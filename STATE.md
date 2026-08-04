@@ -1235,3 +1235,28 @@ Two candidate fixes, in order of expected value:
 Either would attack over half the remaining encoder time. The projection at 768P/5s is
 currently ~7 s (encode ~5.6, decode 3.8) against the 3 s target; removing the round-trip is
 the plausible route to roughly 4 s.
+
+## Amendment 46 (2026-08-04) — stats GroupNorm wired for the unsharded path; perf unproven
+
+Acting on amendment 45's target (Untilize + GroupNorm + Tilize = 52.8 % of encoder device
+time, all of it a layout round-trip forced by `ttnn.group_norm` wanting TILE while `conv3d`
+wants ROW_MAJOR): generalised `MiniMaxH3DistributedFrameGroupNorm` to the unsharded case
+(`spatial_factor=1` skips the all-gather and needs no `ccl_manager`) and routed the encoder's
+norms through a `make_frame_group_norm` factory behind `MINIMAX_H3_USE_STATS_GROUPNORM`.
+
+**Correct**: `test_vae_encoder_minimax_h3.py` 7 passed, PCC **99.9303 % / 99.9264 %** against
+99.988 % for the `group_norm` path. The drop is expected -- two-pass mean/variance in bf16
+rather than group_norm's Welford -- and stays well clear of the 0.99 gate.
+
+**Performance unproven, so the flag defaults to False.** The wall-clock comparison was
+inconclusive: encoder wave 0.857 -> 0.978 s, but the *untouched* decoder moved 0.538 ->
+0.654 s in the same run. A +21 % drift on code that did not change means the encoder's +14 %
+carries no signal. This is amendment 41's problem again, and the lesson from amendment 43 is
+that the device profiler settles it and wall clock does not: profile
+`profile_encoder_minimax_h3.py` with both flag values and compare Untilize + GroupNorm +
+Tilize against the 52.8 % baseline. If the round-trip is gone the flag should flip to True.
+
+**Process note for the next session:** several waits in this session used unbounded
+`until ! pgrep ...; do sleep N; done` loops, which run to the tool timeout even when the job
+finished in a minute. Bound them (`for i in $(seq 1 12); do pgrep ... || break; sleep 10;
+done`) with a cap set from the expected runtime.

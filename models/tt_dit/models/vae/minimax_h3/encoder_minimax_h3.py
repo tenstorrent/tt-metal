@@ -48,6 +48,19 @@ from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import GroupNorm3D
 from .conv_minimax_h3 import MiniMaxH3CausalConv3d
 
+# Use the self-computed-statistics norm instead of ``ttnn.group_norm``. Profiling the bf16
+# encoder put Untilize at 21.1 %, GroupNorm at 21.1 % and Tilize at 10.6 % of device time --
+# 52.8 %, more than double the convolutions -- and all of it exists because ``group_norm``
+# requires TILE layout while ``conv3d`` requires ROW_MAJOR, so all thirteen norm sites
+# convert in and back out. The stats norm needs neither.
+# Default False: correct (7 passed, PCC 99.930 % against 99.988 % for the group_norm path)
+# but its performance effect is **unproven**. The wall-clock comparison was inconclusive --
+# the encoder moved 0.857 -> 0.978 s while the *untouched* decoder moved 0.538 -> 0.654 s in
+# the same run, so the encoder delta sits inside the run-to-run drift of amendment 41.
+# Settle it with the device profiler (as the head-fusion change in amendment 43 was settled),
+# not wall clock, then flip this.
+MINIMAX_H3_USE_STATS_GROUPNORM = False
+
 MINIMAX_H3_VAE_NUM_GROUPS = 32
 MINIMAX_H3_VAE_NORM_EPS = 1e-6
 
@@ -61,6 +74,14 @@ MINIMAX_H3_GN_OUT_BLOCKS: dict[tuple[int, int, int, int], int] = {
     (128, 17, 128, 128): 4,
     (128, 17, 256, 256): 16,
 }
+
+
+def make_frame_group_norm(num_channels: int, **kwargs):
+    """The per-frame norm, either ``ttnn.group_norm``-based or self-computed statistics."""
+    if MINIMAX_H3_USE_STATS_GROUPNORM:
+        return MiniMaxH3DistributedFrameGroupNorm(num_channels, **kwargs)
+    kwargs.pop("dtype", None)
+    return MiniMaxH3FrameGroupNorm(num_channels, **kwargs)
 
 
 class MiniMaxH3FrameGroupNorm(GroupNorm3D):
@@ -162,12 +183,13 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
         num_channels: int,
         *,
         num_frames: int,
-        local_height: int,
+        height: int,
         width: int,
-        spatial_factor: int,
-        cluster_axis: int,
         mesh_device: ttnn.MeshDevice,
-        ccl_manager,
+        spatial_factor: int = 1,
+        cluster_axis: int = 0,
+        ccl_manager=None,
+        dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
         assert num_channels % MINIMAX_H3_VAE_NUM_GROUPS == 0
@@ -175,7 +197,7 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
         self.num_groups = MINIMAX_H3_VAE_NUM_GROUPS
         self.eps = MINIMAX_H3_VAE_NORM_EPS
         self.num_frames = num_frames
-        self.local_height = local_height
+        self.local_height = height
         self.width = width
         self.spatial_factor = spatial_factor
         self.cluster_axis = cluster_axis
@@ -184,7 +206,8 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
 
         # The divisor is the GLOBAL element count per (frame, group): the whole point is
         # that a device normalises by more elements than it holds.
-        self.elements_per_group = (num_channels // self.num_groups) * local_height * spatial_factor * width
+        self.height = height
+        self.elements_per_group = (num_channels // self.num_groups) * height * spatial_factor * width
 
         self.weight = Parameter(total_shape=[1, 1, 1, num_channels], device=mesh_device)
         self.bias = Parameter(total_shape=[1, 1, 1, num_channels], device=mesh_device)
@@ -205,6 +228,9 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
         """``(T,1,HW_local,C)`` -> global per-``(frame, group)`` sums, shaped ``(T,1,1,G)``."""
         channel_sums = ttnn.sum(x_flat, dim=2, keepdim=True)
         group_sums = ttnn.matmul(channel_sums, self.to_groups.data)
+        if self.spatial_factor <= 1:
+            # Unsharded: the local sum is already the global one, and there is no ccl_manager.
+            return group_sums
         # tt_dit exposes no all-reduce (not one call anywhere in the tree), so gather on the
         # singleton dim and sum locally. At T x 32 scalars the distinction is immaterial.
         gathered = self.ccl_manager.all_gather(group_sums, dim=1, mesh_axis=self.cluster_axis, use_hyperparams=False)
@@ -342,9 +368,9 @@ class MiniMaxH3ResnetBlock3d(Module):
         # before calling them. Only the convs see the per-device shard.
         norm_kwargs = dict(num_frames=num_frames, height=height, width=width, mesh_device=mesh_device)
         # A resnet never changes T/H/W, so both norms share one shape.
-        self.norm1 = MiniMaxH3FrameGroupNorm(in_channels, **norm_kwargs)
+        self.norm1 = make_frame_group_norm(in_channels, **norm_kwargs)
         self.conv1 = MiniMaxH3CausalConv3d(in_channels, out_channels, kernel_size=3, spatial_padding=1, **conv_kwargs)
-        self.norm2 = MiniMaxH3FrameGroupNorm(out_channels, **norm_kwargs)
+        self.norm2 = make_frame_group_norm(out_channels, **norm_kwargs)
         self.conv2 = MiniMaxH3CausalConv3d(out_channels, out_channels, kernel_size=3, spatial_padding=1, **conv_kwargs)
         if in_channels != out_channels:
             self.conv_shortcut = MiniMaxH3CausalConv3d(
@@ -551,7 +577,7 @@ class MiniMaxH3Encoder3d(Module):
         self.down_blocks = ModuleList(blocks)
         self.latent_shape = (t, h, w)
 
-        self.norm_out = MiniMaxH3FrameGroupNorm(
+        self.norm_out = make_frame_group_norm(
             block_out_channels[-1], num_frames=t, height=h, width=w, mesh_device=mesh_device
         )
         self.conv_out = MiniMaxH3CausalConv3d(
