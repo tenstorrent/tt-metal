@@ -24,6 +24,11 @@ Knob map (all tunable parameters, none inlined):
                             consumer is a sequential compute helper (tilize /
                             untilize) and depth buys no overlap
 
+  derived helpers (one source of truth each; both L1 solves call them)
+    _cb_block_mult()        which CBs scale with BLOCK_ROWS * WT_CHUNK, and at what
+                            depth -- never re-spelled inline
+    scaler_pages            page count of cb_scaler (2 when PARTIAL_W, else 1)
+
   derived block factors
     BLOCK_ROWS   tile-rows per compute block = min(per-core assignment,
                  the coarsest chunk that fits the L1 budget)
@@ -152,6 +157,22 @@ def _largest_divisor_at_most(n: int, cap: int) -> int:
     return 1
 
 
+def _cb_block_mult(depth_x: int, depth_out: int, has_gamma: bool) -> int:
+    """Tiles-per-block-tile summed over the BLOCK-SCOPED CBs (op_design.md 1.4).
+
+    ONE source of truth for "which CBs scale with BLOCK_ROWS * WT_CHUNK, and at
+    what depth":
+
+        cb_input_tiles (depth_x) + cb_x_squared (1)
+        + cb_normalized (1, gamma only) + cb_output_tiles (depth_out)
+
+    Both the L1 fit predicate and the STREAM chunk-size solve call this, so a new
+    block-scoped CB (or a depth change) is a one-line edit that cannot drift
+    between the two solves.
+    """
+    return depth_x + 1 + (1 if has_gamma else 0) + depth_out
+
+
 def _f32_bits(v: float) -> int:
     return struct.unpack("I", struct.pack("f", float(v)))[0]
 
@@ -178,10 +199,11 @@ def _core_range_set_full_grid(device):
 
 
 def _cores_in(core_range_set):
-    try:
-        return list(ttnn.corerange_to_cores(core_range_set, None, True))
-    except Exception:
-        return []
+    # row_wise=True must match split_work_to_cores' row_wise=True, or the
+    # (row_start, row_count) prefix sum below would be assigned to the wrong
+    # cores.  Never swallow a failure here: an empty list would surface as a
+    # confusing work-split assertion instead of the real error.
+    return list(ttnn.corerange_to_cores(core_range_set, None, True))
 
 
 def _cb(index, page_size, num_pages, data_format, core_ranges):
@@ -200,6 +222,16 @@ def create_program_descriptor(
     epsilon: float = 1e-6,
     compute_kernel_config: "ttnn.ComputeConfigDescriptor" = None,
 ) -> "ttnn.ProgramDescriptor":
+    # GRID_W is a live knob, but turning it past 1 is a SCHEME-CHANGE (Lamp L1:
+    # cross-core partial-sum combine + mcast), not just a wider grid -- the
+    # dependent `width` axis cannot be split without it.  Fail loudly rather than
+    # silently computing every core's slice as if it were the whole row.
+    if GRID_W != 1:
+        raise NotImplementedError(
+            f"rms_norm: GRID_W={GRID_W} requires the cross-core partial-sum combine "
+            f"(op_design.md Lamp L1); Phase 0 only implements GRID_W == 1"
+        )
+
     device = input_tensor.device()
     shape = list(input_tensor.shape)
 
@@ -232,7 +264,10 @@ def create_program_descriptor(
     st = ttnn.tile_size(ttnn.bfloat16)  # scaler CB (R4: value exactly 1.0)
     ft = ttnn.tile_size(ttnn.float32)  # cb_row_stat
 
-    scaler_bytes = st * (2 if partial_w else 1)
+    # Scaler CB page count: one source of truth for the budget term, the CB
+    # allocation and (via PARTIAL_W) the compute kernel's final pop.
+    scaler_pages = 2 if partial_w else 1
+    scaler_bytes = st * scaler_pages
 
     # Depth > 1 only buys overlap when the producer/consumer pair spans two
     # processors.  On the ROW_MAJOR path cb_input_tiles is produced by the
@@ -244,8 +279,7 @@ def create_program_descriptor(
 
     def _resident_fit(depth):
         """(block_rows_l1_max, per-block CB multiplier) for a candidate depth."""
-        # cb_input_tiles + cb_x_squared + cb_normalized + cb_output_tiles
-        mult = depth + 1 + (1 if has_gamma else 0) + depth
+        mult = _cb_block_mult(depth, depth, has_gamma)
         fixed = (
             (Wt * gt)  # cb_gamma_tiles
             + (Wt * gt if gamma_is_rm else 0)  # cb_gamma_sticks
@@ -295,7 +329,7 @@ def create_program_descriptor(
         # adapts to L1, so keep the preferred (coarsest) depth here: overlap is
         # affordable and the byte count is already paid.
         cb_x_depth = cb_out_depth = depth_candidates[0]
-        cb_block_mult = cb_x_depth + 1 + (1 if has_gamma else 0) + cb_out_depth
+        cb_block_mult = _cb_block_mult(cb_x_depth, cb_out_depth, has_gamma)
         block_rows = 1
         per_chunk_tile_bytes = (
             bt * cb_block_mult
@@ -307,7 +341,9 @@ def create_program_descriptor(
         wt_chunk = _largest_divisor_at_most(Wt, wt_chunk_l1_max)  # D1
         num_w_chunks = Wt // wt_chunk
 
-    x_resident = num_w_chunks == 1  # == GAMMA_RESIDENT (op_design.md section 1.4)
+    # X_RESIDENT == GAMMA_RESIDENT == (NUM_W_CHUNKS == 1) is derived in the
+    # kernels from the NUM_W_CHUNKS CT arg -- one source of truth, so it is
+    # deliberately NOT passed as a second flag.
 
     # ---- per-core assignment: (row_start, row_count) prefix sum -----------
     cores_g1 = _cores_in(core_group_1)
@@ -334,7 +370,7 @@ def create_program_descriptor(
         cbs.append(_cb(CB_OUTPUT_STICKS, bt, CB_RM_STAGE_DEPTH * wt_chunk, output_tensor.dtype, all_cores))
     cbs.append(_cb(CB_INPUT_TILES, bt, cb_x_depth * block_rows * wt_chunk, input_tensor.dtype, all_cores))
     cbs.append(_cb(CB_X_SQUARED, bt, block_rows * wt_chunk, input_tensor.dtype, all_cores))
-    cbs.append(_cb(CB_SCALER, st, 2 if partial_w else 1, ttnn.bfloat16, all_cores))
+    cbs.append(_cb(CB_SCALER, st, scaler_pages, ttnn.bfloat16, all_cores))
     cbs.append(_cb(CB_ROW_STAT, ft, block_rows, ttnn.float32, all_cores))
     if has_gamma:
         if gamma_is_rm:
@@ -358,14 +394,17 @@ def create_program_descriptor(
         R_rm,  # 10 total ROW_MAJOR sticks (0 for TILE)
         W,  # 11 logical width (elements)
     ]
+    # The kernel reads its accessor args at TensorAccessorArgs<N>() -- N must equal
+    # the scalar CT-arg count above.  Assert it here so adding a scalar arg fails
+    # in Python instead of mis-parsing on device.
     n_reader_scalars = len(reader_ct_args)
+    assert n_reader_scalars == 12, "rms_norm_reader.cpp expects TensorAccessorArgs<12>()"
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
         if has_gamma
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
-    assert n_reader_scalars == 12
 
     # ---- writer -----------------------------------------------------------
     writer_ct_args = [
@@ -378,6 +417,7 @@ def create_program_descriptor(
         R_rm,  # 6  total ROW_MAJOR sticks (0 for TILE)
         W,  # 7  logical width (elements)
     ]
+    assert len(writer_ct_args) == 8, "rms_norm_writer.cpp expects TensorAccessorArgs<8>()"
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     # ---- compute ----------------------------------------------------------

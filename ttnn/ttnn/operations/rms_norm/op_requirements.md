@@ -1,0 +1,253 @@
+# Operation Requirements: rms_norm
+
+## Definition
+
+- **Formula**: `out[..., w] = x[..., w] / sqrt( (1/W) · Σ_{w'} x[..., w']² + eps ) · gamma[w]`
+  — reduction over the last dim only; `W` is the **logical** width (tile padding never
+  enters the denominator).
+- **PyTorch Reference**:
+
+  ```python
+  def torch_rms_norm(x, gamma=None, epsilon=1e-6):
+      original_dtype = x.dtype
+      xf = x.to(torch.float32)
+      rms = torch.sqrt(torch.mean(xf ** 2, dim=-1, keepdim=True) + epsilon)
+      out = xf / rms
+      if gamma is not None:
+          out = out * gamma.to(torch.float32).reshape(-1)
+      return out.to(original_dtype)
+  ```
+
+- **Import Path**: `from ttnn.operations.rms_norm import rms_norm`
+- **Function Signature**:
+
+  ```python
+  def rms_norm(
+      input_tensor: ttnn.Tensor,
+      *,
+      gamma: Optional[ttnn.Tensor] = None,
+      epsilon: float = 1e-6,
+      compute_kernel_config: Optional[ttnn.ComputeConfigDescriptor] = None,
+      memory_config: Optional[ttnn.MemoryConfig] = None,
+      program_config: Optional[Any] = None,
+  ) -> ttnn.Tensor
+  ```
+
+  `compute_kernel_config=None` resolves through the exported
+  `default_compute_kernel_config()` (HiFi4 / `fp32_dest_acc_en=True` /
+  `math_approx_mode=False`).
+
+## Phases
+
+> **Non-regression rule**: Every refinement must pass all tests from prior phases.
+> **Drift signal**: XPASS-strict failures mean the implementer added support but forgot to update SUPPORTED. The implementer fixes by updating SUPPORTED.
+> **Checkbox protocol**: Implementer marks `[x]` when the refinement is complete and all tests pass, `[~]` when real work landed but at least one named axis value is deferred (treated as completed by the queue, surfaced as partial), `[ ]` only when nothing usable was produced.
+> **Refinement ID + follow-up naming (mandatory — the runner parses this)**: Primary refinements are `Refinement N` (e.g. `Refinement 1`, `Refinement 2`). When you ship `[~]` partial and file the sharper follow-up the partial-tick protocol requires, name it by appending a lowercase letter to the parent's number: `Refinement 1b`, `Refinement 1c`, … (never `Refinement 1.5`, `Refinement 1 (follow-up)`, or a fresh number). Order follow-ups immediately after their parent so the queue runs them before later refinements — a partial's remaining-blocker follow-up must be picked next, not leapfrogged. The runner's parser matches exactly `Refinement \d+[a-z]?`; any other shape is invisible to the queue and silently skipped.
+
+### [x] Phase 0 — Core Implementation
+
+- **SUPPORTED dtype**: [float32, bfloat16]
+- **SUPPORTED fp32_dest_acc_en**: [True]  (`{float32, False}` is a standing EXCLUSION)
+- **SUPPORTED layout**: [TILE, ROW_MAJOR] — both native, no host-side layout ops
+- **SUPPORTED shape-derived axes**: alignment ∈ {tile_aligned, w_non_aligned, h_non_aligned} (all three); rank ∈ {2, 3, 4} (all)
+- **SUPPORTED op-specific axes**: gamma_mode ∈ {gamma, no_gamma}; gamma_dtype ∈ {float32, bfloat16, "none"}; gamma_layout ∈ {TILE, ROW_MAJOR, "none"}
+- **SUPPORTED memory_layout**: [INTERLEAVED]
+- **Cores**: multi-core on day 1 — `split_work_to_cores(full_grid, Rt, row_wise=True)` over the independent `row` axis; `GRID_W = 1` (the dependent `width` axis stays inside a core)
+- **Compute config**: caller-supplied and passed through unmodified; `math_fidelity` / `math_approx_mode` ungated; `fp32_dest_acc_en=True` gated in Phase 0
+- **Golden baseline**: **737 / 737** supported cells passing (`supported_fail = 0`,
+  `xpass_drift = 0`, `xfail_wrong_mode = 0`); 6172 xfail, 33900 invalid-skipped,
+  2 infeasible-skipped (per `verifier_report.json`)
+
+---
+
+### [ ] Refinement 1 — Numerical configurability expansion (dtype + DEST/fidelity surface)
+
+**Goal**: complete the precision surface in one pass.
+1. add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and to `SUPPORTED["gamma_dtype"]`
+   (mixed bf8b-weight / bf16-activation included);
+2. add `False` to `SUPPORTED["fp32_dest_acc_en"]`, keeping the existing
+   `{float32, fp32_dest_acc_en: False}` EXCLUSION intact — i.e. the newly reachable
+   corner is `{bfloat16 | bfloat8_b} × fp32_dest_acc_en=False`;
+3. set intermediate-CB formats correctly for the new dtypes (`cb_x_squared`,
+   `cb_normalized`, `cb_output_tiles` follow the input dtype; `cb_row_stat` stays fp32;
+   `cb_gamma_tiles` follows the *gamma* dtype) and add `UnpackToDestFp32` tagging where it
+   applies — note `AccumulateReloadMode`'s contract: a `to-dest` accumulator CB must not be
+   folded via SrcA/SrcB.
+   Cells that fail out of the box go to `EXCLUSIONS`, not to their own refinement.
+
+**Implementation skill**: /numeric-formats-metal
+
+**Verifier notes**:
+* **This refinement is the gate on the whole perf track — it must land first.** Every
+  perf loose case in `feature_spec.LOOSE_CASES` (the `_perf_case` table with
+  `achievable_ns`) is pinned at `bfloat16 + fp32_dest_acc_en=False + HiFi2`, and so is the
+  entire `_RESILIENCE_SHAPES` × placement sweep and every pad-poison case. Until `False` is
+  in SUPPORTED, Refinement 3/4 would have to measure a `fp32_dest_acc_en=True` stand-in —
+  a different datapath, so a meaningless number. Landing `False` converts **3607** xfail
+  cells (100 of them loose cases), and bf8b a further 1662.
+* **Precision risk on the one corner that matters most.** With `fp32_dest_acc_en=False` the
+  reduce accumulates `Σx²` in bf16 DEST, and a sum of squares is the all-positive
+  worst case for bf16 accumulation (`row_reduce_accumulate/report.md`: 5.83 ULP @ 32 tiles,
+  error *grows* with reduce width). The perf cases run `W` up to 7168 (`Wt = 224`) with a
+  soft `pcc_threshold = 0.9995`. If that misses, **do not exclude the cell** — it is
+  Refinement 3's mandatory target. Levers, in order: keep `cb_row_stat` fp32 (already true)
+  so the cross-chunk `Accumulate::at` reload is lossless; shrink the per-call reduce block
+  so more accumulation happens through that fp32 CB; and wire the `ReduceFp32Mode` slot
+  that `accumulate_reduce_block<>` currently hides (descriptor deviation **D3**) if the
+  float32 path needs it too.
+* Measured Phase 0 baseline to hold against: bf16 PCC 0.999997 / rel RMS 0.0024, fp32
+  PCC 0.9999997 / rel RMS 0.0015 (`verification_report.md` § Precision Baseline). Extend
+  `test_rms_norm_precision_baseline.py` with the new dtype × `fp32_dest_acc_en` rows
+  rather than writing a second file.
+* `feature_spec.INVALID` already pre-excludes bf8b's hardest corner
+  (`{bfloat8_b, w_non_aligned}` / `{…, h_non_aligned}`), so the activation side should be
+  clean. The **gamma** side has no such entry: expect `{gamma_dtype: bfloat8_b,
+  alignment: *_non_aligned}` to fail (a bf8b gamma shares one exponent per block, so pad
+  lanes perturb real weights) and park it in `EXCLUSIONS` with a pointer to
+  `op_design.md` §9.2, which proposes the matching INVALID entries.
+
+---
+
+### [ ] Refinement 2 — Sharded placements: local HEIGHT shard + cross-core WIDTH/BLOCK combine
+
+**Goal**: add all three sharded values to `SUPPORTED["memory_layout"]` —
+`HEIGHT_SHARDED`, `WIDTH_SHARDED`, `BLOCK_SHARDED` — natively, for both layouts and for a
+sharded *output* (`memory_config=` is already threaded through `validate()` and the
+allocator; the golden harness requests an output shard matching the input's). Two pieces
+of work, one refinement because they share all of the placement plumbing:
+
+* **HEIGHT_SHARDED — knob-turn** (`op_design.md` Lamp L3, §5.3). The shard cuts the
+  *independent* `row` axis, so each core already holds whole rows and the reduction stays
+  **local**: no combine, no new math. `cb_input_tiles` / `cb_output_tiles` become
+  `ttnn.cb_descriptor_from_sharded_tensor(...)` — zero-copy, **no NoC read for x** — and
+  `BLOCK_ROWS` defaults to the shard's full tile-row count (sub-chunk only under L1
+  pressure). Do this half first: it establishes the CB-placement path that WIDTH/BLOCK
+  also need.
+* **WIDTH_SHARDED / BLOCK_SHARDED — scheme-change** (Lamp L4 ⊃ L1). These cut the
+  **dependent** `width` axis, so per-core partial `Σx²` must be combined across the grid.
+  Required topology, already specified in `op_design.md` §3.4 — build it as written:
+  each core packs its `BLOCK_ROWS` raw partials into a **dedicated** `cb_sum_handoff`
+  (never `cb_row_stat`, which is a compute accumulator — a dataflow reader on it would be
+  a second consumer); non-root cores `noc_async_write` into a per-sender slot of the
+  root's `cb_partials_gathered` + `noc_semaphore_inc`; the root sums, runs the *same*
+  `transform_in_place` finalize, and multicasts the finalized stat tiles back with
+  `mcast_pipe.hpp`'s `SenderPipe::send()` / `ReceiverPipe::receive()` (host side:
+  `Mcast1D` + `McastConfig`, `Mcast1DShape::PerRow`). `GRID_W` / `GRID_H` and the per-core
+  `(w_start, w_count)` extents are read off the shard spec instead of chosen. No output
+  combine is needed — the output is width-partitioned.
+
+**Verifier notes**:
+* No skill in the inventory covers placement/`memory_layout`; do **not** reach for
+  `/memory-layouts` (that is RM↔TILE layout, not placement). The two patterns you need are
+  named above: `ttnn.cb_descriptor_from_sharded_tensor` for the local shard, and the §3.4
+  partial-reduce + mcast contract for the cross-core one.
+* **Native or nothing.** Re-reading a core's own local shard through a `TensorAccessor`
+  does not implement `HEIGHT_SHARDED`; it merely tolerates it (each core happens to hold
+  full rows, so the accessor reads the right bytes and the golden cells go green). That
+  would be an unimplemented axis value claimed in SUPPORTED. Verify the dataflow, not the
+  test colour.
+* Ordering: hardest-first, and it is also a hard dependency for the perf track —
+  Refinement 3's target shapes are `Rt = 1` decode profiles where the row split can only
+  ever fill **one** core, so the cross-core width combine built here is the mechanism the
+  perf phases then tune. Build it performantly, not correct-only: it ships already filling
+  the grid, with both dataflow halves batched at whole-tile granularity, per the same
+  performance-conformance bar as Phase 0.
+* `GRID_W` is currently a live knob pinned at 1 with an explicit
+  `NotImplementedError` guard in `create_program_descriptor` — turning it up is this
+  refinement's entry point; delete the guard as part of the change.
+* Shard specs on the golden side come from `eval.sharding.auto_shard_config` (and
+  `shard_config` for the perf cases' pinned geometries), so there is **no test work per
+  scheme**. Watch `infeasible_skipped`: a shard geometry that doesn't fit the live device's
+  L1 is uncharged, not a failure — don't chase those two cells.
+* `feature_spec.INVALID` permanently skips
+  `{layout: ROW_MAJOR, memory_layout: *_SHARDED, gamma_layout: TILE}` (all three schemes),
+  so RM-activation + TILE-gamma sharded cells are out of scope here by construction. See
+  the INVALID audit in `verification_report.md` — those entries are mis-categorised
+  (author-scoped, not structural) but they are the harness's contract today; do not work
+  around them.
+
+**Done when**: the 4834 `memory_layout`-blocked xfail cells (including the 279 sharded
+loose cases and the sharded `_perf_case` geometries) pass, with `supported_fail = 0` and
+no regression on the interleaved cells.
+
+---
+
+### [ ] Refinement 3 — Speed up the wide/decode profiles (post-combine)
+
+**Type**: perf
+
+**Goal**: no `LOOSE_CASE` carries an `attention:` perf-focus note, so shape selection is
+mine: take the **interleaved decode profiles** from `feature_spec.LOOSE_CASES`' `_perf_case`
+table — primarily `(1, 1, 32, 7168)` (DeepSeek-V3 decode, `achievable_ns = 104259`,
+`minimum_expected_speedup = 7.0` ⇒ a **≤ 14894 ns** goal at 1350 MHz) and
+`(1, 1, 32, 1024)` (`achievable_ns = 9149`) as the narrow-`W` control. Their full config is
+`bfloat16 / TILE / INTERLEAVED / fp32_dest_acc_en=False / math_fidelity=HiFi2`, soft
+`pcc_threshold = 0.9995` — measure and optimize **exactly that config** (Refinement 1
+guarantees it is in SUPPORTED; never substitute a `fp32_dest_acc_en=True` stand-in, it is a
+different datapath). Remember to clock-scale the reference:
+`scaled_ns = achievable_ns × 1350 / actual_aiclk_mhz`, then divide by
+`minimum_expected_speedup` where present. Pick levers from
+`ttnn/ttnn/operations/examples/master.md`; the relevant situation here is *grid occupancy
+plus DRAM bytes*, because `Rt = 1` means the Phase-0 row split fills exactly one core and
+wide `W` additionally lands in the STREAM regime (x read twice). No SUPPORTED change.
+
+**Done when**: measured device-ns improves on `(1,1,32,7168)` and `(1,1,32,1024)` at their
+declared config and moves toward the clock-scaled goal; their soft `pcc_threshold = 0.9995`
+still holds; the golden suite is green; and no regression across the config-spanning guard
+set (one representative per distinct kernel path × layout × placement — at minimum:
+TILE/interleaved RESIDENT, TILE/interleaved STREAM, ROW_MAJOR/interleaved,
+HEIGHT-sharded, WIDTH-sharded, plus one `no_gamma` and one `w_non_aligned` cell).
+
+**Verifier notes**: depends on Refinement 2 — the cross-core width combine is the only
+lever that fills the grid on `Rt = 1`, and the ≥7× requirement on the 7168 case is not
+reachable by knob-tuning a single-core kernel. Use `/perf-ceiling-dm` first on the narrow
+control shape: `(1,1,32,1024)` may already be near its single-shot DRAM roofline, in which
+case only the wide case should move and that is the honest result to record.
+
+---
+
+### [ ] Refinement 4 — Prefill + sharded-geometry perf, and the block/depth knob surface
+
+**Type**: perf
+
+**Goal**: the remaining `_perf_case` rows — the prefill profiles
+`(1, 1, 8192, {1024, 2304, 5120, 7168})` (`achievable_ns` 96744 / 211345 / 738307 /
+1032281, interleaved) and the measured-fastest sharded geometries
+(`(1,1,32,{1024,2304,5120,7168})` WIDTH_SHARDED and `(1,1,8192,1024)` BLOCK_SHARDED with
+their pinned `shard_shape` + `core_grid`), all at `bfloat16 / fp32_dest_acc_en=False /
+HiFi2`. Prefill is the opposite regime from Refinement 3 (`Rt = 256`+ fills the grid, so it
+is bandwidth-bound, not occupancy-bound) — the relevant levers from
+`ttnn/ttnn/operations/examples/master.md` are therefore the cheap (⭐/⭐⭐) block-surface
+ones, several of which fit in one phase:
+* **co-tune the block/depth knobs** already exposed in `rms_norm_program_descriptor.py`
+  (`BLOCK_ROWS` via `L1_SAFETY_FRACTION`, `CB_DEPTH_CANDIDATES`, `CB_RM_STAGE_DEPTH`) —
+  block size trades L1 for reuse/reconfig, depth trades L1 for movement↔compute overlap;
+  the master.md granularity floor (whole tiles minimum, coarser amortizes) bounds the
+  search. Note the recorded null result: depth `(2, 1)` was measured at 0.83× and reverted
+  (see the descriptor's **D4** table) — re-test it only *after* the width split gives a
+  core many blocks again;
+* the `op_design.md` **Lamp L6** micro-knobs, each already a parameter: (a) `reduce<>`'s
+  `ReduceAlgorithm::AccumulateViaAdd` (+ `prepare_reduce_mask` in place of the partial
+  scaler), measured **2.87–2.94×** on `REDUCE_ROW` at `Wt ≥ 4`; (b) `rsqrt` scoped to
+  `VectorMode::C`, **1.94×** on that step; (c) eliding dtype reconfig when every CB shares
+  one format, up to **1.19×**; (d) `DestAccumulation::PerRow` to delete `cb_x_squared`'s L1
+  round-trip;
+* the **prime-`Wt` STREAM cliff** (`verification_report.md` § Recommendations 2): D1 forces
+  `WT_CHUNK | Wt`, so `Wt = 127` (`W = 4064`, a `_RESILIENCE_SHAPES` entry) collapses to
+  one tile per chunk and per NoC barrier. A ragged-tail chunk (runtime `wt_c`) or Lamp L5
+  removes it.
+No SUPPORTED change.
+
+**Done when**: measured device-ns improves on at least the prefill profiles and one sharded
+geometry at their declared configs (or every lever is measured and correctly reverted with
+the null result recorded — that is a completed investigation); golden suite green; no
+regression across the same config-spanning guard set as Refinement 3.
+
+**Verifier notes**: keep each lever's measurement separate — (a) and (d) both touch the
+reduce/square path and will confound each other if applied together. (a) is a *coupled*
+change, not a one-word swap: `AccumulateViaAdd` restricts `Accumulate` to SUM +
+`BulkWaitBulkPop` and swaps the partial-W mechanism from a scaler tile to a 0/1 mask tile,
+so re-run the poisoned-padding cells (acceptance + the 24 pad-poison loose cells) on it
+specifically — they are the only tests that can catch a masked-reduce regression, and a
+padding leak on a wide row is a near-uniform scale error that PCC is largely blind to (the
+precision baseline's ratio-spread check is the second net).
