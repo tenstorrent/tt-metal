@@ -27,7 +27,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.sfpu_domains import exclude_undefined, for_op
+from helpers.sfpu_domains import exclude_undefined, for_op, narrowest_range_format
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -619,6 +619,22 @@ def eltwise_unary_sfpu(
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
+
+    # Fall back to the op's own (signed) domain rather than generate_stimuli's
+    # positive-only format default. Without this the float sweep feeds every op
+    # uniform(0.1, 1.1), so the x<0 branch, the piecewise knees and the saturation
+    # tails are never reached — see SFPU_EDGE_CASE_COVERAGE.md finding #1. Every
+    # op reaching this driver is registered in _OP_DOMAIN_REGISTRY, so a KeyError
+    # here means a new op was added without a domain: register it rather than
+    # silently falling back to the positive-only default.
+    # The domain is bounded by the narrowest format in the pipeline, not just the
+    # input one — this sweep pairs every input format with every output format, so
+    # e.g. Float32->Float16 still has to stay inside Float16's range.
+    if spec_A is None:
+        domain_format = narrowest_range_format(
+            formats.input_format, formats.output_format
+        )
+        spec_A = exclude_undefined(mathop, for_op(mathop, domain_format).spec_A)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,

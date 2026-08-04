@@ -52,6 +52,41 @@ class OperandSpecs:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Picking which format bounds the domain
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Largest finite magnitude each format can hold. Only formats with a narrower
+# exponent field than bfloat16 need an entry; every other format shares
+# bfloat16's ceiling and is therefore never the binding constraint.
+_FORMAT_MAX_MAGNITUDE: Dict[DataFormat, float] = {
+    DataFormat.MxFp4: 6.0,  # e2m1
+    DataFormat.MxFp8R: 448.0,  # e4m3
+    DataFormat.Float16: 65504.0,  # e5m10
+    DataFormat.MxFp8P: 57344.0,  # e5m2
+}
+
+_BF16_MAX_MAGNITUDE = 3.3895314e38
+
+
+def narrowest_range_format(*formats: Optional[DataFormat]) -> DataFormat:
+    """Return whichever of *formats* has the smallest representable magnitude.
+
+    A safe input domain is bounded by the narrowest float format anywhere in the
+    pipeline, not just the input one. exp over (-100, 80) peaks at ~5.5e34: fine
+    into a Float32 output, saturates a Float16 one. Passing a single format keeps
+    the previous input-only behaviour, and ties resolve to the first argument, so
+    callers should pass the input format first.
+    """
+    candidates = [fmt for fmt in formats if fmt is not None]
+    if not candidates:
+        raise ValueError("narrowest_range_format() requires at least one format")
+    return min(
+        candidates,
+        key=lambda fmt: _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Format-specific domain builders
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -508,6 +543,24 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Round: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
+    # floor/ceil/trunc/frac: defined for all reals, but floor and ceil only differ
+    # from trunc on the negative side, so the domain has to span both signs to tell
+    # the three apart at all. Same range as round for the same reason: enough integer
+    # knees inside the interval that the random sweep lands near several of them.
+    MathOperation.Floor: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    MathOperation.Ceil: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    MathOperation.Trunc: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    # frac keeps the sign of x (frac(x) = x - trunc(x)), so the negative half is a
+    # distinct branch rather than a mirror of the positive one.
+    MathOperation.Frac: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
     # sqrt: domain x >= 0
     MathOperation.Sqrt: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=100.0)
@@ -516,6 +569,13 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Square: _square_spec,
     # tanh: cover saturation regions (saturates near ±1 for |x| > ~3)
     MathOperation.Tanh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # tanhshrink(x) = x - tanh(x): odd function, so the negative half exercises a
+    # distinct sign path. Same range as tanh — past |x| ~ 3 tanh saturates and the
+    # result degenerates to x, while near 0 the subtraction cancels down to ~x^3/3
+    # (small absolute values, covered by atol rather than rtol).
+    MathOperation.Tanhshrink: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
     # topk family: operation sorts/merges; any values are valid
