@@ -561,9 +561,24 @@ def passed_test(
         # band: once a block spans a wide magnitude range, the elements far below the
         # block max are unrepresentable and quantize toward zero, which a fixed atol
         # reads as a mismatch even though the hardware produced the closest value the
-        # format can express. Judge it on its own lattice, same as Bfp4_b/Bfp2_b.
-        is_valid = _bfp_block_aware_compare(
-            golden_tensor, res_tensor, mantissa_bits=7, max_ulp_diff=1
+        # format can express.
+        #
+        # Unlike Bfp4_b/Bfp2_b, though, Bfp8_b's lattice is fine enough that a single
+        # step can be *tighter* than the SFPU's own approximation error, so the lattice
+        # check cannot simply replace the tolerance check either. The two criteria cover
+        # different regimes — quantization dominates for elements far below their block
+        # max, approximation error dominates near it — so accept a result that satisfies
+        # either one.
+        is_close = torch.isclose(
+            golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
+        )
+        is_nan = torch.isnan(golden_tensor) & torch.isnan(res_tensor)
+        is_valid = (
+            is_close
+            | is_nan
+            | _bfp_block_aware_compare(
+                golden_tensor, res_tensor, mantissa_bits=7, max_ulp_diff=1
+            )
         )
     elif output_data_format == DataFormat.Bfp4_b:
         ulp = custom_bfp4_max_ulp_diff if custom_bfp4_max_ulp_diff is not None else 1
