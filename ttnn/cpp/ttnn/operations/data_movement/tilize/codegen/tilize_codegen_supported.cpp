@@ -107,23 +107,25 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
 
     // UNGENERALIZED. One-tile-per-core column splits are NOT demoted as a class: thirteen such
     // configurations measured above parity (native/ported 1.02-2.18, generic/ported ~1.00) against
-    // these three below it, and nothing separates them, so these are enumerated exact matches.
+    // the few below it, and nothing separates them, so these are enumerated exact matches.
     // build_2d_column's `minimal_work` clamp (CB depth 1, write_batch 1) applies to all of them
     // alike, which is why it is not the predicate.
     if (dispatch.path == TilizeCodegenPath::Column && dispatch.max_tiles_per_column_block == 1) {
-        // The ledger's DRAM/L1 discriminator is the OUTPUT placement (the sweep varies
-        // output_memory_config while every input is interleaved DRAM), so these arms key on
-        // output_mem_config; keying on the input would collapse each pair into one answer.
-        const bool out_is_l1 = operation_attributes.output_mem_config.buffer_type() == BufferType::L1;
+        const bool out_is_dram = operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM;
         const uint32_t nc = operation_attributes.NC;
         const uint32_t ht = operation_attributes.Ht;
         const uint32_t wt = operation_attributes.Wt;
-        // [1, 32, 64] and [32, 64], uint16, DRAM out — a single tile-row split two ways.
-        if (operation_attributes.input_dtype == DataType::UINT16 && !out_is_l1 && nc == 1 && ht == 1 && wt == 2) {
+        // [1, 32, 64] and [32, 64], uint16 — a single tile-row split two ways. Only the DRAM-output
+        // twins measured below parity; the L1-output twins are above it, so this arm keys on the
+        // OUTPUT placement (what the sweep varies, every input being interleaved DRAM). Keying on
+        // the input would collapse the pair into one answer.
+        if (operation_attributes.input_dtype == DataType::UINT16 && out_is_dram && nc == 1 && ht == 1 && wt == 2) {
             return true;
         }
-        // [12, 32, 160], bfloat16, L1 out — twelve tile-rows split five ways.
-        if (operation_attributes.input_dtype == DataType::BFLOAT16 && out_is_l1 && nc == 12 && ht == 1 && wt == 5) {
+        // [12, 32, 160], bfloat16 — twelve tile-rows split five ways. Both output placements measured
+        // below parity (L1 out, and DRAM out at wall 0.93 with generic parity on device), so unlike
+        // the uint16 arm above this one carries no placement term.
+        if (operation_attributes.input_dtype == DataType::BFLOAT16 && nc == 12 && ht == 1 && wt == 5) {
             return true;
         }
     }
