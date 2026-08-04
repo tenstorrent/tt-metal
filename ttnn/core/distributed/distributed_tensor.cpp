@@ -48,15 +48,20 @@ auto get_remap_fn(
     DistributionMode distribution_mode,
     const MeshCoordinateRange* global_range,
     const ttsl::SmallVector<uint32_t>& offset) {
-    std::optional<MeshCoordinate> offset_coord;
-    if (!is_zero_mesh_offset(offset)) {
-        offset_coord = MeshCoordinate(ttsl::Span<const uint32_t>(offset));
-    }
-    return [distribution_mode, offset_coord, row_major_dst = global_range->begin()](
-               const MeshCoordinate& src_coord) mutable {
+    return [distribution_mode, offset, row_major_dst = global_range->begin()](const MeshCoordinate& src_coord) mutable {
         switch (distribution_mode) {
             case DistributionMode::ROW_MAJOR: return *(row_major_dst++);
-            case DistributionMode::SUBMESH: return offset_coord.has_value() ? src_coord + *offset_coord : src_coord;
+            case DistributionMode::SUBMESH: {
+                if (is_zero_mesh_offset(offset)) {
+                    return src_coord;
+                }
+                ttsl::SmallVector<uint32_t> result;
+                result.reserve(src_coord.dims());
+                for (size_t i = 0; i < src_coord.dims(); ++i) {
+                    result.push_back(src_coord[i] + offset[i]);
+                }
+                return MeshCoordinate(result);
+            }
         }
         TT_THROW("Unreachable");
     };
