@@ -62,7 +62,13 @@ void bind_conv3d(nb::module_& mod) {
         nb::arg("padding_mode") = "zeros",
         nb::arg("groups") = 1,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("halo_buffer") = nb::none(),
+        nb::arg("logical_h_mask") = 0u,
+        nb::arg("logical_w_mask") = 0u,
+        nb::arg("pad_offset_tensor") = nb::none(),
+        nb::arg("output_pad_h") = 0u,
+        nb::arg("output_pad_w") = 0u);
 
     // Register to ttnn.experimental namespace
     ttnn::bind_function<"prepare_conv3d_weights", "ttnn.experimental.">(
@@ -72,10 +78,7 @@ void bind_conv3d(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("weight_tensor"),
         nb::arg("groups") = 1u,
-        // 0 == use the default minimal valid block (default_c_in_block), the same value conv3d
-        // defaults to, so the prepared weight and the conv compute agree on K-row blocking and
-        // stay within L1. A mismatch silently reorders rows (issues #42146, #47316).
-        nb::arg("C_in_block") = 0u,
+        nb::arg("C_in_block") = tt::constants::TILE_WIDTH,
         nb::arg("alignment") = 32u,
         nb::arg("device") = nb::none());
 
