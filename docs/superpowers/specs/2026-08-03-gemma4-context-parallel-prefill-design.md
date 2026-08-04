@@ -1,8 +1,9 @@
 # Gemma4 context-parallel prefill on Blackhole Galaxy
 
 **Date:** 2026-08-03
-**Status:** Milestone 1 implemented and passing — single decoder layer, all chunk
-sizes, eager and traced. See Implementation status.
+**Status:** Milestones 1 and 2 implemented and passing — single decoder layer and
+the chained 60-layer body, all chunk sizes, eager and traced. See Implementation
+status.
 **Scope:** Prefill only. Decode is disaggregated and runs outside this path.
 
 ## Implementation status
@@ -22,10 +23,41 @@ Landed on `svuckovic/gemma4-prefill`:
 - **A1 came for free at this milestone.** `test_prefill_layer` runs with
   `kv_cache=None`, so there is no paged history and every rank's `base_offset` is
   0 — the scalar-offset problem does not bite until the whole-model path.
-- **Whole-model tests skip under CP.** `test_prefill_layers` and
-  `test_prefill_full` stage a replicated sequence and embed on device, so under CP
-  each rank would hold all `chunk` tokens and the mask/K-V gather would span
-  `cp * chunk`. They skip with an actionable message rather than return nonsense.
+- **The 60-layer body works too** (`test_prefill_layers`, 8/8: four chunk sizes x
+  eager/traced). Depth was never the obstacle — the layer is CP-shape-preserving,
+  so chaining was already free. Three orthogonal things had to be fixed:
+  1. *Token staging.* The body's input is token ids `[1, chunk]` and the model
+     embeds on device. Sharding them needs `seq_dim=-1`; on a 2D tensor `-2` is the
+     size-1 batch dim. `embed_tokens` composes cleanly because its all-gather runs
+     on the TP axis (hidden), orthogonal to CP.
+  2. *RoPE.* The model builds caches internally and slices
+     `[start : start+seq]` with a mesh-wide scalar, which cannot differ per device.
+     The 4D prefill caches are now sharded along positions, so the model's existing
+     `[0:local_seq]` slice lands on the rows each rank owns — the same "offset as
+     data" move as the mask. Requires `max_seq_len == chunk`, enforced by a guard.
+  3. *Readback.* CP gather instead of reading device 0.
+
+  Traced timings at 60 layers: 80.8 ms (512), 114.1 ms (1024), 158.9 ms (2048),
+  273.1 ms (4096) — peak ~15k tok/s.
+- **`test_prefill_full` still skips under CP**, for a specific reason: it selects
+  one absolute position's logits with a mesh-wide scalar index
+  (`get_last_token=tile_start`, or `process_logits_after_prefill_trace`), which
+  under CP indexes into each rank's *local* shard and picks the wrong tokens.
+  Gathering logits instead is not viable (4096 x 262144 is ~4.3 GB, which is why
+  the head is fed a 32-row slice). The fix is a CP gather of the hidden states
+  before lm_head (~44 MB) so the existing slice stays valid.
+- **CP branch guarded against the 32768 SDPA cliff.** It uses the non-chunked op,
+  and under CP the relevant length is K (`cp * local`), so a check on the local Q
+  length under-reports by `cp`. Concretely, chunk 32768 with CP=4 gives local Q
+  8192 (looks safe) against K 32768 (on the cliff) — a silent-corruption window,
+  now a loud failure. There is no correct path to fall through to: the chunked
+  fallbacks take a scalar offset and reject `attn_mask`.
+- **Mask cache is shared across layers.** It was per-`Gemma4Attention`, so a
+  60-layer stack would have held 60 copies of an 8 MiB tensor (~480 MiB/device)
+  where two suffice — the mask depends only on `(local_seq_len, sliding_window)`.
+  Invisible at one layer; it scales with depth x chunk (at chunk 16384 the mask is
+  128 MiB, so 60 layers would have been ~7.7 GiB/device). Now on `CCLManager`,
+  which is already one-per-mesh.
 - **Trace bug fixed along the way.** `_run_graph` ran `ttnn.clone` inside
   `begin_trace_capture` but never during warmup, so capture aborted with "Cannot
   load new binaries during trace capture" and left the device in capture state,
