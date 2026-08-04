@@ -23,12 +23,18 @@ iterations: the first populates the program cache, so only the second is meaning
 
 from __future__ import annotations
 
+import os as _os
+
 import pytest
 import torch
 
 import ttnn
 
+from ....models.vae.minimax_h3 import encoder_minimax_h3 as _enc_mod
 from ....models.vae.minimax_h3.encoder_minimax_h3 import MiniMaxH3Encoder3d
+
+if "MINIMAX_H3_STATS_GN" in _os.environ:
+    _enc_mod.MINIMAX_H3_USE_STATS_GROUPNORM = _os.environ["MINIMAX_H3_STATS_GN"] == "1"
 from .test_performance_vae_minimax_h3 import CLIP_FRAMES, TILE, _config, _random_encoder_state, _weights_dir
 
 SINGLE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
@@ -61,6 +67,10 @@ def test_profile_encoder(mesh_device):
     x = torch.randn(1, CLIP_FRAMES, TILE, TILE, encoder.conv_in.in_channels)
     x_device = ttnn.from_torch(x, dtype=ttnn.float32, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
+    # Drain the profiler between iterations: Tracy buffers 1000 ops per device and drops the
+    # rest, and the encoder is ~550 ops (more with the stats GroupNorm), so two iterations
+    # overrun it and report generation fails with "Device data missing: Op N not present".
     for _ in range(ITERATIONS):
         encoder(x_device)
         ttnn.synchronize_device(mesh_device)
+        ttnn.ReadDeviceProfiler(mesh_device)

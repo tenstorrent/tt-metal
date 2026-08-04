@@ -1490,3 +1490,35 @@ spatial extent, where the round trip cost most, and the deeper levels have far l
 recover. Wall-clock run-to-run drift (amendment 41) also remains wide enough that 0.857 vs
 0.911 s across runs carries little signal -- the block profile is the trustworthy number here,
 and it says the change is right.
+
+## Amendment 53 (2026-08-04) — correction to amendment 50's trace/profile diagnosis
+
+Amendment 50 attributed the stats-norm profile failure to Tracy's 1000-op-per-device buffer.
+**That was wrong.** Added `ttnn.ReadDeviceProfiler(mesh_device)` between iterations in
+`profile_encoder_minimax_h3.py` (the documented drain), and the full encoder still fails at
+the *same* op:
+
+```
+AssertionError: Device data missing: Op 1034240 not present in
+cpp_device_perf_report.csv for device 0 (trace_id=None)
+```
+
+Two facts that rule the buffer out: the identical op ID across runs (a buffer overflow would
+drop a different op each time), and the **down_block profile with the stats norm succeeded**
+(amendment 52) despite the same drain being absent there.
+
+So a specific op emits no device data. The stats norm introduces two op types the
+`group_norm` path does not -- `ReduceDeviceOperation` (`ttnn.sum` over the spatial axis) and
+`MatmulDeviceOperation` (the channel<->group contraction) -- and one of them is the likely
+culprit, plausibly degenerating to zero device work at some level's shape. The drain is
+harmless and is kept.
+
+**Consequence:** the whole-encoder gain from the stats GroupNorm remains **unquantified**.
+The block-level 1.782x (amendment 52) is measured and trustworthy; extrapolating it to the
+encoder is not, because block 0 has the largest spatial extent and the deeper levels have
+much less round-trip to recover. Wall clock cannot substitute here -- the encoder wave read
+0.857 s before the change and 0.911 s after, which is inside the run-to-run drift.
+
+To close it: identify op 1034240 by global call count in `profile_log_device.csv`, or profile
+each down_block separately (blocks 1-5, as block 0 already is) and sum. The per-block route
+needs no new tooling and is the cheaper of the two.
