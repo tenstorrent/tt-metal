@@ -23,10 +23,9 @@ enum class TilizeCodegenPath : uint8_t { RowSingleCore, Row, Column, Block };
 
 struct TilizeCodegenDispatch {
     TilizeCodegenPath path = TilizeCodegenPath::Row;
-    // Column path only: the number of column blocks, and the widest of them in tiles (the widths
-    // differ by one tile when ncol does not divide Wt).
+    // Column path only: the number of column blocks. Their widths differ by one tile when ncol does
+    // not divide Wt.
     uint32_t ncol = 1;
-    uint32_t max_tiles_per_column_block = 0;
 };
 
 TilizeCodegenDispatch tilize_codegen_dispatch(

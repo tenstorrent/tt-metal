@@ -95,39 +95,24 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     if (!is_device_tensor(input_tensor)) {
         return false;
     }
-    // The general arms below are conditions on WHICH builder create_descriptor selects and on the
-    // work that builder hands each core, so they key on the shared dispatch query rather than on
-    // shapes. Where measurement found no such condition, the ledger entry is an enumerated exact
-    // match, flagged UNGENERALIZED at its branch.
+    // The arms below are conditions on WHICH builder create_descriptor selects and on the work that
+    // builder hands each core, so they key on the shared dispatch query rather than on shapes.
     const uint32_t total_ht = operation_attributes.NC * operation_attributes.Ht;
     // Same grid query the factory's path dispatch uses (64 cores on wormhole_b0).
     const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
     const uint32_t grid_cores = grid.x * grid.y;
     const auto dispatch = tilize_codegen_dispatch(input_tensor.device(), operation_attributes, input_tensor);
 
-    // UNGENERALIZED. One-tile-per-core column splits are NOT demoted as a class: thirteen such
-    // configurations measured above parity (native/ported 1.02-2.18, generic/ported ~1.00) against
-    // the few below it, and nothing separates them, so these are enumerated exact matches.
-    // build_2d_column's `minimal_work` clamp (CB depth 1, write_batch 1) applies to all of them
-    // alike, which is why it is not the predicate.
-    if (dispatch.path == TilizeCodegenPath::Column && dispatch.max_tiles_per_column_block == 1) {
-        const bool out_is_dram = operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM;
-        const uint32_t nc = operation_attributes.NC;
-        const uint32_t ht = operation_attributes.Ht;
-        const uint32_t wt = operation_attributes.Wt;
-        // [1, 32, 64] and [32, 64], uint16 — a single tile-row split two ways. Only the DRAM-output
-        // twins measured below parity; the L1-output twins are above it, so this arm keys on the
-        // OUTPUT placement (what the sweep varies, every input being interleaved DRAM). Keying on
-        // the input would collapse the pair into one answer.
-        if (operation_attributes.input_dtype == DataType::UINT16 && out_is_dram && nc == 1 && ht == 1 && wt == 2) {
-            return true;
-        }
-        // [12, 32, 160], bfloat16 — twelve tile-rows split five ways. Only the L1-output twin
-        // measured below parity; the DRAM-output twin sits at wall 0.94 with the port ahead on
-        // device, so like the uint16 arm above this one keys on the OUTPUT placement.
-        if (operation_attributes.input_dtype == DataType::BFLOAT16 && !out_is_dram && nc == 12 && ht == 1 && wt == 5) {
-            return true;
-        }
+    // The column split as a class. Every measured configuration of this path is below parity —
+    // one-tile-per-core splits (max column-block width 1) and the ragged wider ones alike, across
+    // bfloat16/float32/uint32/int32/uint16 and both output placements — so no sub-region of it is
+    // carved out. It buys grid utilization the row split cannot reach, but reader_tilize_block and
+    // compute_tilize take the block width and the sub-block chunking as RUNTIME args so one binary
+    // covers a ragged split: the inner stick loop's transfer size and trip count are not constants,
+    // which is the specialization the path's per-core narrowness relies on to pay for its extra
+    // per-core setup. Forced implementation=codegen still runs the path.
+    if (dispatch.path == TilizeCodegenPath::Column) {
+        return true;
     }
 
     // A caller-forced single-core route (use_multicore=false / use_low_perf) has no parallelism for
@@ -146,24 +131,10 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     // rows), and with total_Ht < grid_cores the split leaves cores idle that the column split was
     // unable to recruit (grid_cores / total_Ht < 2, or Wt == 1).
     //
-    // This arm carries the bulk of the demoted ledger (~65 entries). Its boundary position rests on
-    // a single measured row-path configuration above parity (total_Ht == grid_cores) rather than on
-    // a swept range, plus the two reversals below.
+    // This arm carries the bulk of the demoted ledger. Its boundary position rests on a single
+    // measured row-path configuration above parity (total_Ht == grid_cores) rather than on a swept
+    // range.
     if (dispatch.path == TilizeCodegenPath::Row && total_ht != grid_cores) {
-        // UNGENERALIZED reversals. Two row-path configurations measured above parity on the ported
-        // kernel (native/ported 1.09 and 1.04, generic/ported ~1.00) and are no longer demoted.
-        // Both sit within ~9% of parity and both have an L1-output twin that measured below it, so
-        // the separating term is the OUTPUT buffer type (what the sweep varies) and nothing more
-        // general is claimed here.
-        const bool out_is_dram = operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM;
-        const uint32_t nc = operation_attributes.NC;
-        const uint32_t ht = operation_attributes.Ht;
-        const uint32_t wt = operation_attributes.Wt;
-        if (operation_attributes.input_dtype == DataType::BFLOAT16 && out_is_dram && wt == 2 &&
-            // [5, 8, 64, 64] (total_Ht 80) and [6, 4, 96, 64] (total_Ht 72).
-            ((nc == 40 && ht == 2) || (nc == 24 && ht == 3))) {
-            return false;
-        }
         return true;
     }
 

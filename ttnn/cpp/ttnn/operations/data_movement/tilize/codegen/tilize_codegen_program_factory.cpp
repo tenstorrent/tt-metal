@@ -5,7 +5,6 @@
 #include "tilize_codegen_program_factory.hpp"
 
 #include <algorithm>
-#include <map>
 #include <optional>
 #include <vector>
 
@@ -324,8 +323,8 @@ bool uses_block_path(
 // ops/tilize/spec.py _choose_tilize_2d_ncol.
 //
 // ncol need not divide Wt: a non-divisor split makes the first Wt % ncol blocks one tile wider,
-// which build_2d_column serves with one extra reader/compute kernel variant (the width is a
-// compile-time arg) and which buys the column split for prime and awkward Wt.
+// which build_2d_column serves from per-core runtime args, and which buys the column split for
+// prime and awkward Wt that would otherwise fall to the row path.
 uint32_t choose_tilize_2d_ncol(uint32_t total_ht, uint32_t wt, uint32_t valid_cores) {
     if (total_ht >= valid_cores || wt < 2) {
         return 1;
@@ -548,7 +547,9 @@ ProgramDescriptor build_row(
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kComputeTilize;
     compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {kCbInId, kCbOutId, num_col_chunks, chunk_wt};
+    // Width and chunking reach compute_tilize.cpp as runtime args, so one kernel binary serves
+    // cores with different widths (the ragged column split below relies on that).
+    compute_desc.compile_time_args = {kCbInId, kCbOutId};
     ComputeConfigDescriptor compute_cfg;
     compute_cfg.fp32_dest_acc_en = fp32;
     if (attrs.input_dtype == DataType::FLOAT32) {
@@ -568,7 +569,7 @@ ProgramDescriptor build_row(
              chunk_wt,
              num_col_chunks,
              elem_w_bytes});
-        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{n});
+        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{n, num_col_chunks, chunk_wt});
         writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), n * g.wt, start * g.wt});
         start += n;
     }
@@ -693,85 +694,60 @@ ProgramDescriptor build_2d_column(
 
     const bool fp32 = (attrs.input_dtype == DataType::FLOAT32 || attrs.output_dtype == DataType::FLOAT32);
 
-    // The block width is a compile-time arg to the reader and the compute kernel, so each distinct
-    // width (at most two: base and base+1 when ncol does not divide Wt) needs its own instance.
-    //
-    // Cores are handed out column-block-major — every tile-row of one column block before the next
-    // block starts. Since the wider blocks are exactly the first Wt % ncol column blocks, each width
-    // group then owns a CONTIGUOUS run of the row-wise core list and merges into a few rectangles.
-    // Walking (tile_row, col_block) instead interleaves the two groups core by core, leaving each a
-    // strided scatter that merges into nothing. Which core owns which (tile_row, col_block) is free:
-    // every pair is still assigned exactly once, at the same absolute output tile ids.
-    struct ColumnAssignment {
-        CoreCoord core;
-        uint32_t tile_row;
-        uint32_t col_block;
-    };
-    std::map<uint32_t, std::vector<ColumnAssignment>> groups;  // block width -> assignments
-    uint32_t core_idx = 0;
-    for (uint32_t col_block = 0; col_block < ncol; ++col_block) {
-        for (uint32_t tile_row = 0; tile_row < g.total_ht; ++tile_row) {
-            groups[shape.block_wts[col_block]].push_back({cores[core_idx], tile_row, col_block});
-            ++core_idx;
-        }
+    // Block width and chunking are per-core runtime args, so the ragged split — the first Wt % ncol
+    // column blocks are one tile wider when ncol does not divide Wt — is served by ONE kernel triple
+    // over the whole core set instead of one per distinct width.
+    KernelDescriptor::CompileTimeArgs reader_ct{constants::TILE_HEIGHT, elem_w_bytes, aligned_ps};
+    TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct);
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kReaderTilizeBlock;
+    reader_desc.core_ranges = core_grid;
+    reader_desc.compile_time_args = std::move(reader_ct);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor::CompileTimeArgs writer_ct{kCbOutId, out_page};
+    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
+    writer_ct.push_back(write_batch);
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = kWriterTilizeBlock;
+    writer_desc.core_ranges = core_grid;
+    writer_desc.compile_time_args = std::move(writer_ct);
+    writer_desc.config = WriterConfigDescriptor{};
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = kComputeTilize;
+    compute_desc.core_ranges = core_grid;
+    compute_desc.compile_time_args = {kCbInId, kCbOutId};
+    ComputeConfigDescriptor compute_cfg;
+    compute_cfg.fp32_dest_acc_en = fp32;
+    // The unpack-to-DEST override keys off the INPUT dtype alone: it exists to stop an RM fp32
+    // input from unpacking through SRCA as Float16_b, which an fp32 output cannot cause.
+    if (attrs.input_dtype == DataType::FLOAT32) {
+        compute_cfg.unpack_to_dest_mode = unpack_to_dest_fp32_modes(kCbInId);
+    }
+    compute_desc.config = compute_cfg;
+
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const CoreCoord& core = cores[i];
+        const uint32_t tile_row = i / ncol;
+        const uint32_t col_block = i % ncol;
+        const uint32_t this_wt = shape.block_wts[col_block];
+        const uint32_t sub_wt = tilize_compute_chunk(this_wt, cb_block_limit);
+        const uint32_t n_sub = this_wt / sub_wt;
+        const uint32_t start_stick = tile_row * constants::TILE_HEIGHT;
+        const uint32_t start_tc = shape.block_starts[col_block];
+        const uint32_t col_byte_offset = start_tc * constants::TILE_WIDTH * g.elem_size;
+
+        reader_desc.emplace_runtime_args(
+            core, {input_tensor.buffer(), 1u, start_stick, col_byte_offset, n_sub, sub_wt});
+        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{1, n_sub, sub_wt});
+        const uint32_t start_tile = tile_row * g.wt + start_tc;
+        writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), this_wt, start_tile, this_wt, g.wt});
     }
 
-    for (const auto& [grp_wt, assignments] : groups) {
-        std::vector<CoreCoord> grp_cores;
-        grp_cores.reserve(assignments.size());
-        for (const auto& a : assignments) {
-            grp_cores.push_back(a.core);
-        }
-        const CoreRangeSet grp_grid = merged_core_range_set(grp_cores);
-
-        const uint32_t sub_wt = tilize_compute_chunk(grp_wt, cb_block_limit);
-        const uint32_t n_sub = grp_wt / sub_wt;
-
-        KernelDescriptor::CompileTimeArgs reader_ct{n_sub, constants::TILE_HEIGHT, sub_wt, elem_w_bytes, aligned_ps};
-        TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct);
-        KernelDescriptor reader_desc;
-        reader_desc.kernel_source = kReaderTilizeBlock;
-        reader_desc.core_ranges = grp_grid;
-        reader_desc.compile_time_args = std::move(reader_ct);
-        reader_desc.config = ReaderConfigDescriptor{};
-
-        KernelDescriptor::CompileTimeArgs writer_ct{kCbOutId, out_page};
-        TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
-        writer_ct.push_back(write_batch);
-        KernelDescriptor writer_desc;
-        writer_desc.kernel_source = kWriterTilizeBlock;
-        writer_desc.core_ranges = grp_grid;
-        writer_desc.compile_time_args = std::move(writer_ct);
-        writer_desc.config = WriterConfigDescriptor{};
-
-        KernelDescriptor compute_desc;
-        compute_desc.kernel_source = kComputeTilize;
-        compute_desc.core_ranges = grp_grid;
-        compute_desc.compile_time_args = {kCbInId, kCbOutId, n_sub, sub_wt};
-        ComputeConfigDescriptor compute_cfg;
-        compute_cfg.fp32_dest_acc_en = fp32;
-        // The unpack-to-DEST override keys off the INPUT dtype alone: it exists to stop an RM fp32
-        // input from unpacking through SRCA as Float16_b, which an fp32 output cannot cause.
-        if (attrs.input_dtype == DataType::FLOAT32) {
-            compute_cfg.unpack_to_dest_mode = unpack_to_dest_fp32_modes(kCbInId);
-        }
-        compute_desc.config = compute_cfg;
-
-        for (const auto& a : assignments) {
-            const uint32_t start_stick = a.tile_row * constants::TILE_HEIGHT;
-            const uint32_t start_tc = shape.block_starts[a.col_block];
-            const uint32_t col_byte_offset = start_tc * constants::TILE_WIDTH * g.elem_size;
-
-            reader_desc.emplace_runtime_args(a.core, {input_tensor.buffer(), 1u, start_stick, col_byte_offset});
-            compute_desc.runtime_args.emplace_back(a.core, KernelDescriptor::CoreRuntimeArgs{1});
-            const uint32_t start_tile = a.tile_row * g.wt + start_tc;
-            writer_desc.emplace_runtime_args(a.core, {output_tensor.buffer(), grp_wt, start_tile, grp_wt, g.wt});
-        }
-
-        desc.kernels.push_back(std::move(reader_desc));
-        desc.kernels.push_back(std::move(writer_desc));
-        desc.kernels.push_back(std::move(compute_desc));
-    }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
     return desc;
 }
 
@@ -862,7 +838,10 @@ ProgramDescriptor build_block(
     const uint32_t total_cores = cores_w * cores_h;
     const std::vector<CoreCoord> valid_cores = grid_to_cores(total_cores, grid.x, grid.y, /*row_wise=*/true);
 
-    std::map<uint32_t, std::vector<BlockAssignment>> groups;  // keyed by this_wt (block width)
+    // Per-core block dimensions: full, cliff_w, cliff_h, cliff_wh. Width and chunking reach the
+    // kernels as runtime args, so every core shares one reader/writer/compute triple.
+    std::vector<BlockAssignment> assignments;
+    assignments.reserve(cores_w * cores_h);
     uint32_t core_idx = 0;
     for (uint32_t row_idx = 0; row_idx < cores_h; ++row_idx) {
         const bool is_cliff_h = has_cliff_h && row_idx == cores_h - 1;
@@ -872,7 +851,7 @@ ProgramDescriptor build_block(
             const bool is_cliff_w = has_cliff_w && col_idx == cores_w - 1;
             const uint32_t this_wt = is_cliff_w ? cliff_wt : block_wt;
             const uint32_t start_tile_col = col_idx * block_wt;
-            groups[this_wt].push_back({valid_cores[core_idx], this_ht, this_wt, start_tile_row, start_tile_col});
+            assignments.push_back({valid_cores[core_idx], this_ht, this_wt, start_tile_row, start_tile_col});
             ++core_idx;
         }
     }
@@ -917,60 +896,51 @@ ProgramDescriptor build_block(
 
     const bool fp32 = (attrs.input_dtype == DataType::FLOAT32 || attrs.output_dtype == DataType::FLOAT32);
 
-    for (const auto& [grp_wt, assignments] : groups) {
-        std::vector<CoreCoord> grp_cores;
-        grp_cores.reserve(assignments.size());
-        for (const auto& a : assignments) {
-            grp_cores.push_back(a.core);
-        }
-        const CoreRangeSet grp_grid = merged_core_range_set(grp_cores);
+    KernelDescriptor::CompileTimeArgs reader_ct{constants::TILE_HEIGHT, elem_w_bytes, aligned_ps};
+    TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct);
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kReaderTilizeBlock;
+    reader_desc.core_ranges = all_core_grid;
+    reader_desc.compile_time_args = std::move(reader_ct);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-        const uint32_t sub_wt = tilize_compute_chunk(grp_wt, cb_block_limit);
-        const uint32_t n_sub = grp_wt / sub_wt;
+    KernelDescriptor::CompileTimeArgs writer_ct{kCbOutId, out_page};
+    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
+    writer_ct.push_back(write_batch);
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = kWriterTilizeBlock;
+    writer_desc.core_ranges = all_core_grid;
+    writer_desc.compile_time_args = std::move(writer_ct);
+    writer_desc.config = WriterConfigDescriptor{};
 
-        KernelDescriptor::CompileTimeArgs reader_ct{n_sub, constants::TILE_HEIGHT, sub_wt, elem_w_bytes, aligned_ps};
-        TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct);
-        KernelDescriptor reader_desc;
-        reader_desc.kernel_source = kReaderTilizeBlock;
-        reader_desc.core_ranges = grp_grid;
-        reader_desc.compile_time_args = std::move(reader_ct);
-        reader_desc.config = ReaderConfigDescriptor{};
-
-        KernelDescriptor::CompileTimeArgs writer_ct{kCbOutId, out_page};
-        TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
-        writer_ct.push_back(write_batch);
-        KernelDescriptor writer_desc;
-        writer_desc.kernel_source = kWriterTilizeBlock;
-        writer_desc.core_ranges = grp_grid;
-        writer_desc.compile_time_args = std::move(writer_ct);
-        writer_desc.config = WriterConfigDescriptor{};
-
-        KernelDescriptor compute_desc;
-        compute_desc.kernel_source = kComputeTilize;
-        compute_desc.core_ranges = grp_grid;
-        compute_desc.compile_time_args = {kCbInId, kCbOutId, n_sub, sub_wt};
-        ComputeConfigDescriptor compute_cfg;
-        compute_cfg.fp32_dest_acc_en = fp32;
-        // Input dtype alone drives the override — see build_2d_column.
-        if (attrs.input_dtype == DataType::FLOAT32) {
-            compute_cfg.unpack_to_dest_mode = unpack_to_dest_fp32_modes(kCbInId);
-        }
-        compute_desc.config = compute_cfg;
-
-        for (const auto& a : assignments) {
-            const uint32_t start_stick = a.start_tr * constants::TILE_HEIGHT;
-            const uint32_t col_byte_offset = a.start_tc * constants::TILE_WIDTH * g.elem_size;
-            reader_desc.emplace_runtime_args(a.core, {input_tensor.buffer(), a.this_ht, start_stick, col_byte_offset});
-            compute_desc.runtime_args.emplace_back(a.core, KernelDescriptor::CoreRuntimeArgs{a.this_ht});
-            const uint32_t num_tiles = a.this_ht * a.this_wt;
-            const uint32_t start_tile = a.start_tr * g.wt + a.start_tc;
-            writer_desc.emplace_runtime_args(a.core, {output_tensor.buffer(), num_tiles, start_tile, a.this_wt, g.wt});
-        }
-
-        desc.kernels.push_back(std::move(reader_desc));
-        desc.kernels.push_back(std::move(writer_desc));
-        desc.kernels.push_back(std::move(compute_desc));
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = kComputeTilize;
+    compute_desc.core_ranges = all_core_grid;
+    compute_desc.compile_time_args = {kCbInId, kCbOutId};
+    ComputeConfigDescriptor compute_cfg;
+    compute_cfg.fp32_dest_acc_en = fp32;
+    // Input dtype alone drives the override — see build_2d_column.
+    if (attrs.input_dtype == DataType::FLOAT32) {
+        compute_cfg.unpack_to_dest_mode = unpack_to_dest_fp32_modes(kCbInId);
     }
+    compute_desc.config = compute_cfg;
+
+    for (const auto& a : assignments) {
+        const uint32_t sub_wt = tilize_compute_chunk(a.this_wt, cb_block_limit);
+        const uint32_t n_sub = a.this_wt / sub_wt;
+        const uint32_t start_stick = a.start_tr * constants::TILE_HEIGHT;
+        const uint32_t col_byte_offset = a.start_tc * constants::TILE_WIDTH * g.elem_size;
+        reader_desc.emplace_runtime_args(
+            a.core, {input_tensor.buffer(), a.this_ht, start_stick, col_byte_offset, n_sub, sub_wt});
+        compute_desc.runtime_args.emplace_back(a.core, KernelDescriptor::CoreRuntimeArgs{a.this_ht, n_sub, sub_wt});
+        const uint32_t num_tiles = a.this_ht * a.this_wt;
+        const uint32_t start_tile = a.start_tr * g.wt + a.start_tc;
+        writer_desc.emplace_runtime_args(a.core, {output_tensor.buffer(), num_tiles, start_tile, a.this_wt, g.wt});
+    }
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
 }
@@ -982,7 +952,7 @@ TilizeCodegenDispatch tilize_codegen_dispatch(
     // ops/tilize/tilize.py: route_single = (not use_multicore) or use_low_perf — both force the
     // single-core row path regardless of Wt/Ht, ahead of the block/2D-column dispatch decision.
     if (!attrs.use_multicore || attrs.use_low_perf) {
-        return {TilizeCodegenPath::RowSingleCore, 1, 0};
+        return {TilizeCodegenPath::RowSingleCore, 1};
     }
 
     const Geometry g = compute_geometry(attrs, input_tensor);
@@ -992,14 +962,13 @@ TilizeCodegenDispatch tilize_codegen_dispatch(
     const uint32_t cb_block_limit = compute_cb_block_limit(g.ts_in, l1);
 
     if (uses_block_path(g.total_ht, g.wt, num_avail_cores, cb_block_limit, g.ts_in, l1)) {
-        return {TilizeCodegenPath::Block, 1, 0};
+        return {TilizeCodegenPath::Block, 1};
     }
     const uint32_t ncol = uses_2d_column_path(g.total_ht, g.wt, num_avail_cores, cb_block_limit, g.ts_in, l1);
     if (ncol >= 2) {
-        const std::vector<uint32_t> widths = column_block_widths(g.wt, ncol);
-        return {TilizeCodegenPath::Column, ncol, *std::max_element(widths.begin(), widths.end())};
+        return {TilizeCodegenPath::Column, ncol};
     }
-    return {TilizeCodegenPath::Row, 1, 0};
+    return {TilizeCodegenPath::Row, 1};
 }
 
 bool tilize_codegen_cb_plan_fits(IDevice* device, const TilizeCodegenParams& attrs, const Tensor& input_tensor) {
