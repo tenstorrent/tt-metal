@@ -94,6 +94,116 @@
   team: scaleout
   sp_config: sc4-blitz
 
+- name: "Disaggregated Prefill Runner + Producer KV PCC (Kimi-2.6 SC4)"
+  cmd: |
+    set -euo pipefail
+    cd "${TT_METAL_HOME}"
+    export PYTHONPATH="${TT_METAL_HOME}"   # ttnn/models import from the repo tree (ttrun's local discovery + producer -m)
+    TTRUN_DIR=/etc/ttop
+    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    # One process per host, hostfile (ring) order, 1 slot each: runner = 1 mesh/host, producer = 1/host.
+    HOSTS=$(awk 'NF {printf "%s:1,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+    # Shared NFS scratch for the merged KV chunk table: rank 0 writes it, every host's producer reads it
+    # back. The runner rejects per-host paths (/tmp,/dev/shm,/run,/var/tmp) for num_ranks>1; /data is the
+    # cluster's shared NFS mount.
+    MR_DIR=$(mktemp -d /data/prefill_ci_mr.XXXXXX)
+    TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
+    trap 'rm -rf "${MR_DIR}"' EXIT
+
+    # 4-rank mock-migration rank binding. Model staging + publish flags go in global_env so every rank
+    # (local AND remote) gets identical config -- ttrun writes global_env as per-rank -x, whereas bare -x
+    # forwarding to remote ranks is unreliable. mesh_graph_desc_path is absolute (cwd-independent).
+    cat > prefill_mr_binding.yaml <<EOF
+    rank_bindings:
+      - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+      - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {}}
+      - {rank: 2, mesh_id: 2, mesh_host_rank: 0, env_overrides: {}}
+      - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {}}
+    mesh_graph_desc_path: ${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto
+    global_env:
+      PREFILL_MANIFEST: "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi26.json"
+      MESH_DEVICE: "TG"
+      PREFILL_HF_MODEL: "/mnt/models/Kimi-K2_6-dequantized"
+      PREFILL_TTNN_CACHE: "/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill"
+      PREFILL_TRACE_DIR: "/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm"
+      PREFILL_NUM_LAYERS: "61"
+      PREFILL_FABRIC_MODE: "2d"
+      PREFILL_MAX_SEQ_LEN: "56320"
+      PREFILL_H2D_SERVICE_ID: "ds_prefill"
+      PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+      PREFILL_ENABLE_MIGRATION: "1"
+      PREFILL_MOCK_MIGRATION: "1"
+      PREFILL_MIGRATION_TABLE_PATH: "${TABLE_PATH}"
+      PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_kv_device_map.json"
+      LOGURU_LEVEL: "INFO"
+    EOF
+
+    # 1) Launch the 4-rank runner pipeline in the background. It opens the mesh, loads the model, publishes
+    #    the merged KV chunk table, then serves H2D requests until it receives the shutdown sentinel.
+    python3 "${TTRUN_PY}" \
+      --tcp-interface ens5f0np0 \
+      --rank-binding prefill_mr_binding.yaml \
+      --mpi-args "--host ${HOSTS} --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH" \
+      python3 -m models.demos.common.prefill.runners.prefill_runner &
+    RUNNER_PID=$!
+
+    # 2) Wait (up to 30 min) for rank 0 to publish the merged table; fail fast if the runner dies first.
+    for i in $(seq 1 360); do
+      [ -f "${TABLE_PATH}" ] && break
+      kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
+      sleep 5
+    done
+    [ -f "${TABLE_PATH}" ] || { echo "KV table not published within timeout"; kill "${RUNNER_PID}" 2>/dev/null; exit 1; }
+    echo "[ci] merged KV table published: ${TABLE_PATH}"
+
+    # 3) Launch the all-rank producer (one device-less process per host, MPI-coordinated GO/DONE). rank 0
+    #    feeds tokens over H2D and PCCs its host's layers; every other rank reads its host's KV back and
+    #    PCCs vs golden. PREFILL_SEND_SHUTDOWN=1 makes rank 0 close the stream so the runner tears down
+    #    cleanly. The mpirun exit code is the PCC gate (non-zero if ANY rank's PCC fails). Absolute paths
+    #    are baked into the remote command via outer-shell expansion (not -x, which is unreliable remotely).
+    #    Gate at 0.90: real KV is ~0.999 on shallow layers, drooping to ~0.932 on the deepest (pre-existing
+    #    `nope` depth-droop); 0.90 catches a broken KV path with margin without flaking on the known droop.
+    set +e
+    mpirun-ulfm \
+      --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
+      --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 \
+      bash -lc "cd '${TT_METAL_HOME}'; \
+        export PYTHONPATH='${TT_METAL_HOME}'; \
+        export PREFILL_MANIFEST='${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi26.json'; \
+        export MESH_DEVICE=TG; \
+        export PREFILL_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized; \
+        export PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill; \
+        export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm; \
+        export PREFILL_NUM_LAYERS=61; \
+        export PREFILL_NUM_USERS=1; \
+        export PREFILL_MAX_SEQ_LEN=56320; \
+        export PREFILL_H2D_SERVICE_ID=ds_prefill; \
+        export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
+        export PREFILL_MIGRATION_DEVICE_MAP_PATH=/tmp/prefill_kv_device_map.json; \
+        export PREFILL_PRODUCER_CHECK_PCC=1; \
+        export PREFILL_PRODUCER_CHUNKS=11; \
+        export PREFILL_PRODUCER_MAX_REQUESTS=1; \
+        export PREFILL_SEND_SHUTDOWN=1; \
+        export PREFILL_STANDALONE_CHUNKED_PCC=0.90; \
+        export PREFILL_H2D_CONNECT_TIMEOUT=120; \
+        export LOGURU_LEVEL=INFO; \
+        exec python3 -m models.demos.common.prefill.runners.prefill_producer"
+    PROD_RC=$?
+    set -e
+
+    # 4) The producer sent the shutdown sentinel; wait for the runner to tear the mesh/DRAM down cleanly,
+    #    then gate the leg on the producer's PCC result.
+    wait "${RUNNER_PID}" || true
+    echo "[ci] producer exit code: ${PROD_RC}"
+    exit ${PROD_RC}
+  skus:
+    bh_sc4-blitz:
+      timeout: 60
+  owner_id: U08E1JCMAJF
+  team: scaleout
+  sp_config: sc4-blitz
+
 # ============================================================================
 # BH SC16 Multihost Pipeline Tests (4 connected SC4 = 16 galaxies)
 # ============================================================================
