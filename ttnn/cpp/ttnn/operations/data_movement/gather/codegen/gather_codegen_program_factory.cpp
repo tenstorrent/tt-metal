@@ -10,6 +10,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include "gather_codegen_device_operation.hpp"
 
