@@ -388,12 +388,17 @@ single fixed-precision step inside the fused pipeline. Pinning it further needs 
 
 ## 6. Open items
 
-### Accuracy bookkeeping — one thing to fix before trusting §6.8
-- **§6.8's absolute worst-sample levels do not reproduce.** Re-measuring the config it records at
-  mean 0.84% / p90 1.06% reads 0.94% / 1.56% today. Every "indistinguishable from shipped on
-  mean/p90" call in that section rests on those levels. Reconcile before relying on them again —
-  full detail and what has already been ruled out in **§6.15**. A/B comparisons run inside one
-  session remain sound; only cross-session absolute numbers are in doubt.
+### Accuracy bookkeeping — read §6.15 before quoting any accuracy number
+- **The decode gate's prompt-to-prompt spread (0.45 pp mean, 0.96 pp p90 over 8 prompts) is larger
+  than every change that was gated with it**, w2's 0.10 pp included. §6.8 reported a 2-prompt pair to
+  0.01 pp and did not record which two. The gate is sound for **paired, same-session, same-prompt**
+  A/B — it is deterministic and repeats bit-identically — and unsound for absolute levels or
+  cross-session comparison. Gate on all 8+ prompts, recorded by index, both arms in one session.
+- **§6.8's absolute levels are unreachable today and the cause is unidentified.** It records mean
+  0.84% / p90 1.06%; the best of 28 prompt pairs is 0.99% / 1.38%. Gate code, Block 1 code, the
+  reference, the ttnn build and prompt selection have all been ruled out by direct check — see §6.15
+  so nobody repeats them. Every "indistinguishable from shipped on mean/p90" call in §6.8 rests on
+  those levels.
 
 ### Block 3 — closed, with two deferred decisions (not defects)
 - **`chunk_min` should probably be 1024, not 512.** Measured crossover is S ~ 2000: at S=1024
@@ -1221,14 +1226,47 @@ because the codec stopped calling `ttnn.conv1d`; the codec fix now stands on its
 reverted **alone** — one line, `ttnn_voxtral_gpt.py` `WEIGHT_DTYPE` — for ~2.5 ms/frame (RTF
 0.60–0.65 → ~0.63–0.68), and it does **not** reintroduce the hang, which needed `conv1d`.
 
-**⚠ §6.8'S ABSOLUTE LEVELS DO NOT REPRODUCE — treat that table's numbers as suspect.** §6.8 records
-mean 0.84% / p90 1.06% for the config that is exactly today's minus w2. Re-measuring that same config
-reads **0.94% / 1.56%**. Ruled out: the prefill rows (folding them in gives 0.92%, not 0.84%). Cause
-unknown — a different case pair, a different step count, or drift in `real_frames_fixture` /
-`fixture_embeds` since. **Only the A/B above is trustworthy**, because both sides ran in one session
-against one fixture. Several "indistinguishable from shipped on mean/p90" conclusions in §6.8 were
-drawn against those levels, so reconciling this is worth a session before any of them is relied on
-again. The lesson is §6.9's, once more: re-measure against the config you ship, never a recorded number.
+**⚠ THE BIGGER FINDING: THIS GATE WAS BEING READ TO 0.01 pp AND ITS PROMPT SPREAD IS 0.45 pp.**
+
+Chasing why §6.8's levels would not reproduce turned up something that matters more than the w2
+result above. Per prompt, 22 teacher-forced frames each, shipped build:
+
+| case | voice | P | mean WS | p90 WS |
+|---|---|---|---|---|
+| 5 | fr_female | 118 | 1.20% | 1.65% |
+| 7 | es_female | 158 | 1.34% | 2.34% |
+| 1 | cheerful_female | 163 | **0.97%** | **1.38%** |
+| 6 | de_male | 179 | **1.42%** | 2.28% |
+| 8 | it_male | 184 | 1.35% | 2.16% |
+| 0 | neutral_male | 200 | 1.02% | 1.55% |
+| 2 | neutral_male | 312 | 1.07% | 1.38% |
+| 3 | casual_female | 357 | 1.10% | 1.50% |
+
+**Prompt choice moves mean worst-sample by 0.45 pp and p90 by 0.96 pp** — 4× and ~10× the +0.10 pp
+that w2's precision drop costs, and larger than every §6.8 candidate that was accepted or rejected on
+this metric. It is **not** a prompt-length effect: the shortest prompt (case 5, P=118) reads worse
+than case 1 at P=163. §6.8 reported a 2-prompt pair to 0.01 pp and **did not record which two**.
+
+This is §6.7's error repeated on the gate that was built to *replace* §6.7's gate: reading a number
+to a precision far finer than its own spread. WER over 298 words could not resolve these changes;
+neither can a 44-frame two-prompt worst-sample, **unless the prompts are held fixed**.
+
+**What the gate does and does not support:**
+- ✅ **Paired, same-session, same-prompts A/B.** Deterministic — a repeat run reproduced
+  bit-identically. The w2 table above is valid on this basis.
+- ❌ **Absolute levels.** ❌ **Cross-session comparison.** ❌ **Generalising an effect measured on
+  one prompt pair** — w2's +0.10 pp is cases 0,2 only and may differ elsewhere.
+
+**§6.8's levels are unreachable today, cause unidentified.** It records mean 0.84% / p90 1.06%; the
+best of 28 prompt pairs across 8 cases is **0.99% / 1.38%**, and no single prompt reaches it either.
+Ruled out by direct check, so nobody repeats them: the gate code (identical since §6.8 bar print
+statements), `ttnn_voxtral_gpt.py` (identical bar docstring prose), the Block 1 reference
+(untouched), the ttnn build (artifacts dated Jul 22/30, *predating* §6.8), the prefill rows (folding
+them in gives 0.92%), and prompt selection (above). §6.9 reproduced 0.84%/1.06% at the time in a
+second run, so it was not a one-off transcription slip. Unexplained.
+
+**Practical rule going forward:** gate on **all 8+ prompts, recorded by index, both arms in one
+session**. Anything else in this port has been over-read.
 
 **Where quality stands overall, all measured on the current build:**
 
