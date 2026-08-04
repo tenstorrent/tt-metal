@@ -138,13 +138,13 @@ ttnn:
     # numbers had to roughly double — see that file's header). SKU names are the
     # existing logical SKUs in sku_config.yaml. Shared SKUs cover both targets'
     # entries, so wh_n150_civ2 carries lead + model_traced.
-    wh_galaxy: 640            # lead galaxy (obs ~4h28m total / 29 batches)
-    wh_n150_civ2: 1100        # lead(150) + model_traced(950)
-    wh_n300_civ2: 990         # model_traced
-    wh_llmbox: 920            # model_traced t3k
+    wh_galaxy: 640 # lead galaxy (obs ~4h28m total / 29 batches)
+    wh_n150_civ2: 1100 # lead(150) + model_traced(950)
+    wh_n300_civ2: 990 # model_traced
+    wh_llmbox: 920 # model_traced t3k
     bh_p100a_civ2_viommu: 660 # model_traced
     bh_p150b_civ2_viommu: 640 # model_traced
-    bh_p300_viommu: 720       # model_traced
+    bh_p300_viommu: 720 # model_traced
   sweep_validation:
     wh_n150: 120
     wh_n300: 120
@@ -360,7 +360,7 @@ models:
     bh_p150: 20
     bh_quietbox_2: 260
     bh_galaxy: 75
-    bh_sc1: 25  # Flux multihost tests (timeout 20 + headroom)
+    bh_sc1: 25 # Flux multihost tests (timeout 20 + headroom)
     bh_sc4-mgd: 50 # WAN 2.2 transformer-block multihost quad unit
   unit_tier2:
     wh_llmbox: 114

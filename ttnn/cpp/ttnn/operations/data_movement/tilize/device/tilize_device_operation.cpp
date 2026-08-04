@@ -59,6 +59,10 @@ bool can_use_sharded_optimized_factories(
         return false;
     }
 
+    if (input_tensor.layout() == Layout::ROW_MAJOR && operation_attributes.tile.get_height() < tt::constants::TILE_HEIGHT) {
+        return false;
+    }
+
     if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED ||
             operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
