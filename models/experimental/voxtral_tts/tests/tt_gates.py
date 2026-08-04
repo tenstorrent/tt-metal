@@ -12,8 +12,9 @@ are for a human deciding whether a change is acceptable, not for CI. The pass/fa
 `tests/test_*.py`; this is the thing you run by hand after touching a block.
 
     python models/experimental/voxtral_tts/tests/tt_gates.py --gate wiring
-    python models/experimental/voxtral_tts/tests/tt_gates.py --gate prefill26 --cases 0,2
-    python models/experimental/voxtral_tts/tests/tt_gates.py --gate decode --cases 0 --steps 8
+    python models/experimental/voxtral_tts/tests/tt_gates.py --gate prefill26   # all 15 prompts
+    python models/experimental/voxtral_tts/tests/tt_gates.py --gate decode      # all 15 prompts
+    python models/experimental/voxtral_tts/tests/tt_gates.py --gate decode --cases 0,2 --verbose
     python models/experimental/voxtral_tts/tests/tt_gates.py --gate flow
     python models/experimental/voxtral_tts/tests/tt_gates.py --gate codec
     python models/experimental/voxtral_tts/tests/tt_gates.py --gate codes      # blocks 1+2 e2e
@@ -116,34 +117,61 @@ def gate_prefill26(dev, ref, cases, n_layers=N_LAYERS):
     print("    tt_transformers, FF1_FF3 BFP8: 0.999564 at P=200, 0.999579 at P=312")
 
 
-def gate_decode(dev, ref, cases, n_steps=8, n_layers=N_LAYERS):
+def _p90(v):
+    """The 90th percentile by nearest-rank. Deliberately not numpy's interpolating default, so a
+    recorded p90 is always an observed sample and two runs of the same config give the same value."""
+    v = sorted(v)
+    return v[min(len(v) - 1, int(round(0.9 * (len(v) - 1))))]
+
+
+def gate_decode(dev, ref, cases, n_steps=8, n_layers=N_LAYERS, verbose=False):
     """Increment 4: on-device KV cache + decode steps vs `IncrementalBackbone.step()`.
 
     TEACHER-FORCED on REAL frames (`tests/real_frames_fixture.pt`, genuine Block 1+2 output): both
     sides advance on the SAME embedding every step, so each step is an independent measurement.
     Feeding each its own codes instead compares two diverging trajectories and tells you nothing
     (the same trap `ttnn_voxtral_pipeline.compare_codes` documents).
-    """
-    import os
 
+    HOW TO READ THE OUTPUT, because this gate was misread twice (STATUS.md 6.15):
+
+    Its PROMPT-TO-PROMPT SPREAD is 0.45 pp on mean worst-sample and 0.96 pp on p90 -- LARGER than
+    any change ever gated with it, w2's BFP8 drop (0.10 pp) included. So:
+      - It resolves PAIRED A/B: same prompts, same session, one thing changed. It is deterministic,
+        and a repeat run reproduces bit-identically, so a difference there is real at 0.01 pp.
+      - It does NOT support absolute levels, comparison against a number recorded in another
+        session, or generalising an effect measured on one prompt pair to other prompts.
+    That is why the summary prints the case list and the per-case spread next to every aggregate:
+    an aggregate here is meaningless without knowing which prompts produced it. STATUS.md 6.8
+    reported a 2-prompt pair to 0.01 pp WITHOUT recording which two, and its levels can no longer
+    be reproduced by any pair of the 15.
+
+    Per-step rows are off by default (--verbose) -- they are for debugging a specific step, and
+    printing 330 of them buries the summary that should actually be read.
+    """
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc
 
     here = HERE
     frames = torch.load(os.path.join(here, "tests", "real_frames_fixture.pt")).long()
     w = ref.load_backbone_state()
     gen = TtVoxtralGPT(dev, n_layers=n_layers, state=w, max_seq_len=1024)
+    per_case, pooled_ws, pooled_pcc, pooled_ms = {}, [], [], []
     for ci in cases:
         embeds, case = fixture_embeds(ci, w)
         P = embeds.shape[1]
-        print(f"\n  case {ci} ({case['voice']}, P={P}), {n_steps} real frames teacher-forced")
-        print(f"  {'step':>6} {'pos':>5} {'PCC':>11} {'worst':>8} {'ms':>8}")
+        print(f"\n  case {ci} ({case['voice']}, P={P}), {n_steps} real frames teacher-forced",
+              flush=True)
+        if verbose:
+            print(f"  {'step':>6} {'pos':>5} {'PCC':>11} {'worst':>8} {'ms':>8}")
         inc = ref.IncrementalBackbone(w, n_layers=n_layers)
         h_ref = inc.prefill(embeds)
         gen.reset()
         h_dev = gen.prefill(embeds, last_only=True)
         assert gen.pos == inc.pos == P, f"position mismatch after prefill: {gen.pos} vs {inc.pos}"
-        worst = (h_dev - h_ref).abs().max().item() / h_ref.abs().max().item() * 100
-        print(f"  {'prefill':>6} {P:>5} {pcc(h_dev, h_ref):>11.6f} {worst:>7.2f}%")
+        pre_ws = (h_dev - h_ref).abs().max().item() / h_ref.abs().max().item() * 100
+        pre_pcc = pcc(h_dev, h_ref)
+        if verbose:
+            print(f"  {'prefill':>6} {P:>5} {pre_pcc:>11.6f} {pre_ws:>7.2f}%")
+        ws, pc, ms = [], [], []
         for t in range(min(n_steps, frames.shape[0])):
             emb = ref.embed_frame(w, frames[t])
             h_ref = inc.step(emb)
@@ -151,11 +179,39 @@ def gate_decode(dev, ref, cases, n_steps=8, n_layers=N_LAYERS):
             h_dev = gen.step(emb)
             dt = (time.perf_counter() - t0) * 1e3
             worst = (h_dev - h_ref).abs().max().item() / h_ref.abs().max().item() * 100
-            print(f"  {t:>6} {gen.pos - 1:>5} {pcc(h_dev, h_ref):>11.6f} {worst:>7.2f}% {dt:>7.1f}")
-    print("\n  reference points (STATUS.md 6.8): shipped mean worst-sample is 0.86% over 44 frames")
-    print("  on two prompts, and ~31.4 ms/step. JUDGE A CHANGE ON MEAN AND P90, NOT ON MAX --")
-    print("  max is an order statistic and moved 1.28-4.28% non-monotonically across configs.")
-    print("  tt_transformers, for comparison: decode PCC 0.981 at 48 ms/step.")
+            ws.append(worst); pc.append(pcc(h_dev, h_ref)); ms.append(dt)
+            if verbose:
+                print(f"  {t:>6} {gen.pos - 1:>5} {pc[-1]:>11.6f} {worst:>7.2f}% {dt:>7.1f}")
+        per_case[ci] = dict(voice=case["voice"], P=P, ws=ws, pcc=pc,
+                            pre_ws=pre_ws, pre_pcc=pre_pcc)
+        pooled_ws += ws; pooled_pcc += pc; pooled_ms += ms
+        print(f"    mean {sum(ws)/len(ws):.2f}%  p90 {_p90(ws):.2f}%  max {max(ws):.2f}%  "
+              f"min PCC {min(pc):.6f}   (prefill {pre_ws:.2f}%, PCC {pre_pcc:.6f})", flush=True)
+
+    n = len(pooled_ws)
+    means = [sum(d["ws"]) / len(d["ws"]) for d in per_case.values()]
+    p90s = [_p90(d["ws"]) for d in per_case.values()]
+    print(f"\n  {'=' * 78}")
+    print(f"  DECODE SUMMARY -- cases {','.join(str(c) for c in cases)}  "
+          f"({len(cases)} prompts x {n // max(len(cases), 1)} frames = {n} frames)")
+    print(f"  {'=' * 78}")
+    print(f"  {'pooled over all frames':<34} mean {sum(pooled_ws)/n:5.2f}%   "
+          f"p90 {_p90(pooled_ws):5.2f}%   max {max(pooled_ws):5.2f}%   min PCC {min(pooled_pcc):.6f}")
+    print(f"  {'per-case mean, min..max':<34} {min(means):5.2f}% .. {max(means):5.2f}%   "
+          f"(spread {max(means)-min(means):.2f} pp)")
+    print(f"  {'per-case p90,  min..max':<34} {min(p90s):5.2f}% .. {max(p90s):5.2f}%   "
+          f"(spread {max(p90s)-min(p90s):.2f} pp)")
+    print(f"  {'prefill worst-sample, min..max':<34} "
+          f"{min(d['pre_ws'] for d in per_case.values()):5.2f}% .. "
+          f"{max(d['pre_ws'] for d in per_case.values()):5.2f}%")
+    print(f"\n  QUOTE THIS ONLY WITH THE CASE LIST ABOVE. The spread lines are why: on the full 15")
+    print(f"  the per-case mean ranges ~0.45 pp, so an aggregate over a DIFFERENT prompt set is not")
+    print(f"  comparable. Valid use is a paired A/B -- same cases, same session, one change.")
+    print(f"  Deterministic: a repeat of the same config reproduces these bit-identically.")
+    print(f"  IGNORE THE ms COLUMN. It ran {sum(pooled_ms)/n:.1f} ms/step here against ~23 ms in the")
+    print(f"  real pipeline, because a 3.4B fp32 CPU reference step runs between device steps and")
+    print(f"  starves host dispatch. It has read BFP8 as SLOWER than bf16. Use the pipeline for perf.")
+    print(f"  tt_transformers, for comparison: decode PCC 0.981.")
 
 
 def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
@@ -318,11 +374,25 @@ def main():
                          "decode = KV cache + steps vs IncrementalBackbone; "
                          "flow = Block 2 vs its reference; codec = Block 3 vs its reference; "
                          "codes = blocks 1+2 end to end, integer-code agreement")
-    ap.add_argument("--cases", default="0,2", help="prompt_fixture.json indices")
+    # ALL 15 by default for --gate decode, and that is deliberate. A 2-prompt default is what let
+    # STATUS.md 6.8 record a number to 0.01 pp on a prompt set it did not name, on a gate whose
+    # prompt-to-prompt spread is 0.45 pp -- see gate_decode's docstring and STATUS.md 6.15. All 15
+    # are valid here even though score_quality_set buckets 4/10/11/14 out: that exclusion is about
+    # WER having no defined transcript for them, and teacher-forcing feeds both sides identical
+    # frames, so prompt content cannot invalidate the comparison. Narrow with --cases only when
+    # debugging one prompt, never when recording a number.
+    ap.add_argument("--cases", default="all",
+                    help='"all" (default) or prompt_fixture.json indices, e.g. "0,2"')
     ap.add_argument("--layers", type=int, default=N_LAYERS)
-    ap.add_argument("--steps", type=int, default=8, help="decode steps for --gate decode")
+    ap.add_argument("--steps", type=int, default=22, help="decode steps per case for --gate decode")
+    ap.add_argument("--verbose", action="store_true",
+                    help="per-step rows as well as the per-case and pooled summary")
     args = ap.parse_args()
-    cases = [int(c) for c in args.cases.split(",")]
+    if args.cases == "all":
+        with open(os.path.join(HERE, "tests", "prompt_fixture.json")) as f:
+            cases = list(range(len(json.load(f)["cases"])))
+    else:
+        cases = [int(c) for c in args.cases.split(",")]
 
     if args.gate == "flow":
         return gate_flow()
@@ -338,7 +408,7 @@ def main():
         elif args.gate == "prefill26":
             gate_prefill26(dev, bref, cases, args.layers)
         else:
-            gate_decode(dev, bref, cases, args.steps, args.layers)
+            gate_decode(dev, bref, cases, args.steps, args.layers, args.verbose)
     finally:
         ttnn.close_device(dev)
 

@@ -1284,6 +1284,57 @@ fp32 reference step on the CPU between device steps, starving host dispatch. **T
 are what this gate is for; its timings are host-contended.** Real numbers come from the pipeline:
 0.05 s/frame, RTF 0.60–0.65.
 
+### 6.16 — the precision stack re-gated on all 15 prompts: w2 is 77% of the cost for 15% of the win
+
+§6.15 fixed the gate (all 15 prompts by default, pooled + per-case spread, case list printed). This
+is the measurement it was fixed for, and it **overturns §6.8's central claim** that each BFP8 step was
+free on mean/p90. Five arms, 15 prompts x 22 teacher-forced frames = 330 frames each, all in one
+session, only the weight dtypes differing. `ms/step` for the three cumulative rows is the recorded
+ladder; the two leave-one-out rows are derived from it and marked ~.
+
+| Block 1 weights | ms/step | mean WS | p90 WS | max WS | min PCC |
+|---|---|---|---|---|---|
+| all bf16 | 45.8 | **0.86%** | **1.18%** | 3.01% | 0.999357 |
+| BFP8 except w2 (FF + attn) | 31.4 | 0.93% | 1.35% | 3.05% | 0.998969 |
+| BFP8 except attn (FF + w2) | ~32.2 | 1.13% | 1.69% | 4.07% | 0.998810 |
+| BFP8 except FF (attn + w2) | ~40.0 | 1.13% | 1.69% | 3.73% | 0.998859 |
+| **all BFP8 ← shipped** | **28.9** | **1.17%** | **1.75%** | 4.34% | 0.998045 |
+
+**The total accumulated cost is +0.31 pp mean / +0.57 pp p90, and min PCC 0.999357 → 0.998045.**
+§6.8 measured the increments as 0.86 → 0.86 → 0.84 — i.e. free, three times over — on two unrecorded
+prompts where the prompt spread (0.44 pp) dwarfed each increment (~0.1 pp). The increments were never
+free; the noise hid them, and **the accumulated total was never checked at all**. That is the concrete
+demonstration of §6.15's warning, and it is why the gate now defaults to 15 prompts.
+
+**Priced per millisecond, reverting one thing at a time from shipped:**
+
+| revert | mean WS recovered | p90 recovered | ms/step given back | **pp per ms** |
+|---|---|---|---|---|
+| **w2** | **−0.24 pp** | **−0.40 pp** | 2.5 | **0.096** |
+| wqkv + wo | −0.04 pp | −0.06 pp | 3.3 | 0.012 |
+| FF1 + FF3 | −0.04 pp | −0.06 pp | 11.1 | 0.004 |
+
+The three effects sum to 0.32 pp against a measured total of 0.31, so they are **additive** — and
+**w2 is the whole story: 77% of the accuracy cost for 15% of the speed.** FF1+FF3 are the opposite,
+66% of the speed for 13% of the cost, and 24x better value than w2. Note also that reverting attn and
+reverting FF buy *identical* quality (1.13% / 1.69%) — so if 0.04 pp is ever wanted back, revert
+**attn**, which costs 3.3 ms, never FF at 11.1 ms.
+
+**RECOMMENDATION: put w2 back to bf16.** One line, `ttnn_voxtral_gpt.py` `WEIGHT_DTYPE`. It costs
+2.5 ms/step — frame 47.5 → ~50.0, RTF ~0.60–0.65 → ~0.63–0.68, still far inside realtime — and buys
+back 77% of the accumulated precision loss (mean 1.17% → 0.93%, p90 1.75% → 1.35%). Keep FF and attn
+in BFP8; they are cheap in accuracy and carry the bulk of the speedup.
+
+This reverses the recommendation given when w2 shipped and again in §6.15. Both earlier calls rested
+on a 2-prompt estimate that put w2 at +0.10 pp; on 15 prompts it is **+0.24 pp, 2.4x larger**. The
+2-prompt number was not wrong for cases 0,2 — it was not generalisable, exactly as §6.15 warned, and
+I then generalised it anyway.
+
+**What has NOT changed:** end-to-end quality is still good on the shipped all-BFP8 build — long-form
+WER 1 word of 298, 15/15 `[END_AUDIO]`, voice identity PASS, Block 2 3-of-74 codes, codec
+bit-identical. min PCC 0.998 is still far above tt_transformers' 0.981. This is a
+margin-and-headroom argument, not a "the model is broken" argument.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
