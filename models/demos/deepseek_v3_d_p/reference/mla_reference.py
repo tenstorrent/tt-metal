@@ -43,19 +43,11 @@ class MLAReference(nn.Module):
         # forward() is overridden below to use memory-efficient F.scaled_dot_product_attention.
         self.attention = DeepseekV3Attention(config, layer_idx=layer_idx)
 
-        # Kimi-K3 deltas, both config-driven and both False for every other variant.
-        #  * use_nope: no rotary embedding at all. The qk_rope_head_dim columns are still present and
-        #    still cached (the latent row stays kv_lora_rank + qk_rope_head_dim wide) -- they are just
-        #    never rotated. DeepseekV3Attention.softmax_scale is already correct here: it only applies
-        #    mscale when rope_scaling carries a non-zero mscale_all_dim.
-        #  * use_output_gate: a full-rank g_proj whose sigmoid gates the attention output in
-        #    num_heads * v_head_dim space, before o_proj. It cannot move earlier -- it acts after the
-        #    V-head expansion, and g * (attn @ W_b2) != (g * attn) @ W_b2.
+        # Kimi-K3 deltas; both absent (-> False) on every other variant.
         self.use_nope = bool(getattr(config, "mla_use_nope", False))
         self.use_output_gate = bool(getattr(config, "mla_use_output_gate", False))
         if self.use_output_gate:
-            # Lives on `self.attention` so the "model.layers.N.self_attn.*" state dict and
-            # `from_pretrained`'s single load_state_dict call reach it like every other projection.
+            # On self.attention so the "model.layers.N.self_attn.*" state dict reaches it.
             self.attention.g_proj = nn.Linear(
                 config.hidden_size, config.num_attention_heads * config.v_head_dim, bias=False
             )
@@ -107,8 +99,7 @@ class MLAReference(nn.Module):
         k_pe = k_pe.view(bsz, 1, q_len, attn.qk_rope_head_dim)
         k_nope = attn.kv_a_layernorm(compressed_kv).view(bsz, 1, q_len, attn.kv_lora_rank)
 
-        # RoPE. NoPE variants (Kimi-K3) skip it entirely: q_pe / k_pe pass through unrotated and are
-        # still concatenated into the 576-wide kvpe row below -- do NOT narrow them away.
+        # RoPE; NoPE (Kimi-K3) skips it -- q_pe / k_pe stay unrotated but are still concatenated below.
         sin = cos = None
         if not self.use_nope:
             kv_seq_len = k_nope.shape[-2]
@@ -183,8 +174,8 @@ class MLAReference(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, attn.num_heads * attn.v_head_dim)
 
-        # Kimi-K3 output gate. Head-major over the last dim, matching what the device path multiplies
-        # in after nlp_concat_heads.
+        # Kimi-K3 output gate; head-major over the last dim, as the device path applies it after
+        # nlp_concat_heads. Cannot move before wkv_b2: g * (attn @ W_b2) != (g * attn) @ W_b2.
         if self.use_output_gate:
             attn_output = attn_output * attn.g_proj(hidden_states).sigmoid()
 

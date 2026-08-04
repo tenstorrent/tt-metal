@@ -54,8 +54,6 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # for the MoE side anyway (MLA itself is exempt: quantization_config.ignore covers self_attn).
     # False makes the pretrained fixtures SKIP rather than fail.
     supports_pretrained = False
-    # Carried over from Kimi-K2.6 as a starting point; re-derive once measured.
-    mla_pcc_threshold = 0.995
 
     @property
     def config_builder(self) -> Callable:
