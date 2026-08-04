@@ -22,13 +22,31 @@ from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow  # noqa
 from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt  # noqa: E402
 
 
-def test_block1_weight_precision_is_mixed():
-    """BFP8 on everything EXCEPT w2, which is the pinned trigger of a card-wedging hang in
-    multi-utterance runs (recovery needs a board reset). wqkv, wo, FF1 and FF3 are all safe and
-    were measured individually; w2 alone brings the hang back. See gpt.WEIGHT_DTYPE."""
-    assert gpt.WEIGHT_DTYPE == ttnn.bfloat16        # w2 only
+def test_block1_weights_are_all_bfp8():
+    """ALL of Block 1's matmul weights are BFP8 now, including w2. Decode is bandwidth-limited on
+    weight bytes, so this is the single biggest lever and every matrix that can be halved has been.
+
+    w2 was blocked for months by a card-wedging hang. That hang was in ttnn's conv `halo_gather`
+    kernel, reached via the CODEC's output projection -- not Block 1 at all. It is fixed by
+    computing that projection as matmuls (STATUS.md 6.12-6.13), so if someone reverts the codec
+    change, this must revert too or the hang comes back."""
+    assert gpt.WEIGHT_DTYPE == ttnn.bfloat8_b       # w2
     assert gpt.FF_WEIGHT_DTYPE == ttnn.bfloat8_b    # FF1, FF3
     assert gpt.ATTN_WEIGHT_DTYPE == ttnn.bfloat8_b  # wqkv, wo
+
+
+def test_codec_output_projection_does_not_use_conv1d():
+    """The pair to the test above. The codec's output projection must NOT call ttnn.conv1d: its
+    halo_gather kernel issues an out-of-range NOC write on the second execution of that shape and
+    hangs the card, which is what blocked w2 in BFP8. It is computed as matmuls instead, which needs
+    the per-tap weights below. STATUS.md 6.12-6.13."""
+    import inspect
+
+    from models.experimental.voxtral_tts.tt import ttnn_voxtral_codec as codec
+
+    src = inspect.getsource(codec.TtVoxtralCodecDecoder._graph)
+    assert '_conv1d(x, "out"' not in src, "the output projection is back on ttnn.conv1d -- see 6.13"
+    assert "_out_taps" in inspect.getsource(codec.TtVoxtralCodecDecoder.__init__)
 
 
 def test_block1_math_config_keeps_fp32_accumulation():
