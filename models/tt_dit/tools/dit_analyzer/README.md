@@ -1,6 +1,6 @@
 # ditcheck — collective-redundancy static analyzer for DiT forward graphs
 
-Prototype of the tool described in [`models/tt_dit/DitStaticAnalyzerPlan.md`](../../DitStaticAnalyzerPlan.md):
+Prototype of the tool described in [`DitStaticAnalyzerPlan.md`](DitStaticAnalyzerPlan.md):
 a **distributed forward-pass state analyzer** with a backward demand engine and
 proof-based redundancy checks. It answers, for every collective in a forward
 pass: *what did each device already have, what does anything downstream actually
@@ -129,6 +129,7 @@ property that matters most for adoption.
 ## How it works
 
 ```
+DitStaticAnalyzerPlan.md   the plan this implements (scope, phases, rule classes)
 region.py     interval/box algebra over logical tensor axes (union, subtract, covers, volume)
 ir.py         Mesh, TensorSymbol, Dist, Node, Graph (+ JSON), value identity
 state.py      per-device SymbolState: region owned, layout, provenance, taint
