@@ -12,6 +12,7 @@ import itertools
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 
 def build_rope_tables(device, rope_dim, max_seq_len, theta):
@@ -290,10 +291,34 @@ def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions):
     the [B] index vector. A position past the current table end (M-RoPE rope_delta can push
     rope_pos beyond max_seq_len) grows the table rather than dropping to host trig.
     """
-    B = int(positions.shape[0])
+    if is_blackhole():
+        # Blackhole executes the pre-migration statements verbatim (see e83017ce0ec).
+        inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
+        pos = positions.float()
+        freqs = torch.outer(pos, inv_freq)  # [B, rope_dim/2]
+        emb = torch.cat([freqs, freqs], dim=-1)  # [B, rope_dim]
+        B = positions.shape[0]
+        cos = emb.cos().reshape(1, B, 1, rope_dim).to(torch.bfloat16)
+        sin = emb.sin().reshape(1, B, 1, rope_dim).to(torch.bfloat16)
+        cos_tt = ttnn.from_torch(
+            cos,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        sin_tt = ttnn.from_torch(
+            sin,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        return cos_tt, sin_tt
     pos_i = positions.to(torch.int64).reshape(-1)
     assert int(pos_i.min()) >= 0, f"negative rope position {int(pos_i.min())}"
     tbl_cos, tbl_sin = _rope_dev_tables(device, rope_dim, int(pos_i.max()) + 1, theta)
+    B = int(positions.shape[0])
     idx = ttnn.from_torch(
         pos_i.to(torch.int32).reshape(1, B),
         dtype=ttnn.uint32,
@@ -320,11 +345,12 @@ def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_
     where interleaved-mrope collapses to ordinary 1D RoPE, so the result is independent of
     mrope_section and identical to the pre-M-RoPE behaviour.
     """
-    if position_ids is None:
-        # Text-only: positions are exactly arange(seq_len), i.e. a contiguous prefix of the
-        # RoPE table, so slice it on device instead of recomputing the trig on host and DMAing
+    if position_ids is None and not is_blackhole():
+        # Text-only on Wormhole: positions are exactly arange(seq_len), i.e. a contiguous prefix of
+        # the RoPE table, so slice it on device instead of recomputing the trig on host and DMAing
         # a [1,1,seq_len,rope_dim] cos+sin pair across. (t==h==w here, so interleaved-mrope
         # collapses to ordinary 1D RoPE and mrope_section is irrelevant -- same values.)
+        # Blackhole falls through to the original host path below: unchanged flow.
         tbl_cos, tbl_sin = _rope_dev_tables(device, rope_dim, seq_len, theta)
 
         def _slice(tbl):
@@ -335,6 +361,9 @@ def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_
         return _slice(tbl_cos), _slice(tbl_sin)
 
     inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
+    if position_ids is None:
+        # Blackhole text-only: the original host path expects explicit positions.
+        position_ids = torch.arange(seq_len).view(1, -1)
     if mrope_section is None:
         # Any split works for text (t==h==w); use an even-ish T/H/W partition of rope_dim//2.
         half = rope_dim // 2

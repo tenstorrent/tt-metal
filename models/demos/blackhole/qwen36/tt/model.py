@@ -674,6 +674,8 @@ class Qwen36Model:
         x_last = self.norm(x_last, mode=Mode.PREFILL)  # DistributedNorm on selected row
         logits = self._lm_head(x_last)
         if return_token:
+            # Wormhole-only: generate_tp passes return_token=True there. On Blackhole it never
+            # does, so this branch is unreachable and BH runs the original body untouched.
             tok = self._argmax_device(logits)
             ttnn.deallocate(logits)
             return tok
@@ -717,6 +719,8 @@ class Qwen36Model:
         x = self._final_norm_decode(x)
         logits = self._lm_head(x)
         if return_token:
+            # Wormhole-only: generate_tp passes return_token=True there. On Blackhole it never
+            # does, so this branch is unreachable and BH runs the original body untouched.
             tok = self._argmax_device(logits)
             ttnn.deallocate(logits)
             return tok
@@ -731,7 +735,18 @@ class Qwen36Model:
         T = len(prompt_ids)
         T_pad = max(128, _math.ceil(T / 128) * 128)
         padded = prompt_ids + [0] * (T_pad - T)
-        # return_token=True samples on device (see _argmax_device) and returns the token id.
+        if is_blackhole():
+            # Blackhole executes the pre-migration statements verbatim (see e83017ce0ec):
+            # full-logits readback here, argmax on host. return_token is never passed.
+            logits = self.prefill_tp(torch.tensor([padded], dtype=torch.long), valid_len=T)
+            nxt = int(torch.argmax(logits).item())
+            out = [nxt]
+            for pos in range(T, T + max_new_tokens - 1):
+                logits = self.decode_tp(nxt, pos)
+                nxt = int(torch.argmax(logits).item())
+                out.append(nxt)
+            return out
+        # Wormhole: return_token=True samples on device (see _argmax_device).
         nxt = self.prefill_tp(torch.tensor([padded], dtype=torch.long), valid_len=T, return_token=True)
         out = [nxt]
         for pos in range(T, T + max_new_tokens - 1):
@@ -3332,10 +3347,28 @@ class Qwen36Model:
         # the traced forward, i.e. "TT_FATAL: Writes are not supported during trace capture".
         # Today that is masked by the warmup forward happening to run first; matching the sizes
         # makes it correct by construction instead of by luck.
-        _rope_dev_tables(self.device, self.args.rope_head_dim, self.args.max_seq_len, self.args.rope_theta)
-        rope_packed = ttnn.from_torch(
-            rope_pos_vec.to(torch.int32).reshape(1, B), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
+        if is_blackhole():
+            # BH keeps the original host-computed, host-packed cos/sin: unchanged flow.
+            from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host
+
+            if self.num_devices > 1:
+                rd = self.args.rope_head_dim
+                inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
+                freqs = torch.outer(rope_pos_vec.float(), inv_freq)  # [B, rd/2]
+                emb = torch.cat([freqs, freqs], dim=-1)
+                cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
+                sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
+                rope_packed = ttnn.from_torch(
+                    torch.cat([cos, sin], dim=0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                )
+            else:
+                cos_host, sin_host = self.rope.get_cos_sin_host(int(rope_pos_vec[0]))
+                rope_packed = pack_rope_host(cos_host, sin_host)
+        else:
+            _rope_dev_tables(self.device, self.args.rope_head_dim, self.args.max_seq_len, self.args.rope_theta)
+            rope_packed = ttnn.from_torch(
+                rope_pos_vec.to(torch.int32).reshape(1, B), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
         cur_pos_tt = ttnn.from_torch(pos_vec, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         page_table_tt = (
             ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -3365,7 +3398,12 @@ class Qwen36Model:
 
         on_device_logits=True: return the raw vocab-sharded shard for the on-device sampler.
         """
-        cos, sin = self._rope_from_idx(rot_mat_idxs)
+        if is_blackhole():
+            from models.demos.blackhole.qwen36.tt.generator_interface import unpack_rope
+
+            cos, sin = unpack_rope(rot_mat_idxs)
+        else:
+            cos, sin = self._rope_from_idx(rot_mat_idxs)
         if on_device_logits:
             assert self.sampling is not None, "on_device_logits=True but self.sampling is None"
             logits = self._forward_decode(tokens, cos, sin, current_pos, page_table, sharded_lm_head=True)
