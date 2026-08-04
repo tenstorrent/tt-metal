@@ -50,6 +50,7 @@
 #include <ttnn/types.hpp>
 
 #include <limits>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -252,30 +253,39 @@ struct ScopedTdpLimitEnv {
     std::optional<std::string> prev_;
 };
 
-// Firmware for the first PCIe-attached chip, which is where the TDP limit is read back from.
-umd::FirmwareInfoProvider* FirmwareInfo(MetalEnv& env) {
-    Cluster& cluster = MetalEnvAccessor(env).impl().get_cluster();
-    const ChipId chip_id = *cluster.all_pci_chip_ids().begin();
-    return cluster.get_driver()->get_chip(chip_id)->get_tt_device()->get_firmware_info_provider();
-}
-
 // What RunTimeOptions makes of `value`, without opening a device.
 std::optional<uint32_t> ParseTdpLimitEnv(const std::optional<std::string>& value) {
     ScopedTdpLimitEnv env_var(value);
     return llrt::RunTimeOptions().get_tdp_limit_watts();
 }
 
-// Opens a cluster with the knob set to `value` and returns the limit firmware ends up enforcing.
-std::optional<uint32_t> OpenClusterWithTdpLimit(const std::optional<std::string>& value) {
+// Opens a cluster with the knob set to `value` and returns the limit firmware ends up enforcing on
+// every PCIe-attached chip, because the limit is applied per ASIC. A chip that reports no limit at
+// all maps to nullopt.
+std::map<ChipId, std::optional<uint32_t>> OpenClusterWithTdpLimit(const std::optional<std::string>& value) {
     ScopedTdpLimitEnv env_var(value);
     MetalEnv env;
-    return FirmwareInfo(env)->get_tdp_limit();
+    Cluster& cluster = MetalEnvAccessor(env).impl().get_cluster();
+
+    std::map<ChipId, std::optional<uint32_t>> limits;
+    for (const ChipId chip_id : cluster.all_pci_chip_ids()) {
+        limits[chip_id] =
+            cluster.get_driver()->get_chip(chip_id)->get_tt_device()->get_firmware_info_provider()->get_tdp_limit();
+    }
+    return limits;
 }
 
-// Setting the limit needs Blackhole on firmware new enough to take the ARC message.
+// Setting the limit needs Blackhole on firmware new enough to take the ARC message. Metal requires
+// one architecture across the cluster, so the first chip answers this for all of them.
 bool TdpLimitSupported() {
     MetalEnv env;
-    return env.get_arch() == tt::ARCH::BLACKHOLE && FirmwareInfo(env)->get_firmware_version() >= kMinTdpLimitFirmware;
+    Cluster& cluster = MetalEnvAccessor(env).impl().get_cluster();
+    const ChipId chip_id = *cluster.all_pci_chip_ids().begin();
+    return env.get_arch() == tt::ARCH::BLACKHOLE && cluster.get_driver()
+                                                            ->get_chip(chip_id)
+                                                            ->get_tt_device()
+                                                            ->get_firmware_info_provider()
+                                                            ->get_firmware_version() >= kMinTdpLimitFirmware;
 }
 
 // Enqueues a single no-op kernel on one worker core of `target`, exercising the full
@@ -783,15 +793,19 @@ TEST(MetalEnvMockCCL, LegacyConfigureMockMode_QueryPasses) {
         << "query failed: " << response.error_message.value_or("(no message)");
 }
 
+// rtoptions only decides whether the value is a watt count it can hold; whether firmware will take
+// it is UMD's call at cluster open, so 600 parses even though it is outside the accepted range.
 TEST(TdpLimitEnv, ParsesEnvVar) {
     EXPECT_FALSE(ParseTdpLimitEnv(std::nullopt).has_value());
     // Exporting the variable empty is how a shared profile disables the knob without unsetting it.
     EXPECT_FALSE(ParseTdpLimitEnv("").has_value());
     EXPECT_EQ(ParseTdpLimitEnv("300"), 300u);
     EXPECT_EQ(ParseTdpLimitEnv("0"), llrt::TDP_LIMIT_RESTORE_DEFAULT_SENTINEL);
+    EXPECT_EQ(ParseTdpLimitEnv("600"), 600u);
 }
 
-// A typo must not quietly leave the run at full power, so parsing is strict.
+// A typo must not quietly leave the run at full power, so parsing is strict. Both of these are
+// unusable as watt counts: one is not a number, the other does not fit the uint32_t that holds it.
 TEST(TdpLimitEnv, MalformedEnvVarThrows) {
     EXPECT_ANY_THROW(ParseTdpLimitEnv("abc"));
     EXPECT_ANY_THROW(ParseTdpLimitEnv("99999999999999999999"));
@@ -805,6 +819,16 @@ TEST(TdpLimitEnv, RejectedLimitDoesNotFailClusterOpen) {
     EXPECT_NO_THROW({ MetalEnv env; });
 }
 
+// Surviving the rejection is not enough: firmware must still be enforcing what it was before.
+TEST(TdpLimitEnv, RejectedLimitLeavesFirmwareUntouched) {
+    const std::map<ChipId, std::optional<uint32_t>> before = OpenClusterWithTdpLimit(std::nullopt);
+
+    // 1 W is below the [50, 500] W window firmware accepts, so the write is refused and warned about.
+    for (const auto& [chip_id, limit] : OpenClusterWithTdpLimit("1")) {
+        EXPECT_EQ(limit, before.at(chip_id)) << "chip " << chip_id << " moved after a refused limit";
+    }
+}
+
 // The whole lifecycle: the limit is applied, it outlives the cluster that set it, an unset knob
 // leaves it alone, and the 0 sentinel puts the board default back. The last step is also cleanup.
 TEST(TdpLimitEnv, LimitOutlivesClusterAndSentinelRestoresIt) {
@@ -812,12 +836,20 @@ TEST(TdpLimitEnv, LimitOutlivesClusterAndSentinelRestoresIt) {
         GTEST_SKIP() << "TDP limit needs Blackhole with firmware " << kMinTdpLimitFirmware.to_string() << " or newer";
     }
 
-    const std::optional<uint32_t> board_default = OpenClusterWithTdpLimit(std::nullopt);
-    ASSERT_NE(board_default, kTestTdpLimitWatts) << "test limit must differ from the board default to prove anything";
+    const std::map<ChipId, std::optional<uint32_t>> board_defaults = OpenClusterWithTdpLimit(std::nullopt);
+    for (const auto& [chip_id, limit] : board_defaults) {
+        ASSERT_NE(limit, kTestTdpLimitWatts) << "chip " << chip_id << " already sits at the limit under test";
+    }
 
-    EXPECT_EQ(OpenClusterWithTdpLimit(std::to_string(kTestTdpLimitWatts)), kTestTdpLimitWatts);
-    EXPECT_EQ(OpenClusterWithTdpLimit(std::nullopt), kTestTdpLimitWatts) << "nothing restores the limit on teardown";
-    EXPECT_EQ(OpenClusterWithTdpLimit("0"), board_default) << "the 0 sentinel restores the board default";
+    for (const auto& [chip_id, limit] : OpenClusterWithTdpLimit(std::to_string(kTestTdpLimitWatts))) {
+        EXPECT_EQ(limit, kTestTdpLimitWatts) << "chip " << chip_id << " did not take the limit";
+    }
+    for (const auto& [chip_id, limit] : OpenClusterWithTdpLimit(std::nullopt)) {
+        EXPECT_EQ(limit, kTestTdpLimitWatts) << "chip " << chip_id << " lost the limit when its cluster closed";
+    }
+    for (const auto& [chip_id, limit] : OpenClusterWithTdpLimit("0")) {
+        EXPECT_EQ(limit, board_defaults.at(chip_id)) << "chip " << chip_id << " was not put back to its default";
+    }
 }
 
 }  // namespace tt::tt_metal
