@@ -7,6 +7,7 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
 #include <tt-metalium/experimental/host_bfp_conversion.hpp>
 #include <tt-metalium/host_buffer.hpp>
