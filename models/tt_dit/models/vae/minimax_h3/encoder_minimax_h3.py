@@ -75,6 +75,13 @@ _SILU_ACTIVATION = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
 # measured, not assumed.
 MINIMAX_H3_FLAT_TILE_RESIDUAL = False
 
+# Compute the group variance as E[x^2] - E[x]^2 rather than centring first. Saves one full
+# pass over the activation per norm site (four -> three). The class docstring explains why
+# the two-pass form was chosen: the group means are not near zero, so this is exactly the
+# cancellation Welford exists to avoid. Contained here by doing the subtraction on the
+# per-(frame, group) stats in fp32 -- 32 scalars per frame -- so only the *sums* are bf16.
+MINIMAX_H3_ONE_PASS_VARIANCE = True
+
 # Measured on BH Galaxy: the minimal num_out_blocks whose circular buffers fit L1, per
 # (C, T, H, W) site. -1 is GroupNorm3D's built-in heuristic and is fine almost
 # everywhere; the three large-spatial clip sites need explicit chunking, e.g.
@@ -275,19 +282,35 @@ class MiniMaxH3DistributedFrameGroupNorm(Module):
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         scale = 1.0 / self.elements_per_group
-        mean = self._spread(ttnn.multiply(self._group_sums(x), scale))
-        centred = ttnn.subtract(x, mean)
-        variance = self._spread(ttnn.multiply(self._group_sums(ttnn.multiply(centred, centred)), scale))
-        # Fold ``weight`` into the inverse standard deviation on the (T,1,1,C) stats tensor.
-        # ``normed * weight + bias`` was three full passes over the activation; ``centred *
-        # gamma + bias`` is two, and the extra work lands on a tensor 65536x smaller.
-        gamma = ttnn.multiply(ttnn.rsqrt(ttnn.add(variance, self.eps)), self.weight.data)
-        scaled = ttnn.multiply(centred, gamma)
-        out = (
-            ttnn.add(scaled, self.bias.data, activations=[_SILU_ACTIVATION])
-            if fuse_silu
-            else ttnn.add(scaled, self.bias.data)
-        )
+        if MINIMAX_H3_ONE_PASS_VARIANCE:
+            # E[x^2] - E[x]^2, which never materialises ``x - mean``: three full passes over
+            # the activation (x*x, x*gamma, +beta) instead of four. The cancellation this
+            # form is known for is contained by doing the subtraction on the (T,1,1,G) stats
+            # tensor in fp32 -- 32 scalars per frame, so the cast is free -- rather than on
+            # the activation. Gated by PCC, not assumed: see the class docstring's note on
+            # why the two-pass form was chosen originally.
+            sum_x = ttnn.typecast(self._group_sums(x), ttnn.float32)
+            sum_xx = ttnn.typecast(self._group_sums(ttnn.multiply(x, x)), ttnn.float32)
+            mean_g = ttnn.multiply(sum_x, scale)
+            var_g = ttnn.subtract(ttnn.multiply(sum_xx, scale), ttnn.multiply(mean_g, mean_g))
+            inv_g = ttnn.typecast(ttnn.rsqrt(ttnn.add(var_g, self.eps)), x.get_dtype())
+            gamma = ttnn.multiply(self._spread(inv_g), self.weight.data)
+            beta = ttnn.subtract(
+                self.bias.data, ttnn.multiply(self._spread(ttnn.typecast(mean_g, x.get_dtype())), gamma)
+            )
+            scaled = ttnn.multiply(x, gamma)
+        else:
+            mean = self._spread(ttnn.multiply(self._group_sums(x), scale))
+            centred = ttnn.subtract(x, mean)
+            variance = self._spread(ttnn.multiply(self._group_sums(ttnn.multiply(centred, centred)), scale))
+            # Fold ``weight`` into the inverse standard deviation on the (T,1,1,C) stats
+            # tensor. ``normed * weight + bias`` was three full passes over the activation;
+            # ``centred * gamma + bias`` is two, and the extra work lands on a tensor
+            # 65536x smaller.
+            gamma = ttnn.multiply(ttnn.rsqrt(ttnn.add(variance, self.eps)), self.weight.data)
+            beta = self.bias.data
+            scaled = ttnn.multiply(centred, gamma)
+        out = ttnn.add(scaled, beta, activations=[_SILU_ACTIVATION]) if fuse_silu else ttnn.add(scaled, beta)
 
         if keep_flat_tile:
             return out

@@ -1813,3 +1813,22 @@ On reading `PSNR: inf` -- that is MSE exactly zero, i.e. bit-identical, which is
 comparison. It is a weak assertion alone though, since it would also read inf if `traced=True`
 silently fell through, so the test additionally asserts a tracer was captured
 (`_forward_device._tracers_keyed`) and that the output is not all-zero.
+
+## Amendment 61 (2026-08-04) — one-pass variance: encode is under 3 s
+
+The stats norm made four full passes over the activation. `E[x^2] - E[x]^2` makes three: it
+never materialises `x - mean`, so `x*x`, `x*gamma`, `+beta` is the whole activation cost.
+
+The class docstring warned this off -- "the group means here are not near zero, and that is
+the cancellation `GroupNorm3D` uses Welford to avoid" -- and that reasoning is sound about
+the *subtraction*, but the subtraction does not have to happen in bf16 on the activation. It
+happens on the per-(frame, group) stats, 32 scalars per frame, cast to **fp32** first. Only
+the sums stay bf16.
+
+Measured cost: encoder PCC **99.9094 %** against 99.9303 % for the two-pass form -- 0.02 pp,
+against a 0.99 gate. Gates: 7 passed.
+
+**Encoder wave 0.443 -> 0.427 s. 768P/5s encode 2.99 s.** Under the 3 s target.
+Decode unchanged at 1.0 s. **Visual total 4.0 s.**
+
+Flag: `MINIMAX_H3_ONE_PASS_VARIANCE`, default True.
