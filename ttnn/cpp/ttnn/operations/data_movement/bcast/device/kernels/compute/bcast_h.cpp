@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/compute/bcast.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 
 void kernel_main() {
     uint32_t B = get_arg_val<uint32_t>(0);

@@ -5,11 +5,11 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"        // BinaryFpu, CopyTile, DestReuseBinary, PackTile
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // unary
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Recip
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Negative
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"       // BinaryFpu, CopyTile, DestReuseBinary, PackTile
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // unary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"       // Recip
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"       // Negative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"    // OptionalChainElement
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {

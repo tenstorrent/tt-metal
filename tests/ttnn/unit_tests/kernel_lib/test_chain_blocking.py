@@ -17,8 +17,8 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/block_exp.cpp"
-FIXED_BLOCK_TAIL_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/block_exp_chunked_fixed_tail.cpp"
+KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/block_exp.cpp"
+FIXED_BLOCK_TAIL_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/block_exp_chunked_fixed_tail.cpp"
 
 
 def _build(device, n, block_size):

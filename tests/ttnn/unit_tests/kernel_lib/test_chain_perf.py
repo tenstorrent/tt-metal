@@ -31,9 +31,9 @@ OP = "GenericOpDeviceOperation"
 ITERS = 20
 PERF = "tests/ttnn/unit_tests/kernel_lib/test_chain_perf.py"
 
-BLOCK_CHUNKED = "ttnn/cpp/ttnn/kernel_lib/tests/axes/block_exp_chunked.cpp"
-HOIST = "ttnn/cpp/ttnn/kernel_lib/tests/axes/hoist.cpp"
-FUSED = "ttnn/cpp/ttnn/kernel_lib/tests/axes/fused_chain.cpp"  # FPU add + Exp + DestReuse mul
+BLOCK_CHUNKED = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/block_exp_chunked.cpp"
+HOIST = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/hoist.cpp"
+FUSED = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/fused_chain.cpp"  # FPU add + Exp + DestReuse mul
 
 # PerBlockSize-vs-Bulk comparison on a REALISTIC fused chain (out = exp(A+B)*C: FPU add + Exp + DestReuse
 # mul). Neither lifecycle stages the whole window — both keep a BOUNDED CB and process N over many

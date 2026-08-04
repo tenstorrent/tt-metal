@@ -9,7 +9,7 @@ Factored out of test_chain_reconfig.py so every helper-test suite (operand-kind,
 DEST/block, out-of-bounds, lifecycle, ...) builds its generic_op programs the same
 way instead of copy-pasting the builders.
 
-The reader/writer dataflow kernels live under tests/chain_reconfig/ (they are generic
+The reader/writer dataflow kernels live under tests/eltwise/chain/reconfig/ (they are generic
 N-input / N-output streamers, reused unchanged). Each suite supplies its own compute
 kernel path.
 """
@@ -25,7 +25,7 @@ DTYPE_TILE_BYTES = {
 }
 
 # Reusable generic dataflow kernels (live alongside the reconfig suite).
-DATAFLOW_DIR = "ttnn/cpp/ttnn/kernel_lib/tests/chain_reconfig"
+DATAFLOW_DIR = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/reconfig"
 READER = f"{DATAFLOW_DIR}/reader_inputs.cpp"
 WRITER_1OUT = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
 WRITER_2OUT = f"{DATAFLOW_DIR}/writer_2_outputs.cpp"
@@ -109,7 +109,7 @@ def build_reader_asym_kernel(input_tensors, counts, core_grid):
     rt = ttnn.RuntimeArgs()
     rt[0][0] = [t.buffer_address() for t in input_tensors] + [counts[0], counts[1]]
     return ttnn.KernelDescriptor(
-        kernel_source="ttnn/cpp/ttnn/kernel_lib/tests/axes/reader_2_asym.cpp",
+        kernel_source="ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/reader_2_asym.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_grid,
         compile_time_args=cta,

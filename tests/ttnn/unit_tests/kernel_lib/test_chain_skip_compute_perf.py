@@ -21,8 +21,8 @@ pytestmark = pytest.mark.models_device_performance_bare_metal
 
 OP = "GenericOpDeviceOperation"
 PERF_FILE = "tests/ttnn/unit_tests/kernel_lib/test_chain_skip_compute_perf.py"
-HOIST_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/hoist.cpp"
-ACCUMULATION_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/accumulation.cpp"
+HOIST_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/hoist.cpp"
+ACCUMULATION_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/accumulation.cpp"
 SKIP_DEFINE = [("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1")]
 N_ITERS = 20
 CASES = {
