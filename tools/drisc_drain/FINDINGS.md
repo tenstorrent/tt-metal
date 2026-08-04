@@ -1011,3 +1011,91 @@ busy sweep is flat at 83–86 µs across every delay and occupancy repeats exact
    so 2 works and 3 hits the wall.
 2. **Pacing** — for host load and NoC traffic away from the knee, where over-send is ~9×.
 3. **Reader backoff** — the 50 µs sleep is the suspect for the delay-300 latency tail.
+
+## §N+1 — Read/write NoC split, and the two-DRISC probe (bh-05, 2026-08-04)
+
+Both entries here are measured at **delay 150, `TT_METAL_PERF_DEBUG_NO_DECODE`, 110 producer cores**, so
+they are comparable to §N's 83.6 µs busy sweep. Word conservation was exact in every run and stalls were 0
+throughout, which is the loss-proof check: the L1 counters are incremented by the producer itself.
+
+### Two DRISCs: 1.43×, and it does not move the knee (measured, then reverted)
+
+Two drainers, disjoint halves of the worker grid, one D2H socket and one reader+decoder thread pair each,
+nothing shared on the device side:
+
+| metric | 1 DRISC | 2 DRISC |
+|---|---|---|
+| idle sweep | 31.9 µs | **16.2 µs** (0.51×) |
+| busy sweep | 83.6 µs | 58.3 µs (1.43×) |
+| **worst sweep** | ~95 µs | **~95 µs (unchanged)** |
+| words | 11,002,970 | 5,501,485 + 5,501,485 |
+
+The idle sweep halves exactly, because an idle sweep is pure per-core polling and each drainer sees half the
+cores. The busy sweep does not, and the **worst** sweep — the one that actually sets the knee, since the
+deadline is `worst sweep < ring fill time` — did not move at all. The reason is that only the per-core
+phases (`read`, `proc`) are divided; transport is not. Splitting the same total bytes across two senders
+gives each half the bytes but does not make the egress path faster, so the transport term stays put and caps
+the gain. §N's prediction of "knee ≈ 65 with two DRISCs" was wrong for exactly this reason: it modelled
+`read` and `proc` and forgot that transport is not per-core.
+
+Reverted to `kNSockets = 1`; the host side stays fully parameterized by it, so raising the constant
+re-enables the path.
+
+### The NoC split: reads and writes on different NoCs
+
+Blackhole DRISCs have both NIUs live — firmware runs `noc_local_state_init()` for every NOC and
+`drisc_set_stream_mode_all()` puts both into stream mode — so the drainer can read on one and ship on the
+other. `kReadNoc = NOC_INDEX == 0 ? 1 : 0`; egress stays on `NOC_INDEX`.
+
+That alone changes nothing. The gain needs the loop rearranged so the read barrier is *last*: free the
+generation about to be refilled, issue its reads, process the **previous** batch (whose writes now fly
+concurrently with those reads), and only then wait for the reads. Previously the read barrier sat between
+the read and the ship and forced them apart no matter which NoC each used.
+
+| metric | 1 NoC | 2 NoC (2 runs) |
+|---|---|---|
+| busy sweep | 83.6 µs | **72.3 / 77.3 µs** (1.08–1.16×) |
+| worst sweep | 94.9 µs | 89.8 / 94.3 µs |
+| idle sweep | 31.9 µs | 28.8 / 29.1 µs |
+| max occupancy | 372 | 336 / 360 |
+
+**What it revealed is worth more than the speedup.** Write *issue* collapsed 5×: `noc-chunk` went
+1.82 → 0.12 µs/push. Issuing a write had been stalling on NoC command-buffer availability while the reads
+held the same NoC — invisible before, because it was charged to the write phase and looked like transport.
+That time did not disappear, it moved to completion: `wr-barrier` rose 1.7% → 4.3%.
+
+**Read these numbers with two caveats.** `unaccounted` rose to 23.1%, which is expected and not a bug: the
+phases are now genuinely concurrent, so they no longer partition wall time and the counters cannot sum to
+100%. And run-to-run spread is ~7% across the two samples, so **1.1× is not resolved** — it needs 3–4
+repeats per configuration. The knee has not been re-measured under the split.
+
+### Ping-pong depth is the next knob, and 2 is probably too shallow
+
+The two staging generations *are* ping-pong — one fills while the other drains. The reason it only bought
+~1.1% – 16% is likely depth. Staging is `kNStage = 7` slots of one fused span each (10,560 B), and
+`kGenSlots = kNStage / 2 = 3`, so a batch is 3 worker cores and there are ~37 batches per sweep:
+
+```
+read   3 x 10,496 B @ 64 GB/s  ~ 0.5 us
+proc   3 cores @ ~0.18 us      ~ 0.55 us
+ship   3 x 10,560 B @ 25 GB/s  ~ 1.3 us
+```
+
+A generation is refilled **two batches** — about 2.3 µs — after its ship was issued, which is the same order
+as PCIe completion latency. So the reuse barrier still blocks, which is precisely what the `wr-barrier`
+rise says. Deeper buffering gives each ship more time to land:
+
+| layout (gens × slots) | batch | reuse distance | cost |
+|---|---|---|---|
+| 2 × 3 (current) | 3 cores | ~2.3 µs | shallow; barrier bites |
+| **3 × 2** | 2 cores | ~4.6 µs | likely sweet spot |
+| 7 × 1 | 1 core | ~14 µs | 110 notifies/sweep ≈ 24 µs — swamps the gain |
+
+`notify` is 0.22 µs per push, so depth is paid in pushes: fewer cores per batch means more pushes per sweep.
+3 × 2 is where the two curves cross on paper. Untested.
+
+### Next, in order
+
+1. **Generation-depth sweep** {2, 3, 7} at delay 150, 3–4 repeats each, reading busy *and* worst sweep.
+2. **Knee re-measure** at 125/100 under the split.
+3. **Reader backoff** — the 50 µs sleep is still the suspect for the delay-300 latency tail.
