@@ -538,6 +538,52 @@ def _load_attempts() -> list:
     return []
 
 
+def _load_attempts_all() -> list:
+    """Every attempt ever recorded for this model: the archive UNION the live log.
+
+    "Was this rung tried?" is a fact about history and must not depend on which baseline happens to
+    be current. The resume filter (run.py) keeps only rows whose baseline_at_record equals the
+    baseline measured now and REWRITES the live log with that subset, so _load_attempts() answers a
+    baseline-scoped question. Feeding it to the ladder made attempts that genuinely happened read as
+    untried the moment the baseline moved -- and it moves every run (381.186 / 381.222 / 381.263 /
+    381.291 / 381.311 on gemma-3-12b-it, compared with exact equality). Run 25 went 179 rows -> 121,
+    dropping the structural/tt-lang/cpp rows that were capping an op's knob retries, and the same
+    matmul came back at `grid` in four consecutive runs.
+
+    The archive is otherwise read in exactly one place -- _rebuild_optimize_report, to draw the
+    report -- so nothing that DECIDES anything was consulting it.
+
+    Verdicts keep using _load_attempts(): a "no gain" earned against another baseline still has not
+    been shown to hold now. Only the tried/not-tried question changes.
+    """
+    out, seen = [], set()
+    for src in (Path(str(_KERNEL_LOG_PATH) + ".cumulative"), _KERNEL_LOG_PATH):
+        try:
+            rows = json.loads(src.read_text())
+        except Exception:  # noqa: BLE001 -- absent on a first run, and a bad archive must not erase
+            continue  # the live rows; this runs on every termination_check
+        if not isinstance(rows, list):
+            continue
+        for a in rows:
+            if not isinstance(a, dict):
+                continue
+            # _fold_cumulative copies live rows into the archive, so overlap is normal. Key on the
+            # identity of the ATTEMPT -- op, rung, measurement, note -- so a duplicated row collapses
+            # while two genuinely different variants of the same rung both survive and each spends
+            # its own retry.
+            k = (
+                a.get("op_signature"),
+                (a.get("kernel_kind") or "").lower(),
+                a.get("measured_ms"),
+                (a.get("note") or "")[:400],
+            )
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(a)
+    return out
+
+
 def _save_attempts(a: list) -> None:
     _KERNEL_LOG_PATH.write_text(json.dumps(a))
 
@@ -4054,7 +4100,11 @@ def termination_check() -> dict:
     # makes the ceiling reliably available. Best-effort; _persist_throughput never raises.
     _persist_throughput(rep)
     at_floor = bool(rep.get("at_floor"))
-    attempts = [a for a in _load_attempts() if a.get("kernel_detected_in_source")]
+    # TRIED is history, not a property of the current baseline. This fed _op_ladder_status from the
+    # resume-filtered live log, so a rung tried against an earlier baseline read as untried and got
+    # handed out again -- the same matmul returned at `grid` in four consecutive runs. Verdicts still
+    # come from _load_attempts(); only the tried/not-tried question reads the full history.
+    attempts = [a for a in _load_attempts_all() if a.get("kernel_detected_in_source")]
     blocking, cleared = [], []
     material = _material_gap_ms(dev)
     for o in rep.get("open_ops") or []:
@@ -4097,7 +4147,7 @@ def termination_check() -> dict:
     # known gaps untouched. Attempted, not won: a measured dead end clears an op, per the existing
     # contract that "even a measured kernel that does NOT beat ttnn clears the op as 'tried'". The
     # round budget still bounds the run; it lives in the loop (`while rounds < max_rounds`), not here.
-    _untried = _untried_material_ops(blocking, _load_attempts())
+    _untried = _untried_material_ops(blocking, _load_attempts_all())
     if _untried:
         can_stop = False
     pt_status = _perf_target_status(rep, dev)
