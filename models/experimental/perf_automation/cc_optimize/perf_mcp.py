@@ -2352,6 +2352,22 @@ _CLAMP_MARKERS = ("AICLK failed to settle", "clamped by max-arbiter")
 _LAST_RUN_CLAMPED = False
 
 
+def _visible_device_indices():
+    """The chips this run actually opens, or None for "all of them".
+
+    MAX across the mesh is the right reduction -- a collective runs at the pace of its slowest
+    chip, so one clamped member spoils the reading for all of them. But it must be the max across
+    the MESH, not across the host: on a T3K/TG, or any shared machine, waiting on chips this run
+    never touches would stall for a neighbour's workload.
+    """
+    raw = os.environ.get("TT_VISIBLE_DEVICES") or os.environ.get("TT_METAL_VISIBLE_DEVICES") or ""
+    idx = set()
+    for part in raw.replace(" ", "").split(","):
+        if part.isdigit():
+            idx.add(int(part))
+    return idx or None
+
+
 def _thermal_profile_path():
     return state_dir() / "perf_mcp_thermal_profile.json"
 
@@ -2427,12 +2443,22 @@ def _read_die_temp_c():
         doc = json.loads(r.stdout or "{}")
     except Exception:  # noqa: BLE001
         return None
+    devs = doc.get("device_info") or []
+    keep = _visible_device_indices()
     temps = []
-    for dev in doc.get("device_info") or []:
+    for i, dev in enumerate(devs):
+        if keep is not None and i not in keep:
+            continue
         try:
             temps.append(float((dev.get("telemetry") or {}).get("asic_temperature")))
         except (TypeError, ValueError):
             continue
+    if not temps and devs:
+        for dev in devs:
+            try:
+                temps.append(float((dev.get("telemetry") or {}).get("asic_temperature")))
+            except (TypeError, ValueError):
+                continue
     return max(temps) if temps else None
 
 

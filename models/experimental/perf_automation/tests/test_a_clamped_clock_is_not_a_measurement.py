@@ -227,6 +227,48 @@ def test_an_unknown_start_temperature_is_not_recorded(mcp):
     assert mcp._clamp_threshold_c() is None
 
 
+# ---------------------------------------------------------------- mesh scoping
+
+
+def _smi(mcp, monkeypatch, temps):
+    payload = {"device_info": [{"telemetry": {"asic_temperature": t}} for t in temps]}
+
+    class R:
+        stdout = __import__("json").dumps(payload)
+
+    monkeypatch.setattr(mcp._sp, "run", lambda *a, **k: R())
+
+
+def test_it_takes_the_max_across_the_mesh(mcp, monkeypatch):
+    """A collective runs at the pace of its slowest chip, so one hot member governs."""
+    monkeypatch.setenv("TT_VISIBLE_DEVICES", "0,1")
+    _smi(mcp, monkeypatch, [60.0, 85.0, 50.0, 50.0])
+    assert mcp._read_die_temp_c() == 85.0
+
+
+def test_chips_outside_the_mesh_are_ignored(mcp, monkeypatch):
+    """On a T3K/TG or a shared host, a neighbour's hot chip must not stall this run."""
+    monkeypatch.setenv("TT_VISIBLE_DEVICES", "0")
+    _smi(mcp, monkeypatch, [60.0, 95.0, 95.0, 95.0])
+    assert mcp._read_die_temp_c() == 60.0
+
+
+def test_no_visibility_set_means_every_chip(mcp, monkeypatch):
+    """Unset is how a full-fabric run presents; it genuinely may touch all of them."""
+    monkeypatch.delenv("TT_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("TT_METAL_VISIBLE_DEVICES", raising=False)
+    _smi(mcp, monkeypatch, [60.0, 85.0])
+    assert mcp._read_die_temp_c() == 85.0
+
+
+def test_an_out_of_range_index_falls_back_to_all(mcp, monkeypatch):
+    """A stale TT_VISIBLE_DEVICES naming chips that are not enumerated must not silently disable
+    the gate by leaving it with no temperatures at all."""
+    monkeypatch.setenv("TT_VISIBLE_DEVICES", "9")
+    _smi(mcp, monkeypatch, [60.0, 85.0])
+    assert mcp._read_die_temp_c() == 85.0
+
+
 # ---------------------------------------------------------------- the clamp signal itself
 
 
