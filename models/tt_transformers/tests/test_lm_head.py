@@ -17,6 +17,19 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
 
+def test_softcap_logits_matches_gemma_formula(monkeypatch):
+    monkeypatch.setattr("models.tt_transformers.tt.lm_head.ttnn.mul", torch.mul)
+    monkeypatch.setattr("models.tt_transformers.tt.lm_head.ttnn.tanh", torch.tanh)
+
+    logits = torch.tensor([[-120.0, -30.0, 0.0, 30.0, 120.0]])
+    cap = 30.0
+
+    actual = LMHead.softcap_logits(logits, cap)
+    expected = cap * torch.tanh(logits / cap)
+
+    torch.testing.assert_close(actual, expected)
+
+
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",

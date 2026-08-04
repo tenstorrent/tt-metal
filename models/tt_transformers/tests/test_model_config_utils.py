@@ -4,6 +4,7 @@
 
 import pytest
 
+from models.tt_transformers.tt.common import get_base_model_name
 from models.tt_transformers.tt.model_config import compute_padded_vocab_size, should_pad_sampling_logits_to_power_of_2
 
 
@@ -46,3 +47,15 @@ def test_should_pad_sampling_logits_to_power_of_2(base_model_name, padded_vocab_
 def test_should_pad_sampling_logits_to_power_of_2_rejects_invalid_sampling_splits():
     with pytest.raises(ValueError, match="sampling_splits must be >= 1"):
         should_pad_sampling_logits_to_power_of_2("Llama-3.1-70B", 128256, 0)
+
+
+@pytest.mark.parametrize(
+    ("model_name", "expected"),
+    [
+        ("gemma-2-2b-it", "gemma-2-2b"),
+        ("gemma-2-9b-it", "gemma-2-9b"),
+        ("google/gemma-2-2b-it", "google/gemma-2-2b"),
+    ],
+)
+def test_get_base_model_name_gemma2(model_name, expected):
+    assert get_base_model_name(model_name) == expected

@@ -108,8 +108,7 @@ def should_pad_sampling_logits_to_power_of_2(
 ) -> bool:
     # Enable optional sampling padding for models that regress to single-core TopK. More info at issue #40399
     if sampling_splits < 1:
-        logger.warning(f"Sampling_splits must be >= 1, got {sampling_splits}")
-        return False
+        raise ValueError(f"sampling_splits must be >= 1, got {sampling_splits}")
 
     per_device_vocab = padded_vocab_size // sampling_splits
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
@@ -505,6 +504,8 @@ class ModelArgs:
             "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
+            "gemma-2-2b-it": "models/tt_transformers/model_params/gemma-2-2b-it",
+            "gemma-2-9b-it": "models/tt_transformers/model_params/gemma-2-9b-it",
             "Qwen3.6-27B": "models/tt_transformers/model_params/Qwen3.6-27B",
         }.items()
     }
@@ -561,6 +562,8 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        self.attn_logit_softcapping = None
+        self.final_logit_softcapping = None
         self.use_hf_rope = use_hf_rope
 
         assert not os.getenv(
@@ -634,9 +637,20 @@ class ModelArgs:
 
         if (
             self.base_model_name
-            in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4"]
+            in [
+                "Llama-3.1-8B",
+                "Llama-3.2-11B",
+                "Mistral-7B",
+                "gemma-2-2b",
+                "gemma-3-27b",
+                "gemma-3-4b",
+                "Phi-4",
+            ]
             and self.device_name == "N150"
-        ) or (self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "Phi-4"] and self.device_name == "N300"):
+        ) or (
+            self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "Phi-4", "gemma-2-2b"]
+            and self.device_name == "N300"
+        ):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
@@ -2412,6 +2426,8 @@ class ModelArgs:
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-2-2b": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-2-9b": {"N150": None, "N300": 32, "T3K": 64, "TG": 128, "P150x4": 128},
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2666,9 +2682,16 @@ class ModelArgs:
         self.n_layers -= len(text_config.get("cross_attention_layers", ()))
         self.vision_num_cross_attention_layers = len(text_config.get("cross_attention_layers", ()))
 
-        self.sliding_window_pattern = (
-            [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
-        )
+        if layer_types is not None:
+            self.sliding_window_pattern = [lt == "sliding_attention" for lt in layer_types]
+        elif self.base_model_name.startswith("gemma-2"):
+            # Gemma-2 alternates local sliding-window and global attention layers.
+            # HF configs for this family do not always serialize layer_types, so we
+            # reconstruct the pattern here when needed.
+            self.sliding_window_pattern = [i % 2 == 0 for i in range(self.n_layers)]
+            layer_types = ["sliding_attention" if is_sliding else "full_attention" for is_sliding in self.sliding_window_pattern]
+        else:
+            self.sliding_window_pattern = [False] * self.n_layers
 
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
@@ -2761,6 +2784,8 @@ class ModelArgs:
                     self.hidden_dim = padded_hidden_dim
 
         self.layer_types = text_config.get("layer_types", None)
+        if self.layer_types is None and self.base_model_name.startswith("gemma-2"):
+            self.layer_types = ["sliding_attention" if i % 2 == 0 else "full_attention" for i in range(self.n_layers)]
 
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
@@ -2785,6 +2810,17 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+        self.attn_logit_softcapping = text_config.get("attn_logit_softcapping", None)
+        self.final_logit_softcapping = text_config.get("final_logit_softcapping", None)
+
+        is_gemma = self.base_model_name.startswith("gemma-")
+        if is_gemma:
+            self.rms_norm_add_unit_offset = True
+            self.embed_scale = self.dim**0.5
+            if self.attn_logit_softcapping:
+                raise NotImplementedError(
+                    "Gemma attention logit soft-capping is not supported by the shared TTNN fused SDPA path yet"
+                )
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
@@ -3536,6 +3572,8 @@ class ModelArgs:
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
+            "gemma-2-2b": "google/gemma-2-2b-it",
+            "gemma-2-9b": "google/gemma-2-9b-it",
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",

@@ -139,6 +139,14 @@ class LMHead(LightweightModule):
             packer_l1_acc=True,
         )
 
+    @staticmethod
+    def softcap_logits(logits, cap):
+        if cap is None or cap <= 0:
+            return logits
+        logits = ttnn.mul(logits, 1.0 / cap)
+        logits = ttnn.tanh(logits)
+        return ttnn.mul(logits, cap)
+
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
         use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == Mode.DECODE
@@ -204,4 +212,4 @@ class LMHead(LightweightModule):
             subdevice_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
         )
 
-        return output
+        return self.softcap_logits(output, self.args.final_logit_softcapping)
