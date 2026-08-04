@@ -6,9 +6,11 @@
 
 #include <cstdint>
 #include <optional>
+#include <string_view>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string_view.h>
 
 #include "gather.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -33,6 +35,7 @@ void bind_gather_operation(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
             out (ttnn.Tensor, optional): A preallocated tensor to store the gathered values. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Custom core range set for operation execution. Allows specification of which cores should be used for the operation. Defaults to `None`.
+            implementation (str, optional): Which implementation to dispatch to: "auto" (default), "native", or "codegen".
 
         Additional Information:
             * Currently, the `sparse_grad` argument is not supported.
@@ -78,7 +81,8 @@ void bind_gather_operation(nb::module_& mod) {
         nb::arg("sparse_grad") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("out") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("implementation") = "auto");
 }
 
 }  // namespace ttnn::operations::data_movement::detail

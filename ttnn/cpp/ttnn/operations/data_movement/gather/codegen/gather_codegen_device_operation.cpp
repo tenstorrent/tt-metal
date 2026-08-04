@@ -6,6 +6,7 @@
 
 #include <tt-metalium/assert.hpp>
 
+#include "gather_codegen_supported.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -13,15 +14,88 @@
 namespace ttnn::prim {
 using namespace tt::tt_metal;
 
-// Phase 4a fills in the real L1-fit / core-count selection between the three factories.
+// Mirrors ops/gather/gather.py's `_gather_impl` builder-selection branch: row-buffered
+// ("interleaved") whenever its exact three-CB footprint fits the device's real per-core L1 budget
+// (gather_interleaved_fits_l1, see gather_codegen_program_factory.cpp), further split by output tile
+// ("tiled") when tile-rows underfill the grid and Wt_index has column parallelism; otherwise the
+// width-independent streaming fallback.
 GatherCodegenDeviceOperation::program_factory_t GatherCodegenDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return GatherCodegenProgramFactoryInterleaved{};
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_index_tensor = tensor_args.input_index_tensor;
+    const auto geometry = compute_gather_geometry(input_tensor, input_index_tensor);
+
+    if (gather_interleaved_fits_l1(input_tensor, input_index_tensor, geometry.Wt_input, geometry.Wt_index)) {
+        auto* device = input_tensor.device();
+        const auto grid_size = device->compute_with_storage_grid_size();
+        const uint32_t max_cores = grid_size.x * grid_size.y;
+        if (geometry.Wt_index >= 2 && geometry.Ht < max_cores) {
+            return GatherCodegenProgramFactoryTiled{};
+        }
+        return GatherCodegenProgramFactoryInterleaved{};
+    }
+    return GatherCodegenProgramFactoryStreaming{};
 }
 
-// supported_by_codegen() (gather_codegen_supported.hpp) gates entry into this prim; phase 4a
-// fills in the correctness checks that belong here.
-void GatherCodegenDeviceOperation::validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&) {
+void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // Belt-and-suspenders behind the free function's early gate (call_parity.routing): the scope
+    // predicate, never is_demoted (perf-only, auto-branch-only).
+    TT_FATAL(
+        ttnn::operations::data_movement::gather::supported_by_codegen(
+            tensor_args.input_tensor, attributes.dim, tensor_args.input_index_tensor),
+        "gather_codegen: input/index tensors are not supported by the codegen prim (see "
+        "supported_by_codegen() -- TILE layout, bfloat16, non-sharded input/index only)");
+
+    // Structural preconditions copied from GatherDeviceOperation::validate_on_program_cache_miss
+    // (device/gather_device_operation.cpp): supported_by_codegen() only answers layout/dtype/
+    // memory-config questions, all of which a host or deallocated tensor answers too.
+    const auto& input_shape = tensor_args.input_tensor.logical_shape();
+    const auto& index_shape = tensor_args.input_index_tensor.logical_shape();
+    const auto input_rank = input_shape.rank();
+    const auto index_rank = index_shape.rank();
+    TT_FATAL(
+        input_rank == index_rank,
+        "gather_codegen: input and index tensor must have the same number of dimensions. Got input dim: {} and "
+        "index dim: {}",
+        input_rank,
+        index_rank);
+    for (int i = 0; i < input_rank - 1; ++i) {
+        TT_FATAL(
+            index_shape[i] <= input_shape[i],
+            "gather_codegen: index tensor shape dimension {} must be less than or equal to input tensor shape "
+            "dimension {}. Got index tensor shape: {} and input tensor shape: {}",
+            i,
+            i,
+            index_shape[i],
+            input_shape[i]);
+    }
+    TT_FATAL(
+        tensor_args.input_index_tensor.dtype() == DataType::UINT32 ||
+            tensor_args.input_index_tensor.dtype() == DataType::UINT16,
+        "gather_codegen: index tensor must be of type UINT32 or UINT16. Got: {}",
+        tensor_args.input_index_tensor.dtype());
+    if (tensor_args.output_tensor.has_value()) {
+        const auto output_shape = tensor_args.output_tensor.value().logical_shape();
+        TT_FATAL(
+            output_shape == tensor_args.input_index_tensor.logical_shape(),
+            "gather_codegen: output tensor shape must be the same as index tensor shape. Got output tensor shape: "
+            "{} and index tensor shape: {}",
+            output_shape,
+            tensor_args.input_index_tensor.logical_shape());
+    }
+    TT_FATAL(
+        (tensor_args.input_tensor.buffer() != nullptr) && (tensor_args.input_index_tensor.buffer() != nullptr),
+        "gather_codegen: operands need to be allocated in buffers on the device. Buffer is null.");
+    TT_FATAL(
+        tensor_args.input_tensor.storage_type() == StorageType::DEVICE,
+        "gather_codegen: operation requires input to be on Device. Input storage type: {}",
+        tensor_args.input_tensor.storage_type());
+    TT_FATAL(
+        tensor_args.input_index_tensor.storage_type() == StorageType::DEVICE,
+        "gather_codegen: operation requires index to be on Device. Input storage type: {}",
+        tensor_args.input_index_tensor.storage_type());
+    TT_FATAL(attributes.sparse_grad == false, "gather_codegen: sparse gradient is not supported.");
 }
 
 GatherCodegenDeviceOperation::spec_return_value_t GatherCodegenDeviceOperation::compute_output_specs(
