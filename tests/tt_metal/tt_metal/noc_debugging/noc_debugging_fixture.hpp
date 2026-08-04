@@ -22,6 +22,10 @@ public:
 #if !defined(TRACY_ENABLE)
         return;
 #endif
+        if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+            return;
+        }
+
         // NOC debugging requires profiler + NOC event infrastructure, which is
         // created during MetalContext::initialize_impl() only when profiler_enabled
         // is true at that time.  Setting the env var before create_shared_devices()
@@ -138,11 +142,11 @@ protected:
 #if !defined(TRACY_ENABLE)
         GTEST_SKIP() << "NOC debugging tests require a Tracy-enabled build (build with ENABLE_TRACY=ON)";
 #endif
-        MeshDispatchFixture::SetUp();
-
-        if (this->IsSlowDispatch()) {
+        if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
             GTEST_SKIP() << "NOC debugging tests require fast dispatch mode";
         }
+
+        MeshDispatchFixture::SetUp();
 
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() ||
             tt::tt_metal::MetalContext::instance().rtoptions().get_feature_enabled(
@@ -159,6 +163,9 @@ protected:
 #if !defined(TRACY_ENABLE)
         return;
 #endif
+        if (IsSkipped()) {
+            return;
+        }
         if (auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state()) {
             noc_debug_state->reset_state();
         }
