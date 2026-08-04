@@ -101,7 +101,9 @@ per-direction adaLN modulations in the A↔V cross-attention, and the analyzer
 correctly reported extra "duplicates" for what were then genuinely identical
 values. Those disappeared once `video_q_a2v` / `video_kv_v2a` (and the audio
 pair) got their own shift/scale, as in the real code. Findings are only as good
-as the captured graph — which is the argument for capture over hand-modelling.
+as the graph it is given — which is the argument for deriving the graph from the
+model code instead of restating it by hand. See the roadmap for how: a
+metadata-only `ttnn` shim runs the real forward on a laptop.
 
 ## What it found on the gold case
 
@@ -260,11 +262,15 @@ Not built (and where it would go):
   `semantics.py`; nothing else changes.
 * **Automated rewrites.** Diagnostics only, per the plan's "proofs before
   auto-fixes".
-* **Validation from captured graphs** (plan phase 5 in full). The LTX-2.3 result
-  above comes from a graph hand-modelled off the source, not a device capture, so
-  it validates the analysis but not the capture path. Re-running it against a real
-  trace is the remaining step, and would also cover the branches this model fixes
-  by construction (image conditioning, `skip_qk`, LoRA, the non-audio config).
+* **A graph derived from the model code.** The LTX-2.3 result above comes from a
+  graph hand-modelled off the source, so it validates the analysis, not the
+  front end. The roadmap's phases 6-8 replace `examples/` with a dry run of the
+  real forward under a metadata-only `ttnn` shim; that also covers the branches
+  this hand model fixes by construction (image conditioning, `skip_qk`, LoRA, the
+  non-audio config).
+* **On-device conformance.** `capture.py` remains for the device's two jobs in
+  the new design -- per-op shape/layout conformance and one flat collective log to
+  diff the dry run against -- and has not been run on hardware yet.
 * **Multi-block / whole-pipeline graphs.** Examples model one block with a
   `calls` multiplier, so a redundancy that spans two *different* blocks is out of
   reach here (not in the analysis -- the rules are not block-scoped -- only in
