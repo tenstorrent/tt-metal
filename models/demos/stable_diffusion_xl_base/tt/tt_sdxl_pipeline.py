@@ -223,10 +223,11 @@ class TtSDXLPipeline(LightweightModule):
 
     def get_lora_status(self):
         """Report which components hold the currently-active LoRA (for the runner/server)."""
+        adapter_state = self._lora_weights_manager.adapter_state()
         return {
-            "unet": bool(self._lora_weights_manager.is_fused()),
+            "unet": bool(adapter_state["fused"]),
             "text_encoder": bool(self._te_lora_fused),
-            "skipped_reason": self._lora_weights_manager.skipped_reason(),
+            "skipped_reason": adapter_state["skipped_reason"],
         }
 
     def _ensure_te_base_snapshot(self):
@@ -260,7 +261,7 @@ class TtSDXLPipeline(LightweightModule):
         if self._te_lora_fused:
             logger.info("Text-encoder LoRA already fused; skipping re-fuse (idempotent).")
             return
-        components = self._lora_weights_manager.text_encoder_components()
+        components = self._lora_weights_manager.adapter_state()["text_encoder_components"]
         if not components:
             return
         # scale=0.0 means "do not apply to CLIP" — skip the host fuse + device

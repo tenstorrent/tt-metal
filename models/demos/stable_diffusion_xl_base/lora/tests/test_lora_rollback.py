@@ -154,7 +154,9 @@ def test_text_encoder_lora_rollback(mesh_device, is_ci_env, te_lora_path, prompt
     img_base = _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size)
 
     tt_sdxl.load_lora_weights(te_lora_path)
-    assert tt_sdxl._lora_weights_manager.text_encoder_components(), "chosen LoRA does not impact the text encoders"
+    assert tt_sdxl._lora_weights_manager.adapter_state()[
+        "text_encoder_components"
+    ], "chosen LoRA does not impact the text encoders"
     tt_sdxl.fuse_lora()
     assert tt_sdxl.get_lora_status()["text_encoder"] is True
     _run_forward_pass(tt_sdxl, pipeline, lora_prompt, negative_prompt, batch_size)
