@@ -25,7 +25,16 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/page.h"
 #include "sequencers.h"
+
+// Kill switch for the MODE_TILEROW per-tile-row NoC-address hoist (see the
+// `num_col_chunks > 1` arm below).  Default on; set to 0 to restore the
+// resolve-per-transaction form.  Compile-time only -- flipping it needs
+// `rm -rf ~/.cache/ttnn` to evict the JIT cache.
+#ifndef TTDM_TILEROW_HOIST
+#define TTDM_TILEROW_HOIST 1
+#endif
 
 constexpr uint32_t MODE_SEQUENTIAL = 0;  // Legacy: coalesced stick reads (reshape)
 constexpr uint32_t MODE_TILEROW = 1;
@@ -449,6 +458,57 @@ void kernel_main() {
                 cb.push_back(a->chunk_Wt);
             }
         } else {
+#if TTDM_TILEROW_HOIST
+            // Per-tile-row NoC-address hoist (restores the pre-Device-2.0 shape).
+            //
+            // Each of the H_per_tile source sticks is read once per column chunk,
+            // always at the same page and a chunk-strided byte offset.  Resolving
+            // (page_id -> bank, bank_page_offset) is the expensive part: a per-rank
+            // `%` and `/` by a runtime tensor shape inside TensorAccessor. Doing it
+            // inside the `c` loop repeats it num_col_chunks times per stick.
+            //
+            // Hoisting is exact, not an approximation: TensorAccessor resolves the
+            // page first and adds `offset` as the final term of the address
+            // (`bank_start + bank_base_address + bank_page_offset*aligned_page_size
+            // + offset`), so
+            //     get_noc_addr(p, k) == get_noc_addr(p, 0) + k
+            // holds byte-for-byte, and `tensor_accessor::Page`'s noc_traits src_addr
+            // is likewise `noc_addr() + offset_bytes`.  Same addresses, same sizes,
+            // same issue order -- pure code motion.
+            //
+            // base_noc[32]: H_per_tile is TILE_H (= 32) for every producer of
+            // MODE_TILEROW, matching the legacy fixed-size hoist buffer.
+            const uint8_t noc_id = noc.get_noc_id();
+            for (uint32_t tr = 0; tr < a->num_tile_rows; ++tr) {
+                uint64_t base_noc[32];
+                for (uint32_t h = 0; h < a->H_per_tile; ++h) {
+                    base_noc[h] = s.get_noc_addr(i_stick + h, 0, noc_id);
+                }
+                uint32_t chunk_off = 0;
+                for (uint32_t c = 0; c < a->num_col_chunks; ++c) {
+                    cb.reserve_back(a->chunk_Wt);
+                    // The CB write pointer cannot move between reserve_back and
+                    // push_back, so read it once per chunk instead of once per
+                    // transaction (the CircularBuffer destination re-reads
+                    // fifo_wr_ptr from L1 on every async_read).  Same base address.
+                    const CoreLocalMem<uint8_t> dst(cb.get_write_ptr());
+                    uint32_t l1_offset = 0;
+                    for (uint32_t h = 0; h < a->H_per_tile; ++h) {
+                        noc.async_read(
+                            tensor_accessor::Page(base_noc[h], i_stick + h),
+                            dst,
+                            chunk_read_bytes,
+                            {.offset_bytes = chunk_off},
+                            {.offset_bytes = l1_offset});
+                        l1_offset += chunk_read_bytes;
+                    }
+                    noc.async_read_barrier();
+                    cb.push_back(a->chunk_Wt);
+                    chunk_off += chunk_read_bytes;
+                }
+                i_stick += a->H_per_tile;
+            }
+#else
             for (uint32_t tr = 0; tr < a->num_tile_rows; ++tr) {
                 // The legacy path hoisted one base NoC address per stick row into
                 // base_noc[] and advanced it by chunk_read_bytes per column chunk.
@@ -472,6 +532,7 @@ void kernel_main() {
                 }
                 i_stick += a->H_per_tile;
             }
+#endif  // TTDM_TILEROW_HOIST
         }
     }
 
