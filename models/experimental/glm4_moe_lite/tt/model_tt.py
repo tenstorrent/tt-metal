@@ -37,7 +37,8 @@ from models.experimental.glm4_moe_lite.tt.layer_weights import (
     _linear_weight_tt,
     convert_decoder_layer_weights,
 )
-from models.experimental.glm4_moe_lite.tt.linear_helpers import WORKER_GRID_X
+from models.experimental.glm4_moe_lite.tt.linear_helpers import worker_grid_x
+from models.experimental.glm4_moe_lite.tt.runtime_config import ccl_settings_from_env
 from models.experimental.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
 from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
 
@@ -362,7 +363,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 n_layers=num_layers_to_run,
                 global_cb_tiles=_cb_tiles,
             )
-            logger.info("GLM prefetch enabled: o_proj via {}-core ring", prefetcher.RING_CORES)
+            logger.info("GLM prefetch enabled: o_proj via {}-core ring", prefetcher.ring_cores)
 
         enable_moe = os.environ.get("GLM4_MOE_LITE_ENABLE_MOE", "").strip() == "1"
         moe_runtime = None
@@ -508,7 +509,11 @@ class Glm4MoeLiteDenseOnlyTT:
             force_shared_expert_dense=False,
             enable_moe=self.enable_moe,
             prefetch_dram_cores=None if prefetcher is None else prefetcher.dram_cores,
-            prefetch_ring_cores=0 if prefetcher is None else prefetcher.RING_CORES,
+            # The live, grid-derived ring width -- NOT the WH-reference RING_CORES constant.
+            # This one is load-bearing: it sets the DRAM shard padding for w_o, so a stale 16
+            # here against a 32-core ring lays the weight out for the wrong ring and the
+            # gather_in0 matmul deadlocks rather than raising.
+            prefetch_ring_cores=0 if prefetcher is None else prefetcher.ring_cores,
         )
 
         self.layer_weights[layer_idx] = w
@@ -1035,12 +1040,9 @@ class Glm4MoeLiteDenseOnlyTT:
         logits_tt = ttnn.linear(x_last, self.lm_head_w)
         if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
             cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
-            _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
-            _topo = (
-                ttnn.Topology.Ring
-                if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
-                else ttnn.Topology.Linear
-            )
+            # Via ccl_settings_from_env, not os.environ: the raw env carries the WH winning
+            # values (4 links, ring) and both abort on a BH Galaxy.
+            _nl, _topo = ccl_settings_from_env()
             logits_tt_full = ttnn.all_gather(
                 logits_tt,
                 dim=3,
@@ -1200,12 +1202,8 @@ class Glm4MoeLiteDenseOnlyTT:
             logits_tt = ttnn.linear(x_last, self.lm_head_w)  # [1,1,1,vocab]
             if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
                 cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
-                _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
-                _topo = (
-                    ttnn.Topology.Ring
-                    if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
-                    else ttnn.Topology.Linear
-                )
+                # See the note on the same call in the single-request prefill path above.
+                _nl, _topo = ccl_settings_from_env()
                 logits_tt_full = ttnn.all_gather(
                     logits_tt,
                     dim=3,
@@ -1454,8 +1452,8 @@ class Glm4MoeLiteDenseOnlyTT:
             # The interleaved fallback (rotary_embedding_llama with is_decode_mode=False)
             # takes the full grid and asserts, so force the decode path under prefetch --
             # including in the eager warmup, which is called with enable_trace=False.
-            # The user cap also shrinks: worker columns 0-5, not the full 8x9 grid.
-            max_decode_rope_users = WORKER_GRID_X * int(grid_size.y)
+            # The user cap also shrinks: the worker columns, not the full device grid.
+            max_decode_rope_users = worker_grid_x(int(grid_size.x)) * int(grid_size.y)
         # Decode-mode (sharded) RoPE vs the interleaved kernel is an OP-COUNT tradeoff, and
         # profiling says op count dominates: the decode-mode closure is ~7 device ops per
         # call (permute, pad, 2x to_memory_config, rope, slice, permute) against 1 for the
@@ -1490,7 +1488,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 # repeat, which cannot be confined to the worker SubDevice.
                 host_rope=self.rope if self.prefetcher is not None else None,
                 positions=positions if self.prefetcher is not None else None,
-                max_grid_x=WORKER_GRID_X if self.prefetcher is not None else None,
+                max_grid_x=worker_grid_x(int(grid_size.x)) if self.prefetcher is not None else None,
             )
         if profile_on:
             decode_profile["prep_inputs_s"] = decode_profile.get("prep_inputs_s", 0.0) + (time.perf_counter() - t0)

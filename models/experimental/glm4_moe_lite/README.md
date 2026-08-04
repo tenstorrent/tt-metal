@@ -2,8 +2,9 @@
 
 **Model:** zai-org/GLM-4.7-Flash (47 layers, MLA attention, MoE, 4.7B params)
 **Hardware (T3K):** 8 Wormhole devices; tested with mesh shapes 1x4 (4 devices), 1x8 (8 devices), and 2x4 (8 devices, matching T3K physical topology)
-**Hardware (Galaxy):** 32 Wormhole B0 devices; 4x8 mesh
-**Dispatch:** `DispatchCoreType.ETH` (all 64 Tensix cores per device available for compute)
+**Hardware (WH Galaxy):** 32 Wormhole B0 devices; 4x8 mesh
+**Hardware (BH Galaxy):** 32 Blackhole devices; 4x8 mesh — see [Blackhole Galaxy](#blackhole-galaxy)
+**Dispatch:** resolved from the cluster (`ttnn.device.get_default_dispatch_core_*`) — WORKER/ROW on WH Galaxy, WORKER/COL on Blackhole
 
 **Current best decode latency (Galaxy, batch=1):** **51.3 ms** @ ISL=128 (19.49 tok/s), 52.5 ms @ ISL=512 (19.05 tok/s), 53.4 ms @ ISL=1024 (18.73 tok/s)
 **Current best aggregate TPS (Galaxy):** **449 tok/s** @ batch=32/ISL=128, 431 tok/s @ batch=32/ISL=512, 408 tok/s @ batch=32/ISL=1024; peak **592 tok/s** @ batch=128/ISL=128
@@ -61,7 +62,8 @@ models/experimental/glm4_moe_lite/
    - [Greedy Debug Script (single run)](#greedy-debug-script-single-run)
    - [Batch & ISL Sweep](#batch--isl-sweep)
 2. [Performance](#performance)
-3. [Testing](#testing)
+3. [Blackhole Galaxy](#blackhole-galaxy)
+4. [Testing](#testing)
    - [Full-model smoke test (start here)](#full-model-smoke-test-start-here)
    - [Component tests](#component-tests)
 4. [Script & CLI Options](#script--cli-options)
@@ -234,6 +236,88 @@ acting on those op shares** — they were captured on the pre-optimization stack
 
 ---
 
+## Blackhole Galaxy
+
+The model runs on a 32-chip Blackhole Galaxy from the same files as WH — everything below
+is derived from the cluster at runtime, not selected by a flag. Status: **bring-up
+verified, not yet benchmarked** (no BH decode latency numbers exist yet; the Performance
+section above is WH-only).
+
+### What differs, and where it is handled
+
+| | WH B0 Galaxy | Blackhole Galaxy | handled in |
+|---|---|---|---|
+| `ClusterType` | `GALAXY` | `BLACKHOLE_GALAXY` | `runtime_config.is_ubb_galaxy()` |
+| Compute grid | 8x9 = 72 | **12x10 = 120** (1x-harvested; 130 unharvested) | read from the device |
+| Dispatch | WORKER / ROW | WORKER / **COL** (BH rejects ROW) | `runtime_config.dispatch_core_config()` |
+| L1 per core | 1,499,136 B | **1,572,864 B** | see KV-update cap below |
+| DRAM views | 12 x 1 GiB | **8** x ~4 GiB | `device.dram_grid_size()` |
+| Peak DRAM BW | 258 GB/s | **512 GB/s** | — |
+| AICLK | ~1000 MHz | **1350 MHz** | — |
+| Eth links per direction | 4 | **2** | `runtime_config.hw_max_ccl_links()` |
+| Fabric / CCL topology | `FABRIC_1D_RING` / Ring | **`FABRIC_1D` / Linear** | `runtime_config.galaxy_fabric_config()` |
+| Single-call KV write | 16 users | **32 users** | `attention_decode._kv_update_user_cap()` |
+
+**Ring fabric and the 4x8 mesh are mutually exclusive on BH Galaxy.** The SystemMesh shape
+depends on the fabric config: under `FABRIC_1D` this machine presents `[8, 4]` (so both
+`(4,8)` and `(8,4)` open), but `FABRIC_1D_RING` maps to TORUS_XY on a UBB galaxy and
+presents `[16, 2]`, where `MeshShape(4, 8)` fails with "Requested mesh is too big and is
+not rotatable". We keep `(4,8)` and take line fabric, because `(4,8)` is what the fused
+collective epilogue, the buffered MoE all-reduce and the 2-experts-per-device layout are
+built around — and ring buys nothing measurable (`CCL_TOPOLOGY=linear` measured 0.0 ms vs
+ring on WH). A `(16,2)` + ring configuration is an open A/B.
+
+`GLM4_MOE_LITE_CCL_NUM_LINKS=4` from the winning flag set is clamped to 2 with a warning.
+This matters for bring-up, not just perf: asking for 3+ links aborts in
+`TT_FATAL @ fabric/fabric.cpp:163` rather than degrading.
+
+### Verified on device
+
+```bash
+# MoE collective-epilogue / buffered-all-reduce equality gate, random weights, no checkpoint
+TT_ENABLE_HW_TESTS=1 TT_ENABLE_MULTI_DEVICE_TESTS=1 \
+  pytest models/experimental/glm4_moe_lite/tests/test_tt_moe_layer1_mesh_optional.py -q
+# 12 passed on BH GLX (tokens 1/64/128 x gather_reduce/buffered x links 1/2);
+# 45 skipped as unreachable on this cluster (links 3-4, ring topology) or weight-gated.
+```
+
+`all_reduce` was separately checked correct on both cluster axes at 1 and 2 links
+(bf16-rounding error only), and `paged_update_cache` measured OK at batch 8/16/24/32,
+overflowing at 48 with "circular buffers ... grow to 2105872 B which is beyond max L1 size
+of 1572864 B" — which is what raises the KV-write cap to 32.
+
+### The GlobalCB prefetcher: the L1 verdict was ring-width-bound, not L1-bound
+
+The [earlier conclusion](#what-actually-bounds-the-decode-step-measured-2026-08-03) that
+"the GlobalCB prefetcher and FlashMLA decode cannot coexist in L1" held the ring at **16
+cores**, inherited from REAP, and searched the other knobs (`k_chunk_size`, the L1
+activation flags, SDPA placement). Ring width was not among them — but it is the one knob
+that moves the GlobalCB, since the per-receiver payload is `K_tiles * (N_tiles / ring)`:
+
+| ring | GlobalCB (w_o) | + SDPA CBs @ k_chunk=32 | vs WH 1,499,136 | vs BH 1,572,864 |
+|---|---|---|---|---|
+| 16 | 696,320 B | 1,729,888 B | over by 230,752 | over by 157,024 |
+| **32** | **348,160 B** | **1,381,728 B** | **fits** | **fits (191 KB spare)** |
+
+`gcd(160, 64) = 32`, so 32 is the widest legal ring for `w_o` (a non-dividing ring
+deadlocks rather than raising). `get_glm_core_ranges` now derives the layout from the grid
+and `ring_cores_for` picks the widest legal ring, giving **8 senders x 4 receivers = 32** on
+both arches: BH puts senders in column 10 and receivers in columns 6-9 (workers 0-9); WH
+puts senders in column 6 and receivers in columns 2-5 (workers 0-5). Pinned in
+`tests/test_prefetcher_config.py`.
+
+Two caveats, so this is not over-read:
+
+- **This is arithmetic and geometry, not a working prefetcher.** Nobody has run the ring at
+  32 on either arch. The model-side wiring is still unfinished — `clone`, `typecast`,
+  eltwise add/mul, head create/concat, lm_head and argmax do not accept `sub_core_grids`,
+  and every CCL call needs a `subdevice_id` (mistakes there **hang** rather than assert).
+- **SDPA's CB is not strictly core-count-independent.** `intermed_output_tiles` scales with
+  cores per head, so on a 12-wide grid it may exceed the 1,033,568 B measured on WH and eat
+  the headroom. Measure before relying on the table above; `sub_core_grids` can confine it.
+
+---
+
 ## Testing
 
 Everything here is opt-in behind env gates — this model is **not in CI**, so nothing
@@ -345,7 +429,8 @@ Already on in code — listed so you know what to turn **off** when bisecting.
 | `GLM4_MOE_LITE_FUSED_COLLECTIVE_EPILOGUE` | **On** | Fuse the final routed expert reduction with shared-expert + residual adds into one `fast_reduce_nc` epilogue. Gated to 4x8 mesh, `TP=0`, sparse reduce dispatch, tokens≤32; **falls back safely** otherwise. Set `=0` to disable. |
 | `GLM4_MOE_LITE_BUFFERED_MOE_ALL_REDUCE` | **On** | Replace the MoE gather+reduce with two buffered, semaphore-driven per-axis `all_reduce_async` passes. Bit-exact vs the safe path across 12 CCL configs. Set `=0` to disable. |
 | `GLM4_MOE_LITE_FUSE_DOWN_ROUTING_SCALE` | **On** | Fold the per-token top-k routing weights into the sparse expert down-projection via a `sparse_matmul` `post_scale` width-broadcast epilogue, removing the standalone multiply. Self-gates to `num_blocks==1`; off in all-to-all mode. |
-| `GLM4_MOE_LITE_SHARDED_NORM` | **On** | Width-shard the two decode RMSNorms across 8 cores (hidden=2048 = 64 tiles, otherwise single-core). Decode only; prefill unchanged. Set `=0` for the single-core path. |
+| `GLM4_MOE_LITE_SHARDED_NORM` | **On** | Width-shard the two decode RMSNorms across `SHARDED_NORM_CORES` cores (hidden=2048 = 64 tiles, otherwise single-core). Decode only; prefill unchanged. Set `=0` for the single-core path. |
+| `GLM4_MOE_LITE_SHARDED_NORM_CORES=N` | `8` | Cores for the sharded decode RMSNorm. 8 is the WH-validated value; 16 and 32 also divide the 64 width tiles and Blackhole has the cores (120 vs 72). **Unsettled** — must be A/B'd under trace on the full model, since an isolated `rms_norm` call on a 32-chip mesh is host-dispatch-bound at ~4 ms and tells you nothing. |
 | `GLM4_MOE_LITE_NORM_L1` | **On** | Keep norm intermediates in L1. |
 | `GLM4_MOE_LITE_ROUTER_L1` | **On** | Keep MoE router intermediates in L1 (decode, tokens≤32). |
 | `GLM4_MOE_LITE_EXPLICIT_PROG_CFG` | **On** | Explicit matmul program configs for one-tile, non-batched matmuls. Validated 58.1 → 54.2 ms/token on Galaxy B1. |

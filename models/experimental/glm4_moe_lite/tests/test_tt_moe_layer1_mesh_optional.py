@@ -24,6 +24,12 @@ from models.experimental.glm4_moe_lite.tt.moe_tt import (
     moe_sparse_experts_forward_tt,
 )
 from models.experimental.glm4_moe_lite.tt.reference_moe import run_layer_moe_reference_from_hidden_states
+from models.experimental.glm4_moe_lite.tt.runtime_config import (
+    default_ccl_topology,
+    galaxy_fabric_config,
+    hw_max_ccl_links,
+    is_ubb_galaxy,
+)
 from models.experimental.glm4_moe_lite.tt.weights import (
     find_missing_shards,
     load_glm_lazy_state_dict,
@@ -50,10 +56,17 @@ def _mesh_shape_from_env(default: tuple[int, int] = (1, 8)) -> tuple[int, int]:
 
 
 def _set_galaxy_fabric() -> None:
-    if ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.GALAXY:
+    """Set the fabric this cluster needs, for either Galaxy architecture.
+
+    Uses the model's own helpers so the test and the shipping path cannot disagree: the
+    previous `== ClusterType.GALAXY` check silently did nothing on a Blackhole Galaxy
+    (which reports BLACKHOLE_GALAXY), and ring fabric there would make the 4x8 mesh
+    unopenable. See runtime_config.galaxy_fabric_config().
+    """
+    if not is_ubb_galaxy():
         return
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D_RING,
+        galaxy_fabric_config(),
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
@@ -70,7 +83,7 @@ def _set_galaxy_fabric() -> None:
     os.environ.get("TT_ENABLE_MULTI_DEVICE_TESTS") != "1",
     reason="Enable with TT_ENABLE_MULTI_DEVICE_TESTS=1 (opens a multi-device mesh).",
 )
-@pytest.mark.parametrize("num_links", [1, 3, 4])
+@pytest.mark.parametrize("num_links", [1, 2, 3, 4])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring], ids=["linear", "ring"])
 @pytest.mark.parametrize("buffered", [False, True], ids=["gather_reduce", "buffered_all_reduce"])
 @pytest.mark.parametrize("tokens", [1, 64, 128], ids=["b1", "b64", "b128"])
@@ -80,6 +93,15 @@ def test_collective_epilogue_matches_existing_path_on_galaxy(
     mesh_rows, mesh_cols = _mesh_shape_from_env(default=(4, 8))
     if (mesh_rows, mesh_cols) != (4, 8):
         pytest.skip("Collective epilogue validation requires a 4x8 mesh")
+
+    # Skip configurations this cluster cannot express, rather than failing on them. A BH
+    # Galaxy has 2 links (not WH's 4) and runs line fabric to keep the 4x8 mesh openable,
+    # so ring topology and links > 2 are unavailable there -- asking anyway aborts in
+    # fabric.cpp. 2 is in the list so BH still gets a multi-link config covered.
+    if num_links > hw_max_ccl_links():
+        pytest.skip(f"cluster has {hw_max_ccl_links()} link(s), cannot test num_links={num_links}")
+    if topology == ttnn.Topology.Ring and default_ccl_topology() != ttnn.Topology.Ring:
+        pytest.skip("cluster fabric does not provide a ring topology")
 
     _set_galaxy_fabric()
     mesh_device = ttnn.open_mesh_device(

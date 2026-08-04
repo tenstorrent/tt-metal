@@ -17,15 +17,44 @@ from typing import Any
 import ttnn
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
-# Width of the GlobalCB prefetcher's worker SubDevice (columns 0-5 of the 8x9 grid).
-# Matches prefetcher_setup.get_glm_core_ranges; kept here so matmul program configs can
-# be clamped without importing the prefetcher module on the hot path.
-WORKER_GRID_X = 6
+# Width of the GlobalCB prefetcher's worker SubDevice, and the narrower slice SDPA runs on.
+# Both are derived from the device grid rather than fixed, because the prefetcher layout is
+# "reserve the rightmost columns for senders, leave the rest anchored at (0,0) for workers"
+# and the number of columns differs per arch: WH Galaxy is 8 wide (workers 0-5, senders 6),
+# Blackhole is 12-13 wide.
+#
+# Kept as functions here so matmul program configs can clamp their grids without importing
+# the prefetcher module on the hot path; prefetcher_setup builds the actual CoreRangeSets
+# from the same rule.
+# One column holds the sender cores (one per DRAM bank) and must sit outside the worker
+# rectangle; the column beyond it is left unassigned, as the WH layout did. Applied to the
+# 8-wide WH Galaxy grid this reproduces the validated WORKER_GRID_X of 6 (workers 0-5,
+# senders 6, column 7 unassigned); on Blackhole's 12-wide grid it gives 10.
+_RESERVED_WORKER_COLS = 2
 
-# SDPA runs on a narrower slice: columns 0-3 only. The prefetcher's GlobalCB occupies
-# ~696 KB of L1 on the receiver cores (columns 4-5), and SDPA's circular buffers do not
-# fit alongside it -- see the note at its construction in attention_decode.
+# SDPA is confined further, away from the columns holding the GlobalCB. Two columns in from
+# the worker edge reproduces the validated WH value of 4. Placement only -- the GlobalCB
+# reserves L1 address space device-wide, so this does not by itself buy L1 headroom
+# (measured on WH); it is a tuning knob for the Phase-3 prefetcher work.
+_SDPA_INSET_COLS = 2
+
+
+def worker_grid_x(grid_x: int) -> int:
+    """Number of leftmost columns available to the worker SubDevice."""
+    return max(1, int(grid_x) - _RESERVED_WORKER_COLS)
+
+
+def sdpa_grid_x(grid_x: int) -> int:
+    """Columns SDPA is confined to under the prefetcher."""
+    return max(1, worker_grid_x(grid_x) - _SDPA_INSET_COLS)
+
+
+# The WH Galaxy (8-wide grid) values these were introduced as, kept so the derivation above
+# can be sanity-checked against what was validated there.
+WORKER_GRID_X = 6
 SDPA_GRID_X = 4
+assert worker_grid_x(8) == WORKER_GRID_X, "derivation must reproduce the validated WH worker width"
+assert sdpa_grid_x(8) == SDPA_GRID_X, "derivation must reproduce the validated WH SDPA width"
 
 # Memoised worker CoreRangeSets, keyed by device grid. Built once per grid shape rather
 # than per call: the decode path asks for this at ~30 sites x 47 layers per token.
@@ -48,7 +77,7 @@ def worker_sub_core_grids(device: Any, cfg: Glm4RuntimeConfig) -> Any | None:
     scg = _WORKER_SCG_CACHE.get(key)
     if scg is None:
         scg = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(min(WORKER_GRID_X, key[0]) - 1, key[1] - 1))]
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(worker_grid_x(key[0]) - 1, key[1] - 1))]
         )
         _WORKER_SCG_CACHE[key] = scg
     return scg
@@ -146,17 +175,19 @@ def mlp_linear(
         for i in range(len(b.shape) - 2):
             b_batch *= int(b.shape[i])
         if m_total <= ttnn.TILE_SIZE and b_batch == 1:
-            # WORKER_GRID_X when prefetch is on: the prefetcher's worker SubDevice is
-            # columns 0-5, and an unclamped grid spills onto the sender columns.
-            kwargs["program_config"] = compute_1d_prog_cfg(
-                device, b, m_total, max_grid_x=WORKER_GRID_X if cfg.prefetch else None
-            )
+            # Clamp to the worker width when prefetch is on: the prefetcher's worker
+            # SubDevice is the leftmost columns, and an unclamped grid spills onto the
+            # sender columns.
+            _max_gx = None
+            if cfg.prefetch:
+                _max_gx = worker_grid_x(int(device.compute_with_storage_grid_size().x))
+            kwargs["program_config"] = compute_1d_prog_cfg(device, b, m_total, max_grid_x=_max_gx)
     if cfg.prefetch and "program_config" not in kwargs:
         # No explicit program config (batched weights like the per-head w_kv_b1, where
         # b_batch > 1) means ttnn picks its own grid -- which is the full device grid and
         # so is rejected by the worker SubDevice. core_grid confines it instead.
         grid = device.compute_with_storage_grid_size()
-        kwargs["core_grid"] = ttnn.CoreGrid(y=int(grid.y), x=min(WORKER_GRID_X, int(grid.x)))
+        kwargs["core_grid"] = ttnn.CoreGrid(y=int(grid.y), x=worker_grid_x(int(grid.x)))
     return ttnn.linear(a, b, **kwargs)
 
 

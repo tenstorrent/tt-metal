@@ -14,6 +14,12 @@ import ttnn
 from models.common.modules.tt_ccl import get_tt_ccl
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.layer_weights import MoELayerTTWeights
+from models.experimental.glm4_moe_lite.tt.runtime_config import (
+    ccl_settings_from_env,
+    default_ccl_topology,
+    hw_max_ccl_links,
+    is_blackhole_galaxy,
+)
 
 _SCATTER_ZERO_CACHE: dict[tuple[int, int, int], ttnn.Tensor] = {}
 _FUSED_ROUTER_IDENTITY_CACHE: dict[int, ttnn.Tensor] = {}
@@ -180,9 +186,16 @@ def _detect_galaxy_ccl(device: Any) -> tuple[int, ttnn.Topology]:
     """Auto-detect safe CCL settings from the Galaxy hardware type.
 
     Follows the Llama 70B Galaxy convention:
-    - 6U Galaxy (32 PCIe devices): num_links=4, Ring
-    - 4U Galaxy (<32 PCIe devices): num_links=3, Linear
+    - WH 6U Galaxy (32 PCIe devices): num_links=4, Ring
+    - WH 4U Galaxy (<32 PCIe devices): num_links=3, Linear
+    - BH Galaxy (32 PCIe devices): num_links=2, Linear
     - Non-Galaxy multi-device: num_links=1, Linear
+
+    Device count alone is not enough to tell these apart. A BH Galaxy also reports 32
+    devices and 32 PCIe devices, but has only 2 usable links per direction, and asking for
+    4 aborts in `fabric.cpp:163` instead of degrading. The link ceiling and the topology
+    therefore come from the cluster type via `runtime_config`, which is also what the
+    per-op config in `Glm4RuntimeConfig.from_env` clamps against.
     """
     try:
         num_pcie = ttnn.GetNumPCIeDevices()
@@ -190,12 +203,14 @@ def _detect_galaxy_ccl(device: Any) -> tuple[int, ttnn.Topology]:
         num_pcie = -1
     num_devices = _get_num_devices(device)
     if num_devices == 32:
-        if num_pcie == 32:
-            links, topo = 4, ttnn.Topology.Ring
-            galaxy_type = "6U"
+        max_links = hw_max_ccl_links()
+        topo = default_ccl_topology()
+        if is_blackhole_galaxy():
+            links, galaxy_type = max_links, "BH"
+        elif num_pcie == 32:
+            links, galaxy_type = min(4, max_links), "6U"
         else:
-            links, topo = 3, ttnn.Topology.Linear
-            galaxy_type = "4U"
+            links, galaxy_type = min(3, max_links), "4U"
         print(
             f"[MoE CCL] Detected {galaxy_type} Galaxy ({num_pcie} PCIe devices) "
             f"→ hw_links={links}, hw_topology={'Ring' if topo == ttnn.Topology.Ring else 'Linear'}"
@@ -637,9 +652,9 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
             per_core_M=per_core_M,
         )
 
-    ccl_num_links = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
-    ccl_topology_str = os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower()
-    ccl_topology = ttnn.Topology.Ring if ccl_topology_str == "ring" else ttnn.Topology.Linear
+    # Clamped to the cluster's real capability -- the winning flag set asks for 4 links and
+    # ring, which abort on a BH Galaxy. See runtime_config.ccl_settings_from_env.
+    ccl_num_links, ccl_topology = ccl_settings_from_env()
 
     return Glm4MoeLiteMoERuntime(
         expert_mapping_tensors=expert_mapping_tensors,
@@ -994,16 +1009,10 @@ def moe_dense_experts_forward_decode_tt(
         ttnn.deallocate(weighted, force=False)
 
         # Sum contributions across devices (experts are sharded across the mesh).
-        _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
-        _topo = (
-            rt.topology
-            if rt is not None
-            else (
-                ttnn.Topology.Ring
-                if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
-                else ttnn.Topology.Linear
-            )
-        )
+        # See the note on the identical fallback in the sparse forward below.
+        _env_nl, _env_topo = ccl_settings_from_env()
+        _nl = rt.num_links if rt is not None else _env_nl
+        _topo = rt.topology if rt is not None else _env_topo
         out_full = _moe_all_reduce_across_mesh(
             out_local,
             device=device,
@@ -1268,16 +1277,12 @@ def moe_dense_experts_forward_prefill_tt(
     ttnn.deallocate(weighted, force=False)
 
     # All-reduce across devices (experts sharded across mesh).
-    _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
-    _topo = (
-        rt.topology
-        if rt is not None
-        else (
-            ttnn.Topology.Ring
-            if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
-            else ttnn.Topology.Linear
-        )
-    )
+    # The env fallback goes through ccl_settings_from_env, which clamps to what the cluster
+    # can express. _moe_all_reduce_across_mesh re-clamps anyway, but the raw env values are
+    # a BH abort (4 links / ring on line fabric) and should not be spelled out here.
+    _env_nl, _env_topo = ccl_settings_from_env()
+    _nl = rt.num_links if rt is not None else _env_nl
+    _topo = rt.topology if rt is not None else _env_topo
     return _moe_all_reduce_across_mesh(
         out_local,
         device=device,
@@ -1584,16 +1589,12 @@ def moe_packed_experts_forward_prefill_tt(
     # out_accum: [1, 1, T, H] — local expert contribution
 
     # All-reduce across devices (experts sharded across mesh).
-    _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
-    _topo = (
-        rt.topology
-        if rt is not None
-        else (
-            ttnn.Topology.Ring
-            if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
-            else ttnn.Topology.Linear
-        )
-    )
+    # The env fallback goes through ccl_settings_from_env, which clamps to what the cluster
+    # can express. _moe_all_reduce_across_mesh re-clamps anyway, but the raw env values are
+    # a BH abort (4 links / ring on line fabric) and should not be spelled out here.
+    _env_nl, _env_topo = ccl_settings_from_env()
+    _nl = rt.num_links if rt is not None else _env_nl
+    _topo = rt.topology if rt is not None else _env_topo
     return _moe_all_reduce_across_mesh(
         out_accum,
         device=device,

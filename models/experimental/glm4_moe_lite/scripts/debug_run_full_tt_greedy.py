@@ -29,6 +29,10 @@ apply_perf_defaults()
 
 from models.experimental.glm4_moe_lite.tt.layer0_tt import _alloc_contiguous_page_table, _round_up  # noqa: E402
 from models.experimental.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT  # noqa: E402
+from models.experimental.glm4_moe_lite.tt.runtime_config import (  # noqa: E402
+    dispatch_core_config,
+    galaxy_fabric_config,
+)
 from models.experimental.glm4_moe_lite.tt.weights import (  # noqa: E402
     find_missing_shards,
     resolve_best_effort_snapshot_dir,
@@ -66,16 +70,16 @@ def _set_default_fabric_config(num_devices: int) -> None:
     """Match vLLM/tt-metal conftest behavior: set fabric before opening a mesh.
 
     Some systems can segfault during mesh discovery/open if fabric isn't set.
+
+    The choice is delegated to `runtime_config.galaxy_fabric_config()` because on Blackhole
+    Galaxy it is not merely a perf knob: ring fabric changes which mesh shapes exist at all
+    (it presents this machine as 16x2, so MeshShape(4, 8) fails to open). See that
+    function for the full reasoning.
     """
     if int(num_devices) <= 1:
         return
-    is_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
-    if is_galaxy:
-        fabric = ttnn.FabricConfig.FABRIC_1D_RING
-    else:
-        fabric = ttnn.FabricConfig.FABRIC_1D
     ttnn.set_fabric_config(
-        fabric,
+        galaxy_fabric_config(),
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
@@ -291,11 +295,11 @@ def main() -> int:
 
     # Open a mesh device for consistency with vLLM (even if mesh-cols=1).
     _set_default_fabric_config(n_devices)
-    is_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
-    if is_galaxy:
-        dispatch_cfg = ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.ROW)
-    else:
-        dispatch_cfg = ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH)
+    # Dispatch comes from the canonical ttnn defaults rather than a hardcoded pair: the old
+    # galaxy branch passed DispatchCoreAxis.ROW, which *raises* on Blackhole, and the
+    # non-galaxy branch passed DispatchCoreType.ETH, which BH also rejects. See
+    # runtime_config.dispatch_core_config().
+    dispatch_cfg = dispatch_core_config()
     open_kwargs = {
         "mesh_shape": ttnn.MeshShape(mesh_rows, mesh_cols),
         "dispatch_core_config": dispatch_cfg,

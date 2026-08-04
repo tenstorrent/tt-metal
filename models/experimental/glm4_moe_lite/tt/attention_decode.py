@@ -21,7 +21,7 @@ import torch
 import ttnn
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.linear_helpers import (
-    SDPA_GRID_X,
+    sdpa_grid_x,
     attn_linear,
     mlp_linear,
     tp_row_parallel_linear,
@@ -34,6 +34,39 @@ def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -
     if profile is None:
         return
     profile[key] = float(profile.get(key, 0.0)) + float(elapsed_s)
+
+
+# Largest single-call `paged_update_cache` batch, per architecture. Both values are
+# measured, not modelled.
+#
+# The op's statically-allocated circular buffers grow ~36,864 B per user in the call
+# (measured: 48 users -> 2,105,872 B, 64 users -> 2,695,696 B on BH), and it is checked
+# against the raw per-core L1 size -- 1,499,136 B on WH versus 1,572,864 B on BH. So the
+# same 32-user call that is "~0.6% over" on WH, which is why the cap was pinned to 16
+# there, fits on BH.
+#
+# Verified by calling the op directly at increasing batch on a 32-chip BH Galaxy:
+#   batch 8 / 16 / 24 / 32 -> OK
+#   batch 48 -> "circular buffers ... grow to 2105872 B which is beyond max L1 size of
+#                1572864 B"
+#
+# Raising this to 32 on BH removes the sub-batching entirely at the batch=32 sweep point
+# (two KV writes collapse to one). `device.l1_size_per_core()` is not exposed to Python,
+# so this is an arch table rather than a computation; overflow is a loud TT_THROW naming
+# the real footprint, never silent corruption, and
+# GLM4_MOE_LITE_KV_UPDATE_MAX_USERS overrides it either way.
+_KV_UPDATE_MAX_USERS_BH = 32
+_KV_UPDATE_MAX_USERS_WH = 16
+
+
+def _kv_update_user_cap(max_cores: int) -> int:
+    """Largest single-call `paged_update_cache` batch that fits this arch's L1."""
+    try:
+        is_bh = bool(ttnn.device.is_blackhole())
+    except Exception:  # pragma: no cover - no driver
+        is_bh = False
+    cap = _KV_UPDATE_MAX_USERS_BH if is_bh else _KV_UPDATE_MAX_USERS_WH
+    return max(1, min(cap, max_cores))
 
 
 def _safe_slice(
@@ -182,18 +215,18 @@ def kv_cache_update(
             mesh_coords = None
 
     # `paged_update_cache` height-shards the update tensor as one sequence per Tensix
-    # core, so a single call needs `batch` cores AND its per-core L1 CBs must fit. On
-    # WH (8x8 grid) that hard-caps a single call at 64 sequences, and the per-core CBs
-    # overflow L1 a little past batch~16. For larger decode batches we split the KV
-    # write into sub-batches of <= KV_UPDATE_MAX_USERS sequences (default 16, which is
-    # L1-validated; a single 32-user call overflows the per-core CB by ~0.6%), slicing
-    # positions/page_table per chunk. This sub-batches ONLY the
-    # cheap KV write — attention/MoE and the collectives still run at the full batch,
-    # so the decode-throughput benefit of a wide batch is preserved.
+    # core, so a single call needs `batch` cores AND its per-core L1 CBs must fit. For
+    # larger decode batches we split the KV write into sub-batches of
+    # <= KV_UPDATE_MAX_USERS sequences, slicing positions/page_table per chunk. This
+    # sub-batches ONLY the cheap KV write — attention/MoE and the collectives still run at
+    # the full batch, so the decode-throughput benefit of a wide batch is preserved.
+    #
+    # The cap is per-architecture and L1-driven: 16 on WH, 32 on BH. See
+    # _kv_update_user_cap for the measurements.
     grid = device.compute_with_storage_grid_size()
     max_cores = int(grid.x) * int(grid.y)
     cap_env = int(os.environ.get("GLM4_MOE_LITE_KV_UPDATE_MAX_USERS", "0").strip() or "0")
-    cap = cap_env if cap_env > 0 else min(16, max_cores)
+    cap = cap_env if cap_env > 0 else _kv_update_user_cap(max_cores)
 
     if batch <= cap:
         # Single-call fast path (unchanged behaviour for validated batch sizes).
@@ -406,7 +439,7 @@ def flash_mla_and_output(
         #    L1 buffer at 705248, static circular buffer region ends at 1176928"
         # Shrinking k_chunk_size only got the CBs to 1033568, still ~330 KB over. Keeping
         # SDPA off the receiver columns gives it the full L1 per core instead.
-        _sdpa_x = min(SDPA_GRID_X, int(_dev_grid.x))
+        _sdpa_x = sdpa_grid_x(int(_dev_grid.x))
         _sdpa_grid = ttnn.CoreCoord(_sdpa_x, int(_dev_grid.y))
         _sdpa_scg = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_sdpa_x - 1, int(_dev_grid.y) - 1))]

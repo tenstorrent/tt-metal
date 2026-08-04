@@ -41,6 +41,11 @@ WINNING_DEFAULTS: dict[str, str] = {
     # win with coherence verified (Rayleigh / Canberra / 17x24=408 prompts).
     "GLM4_MOE_LITE_DENSE_TT_DTYPE": "bf8",
     # --- Collectives (code defaults are 1 link / linear topology) ---
+    # These two are WH-Galaxy values and are deliberately left as such: this dict records
+    # what was validated on WH, and `Glm4RuntimeConfig.from_env` clamps them to whatever
+    # the running cluster actually has (logging when it does). A Blackhole Galaxy has 2
+    # links and runs line fabric, so it lands on 2/linear -- asking for 4 would abort in
+    # fabric.cpp rather than degrade. See runtime_config.hw_max_ccl_links.
     "GLM4_MOE_LITE_CCL_NUM_LINKS": "4",
     "GLM4_MOE_LITE_CCL_TOPOLOGY": "ring",
     # --- Prefill ---

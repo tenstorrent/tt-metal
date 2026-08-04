@@ -5,12 +5,12 @@
 
 test_prefetcher_ring_shapes_optional.py validates Flash's weight shapes through the
 canonical upstream harness, but that harness carries llama's core layout, which is
-hardcoded for the 7x10 COL-dispatch grid. Flash runs ROW dispatch on Galaxy and gets
-an 8x9 grid, so it needs its own layout -- this test exercises that layout:
+hardcoded for the 7x10 COL-dispatch grid. Flash needs its own layout -- this test
+exercises that layout end to end:
 
-    get_glm_core_ranges (8 senders col 6, 16 receivers cols 4-5, workers cols 0-5)
+    get_glm_core_ranges (senders in one column, receivers beside them, workers left)
       -> SubDevice manager create + load
-      -> GlobalCB at the computed 640-tile size
+      -> GlobalCB at the computed size
       -> DRAM-WIDTH_SHARDED w_o-shaped weights over the 8 prefetcher DRAM banks
       -> dram_prefetcher
       -> gather_in0 ring matmul consuming the GlobalCB
@@ -20,10 +20,17 @@ This is the last piece that was unproven before model integration. Everything he
 runs outside the model, so a deadlock costs one Galaxy reset instead of a hung
 47-layer run that is hard to attribute.
 
+BOTH ARCHES. This used to hardcode ROW dispatch and skip unless the grid was exactly
+8x9, which made it unrunnable on a Blackhole Galaxy -- ROW dispatch *raises* on BH
+("ROW dispatch core axis is not supported for blackhole arch"), and BH's grid is 12x10.
+Since the layout is now derived from the grid rather than fixed, so is this test: the
+dispatch axis comes from the ttnn default for the arch, and the ring width comes from
+the setup rather than the WH constant.
+
 Grid facts (measured, not assumed):
-    ROW dispatch -> 8x9 = 72 cores   <- Flash on Galaxy
-    COL dispatch -> 7x10 = 70 cores  <- upstream prefetcher harness
-    DRAM grid    -> 12x1 in both
+    WH Galaxy, ROW dispatch -> 8x9  = 72 cores,  DRAM 12x1
+    BH Galaxy, COL dispatch -> 12x10 = 120 cores, DRAM 8x1
+    COL dispatch on WH      -> 7x10 = 70 cores  <- upstream prefetcher harness
 """
 
 from __future__ import annotations
@@ -34,6 +41,19 @@ import pytest
 import torch
 
 import ttnn
+
+
+def _default_dispatch_axis():
+    """Arch-appropriate dispatch axis, resolved defensively.
+
+    Evaluated at collection time (parametrize args are built even when the test will be
+    skipped), so it must not raise on a host with no device attached.
+    """
+    try:
+        return ttnn.device.get_default_dispatch_core_axis(ttnn.FabricTensixConfig.DISABLED)
+    except Exception:  # pragma: no cover - no driver / no devices
+        return ttnn.DispatchCoreAxis.ROW
+
 
 pytestmark = [
     pytest.mark.skipif(
@@ -46,7 +66,8 @@ pytestmark = [
     ),
 ]
 
-# Flash o_proj. 160 x 64 tiles -> the 16-core ring; 640-tile GlobalCB.
+# Flash o_proj. 160 x 64 tiles. Ring width is chosen by the setup from the device grid
+# (16 on a grid that fits 2 receivers/sender, 32 where 4 fit), which sizes the GlobalCB.
 K, N = 5120, 2048
 M = 32  # one tile of padded decode batch
 NUM_LAYERS = 4  # enough for the prefetcher to cycle addresses; keeps the test short
@@ -55,7 +76,7 @@ NUM_LAYERS = 4  # enough for the prefetcher to cycle addresses; keeps the test s
 @pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8_galaxy")], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 23887872}],
+    [{"dispatch_core_axis": _default_dispatch_axis(), "trace_region_size": 23887872}],
     indirect=True,
 )
 def test_flash_layout_prefetch_and_ring_matmul(mesh_device, device_params, function_level_defaults) -> None:
@@ -66,11 +87,16 @@ def test_flash_layout_prefetch_and_ring_matmul(mesh_device, device_params, funct
 
     device = mesh_device
     grid = device.compute_with_storage_grid_size()
-    if (grid.x, grid.y) != (8, 9):
-        pytest.skip(f"Flash prefetcher layout targets an 8x9 grid, got {grid.x}x{grid.y}")
+    try:
+        setup = Glm4MoeLitePrefetcherSetup(device, n_tensors_per_layer=1, n_layers=NUM_LAYERS)
+    except ValueError as exc:
+        # get_glm_core_ranges raises when the grid cannot host the sender column or the
+        # per-sender receivers. Skipping is right: it means this device is too small for the
+        # layout, not that the layout is wrong.
+        pytest.skip(f"grid {grid.x}x{grid.y} cannot host the prefetcher layout: {exc}")
 
-    setup = Glm4MoeLitePrefetcherSetup(device, n_tensors_per_layer=1, n_layers=NUM_LAYERS)
-    ring = setup.RING_CORES
+    # The live ring width, not the WH-reference RING_CORES constant.
+    ring = setup.ring_cores
     assert len(setup.receiver_cores) == ring
     assert setup.global_cb_size == global_cb_tiles_for(K, N, ring) * 1088
 

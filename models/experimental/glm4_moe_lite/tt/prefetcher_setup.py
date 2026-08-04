@@ -31,56 +31,102 @@ and it could not have worked. Do not reintroduce it.
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 import ttnn
 from loguru import logger
 
+from models.experimental.glm4_moe_lite.tt.linear_helpers import worker_grid_x
+
+
+def _sharded_norm_cores() -> int:
+    """Decode sharded-RMSNorm core count. Read here rather than imported from
+    decoder_layer_tt to keep this module free of a dependency on the decode path."""
+    return int(os.environ.get("GLM4_MOE_LITE_SHARDED_NORM_CORES", "8").strip() or "8")
+
+
 TILE = 32
-# Receiver cores per sender in the GlobalCB contract. Fixed by the sender->receiver
-# mapping built below and passed to the matmul as num_global_cb_receivers.
+# Receiver cores per sender in the GlobalCB contract, passed to the matmul as
+# num_global_cb_receivers. 2 is the WH Galaxy value; Blackhole's wider grid can host 4,
+# which halves the per-receiver GlobalCB payload -- see ring_cores_for/global_cb_tiles_for.
 NUM_GLOBAL_CB_RECEIVERS = 2
+# Senders in the ring, one per DRAM bank. 8 on both arches: it is Blackhole's actual bank
+# count, and on WH (12 views) the ring was deliberately built on 8 because a 24-core ring
+# divides neither of w_o's dimensions -- see the module docstring.
+NUM_DRAM_BANKS = 8
 # Bytes per bfloat8_b tile (1024 elements + per-tile exponent metadata).
 BF8_TILE_BYTES = 1088
 
 
 def get_glm_core_ranges(mesh_device, num_global_cb_receivers: int = NUM_GLOBAL_CB_RECEIVERS):
-    """Core ranges for the prefetcher on WH Galaxy (8x9).
+    """Core ranges for the prefetcher, derived from the device grid.
 
-    Column 6 holds the senders, leaving workers a contiguous columns 0-5 block that
-    includes origin (0,0) -- so matmul grids anchored at (0,0) stay inside the worker
-    SubDevice without needing an explicit sub_device_id.
+    The layout rule, which is what actually matters and is arch-independent:
+
+      - one sender per DRAM bank, in a single column *outside* the worker rectangle;
+      - `num_global_cb_receivers` receivers per sender, in contiguous rows immediately to
+        the left of the senders, so the matmul's remote-CB core set exactly equals the
+        GlobalCB receiver set and no dedicated hop core is needed;
+      - the worker SubDevice is the remaining leftmost columns, a solid rectangle anchored
+        at origin (0,0) -- so matmul grids, which are origin-anchored, stay inside it
+        without needing an explicit sub_device_id.
+
+    On WH Galaxy (8x9 grid, 8 DRAM banks, 2 receivers) this reproduces the original
+    layout exactly: senders column 6, receivers columns 4-5, workers columns 0-5.
+    On Blackhole (12x10, 8 banks) it gives senders column 10, workers columns 0-9, and
+    room for 4 receivers per sender -- which is what makes a 32-core ring possible.
     """
     grid = mesh_device.compute_with_storage_grid_size()
-    grid_x, grid_y = grid.x, grid.y
+    grid_x, grid_y = int(grid.x), int(grid.y)
     logger.info("Flash prefetcher: device grid {}x{}", grid_x, grid_y)
 
-    # Eight DRAM banks x two receivers = a 16-core ring. See the module docstring for
-    # why this is not 12.
-    dram_cores = [ttnn.CoreCoord(idx, 0) for idx in range(8)]
+    # One sender per DRAM bank. WH Galaxy exposes 12 DRAM views but the ring is built on 8
+    # (see the module docstring for why 8x2=16 and not 12x24); Blackhole has exactly 8, so
+    # taking the device's bank count keeps both correct.
+    num_banks = min(NUM_DRAM_BANKS, int(mesh_device.dram_grid_size().x))
+    dram_cores = [ttnn.CoreCoord(idx, 0) for idx in range(num_banks)]
 
-    # Senders sit outside the rectangular worker SubDevice (columns 0-5).
-    all_sender_cores = [ttnn.CoreCoord(6, y) for y in range(8)]
+    n_workers_x = worker_grid_x(grid_x)
+    sender_x = n_workers_x
+    if sender_x >= grid_x:
+        raise ValueError(f"device grid {grid_x}x{grid_y} is too narrow for a sender column")
 
-    # Receiver pairs are bank-major then row-major, matching gather_in0's ring walk.
-    # A contiguous 2x8 block means the matmul's remote-CB core set exactly equals the
-    # GlobalCB receiver set, so no dedicated hop core is needed.
-    all_receiver_pairs = [(x, y) for y in range(8) for x in (4, 5)]
+    # Senders occupy one row per bank, so the grid must be at least that tall.
+    if num_banks > grid_y:
+        raise ValueError(f"{num_banks} DRAM banks need {num_banks} sender rows, grid has {grid_y}")
+    all_sender_cores = [ttnn.CoreCoord(sender_x, y) for y in range(num_banks)]
+
+    # Receivers sit in the columns immediately left of the senders, inside the worker
+    # rectangle. Bank-major then row-major, matching gather_in0's ring walk, with each
+    # sender's receivers contiguous along x so they form a single CoreRange.
+    recv_x0 = sender_x - num_global_cb_receivers
+    if recv_x0 < 0:
+        raise ValueError(
+            f"{num_global_cb_receivers} receivers per sender do not fit left of column {sender_x} "
+            f"on a {grid_x}-wide grid"
+        )
+    all_receiver_pairs = [(x, y) for y in range(num_banks) for x in range(recv_x0, sender_x)]
 
     sender_receiver_mapping = []
     for i, sender in enumerate(all_sender_cores):
-        r0 = all_receiver_pairs[i * num_global_cb_receivers]
-        r1 = all_receiver_pairs[i * num_global_cb_receivers + 1]
-        recv_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*r0), ttnn.CoreCoord(*r1))])
+        group = all_receiver_pairs[i * num_global_cb_receivers : (i + 1) * num_global_cb_receivers]
+        recv_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*group[0]), ttnn.CoreCoord(*group[-1]))])
         sender_receiver_mapping.append((sender, recv_crs))
 
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in all_sender_cores])
-    worker_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, grid_y - 1))])
+    worker_core_range_set = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_workers_x - 1, grid_y - 1))]
+    )
 
     logger.info(
-        "Flash prefetcher layout: {} senders (col 6), {} receivers (cols 4-5), worker cols 0-5 rows 0-{}",
+        "Flash prefetcher layout: {} senders (col {}), {} receivers (cols {}-{}), " "worker cols 0-{} rows 0-{}",
         len(all_sender_cores),
+        sender_x,
         len(all_receiver_pairs),
+        recv_x0,
+        sender_x - 1,
+        n_workers_x - 1,
         grid_y - 1,
     )
     return (
@@ -91,6 +137,37 @@ def get_glm_core_ranges(mesh_device, num_global_cb_receivers: int = NUM_GLOBAL_C
         worker_core_range_set,
         sender_receiver_mapping,
     )
+
+
+def ring_cores_for(mesh_device, K: int, N: int) -> tuple[int, int]:
+    """Largest legal (ring_cores, receivers_per_sender) for a (K, N) weight on this device.
+
+    The ring width is the lever that decides whether the prefetcher fits in L1 at all,
+    because the per-receiver GlobalCB payload is `K_tiles * (N_tiles / ring_cores)` -- so
+    doubling the ring halves it. For Flash's w_o (5120x2048 = 160x64 tiles) with L1 at
+    1,572,864 B on Blackhole and SDPA's circular buffers needing 1,033,568 B:
+
+        ring=16 -> 640 tiles = 696,320 B  ->  1,729,888 B total, over on both arches
+        ring=32 -> 320 tiles = 348,160 B  ->  1,381,728 B total, fits on BH with ~191 KB spare
+
+    WH Galaxy cannot reach ring=32: it has 8 sender columns' worth of grid but only room
+    for 2 receivers per sender beside them. Blackhole's wider grid fits 4, giving 8x4=32.
+    gcd(160, 64) = 32 so that is also the maximum legal ring for w_o -- a ring that does
+    not divide both dimensions deadlocks on device rather than raising.
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_banks = min(NUM_DRAM_BANKS, int(mesh_device.dram_grid_size().x))
+    # Receivers must fit in the worker columns to the left of the sender column.
+    max_receivers = max(1, worker_grid_x(int(grid.x)) - 1)
+    best = (0, 0)
+    for receivers in range(max_receivers, 0, -1):
+        ring = num_banks * receivers
+        if ring in ring_feasibility(K, N, max_cores=ring):
+            best = (ring, receivers)
+            break
+    if best[0] == 0:
+        raise ValueError(f"no legal ring for K={K} N={N} on a {grid.x}x{grid.y} grid with {num_banks} banks")
+    return best
 
 
 def ring_feasibility(K: int, N: int, max_cores: int = 16) -> list[int]:
@@ -145,15 +222,20 @@ class Glm4MoeLitePrefetcherSetup:
     # tile shape is dimensionally identical to REAP's QKV, which runs at
     # num_cores=16 with a 640-tile CB -- so the proven config transfers unchanged.
     # Keeping every prefetched weight on the same ring size avoids mixing ring
-    # widths over one GlobalCB contract; w_q_b (8 cores) is a later increment.
+    # widths over one GlobalCB contract; w_q_b is a later increment.
     OPROJ_K = 5120
     OPROJ_N = 2048
+    # WH Galaxy ring width, kept for reference. The live value is `self.ring_cores`, sized
+    # from the device by ring_cores_for() -- 16 on WH, 32 on Blackhole, and that doubling
+    # is what brings the GlobalCB under the L1 budget.
     RING_CORES = 16
 
     def __init__(self, mesh_device, n_tensors_per_layer: int, n_layers: int, global_cb_tiles: int | None = None):
         self.mesh_device = mesh_device
         self.n_tensors = n_tensors_per_layer
         self.n_layers = n_layers
+
+        self.ring_cores, self.receivers_per_sender = ring_cores_for(mesh_device, self.OPROJ_K, self.OPROJ_N)
         (
             self.sender_cores,
             self.dram_cores,
@@ -161,40 +243,48 @@ class Glm4MoeLitePrefetcherSetup:
             self.receiver_cores,
             self.worker_core_range_set,
             self.sender_receiver_mapping,
-        ) = get_glm_core_ranges(mesh_device)
+        ) = get_glm_core_ranges(mesh_device, num_global_cb_receivers=self.receivers_per_sender)
 
         assert (
-            len(self.receiver_cores) == self.RING_CORES
-        ), f"ring size {self.RING_CORES} must equal receiver count {len(self.receiver_cores)}"
+            len(self.receiver_cores) == self.ring_cores
+        ), f"ring size {self.ring_cores} must equal receiver count {len(self.receiver_cores)}"
 
-        feasible = ring_feasibility(self.OPROJ_K, self.OPROJ_N, max_cores=self.RING_CORES)
-        assert self.RING_CORES in feasible, (
-            f"o_proj K={self.OPROJ_K} N={self.OPROJ_N} cannot use a {self.RING_CORES}-core ring "
+        feasible = ring_feasibility(self.OPROJ_K, self.OPROJ_N, max_cores=self.ring_cores)
+        assert self.ring_cores in feasible, (
+            f"o_proj K={self.OPROJ_K} N={self.OPROJ_N} cannot use a {self.ring_cores}-core ring "
             f"(feasible: {feasible}). A non-dividing ring deadlocks on device."
         )
 
-        tiles = global_cb_tiles or global_cb_tiles_for(self.OPROJ_K, self.OPROJ_N, self.RING_CORES)
+        tiles = global_cb_tiles or global_cb_tiles_for(self.OPROJ_K, self.OPROJ_N, self.ring_cores)
         self.global_cb_size = tiles * BF8_TILE_BYTES
         self.global_circular_buffer = None
 
         self.oproj_ring_cores = list(self.receiver_cores)
         self.oproj_program_config = self.make_ring_config(
-            B=1, M=TILE, K=self.OPROJ_K, N=self.OPROJ_N, num_cores=self.RING_CORES
+            B=1,
+            M=TILE,
+            K=self.OPROJ_K,
+            N=self.OPROJ_N,
+            num_cores=self.ring_cores,
+            num_receivers=self.receivers_per_sender,
         )
         self.oproj_input_mem_cfg = self.make_ring_mem_cfg(
-            num_cores=self.RING_CORES, M=TILE, shard_dim=self.OPROJ_K, ring_cores=self.oproj_ring_cores
+            num_cores=self.ring_cores, M=TILE, shard_dim=self.OPROJ_K, ring_cores=self.oproj_ring_cores
         )
         self.oproj_output_mem_cfg = self.make_ring_mem_cfg(
-            num_cores=self.RING_CORES, M=TILE, shard_dim=self.OPROJ_N, ring_cores=self.oproj_ring_cores
+            num_cores=self.ring_cores, M=TILE, shard_dim=self.OPROJ_N, ring_cores=self.oproj_ring_cores
         )
 
         # Worker grids for re-gridding decode ops once the SubDevice is active.
         self.worker_scg = self.worker_core_range_set
-        # Sharded RMSNorm grid, as (gx, gy). hidden=2048 = 64 tiles across 8 cores.
-        # Must be a rectangle inside worker columns 0-5: the norm's default layout is a
-        # 1x8 ROW at y=0, which spans x=0..7 and lands on the sender columns (6, 7).
-        # 4x2 keeps all 8 cores in columns 0-3, preserving the 8-way parallelism.
-        self.norm_core_grid = (4, 2)
+        # Sharded RMSNorm grid, as (gx, gy). The norm's default layout is a 1 x num_cores ROW
+        # at y=0, which on WH spans x=0..7 and lands on the sender columns; it must instead
+        # be a rectangle that fits inside the worker columns. Pick the widest rectangle no
+        # wider than the worker region, so the core count -- and the parallelism it buys --
+        # is preserved on any grid.
+        self.norm_core_grid = self._norm_rect(
+            _sharded_norm_cores(), worker_grid_x(int(mesh_device.compute_with_storage_grid_size().x))
+        )
 
         self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
         self.worker_sub_device_id = ttnn.SubDeviceId(1)
@@ -205,16 +295,30 @@ class Glm4MoeLitePrefetcherSetup:
         self.tensor_addrs = []
 
         logger.info(
-            "Glm4MoeLitePrefetcherSetup: n_tensors={} n_layers={} ring={} global_cb={} tiles ({} B)",
+            "Glm4MoeLitePrefetcherSetup: n_tensors={} n_layers={} ring={} ({} recv/sender) "
+            "global_cb={} tiles ({} B) norm_grid={}",
             n_tensors_per_layer,
             n_layers,
-            self.RING_CORES,
+            self.ring_cores,
+            self.receivers_per_sender,
             tiles,
             self.global_cb_size,
+            self.norm_core_grid,
         )
 
     @staticmethod
-    def make_ring_config(B: int, M: int, K: int, N: int, num_cores: int):
+    def _norm_rect(num_cores: int, max_x: int) -> tuple[int, int]:
+        """Widest (gx, gy) rectangle with gx*gy == num_cores and gx <= max_x.
+
+        Reproduces the WH choice of (4, 2) for 8 cores in a 6-wide worker region.
+        """
+        for gx in range(min(num_cores, max_x), 0, -1):
+            if num_cores % gx == 0:
+                return (gx, num_cores // gx)
+        return (1, num_cores)
+
+    @staticmethod
+    def make_ring_config(B: int, M: int, K: int, N: int, num_cores: int, num_receivers: int | None = None):
         """gather_in0 ring matmul program config.
 
         num_cores must divide BOTH K_tiles and N_tiles -- see ring_feasibility. The
@@ -240,14 +344,16 @@ class Glm4MoeLitePrefetcherSetup:
         gy = num_cores // gx
         assert gx * gy == num_cores, f"num_cores={num_cores} does not factor into an 8-wide grid"
 
-        # Contiguous 2x8 receiver ring needs no hop core.
+        # A contiguous receiver block needs no hop core.
         hop_core_range_set = ttnn.CoreRangeSet([])
+        receivers = NUM_GLOBAL_CB_RECEIVERS if num_receivers is None else int(num_receivers)
         logger.info(
-            "Flash ring config: K={} N={} M={} cores={} grid=({},{}) in0_block_w={} per_core_N={}",
+            "Flash ring config: K={} N={} M={} cores={} recv/sender={} grid=({},{}) " "in0_block_w={} per_core_N={}",
             K,
             N,
             M,
             num_cores,
+            receivers,
             gx,
             gy,
             in0_block_w,
@@ -265,7 +371,7 @@ class Glm4MoeLitePrefetcherSetup:
             mcast_in0=False,
             gather_in0=True,
             hop_cores=hop_core_range_set,
-            num_global_cb_receivers=NUM_GLOBAL_CB_RECEIVERS,
+            num_global_cb_receivers=receivers,
         )
 
     @staticmethod

@@ -173,3 +173,140 @@ def test_bank_count_is_not_the_full_dram_grid() -> None:
     # than silently building a layout the ring matmul disagrees with.
     assert W_O[1] % 12 != 0
     assert W_O[1] % PREFETCH_DRAM_BANKS == 0
+
+
+# ---------------------------------------------------------------------------
+# Grid-derived layout: WH Galaxy (8x9) vs Blackhole Galaxy (12x10)
+#
+# The layout used to be hardcoded to WH Galaxy. It is now derived from the device grid,
+# so these pin both arches: the WH cases must reproduce exactly what was validated there,
+# and the BH cases must produce the wider ring that brings the GlobalCB under the L1
+# budget. A fake device is enough -- only grid sizes are read.
+# ---------------------------------------------------------------------------
+
+BH_L1_SIZE = 1_572_864  # blackhole_140_arch.yaml worker_l1_size
+WH_L1_SIZE = 1_499_136  # wormhole_b0_80_arch.yaml worker_l1_size
+# SDPA decode circular buffers at the minimum legal k_chunk_size of 32, measured on WH.
+SDPA_CB_BYTES_AT_K_CHUNK_32 = 1_033_568
+
+
+class _FakeGrid:
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+
+class _FakeMeshDevice:
+    """Just enough of MeshDevice for the layout math: two grid sizes."""
+
+    def __init__(self, grid_x: int, grid_y: int, dram_banks: int) -> None:
+        self._grid = _FakeGrid(grid_x, grid_y)
+        self._dram = _FakeGrid(dram_banks, 1)
+
+    def compute_with_storage_grid_size(self) -> _FakeGrid:
+        return self._grid
+
+    def dram_grid_size(self) -> _FakeGrid:
+        return self._dram
+
+
+WH_GALAXY = (8, 9, 12)  # 8x9 Tensix, 12 DRAM views
+BH_GALAXY = (12, 10, 8)  # 12x10 Tensix (1x-harvested), 8 DRAM views -- measured on device
+
+
+def test_wh_galaxy_layout_is_unchanged() -> None:
+    """The derivation must reproduce the validated WH Galaxy layout exactly."""
+    from models.experimental.glm4_moe_lite.tt.prefetcher_setup import get_glm_core_ranges
+
+    senders, dram_cores, _, receivers, worker_crs, mapping = get_glm_core_ranges(
+        _FakeMeshDevice(*WH_GALAXY), num_global_cb_receivers=2
+    )
+    assert [(c.x, c.y) for c in senders] == [(6, y) for y in range(8)], "senders in column 6"
+    assert sorted({x for x, _ in receivers}) == [4, 5], "receivers in columns 4-5"
+    assert len(receivers) == 16
+    assert len(dram_cores) == 8, "ring is built on 8 banks even though WH exposes 12"
+    assert worker_crs.num_cores() == 6 * 9, "worker rectangle is columns 0-5"
+    assert len(mapping) == 8
+
+
+def test_bh_galaxy_layout_hosts_a_32_core_ring() -> None:
+    """Blackhole: 8 senders in column 10, 4 receivers each in columns 6-9."""
+    from models.experimental.glm4_moe_lite.tt.prefetcher_setup import get_glm_core_ranges, ring_cores_for
+
+    device = _FakeMeshDevice(*BH_GALAXY)
+    ring, receivers_per_sender = ring_cores_for(device, *W_O)
+    assert (ring, receivers_per_sender) == (32, 4)
+
+    senders, dram_cores, _, receivers, worker_crs, mapping = get_glm_core_ranges(
+        device, num_global_cb_receivers=receivers_per_sender
+    )
+    assert [(c.x, c.y) for c in senders] == [(10, y) for y in range(8)], "senders in column 10"
+    assert sorted({x for x, _ in receivers}) == [6, 7, 8, 9], "receivers in columns 6-9"
+    assert len(receivers) == 32
+    assert len(dram_cores) == 8
+    assert worker_crs.num_cores() == 10 * 10, "worker rectangle is columns 0-9"
+    # Each sender's receivers must be contiguous along x, or the remote-CB core set stops
+    # matching the GlobalCB receiver set and a hop core becomes necessary.
+    for _, recv_crs in mapping:
+        assert recv_crs.num_cores() == 4
+
+
+def test_ring_32_is_the_widest_legal_ring_for_oproj() -> None:
+    """gcd(160, 64) = 32, so no wider ring divides both of w_o's dimensions."""
+    k_tiles, n_tiles = W_O[0] // TILE, W_O[1] // TILE
+    assert math.gcd(k_tiles, n_tiles) == 32
+    assert 64 not in ring_feasibility(*W_O, max_cores=64)
+    assert 32 in ring_feasibility(*W_O, max_cores=32)
+
+
+def test_doubling_the_ring_halves_the_global_cb() -> None:
+    """The mechanism that unblocks the prefetcher: the per-receiver payload is
+    K_tiles * (N_tiles / ring), so a wider ring shrinks it."""
+    assert global_cb_tiles_for(*W_O, 16) == 640
+    assert global_cb_tiles_for(*W_O, 32) == 320
+
+
+def test_ring_32_brings_the_global_cb_plus_sdpa_under_l1() -> None:
+    """The L1 budget that made the prefetcher look infeasible at ring=16.
+
+    The ring width, not the architecture, is the lever. At ring=16 the GlobalCB plus
+    SDPA's circular buffers overflow L1 on *both* arches; at ring=32 they fit on both.
+    """
+    bytes_at = lambda ring: global_cb_tiles_for(*W_O, ring) * 1088 + SDPA_CB_BYTES_AT_K_CHUNK_32  # noqa: E731
+
+    assert bytes_at(16) > WH_L1_SIZE, "the measured WH verdict at ring=16"
+    assert bytes_at(16) > BH_L1_SIZE, "ring=16 does not fit on BH either"
+    assert bytes_at(32) <= BH_L1_SIZE, "ring=32 fits on Blackhole"
+    assert BH_L1_SIZE - bytes_at(32) > 150_000, "with real headroom, not a rounding win"
+    assert bytes_at(32) <= WH_L1_SIZE, "and it fits on Wormhole too -- see the note below"
+
+
+def test_wh_galaxy_can_also_host_the_32_core_ring() -> None:
+    """Correcting the record: WH was never geometrically stuck at ring=16.
+
+    The original "the GlobalCB prefetcher and FlashMLA decode cannot coexist in L1"
+    conclusion held ring=16 fixed, inherited from REAP's proven config, and searched for
+    other knobs (k_chunk_size, the L1 activation flags, SDPA placement). Widening the ring
+    was not among them -- but it is the one knob that moves the GlobalCB, since the
+    per-receiver payload is K_tiles * (N_tiles / ring).
+
+    On WH's 8x9 grid, 8 senders in column 6 leave columns 2-5 free for 4 receivers each,
+    all inside the columns 0-5 worker rectangle. So ring=32 is reachable there as well, and
+    the derivation returns it for both arches.
+
+    This is arithmetic and geometry, not an on-device result: nobody has run the prefetcher
+    at ring=32 on either arch yet. It says the L1 wall is not a dead end, not that the
+    prefetcher works.
+    """
+    from models.experimental.glm4_moe_lite.tt.prefetcher_setup import get_glm_core_ranges, ring_cores_for
+
+    device = _FakeMeshDevice(*WH_GALAXY)
+    assert ring_cores_for(device, *W_O) == (32, 4)
+
+    senders, _, _, receivers, worker_crs, _ = get_glm_core_ranges(device, num_global_cb_receivers=4)
+    assert [(c.x, c.y) for c in senders] == [(6, y) for y in range(8)]
+    assert sorted({x for x, _ in receivers}) == [2, 3, 4, 5]
+    assert len(receivers) == 32
+    # The invariant that makes origin-anchored matmul grids land inside the SubDevice.
+    assert worker_crs.num_cores() == 6 * 9
+    assert all(x < 6 for x, _ in receivers), "receivers must sit inside the worker rectangle"

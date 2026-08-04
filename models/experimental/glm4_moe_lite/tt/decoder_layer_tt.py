@@ -15,7 +15,7 @@ import ttnn
 from models.experimental.glm4_moe_lite.tt.attention_decode import flash_mla_and_output, kv_cache_update, q_projection
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.mlp_decode import dense_mlp_forward, moe_mlp_forward
-from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
+from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig, ccl_settings_from_env
 
 _SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
 if _SIGNPOST_ENABLED:
@@ -24,9 +24,18 @@ if _SIGNPOST_ENABLED:
 
 _SHARDED_NORM = os.environ.get("GLM4_MOE_LITE_SHARDED_NORM", "1").strip() != "0"
 _NORM_L1 = os.environ.get("GLM4_MOE_LITE_NORM_L1", "1").strip() == "1"
+# Width-sharded decode RMSNorm core count. Default 8 is the WH-validated value (worth
+# ~2.8 ms/step there). hidden=2048 is 64 width tiles, so 16 and 32 also divide it and
+# Blackhole has the cores to spare (120 vs WH's 72) -- but this must be A/B'd under trace
+# on the full model, not micro-benchmarked: an isolated rms_norm call on a 32-chip mesh is
+# host-dispatch-bound at ~4 ms, which swamps the kernel difference entirely. Knob exists so
+# the Phase-2 traced sweep can settle it; the default stays at the validated 8.
+_SHARDED_NORM_CORES = int(os.environ.get("GLM4_MOE_LITE_SHARDED_NORM_CORES", "8").strip() or "8")
 
 
-def _maybe_sharded_norm(x, norm_module, mode: str, hidden_size: int, num_cores: int = 8, worker_core_grid=None):
+def _maybe_sharded_norm(
+    x, norm_module, mode: str, hidden_size: int, num_cores: int | None = None, worker_core_grid=None
+):
     """Width-sharded multi-core RMSNorm for decode (speed play; ported from glm4_moe/REAP).
 
     Flash's hidden_size fits single-core, so this is opt-in via GLM4_MOE_LITE_SHARDED_NORM=1
@@ -43,6 +52,8 @@ def _maybe_sharded_norm(x, norm_module, mode: str, hidden_size: int, num_cores: 
     """
     if not _SHARDED_NORM:
         return norm_module(x, mode=mode)
+    if num_cores is None:
+        num_cores = _SHARDED_NORM_CORES
     input_shape = [int(d) for d in x.shape]
     h_logical = int(x.shape[-2])
     h = ((h_logical + 31) // 32) * 32
@@ -869,9 +880,10 @@ def run_decoder_layer_prefill_update_cache_tt(
     mesh_rows, mesh_cols = _mesh_shape(device)
     tp_size = int((mesh_rows, mesh_cols)[tp_axis]) if tp_axis is not None else 1
     attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP")
-    ccl_num_links = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
-    ccl_topology_str = os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower()
-    ccl_topology = ttnn.Topology.Ring if ccl_topology_str == "ring" else ttnn.Topology.Linear
+    # Clamped to the cluster's real capability rather than read from the env: the TP
+    # row-parallel all_reduce below is the one CCL call with no downstream clamp, so raw
+    # WH values (4 links / ring) would abort here on a BH Galaxy.
+    ccl_num_links, ccl_topology = ccl_settings_from_env()
 
     def _tp_row_parallel_linear_from_replicated(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
         a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)
