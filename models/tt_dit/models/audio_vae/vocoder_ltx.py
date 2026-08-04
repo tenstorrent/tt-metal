@@ -354,6 +354,17 @@ class Vocoder(Module):
         """
         return self._device_to_host(self._forward_device(self._upload_BCT(x_BCT)))
 
+    def forward_BCT_traced(self, x_BCT: torch.Tensor) -> torch.Tensor:
+        """:meth:`forward_BCT` with the device graph captured and replayed.
+
+        The channels-over-time counterpart of :meth:`forward_traced`, for MiniMax-H3's audio
+        decoder. Same argument for it: this vocoder is ~70 % host-bound, so removing per-op
+        dispatch is the dominant lever, and ``_forward_device`` is already a fixed-shape
+        device-in/device-out region for exactly this reason.
+        """
+        y_dev = self._forward_device(self._upload_BCT(x_BCT), traced=True, tracer_trace_key=tuple(x_BCT.shape))
+        return self._device_to_host(y_dev)
+
     def forward_traced(self, mel_spec: torch.Tensor) -> torch.Tensor:
         """Like ``forward`` but captures and replays the device graph to remove per-op host
         dispatch (the vocoder is ~70% host-bound). The first call at a shape captures on warm state

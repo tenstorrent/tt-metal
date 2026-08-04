@@ -1765,3 +1765,51 @@ One lead already visible in the log, though probably not the main cost:
 rate. It fires twice and the tensors there are ~1 MB, so it is likely single-digit ms of the
 1.273 s. **The BigVGAN upsampling stack has not been profiled at all** — that is where to
 start, with `profile_downblock`-style per-stage device timing rather than wall clock.
+
+## Amendment 60 (2026-08-04) — audio decode traced: 1.07x. It is device-bound, and the lever is T-parallelism
+
+`vocoder_ltx.Vocoder` already carries a `@traced_function` device region and a
+`forward_traced` entry point, and its own docstring says "the vocoder is ~70% host-bound".
+H3's audio decoder was calling the untraced `forward_BCT`. Added `forward_BCT_traced` (the
+channels-over-time sibling of `forward_traced`) and a `traced=` flag on
+`MiniMaxH3AudioDecoder.forward`.
+
+Traced output is **bit-identical** to untraced (PSNR inf). The speedup is **1.07x**:
+
+| | s |
+|---|---|
+| audio decode, untraced | 1.284 |
+| audio decode, traced | 1.203 |
+
+So the "~70 % host-bound" claim does **not** hold at H3's shape. Split by stage:
+
+| stage | s |
+|---|---|
+| `dec_in_proj` (including its host round trip) | **0.0039** |
+| vocoder | **1.284** (1.200 traced) |
+
+Two things settled. The mid-forward host bounce in `_project_latents_device`
+(`to_torch` -> transpose/contiguous -> re-upload) is **not** a problem at 3.9 ms — it looked
+like an obvious target and is not one. And the vocoder is **99.7 % of audio decode and
+device-bound**, so neither tracing nor removing host work will move it.
+
+**The untried lever is parallelism: the vocoder runs on one device.** It already supports
+T-sharding -- `parallel_config.factor` is threaded through `_upload_BCT` and `_forward_device`
+(T-alignment padding, partition, T-gather) -- and H3's audio decoder accepts a
+`parallel_config`, but the shipping path constructs it without one. The visual halves got
+their 32x from data-parallelism over `(clip, tile)` units, which a single 5 s audio stream
+cannot use; T-sharding is the equivalent for this workload and is the only route to 0.05 s
+that does not need a faster BigVGAN. **Start there.**
+
+Also note the trace region: 60 MB is not enough (`get_trace_buffers_size() <=
+trace_region_size` fires); 300 MB works.
+
+**Hazard:** replaying the traced vocoder in a *second* timing loop, after the whole-forward
+loop had already captured at that shape, wedged the device and needed `tt-smi -glx_reset`.
+The test times the traced path once, via whole-forward, and does not re-enter it.
+
+On reading `PSNR: inf` -- that is MSE exactly zero, i.e. bit-identical, which is the
+*expected* result for replaying the same program on the same data, not a degenerate
+comparison. It is a weak assertion alone though, since it would also read inf if `traced=True`
+silently fell through, so the test additionally asserts a tracer was captured
+(`_forward_device._tracers_keyed`) and that the output is not all-zero.

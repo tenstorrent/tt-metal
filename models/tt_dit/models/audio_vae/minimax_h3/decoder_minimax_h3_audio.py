@@ -131,11 +131,19 @@ class MiniMaxH3AudioDecoder(Module):
             projected = projected[:, : x.shape[1] - t_pad]
         return projected.transpose(1, 2).contiguous()  # (B, 2048, T)
 
-    def forward(self, latents_BCT: torch.Tensor) -> torch.Tensor:
-        """``(B, latent_channels, T)`` torch in, ``(B, 1, T * hop_length)`` torch out."""
+    def forward(self, latents_BCT: torch.Tensor, *, traced: bool = False) -> torch.Tensor:
+        """``(B, latent_channels, T)`` torch in, ``(B, 1, T * hop_length)`` torch out.
+
+        ``traced`` replays a captured device graph for the vocoder instead of dispatching it
+        op by op. The vocoder is ~70 % host-bound, so this is its dominant lever -- unlike the
+        *visual* halves, which measured 1.00x traced because they are device-bound (STATE.md
+        amendment 57). Needs a ``trace_region_size`` on the mesh device; the first call at a
+        shape captures, later calls replay.
+        """
         _, channels, _ = latents_BCT.shape
         assert channels == self.latent_channels, f"expected {self.latent_channels} latent channels, got {channels}"
-        return self.decoder.forward_BCT(self._project_latents_device(latents_BCT))
+        projected = self._project_latents_device(latents_BCT)
+        return self.decoder.forward_BCT_traced(projected) if traced else self.decoder.forward_BCT(projected)
 
     def _t_padding(self, num_frames: int) -> int:
         """T padding needed for tile-aligned per-chip shards; zero when unsharded."""
