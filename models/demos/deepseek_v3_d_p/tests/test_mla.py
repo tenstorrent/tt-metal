@@ -955,6 +955,12 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
     # without this a kimi_k3 case would run on Wormhole T3K where it has never been validated.
     if variant.name == "kimi_k3" and not is_blackhole():
         pytest.skip("kimi_k3 is validated on Blackhole only")
+    # The metadata contract serves the trace-safe runtime (inbound_socket_service_sync feeds forward
+    # tt_metadata directly). K3 has no runtime -- build_runtime/allocate_kv_cache deliberately raise
+    # -- so the path is unreachable for it and passes only via the shared arch-agnostic ttMLA.forward.
+    # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
+    if variant.name == "kimi_k3" and use_metadata_tensor:
+        pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
     # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
     # fixture skips the test if the env var is set but the checkpoint is incomplete.
