@@ -797,3 +797,133 @@ def test_prefill_full(mesh_device, chunk, traced, reset_seeds, request):
     )
     next_token = int(top.indices[0])
     assert tokenizer.decode([next_token]) != "", f"argmax token {next_token} decodes to an empty string"
+
+
+# ── Test 4: the 60-layer graph against a host reference, by PCC ────────────────
+
+
+@parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
+@_parametrize_traced
+def test_prefill_layers_vs_cpu_reference(mesh_device, traced, reset_seeds, request):
+    """The whole 60-layer prefill body vs a CPU reference, by PCC.
+
+    ``test_prefill_layers`` can only assert shape / finiteness / spread because
+    there is no host reference cheap enough to build inline — which makes it a
+    smoke test. A context-parallel bug that shifted token positions would still
+    produce finite, plausible output and pass it. This closes that gap: it compares
+    against a full HuggingFace fp32 run cached on disk, so the 60-layer stack is
+    checked the same way ``test_prefill_layer`` checks one layer.
+
+    4096 tokens only — the largest trace-eligible chunk and the CP target. Skips
+    with the generate command when the dump is absent, since building it needs a few
+    minutes and ~130 GB of RAM.
+
+    On the expected PCC (~0.94, not ~0.999): that is compounding, not a defect, and
+    it is *not* caused by context parallelism. Measured on a BH Galaxy, 31B, 4k:
+
+        CP=4, bfp8 weights (product default) ... 0.9398
+        CP=4, bf16 weights ..................... 0.9401   (weight dtype is not it)
+        CP=1, bfp8 weights ..................... 0.9389   (CP is not it either)
+        CPU bf16 vs CPU fp32, no device ........ 0.9889   (dtype alone costs ~0.011)
+
+    CP costs ~0.001. The number follows from the single-layer figure: one layer is
+    0.9993 against the same reference setup, i.e. a per-layer relative error of
+    ~0.037, and 0.037*sqrt(60) ~ 0.29 predicts ~0.958 — close to the 0.939 measured,
+    with the remainder from residual paths correlating the per-layer errors. The
+    per-layer error is dominated by bf16 activations and kernel differences rather
+    than by weight quantization, which is why bfp8 -> bf16 changes nothing.
+
+    So the threshold is a regression guard set just under the measured value, not an
+    accuracy target. If it drops materially, suspect a real change; if it rises,
+    tighten it. ``GEMMA4_DISABLE_CP=1`` reproduces the CP=1 row.
+
+    The next-token logits agree far better than the hidden states — PCC 0.9892, with
+    the top-3 tokens identical and in order — because lm_head projects onto the
+    directions that carry the prediction while the hidden-state error sits mostly in
+    low-magnitude channels. That is why this test also asserts argmax agreement:
+    it is the stricter statement about behaviour, and the one that would actually
+    break if positions were wrong.
+    """
+    from models.demos.gemma4.tests import cpu_prefill_reference as cpu_ref
+
+    chunk = cpu_ref.REFERENCE_CHUNK
+    _guard_chunk(request, chunk)
+    _guard_cp_rope_alignment(mesh_device, chunk)
+
+    model_path = _model_path()
+    reference = cpu_ref.load(model_path, chunk)
+    if reference is None:
+        pytest.skip(
+            f"No CPU reference at {cpu_ref.reference_path(model_path, chunk)}. Generate it once with:\n"
+            f"  python -m models.demos.gemma4.tests.cpu_prefill_reference\n"
+            f"(tens of minutes, ~130 GB RAM; only needed once per model)"
+        )
+
+    mesh_config = _mesh_config(mesh_device)
+    model_args, model, kv_cache, page_table_tt = _build_prefill_model(mesh_device, model_path, chunk)
+
+    # Reuse the reference's own tokens rather than re-deriving them, and verify the
+    # fingerprint: comparing against a dump built from different input would be
+    # worse than not comparing at all.
+    tokens = reference["tokens"]
+    expected_sha = reference["fingerprint"]["token_sha"]
+    actual_sha = cpu_ref.hash_tokens(tokens)
+    assert actual_sha == expected_sha, f"reference dump is corrupt: token sha {actual_sha} != {expected_sha}"
+
+    fresh_tokens, _tokenizer, _prompt_len = _prompt_tokens(model_path, chunk)
+    if cpu_ref.hash_tokens(fresh_tokens) != expected_sha:
+        pytest.skip(
+            f"CPU reference is stale: the harness now tokenizes to "
+            f"{cpu_ref.hash_tokens(fresh_tokens)} but the dump was built from {expected_sha}. "
+            f"Regenerate with: python -m models.demos.gemma4.tests.cpu_prefill_reference"
+        )
+
+    host_input = _host_tensor(
+        mesh_device, tokens, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_config=mesh_config, seq_dim=-1
+    )
+    forward = _prefill_body_forward(model, page_table_tt, kv_cache, get_last_token=-1)
+    with _lm_head_deferred(model):
+        result = _run_graph(mesh_device, forward, traced=traced, host_input=host_input)
+    _log_run("prefill_layers_vs_cpu", chunk, traced, result, extra=f" layers={len(model.layers)}")
+
+    tt_hidden = _cp_gather_torch(result.output, mesh_device, mesh_config)
+    ref_hidden = reference["hidden"].reshape(1, 1, chunk, model_args.hidden_size)
+    assert tuple(tt_hidden.shape) == tuple(
+        ref_hidden.shape
+    ), f"device gave {tuple(tt_hidden.shape)}, reference is {tuple(ref_hidden.shape)}"
+
+    # Compare only the real prompt rows: positions past prompt_len are padding, and
+    # padded rows carry no signal to agree on.
+    real = reference["prompt_len"]
+    passing, pcc = compare_tensors(
+        tt_hidden[:, :, :real, :], ref_hidden[:, :, :real, :], pcc_threshold=get_pcc_threshold(request, default=0.93)
+    )
+    logger.info(
+        f"[prefill_layers_vs_cpu] chunk={chunk} mode={'traced' if traced else 'eager'} "
+        f"60-layer hidden PCC over {real} real tokens = {pcc}"
+    )
+    assert passing, f"60-layer prefill body PCC {pcc} below threshold over {real} real tokens"
+
+    # Then the next-token distribution, which is what actually matters downstream and
+    # is far more discriminating than hidden-state PCC: accumulated numerical error
+    # spreads across 5376 channels, but the argmax either survives it or does not.
+    logits_tt = model.process_logits_after_prefill_trace(result.output, reference["last_token_idx"])
+    logits = _first_device_torch(logits_tt)[..., : model_args.vocab_size]
+    ref_logits = reference["logits_tile"][..., : model_args.vocab_size]
+    row = reference["last_token_idx"] - reference["tile_start"]
+
+    tt_row = logits.reshape(-1, logits.shape[-1])[row]
+    ref_row = ref_logits.reshape(-1, ref_logits.shape[-1])[row]
+    _, logits_pcc = compare_tensors(tt_row.unsqueeze(0), ref_row.unsqueeze(0), pcc_threshold=0.0)
+
+    tt_top = torch.topk(tt_row, k=5)
+    ref_top = torch.topk(ref_row, k=5)
+    logger.info(
+        f"[prefill_layers_vs_cpu] next-token logits PCC = {logits_pcc}\n"
+        f"    device top-5 idx={tt_top.indices.tolist()} val={[round(v, 3) for v in tt_top.values.tolist()]}\n"
+        f"    cpu-ref top-5 idx={ref_top.indices.tolist()} val={[round(v, 3) for v in ref_top.values.tolist()]}"
+    )
+    assert int(tt_top.indices[0]) == int(ref_top.indices[0]), (
+        f"argmax next token disagrees with the CPU reference: device {int(tt_top.indices[0])} "
+        f"vs reference {int(ref_top.indices[0])}"
+    )
