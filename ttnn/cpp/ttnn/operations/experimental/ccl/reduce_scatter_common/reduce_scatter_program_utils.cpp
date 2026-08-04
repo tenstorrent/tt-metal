@@ -263,11 +263,37 @@ std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_2d_to_4d(uint32_t di
     return {normalized_dim, /*input_tensor_C=*/1, /*input_tensor_B=*/1};
 }
 
+uint32_t reduce_scatter_pages_to_distribute(const ttnn::Tensor& input_tensor, uint32_t dim, uint32_t ring_size) {
+    const auto& input_tensor_shape = input_tensor.padded_shape();
+    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
+        (input_tensor_shape.rank() == 2) ? reduce_scatter_map_2d_to_4d(dim)
+                                         : reduce_scatter_map_nd_to_4d(input_tensor_shape, dim);
+
+    // Only the batch/channel divisions matter here; the Ht/Wt scatter splits are absorbed into the
+    // per-channel page count.
+    const uint32_t slice_B = (normalized_dim == 0) ? input_tensor_B / ring_size : input_tensor_B;
+    const uint32_t slice_C = (normalized_dim == 1) ? input_tensor_C / ring_size : input_tensor_C;
+    if (ring_size == 0 || slice_B == 0 || slice_C == 0) {
+        // Shape isn't cleanly scatterable over this ring; validation reports that properly later, so
+        // don't divide by zero on the way there.
+        return 0;
+    }
+
+    const uint32_t output_tensor_num_pages = input_tensor.buffer()->num_pages() / ring_size;
+    const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
+    // dim 0 scatters hand out a batch of pages at a time, every other dim a channel.
+    return (normalized_dim == 0) ? output_batch_num_pages : output_batch_num_pages / slice_C;
+}
+
 uint32_t reduce_scatter_clamp_workers_to_available_pages(
     uint32_t num_workers_per_direction, uint32_t num_links, uint32_t pages_to_distribute) {
+    TT_FATAL(num_links > 0, "num_links must be non-zero");
     TT_FATAL(
-        num_links > 0 && num_links >= pages_to_distribute,
-        "num_links must be between zero and the number of input pages got: {}",
+        pages_to_distribute >= num_links,
+        "reduce_scatter has {} page(s) to distribute across {} link(s). num_links must be capped to the page count "
+        "before the program is built (see reduce_scatter_pages_to_distribute), otherwise a link is left with no "
+        "pages and its workers hang.",
+        pages_to_distribute,
         num_links);
     // reduce_scatter_get_tile_offsets splits pages across all links' workers, so the per-direction
     // budget is the page count divided by num_links.

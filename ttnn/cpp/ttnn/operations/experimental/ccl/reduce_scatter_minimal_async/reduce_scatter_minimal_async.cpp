@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_scatter_minimal_async.hpp"
+
+#include <algorithm>
+
 #include "device/reduce_scatter_minimal_async_op_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
@@ -30,9 +33,8 @@ ttnn::Tensor reduce_scatter_minimal_async(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for reduce_scatter_minimal_async operation");
-    uint32_t resolved_num_links = std::min(
-        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis)),
-        input_tensor.buffer()->num_pages());
+    uint32_t resolved_num_links =
+        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis));
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
@@ -70,6 +72,16 @@ ttnn::Tensor reduce_scatter_minimal_async(
             num_buffers_per_channel,
             resolved_compute_kernel_config);
     }
+
+    // The program factory splits the pages of one output channel (one batch for dim 0 scatters) across
+    // all num_links * num_workers_per_direction workers. Small tensors can have fewer pages than links,
+    // and a link whose workers get an empty page range hangs waiting on a barrier the others already
+    // passed, so cap the link count to the pages actually available. Resolved here rather than in the
+    // program factory so that the num_links op attribute and the program agree -- the cache-hit
+    // override_runtime_arguments path iterates over the attribute.
+    const uint32_t pages_to_distribute =
+        ttnn::experimental::ccl::reduce_scatter_pages_to_distribute(input_tensor, scatter_dim, num_devices);
+    resolved_num_links = std::max(1u, std::min(resolved_num_links, pages_to_distribute));
 
     bool using_persistent_buffers = persistent_output_buffers.has_value();
 

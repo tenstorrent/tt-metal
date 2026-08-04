@@ -14,6 +14,9 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
+
+#include <algorithm>
 
 namespace ttnn {
 using namespace ttnn::operations::ccl;
@@ -88,6 +91,16 @@ ttnn::Tensor reduce_scatter(
             resolved_compute_kernel_config,
             use_l1_small_for_semaphores);
     }
+    // The program factory splits the pages of one output channel (one batch for dim 0 scatters) across
+    // all num_links * num_workers_per_direction workers. Small tensors can have fewer pages than links,
+    // and a link whose workers get an empty page range hangs waiting on a barrier the others already
+    // passed, so cap the link count to the pages actually available. Resolved here rather than in the
+    // program factory so that the num_links op attribute and the program agree -- the cache-hit
+    // override_runtime_arguments path iterates over the attribute.
+    const uint32_t pages_to_distribute = ttnn::experimental::ccl::reduce_scatter_pages_to_distribute(
+        input_tensor, normalized_dim, ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis));
+    num_links_ = std::max(1u, std::min(num_links_, pages_to_distribute));
+
     return ttnn::prim::reduce_scatter(
                input_tensor,
                normalized_dim,
