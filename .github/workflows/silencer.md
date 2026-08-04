@@ -66,12 +66,15 @@ tools:
 safe-outputs:
   mentions: false
   create-pull-request:
-    # Draft: pr-gate.yaml does not run automatically on Silencer's PRs anyway (a
-    # maintainer must approve the workflow run for bot-authored PRs), so ready-for-review
-    # buys nothing here — draft signals accurately that CI has not validated this yet.
-    # The `dispatch-workflow` output below does start a run without that approval, but it
-    # is a separate `workflow_dispatch` run whose result lands after the agent turn ends,
-    # so at PR-creation time nothing is validated and draft is still the honest state.
+    # Draft *at creation*, and only at creation: nothing is validated at this point.
+    # pr-gate.yaml does not run automatically on Silencer's PRs (a maintainer must approve
+    # the workflow run for bot-authored PRs), and while the `dispatch-workflow` output below
+    # does start a run without that approval, it is a separate `workflow_dispatch` run whose
+    # result lands after the agent turn ends — so draft is the honest state here. Silencer's
+    # *second* run flips it: once it has a dispatched-run outcome to report, it comments that
+    # outcome onto the PR and marks the PR ready for review via
+    # `mark-pull-request-as-ready-for-review` below, because a comment on a draft PR goes
+    # unseen (*Scan procedure* step 7).
     draft: true
     # Without this, gh-aw's create_pull_request handler appends a random 4-byte hex
     # suffix (crypto.randomBytes(4)) to whatever branch name the agent proposes, and
@@ -195,6 +198,25 @@ safe-outputs:
   add-comment:
     max: 5
     target: "*"
+  mark-pull-request-as-ready-for-review:
+    # The other half of phase 2 (*Scan procedure* step 7): having resolved a dispatched run's
+    # outcome and commented it onto its own PR, Silencer takes that PR out of draft. A comment
+    # on a draft PR goes unseen, so this — not the comment — is what actually surfaces the
+    # outcome to a human. Deliberately **unconditional**, not gated on the run's conclusion:
+    # the purpose is visibility, and a failing run needs a maintainer's eyes at least as much
+    # as a green one. It is not a claim that anything is validated (*Validating changes via CI*).
+    # `target: "*"` for exactly the reason `add-comment` and `update-issue` have it: Silencer
+    # runs on a schedule or dispatch, so there is no triggering PR. Without `"*"` the handler
+    # ignores `pull_request_number` and can only mark the PR that triggered the workflow —
+    # which never exists here — so `"*"` is what makes an arbitrary resolved PR reachable.
+    target: "*"
+    # Same guard as `push-to-pull-request-branch` / `update-issue`: the handler fetches the
+    # PR's title and *skips* (does not fail) anything not prefixed `[silencer] `, so a
+    # misresolved number belonging to someone else's PR cannot be un-drafted.
+    required-title-prefix: "[silencer] "
+    # One PR resolved per run, matching `create-pull-request` / `push-to-pull-request-branch` /
+    # `dispatch-workflow` above (also this safe-output's own default).
+    max: 1
 
 source: githubnext/agentics/workflows/ci-doctor.md@497230d3867fe453aae74b15d06178d45a39fcce
 engine: copilot
@@ -729,9 +751,32 @@ unreachable, and keep the suppression as tight as possible. Never reach for a bl
      from that run's own logs is.
    - If `search_pull_requests` returns no open `[silencer]` PR matching the branch you
      recorded — already merged or closed, or the dispatch never happened — **skip silently**:
-     post nothing, fabricate no run link, and do not treat it as an error.
+     post nothing, mark nothing, fabricate no run link, and do not treat it as an error.
    - Note in memory that this validation has been reported (*Memory* → *CI validations in
      flight*) so the next daily run does not comment the same outcome again.
+
+   **Then, in the same turn, mark that PR ready for review** with the
+   `mark-pull-request-as-ready-for-review` safe-output (`mark_pull_request_as_ready_for_review`
+   tool). Silencer opens its PRs as draft (*Pull request conventions*), and **a comment on a
+   draft PR goes unseen** — so the comment above is only half the job; this call is what
+   actually surfaces the outcome to a human:
+   ```json
+   { "type": "mark_pull_request_as_ready_for_review", "pull_request_number": 52111, "reason": "Silencer has reported the dispatched validation run in a comment above — that comment has the run link and the exact pattern to re-grep. Taking this out of draft so the comment is actually visible; the diff itself still needs a maintainer's review." }
+   ```
+   - `pull_request_number` is the **same** PR number as the `add_comment` `item_number` above,
+     and it is **required** here: with `target: "*"` and no triggering PR in a scheduled or
+     dispatched run, there is nothing for the handler to default to.
+   - Emit it **unconditionally, whatever the outcome was** — `queued`, `in_progress`,
+     `success`, `failure`, `cancelled` all get the same treatment. Do **not** gate it on the
+     conclusion: this is a visibility step, not a verdict, and a failing run needs a
+     maintainer's attention every bit as much as a green one.
+   - `reason` is **itself posted as a second PR comment** by the handler, so keep it short and
+     **non-duplicative**: point at the outcome comment rather than restating the run link and
+     the what-to-grep-and-where, which belong in the `add_comment` body above.
+   - A PR that is already out of draft (a maintainer got there first) is a **no-op, not an
+     error** — the handler returns early without marking or commenting — so this is always
+     safe to emit. That early return is also why the run link must live in the `add_comment`
+     call and never only in `reason`: in that case no `reason` comment is posted at all.
 
    Then **stop** — one quiet step at a time.
 
@@ -804,16 +849,21 @@ Therefore:
   place, so say that too and ask the maintainer to verify a run actually exists on the branch
   before relying on it — and say explicitly that the run's **own logs** must then be checked for
   this exact pattern, naming which step's logs to look in.
-- A dispatched run is **not** a substitute for maintainer review, and it does not make the PR
-  ready for review. It stays a draft.
+- A dispatched run is **not** a substitute for maintainer review. Silencer's next run does take
+  the PR out of draft, but only as the final act of reporting the outcome (*Scan procedure*
+  step 7) and purely for **visibility** — a comment sitting on a draft PR goes unseen.
+  Ready-for-review means "a human should now look at this", never "this has been validated":
+  the diff still needs a maintainer's review, and the pattern's absence from the dispatched
+  run's own logs is still the only proof the fix worked.
 
 ## Pull request conventions
 
 - Branch name: `silencer/<category>-<short-desc>` (e.g. `silencer/unused-var-layernorm`).
 - Title prefixed `[silencer] ` (the safe-output adds this) and labelled `automation` and
   `silencer` (the latter so these PRs are easy to filter/find later).
-- Opened as **draft** (see *Validating changes via CI* for why) — a maintainer marks it
-  ready when they choose to review/approve CI for it.
+- Opened as **draft** (see *Validating changes via CI* for why) — Silencer's own next run
+  marks it ready for review when it reports the dispatched run's outcome onto the PR
+  (*Scan procedure* step 7), so the comment it leaves there is actually seen.
 - **One concern per PR.** Do not mix categories or unrelated files.
 - PR body must include:
   - **What noise this removes** — the exact warning/message and its **frequency** in the
@@ -922,8 +972,10 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
   is verified without a build run, and never claim a runtime/log-spam pattern (categories 3/5/6)
   is confirmed gone from a compile-only build run — the proof is its absence from the dispatched
   run's own logs, which you cannot read until a later run. On that later run, **comment the
-  resolved outcome back onto the PR** with `add-comment` (*Scan procedure* step 7); an outcome
-  you resolve but never report is no better than one you never checked.
+  resolved outcome back onto the PR** with `add-comment` and **mark the PR ready for review**
+  with `mark-pull-request-as-ready-for-review` (*Scan procedure* step 7); an outcome you
+  resolve but never report is no better than one you never checked, and a report nobody can see
+  — a comment on a draft PR — is no better than no report.
 - **Coordinate with `deprecations.json` / `deprecation-reaper.yml`** for deprecated-API work;
   migrate call sites, leave shim deletion to the reaper's schedule.
 - **When in doubt, do nothing / open an issue.** A wrong or noisy PR wastes maintainer
