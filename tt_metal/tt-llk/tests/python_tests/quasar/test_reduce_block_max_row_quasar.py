@@ -33,11 +33,9 @@ from helpers.test_variant_parameters import (
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
-# block_ct_dim values: 1 (single tile / first-tile init), 2, 4, 8 (multi-tile accumulation + DEST
-# bank switching across the block).
 BLOCK_CT_DIMS = [1, 2, 3, 4, 8, 16]
 
-TILE_DIMENSIONS = [(32, 32), (16, 32)]
+TILE_DIMENSIONS = [(32, 32), (16, 32), (8, 32), (4, 32)]
 
 
 @pytest.mark.quasar
