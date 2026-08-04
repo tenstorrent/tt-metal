@@ -2333,8 +2333,6 @@ def _run_full_pipeline_ms():
     )
 
 
-_GATE_REPS = max(1, int(os.environ.get("PERF_MCP_GATE_REPS", "3")))
-
 _THERMAL_GATE = str(os.environ.get("PERF_MCP_THERMAL_GATE", "1")).lower() not in ("0", "false", "no")
 _THERMAL_WAIT_S = float(os.environ.get("PERF_MCP_THERMAL_WAIT_S", "900"))
 _THERMAL_POLL_S = float(os.environ.get("PERF_MCP_THERMAL_POLL_S", "15"))
@@ -2517,33 +2515,33 @@ def _wait_for_thermal_headroom():
     return False, cur
 
 
-def _measure_full_pipeline_median():
-    """Measure the pipeline _GATE_REPS times; return (median_ms, method, err, path, spread).
+def _measure_full_pipeline_guarded():
+    """One reading of the pipeline; return (ms, method, err, path).
 
-    A single reading cannot grade a win smaller than the board's spread. Six interleaved runs of
-    identical code on gemma-3-12b-it gave 33.34 / 34.72 / 35.19 / 35.21 / 35.29 / 35.62 -- 2.28 ms,
-    or 28.1 to 30.0 tok/s/u. The wins the ladder hunts are 0.7-1.3 ms, so one reading is a coin flip
-    in BOTH directions and every outcome is written conclusive: a neutral lever banked as a win, a
-    real win discarded and never revisited. 145 attempts on this model produced one "win" of
-    -0.79 ms that re-measured at +0.32.
+    ONE reading, not a median. Repeating the measurement was tried and removed: the board clamps
+    AICLK once the die passes its threshold, and a 17-second measurement is itself what pushes it
+    there -- so extra reps do not sample independent noise, they manufacture the very condition
+    that invalidates them. On gemma-3-12b-it, reps 2 and 3 read 68.32 and 69.32 against a true
+    35-36, and the MEDIAN of the three was therefore 68.32: taking three readings turned one bad
+    number into the answer, where a single reading would have been correct.
 
-    MEDIAN, not mean: this bench emits 55-66 ms readings, and a mean would let one of those invent
-    or destroy a win outright.
+    What the repeats were meant to fix -- that one reading cannot grade a win smaller than the
+    board's spread -- turned out to be the same problem seen from the other end. That 2.28 ms
+    "spread" was clamped and unclamped readings mixed together, not noise around a stable mean.
+    Refusing clamped readings removes the spread at its source, which is what the thermal gate
+    below does.
 
-    The spread rides along so a caller can see when a delta is smaller than the measurement it came
-    from. PERF_MCP_GATE_REPS=1 restores single-shot exactly.
+    Kept from that work: the clamp check and its bounded retries. A discarded reading is REPLACED,
+    not averaged with, and a board that is clamped on every attempt fails loudly rather than
+    anchoring the ledger to a number taken at 800 MHz instead of 1350.
     """
-    vals, method, path, err = [], None, None, None
-    discarded, attempts = 0, 0
-    max_attempts = _GATE_REPS + max(0, _THERMAL_RETRIES)
-    while len(vals) < _GATE_REPS and attempts < max_attempts:
-        attempts += 1
+    discarded = 0
+    for _ in range(1 + max(0, _THERMAL_RETRIES)):
         _ok, _start_c = _wait_for_thermal_headroom()
         globals()["_LAST_RUN_CLAMPED"] = False
-        _ms, _m, _e, _p = _run_full_pipeline_ms()
-        if _ms is None:
-            err = _e or err
-            continue
+        ms, method, err, path = _run_full_pipeline_ms()
+        if ms is None:
+            return None, method, err, path
         # Teach the board profile what this start temperature produced, so the threshold is derived
         # from THIS hardware rather than the p300c the gate was written on.
         _record_thermal_observation(_start_c, bool(_LAST_RUN_CLAMPED))
@@ -2551,26 +2549,21 @@ def _measure_full_pipeline_median():
             discarded += 1
             print(
                 "  [thermal-gate] DISCARDED %.4f ms: AICLK was clamped during the run, so this "
-                "reading is not comparable to an unclamped one" % float(_ms),
+                "reading is not comparable to an unclamped one" % float(ms),
                 file=sys.stderr,
                 flush=True,
             )
             continue
-        vals.append(float(_ms))
-        method, path = _m, _p
-    if not vals:
-        if discarded:
-            _lim = _clamp_threshold_c()
-            err = (
-                "every reading was discarded: AICLK was clamped on all %d attempts (board too hot "
-                "to measure; learned clamp threshold %s)"
-                % (discarded, ("%.1fC" % _lim) if _lim is not None else "not yet established")
-            )
-        return None, method, (err or "all measurement attempts failed"), path, None
-    vals.sort()
-    n = len(vals)
-    med = vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2.0
-    return med, method, None, path, round(vals[-1] - vals[0], 4)
+        return float(ms), method, None, path
+    _lim = _clamp_threshold_c()
+    return (
+        None,
+        None,
+        "every reading was discarded: AICLK was clamped on all %d attempts (board too hot to "
+        "measure; learned clamp threshold %s)"
+        % (discarded, ("%.1fC" % _lim) if _lim is not None else "not yet established"),
+        None,
+    )
 
 
 def _fullpipe_gate_log():
@@ -3173,9 +3166,7 @@ def check_full_pipeline_latency() -> dict:
     gap_to_target_ms?, reached_target?}."""
     # The tool is trace+1cq end to end: one track, one baseline, no 2-CQ bookend.
     cq = 1
-    # N readings, median. One reading cannot grade a win smaller than the board's 2.28 ms
-    # spread -- see _measure_full_pipeline_median.
-    ms, method, err, path, _spread = _measure_full_pipeline_median()
+    ms, method, err, path = _measure_full_pipeline_guarded()
     if ms is None:
         return _emit_fullpipe({"status": "crash", "error": err, "cq": cq})
     metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"

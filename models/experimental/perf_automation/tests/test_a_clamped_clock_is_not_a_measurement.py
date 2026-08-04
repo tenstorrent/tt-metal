@@ -76,50 +76,50 @@ def _feed(mcp, monkeypatch, readings, clamped=()):
 def test_a_clamped_reading_is_not_used(mcp, monkeypatch):
     """The run-30 case: a 68.3 ms clamped reading must not become the answer."""
     _feed(mcp, monkeypatch, [68.3, 35.0, 35.1, 35.2], clamped={0})
-    ms, *_ = mcp._measure_full_pipeline_median()
+    ms, *_ = mcp._measure_full_pipeline_guarded()
     assert ms is not None and ms < 36, ms
 
 
-def test_it_retries_until_it_has_enough_clean_readings(mcp, monkeypatch):
-    """Discarding must not simply shrink the sample -- it has to go get another one."""
-    calls = _feed(mcp, monkeypatch, [68.3, 69.9, 35.0, 35.1, 35.2], clamped={0, 1})
-    mcp._measure_full_pipeline_median()
-    assert calls["n"] == 5, calls
+def test_a_discarded_reading_is_replaced_not_dropped(mcp, monkeypatch):
+    """Two clamped readings then a clean one: three runs, and the clean one is the answer."""
+    calls = _feed(mcp, monkeypatch, [68.3, 69.9, 35.0], clamped={0, 1})
+    ms, *_ = mcp._measure_full_pipeline_guarded()
+    assert calls["n"] == 3 and ms == 35.0, (calls, ms)
 
 
 def test_an_all_clamped_board_fails_loudly(mcp, monkeypatch):
     """No number at all beats a wrong number: this is what stops a bad BEFORE anchor being written."""
     _feed(mcp, monkeypatch, [68.3] * 12, clamped=set(range(12)))
-    ms, _method, err, _path, _spread = mcp._measure_full_pipeline_median()
+    ms, _method, err, _path = mcp._measure_full_pipeline_guarded()
     assert ms is None and "clamped" in (err or "").lower(), (ms, err)
 
 
 def test_retries_are_bounded(mcp, monkeypatch):
     """A permanently hot board must terminate, not spin forever."""
     calls = _feed(mcp, monkeypatch, [68.3] * 50, clamped=set(range(50)))
-    mcp._measure_full_pipeline_median()
-    assert calls["n"] <= mcp._GATE_REPS + mcp._THERMAL_RETRIES, calls
+    mcp._measure_full_pipeline_guarded()
+    assert calls["n"] <= 1 + mcp._THERMAL_RETRIES, calls
 
 
-def test_unclamped_readings_are_untouched(mcp, monkeypatch):
-    """The healthy path must behave exactly as before the gate existed."""
-    _feed(mcp, monkeypatch, [35.0, 35.1, 35.2])
-    ms, _m, err, _p, _s = mcp._measure_full_pipeline_median()
-    assert err is None and ms == 35.1, (ms, err)
+def test_a_clean_reading_is_taken_once(mcp, monkeypatch):
+    """ONE reading. Repeating it was tried and removed: a 17s measurement is itself what heats the
+    board past the clamp point, so extra reps manufacture the condition that invalidates them --
+    on gemma3 the median of three WAS the clamped 68.32 against a true 35."""
+    calls = _feed(mcp, monkeypatch, [35.0, 35.1, 35.2])
+    ms, _m, err, _p = mcp._measure_full_pipeline_guarded()
+    assert err is None and ms == 35.0 and calls["n"] == 1, (ms, err, calls)
 
 
 def test_the_gate_can_be_switched_off(mcp, monkeypatch):
     """An escape hatch for a board whose telemetry lies, or a bring-up on unknown silicon.
 
-    Switched off, the clamped reading is KEPT in the sample -- exactly _GATE_REPS runs happen and
-    none is retried. (The median of [35.0, 35.1, 68.3] is still 35.1, which is why the returned
-    value cannot tell these two modes apart; the retry count can.)
+    Switched off, the clamped reading is KEPT: one run happens and nothing is retried.
     """
     monkeypatch.setenv("PERF_MCP_THERMAL_GATE", "0")
     importlib.reload(mcp)
     calls = _feed(mcp, monkeypatch, [68.3, 35.0, 35.1], clamped={0})
-    mcp._measure_full_pipeline_median()
-    assert calls["n"] == mcp._GATE_REPS, calls
+    mcp._measure_full_pipeline_guarded()
+    assert calls["n"] == 1, calls
 
 
 # ---------------------------------------------------------------- waiting for headroom
