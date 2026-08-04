@@ -2252,3 +2252,98 @@ the `ttnn.*` entry points (`concat`, `slice`, `multiply`, `add`, `reshape`, `con
 `to_layout`, `snake_beta`) and tag each call with the enclosing module label. Serializing host
 and device inflates the total ~10 %, but every entry is honest device time. The probe file was
 deleted per amendment 65's precedent.
+
+## Amendment 71 (2026-08-04) — NEXT TARGET: audio decode, a fused depthwise FIR then a fused Activation1d
+
+Forward-looking spec, not a measurement. Everything quoted here is measured in amendments 66-69.
+
+**Where audio decode stands:** 0.988 s at `t_factor=4` (1.284 s single device) against **0.05 s**,
+a 20x gap. Device-bound: ~1235 ms device inside a 1284 ms wall, with 504 ms of host dispatch
+hidden underneath it. `Activation1d` is **1175 ms of 1493 ms accounted device time (78.7 %)**,
+and every millisecond of it is `layers/audio_ops.py:178::depthwise_tap_filter`, up or down.
+
+### Why this is the only remaining lever
+
+| lever | why it is closed |
+|---|---|
+| parallelism | factor 4 shipped; ceiling ~1.55x, s1 scales 1.02x, s0 gets worse (amendment 67) |
+| kernel research (`ttnn.conv1d`) | 8 `Conv1dConfig` variants; all fail at K=7, and 2.1x **slower** where it runs (68) |
+| layout / T-folding | saturates at S·C = 32, worth 3.8 % (69) |
+| math fidelity | data-movement bound at ~65 GB/s per pass (68) |
+| blocking sweeps | the hot ops are `slice`/`multiply`/`add`/`concat` — no tuning surface |
+| trace | capped at 1.07x until device time falls under 504 ms (66) |
+
+### Tier 1 — a fused depthwise FIR. Target: audio decode ~0.55-0.65 s
+
+Replace `depthwise_tap_filter`'s two bodies (`_depthwise_tap_conv1d`, `_depthwise_tap_mac`) with
+one op computing, per channel independently,
+
+    y[b, t, c] = sum_k  tap[k] * x[b, t*stride + k, c]
+
+ROW_MAJOR `(B, T_pad, C)` in, ROW_MAJOR `(B, T_out, C)` out, `T_out = (T_pad - K)/stride + 1`,
+**fp32** (`vocoder_ltx`'s docstring records that bf16 accumulation measurably degrades spectral
+metrics through its 108-conv chain, and H3's is longer). Taps are a compile-time-sized host
+vector, not a device tensor — K is 7 or 12 and there are only three distinct tap vectors.
+
+**Three call sites**, all in `layers/audio_resample.py`: `LowPassFilter1d.forward:131` (the
+downsampler, K=12 stride 2) and `UpSample1d.forward:227,230` (the two polyphase phases, K=7
+stride 1). **381 calls per forward** — 18 `Activation1d` per stage x 3 filters x 7 stages, plus 3
+for `act_post`.
+
+The shapes it must serve, and what it must beat (measured per call):
+
+| stage | C | FIR input | K, stride | current | ideal 2-pass @65 GB/s |
+|---|---|---|---|---|---|
+| s0 | 512 | (2, 1041, 512) | 7, 1 | 1.46 ms (MAC, 34 passes) | **0.13 ms** |
+| s0 | 512 | (2, 2081, 512) | 12, 2 | 2.13 ms (MAC) / 4.56 (conv1d) | 0.26 ms |
+| s5 | 16 | (2, 82806, 16) | 7, 1 | 1.22 ms (conv1d) | 0.16 ms |
+| s6 | 8 | (2, 165606, 8) | 7, 1 | 2.63 ms (conv1d) | **0.16 ms** |
+| s6 | 8 | (2, 331211, 8) | 12, 2 | 3.59 ms (conv1d) | 0.33 ms |
+
+**The one design requirement that decides whether this works.** Cost today tracks **row count,
+not bytes** — s6's conv1d costs 2.16x s5's for the identical 5.3 MB, purely because it has 2x the
+rows at half the width (66). At `C = 8` a row is a **32-byte** DRAM stick, and that is what
+strands the deep stages at ~6 GB/s. But in `(B, T, C)` row-major, **consecutive T rows are
+contiguous in memory**, so the window feeding `R` output rows is one contiguous
+`(R*stride + K - 1) * C * 4` byte block. A kernel that reads *blocks of rows* coalesces
+regardless of how narrow `C` is. `ttnn.conv1d`'s HEIGHT_SHARDED halo path does not exploit this,
+which is the whole reason it loses to 34 unfused passes. **Read many rows per transaction, hold
+the K-1 row overlap in L1, accumulate all K taps in one pass.**
+
+Expected: the 911 ms of filters (up 589 + down 322) to ~230-350 ms, single-device total 1493 ->
+**~810-930 ms**, `t_factor=4` to **~0.55-0.65 s**. Trace then has room (device time approaching
+the 504 ms dispatch) and T-parallelism is worth re-measuring, since its ceiling came partly from
+per-op fixed cost that this removes.
+
+**Two cheap extras to fold in while there.** (a) Give the op an *interleaved two-phase* output
+mode: `UpSample1d`'s polyphase pair plus the `ttnn.concat` that interleaves them becomes one
+call, deleting 36 concats per forward (68 ms at s6 alone). (b) The replicate/zero T-pad is a
+`concat` costing a full copy of the activation (2.6 ms at s6); let the FIR take
+`pad_before`/`pad_after` and a `padding_mode` and do it inside the gather — the same argument
+amendment 58 makes for conv3d's vol2col reader, which already does exactly this.
+
+### Tier 2 — fuse the whole Activation1d. This is the one with 0.05 s magnitude
+
+Tier 1 leaves `Activation1d` making ~6 full materializations per call, three of them of the **2x
+upsampled** tensor. `up2 -> snake -> down2` never needs that tensor in DRAM: for each output row
+block, upsample locally in L1, apply `x + (1/beta) sin^2(alpha x)` per channel, lowpass back down,
+write once. Ideal traffic is **one read and one write of the T-row tensor**, against roughly 40
+passes over T-or-2T rows today.
+
+That is a ~10-20x on 79 % of audio decode and the only path that makes **0.05 s** arguable. It is
+a real kernel (a fused resample-activate-resample band), so Tier 1 first: Tier 1 is a
+self-contained op with 381 call sites and its own unit test, and it is the input Tier 2 needs
+anyway.
+
+### Acceptance gates
+
+Correctness first, per the skill. `test_audio_vae_minimax_h3.py` round-trip PSNR **>= 29.89 dB**
+(the current value), and `test_audio_parallel_minimax_h3.py` already gates every sharded factor
+against the single-device output at **PSNR > 40 dB**, so a speedup from dropped work fails rather
+than reports. Bit-exactness is not required; `depthwise_tap_filter` is currently bit-exact
+(rel_max 0.0) against torch, so a new op should be held to `rel_max <= 1e-6` in fp32 rather than
+to conv1d's 1.73e-03.
+
+**Measure with the sync-isolated method, not Tracy** — Tracy under-reads this model 6x
+(amendment 66 records the technique). Re-run the per-role table so the new `Activation1d` share
+is directly comparable to the 78.7 % baseline.
