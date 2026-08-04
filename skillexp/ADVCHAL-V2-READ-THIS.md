@@ -105,7 +105,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The twenty findings that matter
+## 3. The twenty-one findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -567,7 +567,39 @@ were found or missed are the dirty ones (phi 17–26 %, qwen B 53 %).
 So **≈1/3 advisor-reachable, 2/3 not.** qwen's 191 ms `retilize` is in the second bucket, which is why §3.19
 concluded it needs a chain rewrite rather than a placement.
 
+**The 4-line category fix, measured:** applying it collapses the `Other` bucket from **12.8 % mean to 0.2 %**,
+with 11 of 13 cells reaching exactly 0.0 — 8.1 pp into Compute, 4.6 pp into TM. The cell ordering is unchanged,
+so the rubric was already usable; the fix makes the absolute numbers meaningful.
+
 → [`PERF-REPORT-AUDIT`](ADVCHAL-V2-PERF-REPORT-AUDIT.md)
+
+### 3.21 The advisor's option space, swept — and my row-major recommendation is refuted
+
+Ran `ttnn-advise mlir` directly (no device needed) on phi's own IR, one option at a time:
+
+| run | ops | reshards | **row-major layouts** | outcome |
+|---|---|---|---|---|
+| baseline ×2 | 35 | 39 | **0** | **identical — the advisor is deterministic** |
+| `opt-level 3` | — | — | — | **FAILS.** `TTNNPipelines.h:592` validates 0..2 |
+| `disable-dram-sharded-matmul=true` | 35 | 39 | **0** | identical to baseline |
+| `row-major-enabled=true` | 35 | 38 | **0** | 4 matmuls narrowed `width/1x96` → `block/1x11` |
+
+**Zero row-major layouts, with the flag on.** They *are* enumerated either way, and the flag lets far more
+through — the pipeline log grows **3.3 MB → 35 MB (10.8×)** — but every one is rejected:
+
+```
+TT_FATAL: Input tensor layout must be TILE but got Layout::ROW_MAJOR
+```
+
+**The blocker is that TTNN ops reject row-major input** — tt-metal territory, out of scope. So my D0b
+recommendation ("enumerate row-major") is withdrawn, and §3.19's reason 4 gets stronger: the advisor can neither
+rewrite the graph nor legally place anything in row-major. Both halves of the `retilize` problem are outside its
+reach.
+
+What survives: **price conversions as a cost rather than a boolean** — the only advisor-side lever, operating
+entirely within TILE layouts, which is the whole space it legally has.
+
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E23
 
 ---
 

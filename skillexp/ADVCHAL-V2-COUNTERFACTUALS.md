@@ -23,6 +23,7 @@ there.
 | **E20** | widen **matmuls**, the largest apparent pool | **dead end, and it retracts part of my own C5** — DS matmuls are bandwidth-bound; the advisor's direction is **+65 %** slower |
 | **E21** | look at the **boundary** bucket my own dataset was dropping | **`retilize` is 76.5 % of all boundary cost** — 191 ms/model, **24.4 % of qwen B's decode time**, with the advisor's ceiling correctly at 0.000 µs |
 | **E22** | ask whether the **chain** could be written differently | **yes — it's a shape choice, not a kernel limit.** A 4-element conv window on the 32-wide tile axis; the conversions run at **~1 % of DRAM bandwidth**. And the advisor cannot help for 4 independent reasons |
+| **E23** | sweep the advisor's own **option space** | advisor is **deterministic**; **opt-level 3 is invalid** (validated 0..2); **`row-major-enabled` yields zero row-major layouts** — they are enumerated and then rejected by op constraints. **D0b withdrawn** |
 
 ---
 
@@ -702,3 +703,80 @@ placed.
   inherits the advisor's blind spot. It should *also* rank the profile's own conversion ops by cost,
   independently of what the advisor says about them. In this corpus that single change surfaces a 191 ms item
   the whole exercise reported as "out of scope, 0.000 µs".
+
+---
+
+## E23 — the advisor's option space, swept. Row-major is refuted, and for a better reason
+
+Set up `ttnn-advise` directly (`TTMLIR_ADVISOR_HOME`, `cd tt-mlir && source env/activate` — note it uses
+`$(pwd)`, so it must be sourced from the tt-mlir root) and ran the `mlir` subcommand, which needs only
+`SYSTEM_DESC_PATH` and **no device**. Input: phi FN's own `shard_advise/dense/final_ir.mlir`, `--pipeline ttnn`,
+one variable at a time.
+
+| run | opt-level | pipeline-options | ops | reshards | **row-major layouts** | layout mix |
+|---|---|---|---|---|---|---|
+| baseline a | 2 | — | 35 | 39 | **0** | interleaved 14, height 12, width 7, block 2 |
+| baseline b | 2 | — | 35 | 39 | **0** | *identical to a* |
+| **opt-level 3** | 3 | — | — | — | — | **FAILS** |
+| no-DS | 2 | `disable-dram-sharded-matmul=true` | 35 | 39 | **0** | *identical to baseline* |
+| **row-major** | 2 | `row-major-enabled=true` | 35 | **38** | **0** | interleaved 14, height 12, **block 6, width 3** |
+
+### The advisor is deterministic
+
+Two baseline runs produced identical plans — 35 ops, 39 reshards, same layout mix. Worth recording: it means
+every plan difference below is attributable to the flag.
+
+### There is no optimization level above 2
+
+`opt-level 3` does not merely behave like 2 — it **errors out**. From source,
+`include/ttmlir/Dialect/TTNN/Pipelines/TTNNPipelines.h:592`:
+
+```cpp
+if (optimizationLevel < 0 || optimizationLevel > 2) {
+  ... "Invalid optimization_level: " ...
+}
+```
+
+**E14 confirmed and strengthened:** the stage already uses the maximum. This line of inquiry is closed for good.
+
+### `row-major-enabled=true` produces zero row-major layouts — action D0b is refuted
+
+**And the reason is better than the one I guessed.** I had assumed row-major candidates were never enumerated
+because the flag was off. They are enumerated either way — `generateAllPossibleLayouts` loops over
+`typesToConsider` = {scalar, tiled} unconditionally. What the flag does is let far more of them through: the
+pipeline log goes from **3.3 MB to 35 MB, 10.8×**, so the search genuinely widened.
+
+**Every one of them is then rejected by op constraint validation.** Present in *both* logs:
+
+```
+TT_FATAL: Input tensor layout must be TILE but got Layout::ROW_MAJOR
+```
+
+So the advisor cannot propose a row-major chain for a decoder graph because **the TTNN ops reject row-major
+input**. That is a capability question in tt-metal, not a flag.
+
+**The flag's only actual effect is a side effect, and it looks like a regression:** four `linear` ops move from
+`l1/width_sharded/1x96`–`1x103` down to `l1/block_sharded/1x11`, and one reshard disappears (39 → 38).
+Reproduced across two runs. phi's own measured record rejects every matmul narrowing it tried
+(`103→99 rej`, `96→88 rej`, `32→88 rej`), and [E20](#e20) measured a 12-core matmul beating a wide L1-sharded
+one by **65 %** — so narrowing four matmuls to 11 cores is very unlikely to help.
+
+### `disable-dram-sharded-matmul=true` changed nothing on this graph
+
+Identical plan to baseline. Either the graph's matmuls are not DS-eligible at this point in the pipeline, or the
+DS decision is made outside the flag's reach. Not pursued further.
+
+⚠ **Caveat on all of the above.** I fed the cell's *output* IR back in (`final_ir.mlir`, `--pipeline ttnn`), so
+this is a **sensitivity test on an already-optimised graph**, not a reproduction of the original capture. The
+*zero-row-major* result is robust — it follows from op constraints, which do not depend on the input being
+fresh — but the 96→11 narrowing could be an artefact of re-optimising.
+
+### What this changes
+
+- **D0b (enumerate row-major) is withdrawn.** It is already enumerated; the blocker is op-level constraint
+  validation, which is tt-metal territory and out of scope.
+- **D0 (price conversions as a cost, not a boolean) still stands**, and is now the *only* advisor-side change
+  with a path to the layout-induced 6.0 pp: it would let the advisor prefer plans with fewer or cheaper
+  conversions *among TILE layouts*, which is the whole space available to it.
+- **E22's reason 4 is strengthened.** Not only can the advisor not rewrite the graph — it cannot legally place
+  anything in row-major either. Both halves of the `retilize` problem are outside its reach.

@@ -104,6 +104,35 @@ ones.
 [E20](ADVCHAL-V2-COUNTERFACTUALS.md) measured that widening those is **+65 %** slower. A low number is not
 automatically a defect.
 
+### 3a. And the 4-line category fix, measured
+
+Applying the four missing op codes (§5) and re-scoring the same CSVs — 13 cells, whichever profile artefact each
+cell has:
+
+| cell | as shipped: Comp / TM / DM / **Other** | with the fix: Comp / TM / DM / **Other** |
+|---|---|---|
+| qwen B | 30.2 / 45.3 / 12.8 / **11.6** | 31.4 / **55.8** / 12.8 / **0.0** |
+| g26 B | 38.1 / 36.1 / 18.6 / **7.2** | 41.2 / **38.1** / 18.6 / **2.1** |
+| phi FN | 52.3 / 22.4 / 10.8 / **14.6** | 59.1 / 30.1 / 10.8 / **0.0** |
+| phi A | 49.0 / 26.3 / 11.4 / **13.3** | 59.4 / 29.2 / 11.4 / **0.0** |
+| phi B | 37.4 / 20.7 / 1.3 / **40.5** | 70.2 / 28.5 / 1.3 / **0.0** |
+| g26 onA | 73.7 / 26.3 / 0.0 / 0.0 | 73.7 / 26.3 / 0.0 / 0.0 |
+| phi exp17 | 54.5 / 17.1 / 7.0 / **21.4** | 72.7 / 20.3 / 7.0 / **0.0** |
+| qwen FN | 78.5 / 8.5 / 4.5 / **8.4** | 80.7 / 14.7 / 4.5 / **0.0** |
+| gemma-12B | 78.3 / 4.3 / 2.7 / **14.7** | 83.4 / 13.9 / 2.7 / **0.0** |
+| nm onA | 87.9 / 3.4 / 1.7 / **7.0** | 91.2 / 7.1 / 1.7 / **0.0** |
+| nm B | 80.0 / 3.1 / 5.6 / **11.4** | 88.2 / 6.2 / 5.6 / **0.0** |
+| llama-1B | 87.2 / 1.6 / 4.2 / **7.0** | 92.2 / 3.6 / 4.2 / **0.0** |
+| llama-8B | 86.4 / 1.2 / 2.5 / **9.9** | 95.2 / 2.4 / 2.5 / **0.0** |
+| **mean** | 64.1 / 16.6 / 6.4 / **12.8** | **72.2 / 21.2 / 6.4 / 0.2** |
+
+**The `Other` bucket goes from 12.8 % to 0.2 %, and 11 of 13 cells reach exactly 0.0 %** — 8.1 pp moves into
+Compute and 4.6 pp into TM. Four strings. The ordering of cells is unchanged, so the rubric was already usable;
+the fix makes the absolute numbers meaningful.
+
+*(Mixed provenance: some rows are bounded windows, some are raw unsignposted exports that include setup. The
+bounded-only scorecard is §3; the ordering agrees.)*
+
 ---
 
 ## 4. Could the advisor help? Split the non-compute time and it answers itself
@@ -167,10 +196,19 @@ The information is already produced and already on disk. Four changes to the sta
 
 - **D0: price conversions as a cost, not a boolean**, and let `LayoutScore` see element type. This is the only
   change that lets the advisor reason about the layout-induced third at all.
-- **D0b: enumerate row-major.** `rowMajorEnabled` defaults `false` and the advisor never sets it; it is a
-  one-line change to its option string to find out what difference it makes. Cheap experiment, no rebuild —
-  `ShardAdvisor` already accepts `extra_pipeline_options`.
-- Both are prerequisites, not solutions: neither would have found qwen's 191 ms, because that is a rewrite.
+- ~~**D0b: enumerate row-major.**~~ **Tested and withdrawn.** I ran the advisor with
+  `row-major-enabled=true` against phi's own IR: **zero row-major layouts in the plan.** They *are* enumerated
+  either way (`generateAllPossibleLayouts` loops over {scalar, tiled} unconditionally) and the flag lets far
+  more through — the pipeline log grows **3.3 MB → 35 MB** — but every one is then rejected by op constraint
+  validation: `TT_FATAL: Input tensor layout must be TILE but got Layout::ROW_MAJOR`. **The blocker is that
+  TTNN ops reject row-major input**, which is tt-metal territory and out of scope. The flag's only real effect
+  was to narrow four matmuls from `width_sharded/1x96` to `block_sharded/1x11` — almost certainly a
+  regression. → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E23.
+- **Also settled:** the advisor is **deterministic** (two identical baseline runs), `opt-level 3` is
+  **invalid** (`TTNNPipelines.h:592` validates 0..2), and `disable-dram-sharded-matmul=true` changed nothing on
+  this graph.
+- So **D0 is the only advisor-side change with a path to the layout-induced 6.0 pp**, and it would operate
+  entirely within TILE layouts — which is the whole space available to it.
 
 ### Third: tt-metal — one trivial fix worth proposing, and nothing else
 

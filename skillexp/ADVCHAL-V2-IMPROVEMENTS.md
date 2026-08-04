@@ -422,21 +422,33 @@ levels 2 and 3 are identical for layout advice. **The stage already uses the onl
 the advice can only be improved by changing the objective below.
 → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E14.
 
-### D0. Price conversions as a cost, not a boolean — and enumerate row-major ⭐
+### D0. Price conversions as a cost, not a boolean ⭐
 
 Two gaps that together make every layout crossing invisible to the advisor:
 
 - **`requiresReshard` is a boolean** at level 5 of `LayoutScore`, and the struct has no reference to tilize,
   `isTiled`, or element type. **An 819 µs untilize and a 1.5 µs L1 regrid are the same value to it.** Given
   `retilize` is 76.5 % of all boundary cost in this corpus, that is the wrong abstraction.
-- **`rowMajorEnabled` defaults to `false`** (`GreedyMemoryLayoutPropagation.h:20`) and the advisor never sets
-  it, so row-major candidates are never enumerated. And `RowMajorLayoutPropagation` is restricted to
-  *integer-typed function inputs* — it deletes redundant RM→Tile ops on page tables; it does not build
-  row-major compute chains.
+- ⚠ **The row-major half is WITHDRAWN — tested.** Running the advisor with `row-major-enabled=true` on phi's
+  own IR gives **zero row-major layouts**. They are enumerated either way
+  (`generateAllPossibleLayouts` loops over {scalar, tiled} unconditionally); the flag lets far more through —
+  pipeline log **3.3 MB → 35 MB** — and every one is rejected by op constraint validation:
+  `TT_FATAL: Input tensor layout must be TILE but got Layout::ROW_MAJOR`. **The blocker is that TTNN ops reject
+  row-major input**, i.e. tt-metal, i.e. out of scope. The flag's only effect was narrowing four matmuls from
+  `width_sharded/1x96` to `block_sharded/1x11`, almost certainly a regression.
+  → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E23.
 
-⚠ **Neither would have found the 191 ms item** (E-1) — that needs a graph rewrite, which the advisor cannot do
-by construction. But both are prerequisites for the advisor reasoning about layout crossings *at all*.
-→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E22.
+  **So the conversion-cost change is the only advisor-side lever left, and it operates entirely within TILE
+  layouts** — which is the whole space the advisor legally has.
+
+⚠ **This would not have found the 191 ms item** (E-1) — that needs a graph rewrite, which the advisor cannot do
+by construction, and it cannot place row-major either. But it is the prerequisite for the advisor reasoning
+about layout crossings *at all*.
+
+**Also settled by the same sweep, so nobody re-tries them:** the advisor is **deterministic**; **`opt-level 3`
+is invalid** (`TTNNPipelines.h:592` validates 0..2 — E14 confirmed and closed); and
+`disable-dram-sharded-matmul=true` changed nothing on the graph tested.
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E23.
 
 ### D1. Add a latency term to `LayoutScore` ⭐
 
