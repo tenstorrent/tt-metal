@@ -122,9 +122,9 @@ def test_uniform(shape, rand_range, dtype, seed, device):
     run_uniform(shape, rand_range, dtype, device, seed=seed)
 
 
-def test_uniform_rejects_unsupported_dtype(device):
+def test_uniform_rejects_unsupported_dtype(device, expect_error):
     input_tensor = _zeros(device, (32, 32), ttnn.int32)
-    with pytest.raises(RuntimeError, match="Uniform: Input tensor must be Float32 or Bfloat16"):
+    with expect_error(RuntimeError, "Uniform: Input tensor must be Float32 or Bfloat16"):
         ttnn.uniform(input_tensor)
 
 
