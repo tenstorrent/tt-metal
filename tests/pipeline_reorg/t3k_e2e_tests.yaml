@@ -125,8 +125,7 @@
 - name: t3k_DeepSeek_PREFILL
   cmd: |
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -vvv --tb=short -k "mesh-4x2 and not fabric2d-" --timeout 900
-    # TODO(chunked-coverage): chunked MLA replaces the single-shot test_ds_mla line PCC; maxedge is <=5120 ISL, so its long-ISL PCC is not covered.
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 2x4 and line" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "dsv3 and production and cpu and 2x4 and line" -vvv --tb=short
   skus:
     wh_llmbox:
       timeout: 30
