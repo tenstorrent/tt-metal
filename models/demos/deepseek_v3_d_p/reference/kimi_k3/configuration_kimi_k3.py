@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2025-2026 The Moonshot AI Team.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Copy from https://huggingface.co/moonshotai/Kimi-K3/blob/main/configuration_kimi_k3.py
