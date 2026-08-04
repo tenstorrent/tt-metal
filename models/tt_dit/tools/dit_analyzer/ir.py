@@ -1,0 +1,334 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""Analyzer IR: device mesh, tensor symbols, distributions, nodes, graphs.
+
+Design notes
+------------
+* **SSA.** Every node output is a fresh symbol, so "was this value invalidated
+  between two collectives?" reduces to comparing ``value_id``s instead of
+  tracking writes.
+* **value_id is the *mathematical* value.** Collectives (all-gather,
+  reduce-scatter, all-reduce) change only *where* and *how* a value is
+  materialised, never what it is, so they propagate their input's ``value_id``.
+  Compute ops mint a new one. This single rule is what lets the redundancy
+  checker prove "device already holds this exact data".
+* **Dist is materialisation metadata.** ``shard[m]`` says which tensor axis is
+  fractured across mesh axis ``m``; ``partial[m]`` says the value is an
+  unreduced partial sum over mesh axis ``m``. Regions remain the source of
+  truth for coverage (they can be finer than ``shard`` after slices).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from .region import RegionSet
+
+# Symbol kinds -----------------------------------------------------------------
+ACT = "activation"
+PARAM = "param"  # weights / biases: constant across denoise steps
+
+# Node kinds -------------------------------------------------------------------
+COMPUTE = "compute"
+COMM = "comm"
+META = "meta"
+
+
+@dataclass(frozen=True)
+class Mesh:
+    """A 2-D device mesh, matching ``ttnn.MeshDevice.shape``."""
+
+    shape: Tuple[int, int]
+    axis_names: Tuple[str, str] = ("axis0", "axis1")
+    arch: str = "wormhole_b0"
+    topology: str = "Linear"
+
+    @property
+    def num_devices(self) -> int:
+        return self.shape[0] * self.shape[1]
+
+    def devices(self) -> List[int]:
+        return list(range(self.num_devices))
+
+    def coord(self, device: int) -> Tuple[int, int]:
+        return (device // self.shape[1], device % self.shape[1])
+
+    def device_id(self, row: int, col: int) -> int:
+        return row * self.shape[1] + col
+
+    def size(self, mesh_axis: int) -> int:
+        return self.shape[mesh_axis]
+
+    def groups(self, mesh_axis: int) -> List[Tuple[int, ...]]:
+        """Communication groups along ``mesh_axis`` (one per orthogonal index)."""
+        rows, cols = self.shape
+        if mesh_axis == 0:
+            return [tuple(self.device_id(r, c) for r in range(rows)) for c in range(cols)]
+        return [tuple(self.device_id(r, c) for c in range(cols)) for r in range(rows)]
+
+    def group_of(self, device: int, mesh_axis: int) -> Tuple[int, ...]:
+        for g in self.groups(mesh_axis):
+            if device in g:
+                return g
+        raise KeyError(device)
+
+    def index_in_group(self, device: int, mesh_axis: int) -> int:
+        return self.coord(device)[mesh_axis]
+
+
+@dataclass(frozen=True)
+class Dist:
+    """Per-mesh-axis materialisation of a tensor."""
+
+    shard: Tuple[Optional[int], ...]  # tensor axis fractured across this mesh axis, or None
+    partial: Tuple[bool, ...]  # value is an unreduced partial sum over this mesh axis
+
+    @staticmethod
+    def replicated(mesh: Mesh) -> "Dist":
+        n = len(mesh.shape)
+        return Dist(tuple([None] * n), tuple([False] * n))
+
+    @staticmethod
+    def make(mesh: Mesh, shard: Optional[Dict[int, int]] = None, partial: Sequence[int] = ()) -> "Dist":
+        n = len(mesh.shape)
+        sh: List[Optional[int]] = [None] * n
+        for mesh_axis, tensor_axis in (shard or {}).items():
+            sh[mesh_axis] = tensor_axis
+        pa = [m in set(partial) for m in range(n)]
+        return Dist(tuple(sh), tuple(pa))
+
+    def with_shard(self, mesh_axis: int, tensor_axis: Optional[int]) -> "Dist":
+        sh = list(self.shard)
+        sh[mesh_axis] = tensor_axis
+        return Dist(tuple(sh), self.partial)
+
+    def with_partial(self, mesh_axis: int, value: bool) -> "Dist":
+        pa = list(self.partial)
+        pa[mesh_axis] = value
+        return Dist(self.shard, tuple(pa))
+
+    @property
+    def any_partial(self) -> bool:
+        return any(self.partial)
+
+    def normalized(self, ndim: int) -> "Dist":
+        sh = tuple(None if a is None else a % ndim for a in self.shard)
+        return Dist(sh, self.partial)
+
+    def describe(self, mesh: Mesh) -> str:
+        bits = []
+        for m, name in enumerate(mesh.axis_names[: len(self.shard)]):
+            if self.partial[m]:
+                bits.append("partial(%s)" % name)
+            elif self.shard[m] is None:
+                bits.append("replicated(%s)" % name)
+            else:
+                bits.append("shard(dim%d,%s)" % (self.shard[m], name))
+        return ", ".join(bits)
+
+
+@dataclass
+class TensorSymbol:
+    id: str
+    shape: Tuple[int, ...]
+    dtype: str = "bf16"
+    kind: str = ACT
+    value_id: str = ""
+    note: str = ""
+
+    @property
+    def ndim(self) -> int:
+        return len(self.shape)
+
+    @property
+    def elem_bytes(self) -> int:
+        return {"bf16": 2, "fp16": 2, "bf8_b": 1, "bfp8_b": 1, "fp32": 4, "bf4_b": 1}.get(self.dtype, 2)
+
+    def full_region(self) -> RegionSet:
+        return RegionSet.full(self.shape)
+
+    def bytes_of(self, region: RegionSet) -> int:
+        return region.volume * self.elem_bytes
+
+
+@dataclass
+class Node:
+    id: str
+    op: str
+    inputs: List[str] = field(default_factory=list)
+    outputs: List[str] = field(default_factory=list)
+    attrs: Dict[str, Any] = field(default_factory=dict)
+    mesh_axis: Optional[int] = None
+    loc: Optional[str] = None  # "file.py:123" from the model source
+    label: Optional[str] = None  # human name, e.g. "attn.to_qkv"
+    calls: int = 1  # how many times this node runs per forward (e.g. 38 blocks)
+    fused_in: Optional[str] = None  # set when this node models one stage of a fused ttnn op
+
+    @property
+    def display(self) -> str:
+        return self.label or self.id
+
+    def group(self, mesh: Mesh) -> Optional[Tuple[int, ...]]:
+        if self.mesh_axis is None:
+            return None
+        explicit = self.attrs.get("group")
+        if explicit:
+            return tuple(explicit)
+        return mesh.groups(self.mesh_axis)[0] if mesh.size(self.mesh_axis) else None
+
+
+@dataclass
+class Placement:
+    """Initial materialisation of a graph input."""
+
+    dist: Dist
+    region: Optional[RegionSet] = None  # defaults to the shard implied by dist
+
+
+@dataclass
+class Graph:
+    name: str
+    mesh: Mesh
+    symbols: Dict[str, TensorSymbol] = field(default_factory=dict)
+    nodes: List[Node] = field(default_factory=list)
+    placements: Dict[str, Placement] = field(default_factory=dict)
+    outputs: List[str] = field(default_factory=list)
+    # Number of times the whole graph runs back-to-back with unchanged params
+    # (denoise steps). Used only to scale param-gather savings.
+    steps: int = 1
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+    def symbol(self, sid: str) -> TensorSymbol:
+        return self.symbols[sid]
+
+    def node(self, nid: str) -> Node:
+        for n in self.nodes:
+            if n.id == nid:
+                return n
+        raise KeyError(nid)
+
+    def producer_of(self, sid: str) -> Optional[Node]:
+        for n in self.nodes:
+            if sid in n.outputs:
+                return n
+        return None
+
+    def consumers_of(self, sid: str) -> List[Node]:
+        return [n for n in self.nodes if sid in n.inputs]
+
+    # -- serialization --------------------------------------------------------
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "version": 1,
+            "name": self.name,
+            "steps": self.steps,
+            "meta": self.meta,
+            "mesh": {
+                "shape": list(self.mesh.shape),
+                "axis_names": list(self.mesh.axis_names),
+                "arch": self.mesh.arch,
+                "topology": self.mesh.topology,
+            },
+            "symbols": [
+                {
+                    "id": s.id,
+                    "shape": list(s.shape),
+                    "dtype": s.dtype,
+                    "kind": s.kind,
+                    "value_id": s.value_id,
+                    "note": s.note,
+                }
+                for s in self.symbols.values()
+            ],
+            "placements": {
+                sid: {"shard": list(p.dist.shard), "partial": list(p.dist.partial)}
+                for sid, p in self.placements.items()
+            },
+            "nodes": [
+                {
+                    "id": n.id,
+                    "op": n.op,
+                    "inputs": n.inputs,
+                    "outputs": n.outputs,
+                    "attrs": n.attrs,
+                    "mesh_axis": n.mesh_axis,
+                    "loc": n.loc,
+                    "label": n.label,
+                    "calls": n.calls,
+                    "fused_in": n.fused_in,
+                }
+                for n in self.nodes
+            ],
+            "outputs": self.outputs,
+        }
+
+    def to_json(self, indent: int = 2) -> str:
+        return json.dumps(self.to_dict(), indent=indent)
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "Graph":
+        m = d["mesh"]
+        mesh = Mesh(
+            shape=tuple(m["shape"]),
+            axis_names=tuple(m.get("axis_names", ("axis0", "axis1"))),
+            arch=m.get("arch", "wormhole_b0"),
+            topology=m.get("topology", "Linear"),
+        )
+        g = Graph(name=d.get("name", "graph"), mesh=mesh, steps=d.get("steps", 1), meta=d.get("meta", {}))
+        for s in d["symbols"]:
+            g.symbols[s["id"]] = TensorSymbol(
+                id=s["id"],
+                shape=tuple(s["shape"]),
+                dtype=s.get("dtype", "bf16"),
+                kind=s.get("kind", ACT),
+                value_id=s.get("value_id") or s["id"],
+                note=s.get("note", ""),
+            )
+        for sid, p in d.get("placements", {}).items():
+            dist = Dist(
+                tuple(None if a is None else int(a) for a in p["shard"]),
+                tuple(bool(b) for b in p["partial"]),
+            )
+            g.placements[sid] = Placement(dist=dist)
+        for n in d["nodes"]:
+            g.nodes.append(
+                Node(
+                    id=n["id"],
+                    op=n["op"],
+                    inputs=list(n.get("inputs", [])),
+                    outputs=list(n.get("outputs", [])),
+                    attrs=dict(n.get("attrs", {})),
+                    mesh_axis=n.get("mesh_axis"),
+                    loc=n.get("loc"),
+                    label=n.get("label"),
+                    calls=int(n.get("calls", 1)),
+                    fused_in=n.get("fused_in"),
+                )
+            )
+        g.outputs = list(d.get("outputs", []))
+        return g
+
+    @staticmethod
+    def from_json(text: str) -> "Graph":
+        return Graph.from_dict(json.loads(text))
+
+
+def derive_value_id(op: str, input_value_ids: Sequence[str], attrs: Optional[Dict[str, Any]] = None) -> str:
+    """Structural identity of a computed value (used for equivalence proofs)."""
+    payload = json.dumps(
+        {"op": op, "ins": list(input_value_ids), "attrs": _stable(attrs or {})},
+        sort_keys=True,
+        default=str,
+    )
+    return "v" + hashlib.sha1(payload.encode()).hexdigest()[:10]
+
+
+def _stable(attrs: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop attrs that affect performance but not the mathematical value."""
+    ignore = {"group", "num_links", "topology", "loc", "buffer", "persistent", "chunks", "block_size"}
+    return {k: v for k, v in sorted(attrs.items()) if k not in ignore}
