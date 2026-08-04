@@ -1,7 +1,10 @@
 # Source files for ttnn_op_uniform.
 # Module owners should update this file when adding/removing/renaming source files.
 
-set(TTNN_OP_UNIFORM_API_HEADERS uniform.hpp uniform_range.hpp)
+set(TTNN_OP_UNIFORM_API_HEADERS
+    uniform.hpp
+    uniform_range.hpp
+)
 
 set(TTNN_OP_UNIFORM_SRCS
     device/uniform_device_operation.cpp
