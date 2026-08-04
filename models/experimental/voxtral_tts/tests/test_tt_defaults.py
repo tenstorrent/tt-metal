@@ -22,24 +22,32 @@ from models.experimental.voxtral_tts.tt import ttnn_voxtral_flow as flow  # noqa
 from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt  # noqa: E402
 
 
-def test_block1_weights_are_all_bfp8():
-    """ALL of Block 1's matmul weights are BFP8 now, including w2. Decode is bandwidth-limited on
-    weight bytes, so this is the single biggest lever and every matrix that can be halved has been.
+def test_block1_weights_are_bfp8_except_w2():
+    """Block 1 is BFP8 everywhere except w2. Decode is bandwidth-limited on weight bytes, so dtype
+    is the single biggest speed lever, and every matrix worth halving has been.
 
-    w2 was blocked for months by a card-wedging hang. That hang was in ttnn's conv `halo_gather`
-    kernel, reached via the CODEC's output projection -- not Block 1 at all. It is fixed by
-    computing that projection as matmuls (STATUS.md 6.12-6.13), so if someone reverts the codec
-    change, this must revert too or the hang comes back."""
-    assert gpt.WEIGHT_DTYPE == ttnn.bfloat8_b       # w2
-    assert gpt.FF_WEIGHT_DTYPE == ttnn.bfloat8_b    # FF1, FF3
-    assert gpt.ATTN_WEIGHT_DTYPE == ttnn.bfloat8_b  # wqkv, wo
+    W2 IS bf16 FOR ACCURACY, NOT FOR THE HANG -- and this test exists mostly to keep those two apart,
+    because they were conflated for months. BFP8 on w2 used to wedge the card; that was ttnn's conv
+    `halo_gather` kernel reached via the CODEC (STATUS.md 6.12-6.13), it is fixed, and BFP8 here is
+    now safe. It is simply a bad trade: measured on all 15 prompts it costs 0.24 pp of mean
+    worst-sample and 0.40 pp of p90 for 2.5 ms/step -- 77% of the precision stack's whole accuracy
+    cost for 15% of its speed, and 8x the worst ratio of the other two (STATUS.md 6.16).
+
+    If you flip it back, expect mean/p90 1.17%/1.75% instead of 0.93%/1.35%, and note the codec test
+    below becomes load-bearing again."""
+    assert gpt.WEIGHT_DTYPE == ttnn.bfloat16        # w2 -- accuracy, see above
+    assert gpt.FF_WEIGHT_DTYPE == ttnn.bfloat8_b    # FF1, FF3 -- 11.1 ms for 0.04 pp, best trade
+    assert gpt.ATTN_WEIGHT_DTYPE == ttnn.bfloat8_b  # wqkv, wo -- 3.3 ms for 0.04 pp
 
 
 def test_codec_output_projection_does_not_use_conv1d():
-    """The pair to the test above. The codec's output projection must NOT call ttnn.conv1d: its
-    halo_gather kernel issues an out-of-range NOC write on the second execution of that shape and
-    hangs the card, which is what blocked w2 in BFP8. It is computed as matmuls instead, which needs
-    the per-tap weights below. STATUS.md 6.12-6.13."""
+    """The codec's output projection must NOT call ttnn.conv1d: its halo_gather kernel issues an
+    out-of-range NOC write on the second execution of that shape and hangs the card.
+
+    This no longer pairs with the w2 test -- w2 is bf16 again, so nothing in the shipped config
+    triggers that kernel. It stands on its own two feet: the matmul form is FASTER than the conv it
+    replaced (3.45 vs 4.29 ms, STATUS.md 6.14), and it is what makes w2-in-BFP8 survivable for anyone
+    who flips that line. STATUS.md 6.12-6.14."""
     import inspect
 
     from models.experimental.voxtral_tts.tt import ttnn_voxtral_codec as codec

@@ -17,7 +17,7 @@ Branch: `lserbedzija/voxtral-tts-ttnn` (pushed). All work is under
 | Block 3 — codec decoder on TTNN | **CLOSED**, 242x real-time, see §4 |
 | Block 1 — 3.4B AR backbone on TTNN | **done — OURS** (`tt/ttnn_voxtral_gpt.py`), the default |
 | Block 2 — flow-matching transformer on TTNN | **done** — velocity PCC 0.9999989 |
-| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works**, 0.88% WER on natural text |
+| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works**, 0 long-form WER errors of 298 words, RTF 0.64-0.69 |
 | Codec **encoder** | **impossible** — weights absent from the public release |
 
 **Block 1 now runs on our own implementation, not `tt_transformers`.** The wrapper is DELETED, not
@@ -33,7 +33,7 @@ on the 15-case fixture:
 | decode ms/frame | 34.9 | 48 |
 | natural-text WER | 0.88% | 1.17% |
 
-**Performance: 83.7 → 45.9-52.1 ms/frame (mean 47.5 over 45 utterances), RTF 0.58-0.81.**
+**Performance: 83.7 → ~50 ms/frame, RTF 0.64-0.69** (15 cases, all terminating on `[END_AUDIO]`). It touched 47.5 ms / RTF 0.60-0.65 with w2 in BFP8, and 2.5 ms of that was handed back deliberately: w2 cost 77% of the precision stack's accuracy for 15% of its speed (§6.16). Accuracy: Block 1 mean/p90 worst-sample **0.93% / 1.35%**, min PCC 0.998969; long-form WER **0 wrong words of 298**.
 Per frame: Block 1 ~23 ms, Block 2 ~23 ms, host 0.2 ms. w2 is in BFP8 as of §6.13 — the hang that
 blocked it is fixed, by not calling `ttnn.conv1d` in the codec.
 goes" map at the top with the ceiling for each line item. Two sweeps got here — §6.6 (GQA row fold,
@@ -1320,10 +1320,25 @@ The three effects sum to 0.32 pp against a measured total of 0.31, so they are *
 reverting FF buy *identical* quality (1.13% / 1.69%) — so if 0.04 pp is ever wanted back, revert
 **attn**, which costs 3.3 ms, never FF at 11.1 ms.
 
-**RECOMMENDATION: put w2 back to bf16.** One line, `ttnn_voxtral_gpt.py` `WEIGHT_DTYPE`. It costs
-2.5 ms/step — frame 47.5 → ~50.0, RTF ~0.60–0.65 → ~0.63–0.68, still far inside realtime — and buys
-back 77% of the accumulated precision loss (mean 1.17% → 0.93%, p90 1.75% → 1.35%). Keep FF and attn
-in BFP8; they are cheap in accuracy and carry the bulk of the speedup.
+**APPLIED — w2 is back in bf16.** `ttnn_voxtral_gpt.py` `WEIGHT_DTYPE`. FF and attn stay BFP8; they
+are cheap in accuracy and carry the bulk of the speedup. Measured after the flip, not predicted:
+
+| | w2 BFP8 | **w2 bf16 ← ships** |
+|---|---|---|
+| Block 1 mean / p90 WS | 1.17% / 1.75% | **0.93% / 1.35%** |
+| Block 1 min PCC | 0.998045 | **0.998969** |
+| RTF, 15 cases | 0.60–0.65 | **0.64–0.69** |
+| long-form WER | 1 word of 298 | **0 words of 298** |
+| `[END_AUDIO]` termination | 15/15 | **15/15** |
+| voice identity | PASS | **PASS** |
+
+RTF landed at 0.64–0.69 against a predicted 0.63–0.68. **Do not read the WER 1 → 0 as the win** — at
+298 words that is one word, and §6.7 showed this gate cannot resolve changes this size; it is
+consistent with the deterministic improvement, not evidence of it. The gate table is the evidence.
+
+Frame counts DO shift (case 6: 177 → 211 frames): changing w2's precision changes the emitted codes,
+which changes trajectory length. That is the chaotic-trajectory property documented in §6.7, not a
+defect — every case still terminates on `[END_AUDIO]` rather than running to the cap.
 
 This reverses the recommendation given when w2 shipped and again in §6.15. Both earlier calls rested
 on a 2-prompt estimate that put w2 at +0.10 pp; on 15 prompts it is **+0.24 pp, 2.4x larger**. The
