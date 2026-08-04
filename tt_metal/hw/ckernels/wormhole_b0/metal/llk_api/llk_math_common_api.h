@@ -31,6 +31,10 @@ inline void llk_math_set_fp32_dest_acc(bool enable) { _llk_math_set_fp32_dest_ac
 
 inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
 
+// Release a stale (MatrixUnit-owned) SrcB bank before a DEST_TO_SRCB dest-reuse so its first SrcB load gates on
+// the current unpack. Only valid when the preceding op left SrcB stale; misaligns/deadlocks a clean entry. #46523.
+inline void llk_math_reset_srcb_bank_valid() { _llk_math_reset_srcb_bank_valid_(); }
+
 inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDW");
     _llk_math_wait_for_dest_available_<DST_SYNC_MODE>();

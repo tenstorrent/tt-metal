@@ -358,6 +358,29 @@ ALWI void binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __bui
 
 // clang-format off
 /**
+ * Resets the SrcB register-bank handshake to Unpacker-owned so that a following
+ * binary_dest_reuse_tiles(..., DEST_TO_SRCB) gates its first SrcB load on the current unpack.
+ *
+ * Call on the compute thread immediately before binary_dest_reuse_tiles_init(...) when the op that produced the
+ * dest value kept SrcB — a COL/SCALAR broadcast such as sub_tiles_bcast_cols, whose MOP ends with CLR_A. That
+ * leaves SrcB stale-valid and lets the dest-reuse MOVD2B race the unpacker's SET_DVALID/ZEROSRC (tt-metal #46523).
+ *
+ * WARNING: valid ONLY when the preceding op left SrcB stale (MatrixUnit-owned). Calling it before an already-clean
+ * dest-reuse (e.g. one preceded by a NONE/ROW-broadcast op, or by another dest-reuse whose MOP ends with CLR_AB)
+ * misaligns the SrcB bank pointers and deadlocks. Do not call before every dest-reuse — only the first one after a
+ * SrcB-keeping producer. No-op on Quasar (different DEST_TO_SRCB bank model; out of scope for #46523, unvalidated).
+ *
+ * Return value: None
+ */
+// clang-format on
+ALWI void binary_dest_reuse_reset_srcb() {
+#ifndef ARCH_QUASAR
+    MATH((llk_math_reset_srcb_bank_valid()));
+#endif
+}
+
+// clang-format off
+/**
  * Performs element-wise binary operations, such as multiply, add, or sub of tiles.
  * If binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA, then the tile specified by idst will be loaded from
  * the DST register buffer into SRCA. The binary operation will operate on SRCA & SRCB inputs, and the result will be

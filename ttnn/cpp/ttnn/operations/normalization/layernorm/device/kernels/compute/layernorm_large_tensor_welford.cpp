@@ -538,6 +538,13 @@ void kernel_main() {
                 dfb_x_welford_obj_eltwise.pop_front(block.full_block_size());
             }
 
+            // #46523: sub_tiles_bcast_cols above is a COL broadcast (its MOP ends with CLR_A), so it leaves SrcB
+            // MatrixUnit-owned (stale). Release it to the Unpackers so the first DEST_TO_SRCB dest-reuse below gates
+            // its MOVD2B on the current unpack instead of racing it. Runs once, before the first reuse only: the
+            // second reuse (ELWMUL after the fused ELWADD) sees a clean SrcB entry (the ELWADD reuse MOP ends with
+            // CLR_AB) and must NOT be reset, or the bank pointers misalign and deadlock.
+            binary_dest_reuse_reset_srcb();
+
             if constexpr (fuse_pre_add) {
                 // Fuse in = in + b
                 reconfig_data_format_srca(dfb_in, dfb_inb);
