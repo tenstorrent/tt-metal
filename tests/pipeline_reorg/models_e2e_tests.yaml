@@ -8,6 +8,7 @@
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
 #     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
+#     release_ready: Whether this SKU leg is included in package-and-release (default false).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
 
@@ -32,15 +33,19 @@
     wh_n150:
       timeout: 11
       tier: 1
+      release_ready: true
     bh_p150:
       timeout: 11
       tier: 1
+      release_ready: true
     wh_llmbox_perf:
       timeout: 11
       tier: 2
+      release_ready: false
     bh_quietbox_2:
       timeout: 20
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -67,6 +72,7 @@
     bh_p300:
       timeout: 25
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -81,12 +87,14 @@
     wh_llmbox_perf:
       timeout: 20
       tier: 2
+      release_ready: false
     # bh_quietbox_2 is 4-chip: the DP-8 case is auto-skipped when the chip count
     # is below the DP factor, so it effectively runs the DP-4 case only.
     # Migrated from the legacy blackhole_demo_tests.yaml DP entries.
     bh_quietbox_2:
       timeout: 20
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -101,6 +109,7 @@
     wh_galaxy_perf:
       timeout: 20
       tier: 1
+      release_ready: false
   owner_id: U08BH66EXAL # Radoica Draskic
   team: models
 
@@ -114,6 +123,7 @@
     wh_n150:
       timeout: 5
       tier: 3
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -129,6 +139,7 @@
     wh_n150:
       timeout: 12
       tier: 3
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -142,6 +153,7 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 3
+      release_ready: false
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
 
@@ -155,6 +167,7 @@
     wh_llmbox_perf:
       timeout: 25
       tier: 2
+      release_ready: false
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
@@ -172,6 +185,7 @@
     bh_quietbox_2:
       timeout: 30
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -188,6 +202,7 @@
     wh_galaxy_perf:
       timeout: 30
       tier: 1
+      release_ready: false
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
@@ -223,6 +238,7 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -239,6 +255,7 @@
     bh_quietbox_2:
       timeout: 15
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -252,6 +269,7 @@
     wh_galaxy_perf:
       timeout: 30
       tier: 1
+      release_ready: false
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
@@ -266,9 +284,11 @@
     wh_llmbox_perf:
       timeout: 20
       tier: 2
+      release_ready: false
     bh_quietbox_2:
       timeout: 20
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -283,6 +303,7 @@
     wh_llmbox_perf:
       timeout: 18
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -296,6 +317,7 @@
     wh_n300:
       timeout: 5
       tier: 3
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -330,9 +352,11 @@
     wh_llmbox_perf:
       timeout: 20
       tier: 2
+      release_ready: false
     bh_quietbox_2:
       timeout: 20
       tier: 2
+      release_ready: false
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
@@ -347,9 +371,11 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 3
+      release_ready: false
     bh_quietbox_2:
       timeout: 15
       tier: 3
+      release_ready: false
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
@@ -364,6 +390,7 @@
     wh_llmbox_perf:
       timeout: 10
       tier: 2
+      release_ready: false
   owner_id: U08H31YMN4Q # Sanjay Sanjay
   team: models
 
@@ -379,6 +406,7 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 3
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -394,6 +422,7 @@
     bh_quietbox_2:
       timeout: 45
       tier: 1
+      release_ready: true
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
 
@@ -410,6 +439,7 @@
     wh_n150:
       timeout: 15
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -424,6 +454,7 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -452,9 +483,11 @@
     wh_n150:
       timeout: 5
       tier: 3
+      release_ready: false
     bh_p150:
       timeout: 5
       tier: 3
+      release_ready: false
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
@@ -477,9 +510,11 @@
     bh_p300:
       timeout: 5
       tier: 3
+      release_ready: false
     bh_quietbox_2:
       timeout: 15
       tier: 3
+      release_ready: false
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
@@ -498,9 +533,11 @@
     wh_llmbox_perf:
       timeout: 10
       tier: 2
+      release_ready: false
     bh_quietbox_2:
       timeout: 22
       tier: 1
+      release_ready: true
     # bh_galaxy_perf: temporarily disabled — Blackhole Galaxy fabric / ethernet
     # bring-up hits an unrecoverable hang at open_mesh_device (FabricFirmwareInitializer
     # router sync timeout / "active ethernet core … to become active again"). Same
@@ -527,9 +564,11 @@
     wh_llmbox_perf:
       timeout: 10
       tier: 2
+      release_ready: false
     bh_quietbox_2:
       timeout: 25
       tier: 1
+      release_ready: true
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
     # hang as 26B-A4B above. Re-enable once root-caused.
     # bh_galaxy_perf:
@@ -553,6 +592,7 @@
     bh_quietbox_2:
       timeout: 22
       tier: 1
+      release_ready: false
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
@@ -569,6 +609,7 @@
     wh_n150:
       timeout: 7
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -583,6 +624,7 @@
     wh_llmbox_perf:
       timeout: 20
       tier: 2
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -597,6 +639,7 @@
     wh_n150:
       timeout: 6
       tier: 3
+      release_ready: false
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
@@ -609,6 +652,7 @@
     wh_llmbox_perf:
       timeout: 10
       tier: 3
+      release_ready: false
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
@@ -624,12 +668,15 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
+      release_ready: false
     bh_p150:
       timeout: 15
       tier: 2
+      release_ready: false
     bh_quietbox_2:
       timeout: 15
       tier: 2
+      release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -647,12 +694,15 @@
     wh_galaxy_perf:
       timeout: 30
       tier: 1
+      release_ready: true
     bh_quietbox_2:
       timeout: 35
       tier: 1
+      release_ready: true
     bh_galaxy:
       timeout: 30
       tier: 1
+      release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -668,9 +718,11 @@
     wh_n150:
       timeout: 10
       tier: 1
+      release_ready: true
     bh_p150:
       timeout: 10
       tier: 1
+      release_ready: true
     # wh_n300:
     #   timeout: 15
     #   tier: 1
@@ -689,6 +741,7 @@
     wh_n150:
       timeout: 6
       tier: 3
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -720,6 +773,7 @@
     wh_n150:
       timeout: 5
       tier: 3
+      release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -736,9 +790,9 @@
     bh_p150:
       timeout: 5
       tier: 2
+      release_ready: false
   owner_id: U06ECNVR0EN # Evan Smal
   team: models
-
 
 - name: TT-DiT Flux.1 schnell e2e tests
   cmd: |
@@ -751,6 +805,7 @@
     bh_quietbox_2:
       timeout: 20
       tier: 1
+      release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -765,6 +820,7 @@
     bh_quietbox_2:
       timeout: 20
       tier: 1
+      release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -780,9 +836,11 @@
     wh_n150:
       timeout: 40
       tier: 2
+      release_ready: false
     bh_p150b_civ2:
       timeout: 40
       tier: 2
+      release_ready: false
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
@@ -797,6 +855,7 @@
     wh_n300:
       timeout: 30
       tier: 2
+      release_ready: false
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
@@ -810,6 +869,7 @@
     wh_n150:
       timeout: 30
       tier: 2
+      release_ready: false
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
@@ -823,9 +883,11 @@
     wh_n150:
       timeout: 40
       tier: 2
+      release_ready: false
     bh_p150b_civ2:
       timeout: 40
       tier: 2
+      release_ready: false
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
@@ -842,9 +904,11 @@
     wh_n150:
       timeout: 40
       tier: 2
+      release_ready: false
     bh_p150b_civ2:
       timeout: 40
       tier: 2
+      release_ready: false
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
@@ -857,6 +921,7 @@
     bh_p150b_civ2:
       timeout: 18
       tier: 3
+      release_ready: false
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
 
@@ -882,6 +947,7 @@
     bh_sc4-mgd:
       timeout: 40
       tier: 1
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -906,5 +972,6 @@
     bh_sc4-mgd:
       timeout: 80
       tier: 1
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
