@@ -36,8 +36,10 @@ std::vector<std::pair<std::string, std::string>> Config::get_config_entries() co
 // The callback is invoked lazily when getConfiguration RPC is queried.
 static const int register_inspector_config = [] {
     tt::tt_metal::inspector::add_config_callback([]() {
+        const auto config_entries = CONFIG.get_config_entries();
         std::vector<tt::tt_metal::inspector::ConfigurationEntry> entries;
-        for (const auto& [name, value] : CONFIG.get_config_entries()) {
+        entries.reserve(config_entries.size());
+        for (const auto& [name, value] : config_entries) {
             entries.push_back(
                 {name, value == "nullopt" ? "(unset)" : value, tt::tt_metal::inspector::ConfigScope::TtnnConfig});
         }

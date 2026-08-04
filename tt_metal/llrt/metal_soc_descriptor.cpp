@@ -57,7 +57,9 @@ std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(t
     // one spot rather than every DRAM loop in Metal.
     const bool exclude_noc0_endpoints = (this->arch == tt::ARCH::BLACKHOLE);
     std::vector<tt::tt_metal::CoreCoord> dram_cores;
-    for (const tt::umd::CoreCoord& core : get_cores(tt::CoreType::DRAM, coord_system)) {
+    const auto& umd_dram_cores = get_cores(tt::CoreType::DRAM, coord_system);
+    dram_cores.reserve(umd_dram_cores.size());
+    for (const tt::umd::CoreCoord& core : umd_dram_cores) {
         if (exclude_noc0_endpoints) {
             const tt::umd::CoreCoord translated = translate_coord_to(core, tt::CoordSystem::TRANSLATED);
             if (is_noc0_dram_endpoint({translated.x, translated.y})) {
@@ -223,12 +225,18 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_compute_grid_size() const 
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
     this->dram_view_size = device_descriptor_yaml["dram_view_size"].as<uint64_t>();
-    this->dram_core_size = device_descriptor_yaml["dram_views"].size() * this->dram_view_size;
+    const size_t num_dram_views_in_descriptor = device_descriptor_yaml["dram_views"].size();
+    this->dram_core_size = num_dram_views_in_descriptor * this->dram_view_size;
     this->dram_view_channels.clear();
     this->dram_view_eth_cores.clear();
     this->dram_view_worker_cores.clear();
     this->dram_view_address_offsets.clear();
     this->dram_bank_endpoint_coords.clear();
+    this->dram_view_channels.reserve(num_dram_views_in_descriptor);
+    this->dram_view_eth_cores.reserve(num_dram_views_in_descriptor);
+    this->dram_view_worker_cores.reserve(num_dram_views_in_descriptor);
+    this->dram_view_address_offsets.reserve(num_dram_views_in_descriptor);
+    this->dram_bank_endpoint_coords.reserve(num_dram_views_in_descriptor);
 
     const uint32_t dram_harvesting_mask = this->harvesting_masks.dram_harvesting_mask;
 
@@ -243,9 +251,12 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         }
         size_t address_offset = dram_view["address_offset"].as<size_t>();
 
+        const auto eth_endpoint_ids = dram_view["eth_endpoint"].as<std::vector<int>>();
         std::vector<tt::tt_metal::CoreCoord> eth_dram_cores;
         std::vector<size_t> eth_endpoints;
-        for (int eth_endpoint : dram_view["eth_endpoint"].as<std::vector<int>>()) {
+        eth_dram_cores.reserve(eth_endpoint_ids.size());
+        eth_endpoints.reserve(eth_endpoint_ids.size());
+        for (int eth_endpoint : eth_endpoint_ids) {
             if (eth_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
                 TT_THROW(
                     "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
@@ -258,9 +269,12 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
             eth_endpoints.push_back(eth_endpoint);
         }
 
+        const auto worker_endpoint_ids = dram_view["worker_endpoint"].as<std::vector<int>>();
         std::vector<tt::tt_metal::CoreCoord> worker_dram_cores;
         std::vector<size_t> worker_endpoints;
-        for (int worker_endpoint : dram_view["worker_endpoint"].as<std::vector<int>>()) {
+        worker_dram_cores.reserve(worker_endpoint_ids.size());
+        worker_endpoints.reserve(worker_endpoint_ids.size());
+        for (int worker_endpoint : worker_endpoint_ids) {
             if (worker_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
                 TT_THROW(
                     "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
@@ -276,8 +290,8 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
 
         this->dram_view_channels.push_back(channel);
         this->dram_view_address_offsets.push_back(address_offset);
-        this->dram_view_eth_cores.push_back(eth_dram_cores);
-        this->dram_view_worker_cores.push_back(worker_dram_cores);
+        this->dram_view_eth_cores.push_back(std::move(eth_dram_cores));
+        this->dram_view_worker_cores.push_back(std::move(worker_dram_cores));
 
         size_t num_subchannels = get_grid_size(tt::CoreType::DRAM).y;
         size_t preferred_subchannel = worker_endpoints[0];
