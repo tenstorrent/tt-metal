@@ -28,6 +28,17 @@ using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+DataflowBufferSpec make_dfb(
+    const DFBSpecName& name, uint32_t entry_size, uint32_t num_entries, tt::DataFormat data_format) {
+    return DataflowBufferSpec{
+        .unique_id = name,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = data_format,
+    };
+}
 
 ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
@@ -101,18 +112,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     const uint32_t num_input_tiles = tiles_per_channel_dim;
 
     // Source DFB (formerly src0 CB) and untilized-output DFB (formerly src1 CB).
-    DataflowBufferSpec src0_dfb{
-        .unique_id = SRC0,
-        .entry_size = single_tile_size,
-        .num_entries = num_input_tiles,
-        .data_format_metadata = cb_data_format,
-    };
-    DataflowBufferSpec src1_dfb{
-        .unique_id = SRC1,
-        .entry_size = out_single_tile_size,
-        .num_entries = num_input_tiles,
-        .data_format_metadata = out_cb_data_format,
-    };
+    DataflowBufferSpec src0_dfb = make_dfb(SRC0, single_tile_size, num_input_tiles, cb_data_format);
+    DataflowBufferSpec src1_dfb = make_dfb(SRC1, out_single_tile_size, num_input_tiles, out_cb_data_format);
 
     TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
     TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
@@ -336,24 +337,15 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         hal::get_dram_alignment());
 
     const int double_buffer = 2;
-    DataflowBufferSpec src0_dfb{
-        .unique_id = SRC0,
-        .entry_size = aligned_stick_nbytes * stride_w * stride_h,
-        .num_entries = static_cast<uint32_t>(double_buffer),
-        .data_format_metadata = cb_data_format,
-    };
+    DataflowBufferSpec src0_dfb = make_dfb(
+        SRC0, aligned_stick_nbytes * stride_w * stride_h, static_cast<uint32_t>(double_buffer), cb_data_format);
 
     const bool is_l1_aligned = stick_nbytes == aligned_stick_nbytes;
 
-    // src1 is an intermediate L1 scratch, present only when the stick is not L1-aligned.
-    // It is touched by a single kernel (the writer, by raw pointer) -> self-loop DFB, and its
-    // binding is conditional on !is_l1_aligned (matched by a kernel-side #ifdef).
-    DataflowBufferSpec src1_dfb{
-        .unique_id = SRC1,
-        .entry_size = stick_nbytes * stride_w * stride_h,
-        .num_entries = 1,
-        .data_format_metadata = cb_data_format,
-    };
+    // src1 is an intermediate L1 scratch. It is bound for both specializations so the kernel can
+    // use a constexpr compile-time argument rather than a preprocessor guard; the aligned path
+    // compiles its uses away.
+    DataflowBufferSpec src1_dfb = make_dfb(SRC1, stick_nbytes * stride_w * stride_h, 1, cb_data_format);
 
     TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
     TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
@@ -365,14 +357,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         {"stride_w", stride_w},
         {"input_width", input_width},
         {"work_per_core", patches_per_core},
+        {"is_l1_aligned", static_cast<uint32_t>(is_l1_aligned)},
     };
-
-    // Emit the NOT_L1_ALIGNED define to the writer only when the src1 scratch is bound
-    // (the define and the binding share one condition — Pattern: Conditional / optional DFB bindings).
-    KernelSpec::CompilerOptions::Defines writer_defines;
-    if (!is_l1_aligned) {
-        writer_defines.insert({"FOLD_RM_NOT_L1_ALIGNED", "1"});
-    }
 
     KernelSpec reader_spec{
         .unique_id = READER,
@@ -385,19 +371,15 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
-    // Writer: consumes src0; when !is_l1_aligned it also uses src1 as a self-loop scratch.
+    // Writer consumes src0 and has src1 as a self-loop scratch. The kernel compiles the scratch
+    // path out for L1-aligned sticks.
     Group<DFBBinding> writer_dfbs{
-        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
-    if (!is_l1_aligned) {
-        writer_dfbs.push_back(
-            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER});
-        writer_dfbs.push_back(
-            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER});
-    }
+        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER}};
     KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::filesystem::path{WRITER_RM},
-        .compiler_options = {.defines = writer_defines},
         .dfb_bindings = writer_dfbs,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = common_cta,
@@ -444,7 +426,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     ProgramSpec spec{
         .name = "fold_multi_core_row_major_interleaved",
         .kernels = {reader_spec, writer_spec},
-        .dataflow_buffers = {src0_dfb},
+        .dataflow_buffers = {src0_dfb, src1_dfb},
         .tensor_parameters = {input_param, output_param},
         .work_units = {WorkUnitSpec{
             .name = "main",
@@ -452,10 +434,6 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
             .target_nodes = all_cores,
         }},
     };
-    if (!is_l1_aligned) {
-        spec.dataflow_buffers.push_back(src1_dfb);
-    }
-
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {reader_run, writer_run};
     run_args.tensor_args = {
@@ -466,6 +444,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts Fold::MultiCoreDRAMFold::create_program_artifacts(
@@ -474,11 +453,11 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCoreDRAMFold::create_program
     tensor_return_value_t& output_tensor) {
     if (tensor_args.input_tensor.layout() == Layout::TILE) {
         log_debug(tt::LogOp, "Fold operation with DRAM tiled input");
-        return fold_multi_core_tiled_interleaved(
+        return CMAKE_UNIQUE_NAMESPACE::fold_multi_core_tiled_interleaved(
             tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
     }
     log_debug(tt::LogOp, "Fold operation with DRAM row major input");
-    return fold_multi_core_row_major_interleaved(
+    return CMAKE_UNIQUE_NAMESPACE::fold_multi_core_row_major_interleaved(
         tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
 }
 
