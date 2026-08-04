@@ -346,6 +346,25 @@ class Vocoder(Module):
         y_dev = self._forward_device(x_dev)
         return self._device_to_host(y_dev)
 
+    def forward_BCT(self, x_BCT: torch.Tensor) -> torch.Tensor:
+        """``(B, C, T)`` in, ``(B, out_channels, T * prod(rates))`` out.
+
+        The same device graph as :meth:`forward`, minus the mel-specific input reshape.
+        Used by MiniMax-H3's audio decoder, whose input is already channels-over-time.
+        """
+        return self._device_to_host(self._forward_device(self._upload_BCT(x_BCT)))
+
+    def forward_BCT_traced(self, x_BCT: torch.Tensor) -> torch.Tensor:
+        """:meth:`forward_BCT` with the device graph captured and replayed.
+
+        The channels-over-time counterpart of :meth:`forward_traced`, for MiniMax-H3's audio
+        decoder. Same argument for it: this vocoder is ~70 % host-bound, so removing per-op
+        dispatch is the dominant lever, and ``_forward_device`` is already a fixed-shape
+        device-in/device-out region for exactly this reason.
+        """
+        y_dev = self._forward_device(self._upload_BCT(x_BCT), traced=True, tracer_trace_key=tuple(x_BCT.shape))
+        return self._device_to_host(y_dev)
+
     def forward_traced(self, mel_spec: torch.Tensor) -> torch.Tensor:
         """Like ``forward`` but captures and replays the device graph to remove per-op host
         dispatch (the vocoder is ~70% host-bound). The first call at a shape captures on warm state
@@ -370,10 +389,20 @@ class Vocoder(Module):
             assert x_t.shape[1] == 2, f"stereo input must have 2 channels, got {x_t.shape[1]}"
             B, S, F, T = x_t.shape
             x_t = x_t.reshape(B, S * F, T)
-        B, C, T = x_t.shape
+        return self._upload_BCT(x_t)
+
+    def _upload_BCT(self, x_BCT: torch.Tensor) -> ttnn.Tensor:
+        """Upload a plain ``(B, C, T)`` tensor, T-padded for tile-aligned per-chip shards.
+
+        Split out of ``_host_to_device`` so a caller whose input is already ``(B, C, T)`` --
+        MiniMax-H3's audio decoder, whose ``dec_in_proj`` emits ``(B, 2048, T)`` rather than
+        a mel spectrogram -- can reuse the padding and upload without going through the
+        mel-specific reshape above. Sets ``self._t_pad``.
+        """
+        B, C, T = x_BCT.shape
         assert C == self.in_channels, f"expected {self.in_channels} input channels, got {C}"
 
-        x_BTC_torch = x_t.transpose(1, 2).float().contiguous()
+        x_BTC_torch = x_BCT.transpose(1, 2).float().contiguous()
 
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
         # Pad T to a multiple of (TILE_HEIGHT * factor) for tile-aligned per-chip shards;

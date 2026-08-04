@@ -369,7 +369,6 @@ def test_distributed_layernorm(
     ids=["fabric1d"],
     indirect=True,
 )
-@pytest.mark.parametrize("group_count", [32])
 @pytest.mark.parametrize(
     "mesh_axis",
     [1, None],
