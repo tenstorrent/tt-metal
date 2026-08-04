@@ -24,6 +24,7 @@ SHAPES = [tuple([32] * i) for i in range(6)]
 ALL_TYPES = get_types_from_binding_framework()
 SUPPORTED_DTYPES = (ttnn.bfloat16, ttnn.float32)
 UNSUPPORTED_DTYPES = tuple(dtype for dtype in ALL_TYPES if dtype not in SUPPORTED_DTYPES)
+TEST_SEED = 17
 FLOAT32_MIN_NORMAL = torch.finfo(torch.float32).tiny
 FLOAT32_MIN_SUBNORMAL = torch.nextafter(torch.tensor(0.0), torch.tensor(1.0)).item()
 FLOAT32_MIN_NORMAL_PLUS_TWO_ULPS = torch.nextafter(
@@ -227,7 +228,9 @@ def test_rand_tile_means_have_iid_dispersion(device):
 
 @pytest.mark.parametrize("low, high", [(0.0, 5e-7), (2.0, 2.0000005), (-1.0, 0.0)])
 def test_rand_respects_narrow_fp32_ranges(device, low, high):
-    data = ttnn.to_torch(ttnn.rand((256, 256), device=device, dtype=ttnn.float32, low=low, high=high, seed=17)).float()
+    data = ttnn.to_torch(
+        ttnn.rand((256, 256), device=device, dtype=ttnn.float32, low=low, high=high, seed=TEST_SEED)
+    ).float()
 
     assert torch.isfinite(data).all()
     assert torch.all(data >= low)
@@ -237,7 +240,9 @@ def test_rand_respects_narrow_fp32_ranges(device, low, high):
 
 @pytest.mark.parametrize("low, high", [(-2.0, -1.0), (1.001, 2.0)])
 def test_rand_respects_bfloat16_ranges(device, low, high):
-    data = ttnn.to_torch(ttnn.rand((256, 256), device=device, dtype=ttnn.bfloat16, low=low, high=high, seed=17)).float()
+    data = ttnn.to_torch(
+        ttnn.rand((256, 256), device=device, dtype=ttnn.bfloat16, low=low, high=high, seed=TEST_SEED)
+    ).float()
 
     assert torch.isfinite(data).all()
     assert torch.all(data >= low)
@@ -247,7 +252,7 @@ def test_rand_respects_bfloat16_ranges(device, low, high):
 
 def test_rand_rejects_range_without_bfloat16_value(device, expect_error):
     with expect_error(RuntimeError, "contains no value representable"):
-        ttnn.rand((32, 32), device=device, dtype=ttnn.bfloat16, low=1.001, high=1.002, seed=17)
+        ttnn.rand((32, 32), device=device, dtype=ttnn.bfloat16, low=1.001, high=1.002, seed=TEST_SEED)
 
 
 @pytest.mark.parametrize("dtype", SUPPORTED_DTYPES)
@@ -259,7 +264,7 @@ def test_rand_rejects_range_without_bfloat16_value(device, expect_error):
     ],
 )
 def test_rand_respects_flush_to_zero_ranges(device, dtype, low, high, expected):
-    data = ttnn.to_torch(ttnn.rand((32, 32), device=device, dtype=dtype, low=low, high=high, seed=17)).float()
+    data = ttnn.to_torch(ttnn.rand((32, 32), device=device, dtype=dtype, low=low, high=high, seed=TEST_SEED)).float()
 
     assert torch.all(data == expected)
     assert torch.all(data >= low)
@@ -275,7 +280,7 @@ def test_rand_rejects_all_subnormal_range(device, dtype, expect_error):
             dtype=dtype,
             low=FLOAT32_MIN_SUBNORMAL,
             high=FLOAT32_MIN_NORMAL,
-            seed=17,
+            seed=TEST_SEED,
         )
 
 
@@ -292,7 +297,7 @@ def test_rand_rejects_all_subnormal_range(device, dtype, expect_error):
 )
 def test_rand_rejects_invalid_range(device, expect_error, low, high, error):
     with expect_error(RuntimeError, error):
-        ttnn.rand((32, 32), device=device, dtype=ttnn.float32, low=low, high=high, seed=17)
+        ttnn.rand((32, 32), device=device, dtype=ttnn.float32, low=low, high=high, seed=TEST_SEED)
 
 
 def test_rand_all_ones_seed_does_not_lock_prng(device):

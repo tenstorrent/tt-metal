@@ -25,6 +25,13 @@ class TestMode(Enum):
     BENCHMARK = 1
 
 
+TEST_SEED = 17
+
+
+def _zeros(device, shape, dtype):
+    return ttnn.from_torch(torch.zeros(shape), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+
+
 def check_torch_uniform_bfloat16():
     input = torch.zeros(10, 10, dtype=torch.bfloat16).uniform_(2.1, 2.11)
     logger.info(input)
@@ -116,9 +123,9 @@ def test_uniform(shape, rand_range, dtype, seed, device):
 
 
 def test_uniform_rejects_unsupported_dtype(device):
-    input_tensor = ttnn.from_torch(torch.zeros((32, 32), dtype=torch.int32), device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor = _zeros(device, (32, 32), ttnn.int32)
     with pytest.raises(RuntimeError, match="Uniform: Input tensor must be Float32 or Bfloat16"):
-        ttnn.uniform(input_tensor, 0.0, 1.0)
+        ttnn.uniform(input_tensor)
 
 
 @pytest.mark.parametrize(
@@ -195,32 +202,23 @@ def test_uniform_seed_distinguishes_cache_entries(device):
 
 
 def test_uniform_respects_narrow_fp32_range(device):
-    npu = ttnn.from_torch(
-        torch.zeros((256, 256), dtype=torch.float32),
-        device=device,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    low, high = 0.0, 5e-7
+    npu = _zeros(device, (256, 256), ttnn.float32)
 
-    ttnn.uniform(npu, 0.0, 5e-7, 17)
+    ttnn.uniform(npu, low, high, seed=TEST_SEED)
     data = ttnn.to_torch(npu).float()
 
     assert torch.isfinite(data).all()
-    assert torch.all(data >= 0.0)
-    assert torch.all(data < 5e-7)
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
     assert torch.unique(data).numel() > 1
 
 
 @pytest.mark.parametrize("low, high", [(-2.0, -1.0), (1.001, 2.0)])
 def test_uniform_respects_bfloat16_ranges(device, low, high):
-    npu = ttnn.from_torch(
-        torch.zeros((256, 256), dtype=torch.bfloat16),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    npu = _zeros(device, (256, 256), ttnn.bfloat16)
 
-    ttnn.uniform(npu, low, high, 17)
+    ttnn.uniform(npu, low, high, seed=TEST_SEED)
     data = ttnn.to_torch(npu).float()
 
     assert torch.isfinite(data).all()
@@ -230,33 +228,25 @@ def test_uniform_respects_bfloat16_ranges(device, low, high):
 
 
 def test_uniform_rejects_range_without_bfloat16_value(device, expect_error):
-    npu = ttnn.from_torch(
-        torch.zeros((32, 32), dtype=torch.bfloat16),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    low, high = 1.001, 1.002
+    npu = _zeros(device, (32, 32), ttnn.bfloat16)
 
     with expect_error(RuntimeError, "contains no value representable"):
-        ttnn.uniform(npu, 1.001, 1.002, 17)
+        ttnn.uniform(npu, low, high, seed=TEST_SEED)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_uniform_respects_flush_to_zero_range_ending_at_zero(device, dtype):
     min_normal = torch.finfo(torch.float32).tiny
-    npu = ttnn.from_torch(
-        torch.zeros((32, 32), dtype=torch.float32),
-        device=device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    low, high = -min_normal, 0.0
+    npu = _zeros(device, (32, 32), dtype)
 
-    ttnn.uniform(npu, -min_normal, 0.0, 17)
+    ttnn.uniform(npu, low, high, seed=TEST_SEED)
     data = ttnn.to_torch(npu).float()
 
-    assert torch.all(data == -min_normal)
-    assert torch.all(data >= -min_normal)
-    assert torch.all(data < 0.0)
+    assert torch.all(data == low)
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
 
 
 @pytest.mark.parametrize(
