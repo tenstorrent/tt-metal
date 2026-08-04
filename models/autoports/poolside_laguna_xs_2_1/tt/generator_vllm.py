@@ -258,6 +258,29 @@ class LagunaForCausalLM:
                 spec[key] = SlidingWindowSpec(sliding_window=sliding_window, **common)
             else:
                 spec[key] = FullAttentionSpec(**common)
+        # Phase-3 diagnostic (env-gated TT_LAGUNA_KV_SPEC_LOG=1): record what this hook returns. NOTE
+        # (2026-08-04): an always-on run proved this hook is NEVER CALLED at serving — the plugin's
+        # _try_get_spec_from_model_hook (worker.py) does not reach it, so vLLM uses the single-spec default
+        # (1 KV group / uniform full-KV). The model + HF config are correct (30 sliding + 10 full,
+        # sliding_window=512); the bug is plugin hook-resolution. Kept env-gated as a re-check.
+        if os.environ.get("TT_LAGUNA_KV_SPEC_LOG") != "1":
+            return spec
+        try:
+            nsl = sum(1 for v in spec.values() if type(v).__name__ == "SlidingWindowSpec")
+            nfa = len(spec) - nsl
+            kinds = sorted({type(v).__name__ for v in spec.values()})
+            with open(
+                "/home/ttuser/dev/tt-metal/models/autoports/poolside_laguna_xs_2_1/"
+                "doc/vllm_integration/_runs/kv_spec.txt",
+                "a",
+            ) as _f:
+                _f.write(
+                    f"[laguna kv_spec] get_kv_cache_spec CALLED pid={os.getpid()}: {len(spec)} layers, "
+                    f"sliding={nsl} full={nfa}, kinds={kinds}, sliding_window={sliding_window}, "
+                    f"hybrid_flag={cls._HYBRID_KV_CACHE_GROUPS_ENABLED}\n"
+                )
+        except Exception:
+            pass
         return spec
 
     @classmethod

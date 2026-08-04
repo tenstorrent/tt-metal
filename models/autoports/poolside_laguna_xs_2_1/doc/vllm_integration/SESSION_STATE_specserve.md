@@ -156,6 +156,21 @@ readiness log). Findings:
   for the spec-eligible batch. That is the true Phase-2 follow-up, gated on the trace-coexistence fix.
 - Probe code (gated OFF by default) is committed as the reusable feasibility harness.
 
+## PHASE-3 HYBRID-KV ROOT CAUSE (2026-08-04, on device) — plugin never calls the model hook
+Definitively pinned (always-on diagnostic in get_kv_cache_spec that writes to _runs/kv_spec.txt):
+- The model's `get_kv_cache_spec` is **NEVER CALLED at serving** — kv_spec.txt stays empty across boots while
+  KV init completes with `num_gpu_blocks_override=2568` / 164,352 tok / "concurrency 1.25x" (the single-group
+  signature). So vLLM uses `_build_default_kv_cache_spec` (one FullAttentionSpec) → 1 group → uniform full-KV.
+- RULED OUT: the model + HF config are CORRECT (host-side check: layer_types = 10 full + 30 sliding,
+  sliding_window=512, 40 layers); `_is_sliding` would emit a proper hybrid spec IF called. And it is NOT a
+  vLLM `unify_hybrid_kv_cache_specs` collapse (the hook never runs, so there's nothing to collapse).
+- ROOT CAUSE = PLUGIN hook resolution: `worker.py:_try_get_spec_from_model_hook` (:177) does not reach
+  `LagunaForCausalLM.get_kv_cache_spec`. Likely `ModelRegistry.resolve_model_cls(arch)` returns a
+  class/wrapper on which `getattr(model_cls, "get_kv_cache_spec", None)` is None (or arch resolves to the
+  non-TT class). NEXT: instrument worker.py:194-208 (log arch, model_cls, hasattr) — but that edits the
+  uncommitted `.local` plugin, so FORK/BRANCH first. Capacity-only (no decode-speed gain): frees DRAM
+  4.30→1.08 GB/dev + unblocks 262k, but decode t/s/u is batch-flat.
+
 ## HANDOFF — remaining work (do with mesh in front of you)
 1. W1 fix: after the on-device repro pins the exact unseen prefill shape, extend warmup_model_prefill to warm
    that shape (row-count set and/or the width the stall recompiled). Validate: C=16→C=1 no 8-min outlier.
