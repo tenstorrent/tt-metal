@@ -335,7 +335,7 @@ TEST(VectorConversionTest, ExactSpecPredicateCustomAlignment) {
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
 
     auto host_tensor = HostTensor::from_vector(input, spec);
@@ -352,7 +352,7 @@ TEST(VectorConversionTest, ExactSpecPredicateCustomAlignmentRvalueVector) {
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
 
     auto host_tensor = HostTensor::from_vector(std::move(input), spec);
@@ -368,7 +368,7 @@ TEST(VectorConversionTest, ExactSpecPredicateCustomAlignmentFromSpan) {
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
 
     auto host_tensor = HostTensor::from_span<float>(std::span<float>(input), spec);
@@ -388,7 +388,7 @@ TEST(VectorConversionTest, ExactSpecShardedPackedSizes) {
     auto alignment = tt::tt_metal::Alignment({64, 64});
     auto spec = TensorSpec(
         shape,
-        experimental::tensor_layout_with_custom_alignment(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
 
     auto host_tensor = HostTensor::from_vector(input, spec);
