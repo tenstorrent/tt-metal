@@ -42,10 +42,10 @@ rows, and the qkv fusion (0.96 ms) merged a 2048-wide matmul that was costing th
 4096-wide one into a single larger call. Judge a proposal on whether it makes kernels BIGGER, not
 on how many ops it deletes.
 
-WHERE THE TIME GOES, per frame, steady state on one N150 (~24 ms of a ~52 ms frame; Block 1's
-26.6 ms is marginally the larger half):
+WHERE THE TIME GOES, per frame, steady state on one N150 (~23 ms of a ~51 ms frame; Block 1's
+26.6 ms is the larger half):
 
-    _solve -- 7 Euler steps          ~22 ms    7 SEQUENTIAL velocity evaluations, each a 3-layer
+    _solve -- 7 Euler steps          ~21 ms    7 SEQUENTIAL velocity evaluations, each a 3-layer
                                                transformer over 3 tokens, CFG batch-2 folded to 6
                                                rows. Floor is 13.4 ms (2.6 GB at 194 GB/s), so
                                                there is still ~1.6x of per-kernel cost in here.
@@ -57,8 +57,8 @@ WHERE THE TIME GOES, per frame, steady state on one N150 (~24 ms of a ~52 ms fra
                                                it produces an INDEX; see semantic_dev.
     host tail (FSQ quantise etc)       0.7 ms
     ------------------------------------------
-    Block 2 total                     ~24 ms   (42.5 before the row fold, sharded norm, qkv
-                                               fusion, device semantic head and L1 q/k/v)
+    Block 2 total                     ~23 ms   (42.5 before the row fold, sharded norm, qkv
+                                               fusion, device semantic head and L1 interior)
 
 The structural problem is the SEQUENCE: 7 steps that each depend on the previous, so none of the
 usual batching tricks apply within a frame.
@@ -121,6 +121,24 @@ SCALE = FM_HEAD_DIM**-0.5
 REP = FM_N_HEADS // FM_N_KV_HEADS
 # Width of the fused q++k++v projection, GQA-aware: 32 q heads + 2 x 8 kv heads.
 _QKV_WIDTH = (FM_N_HEADS + 2 * FM_N_KV_HEADS) * FM_HEAD_DIM
+
+# EVERY INTERMEDIATE INSIDE `_block` LIVES IN L1, not DRAM. This is the same finding as the
+# L1-resident q/k/v (see _block): at this block's shapes, WHERE a tensor lives matters as much as
+# how big the kernel is. Nothing here exceeds ~110 KB ([1,6,9216] bf16), and each value is consumed
+# within a few ops of being produced, so a DRAM round trip per intermediate is pure latency.
+#
+# Measured cumulatively, 8 draws, all at IDENTICAL accuracy (9/288 differing codes throughout):
+#
+#     q/k/v L1 only (was)                      24.18 ms
+#     + attention interior (scores, scaled, av) 23.85    1.014x
+#     + MLP intermediates (g, w3_out, u)        23.22    1.041x
+#     + residual stream                         23.04    1.049x   <- shipped
+#
+# The one candidate that does NOT pay is the `_norm` output: 0.999x alone, so it stays DRAM. That
+# is worth knowing -- it is not "L1 everywhere is better", it is specifically the values with a
+# consumer close behind. And note the LIMIT: a width-SHARDED activation into a DRAM-weight matmul
+# is SLOWER (8.94 vs 5.32 ms per 26 norm+linear pairs). Interleaved-L1 is the useful middle.
+_L1 = ttnn.L1_MEMORY_CONFIG
 
 # Math fidelity for the VELOCITY NETWORK. HiFi4 + fp32 destination accumulation is the most
 # expensive setting available and it STAYS: lowering it is a bad trade at this block's shapes.
@@ -293,7 +311,7 @@ class TtVoxtralFlow:
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
             ttnn.reshape(qkv, [B, 1, 3, _QKV_WIDTH]),
             num_heads=FM_N_HEADS, num_kv_heads=FM_N_KV_HEADS,
-            transpose_k_heads=True, memory_config=ttnn.L1_MEMORY_CONFIG)
+            transpose_k_heads=True, memory_config=_L1)
         # GQA BY ROW FOLD, NOT BY REPEAT -- the same lesson as the CFG fold above, and worth 1.40x
         # on this block. Mathematically the same attention: on device it gives the same velocity
         # PCC and the same 3-of-74 code diff, and in fp32 on host the two agree to 6e-07, which is
@@ -312,18 +330,23 @@ class TtVoxtralFlow:
         # ONE op and measures faster still (1.147x), but it triples the differing codes (7/288 ->
         # 21/288 over 8 draws); see STATUS.md 6.8.
         s = ttnn.matmul(ttnn.reshape(qh, [B, FM_N_KV_HEADS, REP * 3, FM_HEAD_DIM]),
-                        kh, compute_kernel_config=COMPUTE_CONFIG)   # kh already transposed
-        s = ttnn.multiply(s, SCALE)
+                        kh, compute_kernel_config=COMPUTE_CONFIG,   # kh already transposed
+                        memory_config=_L1)
+        s = ttnn.multiply(s, SCALE, memory_config=_L1)
         a = ttnn.softmax(s, dim=-1, numeric_stable=True, compute_kernel_config=COMPUTE_CONFIG)
-        a = ttnn.matmul(a, vh, compute_kernel_config=COMPUTE_CONFIG)
+        a = ttnn.matmul(a, vh, compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
         # back to folded rows so wo and the MLP get the single-weight-read layout too
         a = ttnn.reshape(a, [B, FM_N_HEADS, 3, FM_HEAD_DIM])
         a = ttnn.reshape(ttnn.permute(a, (0, 2, 1, 3)), [1, B * 3, FM_N_HEADS * FM_HEAD_DIM])
-        x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG))
+        x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
+                                    memory_config=_L1), memory_config=_L1)
         h = self._norm(x, w["fn"])
-        g = ttnn.silu(ttnn.linear(h, w["w1"], compute_kernel_config=COMPUTE_CONFIG))
-        u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG))
-        return ttnn.add(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG))
+        g = ttnn.silu(ttnn.linear(h, w["w1"], compute_kernel_config=COMPUTE_CONFIG,
+                                  memory_config=_L1), memory_config=_L1)
+        u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
+                                         memory_config=_L1), memory_config=_L1)
+        return ttnn.add(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG,
+                                       memory_config=_L1), memory_config=_L1)
 
     def _up(self, t, dtype=None):
         return ttnn.from_torch(t.contiguous(), dtype=dtype or self.dtype,
