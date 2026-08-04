@@ -68,7 +68,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'grouping-ci-failures.yaml',
-              branch,
+              branch: 'main',
               status: 'success',
               exclude_pull_requests: true,
               per_page: 1
