@@ -335,6 +335,12 @@ def test_non_checkout_git_failure_stays_generic():
             InfraErrorV1.ACTION_DOWNLOAD_FAILURE,
         ),
         (
+            "Action 'https://codeload.github.com/tenstorrent/tt-metal/tar.gz/b788cf2ffdc5389026bd4878376d11a9a0facac7' "
+            "download has timed out. Error: The request was canceled due to the configured HttpClient.Timeout "
+            "of 100 seconds elapsing.",
+            InfraErrorV1.ACTION_DOWNLOAD_FAILURE,
+        ),
+        (
             "Failed tests were found and 'fail-on-error' option is set to true",
             InfraErrorV1.TEST_REPORTER_FAILURE,
         ),
