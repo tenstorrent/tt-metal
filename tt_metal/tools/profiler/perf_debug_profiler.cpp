@@ -79,6 +79,18 @@ size_t ring_capacity_recs() {
 }
 
 namespace {
+// TT_METAL_PERF_DEBUG_DRISC_GAP: fixed inter-sweep gap in device cycles for the DRISC drainer. 0 (default)
+// means continuous sweeping -- peak throughput. Bulk reads cost 41x the NoC bytes of the old poll, so a
+// non-zero gap is how that traffic gets bounded once peak is no longer the goal; this is the knob a pacing
+// controller would drive.
+uint32_t drisc_gap_cycles() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_GAP");
+        return (s == nullptr || *s == '\0') ? 0u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+    }();
+    return v;
+}
+
 // Read once: profile the X280 drain harts as well as the worker kernels.
 bool hart_zones_enabled() {
     static const bool on = [] {
@@ -102,6 +114,35 @@ uint32_t max_pages_per_read(uint32_t compiled_default) {
         return static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
     }();
     return v;
+}
+
+// TT_METAL_PERF_DEBUG_STALL_ONLY=1: decode far enough to COUNT PRODUCER STALL ZONES and nothing else --
+// no record building, no BroadcastRing publish, no Tracy. The packet walk is still the real one (a raw scan
+// for the 0x7FFF pattern would false-positive on timestamp words that happen to equal 32767), so the count
+// is exact; what is skipped is the ~24 B record per marker and the publish.
+//
+// This exists to measure the KNEE without the host being the thing under test: producer stalls are the knee
+// metric, and we measured that host-side per-marker work is what feeds back into the DRISC's credit wait and
+// makes stall counts swing between 0 and ~1,000 for the same configuration.
+bool stall_only() {
+    static const bool on = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_STALL_ONLY");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+    return on;
+}
+
+// TT_METAL_PERF_DEBUG_NO_DECODE=1: the reader thread does read() + ack and NOTHING else -- no decode, no
+// publish. Deliberately a measurement tool, not a mode: it isolates whether the DRISC's credit wait is
+// caused by per-marker host work sharing the ack path. The DRISC's own phase counters live in device L1 and
+// are read at teardown, so they stay valid with this on; the host-derived stats (marker count, stall zones)
+// do NOT, since those are produced by the decode being skipped.
+bool decode_disabled() {
+    static const bool off = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_NO_DECODE");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+    return off;
 }
 
 // TT_METAL_PERF_DEBUG_NO_TRACY=1: drain and decode EXACTLY as normal (markers and stall zones are still
@@ -293,9 +334,12 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     // consumer (ring -> Tracy), matching test_x280_realprof: the slow Tracy sink is off the drain path.
     if (!devices_.empty()) {
         const uint32_t cap = max_pages_per_read(kMaxPagesPerRead);
-        read_chunk_recs_ = cap ? static_cast<size_t>(cap) * 16 : static_cast<size_t>(kHRingWords);
+        // Records per read: a page holds at most page_words/2 two-word markers.
+        const size_t recs_per_page = (kPageSize / sizeof(uint32_t)) / 2;
+        read_chunk_recs_ = cap ? static_cast<size_t>(cap) * recs_per_page : static_cast<size_t>(kHRingWords);
         ring_ = std::make_unique<RecRingHolder>(ring_capacity_recs());
         writer_ = std::thread(&PerfDebugProfiler::writer_thread, this);
+        decoder_ = std::thread(&PerfDebugProfiler::decoder_thread, this);
         consumers_.emplace_back(&PerfDebugProfiler::consumer_thread, this);
     }
     if (!devices_.empty()) {
@@ -322,6 +366,42 @@ void PerfDebugProfiler::set_drisc_niu_mode(IDevice* device, const CoreCoord& dri
     detail::LaunchProgram(device, p, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
 }
 
+// Producers are armed by TT_METAL_DEVICE_PROFILER, not by us, and a lossless producer BLOCKS on a full
+// ring. So whenever the drainer fails to come up, the workload does not merely lose its capture -- it
+// wedges, with 550 lanes parked in ring_ensure_room and nothing on the other end. PROFILER_TERMINATE
+// exists precisely for this: while set, the producer stops blocking and proceeds.
+//
+// Learned the hard way, twice in one session from unrelated causes: card FW below the DRISC gate, and a
+// drain kernel that failed to JIT-compile. Both looked like a hung test.
+void PerfDebugProfiler::disarm_producers(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t device_id) {
+    const auto context_id = mesh_device->impl().get_context_id();
+    auto& cluster = MetalContext::instance(context_id).get_cluster();
+    const auto& hal = MetalContext::instance(context_id).hal();
+    const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+    const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+    uint32_t one = 1;
+    uint32_t n = 0;
+    for (uint32_t ly = 0; ly < static_cast<uint32_t>(grid.y); ly++) {
+        for (uint32_t lx = 0; lx < static_cast<uint32_t>(grid.x); lx++) {
+            const CoreCoord v =
+                cluster.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord{lx, ly}, CoreType::WORKER);
+            cluster.write_core(
+                &one,
+                sizeof(uint32_t),
+                tt_cxy_pair(device_id, v),
+                prof_l1 + kernel_profiler::PROFILER_TERMINATE * sizeof(uint32_t));
+            n++;
+        }
+    }
+    log_warning(
+        tt::LogMetal,
+        "[perf-debug profiler] Device {}: no DRISC drainer -- disarmed ring back-pressure on {} cores "
+        "(markers are DROPPED, but the workload will not stall waiting for a consumer)",
+        device_id,
+        n);
+}
+
 bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx) {
     const auto context_id = mesh_device->impl().get_context_id();
     auto& cluster = MetalContext::instance(context_id).get_cluster();
@@ -332,6 +412,11 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     // The drainer is a DRISC: one DM RISC-V on a DRAM core. Nothing else here is Blackhole-specific, but
     // that is the only place they exist today.
     if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] Device {}: no DRAM programmable cores (card FW below the DRISC gate?)",
+            device_id);
+        disarm_producers(mesh_device, device_id);
         return false;
     }
 
@@ -375,84 +460,126 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     ctx.drisc_l1_noc = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
 
     // ---- DRISC L1 map ----
-    const uint32_t poll_bytes = kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE;
-    const uint32_t frame_bytes =
-        (kernel_profiler::SPSC_SPAN_PREFIX_WORDS + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE +
-         kNRisc * kernel_profiler::PROFILER_L1_VECTOR_SIZE) *
-        sizeof(uint32_t);
-    const uint32_t poll_ring = ctx.drisc_l1_base;
-    const uint32_t frame_buf = poll_ring + static_cast<uint32_t>(num_cores) * poll_bytes;
-    const uint32_t head_scratch = frame_buf + frame_bytes;
-    ctx.done_addr = head_scratch + 128 * 32;
-    ctx.stop_addr = ctx.done_addr + 64;
-    ctx.results_addr = ctx.stop_addr + 64;
-    const uint32_t cfg_l1 = ctx.drisc_l1_base + 64 * 1024;
-    if (ctx.results_addr + 64 - ctx.drisc_l1_base >= 64 * 1024) {
+    //
+    // The drainer is a conduit: it bulk-reads a core's whole 10,496 B profiler_msg_t into a staging slot
+    // and writes that slot straight to the host. There are no page buffers to assemble into -- the frame IS
+    // the slot -- so all of L1 goes to staging, and staging depth is what sets how many adjacent cores can
+    // ship in one contiguous PCIe write.
+    const uint32_t span_bytes =
+        (kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + kNRisc * kernel_profiler::PROFILER_L1_VECTOR_SIZE) *
+        sizeof(uint32_t);  // 10,496
+    // A 16-word frame prefix sits IN FRONT of each span so prefix+span are contiguous and ship as one
+    // write. 10,560 B is exactly 165 socket pages, so frames never need padding.
+    const uint32_t slot_bytes = kernel_profiler::SPSC_SPAN_PREFIX_WORDS * sizeof(uint32_t) + span_bytes;
+    const uint32_t region = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    constexpr uint32_t kCfgReserve = 8 * 1024;    // D2HSocket::required_config_buffer_size() is well under this
+    constexpr uint32_t kScratchBytes = 128 * 32;  // one head-scratch slot per core; a posted write must not
+                                                  // have its scratch reused underneath it
+    constexpr uint32_t kMiscBytes = 512;          // done / stop / results (results holds the phase counters)
+
+    const uint32_t fixed = kCfgReserve + kScratchBytes + kMiscBytes;
+    const uint32_t nstage = region > fixed ? (region - fixed) / slot_bytes : 0;
+    if (nstage == 0) {
         log_warning(
             tt::LogMetal,
-            "[perf-debug profiler] Device {}: {} worker cores need more DRISC L1 than the socket config "
-            "leaves; skipping DRISC capture",
+            "[perf-debug profiler] Device {}: {} B of DRISC L1 cannot hold even one {} B staging slot; "
+            "skipping DRISC capture",
             device_id,
-            num_cores);
+            region,
+            slot_bytes);
+        disarm_producers(mesh_device, device_id);
         return false;
     }
 
-    // Stream mode first: the socket config is written from the host, and it can only land in L1 once the
-    // NIU stops forwarding inbound DRAM-range addresses to GDDR. Restored in stop().
-    set_drisc_niu_mode(ctx.device, ctx.drisc_logical, 1);
+    const uint32_t stage_base = ctx.drisc_l1_base;
+    const uint32_t head_scratch = stage_base + nstage * slot_bytes;
+    ctx.done_addr = head_scratch + kScratchBytes;
+    ctx.stop_addr = ctx.done_addr + 64;
+    ctx.results_addr = ctx.stop_addr + 64;
+    const uint32_t cfg_l1 = ctx.drisc_l1_base + region - kCfgReserve;
+    TT_FATAL(ctx.results_addr + 128 <= cfg_l1, "DRISC L1 layout overlaps the socket config");
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] Device {}: DRISC L1 {} KB -- {} staging slots x {} B (up to {} cores per "
+        "PCIe write), conduit mode (no payload copy)",
+        device_id,
+        region / 1024,
+        nstage,
+        slot_bytes,
+        nstage);
 
-    const distributed::MeshCoordinate scoord = *distributed::MeshCoordinateRange(mesh_device->shape()).begin();
-    ctx.sockets[0] = std::make_unique<distributed::D2HSocket>(
-        mesh_device,
-        distributed::MeshCoreCoord{scoord, CoreCoord(drisc_phys.x, drisc_phys.y)},
-        static_cast<uint32_t>(static_cast<uint64_t>(kHRingWords) * 4),
-        distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = true});
-    ctx.sockets[0]->set_page_size(kPageSize);
-    ctx.decode[0] = std::make_unique<pz::ProfzoneDecodeState>();
-    ctx.decode[0]->reset(ctx.nl);
-    for (uint32_t c = 0; c < num_cores; c++) {
-        ctx.decode[0]->core_of_xy[coords[c]] = c;
-    }
+    // Everything from here can throw: a JIT compile failure in the drain kernel, a socket that will not
+    // construct, a layout assertion. Any of those leaves producers armed with no consumer, which wedges the
+    // workload rather than just losing the capture -- so the catch disarms them and degrades to "no
+    // capture" instead of propagating.
+    try {
+        // Stream mode first: the socket config is written from the host, and it can only land in L1 once the
+        // NIU stops forwarding inbound DRAM-range addresses to GDDR. Restored in stop().
+        set_drisc_niu_mode(ctx.device, ctx.drisc_logical, 1);
 
-    // Clear `done` before the drainer can publish it.
-    uint32_t zero = 0;
-    cluster.write_core(
-        &zero,
-        sizeof(uint32_t),
-        tt_cxy_pair(device_id, ctx.drisc_virtual),
-        ctx.drisc_l1_noc + (ctx.done_addr - ctx.drisc_l1_base));
+        const distributed::MeshCoordinate scoord = *distributed::MeshCoordinateRange(mesh_device->shape()).begin();
+        ctx.sockets[0] = std::make_unique<distributed::D2HSocket>(
+            mesh_device,
+            distributed::MeshCoreCoord{scoord, CoreCoord(drisc_phys.x, drisc_phys.y)},
+            // The FIFO must be a whole number of pages, and a page is now a whole frame.
+        static_cast<uint32_t>((static_cast<uint64_t>(kHRingWords) * 4 / kPageSize) * kPageSize),
+            distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = true});
+        ctx.sockets[0]->set_page_size(kPageSize);
+        ctx.decode[0] = std::make_unique<pz::ProfzoneDecodeState>();
+        ctx.decode[0]->reset(ctx.nl);
+        for (uint32_t c = 0; c < num_cores; c++) {
+            ctx.decode[0]->core_of_xy[coords[c]] = c;
+        }
 
-    // ---- launch the drainer, resident ----
-    //
-    // Outside the command queue on purpose (see DeviceCtx::drain_program). kQuietStop = 0 means it never
-    // stops on its own: it runs until stop() sets the stop word.
-    ctx.drain_program = std::make_unique<Program>(CreateProgram());
-    auto drain_id = CreateKernel(
+        // Clear `done` before the drainer can publish it.
+        uint32_t zero = 0;
+        cluster.write_core(
+            &zero,
+            sizeof(uint32_t),
+            tt_cxy_pair(device_id, ctx.drisc_virtual),
+            ctx.drisc_l1_noc + (ctx.done_addr - ctx.drisc_l1_base));
+
+        // ---- launch the drainer, resident ----
+        //
+        // Outside the command queue on purpose (see DeviceCtx::drain_program). kQuietStop = 0 means it never
+        // stops on its own: it runs until stop() sets the stop word.
+        ctx.drain_program = std::make_unique<Program>(CreateProgram());
+        auto drain_id = CreateKernel(
         *ctx.drain_program,
         "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp",
         ctx.drisc_logical,
         DramConfig{
             .noc = NOC::NOC_0,
             .compile_args = {
-                poll_ring,
-                frame_buf,
+                stage_base,
+                nstage,
                 head_scratch,
                 ctx.results_addr,
                 ctx.done_addr,
                 ctx.stop_addr,
                 ctx.sockets[0]->get_config_buffer_address(),
-                0 /*kQuietStop: never quit on quiescence*/,
-                0xFFFFFFFFu /*kMaxSweeps*/,
-                static_cast<uint32_t>(num_cores)}});
-    std::vector<uint32_t> rt = {
-        static_cast<uint32_t>(num_cores), static_cast<uint32_t>(prof_l1), static_cast<uint32_t>(prof_l1 + poll_bytes)};
+                0xFFFFFFFFu /*kMaxSweeps: run until the host says stop*/,
+                128 /*kMaxCores: power of two, indexes the head-scratch ring*/,
+                drisc_gap_cycles() /*kGapCycles: 0 = continuous*/}});
+    std::vector<uint32_t> rt = {static_cast<uint32_t>(num_cores), static_cast<uint32_t>(prof_l1)};
     rt.insert(rt.end(), coords.begin(), coords.end());
     SetRuntimeArgs(*ctx.drain_program, drain_id, ctx.drisc_logical, rt);
 
-    detail::CompileProgram(ctx.device, *ctx.drain_program, /*force_slow_dispatch=*/true);
-    detail::WriteRuntimeArgsToDevice(ctx.device, *ctx.drain_program, /*force_slow_dispatch=*/true);
-    detail::LaunchProgram(
-        ctx.device, *ctx.drain_program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        detail::CompileProgram(ctx.device, *ctx.drain_program, /*force_slow_dispatch=*/true);
+        detail::WriteRuntimeArgsToDevice(ctx.device, *ctx.drain_program, /*force_slow_dispatch=*/true);
+        detail::LaunchProgram(
+            ctx.device, *ctx.drain_program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] Device {}: DRISC drainer failed to start ({}); continuing without capture",
+            device_id,
+            e.what());
+        ctx.drain_program.reset();
+        ctx.sockets[0].reset();
+        disarm_producers(mesh_device, device_id);
+        return false;
+    }
 
     log_info(
         tt::LogMetal,
@@ -473,64 +600,50 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
 // a slow Tracy push can never back-pressure the FIFO -> relay -> reader -> worker cores. (Measured: with the
 // push inline, UFLD-v2 held relay0 in HOST-WAIT 15.85 s of a 19 s run and stalled producers 826x; with the
 // push removed, 0 stalls. This is the same structure test_x280_realprof uses.)
-bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
-    distributed::D2HSocket* sock = ctx.sockets[sock_idx].get();
-    if (sock == nullptr) {
-        return false;
-    }
+// Decode + publish, OFF the reader thread.
+//
+// MEASURED: with this inline, the reader's ack rate was gated by per-marker work -- read 3.8 ms, decode
+// 13.5 ms, publish 8.7 ms, so 85% of host time sat between one ack and the next. At delay 300 that produced
+// 17,366 producer stalls where the same device code with a minimal decode produced 0. The copy was never the
+// problem (15% of host work, 15-19 GB/s); the interpretation was.
+//
+// Sequential by construction: ProfzoneDecodeState carries sticky timer highs, the packet residual and the
+// per-lane head mirror across buffers, so buffers for one socket MUST be decoded in arrival order. That is
+// why there is one decoder per socket rather than a pool.
+void PerfDebugProfiler::decode_and_publish(DeviceCtx& ctx, uint32_t sock_idx, std::vector<uint32_t>& buf) {
     DeviceCtx::SockState& ss = ctx.sock_state[sock_idx];
     pz::ProfzoneDecodeState& st = *ctx.decode[sock_idx];
-    const uint32_t page_words = kPageSize / sizeof(uint32_t);
     static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
-
-    // Both of these touch the device/FIFO state and run on EVERY pass for EVERY socket, so they set the
-    // writer's loop period. They were previously outside any zone, which is how a run could show 79 ms of
-    // writer zones inside a 5,433 ms span with the time unattributable.
-    uint32_t fifo_pages;
-    uint32_t np;
-    {
-        ZoneScopedNC("sock-poll", 0x16A085);  // teal: "is there anything to read?" -- pure overhead when empty
-        fifo_pages = sock->get_fifo_curr_size() / sock->get_page_size();
-        np = sock->pages_available();
+    (void)ddbg;
+    const auto t_dec_all = std::chrono::steady_clock::now();
+    if (stall_only()) {
+        pz::profzone_decode(
+            st, buf.data(), buf.size(), ctx.nl,
+            [&](uint32_t, uint32_t type, uint32_t hash, uint64_t, uint32_t) {
+                if (hash == 0x7FFFu && type == PP_ZONE_START) {
+                    ss.stall++;
+                    w_stalls_++;
+                }
+                ss.emit++;
+            });
+        w_decode_ns_ +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_dec_all)
+                .count();
+        return;
     }
-    if (np == 0) {
-        return false;
-    }
-    if (np >= fifo_pages) {
-        np = fifo_pages - 1u;  // never read more than the FIFO holds (pages_available can spike)
-    }
-    const uint32_t cap = max_pages_per_read(kMaxPagesPerRead);
-    if (cap != 0 && np > cap) {
-        np = cap;
-    }
-    if (ddbg && ss.iters < 40) {
-        log_info(tt::LogMetal, "[drain sock={}] iter={} np={} fifo_pages={}", sock_idx, ss.iters, np, fifo_pages);
-    }
-    ss.iters++;
-    ss.pages += np;
-    {
-        ZoneScopedNC("buf-resize", 0xD35400);  // dark orange: with the page cap removed this can be MBs per read
-        ss.buf.resize(static_cast<size_t>(np) * page_words);
-    }
-    {
-        ZoneScopedNC("sock-read", 0x27AE60);  // green: pulling pages off the D2H socket (also acks the sender)
-        sock->read(ss.buf.data(), np);
-    }
-
-    if (ss.batch.size() < read_chunk_recs_) {
-        ss.batch.resize(read_chunk_recs_);  // upper bound on records from one read (words >= records)
-    }
+    ss.batch.resize(read_chunk_recs_);  // upper bound on records from one read (words >= records)
     PerfDebugRec* bcur = ss.batch.data();
-    PerfDebugRec* bend = ss.batch.data() + ss.batch.size();
+    PerfDebugRec* const bend = ss.batch.data() + ss.batch.size();
     const uint32_t dev_idx = static_cast<uint32_t>(&ctx - devices_.data());
 
     ZoneScopedNC("decode", 0x8E44AD);  // purple: pages -> records. With the sink decoupled this plus sock-read
                                        // is the writer's whole job; if it ever fills the thread, the DRAIN is
                                        // the wall (not Tracy) -- the opposite of the UFLD-v2 case.
+    const auto t_dec0 = std::chrono::steady_clock::now();
     pz::profzone_decode(
         st,
-        ss.buf.data(),
-        ss.buf.size(),
+        buf.data(),
+        buf.size(),
         ctx.nl,
         [&](uint32_t lane, uint32_t type, uint32_t hash, uint64_t ts, uint32_t prog) {
             // X280 wire codes, NOT hostdevcommon PacketTypes: the two sources never co-exist and share no
@@ -600,22 +713,139 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
             }
         });
 
+    w_decode_ns_ +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_dec0).count();
+
     const size_t bn = static_cast<size_t>(bcur - ss.batch.data());
+    w_recs_ += bn;
     if (bn != 0 && ring_) {
         ZoneScopedNC("publish", 0xE67E22);  // orange: publish this read's records to the BroadcastRing
+        const auto t_p0 = std::chrono::steady_clock::now();
         ring_->ring.writer().publish_batch(std::span<const PerfDebugRec>(ss.batch.data(), bn));
+        w_publish_ns_ +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_p0).count();
     }
+}
+
+bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
+    distributed::D2HSocket* sock = ctx.sockets[sock_idx].get();
+    if (sock == nullptr) {
+        return false;
+    }
+    DeviceCtx::SockState& ss = ctx.sock_state[sock_idx];
+    // No decode state here any more -- this thread only reads and acks; ProfzoneDecodeState belongs to the
+    // decoder thread, which is the only place the stream is interpreted.
+    const uint32_t page_words = kPageSize / sizeof(uint32_t);
+    static const bool ddbg = (std::getenv("TT_PERF_DEBUG_ZONE_DUMP") != nullptr);
+
+    // Both of these touch the device/FIFO state and run on EVERY pass for EVERY socket, so they set the
+    // writer's loop period. They were previously outside any zone, which is how a run could show 79 ms of
+    // writer zones inside a 5,433 ms span with the time unattributable.
+    uint32_t fifo_pages;
+    uint32_t np;
+    {
+        ZoneScopedNC("sock-poll", 0x16A085);  // teal: "is there anything to read?" -- pure overhead when empty
+        const auto t0 = std::chrono::steady_clock::now();
+        fifo_pages = sock->get_fifo_curr_size() / sock->get_page_size();
+        np = sock->pages_available();
+        w_poll_ns_ += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0)
+                          .count();
+        w_polls_++;
+    }
+    if (np == 0) {
+        return false;
+    }
+    if (np >= fifo_pages) {
+        np = fifo_pages - 1u;  // never read more than the FIFO holds (pages_available can spike)
+    }
+    const uint32_t cap = max_pages_per_read(kMaxPagesPerRead);
+    if (cap != 0 && np > cap) {
+        np = cap;
+    }
+    if (ddbg && ss.iters < 40) {
+        log_info(tt::LogMetal, "[drain sock={}] iter={} np={} fifo_pages={}", sock_idx, ss.iters, np, fifo_pages);
+    }
+    ss.iters++;
+    ss.pages += np;
+    // Take a buffer from the pool. If the decoder has fallen behind and the pool is dry, still read (the
+    // FIFO must keep draining or the DRISC stalls) but discard the data and count it.
+    std::vector<uint32_t> pooled;
+    bool discard = false;
+    {
+        std::lock_guard<std::mutex> lk(dq_.m);
+        if (!dq_.free_bufs.empty()) {
+            pooled = std::move(dq_.free_bufs.back());
+            dq_.free_bufs.pop_back();
+        } else if (dq_.allocated < kMaxPooledBufs) {
+            dq_.allocated++;
+        } else {
+            dq_.dropped++;
+            discard = true;
+        }
+    }
+    std::vector<uint32_t>& dst = discard ? ss.buf : pooled;
+    {
+        ZoneScopedNC("buf-resize", 0xD35400);
+        dst.resize(static_cast<size_t>(np) * page_words);
+    }
+    {
+        ZoneScopedNC("sock-read", 0x27AE60);  // green: pulls pages AND acks the sender -- the critical path
+        const auto t0 = std::chrono::steady_clock::now();
+        sock->read(dst.data(), np);
+        w_read_ns_ += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0)
+                          .count();
+        w_reads_++;
+        w_bytes_ += static_cast<uint64_t>(np) * kPageSize;
+    }
+    if (decode_disabled() || discard) {
+        return true;
+    }
+    // Hand the raw buffer to the decoder and go straight back to polling. This is the whole point: the ack
+    // (issued inside sock->read above) is no longer behind 85% of host work.
+    {
+        std::lock_guard<std::mutex> lk(dq_.m);
+        dq_.work.push_back(DecodeItem{&ctx, sock_idx, std::move(pooled)});
+    }
+    dq_.cv.notify_one();
     return true;
 }
 
 // The single writer thread: round-robin every (device, socket); each drain_pass publishes its own read as one
 // data-driven batch, then wake readers once per sweep. Idle sweeps back off. Mirrors test_x280_realprof.
+void PerfDebugProfiler::decoder_thread() {
+    tracy::SetThreadName("perf-debug-decoder");
+    for (;;) {
+        DecodeItem item;
+        {
+            std::unique_lock<std::mutex> lk(dq_.m);
+            dq_.cv.wait(lk, [this] { return !dq_.work.empty() || dq_.quit; });
+            if (dq_.work.empty()) {
+                if (dq_.quit) {
+                    return;
+                }
+                continue;
+            }
+            dq_.max_depth = std::max<uint64_t>(dq_.max_depth, dq_.work.size());
+            item = std::move(dq_.work.front());
+            dq_.work.pop_front();
+        }
+        decode_and_publish(*item.ctx, item.sock, item.buf);
+        std::lock_guard<std::mutex> lk(dq_.m);
+        item.buf.clear();
+        dq_.free_bufs.push_back(std::move(item.buf));
+    }
+}
+
 void PerfDebugProfiler::writer_thread() {
     tracy::SetThreadName("x280-writer");
     // Startup accounting: the gap between this thread entering and its FIRST successful drain is the window
     // in which the D2H FIFO can fill unserviced -- which back-pressures relay -> reader -> worker rings and
     // stalls every producing RISC once. Reported so it is a number rather than an inference.
     const auto t_writer_entry = std::chrono::steady_clock::now();
+    // Wall time of this thread's whole loop. Without it, phase totals cannot distinguish "saturated" from
+    // "mostly waiting for the device" -- the exact mistake made when host work time was compared against the
+    // DRISC's busy time as though they shared a window.
+    const auto t_wall0 = t_writer_entry;
     bool first_data_seen = false;
     auto watchdog = std::chrono::steady_clock::now();
     auto backoff = std::chrono::microseconds(50);
@@ -698,6 +928,9 @@ void PerfDebugProfiler::writer_thread() {
                 ss.stall);
         }
     }
+    w_wall_ns_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                     std::chrono::steady_clock::now() - t_wall0)
+                     .count();
 }
 
 // BroadcastRing reader -> Tracy. This is the slow side (~270 ns/marker measured), and it is now the ONLY
@@ -915,28 +1148,74 @@ void PerfDebugProfiler::stop() {
         }
         // The drainer's own view of the run. Host-side page and marker counts cannot distinguish a
         // bandwidth wall from a latency one; sweeps/frames/cycles can.
-        std::vector<uint32_t> res(9, 0);
+        std::vector<uint32_t> res(33, 0);
         cluster.read_core(
             res.data(),
             res.size() * sizeof(uint32_t),
             drisc,
             ctx.drisc_l1_noc + (ctx.results_addr - ctx.drisc_l1_base));
-        const uint64_t cyc = (static_cast<uint64_t>(res[1]) << 32) | res[0];
-        const uint64_t dw = (static_cast<uint64_t>(res[3]) << 32) | res[2];
+        auto u64 = [&res](size_t i) { return (static_cast<uint64_t>(res[i + 1]) << 32) | res[i]; };
+        const uint64_t cyc = u64(0);
+        const uint64_t dw = u64(2);
+        const double kCycPerUs = 1.35e3;  // the drainer stamps with the Tensix wall clock
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] DRISC: {} sweeps, {} frames, {} words, {} pages, max run {}/{}, "
-            "overflows {}, {} Mcyc ({:.2f} us/frame, {:.1f} cores/sweep)",
+            "[perf-debug profiler] DRISC: {} sweeps ({} idle), {} frames, {} pushes, {} words, {} pages, "
+            "max occ {}/{}, overflows {}",
             res[4],
+            res[20],
             res[6],
+            res[9],
             dw,
             res[5],
             res[7],
             kernel_profiler::PROFILER_L1_VECTOR_SIZE,
-            res[8],
-            cyc / 1000000,
-            res[6] ? (cyc / 1.35e3) / res[6] : 0.0,
-            res[4] ? static_cast<double>(res[6]) / res[4] : 0.0);
+            res[8]);
+        // Per-phase, so a lifetime average can never again hide that empty and loaded sweeps differ by
+        // orders of magnitude. `reserve` is the host FIFO credit wait: if that dominates, the DRISC is not
+        // the bottleneck at all -- the host consumer is.
+        const uint64_t c_read = u64(10), c_proc = u64(12), c_res = u64(14), c_wr = u64(16), c_bar = u64(18);
+        const uint64_t c_idle = u64(21), c_busy = u64(23);
+        const uint64_t acct = c_read + c_proc + c_res + c_wr + c_bar;
+        auto pct = [cyc](uint64_t v) {
+            return cyc ? (100.0 * static_cast<double>(v) / static_cast<double>(cyc)) : 0.0;
+        };
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] DRISC phases of {:.1f} ms: read {:.1f}% | proc {:.1f}% | "
+            "reserve(credit-wait) {:.1f}% | write {:.1f}% | wr-barrier {:.1f}% | unaccounted {:.1f}%",
+            cyc / kCycPerUs / 1000.0,
+            pct(c_read),
+            pct(c_proc),
+            pct(c_res),
+            pct(c_wr),
+            pct(c_bar),
+            pct(cyc > acct ? cyc - acct : 0));
+        const uint32_t sweeps_busy = res[4] > res[20] ? res[4] - res[20] : 0;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] DRISC sweeps: idle {} @ {:.1f} us | busy {} @ {:.1f} us | worst sweep "
+            "{:.1f} us | worst credit-wait {:.1f} us",
+            res[20],
+            res[20] ? (static_cast<double>(c_idle) / kCycPerUs) / res[20] : 0.0,
+            sweeps_busy,
+            sweeps_busy ? (static_cast<double>(c_busy) / kCycPerUs) / sweeps_busy : 0.0,
+            res[25] / kCycPerUs,
+            res[26] / kCycPerUs);
+        // write sub-split. Exact per busy sweep: ship_run only executes when a frame is being sent.
+        const uint64_t c_chunk = u64(27), c_push = u64(29), c_notify = u64(31);
+        const double pu = res[9] ? static_cast<double>(res[9]) : 1.0;  // pushes
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] DRISC write split over {} pushes: noc-chunk {:.2f} us/push ({:.1f} ms) | "
+            "push_pages {:.2f} us/push ({:.1f} ms) | notify {:.2f} us/push ({:.1f} ms)",
+            res[9],
+            (c_chunk / kCycPerUs) / pu,
+            c_chunk / kCycPerUs / 1000.0,
+            (c_push / kCycPerUs) / pu,
+            c_push / kCycPerUs / 1000.0,
+            (c_notify / kCycPerUs) / pu,
+            c_notify / kCycPerUs / 1000.0);
 
         // Release it to restore the NIU. It cannot do that until we say so: NOC2AXI forwards inbound
         // DRAM-range addresses to GDDR, so the flip takes this L1 out of the host's view.
@@ -947,7 +1226,117 @@ void PerfDebugProfiler::stop() {
     if (writer_.joinable()) {
         writer_.join();  // drains every socket to quiescence, then publishes its last batch
     }
+    // ---- the knee metric, read straight out of every worker's L1 ----
+    //
+    // No decode required, so this is valid in NO_DECODE mode where the host does nothing but read and ack.
+    // The producer increments its own counter when it blocks, so nothing downstream can lose it.
+    for (auto& ctx : devices_) {
+        if (ctx.core_virt.empty()) {
+            continue;
+        }
+        auto& cluster = MetalContext::instance().get_cluster();
+        const auto& hal = MetalContext::instance().hal();
+        const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+        std::vector<uint32_t> cv(kernel_profiler::SPSC_CONTROL_END, 0);
+        uint64_t total = 0, worst = 0, cores_hit = 0;
+        for (const auto& [vx, vy] : ctx.core_virt) {
+            cluster.read_core(
+                cv.data(),
+                kernel_profiler::SPSC_CONTROL_END * sizeof(uint32_t),
+                tt_cxy_pair(ctx.chip_id, CoreCoord{vx, vy}),
+                prof_l1);
+            uint64_t core_total = 0;
+            for (uint32_t r = 0; r < kernel_profiler::SPSC_STALL_COUNT_MAX; r++) {
+                core_total += cv[kernel_profiler::SPSC_STALL_COUNT_0 + r];
+            }
+            total += core_total;
+            worst = std::max(worst, core_total);
+            cores_hit += (core_total != 0);
+        }
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] Device {}: L1 STALL COUNTERS -- {} producer stalls across {} of {} cores "
+            "(worst core {}) [0 = the capture did not perturb the workload]",
+            ctx.chip_id,
+            total,
+            cores_hit,
+            ctx.core_virt.size(),
+            worst);
+    }
+
+    // Drain the decode queue before declaring the writer done, else the tail of the run is lost.
+    {
+        std::lock_guard<std::mutex> lk(dq_.m);
+        dq_.quit = true;
+    }
+    dq_.cv.notify_all();
+    if (decoder_.joinable()) {
+        decoder_.join();
+    }
+    if (dq_.dropped != 0) {
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] decoder fell behind: {} reads discarded (pool of {} exhausted); capture is "
+            "incomplete but the workload was not perturbed",
+            dq_.dropped,
+            kMaxPooledBufs);
+    }
+    log_info(tt::LogMetal, "[perf-debug profiler] decode queue: max depth {} buffers", dq_.max_depth);
     writer_done_.store(true, std::memory_order_release);
+    // Why the host is the wall. The egress-only benchmark moved bytes with a copy and no interpretation;
+    // this thread also DECODES every marker and publishes every record, on the same thread that issues the
+    // socket acks -- so the ack rate, and hence the sender's credit wait, is gated by per-marker work.
+    if (w_reads_ != 0) {
+        const double read_ms = w_read_ns_ / 1e6, dec_ms = w_decode_ns_ / 1e6, pub_ms = w_publish_ns_ / 1e6;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] host writer: {} reads, {:.1f} MB, {} records | sock-read {:.1f} ms "
+            "({:.2f} GB/s) | decode {:.1f} ms ({:.1f} ns/marker) | publish {:.1f} ms",
+            w_reads_,
+            w_bytes_ / (1024.0 * 1024.0),
+            w_recs_,
+            read_ms,
+            read_ms > 0 ? (w_bytes_ / 1e9) / (read_ms / 1e3) : 0.0,
+            dec_ms,
+            w_recs_ ? w_decode_ns_ / static_cast<double>(w_recs_) : 0.0,
+            pub_ms);
+        const double wall_ms = w_wall_ns_ / 1e6;
+        const double work_ms = (w_read_ns_ + w_decode_ns_ + w_publish_ns_ + w_poll_ns_) / 1e6;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] host writer wall {:.1f} ms: poll {:.1f}% ({} polls) | sock-read {:.1f}% | "
+            "decode {:.1f}% | publish {:.1f}% | IDLE/other {:.1f}% -- {:.0f}% busy",
+            wall_ms,
+            wall_ms > 0 ? 100.0 * (w_poll_ns_ / 1e6) / wall_ms : 0.0,
+            w_polls_,
+            wall_ms > 0 ? 100.0 * (w_read_ns_ / 1e6) / wall_ms : 0.0,
+            wall_ms > 0 ? 100.0 * (w_decode_ns_ / 1e6) / wall_ms : 0.0,
+            wall_ms > 0 ? 100.0 * (w_publish_ns_ / 1e6) / wall_ms : 0.0,
+            wall_ms > 0 ? 100.0 * (wall_ms - work_ms) / wall_ms : 0.0,
+            wall_ms > 0 ? 100.0 * work_ms / wall_ms : 0.0);
+        if (stall_only()) {
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] STALL-ONLY decode: {} producer stall zones (knee metric; no records "
+                "built, no Tracy)",
+                w_stalls_);
+        }
+        uint64_t drift = 0;
+        for (auto& ctx : devices_) {
+            for (auto& d : ctx.decode) {
+                if (d) {
+                    drift += d->head_drift;
+                }
+            }
+        }
+        if (drift != 0) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] head-mirror drift on {} frames -- the drainer's write-back lagged a "
+                "snapshot, or a frame was lost",
+                drift);
+        }
+    }
     if (ring_) {
         ring_->ring.writer().wake_readers();  // unblock a consumer parked in wait()
     }

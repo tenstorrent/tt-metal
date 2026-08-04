@@ -52,12 +52,23 @@ struct ProfzoneDecodeState {
     // meaning downstream. The caller owns this map because only the host knows the grid; the drainer never
     // sees it and never puts a core id on the wire. A frame whose xy is absent is skipped whole.
     std::unordered_map<uint32_t, uint32_t> core_of_xy;
+    // Host-side head mirror, per lane. The drainer stopped patching heads into the frame (5 stores per core
+    // per visit); the host reconstructs them instead: head(frame N) == tail(frame N-1) for that lane, which
+    // is exact because the D2H FIFO is ordered and lossless. The span's own head field still arrives free
+    // inside the control vector, so it seeds this on first sight and thereafter serves as a CONSISTENCY
+    // CHECK -- `head_drift` counts disagreements rather than silently trusting either side.
+    std::vector<uint32_t> host_head;
+    std::vector<uint8_t> head_seeded;
+    uint64_t head_drift = 0;
 
     void reset(uint32_t nl) {
         cur_lane = 0xFFFFFFFFu;
         cur_prog = 0;
         cur_hi.assign(nl, 0);
         resid.clear();
+        host_head.assign(nl, 0);
+        head_seeded.assign(nl, 0);
+        head_drift = 0;
     }
 };
 
@@ -177,9 +188,8 @@ inline void profzone_decode(
             p += prefix + rawn;
         } else if (pp_is_bulkspan(w0)) {
             // Identity-free whole-core frame. Everything BULK_CORE puts in a drainer-written header --
-            // which core, where each ring starts, how much is live -- is re-derived here from the worker's
-            // OWN control vector, using the same helper the drainer used to cut the slices. The ring wrap
-            // was resolved by the framing, so each run is a flat array.
+            // which core, how much is live -- is re-derived here from the worker's OWN control vector.
+            // Payload is each RISC's live run, packed exactly and already unwrapped device-side.
             if (p + 1 >= sz) {
                 break;  // need the length word
             }
@@ -192,34 +202,54 @@ inline void profzone_decode(
             const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
             const bool known = xy_it != st.core_of_xy.end();
             for (uint32_t r = 0; r < kProfzoneNRiscDecode; r++) {
-                const kernel_profiler::SpscSpanRun g = kernel_profiler::spsc_span_run(
-                    ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r],
-                    ctrl[kernel_profiler::SPSC_RING_TAIL_0 + r],
-                    kProfzoneRingCap);
-                const uint32_t* run_w = blk + g.skip;
-                blk += g.words;  // slices are concatenated in RISC order -- advance even when skipping
+                // The payload is five WHOLE raw rings -- the drainer is a conduit and never repacked them
+                // (a CPU repack cost it 45% of its cycles). So the live window is the circular range
+                // [head, head+run) and the wrap is resolved here, on a host that has cycles to spare.
+                const uint32_t tail = ctrl[kernel_profiler::SPSC_RING_TAIL_0 + r];
+                const uint32_t* ring = blk;
+                blk += kProfzoneRingCap;  // rings are fixed-size and in RISC order, present even when empty
                 const uint32_t lane = known ? xy_it->second * kProfzoneNRiscDecode + r : nl;
-                if (g.run == 0 || lane >= nl) {
+                if (lane >= nl) {
+                    continue;
+                }
+                if (!st.head_seeded[lane]) {
+                    st.host_head[lane] = ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r];
+                    st.head_seeded[lane] = 1;
+                } else if (ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r] != st.host_head[lane]) {
+                    // Benign if the drainer's write-back was still in flight when the snapshot was taken;
+                    // a real signal if a frame went missing. Counted, never trusted over the mirror.
+                    st.head_drift++;
+                }
+                const uint32_t head = st.host_head[lane];
+                const uint32_t run = kernel_profiler::spsc_span_live(head, tail, kProfzoneRingCap);
+                st.host_head[lane] = head + run;
+                const uint32_t head_mod = head % kProfzoneRingCap;
+                if (run == 0) {
                     continue;
                 }
                 uint32_t i = 0;
-                while (i < g.run) {
-                    const uint32_t rw0 = run_w[i];
+                while (i < run) {
+                    const uint32_t rw0 = ring[(head_mod + i) % kProfzoneRingCap];
                     if (pp_is_timer(rw0)) {  // 1-word: refresh this lane's timer_hi
                         st.cur_hi[lane] = pp_timer_hi(rw0);
                         i += 1;
                         continue;
                     }
                     // The producer publishes its tail only after a whole packet is in the ring, so a run
-                    // never ends mid-packet. These bounds checks are therefore assertions, not recovery.
-                    if (i + 1 >= g.run) {
+                    // never ends mid-packet. These bounds checks are assertions, not recovery.
+                    if (i + 1 >= run) {
                         break;
                     }
-                    const uint32_t rw1 = run_w[i + 1];
+                    const uint32_t rw1 = ring[(head_mod + i + 1) % kProfzoneRingCap];
                     if (pp_is_point(rw0)) {
                         const uint32_t n = pp_data_size(rw0);
-                        if (i + 2u + n > g.run) {
+                        if (i + 2u + n > run) {
                             break;
+                        }
+                        // The payload can wrap the ring, so unwrap it into a flat scratch buffer first.
+                        uint32_t payload[kProfzoneMaxDataWords];
+                        for (uint32_t k = 0; k < n && k < kProfzoneMaxDataWords; k++) {
+                            payload[k] = ring[(head_mod + i + 2 + k) % kProfzoneRingCap];
                         }
                         emit_data(
                             lane,
@@ -227,7 +257,7 @@ inline void profzone_decode(
                             pp_data_id(rw0),
                             pp_full_ts(st.cur_hi[lane], rw1),
                             st.cur_prog,
-                            &run_w[i + 2],
+                            payload,
                             n);
                         i += 2u + n;
                         continue;
@@ -235,8 +265,7 @@ inline void profzone_decode(
                     if (pp_type(rw0) == PP_STICKY_PROG) {
                         st.cur_prog = rw1;
                     } else {
-                        emit(
-                            lane, pp_type(rw0), pp_low27(rw0) & 0xFFFFu, pp_full_ts(st.cur_hi[lane], rw1), st.cur_prog);
+                        emit(lane, pp_type(rw0), pp_low27(rw0) & 0xFFFFu, pp_full_ts(st.cur_hi[lane], rw1), st.cur_prog);
                     }
                     i += 2;
                 }

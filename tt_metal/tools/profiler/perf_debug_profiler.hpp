@@ -19,7 +19,11 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
+
+#include "hostdevcommon/profiler_common.h"
 
 #include <tt-metalium/core_coord.hpp>
 #include <memory>
@@ -194,10 +198,17 @@ private:
     // Put this DRISC's NIU into stream mode (1) or back to NOC2AXI (0). Its own program, launched and
     // waited on, because the socket config has to be able to land in DRISC L1 before the drainer runs.
     static void set_drisc_niu_mode(IDevice* device, const CoreCoord& drisc_logical, uint32_t stream);
+    // Set PROFILER_TERMINATE on every worker, so producers stop BLOCKING on a full ring and just proceed.
+    // Must be called on every path where the drainer does not come up: producers are armed by
+    // TT_METAL_DEVICE_PROFILER independently of us, they are lossless by design, and with no consumer they
+    // block forever -- the workload wedges rather than merely losing its capture.
+    void disarm_producers(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t device_id);
     bool boot_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
     // ONE read+decode pass over (ctx, sock): pages -> decode -> records -> ring. Returns true if it moved data.
     bool drain_pass(DeviceCtx& ctx, uint32_t sock_idx);
-    void writer_thread();    // round-robins every (device, socket), publishing each read as one batch
+    void writer_thread();
+    void decoder_thread();   // owns decode+publish; see decode_and_publish for why it is off the reader
+    void decode_and_publish(DeviceCtx& ctx, uint32_t sock_idx, std::vector<uint32_t>& buf);    // round-robins every (device, socket), publishing each read as one batch
     void consumer_thread();  // BroadcastRing reader -> PerfDebugTracyHandler (the slow sink, now off the drain)
 
     std::vector<DeviceCtx> devices_;
@@ -209,11 +220,47 @@ private:
     // 19 s run and stalled producers 826x; with the push removed entirely, stalls went to 0.
     std::unique_ptr<RecRingHolder> ring_;
     std::thread writer_;
+    std::thread decoder_;
+    // One raw buffer per outstanding read, handed reader -> decoder. Bounded: at 64 KB per buffer this caps
+    // at ~64 MB. On exhaustion the reader still DRAINS the FIFO into a scratch and discards, because leaving
+    // the FIFO full would back-pressure the DRISC and stall the workload -- losing capture beats perturbing
+    // the thing being measured, the same policy the BroadcastRing already uses on its own overflow.
+    static constexpr size_t kMaxPooledBufs = 1024;
+    struct DecodeItem {
+        DeviceCtx* ctx = nullptr;
+        uint32_t sock = 0;
+        std::vector<uint32_t> buf;
+    };
+    struct DecodeQueue {
+        std::mutex m;
+        std::condition_variable cv;
+        std::deque<DecodeItem> work;
+        std::vector<std::vector<uint32_t>> free_bufs;
+        size_t allocated = 0;
+        uint64_t dropped = 0;   // reads discarded: pool exhausted (decoder fell behind)
+        uint64_t max_depth = 0;
+        bool quit = false;
+    };
+    DecodeQueue dq_;
     std::vector<std::thread> consumers_;
     std::atomic<uint64_t> consumed_{0};
     std::atomic<uint64_t> dropped_{0};
     std::atomic<bool> writer_done_{false};
     size_t read_chunk_recs_ = 0;
+    // Writer-thread phase accounting, in nanoseconds. Touched only by the writer thread and read after it
+    // joins, so no synchronisation is needed. The Tracy zones (sock-read/decode/publish) only exist inside
+    // a capture; these exist always, which is what lets us say whether the host wall is the COPY or the
+    // per-marker DECODE without guessing.
+    uint64_t w_read_ns_ = 0;
+    uint64_t w_decode_ns_ = 0;
+    uint64_t w_publish_ns_ = 0;
+    uint64_t w_reads_ = 0;
+    uint64_t w_bytes_ = 0;
+    uint64_t w_recs_ = 0;
+    uint64_t w_stalls_ = 0;
+    uint64_t w_poll_ns_ = 0;
+    uint64_t w_polls_ = 0;
+    uint64_t w_wall_ns_ = 0;
     std::atomic<bool> stop_{false};
     std::atomic<bool> stopped_{false};
     std::unordered_map<uint16_t, std::string> zone_names_;  // srcloc hash -> zone name (Tracy)

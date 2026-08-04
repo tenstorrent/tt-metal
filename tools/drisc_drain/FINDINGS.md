@@ -896,3 +896,118 @@ Two different regimes, and they need opposite treatment:
   a phase timer records where the core blocks, not what an operation costs. Removing work migrates
   the blocking time into a neighbouring phase rather than shrinking the total. Notify batching cut
   its phase 5.7x and moved throughput 0.2%. **Only the total is trustworthy.**
+
+## §N — The conduit drainer, and the knee at 125 (bh-05, 2026-08-04)
+
+Single-DRISC drain of the full 110-core grid, measured end to end with per-phase counters on both sides.
+**Knee moved 875 → 125** (7×) against the X280 baseline. Everything below is measured on
+`test_perf_debug_zones --gx 0 --gy 0 --iters 500 --delay N`, conduit drainer, no Tracy capture.
+
+### The design: the DRISC is a conduit, not a processor
+
+One **fused read** per core covers the whole 10,496 B `profiler_msg_t` — control vector *and* all five
+rings — in a single NoC burst (`NOC_MAX_BURST_SIZE` is 16,384 B on Blackhole: 256 words × 64 B). It then
+writes that same staging slot straight to the host. It **authors zero words inside a frame**.
+
+The fused read is legal because staleness runs the safe way: the control vector is at offset 0 and the
+rings at 256+, so ascending in-burst delivery samples the tail NO LATER than the data behind it.
+Everything in `[head, tail)` is already in the snapshot. The dangerous ordering — fresh tail, stale data —
+is ruled out by address order. Torn reads would appear as `run > cap` and are counted, never trusted.
+
+Identity, geometry and progress all reach the host inside the worker's own control vector. The host keeps
+its own head mirror (`head(frame N) == tail(frame N-1)`, exact because the FIFO is ordered and lossless)
+and uses the shipped head field as a **consistency check** — `head_drift` was 0 across ~15,000 frames.
+
+### ★★★ The CPU copy was 45% of the drainer — never repack on a DRISC
+
+Packing each lane's live run exactly, with CPU loads/stores out of the snapshot, cost **~11 cycles per
+word**: 20.4 µs to move one core's 2,490 words. A busy sweep was **2,271 µs** against an idle sweep's 36 µs.
+A `volatile tt_l1_ptr` word loop cannot be unrolled, widened or pipelined.
+
+Removing it (ship the raw span, let the host slice) took the busy sweep **2,271 → 244 µs** and producer
+stalls **21,175 → 0**. It costs shipping dead ring space, which is nearly free: the socket credit wait was
+0.0% and the PCIe write 0.1% at the time. **Exact packing traded a resource costing 0.1% for one costing 45%.**
+
+### The deadline model — occupancy is forced, not chosen
+
+    occupancy ≈ worst sweep / ring fill time,   fill = 128 zones × zone duration
+
+    delay 150:  94.9 / 129 us = 74%   observed 372/512 = 73%
+    delay 125:  95.4 / 107 us = 89%   observed 440/512 = 86%
+    delay 100:  95.0 /  86 us = 110%  saturates → stalls on all 110 cores
+
+Three points, within ~3%. At delay 100 the sweep is LONGER than the fill time, so it physically cannot
+return before the ring fills — the cliff is arithmetic, not a tuning threshold.
+
+**Corollary: pacing does not move the knee.** A gap lengthens the revisit period, which raises occupancy
+and cuts bytes, but the knee IS the point where period == fill. Pacing trades safety margin for byte
+efficiency. Its value is away from the knee: at delay 900 occupancy is forced to 11% and over-send is ~9×,
+where a large gap is nearly free.
+
+### Per-sweep budget at the knee (delay 150, no host decode)
+
+    IDLE 31.9 us = read 18.0 + proc 12.0 + barrier 0.5 + misc 1.4      (15,704 of 15,777 sweeps)
+    BUSY 83.6 us = read 18.0 + proc 19.6 + transport 38.9 + notify 4.6  reserve 0.0
+                   read 1.15 MB / 18.0 us = 64 GB/s   (FINDINGS ingest ceiling: 18.29 us / 67.4 GB/s)
+                   transport 1.14 MB / 38.9 us = 29 GB/s (egress reference 25.36 GB/s)
+
+`write` splits as **noc-chunk 1.82 µs/push (85%) | notify 0.29 (13%) | push_pages 0.04 (2%)**. The chunk
+figure is 40.6 GB/s, which is impossible for real movement — these are POSTED writes, so it measures
+*issue*; completion is the `wr-barrier` phase. Both hardware phases are at their documented ceilings.
+
+**Sub-ring shipping is a dead end.** It would fragment ~16 contiguous pushes into up to 550 small writes
+per sweep (66–200 µs of issue against 28.8 µs today) to save 1.9× on bytes, and would reintroduce the
+per-lane metadata that the conduit deleted. Transport at high occupancy is irreducible with this frame.
+
+### ★★ Stall counting must not go through the pipeline — put a counter in L1
+
+`SPSC_STALL_COUNT_0` (8 slots, indexed by processor id) is incremented by the producer in its own stall
+path and read by the host straight out of L1 at teardown. Validated against decode: **12,487 vs 12,459**
+(0.2%, counter higher — the correct direction, since decode can lose events and the counter cannot).
+
+This matters because every stall number measured through the decode path travelled DRISC frame → PCIe FIFO
+→ buffer pool → decoder → BroadcastRing, and every one of those was observed dropping data (1.29 M records
+at the ring alone). It also removes the host from the measurement entirely.
+
+### The host was the bottleneck, and it was never the memcpy
+
+Writer-thread phases at delay 300, full decode: **sock-read 3.8 ms (15.5 GB/s) | decode 13.5 | publish 8.7**.
+The copy is **15%** of host work. Decode + publish are 85%, and they sat between one socket ack and the
+next, so the ack rate — and hence the DRISC's credit wait — was gated by per-marker work.
+
+Proof by construction: same device code, delay 300, decode ON → **17,366 stalls**; minimal decode → **0**.
+
+Moving decode+publish to their own thread (bounded buffer pool, discard-and-count on exhaustion rather
+than back-pressuring the device) fixed delay 900 outright (0 stalls, complete records, previously bimodal
+0/5,115) and took delay 300 from 404 → 192 µs busy sweeps. It did not fully fix delay 300: the tail
+(worst sweep 368 µs vs 257 µs fill) still stalls, prime suspect the reader's 50 µs poll backoff.
+
+### Knee progression, and the negative results
+
+| configuration | knee | zone | aggregate |
+|---|---|---|---|
+| X280 (§27) | 875 | 5.88 µs | 187 M mk/s, 1.50 GB/s |
+| DRISC, per-lane sliced reads | ~750 | 5.03 µs | 219 M mk/s, 1.75 GB/s |
+| conduit + stall-only decode | 250–300 | 1.68–2.01 µs | 655 M mk/s, 5.2 GB/s |
+| **conduit + L1 counters, host read+ack only** | **125** | **0.84 µs** | **1.31 G mk/s, 10.5 GB/s** |
+
+Repeatable: 125 clean ×2 (occupancy 440/512 both runs, identical), 100 stalls ×2 (1,676 / 1,509, all 110
+cores). With the host in the path this configuration was bimodal (0 or ~5,000 stalls); with it out, the
+busy sweep is flat at 83–86 µs across every delay and occupancy repeats exactly.
+
+**Measured and rejected:**
+- **Bigger host reads.** `MAX_PAGES` 1024 → 16384 → 0: worst credit-wait 93 µs → 1.8 ms → **25.8 ms**,
+  stalls 984 → 884 → 10,010. A page cap bounds pages, not per-pass time. (Reconfirms ERA-2, §27.)
+- **Page size = frame size.** Collapsed page ops 165× (2.5 M → 8.9 K) and cut bytes 41%, and bought
+  NOTHING: total busy time 34.0 → 34.3 ms. It concentrated the same wait into fewer, longer stalls
+  (167 → 339 µs/busy sweep) and turned 0 stalls into 952. Socket page bookkeeping is not the egress wall.
+- **Unpaced bulk with the old per-lane framing.** 41× the NoC bytes of a control-vector poll; 18 GB of
+  reads to find 0.3 cores/sweep with data.
+
+### Next, in order
+
+1. **More DRISCs** — the only lever left on the knee. `read` and `proc` are per-core costs that halve with
+   a second drainer: ~95 → ~48 µs, knee ≈ 65. Bounded by egress: we are at 12 GB/s of a ~25 GB/s reference,
+   so 2 works and 3 hits the wall.
+2. **Pacing** — for host load and NoC traffic away from the knee, where over-send is ~9×.
+3. **Reader backoff** — the 50 µs sleep is the suspect for the delay-300 latency tail.

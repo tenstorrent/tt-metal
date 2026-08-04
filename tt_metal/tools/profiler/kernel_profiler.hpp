@@ -284,6 +284,12 @@ __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
         profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ppfmt::w0(ppfmt::T_STICKY_TIMER, start_hi);
         g_prev_timer_hi = start_hi;
     }
+    // Ground truth for the knee, straight from the producer. The stall ZONE below still goes into the ring
+    // for timeline use, but this counter is what the host reads when it wants the count without decoding --
+    // it cannot be lost downstream, and it costs one L1 store on a path that was already blocked.
+    if constexpr (myRiscID < SPSC_STALL_COUNT_MAX) {
+        profiler_control_buffer[SPSC_STALL_COUNT_0 + myRiscID]++;
+    }
     profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ppfmt::w0(ZONE_START, PROFILER_STALL_ZONE_ID);
     profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = start_lo;
     if (end_hi != g_prev_timer_hi) {  // hi ticked DURING the stall -> anchor the END before its low half
