@@ -102,6 +102,17 @@ def _modality_metadata(num_text: int, num_audio: int, num_video: int):
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
+    "weights",
+    [
+        pytest.param("random", id="random_weights"),
+        # Real checkpoint values at reduced depth. Random weights cannot exercise the trained
+        # distribution, and they hid a live bug once already (nn.RMSNorm inits to ones, so norm weight
+        # loading was invisible until `randomize_norm_weights` was added). Skipped unless
+        # MINIMAX_H3_MODEL_PATH is set.
+        pytest.param("checkpoint", id="real_weights"),
+    ],
+)
+@pytest.mark.parametrize(
     ("num_text", "num_audio", "num_video"),
     [
         # Each modality's row count only needs to be a multiple of TILE (32); the packed sequence is
@@ -120,6 +131,7 @@ def test_minimax_h3_transformer(
     num_text: int,
     num_audio: int,
     num_video: int,
+    weights: str,
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
@@ -163,6 +175,18 @@ def test_minimax_h3_transformer(
         f"num_timesteps={num_timesteps}, layers={NUM_LAYERS} (reduced from 50)"
     )
 
+    checkpoint_state = None
+    if weights == "checkpoint":
+        model_root = os.environ.get(MODEL_PATH_ENV)
+        if not model_root:
+            pytest.skip(f"set {MODEL_PATH_ENV} to a MiniMax-H3 diffusers snapshot to run this")
+        directory = Path(model_root) / os.environ.get(SUBFOLDER_ENV, "transformer")
+        if not directory.is_dir():
+            pytest.skip(f"{directory} is not a directory")
+        start = time.time()
+        checkpoint_state = _truncated_depth_state_dict(directory, NUM_LAYERS)
+        logger.info(f"read {len(checkpoint_state)} tensors for {NUM_LAYERS} layers in {time.time() - start:.1f}s")
+
     torch_model = TorchMiniMaxH3Transformer(
         num_attention_heads=NUM_ATTENTION_HEADS,
         attention_head_dim=ATTENTION_HEAD_DIM,
@@ -182,8 +206,18 @@ def test_minimax_h3_transformer(
         norm_eps=NORM_EPS,
         qk_norm_eps=QK_NORM_EPS,
         final_norm_eps=FINAL_NORM_EPS,
-    ).to(torch.float32)
-    randomize_norm_weights(torch_model)
+    )
+    if checkpoint_state is not None:
+        # strict: the truncated dict must cover the truncated model exactly.
+        torch_model.load_state_dict(checkpoint_state, strict=True)
+        # fp32 reference throughout, so the comparison is against the reference maths rather than the
+        # checkpoint's mixed bf16/fp32 storage.
+        torch_model = torch_model.to(torch.float32)
+    else:
+        torch_model = torch_model.to(torch.float32)
+        # Random weights leave every RMSNorm affine at ones, which makes norm weight loading
+        # invisible to a PCC comparison. Real weights need no such help.
+        randomize_norm_weights(torch_model)
     torch_model.eval()
 
     video_input = torch.randn((B, num_video, VIDEO_PATCH_DIM), dtype=torch.float32)
@@ -268,6 +302,9 @@ def test_minimax_h3_transformer(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
     )
+    # Same weights into the TT model. For the checkpoint case this deliberately re-reads them from
+    # `torch_model.state_dict()` rather than the raw dict, so the fp32 cast above applies to both
+    # sides and any difference is the port, not the dtype.
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # The modality inputs are fully replicated: they are projected and concatenated into the packed
@@ -356,21 +393,44 @@ SUBFOLDER_ENV = "MINIMAX_H3_SUBFOLDER"
 _CALLER_OWNED_CONFIG_KEYS = ("rope_freq_dim", "rope_theta")
 
 
-def _load_reference_state_dict(directory: Path) -> dict[str, torch.Tensor]:
-    """Read a sharded safetensors checkpoint into one state dict, shard by shard."""
+def _load_reference_state_dict(directory: Path, keep=None) -> dict[str, torch.Tensor]:
+    """Read a sharded safetensors checkpoint into one state dict, shard by shard.
+
+    `keep(key) -> bool` filters at read time rather than after, so a truncated-depth model does not
+    pay to materialise 50 blocks' worth of weights to use two of them.
+    """
     index_path = directory / "diffusion_pytorch_model.safetensors.index.json"
     weight_map = json.loads(index_path.read_text())["weight_map"]
     by_file: dict[str, list[str]] = defaultdict(list)
     for key, shard in weight_map.items():
-        by_file[shard].append(key)
+        if keep is None or keep(key):
+            by_file[shard].append(key)
 
     state: dict[str, torch.Tensor] = {}
     for shard in sorted(by_file):
         with safe_open(directory / shard, framework="pt") as handle:
             for key in by_file[shard]:
                 state[key] = handle.get_tensor(key)
-    assert len(state) == len(weight_map), f"loaded {len(state)} of {len(weight_map)} tensors"
+    if keep is None:
+        assert len(state) == len(weight_map), f"loaded {len(state)} of {len(weight_map)} tensors"
     return state
+
+
+def _truncated_depth_state_dict(directory: Path, num_layers: int) -> dict[str, torch.Tensor]:
+    """The real checkpoint restricted to the first `num_layers` transformer blocks.
+
+    The block stack is the only depth-dependent part; every other module (input projections, timestep
+    MLP, token refiner, norm_out, both output heads) is present exactly once and loads unchanged. So a
+    2-layer model built from this dict is the real model's first two layers with real weights, and a
+    strict load will still catch any key that does not map.
+    """
+
+    def keep(key: str) -> bool:
+        if not key.startswith("transformer_blocks."):
+            return True
+        return int(key.split(".")[1]) < num_layers
+
+    return _load_reference_state_dict(directory, keep=keep)
 
 
 @pytest.mark.parametrize(
