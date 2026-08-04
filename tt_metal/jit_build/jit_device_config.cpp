@@ -45,7 +45,7 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
     const size_t num_l1_banks = get_logical_compute_cores(env, device_id, num_hw_cqs, dispatch_core_config).size();
 
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
-    CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
+    CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0].to_pair();
 
     return {
         .hal = &hal,

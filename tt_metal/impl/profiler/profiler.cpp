@@ -699,7 +699,7 @@ auto coalesceFabricEvents(
                     // disable linting here; slicing is __intended__
                     // NOLINTBEGIN
                     CoreCoord local_noc_write_dst_phys =
-                        translateNocCoordinatesToNoc0(device_id, local_noc_write_dst_virt, local_noc_write.noc_type);
+                        translateNocCoordinatesToNoc0(device_id, local_noc_write_dst_virt, local_noc_write.noc_type).to_pair();
                     // NOLINTEND
                     if (!fabric_mux_markers.contains(local_noc_write_dst_phys)) {
                         addFabricMuxEvents(markers, fabric_mux_markers, local_noc_write_dst_phys);
@@ -983,7 +983,8 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                         local_noc_write_marker.chip_id,
                         {static_cast<size_t>(local_noc_write_event.dst_x),
                          static_cast<size_t>(local_noc_write_event.dst_y)},
-                        local_noc_write_event.noc_type);
+                        local_noc_write_event.noc_type)
+                            .to_pair();
 
                     auto fabric_mux_marker = fabric_event_markers.fabric_mux_marker.value();
                     auto fabric_mux_event = std::get<EMD::LocalNocEvent>(EMD(fabric_mux_marker.data).getContents());
@@ -996,7 +997,8 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     auto eth_router_phys_coord = translateNocCoordinatesToNoc0(
                         fabric_mux_marker.chip_id,
                         {static_cast<size_t>(fabric_mux_event.dst_x), static_cast<size_t>(fabric_mux_event.dst_y)},
-                        fabric_mux_event.noc_type);
+                        fabric_mux_event.noc_type)
+                            .to_pair();
                     auto eth_chan_opt =
                         routing_lookup.getRouterEthCoreToChannelLookup(device_id, eth_router_phys_coord);
                     if (!eth_chan_opt) {
@@ -1021,7 +1023,8 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                         local_noc_write_marker.chip_id,
                         {static_cast<size_t>(local_noc_write_event.dst_x),
                          static_cast<size_t>(local_noc_write_event.dst_y)},
-                        local_noc_write_event.noc_type);
+                        local_noc_write_event.noc_type)
+                            .to_pair();
                     auto eth_chan_opt =
                         routing_lookup.getRouterEthCoreToChannelLookup(device_id, eth_router_phys_coord);
                     if (!eth_chan_opt) {
@@ -1527,7 +1530,7 @@ void DeviceProfiler::readRiscProfilerResults(
     const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
     // disable linting here; slicing is __intended__
     // NOLINTBEGIN
-    const CoreCoord phys_coord = soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::NOC0);
+    const CoreCoord phys_coord = soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::NOC0).to_pair();
     // NOLINTEND
     // helper function to lookup opname from runtime id if metadata is available
     auto getOpNameIfAvailable = [&metadata](auto device_id, auto runtime_id) {
@@ -1941,7 +1944,7 @@ void DeviceProfiler::readDeviceMarkerData(
             // disable linting here; slicing is __intended__
             // NOLINTBEGIN
             const CoreCoord virtual_core =
-                soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
+                soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED).to_pair();
             // NOLINTEND
 
             NocDebuggingEventMetadata ev_md(data);
@@ -2006,7 +2009,7 @@ void DeviceProfiler::readTsData16BMarkerData(
             // disable linting here; slicing is __intended__
             // NOLINTBEGIN
             const CoreCoord virtual_core =
-                soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
+                soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED).to_pair();
             // NOLINTEND
             noc_debug_state->push_event(
                 device_id,
@@ -2716,7 +2719,7 @@ void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& devi
         // disable linting here; slicing is __intended__
         // NOLINTBEGIN
         const CoreCoord logical_core =
-            soc_desc.translate_coord_to(worker_core, CoordSystem::NOC0, CoordSystem::LOGICAL);
+            soc_desc.translate_coord_to(worker_core, CoordSystem::NOC0, CoordSystem::LOGICAL).to_pair();
         // NOLINTEND
         const std::string tracyTTCtxName = fmt::format(
             "Device: {}, Logical ({},{}) Physical ({},{})",

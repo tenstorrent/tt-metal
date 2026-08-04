@@ -66,7 +66,7 @@ void configure_fabric_cores(tt::tt_metal::IDevice* device) {
     const auto& router_config = builder_context.get_fabric_router_config();
     std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);
     for (const auto& [router_chan, _] : router_chans_and_direction) {
-        auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
+        auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL).to_pair();
         for (const auto& address : addresses_to_clear) {
             tt::tt_metal::detail::WriteToDeviceL1(device, router_logical_core, address, router_zero_buf, CoreType::ETH);
         }

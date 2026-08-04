@@ -961,19 +961,19 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
     if (not skip_physical) {
         for (tt::umd::CoreCoord core : pcie_cores) {
             set_addressable_core(
-                core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::PCIE);
+                core_info.non_worker_cores()[non_worker_cores_idx++], core.to_pair(), dev_msgs::AddressableCoreType::PCIE);
         }
         for (tt::umd::CoreCoord core : dram_cores) {
             set_addressable_core(
-                core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::DRAM);
+                core_info.non_worker_cores()[non_worker_cores_idx++], core.to_pair(), dev_msgs::AddressableCoreType::DRAM);
         }
         for (tt::umd::CoreCoord core : eth_cores) {
             set_addressable_core(
-                core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::ETH);
+                core_info.non_worker_cores()[non_worker_cores_idx++], core.to_pair(), dev_msgs::AddressableCoreType::ETH);
         }
         for (tt::umd::CoreCoord core : dispatch_cores) {
             set_addressable_core(
-                core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::DISPATCH);
+                core_info.non_worker_cores()[non_worker_cores_idx++], core.to_pair(), dev_msgs::AddressableCoreType::DISPATCH);
         }
     }
 
@@ -988,7 +988,7 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
         }
 
         if (cluster_.arch() == ARCH::BLACKHOLE) {
-            for (const CoreCoord& core : pcie_cores) {
+            for (const tt::umd::CoreCoord& core : pcie_cores) {
                 auto virtual_core =
                     cluster_.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
                 set_addressable_core(
@@ -997,7 +997,7 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
                     dev_msgs::AddressableCoreType::PCIE);
             }
 
-            for (const CoreCoord& core : dram_cores) {
+            for (const tt::umd::CoreCoord& core : dram_cores) {
                 auto virtual_core =
                     cluster_.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
                 set_addressable_core(

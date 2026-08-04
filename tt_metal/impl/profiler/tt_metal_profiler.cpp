@@ -309,7 +309,7 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
     // disable linting here; slicing is __intended__
     // NOLINTBEGIN
     profiler_state_manager->device_profiler_map.at(device_id).device_core_sync_info.insert_or_assign(
-        CoreCoord(phys_core), SyncInfo(host_timestamp, device_timestamp, frequencyFit));
+        phys_core.to_pair(), SyncInfo(host_timestamp, device_timestamp, frequencyFit));
     // NOLINTEND
 }
 

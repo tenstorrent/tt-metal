@@ -170,7 +170,7 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
         if (chan == master_chan) {
             continue;
         }
-        auto core = soc_desc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+        auto core = soc_desc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL).to_pair();
         std::vector<uint32_t> status_buf{0};
         detail::ReadFromDeviceL1(dev, core, router_sync_address, 4, status_buf, CoreType::ETH);
         reports.push_back({chan, core, status_buf[0], classify_edm_status(status_buf[0]), /*is_master=*/false});
@@ -398,7 +398,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         }
 
         auto master_router_logical_core = cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(
-            builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
+            builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL).to_pair();
         detail::WriteToDeviceL1(
             dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
     }
@@ -463,7 +463,7 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
 
         const auto master_router_chan = builder_context.get_fabric_master_router_chan(dev->id());
         const auto master_router_logical_core =
-            cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(master_router_chan, CoordSystem::LOGICAL);
+            cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(master_router_chan, CoordSystem::LOGICAL).to_pair();
 
         const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
         std::vector<std::uint32_t> master_router_status{0};
