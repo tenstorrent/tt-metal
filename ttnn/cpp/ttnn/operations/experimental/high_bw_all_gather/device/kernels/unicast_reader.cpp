@@ -51,7 +51,13 @@ void kernel_main() {
     // The maximum per-rank output slot is structural even for selected-prefix gathers, so its
     // stripe width stays baked and keeps the iterator arithmetic constexpr.
     constexpr uint32_t static_output_chunks_per_stripe = get_compile_time_arg_val(7);
-    constexpr auto input_tensor_args = TensorAccessorArgs<8>();
+    constexpr bool linearized_mesh_ring = get_compile_time_arg_val(8) != 0;
+    constexpr auto snake_orientation =
+        static_cast<ttnn::operations::experimental::high_bw_all_gather::snake_ring::Orientation>(
+            get_compile_time_arg_val(9));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(10);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(11);
+    constexpr auto input_tensor_args = TensorAccessorArgs<12>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
@@ -90,7 +96,11 @@ void kernel_main() {
         output_chunk_size,
         num_devices,
         slice_step,
-        static_output_chunks_per_stripe>
+        static_output_chunks_per_stripe,
+        linearized_mesh_ring,
+        snake_orientation,
+        mesh_rows,
+        mesh_cols>
         it;
 
     ///////////////////////////////////////////////////
