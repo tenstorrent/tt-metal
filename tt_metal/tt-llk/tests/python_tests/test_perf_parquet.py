@@ -37,14 +37,16 @@ _RUN_PROV = dict(
 
 def _output_row():
     """What one perf test emits: a few OUTPUT columns, the rest absent."""
+    # Real perf reports carry three profiler markers per config: INIT, KERNEL,
+    # TILE_LOOP (see the marker values in nightly CSVs).
     return pd.DataFrame(
         {
-            "marker": ["INIT", "TILE_LOOP"],
-            "mean(MATH_ISOLATE)": [10.5, 20.0],
-            "std(MATH_ISOLATE)": [1.0, 2.0],
-            "tile_cnt": [4, 4],
-            "loop_factor": [1, 1],
-            "approx_mode": ["No", "No"],
+            "marker": ["INIT", "KERNEL", "TILE_LOOP"],
+            "mean(MATH_ISOLATE)": [10.5, 15.0, 20.0],
+            "std(MATH_ISOLATE)": [1.0, 1.5, 2.0],
+            "tile_cnt": [4, 4, 4],
+            "loop_factor": [1, 1, 1],
+            "approx_mode": ["No", "No", "No"],
         }
     )
 
@@ -69,8 +71,14 @@ def test_report_round_trips_through_parquet(tmp_path):
     assert table.schema.names == [c.name for c in DB_SCHEMA]
 
     back = table.to_pandas()
-    assert list(back["mean(MATH_ISOLATE)"].dropna()) == [10.5, 20.0]
+    # every source row survives, values intact, provenance stamped on each row.
+    assert table.num_rows == len(df)
+    assert list(back["marker"]) == ["INIT", "KERNEL", "TILE_LOOP"]
+    assert list(back["mean(MATH_ISOLATE)"].dropna()) == [10.5, 15.0, 20.0]
     assert set(back["arch"]) == {"wormhole"}
+    assert set(back["commit_sha"]) == {"abc123"}
+    assert set(back["test_name"]) == {"perf_x"}
+    # tmp_path is torn down by pytest, so the file needs no manual cleanup.
 
 
 def test_missing_columns_are_null_not_dropped():
@@ -106,10 +114,10 @@ def _output_row_b():
     """A second test emitting a different column set (no MATH_ISOLATE)."""
     return pd.DataFrame(
         {
-            "marker": ["INIT", "TILE_LOOP"],
-            "mean(PACK_ISOLATE)": [5.0, 6.0],
-            "num_faces": [4, 4],
-            "tile_cnt": [2, 2],
+            "marker": ["INIT", "KERNEL", "TILE_LOOP"],
+            "mean(PACK_ISOLATE)": [5.0, 5.5, 6.0],
+            "num_faces": [4, 4, 4],
+            "tile_cnt": [2, 2, 2],
         }
     )
 
@@ -122,7 +130,7 @@ def test_run_batch_compacts_multiple_tests():
     assert table.schema.names == [c.name for c in DB_SCHEMA]
 
     df = table.to_pandas()
-    assert len(df) == 4  # 2 markers x 2 tests
+    assert len(df) == 6  # 3 markers x 2 tests
     assert set(df["test_name"]) == {"perf_a", "perf_b"}
     # A column only one test emits is NULL on the other test's rows.
     assert df[df["test_name"] == "perf_b"]["mean(MATH_ISOLATE)"].isna().all()
@@ -150,7 +158,7 @@ def test_write_run_batch_is_one_file_per_run(tmp_path):
     assert path.exists()
     table = pq.read_table(path)
     assert table.schema.names == [c.name for c in DB_SCHEMA]
-    assert table.num_rows == 4
+    assert table.num_rows == 6
 
 
 # ── CSV -> Parquet conversion ─────────────────────────────────────────────────
