@@ -399,6 +399,38 @@
 
 # ── Gemma ──────────────────────────────────────────────────────────
 
+# Tier 3: accuracy-only e2e (ci-token-matching). Validated locally on N150 (2B)
+# and N300 (2B + 9B). Requires gemma-2-{2b,9b}-it.refpt under
+# models/tt_transformers/tests/reference_outputs/.
+- name: Gemma-2-2B e2e tests
+  cmd: |
+    export HF_MODEL=google/gemma-2-2b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-2b-it
+    pytest --timeout 900 models/tt_transformers/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
+  model: gemma-2-2b
+  model_family: Gemma
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 3
+    wh_n300:
+      timeout: 20
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-2-9B e2e tests
+  cmd: |
+    export HF_MODEL=google/gemma-2-9b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-2-9b-it
+    pytest --timeout 1200 models/tt_transformers/demo/simple_text_demo.py -k "ci-token-matching and accuracy"
+  model: gemma-2-9b
+  model_family: Gemma
+  skus:
+    wh_n300:
+      timeout: 25
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Gemma-3-4B e2e tests
   cmd: |
     export HF_MODEL=google/gemma-3-4b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-4b-it

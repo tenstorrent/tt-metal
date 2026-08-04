@@ -342,8 +342,10 @@ models:
     bh_quietbox_2: 186
   e2e_tier3:
     wh_llmbox_perf: 64
-    wh_n150: 42
-    wh_n300: 15
+    # +20 for gemma-2-2b (N150 accuracy e2e)
+    wh_n150: 62
+    # +20 gemma-2-2b + +25 gemma-2-9b (N300 accuracy e2e)
+    wh_n300: 60
     bh_p150: 7
     bh_p300: 8
     bh_quietbox_2: 30
@@ -370,8 +372,10 @@ models:
     bh_quietbox_2: 50
   unit_tier3:
     wh_llmbox_perf: 58
-    wh_n150: 33
-    wh_n300: 15
+    # +8 for gemma-2-2b decoder unit
+    wh_n150: 41
+    # +8 gemma-2-2b + +10 gemma-2-9b decoder unit
+    wh_n300: 33
     bh_p150: 20
     bh_p300: 30
     bh_quietbox_2: 21

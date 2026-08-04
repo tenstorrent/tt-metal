@@ -80,6 +80,8 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 |-------|---------|
 | Falcon-7B | WH N150 |
 | Falcon-40B | WH LLMBox |
+| Gemma-2-2B | WH N150, WH N300 |
+| Gemma-2-9B | WH N300 |
 | Llama3.2-1B | WH N150 |
 | Llama3.2-3B | WH N150 |
 | Llama3.2-11B-Vision | WH LLMBox |
