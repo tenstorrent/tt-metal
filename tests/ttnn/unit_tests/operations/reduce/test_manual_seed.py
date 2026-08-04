@@ -123,7 +123,7 @@ def test_manual_seed_mapping_functionality(device):
 
     # Prepare seed and user_id tensors for mapping
     user_id_tensor = ttnn.arange(0, 32, dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
-    seed_tensor = ttnn.rand([32], dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    seed_tensor = ttnn.arange(1, 33, dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
 
     # Get first sampling result with mapped seeds
     ttnn.manual_seed(seeds=seed_tensor, user_ids=user_id_tensor)
@@ -247,7 +247,7 @@ def test_manual_seed_mapping_functionality_sub_core_grids(device):
 
     # Prepare seed and user_id tensors for mapping
     user_id_tensor = ttnn.arange(0, 32, dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
-    seed_tensor = ttnn.rand([32], dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    seed_tensor = ttnn.arange(1, 33, dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
 
     # Get first sampling result with mapped seeds
     ttnn.manual_seed(seeds=seed_tensor, user_ids=user_id_tensor, sub_core_grids=sub_core_grids)

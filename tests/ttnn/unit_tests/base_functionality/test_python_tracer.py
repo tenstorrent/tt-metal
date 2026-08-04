@@ -75,10 +75,9 @@ def enable_tracing_for_test(request):
         ([2, 3], [2, 3], ttnn.bfloat16),
         ([4, 5], [4, 5], ttnn.bfloat16),
         ([1, 8], [1, 8], ttnn.float32),
-        ([3, 4], [3, 4], ttnn.int32),
         ([2, 2, 2], [2, 2, 2], ttnn.bfloat16),
     ],
-    ids=["2x3_bfloat16", "4x5_bfloat16", "1x8_float32", "3x4_int32", "2x2x2_bfloat16"],
+    ids=["2x3_bfloat16", "4x5_bfloat16", "1x8_float32", "2x2x2_bfloat16"],
 )
 def test_operation_parameter_tracing(tmp_path, device, shape_a, shape_b, dtype):
     """Test that operation parameters are traced when --trace-params flag is used."""

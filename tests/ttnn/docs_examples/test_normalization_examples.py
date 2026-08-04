@@ -9,6 +9,10 @@ import math
 from loguru import logger
 
 
+def _rand_bfloat8_b(shape, device):
+    return ttnn.typecast(ttnn.rand(shape, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device), ttnn.bfloat8_b)
+
+
 def test_group_norm(device):
     #
     # Sharded Input Tensor Example
@@ -297,8 +301,8 @@ def test_scale_mask_softmax(device):
     num_cores_r = compute_grid_size.y
 
     input_shape = (batch, num_cores_r, fuse_head * 384, 768)
-    attention_mask_t = ttnn.rand((batch, 1, 1, 768), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    attention_mask_t = _rand_bfloat8_b((batch, 1, 1, 768), device)
+    input_tensor = _rand_bfloat8_b(input_shape, device)
 
     # Apply scale mask softmax
     tt_output = ttnn.scale_mask_softmax(
@@ -324,8 +328,8 @@ def test_scale_mask_softmax_in_place(device):
     # Setup input tensor and mask
     input_shape = (1, 1, 32, 32)
 
-    attention_mask_t = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    attention_mask_t = _rand_bfloat8_b(input_shape, device)
+    input_tensor = _rand_bfloat8_b(input_shape, device)
 
     # Apply in-place scale mask softmax
     tt_output = ttnn.scale_mask_softmax_in_place(
@@ -342,9 +346,9 @@ def test_scale_mask_softmax_in_place(device):
 
     input_shape = (batch, num_cores_r, fuse_head * 384, 768)
 
-    attention_mask_t = ttnn.rand((batch, 1, 384, 768), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    attention_mask_t = _rand_bfloat8_b((batch, 1, 384, 768), device)
 
-    input_tensor = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = _rand_bfloat8_b(input_shape, device)
 
     # Shard the input tensor
     grid_coord = ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
@@ -379,9 +383,9 @@ def test_scale_causal_mask_hw_dims_softmax_in_place(device):
     num_cores_r = compute_grid_size.y
 
     input_shape = (batch, num_cores_r, 384, 768)
-    attention_mask_t = ttnn.rand((1, 1, 384, 768), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    attention_mask_t = _rand_bfloat8_b((1, 1, 384, 768), device)
 
-    input_tiled = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tiled = _rand_bfloat8_b(input_shape, device)
 
     # We must shard the input tensor in ROW_MAJOR orientation
     grid_coord = ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)

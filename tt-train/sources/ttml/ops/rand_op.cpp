@@ -28,6 +28,11 @@ autograd::TensorPtr rand(
     tt::tt_metal::DataType dtype,
     tt::tt_metal::Layout layout,
     const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
+    TT_FATAL(
+        dtype == tt::tt_metal::DataType::FLOAT32 || dtype == tt::tt_metal::DataType::BFLOAT16,
+        "[ttml::ops::rand] dtype must be FLOAT32 or BFLOAT16, got {}.",
+        dtype);
+
     auto* device = &autograd::ctx().get_device();
     ttnn::MemoryConfig mem_config{};
 
