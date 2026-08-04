@@ -37,10 +37,22 @@ void SwigluPackedBwDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
+    // Call only after check_tensor has established DEVICE storage on both tensors.
+    auto check_same_device = [](const ttnn::Tensor& tensor, const ttnn::Tensor& reference, const std::string& name) {
+        TT_FATAL(
+            tensor.device() == reference.device(),
+            "SwigluPackedBw: {} is on a different device than packed. The program is created on "
+            "packed's device and the kernels are handed {}'s raw buffer address, so a foreign "
+            "buffer would be addressed as if it were local.",
+            name,
+            name);
+    };
+
     const auto& packed = tensor_args.packed;
     const auto& dL_dh = tensor_args.dL_dh;
     check_tensor(packed, "packed");
     check_tensor(dL_dh, "dL_dh");
+    check_same_device(dL_dh, packed, "dL_dh");
 
     const auto& packed_padded = packed.padded_shape();
     const auto& dh_padded = dL_dh.padded_shape();
@@ -50,6 +62,12 @@ void SwigluPackedBwDeviceOperation::validate_on_program_cache_miss(
         packed_padded[-1] % two_tiles_w == 0U,
         "SwigluPackedBw: packed last padded dim {} must be a multiple of {} so each half is tile-aligned",
         packed_padded[-1],
+        two_tiles_w);
+    TT_FATAL(
+        packed.logical_shape()[-1] % two_tiles_w == 0U,
+        "SwigluPackedBw: packed last logical dim {} must be a multiple of {} so the gate|up split "
+        "lands on the tile boundary where the kernel splits the padded row",
+        packed.logical_shape()[-1],
         two_tiles_w);
     TT_FATAL(
         dh_padded[-1] * 2U == packed_padded[-1] && dh_padded[-2] == packed_padded[-2] &&
@@ -66,11 +84,18 @@ void SwigluPackedBwDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.preallocated_dL_dpacked.has_value()) {
         const auto& out = tensor_args.preallocated_dL_dpacked.value();
         check_tensor(out, "preallocated_dL_dpacked");
+        check_same_device(out, packed, "preallocated_dL_dpacked");
         TT_FATAL(
             out.padded_shape() == packed_padded,
             "SwigluPackedBw: preallocated_dL_dpacked padded shape {} must match packed {}",
             out.padded_shape(),
             packed_padded);
+        TT_FATAL(
+            out.logical_shape() == packed.logical_shape(),
+            "SwigluPackedBw: preallocated_dL_dpacked logical shape {} must match packed {}; its "
+            "spec is returned to the caller as the output spec",
+            out.logical_shape(),
+            packed.logical_shape());
     }
 }
 
@@ -105,7 +130,9 @@ ttsl::hash::hash_t SwigluPackedBwDeviceOperation::compute_program_hash(
         packed.dtype(),
         packed.logical_shape(),
         packed.padded_shape(),
+        packed.memory_config(),
         tensor_args.dL_dh.logical_shape(),
+        tensor_args.dL_dh.memory_config(),
         out_memcfg);
 }
 

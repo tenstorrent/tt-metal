@@ -162,6 +162,19 @@ class TestValidation:
         with expect_error(RuntimeError, "halved"):
             ttml.ops.metal.swiglu_packed_bw(packed.get_value(), wrong.get_value())
 
+    # 100 pads to 128, so the padded halves are tile-aligned and only the logical split is wrong:
+    # the kernel would read up at element 64 while the op's contract puts it at 50.
+    def test_fw_rejects_a_logical_width_that_pads_into_alignment(self, expect_error):
+        packed = to_device(np.zeros((1, 1, 32, 100)))
+        with expect_error(RuntimeError, "logical dim"):
+            ttml.ops.metal.swiglu_packed_fw(packed.get_value())
+
+    def test_bw_rejects_a_logical_width_that_pads_into_alignment(self, expect_error):
+        packed = to_device(np.zeros((1, 1, 32, 100)))
+        dh = to_device(np.zeros((1, 1, 32, 50)))  # consistent with packed, both halves of a bad split
+        with expect_error(RuntimeError, "logical dim"):
+            ttml.ops.metal.swiglu_packed_bw(packed.get_value(), dh.get_value())
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

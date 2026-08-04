@@ -11,6 +11,16 @@
 
 namespace ttml::metal::ops::swiglu_packed_fw::device {
 
+namespace {
+
+// The output is packed with the gate|up halves collapsed into one, so every shape of the output is
+// the corresponding shape of packed with the last dim halved.
+ttnn::Shape halve_last_dim(const ttnn::Shape& shape) {
+    return ttnn::Shape({shape[0], shape[1], shape[2], shape[-1] / 2U});
+}
+
+}  // namespace
+
 void SwigluPackedFwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
@@ -37,6 +47,17 @@ void SwigluPackedFwDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
+    // Call only after check_tensor has established DEVICE storage on both tensors.
+    auto check_same_device = [](const ttnn::Tensor& tensor, const ttnn::Tensor& reference, const std::string& name) {
+        TT_FATAL(
+            tensor.device() == reference.device(),
+            "SwigluPackedFw: {} is on a different device than packed. The program is created on "
+            "packed's device and the kernels are handed {}'s raw buffer address, so a foreign "
+            "buffer would be addressed as if it were local.",
+            name,
+            name);
+    };
+
     const auto& packed = tensor_args.packed;
     check_tensor(packed, "packed");
 
@@ -49,20 +70,30 @@ void SwigluPackedFwDeviceOperation::validate_on_program_cache_miss(
         packed_padded[-1],
         two_tiles_w);
     TT_FATAL(
-        packed.logical_shape()[-1] % 2U == 0U,
-        "SwigluPackedFw: packed last logical dim {} must be even so the gate|up split is well-defined",
-        packed.logical_shape()[-1]);
+        packed.logical_shape()[-1] % two_tiles_w == 0U,
+        "SwigluPackedFw: packed last logical dim {} must be a multiple of {} so the gate|up split "
+        "lands on the tile boundary where the kernel splits the padded row",
+        packed.logical_shape()[-1],
+        two_tiles_w);
 
     if (tensor_args.preallocated_output.has_value()) {
         const auto& out = tensor_args.preallocated_output.value();
         check_tensor(out, "preallocated_output");
-        const auto& out_padded = out.padded_shape();
+        check_same_device(out, packed, "preallocated_output");
+        const auto expected_padded = halve_last_dim(packed_padded);
         TT_FATAL(
-            out_padded[-1] * 2U == packed_padded[-1] && out_padded[-2] == packed_padded[-2] &&
-                out_padded[0] == packed_padded[0] && out_padded[1] == packed_padded[1],
-            "SwigluPackedFw: preallocated_output padded shape {} must be packed {} with the last dim halved",
-            out_padded,
+            out.padded_shape() == expected_padded,
+            "SwigluPackedFw: preallocated_output padded shape {} must be {} (packed {} with the last dim halved)",
+            out.padded_shape(),
+            expected_padded,
             packed_padded);
+        const auto expected_logical = halve_last_dim(packed.logical_shape());
+        TT_FATAL(
+            out.logical_shape() == expected_logical,
+            "SwigluPackedFw: preallocated_output logical shape {} must be {}; its spec is returned "
+            "to the caller as the output spec",
+            out.logical_shape(),
+            expected_logical);
     }
 }
 
@@ -72,10 +103,9 @@ spec_return_value_t SwigluPackedFwDeviceOperation::compute_output_specs(
         return tensor_args.preallocated_output->tensor_spec();
     }
     const auto& packed = tensor_args.packed;
-    const auto& in_shape = packed.logical_shape();
-    const ttnn::Shape out_shape({in_shape[0], in_shape[1], in_shape[2], in_shape[-1] / 2U});
     return tt::tt_metal::TensorSpec(
-        out_shape, tt::tt_metal::TensorLayout(packed.dtype(), tt::tt_metal::Layout::TILE, packed.memory_config()));
+        halve_last_dim(packed.logical_shape()),
+        tt::tt_metal::TensorLayout(packed.dtype(), tt::tt_metal::Layout::TILE, packed.memory_config()));
 }
 
 tensor_return_value_t SwigluPackedFwDeviceOperation::create_output_tensors(
@@ -93,7 +123,7 @@ ttsl::hash::hash_t SwigluPackedFwDeviceOperation::compute_program_hash(
                                  ? tensor_args.preallocated_output->memory_config()
                                  : packed.memory_config();
     return tt::tt_metal::operation::hash_operation<SwigluPackedFwDeviceOperation>(
-        args, packed.dtype(), packed.logical_shape(), packed.padded_shape(), out_memcfg);
+        args, packed.dtype(), packed.logical_shape(), packed.padded_shape(), packed.memory_config(), out_memcfg);
 }
 
 }  // namespace ttml::metal::ops::swiglu_packed_fw::device

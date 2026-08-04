@@ -177,6 +177,15 @@ class SFTTrainer:
         if config.seed is not None:
             ttml.autograd.AutoContext.get_instance().set_seed(config.seed)
 
+        # Read the strategy before any wrapping: LoraModel holds the real model at .model and
+        # forwards no attributes, so this has to happen while `model` is still the model itself.
+        # Models that expose no tp_strategy (every non-Llama one) leave the check inactive.
+        strategy = getattr(getattr(model, "config", None), "tp_strategy", None)
+        if strategy is not None and config.sequence_parallel != strategy.sequence_parallel:
+            raise ValueError(
+                f"SFTConfig.sequence_parallel={config.sequence_parallel} disagrees with the model's {strategy}."
+            )
+
         if peft_config is not None:
             from ttml.modules.lora import LoraModel
 
