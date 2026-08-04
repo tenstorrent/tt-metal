@@ -1028,7 +1028,56 @@ config leaves on the table: **317 KB of L1 is spare and a K-row of weight buffer
 13.5 KB** (13g). Deeper weight CBs and per-trid barriers are complementary, and between them
 they are what would take isl-64 from 116.7 us toward the ~79 us full-overlap figure in 13j.
 
-### 13l. Still on the table
+### 13l. TRIED AND REVERTED: hoisting the DRAM read above the ready handshake
+
+The per-block decomposition (13b) books 2503 cy — 41% — as "ready-barrier + peer-valid wait",
+and the sender reads DRAM into ITS OWN cb_in1 slot, already reserved at the top of the
+iteration. So the read has no dependency on the receivers, yet `reader.cpp` waited for the
+handshake BEFORE issuing it. Hoisting the read above the wait should have overlapped ~2503 cy
+of peer wait with ~2499 cy of read issue + completion, predicting per-block
+6101 -> ~3602 cy (~1.7x on the overhead, ~1.28x at isl-64). There was even an in-repo
+precedent: in UP_SPLIT mode the writer's `up` read is already triggered from the top of the
+loop, above the wait.
+
+Implemented for both the in1 (weights) and in0 (x) senders. 72/72 functional tests pass, so
+the handshake was not broken. But the effect is absent:
+
+| case | baseline | hoisted | delta |
+|---|---|---|---|
+| x_rm/w_int kimi isl-64 | 143,402 | 146,686 | +2.3% |
+| x_rm/w_int kimi isl-128 | 146,822 | 142,319 | -3.1% |
+| x_rm/w_int kimi isl-256 | 157,270 | 151,001 | -4.0% |
+| x_rm/w_int kimi isl-512 | 202,118 | 197,799 | -2.1% |
+| x_tile/w_nds kimi isl-64 | 119,066 | 122,973 | +3.3% |
+| x_tile/w_nds kimi isl-256 | 141,341 | 142,561 | +0.9% |
+
+Every delta sits inside the +-8-15% short-ISL noise band (12b), and a 1.28x effect would have
+been unmistakable. **Reverted** rather than keep churn on the mcast handshake for an
+unmeasurable change.
+
+**What this corrects in the model.** The 2503 cy is NOT sender idle time waiting for peers.
+Receivers ack BOTH senders at step 1, which precedes the senders' step 2, so by the time a
+sender polls its ready sem the count is usually already there — there was no stall for the
+read to fill. That cost is the semaphore round trip itself: posted sem writes, L1 polling, and
+the valid-sem `set_multicast`. Local work cannot hide it.
+
+**And it explains why w saturates (13d).** If the handshake were a hard 2503 cy per block,
+w=16 -> 28 (14 -> 8 blocks) would have saved 6 * 2503 cy = 11 us; measured was ~2 us. So the
+handshake is largely in the SHADOW OF COMPUTE — the sender waits while receivers matmul — and
+a wider block gives each handshake more compute to hide behind. That is a self-consistent
+story for every measurement in section 13: the win from w=8 -> 16 came from halving the
+number of rounds, and it flattens once the rounds are cheap relative to the compute they hide
+behind.
+
+Corollary: **the two remaining levers named in 13k are both weaker than they looked.** Deeper
+weight CBs cannot pipeline the mcast at all (the mcast targets the sender's own CB write
+pointer, and a receiver's pointer only advances on push_back, so a receiver cannot hold two
+distinct slots — one block in flight is intrinsic to multicasting into a CB slot). And the
+handshake is not idle time to be filled. What is left is genuinely the DRAM floor: at isl-64
+we are at 116.7 us against ~67 us of weight read at 97% of the bank ceiling plus 37.6 us of
+multicast, i.e. close to the structural floor of the current one-RISC-does-both design.
+
+### 13m. Still on the table
 
 - **Weight CB depth at fixed w** (the part of the original latency argument that survives):
   with only double buffering the reader runs one block ahead, so the fetch is exposed. Deeper
