@@ -601,7 +601,11 @@ def commit_decode_forward(
     if skip_lm_head and on_device_logits:
         raise ValueError("skip_lm_head is incompatible with on_device_logits (no logits produced)")
     if x.dtype in (ttnn.uint32, ttnn.int32):
-        input_embeds = tt_model.embed_tokens(x)
+        # The default DG build returns the shared Gemma4Model, whose embedding
+        # gather uses the semaphore-creating shared collective.
+        from models.experimental.diffusion_gemma.tt.generate import _embed_tokens_dg
+
+        input_embeds = _embed_tokens_dg(tt_model, x)
         if len(input_embeds.shape) == 3:
             input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
         input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)

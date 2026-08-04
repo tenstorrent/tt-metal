@@ -104,9 +104,14 @@ def _resolve_reveal_pmax(adapter) -> int:
     if p_max <= 0 or p_max % ttnn.TILE_SIZE:
         raise RuntimeError("DG_DENOISE_REVEAL_PMAX must be a positive 32-token multiple")
 
-    caches = getattr(getattr(adapter, "tt_model", None), "tt_kv_cache", None)
+    tt_model = getattr(adapter, "tt_model", None)
+    caches = getattr(tt_model, "tt_kv_cache", None)
     if caches:
-        allocated_span = min(int(k_cache.shape[-2]) for k_cache, _v_cache in caches)
+        allocated_span = (
+            int(tt_model._dg_hybrid_max_seq_len)
+            if bool(getattr(tt_model, "_dg_model_owned_hybrid_kv", False))
+            else min(int(k_cache.shape[-2]) for k_cache, _v_cache in caches)
+        )
         if p_max > allocated_span:
             raise RuntimeError(
                 f"DG_DENOISE_REVEAL_PMAX={p_max} exceeds the smallest allocated model KV span " f"{allocated_span}"

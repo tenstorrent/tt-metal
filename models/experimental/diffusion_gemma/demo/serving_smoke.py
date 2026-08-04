@@ -45,6 +45,11 @@ from models.experimental.diffusion_gemma.demo.text_demo import (
     _open_mesh_device,
 )
 from models.experimental.diffusion_gemma.tt.generate import decode_generation, tokenize_prompt
+from models.experimental.diffusion_gemma.tt.hybrid_kv import (
+    attach_model_owned_hybrid_kv,
+    model_owned_hybrid_kv_enabled,
+    model_owned_hybrid_kv_model_kwargs,
+)
 from models.experimental.diffusion_gemma.tt.self_conditioning import (
     self_conditioning_embedding_prechunk_enabled,
     self_conditioning_logits_l1_mode,
@@ -109,6 +114,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "use through vLLM). Omitted = the non-thinking render.",
     )
     parser.add_argument("--local-files-only", action="store_true")
+    parser.add_argument(
+        "--hybrid-kv",
+        action="store_true",
+        default=model_owned_hybrid_kv_enabled(),
+        help="use the DG model-owned paged KV cache: 1024 tokens on sliding layers and full "
+        "max-seq-len on global layers (default; DG_MODEL_OWNED_HYBRID_KV=0 restores contiguous KV)",
+    )
     parser.add_argument("--metrics-json", default=None, help="optional path to dump the per-block metrics JSON")
     parser.add_argument(
         "--upfront",
@@ -195,6 +207,13 @@ def run(args) -> dict:
     try:
         _log_mesh_dram(mesh_device, "baseline")
         model_kwargs = {"max_seq_len": args.max_seq_len, "create_kv_cache": True}
+        if args.hybrid_kv:
+            model_kwargs.update(
+                model_owned_hybrid_kv_model_kwargs(
+                    max_seq_len=args.max_seq_len,
+                    max_batch_size=1,
+                )
+            )
         if args.num_layers is not None:
             model_kwargs["num_layers"] = args.num_layers
         bundle = build_tt_model_from_checkpoint_dir(
@@ -202,6 +221,15 @@ def run(args) -> dict:
             args.checkpoint,
             tokenizer_kwargs=tokenizer_kwargs,
             **model_kwargs,
+        )
+        page_tables_per_layer = (
+            attach_model_owned_hybrid_kv(
+                bundle.tt_model,
+                max_seq_len=args.max_seq_len,
+                max_batch_size=1,
+            )
+            if args.hybrid_kv
+            else None
         )
         _log_mesh_dram(mesh_device, "post-build")
 
@@ -218,6 +246,7 @@ def run(args) -> dict:
             tokenizer=bundle.tokenizer,
             gumbel_mode=args.gumbel_mode,
             seed=args.seed,
+            page_tables_per_layer=page_tables_per_layer,
             # Empty list disables the EOS/stop halt so degenerate EOS-heavy blocks
             # still emit their non-EOS positions for the qualitative control.
             stop_token_ids=[] if args.disable_eos_stop else None,
@@ -288,6 +317,7 @@ def run(args) -> dict:
             "mesh_shape": [1, 4] if args.mesh == "P150x4" else None,
             "num_layers": len(bundle.tt_model.layers),
             "max_seq_len": args.max_seq_len,
+            "hybrid_kv": bool(args.hybrid_kv),
             "seed": args.seed,
             "DG_SELFCOND_PRECHUNK_EMBED": os.environ.get("DG_SELFCOND_PRECHUNK_EMBED", "<unset>"),
             "resolved_selfcond_prechunk": self_conditioning_embedding_prechunk_enabled(),

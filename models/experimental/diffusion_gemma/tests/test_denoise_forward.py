@@ -850,6 +850,31 @@ def test_full_span_read_clones_by_default_and_borrows_when_asked(monkeypatch):
     assert cloned == []
 
 
+@pytest.mark.parametrize(
+    ("seq_len_start", "prompt_len", "capacity", "expected"),
+    [
+        pytest.param(0, 1024, 1024, ((0, 1024),), id="whole-window"),
+        pytest.param(256, 512, 1024, ((256, 768),), id="one-segment"),
+        pytest.param(768, 512, 1024, ((768, 1024), (0, 256)), id="wrap"),
+        pytest.param(2048, 1024, 1024, ((0, 1024),), id="absolute-position-wrap"),
+    ],
+)
+def test_hybrid_cache_sequence_segments(seq_len_start, prompt_len, capacity, expected):
+    assert (
+        DF.hybrid_cache_sequence_segments(
+            seq_len_start=seq_len_start,
+            prompt_len=prompt_len,
+            capacity=capacity,
+        )
+        == expected
+    )
+
+
+def test_hybrid_cache_sequence_segments_rejects_reads_larger_than_window(expect_error):
+    with expect_error(ValueError, match="exceeds physical capacity"):
+        DF.hybrid_cache_sequence_segments(seq_len_start=0, prompt_len=1056, capacity=1024)
+
+
 def test_reader_owns_result_is_true_unless_span_covers_whole_cache():
     # Borrowing not requested -> always owned.
     reader = DF.MutablePrefixKVReader(_kv_cache_model([128] * 3), prompt_len=64)
@@ -877,6 +902,26 @@ def test_reader_owns_result_is_true_unless_span_covers_whole_cache():
     )
     reader.set_read_span(128)
     assert reader.owns_result is True
+
+
+def test_hybrid_reader_borrows_full_layer_view_but_not_uncached_layers():
+    full_view = (_FakeTensor([1, 1, 4096, 16]), _FakeTensor([1, 1, 4096, 16]))
+    model = SimpleNamespace(
+        _dg_model_owned_hybrid_kv=True,
+        _dg_hybrid_sliding_layers=frozenset({0}),
+        _dg_hybrid_full_cache_views={1: full_view},
+    )
+    reader = object.__new__(DF.MutablePrefixKVReader)
+    reader.borrow_full_span = True
+    reader.seq_len_start = 0
+    reader.prompt_len = 64
+    reader.read_span = 4096
+    reader.tt_model = model
+    reader._window_bufs = {0: ("k-window", "v-window")}
+
+    assert reader.owns_result_for(0) is False
+    assert reader.owns_result_for(1) is False
+    assert reader.owns_result_for(2) is True
 
 
 def test_read_prompt_kv_cache_by_layer_reads_every_model_layer():

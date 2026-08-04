@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "date": "2026-08-04",
+  "tt_metal_head": "abe1e3ad52aad2c8009b4818d2308623ed788db4",
+  "hardware": {
+    "mesh": "P150x4",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "architecture": "Blackhole",
+    "tensor_parallel": 4
+  },
+  "contract": {
+    "num_layers": 30,
+    "canvas_length": 256,
+    "prompt_length": 128,
+    "fixed_k": 12,
+    "commit_warmup_k": 1,
+    "captured_schedule_steps": 48,
+    "traces_captured_per_arm": 48,
+    "trace_capture_events_per_arm": 1,
+    "gumbel_mode": "device",
+    "hybrid_kv": true,
+    "trace_region_size_bytes": 2684354560,
+    "degeneracy_policy": "off",
+    "metric": "256 / warmed block_latency_s",
+    "notes": [
+      "Each pmax is a separate full-model build and trace capture.",
+      "The pmax=512 arm uses a physical max_seq_len=1024 because the hybrid sliding cache retains 1024 tokens.",
+      "One K=1 block at the same start position warms commit programs before each measured K=12 block.",
+      "The fixed-K halt is a process-local benchmark override; production source and the captured 48-step schedule are unchanged."
+    ]
+  },
+  "unsupported_pmax": [
+    {
+      "pmax": 128,
+      "reason": "The trace needs at least one 32-token startup tile plus one 256-token canvas."
+    },
+    {
+      "pmax": 256,
+      "reason": "The trace needs at least one 32-token startup tile plus one 256-token canvas."
+    }
+  ],
+  "rows": [
+    {
+      "pmax": 512,
+      "physical_max_seq_len": 1024,
+      "block_latency_s": 2.311236,
+      "denoise_latency_s": 2.156952,
+      "ms_per_denoise_step": 179.746,
+      "commit_latency_s": 0.15326,
+      "tokens_per_block_per_s": 110.763,
+      "free_dram_gib": 6.623021
+    },
+    {
+      "pmax": 1024,
+      "physical_max_seq_len": 1024,
+      "block_latency_s": 2.349813,
+      "denoise_latency_s": 2.178469,
+      "ms_per_denoise_step": 181.539,
+      "commit_latency_s": 0.16606,
+      "tokens_per_block_per_s": 108.945,
+      "free_dram_gib": 6.622563
+    },
+    {
+      "pmax": 2048,
+      "physical_max_seq_len": 2048,
+      "block_latency_s": 2.347354,
+      "denoise_latency_s": 2.1899,
+      "ms_per_denoise_step": 182.492,
+      "commit_latency_s": 0.154262,
+      "tokens_per_block_per_s": 109.059,
+      "free_dram_gib": 6.557531
+    },
+    {
+      "pmax": 4096,
+      "physical_max_seq_len": 4096,
+      "block_latency_s": 2.372455,
+      "denoise_latency_s": 2.212683,
+      "ms_per_denoise_step": 184.39,
+      "commit_latency_s": 0.153465,
+      "tokens_per_block_per_s": 107.905,
+      "free_dram_gib": 6.525291
+    },
+    {
+      "pmax": 8192,
+      "physical_max_seq_len": 8192,
+      "block_latency_s": 2.433498,
+      "denoise_latency_s": 2.260423,
+      "ms_per_denoise_step": 188.369,
+      "commit_latency_s": 0.165521,
+      "tokens_per_block_per_s": 105.198,
+      "free_dram_gib": 6.46072
+    },
+    {
+      "pmax": 16384,
+      "physical_max_seq_len": 16384,
+      "block_latency_s": 2.524842,
+      "denoise_latency_s": 2.360036,
+      "ms_per_denoise_step": 196.67,
+      "commit_latency_s": 0.15794,
+      "tokens_per_block_per_s": 101.392,
+      "free_dram_gib": 6.33173
+    },
+    {
+      "pmax": 32768,
+      "physical_max_seq_len": 32768,
+      "block_latency_s": 2.727942,
+      "denoise_latency_s": 2.559108,
+      "ms_per_denoise_step": 213.259,
+      "commit_latency_s": 0.155055,
+      "tokens_per_block_per_s": 93.844,
+      "free_dram_gib": 6.073673
+    },
+    {
+      "pmax": 65536,
+      "physical_max_seq_len": 65536,
+      "block_latency_s": 3.130235,
+      "denoise_latency_s": 2.949568,
+      "ms_per_denoise_step": 245.797,
+      "commit_latency_s": 0.155627,
+      "tokens_per_block_per_s": 81.783,
+      "free_dram_gib": 5.55759
+    },
+    {
+      "pmax": 131072,
+      "physical_max_seq_len": 131072,
+      "block_latency_s": 3.941953,
+      "denoise_latency_s": 3.730645,
+      "ms_per_denoise_step": 310.887,
+      "commit_latency_s": 0.161659,
+      "tokens_per_block_per_s": 64.942,
+      "free_dram_gib": 4.52544
+    },
+    {
+      "pmax": 262144,
+      "physical_max_seq_len": 262144,
+      "block_latency_s": 5.549656,
+      "denoise_latency_s": 5.303623,
+      "ms_per_denoise_step": 441.969,
+      "commit_latency_s": 0.153167,
+      "tokens_per_block_per_s": 46.129,
+      "free_dram_gib": 2.461094
+    }
+  ],
+  "all_checks": {
+    "all_arms_passed": true,
+    "all_measured_blocks_ran_k12": true,
+    "all_arms_captured_48_traces_once": true,
+    "all_trace_reveal_pmax_values_matched": true,
+    "all_warmed_commit_latencies_below_250_ms": true
+  },
+  "failed_live_prefix_attempt": {
+    "description": "A single 256K physical model with live prompt lengths through 256K was attempted before the pmax-geometry sweep.",
+    "status": "failed",
+    "failure_phase": "compile-only prefill warmup at the longest prompt",
+    "error": "Out of Memory allocating a 2949906432-byte all-reduce output; largest free DRAM block was 325261824 bytes.",
+    "artifact": "/home/zni/dg_runs/context_k12_256k_hybrid_20260804"
+  },
+  "remote_artifact_root": "/home/zni/dg_runs/context_pmax_k12_20260804"
+}

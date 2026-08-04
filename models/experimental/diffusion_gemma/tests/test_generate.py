@@ -528,6 +528,16 @@ def test_commit_canvas_tokens_uses_diffusion_local_commit_decode(monkeypatch):
     assert all(logit.deallocated for logit in logits)
 
 
+def test_default_commit_uses_batched_path_for_model_owned_per_layer_pages():
+    from models.experimental.diffusion_gemma.tt.commit_batched import commit_canvas_tokens_batched
+
+    assert G._resolve_default_commit_fn(page_tables_per_layer=["layer-pages"]) is commit_canvas_tokens_batched
+    assert (
+        G._resolve_default_commit_fn(page_table="legacy-pages", page_tables_per_layer=["layer-pages"])
+        is commit_canvas_tokens
+    )
+
+
 # --- device generate_blocks -----------------------------------------------------------------
 
 

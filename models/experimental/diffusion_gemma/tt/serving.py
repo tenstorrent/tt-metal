@@ -24,15 +24,14 @@ import) means the reduced-surface serving driver
 the exact contract on device wherever ``ttnn`` runs, without the container-gated
 vLLM stack.
 
-Cache ownership: this session uses the **model-owned contiguous** K/V cache
-(``tt_model.tt_kv_cache``) — the "generator/standalone" ownership mode. The
-diffusion denoise-read path (``read_prompt_kv_cache_by_layer`` →
-``ttnn.slice`` over ``[B, heads, max_seq, head_dim]``) reads the frozen prompt
-prefix from that contiguous cache, so a single session tracks one active
-sequence. Routing the frozen-prefix read through a vLLM paged cache + per-request
-block tables (for concurrent batched serving) is part of the upstream #47488
-runner/scheduler + cache-ownership change and the batched-canvas-decode work
-(#47557); see ``doc/vllm_integration/README.md``.
+Cache ownership: this session uses the **model-owned hybrid paged** K/V cache
+(``tt_model.tt_kv_cache``) — the "generator/standalone" ownership mode. Sliding
+layers keep a circular 1024-token physical window and full-attention layers keep
+the full served context; DG-local readers expose the contiguous prefix/window
+shape denoise attention consumes. A single deterministic identity page-table set
+still backs one active sequence. Arbitrary vLLM block-pool ownership and
+concurrent per-request tables remain #47488/#47557; see
+``doc/vllm_integration/README.md``.
 """
 
 from __future__ import annotations

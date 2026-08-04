@@ -64,6 +64,7 @@ import ttnn
 import models.experimental.diffusion_gemma.tt.commit_batched as commit_batched
 from models.experimental.diffusion_gemma.tt.commit_batched import (
     _fill_write_unsupported_reason,
+    _paged_write_plan,
     _read_cache_kv,
     _write_canvas_kv_contiguous,
 )
@@ -141,6 +142,42 @@ def test_unknown_write_mode_argument_fails_loudly(expect_error):
             canvas_len=32,
             mesh_device=None,
             write_mode="turbo",
+        )
+
+
+@pytest.mark.parametrize(
+    "start_pos,circular,expected_ids,expected_leading,expected_trailing",
+    [
+        pytest.param(192, False, (3, 4, 5, 6), 0, 0, id="full-page-aligned"),
+        pytest.param(32, False, (0, 1, 2, 3, 4), 32, 32, id="full-half-page"),
+        pytest.param(992, True, (15, 0, 1, 2, 3), 32, 32, id="sliding-wrap-half-page"),
+        pytest.param(1056, True, (0, 1, 2, 3, 4), 32, 32, id="sliding-after-one-window"),
+    ],
+)
+def test_paged_write_plan_maps_absolute_canvas_to_physical_pages(
+    start_pos, circular, expected_ids, expected_leading, expected_trailing
+):
+    block_ids, leading, trailing = _paged_write_plan(
+        start_pos=start_pos,
+        canvas_len=256,
+        block_size=64,
+        num_blocks=16 if circular else 64,
+        circular=circular,
+    )
+
+    assert block_ids == expected_ids
+    assert leading == expected_leading
+    assert trailing == expected_trailing
+
+
+def test_paged_write_plan_rejects_full_pool_overflow(expect_error):
+    with expect_error(ValueError, match="exceeds the full-attention pool"):
+        _paged_write_plan(
+            start_pos=32,
+            canvas_len=256,
+            block_size=64,
+            num_blocks=4,
+            circular=False,
         )
 
 

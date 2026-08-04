@@ -29,6 +29,8 @@ from models.experimental.diffusion_gemma.reference.attention_mask import (
 )
 from models.experimental.diffusion_gemma.tt.ccl import CCLManager
 from models.experimental.diffusion_gemma.tt import chunked_prefill as cp
+from models.experimental.diffusion_gemma.tt import ccl as dg_ccl
+from models.experimental.diffusion_gemma.tt import commit_decode as CD
 from models.experimental.diffusion_gemma.tt import denoise_forward as DF
 from models.experimental.diffusion_gemma.tt import diffusion_attention as DA
 from models.experimental.diffusion_gemma.tt import generate
@@ -635,6 +637,7 @@ def test_embed_routes_the_tp_gather_through_dg_not_the_shared_allgather(monkeypa
 
     class _FakeTtnn:
         bfloat16 = "bfloat16"
+        TILE_LAYOUT = "tile"
 
         @staticmethod
         def embedding(tokens, weight, dtype=None):
@@ -650,6 +653,11 @@ def test_embed_routes_the_tp_gather_through_dg_not_the_shared_allgather(monkeypa
             return _T("4d")
 
         @staticmethod
+        def to_layout(value, layout):
+            seen["tilized"] = (value.name, layout)
+            return _T("tiled")
+
+        @staticmethod
         def all_gather(*args, **kwargs):  # pragma: no cover - must never be reached
             raise AssertionError("DG must not call the shared plain ttnn.all_gather")
 
@@ -661,8 +669,30 @@ def test_embed_routes_the_tp_gather_through_dg_not_the_shared_allgather(monkeypa
     out = generate._embed_tokens_dg(_GatherSpyModel(), _T("tokens"))
 
     assert seen["unsqueezed"] == "scaled"
-    assert seen["dg_gather"] == ("4d", "ccl-manager")
+    assert seen["tilized"] == ("4d", "tile")
+    assert seen["dg_gather"] == ("tiled", "ccl-manager")
     assert out == seen["dg_gather"]
+
+
+def test_dg_allgather_rejects_composite_broadcast_fallbacks():
+    row_major = SimpleNamespace(shape=[1, 1, 32, 2816], layout=ttnn.ROW_MAJOR_LAYOUT)
+    with pytest.raises(ValueError, match="composite all_broadcast"):
+        dg_ccl._validate_minimal_allgather_input(row_major, 3)
+
+    unaligned_tile = SimpleNamespace(shape=[1, 1, 32, 2815], layout=ttnn.TILE_LAYOUT)
+    with pytest.raises(ValueError, match="tile-aligned"):
+        dg_ccl._validate_minimal_allgather_input(unaligned_tile, 3)
+
+
+def test_commit_and_denoise_avoid_shared_collectives():
+    commit_src = inspect.getsource(CD.commit_decode_forward)
+    denoise_src = inspect.getsource(DF.denoise_logits_forward)
+    lm_head_src = inspect.getsource(DF._apply_denoise_lm_head)
+
+    assert "_embed_tokens_dg(tt_model, x)" in commit_src
+    assert "tt_model.embed_tokens(x)" not in commit_src
+    assert "_apply_denoise_lm_head(hidden_states, tt_model)" in denoise_src
+    assert "models.experimental.diffusion_gemma.tt.ccl" in lm_head_src
 
 
 # --- paged-prefix reader plumbing -----------------------------------------------------------

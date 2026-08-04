@@ -373,6 +373,18 @@ def _build_denoise_attn_mask_for_layer(
     if not _sliding_layer_needs_denoise_mask(prompt_len, canvas_len, sliding_window):
         return None
 
+    if bool(getattr(tt_model, "_dg_model_owned_hybrid_kv", False)):
+        span = min(int(sliding_window), int(prompt_len))
+        lo = max(0, int(prompt_len) - span)
+        return build_device_canvas_reveal_window_mask(
+            tt_model.mesh_device,
+            prompt_len=prompt_len,
+            canvas_len=canvas_len,
+            span=span,
+            lo=lo,
+            sliding_window=sliding_window,
+        )
+
     return mask_builder(
         tt_model.mesh_device,
         prompt_len=prompt_len,
@@ -967,7 +979,36 @@ def denoise_logits_forward(
         canvas_rope_provider=canvas_rope_provider,
         reveal_mask_provider=reveal_mask_provider,
     )
-    return tt_model._apply_lm_head(hidden_states, is_decode=False)
+    return _apply_denoise_lm_head(hidden_states, tt_model)
+
+
+def _apply_denoise_lm_head(hidden_states, tt_model):
+    """Project denoise states using DG's pre-created TP semaphores."""
+    from models.demos.gemma4.tt.model import _get_lm_head_program_config
+
+    if tt_model.lm_head_weight is not None:
+        lm_head_pc = _get_lm_head_program_config(
+            tt_model.mesh_device,
+            m=hidden_states.shape[2],
+            k=tt_model.hidden_size,
+            n=tt_model.lm_head_weight.shape[-1],
+        )
+        logits = ttnn.linear(hidden_states, tt_model.lm_head_weight, program_config=lm_head_pc)
+        hidden_states.deallocate(True)
+    else:
+        logits = hidden_states
+
+    if tt_model.final_logit_softcapping and tt_model.final_logit_softcapping > 0:
+        cap = tt_model.final_logit_softcapping
+        logits = ttnn.mul(logits, 1.0 / cap)
+        logits = ttnn.tanh(logits)
+        logits = ttnn.mul(logits, cap)
+
+    if tt_model.mesh_config is not None and tt_model.mesh_config.tp > 1 and tt_model.lm_head_weight is not None:
+        from models.experimental.diffusion_gemma.tt.ccl import ccl_allgather
+
+        logits = ccl_allgather(logits, tt_model.mesh_config, tt_model.ccl_manager)
+    return logits
 
 
 def collect_prompt_hidden_by_layer(tt_model, prompt_hidden):
@@ -1060,6 +1101,112 @@ def read_prompt_kv_cache_slice(kv_cache, *, prompt_len: int, seq_len_start: int 
     )
 
 
+def hybrid_cache_sequence_segments(*, seq_len_start: int, prompt_len: int, capacity: int) -> tuple[tuple[int, int], ...]:
+    """Physical circular-cache segments for one absolute logical span.
+
+    Returned bounds are half-open and ordered chronologically.  The model-owned
+    hybrid path only calls this for a sliding layer, whose paged kernels map
+    absolute positions through ``position % sliding_window``.
+    """
+
+    seq_len_start = int(seq_len_start)
+    prompt_len = int(prompt_len)
+    capacity = int(capacity)
+    if seq_len_start < 0 or prompt_len <= 0 or capacity <= 0:
+        raise ValueError(
+            f"invalid hybrid cache span: start={seq_len_start} prompt_len={prompt_len} capacity={capacity}"
+        )
+    if prompt_len > capacity:
+        raise ValueError(f"hybrid sliding read {prompt_len} exceeds physical capacity {capacity}")
+    start = seq_len_start % capacity
+    end = start + prompt_len
+    if end <= capacity:
+        return ((start, end),)
+    return ((start, capacity), (0, end - capacity))
+
+
+def _paged_cache_to_sequence(cache):
+    """``[blocks, heads, block, dim] -> [1, heads, blocks*block, dim]``."""
+
+    heads = int(cache.shape[1])
+    span = int(cache.shape[0]) * int(cache.shape[2])
+    head_dim = int(cache.shape[3])
+    head_major = ttnn.permute(cache, (1, 0, 2, 3))
+    return ttnn.reshape(head_major, (1, heads, span, head_dim))
+
+
+def _read_hybrid_sliding_cache(cache, *, prompt_len: int, seq_len_start: int, capacity: int):
+    sequence = _paged_cache_to_sequence(cache)
+    segments = hybrid_cache_sequence_segments(
+        seq_len_start=seq_len_start,
+        prompt_len=prompt_len,
+        capacity=capacity,
+    )
+    if len(segments) == 1 and segments[0] == (0, capacity):
+        return sequence
+
+    slices = []
+    for start, end in segments:
+        slices.append(
+            ttnn.slice(
+                sequence,
+                [0, 0, start, 0],
+                [sequence.shape[0], sequence.shape[1], end, sequence.shape[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        )
+    sequence.deallocate(True)
+    if len(slices) == 1:
+        return slices[0]
+    out = ttnn.concat(slices, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for tensor in slices:
+        tensor.deallocate(True)
+    return out
+
+
+def read_prompt_kv_model_owned_hybrid(
+    tt_model,
+    *,
+    prompt_len: int,
+    seq_len_start: int = 0,
+    layer_idx: int,
+    borrow_full_span: bool = False,
+):
+    """Read one layer from DG's identity-mapped model-owned hybrid cache."""
+
+    sliding_layers = getattr(tt_model, "_dg_hybrid_sliding_layers", frozenset())
+    if layer_idx not in sliding_layers:
+        views = getattr(tt_model, "_dg_hybrid_full_cache_views", {})
+        if layer_idx not in views:
+            raise RuntimeError(f"hybrid full-attention cache view missing for layer {layer_idx}")
+        return read_prompt_kv_cache_slice(
+            views[layer_idx],
+            prompt_len=prompt_len,
+            seq_len_start=seq_len_start,
+            borrow_full_span=borrow_full_span,
+        )
+
+    capacity = int(getattr(tt_model, "_dg_hybrid_sliding_window", 0))
+    if prompt_len > capacity:
+        seq_len_start += prompt_len - capacity
+        prompt_len = capacity
+    k_cache, v_cache = tt_model.tt_kv_cache[layer_idx]
+    return (
+        _read_hybrid_sliding_cache(
+            k_cache,
+            prompt_len=prompt_len,
+            seq_len_start=seq_len_start,
+            capacity=capacity,
+        ),
+        _read_hybrid_sliding_cache(
+            v_cache,
+            prompt_len=prompt_len,
+            seq_len_start=seq_len_start,
+            capacity=capacity,
+        ),
+    )
+
+
 def read_prompt_kv_cache_by_layer(
     tt_model,
     *,
@@ -1080,6 +1227,27 @@ def read_prompt_kv_cache_by_layer(
         raise ValueError(
             f"tt_kv_cache has {len(tt_model.tt_kv_cache)} layers but model has {len(tt_model.layers)} layers"
         )
+    hybrid = bool(getattr(tt_model, "_dg_model_owned_hybrid_kv", False))
+    if hybrid and read_fn is read_prompt_kv_cache_slice:
+        if layer_idx is None:
+            return [
+                read_prompt_kv_model_owned_hybrid(
+                    tt_model,
+                    prompt_len=prompt_len,
+                    seq_len_start=seq_len_start,
+                    layer_idx=i,
+                    borrow_full_span=borrow_full_span,
+                )
+                for i in range(len(tt_model.layers))
+            ]
+        return read_prompt_kv_model_owned_hybrid(
+            tt_model,
+            prompt_len=prompt_len,
+            seq_len_start=seq_len_start,
+            layer_idx=layer_idx,
+            borrow_full_span=borrow_full_span,
+        )
+
     # Only forward the kwarg when borrowing is actually requested: ``read_fn`` is a documented
     # injection point and existing test doubles / tests/replay_hf_tt.py monkeypatches accept only
     # (kv_cache, *, prompt_len, seq_len_start).
@@ -1159,6 +1327,14 @@ class MutablePrefixKVReader:
         """Per-layer ownership. Windowed layers hand back persistent buffers we must NOT free."""
         if layer_idx in self._window_bufs:
             return False
+        if bool(getattr(self.tt_model, "_dg_model_owned_hybrid_kv", False)):
+            if not self.borrow_full_span or self.seq_len_start != 0:
+                return True
+            if layer_idx in getattr(self.tt_model, "_dg_hybrid_sliding_layers", frozenset()):
+                return True
+            n = self.read_span if self.read_span is not None else self.prompt_len
+            view = getattr(self.tt_model, "_dg_hybrid_full_cache_views", {}).get(layer_idx)
+            return view is None or int(view[0].shape[2]) != int(n)
         return self.owns_result
 
     # --- bounded per-layer window buffers -------------------------------------------------
@@ -1196,11 +1372,13 @@ class MutablePrefixKVReader:
         mesh_device = self.tt_model.mesh_device
         for layer_idx, span in sorted(self.window_layers.items()):
             lo = sliding_read_offset(self.prompt_len, span, p_max)
-            k_cache, v_cache = self.tt_model.tt_kv_cache[layer_idx]
-            # ``read_prompt_kv_cache_slice`` returns an owned copy for a partial slice, so
-            # these are already caller-owned and serve directly as the persistent buffers.
-            self._window_bufs[layer_idx] = read_prompt_kv_cache_slice(
-                self.tt_model.tt_kv_cache[layer_idx], prompt_len=span, seq_len_start=lo
+            # The reader returns owned tensors for both a contiguous partial slice and a
+            # paged circular-window gather, so they can serve directly as persistent buffers.
+            self._window_bufs[layer_idx] = self.read_fn(
+                self.tt_model,
+                prompt_len=span,
+                seq_len_start=lo,
+                layer_idx=layer_idx,
             )
             self._window_lo[layer_idx] = lo
 
@@ -1216,9 +1394,11 @@ class MutablePrefixKVReader:
         for layer_idx, span in sorted(self.window_layers.items()):
             lo = sliding_read_offset(int(prompt_len), span, p_max)
             k_buf, v_buf = self._window_bufs[layer_idx]
-            k_cache, v_cache = self.tt_model.tt_kv_cache[layer_idx]
-            k_src, v_src = read_prompt_kv_cache_slice(
-                self.tt_model.tt_kv_cache[layer_idx], prompt_len=span, seq_len_start=lo
+            k_src, v_src = self.read_fn(
+                self.tt_model,
+                prompt_len=span,
+                seq_len_start=lo,
+                layer_idx=layer_idx,
             )
             try:
                 ttnn.copy(k_src, k_buf)

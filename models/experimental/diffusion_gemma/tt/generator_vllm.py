@@ -43,14 +43,13 @@ this adapter is written to that block contract so it works once #47488 lands.
 Cache ownership
 ---------------
 The diffusion denoise-read path reads the frozen prompt prefix from the
-**model-owned contiguous** ``tt_model.tt_kv_cache`` via ``ttnn.slice`` (not from a
-vLLM paged block pool). Serving therefore runs in the generator/standalone
-cache-ownership mode: the model owns its ``max_model_len`` cache and is driven with
-``page_table=None``; :meth:`allocate_kv_cache` returns those existing handles (no
-double allocation). Routing the frozen-prefix read through a vLLM paged cache +
-per-request block tables (for concurrent batched serving) is part of #47488 and
-the batched-canvas-decode work (#47557). Until then one contiguous cache backs one
-active sequence.
+**model-owned paged hybrid** ``tt_model.tt_kv_cache``. Sliding layers retain a
+1024-token circular window while full-attention layers retain ``max_model_len``;
+deterministic identity page tables keep the existing one-cache/one-active-sequence
+ownership contract. :meth:`allocate_kv_cache` returns those existing handles (no
+double allocation). This is not vLLM block-pool ownership: routing arbitrary
+per-request block tables for concurrent batched serving remains #47488/#47557.
+Set ``DG_MODEL_OWNED_HYBRID_KV=0`` only as the contiguous-cache rollback.
 
 **Do not edit ``models/demos/gemma4/``.** The backbone is imported and reused
 unchanged; the ``get_kv_cache_spec`` hybrid layer-type logic is copied (not
@@ -70,6 +69,11 @@ import ttnn
 from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_checkpoint_dir
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.tt.generate import prefill_prompt_tokens
+from models.experimental.diffusion_gemma.tt.hybrid_kv import (
+    attach_model_owned_hybrid_kv,
+    model_owned_hybrid_kv_enabled,
+    model_owned_hybrid_kv_model_kwargs,
+)
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 from models.experimental.diffusion_gemma.tt.traced_denoise import (
     UPFRONT_DENOISE_STEPS,
@@ -266,6 +270,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         config=None,
         gumbel_mode=DEFAULT_VLLM_GUMBEL_MODE,
         max_model_len=None,
+        page_tables_per_layer=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -276,6 +281,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # The served bound, used to derive the fixed reveal span when the operator does not
         # pin DG_DENOISE_REVEAL_PMAX explicitly.
         self._max_model_len = None if max_model_len is None else int(max_model_len)
+        self._model_owned_page_tables_per_layer = page_tables_per_layer
         # DEFAULT "device" is the on-device permuted-vocab Gumbel: it removes the ~313 ms/step
         # host RNG and the ~256 MiB/step replicated PCIe DMA that the deleted per-step host-torch
         # Gumbel mode paid, measured here at ~53.6 vs ~36.3 tokens/block/s steady (~1.48x).
@@ -312,7 +318,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # carries a known QB2 1024-wide RNG distribution bias; "argmax" is the fast deterministic
         # RUN control.
         self._gumbel_mode = os.environ.get("DG_VLLM_GUMBEL_MODE", gumbel_mode)
-        # One active session per batch row. A single contiguous model cache backs
+        # One active session per batch row. A single model-owned hybrid cache backs
         # one active sequence today (see module docstring); the dict is keyed by
         # row so output formatting never assumes batch size 1.
         self._sessions: dict[int, BlockDiffusionServingSession] = {}
@@ -370,19 +376,37 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
             dtype=ttnn.bfloat16,  # full-model policy: bf16 weights + bf16 KV cache
-            create_kv_cache=True,  # model owns its contiguous KV cache (see docstring)
+            create_kv_cache=True,  # overridden below with bounded paged KV by default
         )
+        hybrid_kv = model_owned_hybrid_kv_enabled()
+        if hybrid_kv:
+            model_kwargs.update(
+                model_owned_hybrid_kv_model_kwargs(
+                    max_seq_len=max_seq_len,
+                    max_batch_size=max_batch_size,
+                )
+            )
         if n_layers is not None:
             model_kwargs["num_layers"] = n_layers
 
         build_t0 = time.perf_counter()
         bundle = build_tt_model_from_checkpoint_dir(mesh_device, checkpoint_dir, **model_kwargs)
+        page_tables_per_layer = (
+            attach_model_owned_hybrid_kv(
+                bundle.tt_model,
+                max_seq_len=max_seq_len,
+                max_batch_size=max_batch_size,
+            )
+            if hybrid_kv
+            else None
+        )
         ttnn.synchronize_device(mesh_device)
         model_build_s = time.perf_counter() - build_t0
         dram = _dram_snapshot(mesh_device, synchronize=False)
         logger.info(
             f"[DiffusionGemma vLLM] built model: max_seq_len={max_seq_len} "
             f"n_layers={n_layers or 'full'} "
+            f"model_owned_hybrid_kv={hybrid_kv} "
             f"gumbel_mode={os.environ.get('DG_VLLM_GUMBEL_MODE', DEFAULT_VLLM_GUMBEL_MODE)}"
         )
         _metric(
@@ -392,6 +416,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             model_build_s=round(model_build_s, 6),
             gumbel_mode=os.environ.get("DG_VLLM_GUMBEL_MODE", DEFAULT_VLLM_GUMBEL_MODE),
             max_denoise_steps=diffusion_config.max_denoise_steps,
+            model_owned_hybrid_kv=hybrid_kv,
             trace_region_size_env=int(os.environ.get("DG_TRACE_REGION_SIZE", "0")),
             selfcond_prechunk_embed=os.environ.get("DG_SELFCOND_PRECHUNK_EMBED", "1"),
             selfcond_logits_l1=os.environ.get("DG_SELFCOND_LOGITS_L1", "chain"),
@@ -405,6 +430,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             tokenizer=bundle.tokenizer,
             config=diffusion_config,
             max_model_len=max_seq_len,
+            page_tables_per_layer=page_tables_per_layer,
         )
 
     @property
@@ -436,9 +462,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         a ``FullAttentionSpec`` (uniform type) so vLLM merges them into ONE KV-cache
         group backed by the whole block pool — hybrid groups are disabled
         (``_HYBRID_KV_CACHE_GROUPS_ENABLED = False``) and the diffusion forward uses
-        the non-hybrid single-page-table path, so a per-type spec would instead split
+        the non-hybrid single-page-table bookkeeping path, so a per-type spec would instead split
         into 6 groups sharing the pool and cap prefill admission at ~21824 tokens (see
-        the sliding branch). The diffusion forward reads the model-owned contiguous
+        the sliding branch). The diffusion forward reads the model-owned hybrid
         cache, so this spec is the manager's bookkeeping, not the physical cache
         (#47488).
         """
@@ -509,9 +535,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         return spec_per_layer
 
     def _model_owned_kv_handles(self):
-        """``[submesh][layer][k_or_v]`` handles into the model's own contiguous cache.
+        """``[submesh][layer][k_or_v]`` handles into the model's own hybrid cache.
 
-        Serving runs on the model-owned contiguous cache the model allocated at
+        Serving runs on the model-owned cache the model allocated at
         build time (`create_kv_cache=True`); both allocator entry points return
         those existing handles so vLLM's `kv_cache` arg points at the physical
         cache the diffusion forward actually reads/writes — no fresh DRAM, no
@@ -567,7 +593,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 for prompt_len in sorted(self._upfront_prefill_warmup_lens):
                     logger.info(f"[DiffusionGemma vLLM] warming prefill shape {prompt_len} before trace capture")
                     mock_tokens = torch.zeros((1, prompt_len), dtype=torch.long)
-                    prefill_prompt_tokens(self.model[0], mock_tokens)
+                    page_tables = getattr(self, "_model_owned_page_tables_per_layer", None)
+                    page_table_kwargs = {"page_tables_per_layer": page_tables} if page_tables is not None else {}
+                    prefill_prompt_tokens(self.model[0], mock_tokens, **page_table_kwargs)
                 ttnn.synchronize_device(self.model[0].mesh_device)
             logger.info("[DiffusionGemma vLLM] deferring up-front denoise capture to trace warmup phase")
             return
@@ -594,7 +622,11 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             gumbel_mode=self._gumbel_mode,
             max_model_len=self._max_model_len,
         )
-        cache_span = min(int(k_cache.shape[-2]) for k_cache, _v_cache in self.model[0].tt_kv_cache)
+        cache_span = (
+            int(self._max_model_len)
+            if bool(getattr(self.model[0], "_dg_model_owned_hybrid_kv", False))
+            else min(int(k_cache.shape[-2]) for k_cache, _v_cache in self.model[0].tt_kv_cache)
+        )
         if p_max > cache_span:
             raise RuntimeError(
                 f"DG_DENOISE_REVEAL_PMAX={p_max} exceeds the smallest allocated model KV span {cache_span}"
@@ -721,6 +753,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             gumbel_mode=self._gumbel_mode,
             seed=seed,
             stop_token_ids=[],
+            page_tables_per_layer=getattr(self, "_model_owned_page_tables_per_layer", None),
             denoise_block_fn=denoise_block_fn,
         )
 

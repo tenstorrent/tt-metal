@@ -300,6 +300,10 @@ def _embed_tokens_dg(tt_model, tt_tokens):
         from models.experimental.diffusion_gemma.tt.ccl import ccl_allgather
 
         embeds = ttnn.unsqueeze_to_4D(embeds)
+        # ROW_MAJOR makes all_gather_async silently select composite
+        # all_broadcast, bypassing the supplied semaphores. Hidden size is
+        # tile-aligned, so this forces the minimal async implementation.
+        embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
         embeds = ccl_allgather(embeds, tt_model.mesh_config, tt_model.ccl_manager)
     return embeds
 
@@ -843,18 +847,19 @@ def _empty_device_generation(batch_size: int, prompt_len: int, *, device=None) -
 
 
 def _resolve_default_commit_fn(page_table=None, page_tables_per_layer=None) -> Callable[..., None]:
-    """Pick the commit path: batched single-prefill (default) unless paged.
+    """Pick the commit path: batched single-prefill for contiguous or DG hybrid KV.
 
     The batched commit (``tt.commit_batched``, now the torch-verified-correct
-    default) supports only the contiguous model-owned cache; for a paged / vLLM
-    hybrid cache it raises, so force the sequential path when a page table is
-    present. Imported lazily so the sequential path keeps no import dependency on
-    ``tt.commit_batched`` (which imports helpers from this module).
+    default) supports the contiguous cache and DG's identity-mapped model-owned
+    per-layer hybrid cache.  A legacy/shared page table can carry arbitrary vLLM
+    block ownership, so it still uses the sequential path. Imported lazily so
+    that path keeps no import dependency on ``tt.commit_batched`` (which imports
+    helpers from this module).
     """
     from models.experimental.diffusion_gemma.tt.commit_batched import select_commit_fn
 
-    if page_table is not None or page_tables_per_layer is not None:
-        return commit_canvas_tokens  # batched unsupported for paged caches (#47488)
+    if page_table is not None:
+        return commit_canvas_tokens
     return select_commit_fn()
 
 

@@ -439,6 +439,22 @@ def test_traced_denoise_reveal_pmax_default_registration(monkeypatch, expect_err
         TD.set_default_reveal_pmax(None)
 
 
+def test_traced_denoise_uses_hybrid_logical_capacity_not_physical_block_axis(monkeypatch):
+    monkeypatch.delenv("DG_DENOISE_REVEAL_PMAX", raising=False)
+    TD.set_default_reveal_pmax(131072)
+    try:
+        paged_cache = SimpleNamespace(shape=[16, 2, 64, 256])
+        tt_model = SimpleNamespace(
+            tt_kv_cache=[(paged_cache, paged_cache)],
+            _dg_model_owned_hybrid_kv=True,
+            _dg_hybrid_max_seq_len=131072,
+        )
+        adapter = SimpleNamespace(tt_model=tt_model)
+        assert TD._resolve_reveal_pmax(adapter) == 131072
+    finally:
+        TD.set_default_reveal_pmax(None)
+
+
 # --- adapter rebind ----------------------------------------------------------
 
 
