@@ -63,7 +63,7 @@ void kernel_main() {
         // output * (1 / number_of_elements)
         tile_regs_acquire();
         dfb_intermed0_obj.wait_front(onetile);
-        mul_tiles_bcast_scalar_init_short_with_dt(dfb_intermed0_obj, dfb_scalar_obj);
+        mul_bcast_scalar_init_with_dt(dfb_intermed0_obj, dfb_scalar_obj);
         mul_tiles_bcast<BroadcastType::SCALAR>(dfb::intermed0, dfb::scalar, 0, 0, 0);
         tile_regs_commit();
 
