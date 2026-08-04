@@ -17,9 +17,11 @@
 using namespace ckernel;
 
 /**
- * @brief Enables/disables the UNPACKER0 hardware transpose used for row reduction.
+ * @brief Enable/disable the UNPACKER0 hardware transpose used for row reduction.
  *
  * Row reduce transposes each SrcA face in the unpacker; the scaler (SrcB / UNPACKER1) is not transposed.
+ *
+ * @param enable: true programs the transpose on (init); false clears it (uninit).
  */
 inline void _llk_unpack_AB_reduce_block_max_row_cfg_(const bool enable = true)
 {
@@ -29,7 +31,17 @@ inline void _llk_unpack_AB_reduce_block_max_row_cfg_(const bool enable = true)
 }
 
 /**
- * @brief Runtime-block_ct_dim MOP config for the block reduce_max_row unpacker.
+ * @brief Program the unpack MOP for block reduce_max_row: one outer iteration per tile, inner loop over
+ *        the tile's faces; the last inner op advances the source tile so one run walks the whole block.
+ *
+ * @param block_ct_dim: Number of tiles in the block; becomes the MOP outer-loop count.
+ * @param buf_desc_id_0: SrcA operand buffer descriptor id (baked into the UNPACR0 ops).
+ * @param buf_desc_id_1: SrcB scaler buffer descriptor id; unused here -- the scaler is unpacked once in
+ *                       the execute fn, not in this MOP.
+ * @param tensor_shape: Operand tile shape; drives the face count and the partial-face -inf clear.
+ * @param respect_trigger: SDPA MOP-split handshake; unsupported on Quasar, must stay false.
+ * @note Called by @ref _llk_unpack_AB_reduce_block_max_row_init_runtime_ (and by the compile-time
+ *       llk_api wrapper at execute); not a standalone entry point.
  */
 inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
     const std::uint32_t block_ct_dim,
@@ -44,9 +56,9 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
 
     // Single MOP walks the WHOLE block. Its outer loop = block_ct_dim (one tile per outer iteration); its
     // inner loop = the tile's faces.
-    // The scaler (SrcB) is NOT in this MOP: the template's START_OP runs once PER OUTER ITERATION (see the
-    // loop diagram in ckernel_template.h), so putting the scaler there would re-copy the constant scaler
-    // block_ct_dim times. It is unpacked exactly ONCE in the execute fn instead.
+    // The scaler (SrcB) is NOT in this MOP: the template's START_OP runs once PER OUTER ITERATION,
+    // so putting the scaler there would re-copy the constant scaler block_ct_dim times.
+    // It is unpacked exactly ONCE in the execute fn instead.
     (void)buf_desc_id_1; // scaler is unpacked once in the execute fn, not in this MOP
     const std::uint32_t MOP_OUTER_LOOP = block_ct_dim;
     const std::uint32_t MOP_INNER_LOOP = tensor_shape.total_num_faces();
@@ -90,7 +102,18 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
 }
 
 /**
- * @brief Runtime-block_ct_dim init for the block reduce_max_row unpacker.
+ * @brief Configure the unpack thread for block reduce_max_row: enable the UNPACKER0 transpose and
+ *        program the block MOP.
+ *
+ * @tparam is_fp32_dest_acc_en: 32-bit DEST accumulation, values = <false> (true unsupported on Quasar).
+ * @param block_ct_dim: Number of tiles in the block, baked into the MOP.
+ * @param respect_trigger: SDPA MOP-split handshake; unsupported on Quasar, must stay false.
+ * @param buf_desc_id_0: SrcA operand buffer descriptor id.
+ * @param buf_desc_id_1: SrcB scaler buffer descriptor id.
+ * @param tensor_shape: Operand tile shape.
+ * @note On the math thread, pair with @ref _llk_math_reduce_block_max_row_init_runtime_ (T1).
+ * @note @ref _llk_unpack_AB_reduce_block_max_row_runtime_ runs the unpack; call
+ *       @ref _llk_unpack_AB_reduce_block_max_row_uninit_runtime_ after to clear the transpose bit.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(
@@ -109,7 +132,19 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(
 }
 
 /**
- * @brief Runtime execute for the block reduce_max_row unpacker.
+ * @brief Execute the block reduce_max_row unpack: unpack the constant scaler once into SrcB, then fire
+ *        the block MOP to stream all block_ct_dim tiles' faces into the rotating SrcA banks.
+ *
+ * @param block_ct_dim: Number of tiles in the block (handled by the MOP outer loop; kept for symmetry).
+ * @param start_l1_tile_idx_0: L1 tile index of the block's first SrcA tile.
+ * @param start_l1_tile_idx_1: L1 tile index of the scaler (SrcB) tile.
+ * @param buf_desc_id_1: SrcB scaler buffer descriptor id.
+ * @param tensor_shape: Operand tile shape; selects full-tile vs partial-tile L1 index scaling.
+ * @param respect_trigger: SDPA MOP-split handshake; unsupported on Quasar, must stay false.
+ * @param overlap_first_half: SDPA MOP-split overlap; unsupported on Quasar, must stay false.
+ * @note Call @ref _llk_unpack_AB_reduce_block_max_row_init_runtime_ first (programs the MOP) and
+ *       @ref _llk_unpack_AB_reduce_block_max_row_uninit_runtime_ after. On T1, pair with
+ *       @ref _llk_math_reduce_block_max_row_runtime_ which pools + transposes the delivered tiles.
  */
 inline void _llk_unpack_AB_reduce_block_max_row_runtime_(
     const std::uint32_t block_ct_dim,
@@ -147,7 +182,11 @@ inline void _llk_unpack_AB_reduce_block_max_row_runtime_(
 }
 
 /**
- * @brief Runtime uninit for the block reduce_max_row unpacker.
+ * @brief Uninit the unpack thread after block reduce_max_row: clear the UNPACKER0 transpose bit.
+ *
+ * @param respect_trigger: SDPA MOP-split handshake; unsupported on Quasar, must stay false.
+ * @param overlap_first_half: SDPA MOP-split overlap; unsupported on Quasar, must stay false.
+ * @note Pairs with @ref _llk_unpack_AB_reduce_block_max_row_init_runtime_.
  */
 inline void _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(const bool respect_trigger = false, const bool overlap_first_half = false)
 {

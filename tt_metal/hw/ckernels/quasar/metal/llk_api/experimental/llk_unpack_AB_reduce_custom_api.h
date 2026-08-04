@@ -85,6 +85,11 @@ inline void llk_unpack_AB_reduce_block_max_row(
     WAYPOINT("URBD");
 }
 
+/**
+ * @brief Uninit for the block reduce_max_row unpacker: clears the UNPACKER0 transpose bit.
+ *
+ * @tparam respect_trigger  SDPA MOP-split handshake -- unsupported on Quasar; must stay false.
+ */
 template <bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row_uninit() {
     static_assert(!respect_trigger, "respect_trigger (MOP-split handshake) not supported on Quasar");
