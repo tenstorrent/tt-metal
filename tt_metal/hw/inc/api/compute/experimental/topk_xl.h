@@ -16,12 +16,12 @@
 #ifdef TRISC_MATH
 #ifdef ARCH_BLACKHOLE
 #include "experimental/llk_math_topk_xl_copy_api.h"
-#include "experimental/llk_math_eltwise_unary_sfpu_topk_xl.h"
+#include "experimental/llk_sfpu/llk_math_eltwise_unary_sfpu_topk_xl.h"
 #endif
 #endif
 #ifdef TRISC_PACK
 #ifdef ARCH_BLACKHOLE
-#include "experimental/llk_math_eltwise_unary_sfpu_topk_xl.h"
+#include "experimental/llk_sfpu/llk_math_eltwise_unary_sfpu_topk_xl.h"
 #endif
 #endif
 

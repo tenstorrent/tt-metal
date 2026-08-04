@@ -112,6 +112,26 @@ class LoopBlock(FusedLoop):
         block.tile_id_block = "0"
         return compute_unit.fpu.calculate(operation, config, compute_unit, block)
 
+    def pack_loop(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        pack_node: "PackNode",
+        block: "BlockData",
+    ) -> str:
+        code = ""
+        if config.perf_run_type in (
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ):
+            return code
+        block.tile_id_global = (
+            f"{block.tile_count_x} * {block.block_y} + {block.block_x}"
+        )
+        block.tile_id_block = "0"
+        code += pack_node.packer.pack(pack_node, operation, config, block)
+        return code
+
 
 class LoopBlockRow(FusedLoop):
     def unpack_loop(

@@ -958,7 +958,6 @@ static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
-static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 inline CoreCoord sd_prefetch_core(const tt_metal::IDevice* device) {
     return tt::tt_metal::detail::sd_cq_prefetch_core(device);
 }
@@ -1583,7 +1582,6 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"MY_UPSTREAM_CB_SEM_ID", "0"},  // not used when IS_H_VARIANT=1
         {"UPSTREAM_CB_SEM_ID", "0"},
         {"CMDDAT_Q_LOG_PAGE_SIZE", std::to_string(SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE)},
-        {"CMDDAT_Q_BLOCKS", std::to_string(SD_PREFETCH_CMDDAT_BLOCKS)},
         {"DISPATCH_S_BUFFER_BASE", "0"},
         {"MY_DISPATCH_S_CB_SEM_ID", "0"},
         {"DOWNSTREAM_DISPATCH_S_CB_SEM_ID", "0"},

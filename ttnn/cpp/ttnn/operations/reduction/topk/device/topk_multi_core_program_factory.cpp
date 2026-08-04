@@ -449,6 +449,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(std::log2(Wt_local)),  // log2(width) for merge iterations
         static_cast<std::uint32_t>(args.largest),         // Sort direction (largest=1, smallest=0)
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
+        static_cast<std::uint32_t>(args.stable),          // Stable sort: ties keep the lowest index
     };
 
     KernelDescriptor compute_local_desc;
@@ -478,6 +479,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(std::log2(Wt_final)),  // log2(final_width) for merge iterations
         static_cast<std::uint32_t>(args.largest),         // Sort direction (largest=1, smallest=0)
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
+        static_cast<std::uint32_t>(args.stable),          // Stable sort: ties keep the lowest index
     };
 
     KernelDescriptor compute_final_desc;

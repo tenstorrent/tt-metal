@@ -725,6 +725,7 @@ PERF_RUN_TYPES_QUASAR = [
         PerfRunType.L1_CONGESTION,
     ],
 ]
+PERF_LOOP_FACTOR_QUASAR = 32
 
 
 # ******** QUASAR specific ********
