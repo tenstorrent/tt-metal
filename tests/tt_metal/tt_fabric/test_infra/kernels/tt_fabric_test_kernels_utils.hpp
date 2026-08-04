@@ -8,6 +8,9 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+// For WATCHER_RING_BUFFER_PUSH() used by the [SYNC-PROBE] instrumentation below. The macro compiles
+// to nothing unless the watcher is enabled (TT_METAL_WATCHER), so it costs nothing in normal runs.
+#include "api/debug/ring_buffer.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -741,6 +744,116 @@ struct FabricConnectionArray {
     }
 };
 
+// ============================================================================
+// [SYNC-PROBE] End-of-test sync barrier instrumentation
+// ============================================================================
+// Watcher-log evidence showed the hung run parked at the end-of-test barrier: sender cores at
+// waypoint NSW (noc_semaphore_wait, LocalSyncConfig::local_sync) and sync cores at NSMW
+// (noc_semaphore_wait_min, LineSyncConfig::global_sync_finish). Waypoints alone only say "inside a
+// semaphore wait" -- they cannot show WHICH barrier iteration, what value was expected, or what the
+// semaphore actually holds while stuck. These probes add all three.
+//
+// Encoding, one uint32 per ring-buffer entry:
+//     [31:24] tag   [23:16] sync_iter   [15:0] value
+// The tags are grouped so a hexdump reads at a glance: 0xB0/0xB1/0xB2 are the local barrier's
+// enter/poll/exit, 0xB4/0xB5/0xB6 the global barrier's.
+//
+//   ENTER  -> pushed once before spinning; `value` is the value being WAITED FOR.
+//   POLL   -> pushed periodically while still spinning; `value` is the value CURRENTLY OBSERVED.
+//             This is what makes the semaphore readable on a wedged core -- a stuck barrier leaves a
+//             run of POLL entries all carrying the same value, which is the proof it never advanced.
+//   EXIT   -> pushed once the wait is satisfied; `value` is the final observed value.
+//
+// ENTER with no EXIT == wedged in that barrier. The tag says which barrier, sync_iter says which
+// iteration of it, and ENTER-vs-POLL says expected-vs-actual.
+constexpr uint32_t SYNC_DBG_TAG_LOCAL_ENTER = 0xB0;
+constexpr uint32_t SYNC_DBG_TAG_LOCAL_POLL = 0xB1;
+constexpr uint32_t SYNC_DBG_TAG_LOCAL_EXIT = 0xB2;
+constexpr uint32_t SYNC_DBG_TAG_GLOBAL_ENTER = 0xB4;
+constexpr uint32_t SYNC_DBG_TAG_GLOBAL_POLL = 0xB5;
+constexpr uint32_t SYNC_DBG_TAG_GLOBAL_EXIT = 0xB6;
+
+// Send-side phases of global_sync(). The B4/B5/B6 tags above only cover the WAIT half
+// (global_sync_finish). global_sync_start() calls wait_for_empty_write_slot(), which blocks when the
+// local router's sender channel is stalled -- so without these a core wedged while SENDING would emit
+// no B4 at all, and would look identical to a core that never reached global_sync(). These make the
+// send half observable, so "couldn't push the packet out" and "pushed it but nobody answered" are
+// distinguishable.
+//   OPEN   value = number of sync fabric connections about to be opened
+//   SENT   value = connection index whose atomic-inc packet was just pushed
+//   CLOSED value = number of packets pushed this round
+constexpr uint32_t SYNC_DBG_TAG_GLOBAL_OPEN = 0xB8;
+constexpr uint32_t SYNC_DBG_TAG_GLOBAL_SENT = 0xB9;
+constexpr uint32_t SYNC_DBG_TAG_GLOBAL_CLOSED = 0xBA;
+
+// POLL pacing. The ring buffer holds only DEBUG_RING_BUFFER_ELEMENTS (32) entries, so an unbounded
+// poll is self-defeating: the sync core legitimately sits in local_sync(1) for the WHOLE run (it is
+// waiting for every sender to finish its 100M packets), and a fixed-interval poll fills all 32 slots
+// with identical entries and evicts everything else -- including the global-sync markers. Observed
+// directly: the sync core's buffer came back as 32 copies of 0xb1010006 and nothing else.
+//
+// So: at most SYNC_DBG_MAX_POLLS entries per wait, at exponentially growing intervals (2^20, 2^24,
+// 2^28 spins). That gives one early sample and one very late one -- enough to show whether the value
+// moved -- while costing at most 3 slots per wait. Worst case across all barriers a core executes
+// stays inside 32, so the wedged wait's ENTER+POLLs survive at the tail of the buffer.
+constexpr uint32_t SYNC_DBG_FIRST_POLL_SPINS = 1u << 20;
+constexpr uint32_t SYNC_DBG_POLL_GROWTH_SHIFT = 4;
+constexpr uint32_t SYNC_DBG_MAX_POLLS = 3;
+
+// [[maybe_unused]]: with the watcher disabled WATCHER_RING_BUFFER_PUSH expands to nothing, which
+// would otherwise leave all three parameters unused and trip -Wunused-parameter in the kernel build.
+FORCE_INLINE void sync_dbg_push(
+    [[maybe_unused]] uint32_t tag, [[maybe_unused]] uint32_t sync_iter, [[maybe_unused]] uint32_t value) {
+    WATCHER_RING_BUFFER_PUSH((tag << 24) | ((sync_iter & 0xFF) << 16) | (value & 0xFFFF));
+}
+
+// Instrumented stand-in for noc_semaphore_wait(). Semantics are IDENTICAL to the original -- same
+// do/while, same exact-equality (`!=`) test, same invalidate_l1_cache() placement -- so this cannot
+// change whether the barrier passes. The WAYPOINT calls are kept as NSW/NSD so existing watcher-log
+// analysis keeps working unchanged.
+//
+// NOTE the equality test is `!=`, not `<`: if the semaphore ever OVERSHOOTS the expected value this
+// spins forever. The POLL entries will show that case plainly (observed value > expected).
+FORCE_INLINE void sync_dbg_wait_eq(
+    volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val, uint32_t tag_base, uint32_t sync_iter) {
+    sync_dbg_push(tag_base, sync_iter, val);
+    WAYPOINT("NSW");
+    uint32_t spins = 0;
+    uint32_t polls = 0;
+    uint32_t next_poll = SYNC_DBG_FIRST_POLL_SPINS;
+    do {
+        invalidate_l1_cache();
+        if (++spins >= next_poll && polls < SYNC_DBG_MAX_POLLS) {
+            sync_dbg_push(tag_base + 1, sync_iter, *sem_addr);
+            polls++;
+            next_poll <<= SYNC_DBG_POLL_GROWTH_SHIFT;
+        }
+    } while ((*sem_addr) != val);
+    WAYPOINT("NSD");
+    sync_dbg_push(tag_base + 2, sync_iter, *sem_addr);
+}
+
+// Instrumented stand-in for noc_semaphore_wait_min(). As above, semantics are identical to the
+// original (`<` test) and the waypoints stay NSMW/NSMD.
+FORCE_INLINE void sync_dbg_wait_min(
+    volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val, uint32_t tag_base, uint32_t sync_iter) {
+    sync_dbg_push(tag_base, sync_iter, val);
+    WAYPOINT("NSMW");
+    uint32_t spins = 0;
+    uint32_t polls = 0;
+    uint32_t next_poll = SYNC_DBG_FIRST_POLL_SPINS;
+    do {
+        invalidate_l1_cache();
+        if (++spins >= next_poll && polls < SYNC_DBG_MAX_POLLS) {
+            sync_dbg_push(tag_base + 1, sync_iter, *sem_addr);
+            polls++;
+            next_poll <<= SYNC_DBG_POLL_GROWTH_SHIFT;
+        }
+    } while ((*sem_addr) < val);
+    WAYPOINT("NSMD");
+    sync_dbg_push(tag_base + 2, sync_iter, *sem_addr);
+}
+
 // Line sync for each fabric connection (used by SyncKernelConfig)
 template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct LineSyncConfig {
@@ -782,7 +895,8 @@ struct LineSyncConfig {
 
     void global_sync_finish(uint8_t sync_iter) {
         // sync wait
-        noc_semaphore_wait_min(line_sync_ptr, line_sync_val * (sync_iter + 1));
+        // [SYNC-PROBE] instrumented; identical wait semantics to noc_semaphore_wait_min().
+        sync_dbg_wait_min(line_sync_ptr, line_sync_val * (sync_iter + 1), SYNC_DBG_TAG_GLOBAL_ENTER, sync_iter);
     }
 
 private:
@@ -817,10 +931,12 @@ struct LocalSyncConfig {
             }
             // Wait for all local cores to acknowledge
             uint32_t expected_val = NUM_LOCAL_CORES * (sync_iter + 1);
-            noc_semaphore_wait(sync_ptr, expected_val);
+            // [SYNC-PROBE] instrumented; identical wait semantics to noc_semaphore_wait().
+            sync_dbg_wait_eq(sync_ptr, expected_val, SYNC_DBG_TAG_LOCAL_ENTER, sync_iter);
         } else {
             uint32_t expected_val = sync_iter + 1;
-            noc_semaphore_wait(sync_ptr, expected_val);
+            // [SYNC-PROBE] instrumented; identical wait semantics to noc_semaphore_wait().
+            sync_dbg_wait_eq(sync_ptr, expected_val, SYNC_DBG_TAG_LOCAL_ENTER, sync_iter);
             // send ack back to master sender
             auto master_sender_noc_addr = get_noc_addr_helper(sync_core_xy_encoding_[0], sync_address);
             noc_semaphore_inc(master_sender_noc_addr, 1);
@@ -2225,12 +2341,18 @@ struct SyncKernelConfig {
     }
 
     void global_sync(uint8_t sync_iter) {
+        // [SYNC-PROBE] About to open connections. An OPEN with no following SENT means we wedged in
+        // open_all(); a SENT run that stops short of NUM_SYNC_FABRIC_CONNECTIONS means we wedged in
+        // global_sync_start() (its wait_for_empty_write_slot) on that connection index.
+        sync_dbg_push(SYNC_DBG_TAG_GLOBAL_OPEN, sync_iter, NUM_SYNC_FABRIC_CONNECTIONS);
+
         // Open all sync connections
         sync_connections.open_all();
 
         // Send sync start packets
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
             line_sync_configs()[i].global_sync_start();
+            sync_dbg_push(SYNC_DBG_TAG_GLOBAL_SENT, sync_iter, i);
         }
 
         // Wait for acks (only need one config to check)
@@ -2238,6 +2360,9 @@ struct SyncKernelConfig {
 
         // Close all sync connections
         sync_connections.close_all();
+
+        // [SYNC-PROBE] Round fully complete (packets out, quorum received, connections closed).
+        sync_dbg_push(SYNC_DBG_TAG_GLOBAL_CLOSED, sync_iter, NUM_SYNC_FABRIC_CONNECTIONS);
     }
 
     void local_sync(uint8_t sync_iter) { local_sync_config().local_sync(sync_iter); }
