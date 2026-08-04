@@ -59,7 +59,7 @@ bool NOCDebugState::has_state(tt_cxy_pair core) const { return cores.contains(co
 void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteEvent event) {
     CoreDebugState& state = get_state(core);
     uint8_t noc_id = event.noc;
-    uint32_t src_addr = event.src_addr;
+    uint64_t src_addr = event.src_addr;
     bool posted = event.posted;
     bool is_semaphore = event.is_semaphore;
     bool is_mcast = event.is_mcast;
@@ -97,10 +97,11 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
         state.issue[processor_id].set_issue(issue_type);
     }
 
-    // Check if the write hit a locked buffer in the destination core(s). For a stateful write the destination core
-    // was programmed by an earlier WRITE_SET_STATE, so event.dst_x/dst_y are placeholders (0,0): resolve the real
-    // destination coords (and, for the non-trid variant, the size) from the tracked write state. The destination
-    // address always comes from the write event itself (the with-state call carries dst_local_l1_addr).
+    // Check if the write hit a locked buffer in the destination core(s). For a stateful write the destination was
+    // programmed in two halves by the hardware, so it has to be reassembled here: the earlier WRITE_SET_STATE
+    // supplied the coordinates and everything above the low address word (on Blackhole the NOC_RET_ADDR_MID high
+    // address bits), while this write supplied only the low word (NOC_RET_ADDR_LO). The write event's own
+    // dst_x/dst_y are therefore placeholders (0,0), and its address is only the bottom of the real one.
     // Coords are non-negative NOC grid coordinates; cast through uint8_t so the signed int8_t fields widen without
     // a signed-char conversion warning (the -1 sentinel in an unused mcast_end field maps to 255 but is never read).
     bool have_dst = true;
@@ -109,7 +110,7 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
     int mcast_end_x = static_cast<uint8_t>(event.mcast_end_dst_x);
     int mcast_end_y = static_cast<uint8_t>(event.mcast_end_dst_y);
     bool dst_is_mcast = event.is_mcast;
-    uint32_t write_addr = event.dst_addr;
+    uint64_t write_addr = event.dst_addr;
     uint32_t write_size = event.num_bytes;
     if (!event.has_valid_dst) {
         const CoreDebugState::WriteStateInfo& ws = state.current_write_state[processor_id][noc_id];
@@ -119,6 +120,9 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
         mcast_end_x = static_cast<uint8_t>(ws.mcast_end_dst_x);
         mcast_end_y = static_cast<uint8_t>(ws.mcast_end_dst_y);
         dst_is_mcast = ws.is_mcast;
+        // Reassemble the address from the two halves the hardware programmed separately.
+        constexpr uint64_t low_word_mask = 0xFFFF'FFFFull;  // NOC_RET_ADDR_LO, the part each write programs
+        write_addr = (ws.dst_addr & ~low_word_mask) | (write_addr & low_word_mask);
         // The non-trid stateful write records num_bytes == 0 (its size lives in the set_state); the trid variant
         // carries its own size, so prefer a non-zero event size and fall back to the tracked one.
         if (write_size == 0) {
@@ -184,6 +188,7 @@ void NOCDebugState::handle_write_set_state_event(
     // real destination core. Events are processed in timestamp order, so a set_state always lands before the writes
     // that reuse it, and a later set_state overwrites this one.
     CoreDebugState::WriteStateInfo& ws = state.current_write_state[processor_id][noc_id];
+    ws.dst_addr = event.dst_addr;
     ws.dst_x = event.dst_x;
     ws.dst_y = event.dst_y;
     ws.mcast_end_dst_x = event.mcast_end_dst_x;
@@ -198,7 +203,7 @@ void NOCDebugState::handle_write_set_state_event(
 void NOCDebugState::handle_read_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocReadEvent event) {
     CoreDebugState& state = get_state(core);
     uint8_t noc_id = event.noc;
-    uint32_t dst_addr = event.dst_addr;
+    uint64_t dst_addr = event.dst_addr;
     bool issue_found = false;
 
     // Multiple reads to the same destination address without a barrier in between
@@ -568,13 +573,13 @@ void NOCDebugState::process_accumulated_events_all_chips() {
 }
 
 const NOCDebugState::LockedBufferInfo* NOCDebugState::CoreDebugState::get_noc_write_to_lock_buffer(
-    uint32_t write_start, uint32_t write_size) const {
-    const uint32_t write_end = write_start + write_size;
+    uint64_t write_start, uint32_t write_size) const {
+    const uint64_t write_end = write_start + write_size;
     const auto& bufs = this->locked_buffers;
     for (auto proc_id = 0; proc_id < CoreDebugState::MAX_PROCESSORS; ++proc_id) {
         for (const auto& entry : bufs[proc_id]) {
             const LockedBufferInfo& buf = entry.first;
-            const uint32_t buf_end = buf.address + buf.size;
+            const uint64_t buf_end = static_cast<uint64_t>(buf.address) + buf.size;
             if (write_end > buf.address && buf_end > write_start) {
                 return &buf;
             }

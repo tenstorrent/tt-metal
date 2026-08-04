@@ -22,8 +22,8 @@
 namespace tt::tt_metal {
 
 struct NocWriteEvent {
-    uint32_t src_addr;
-    uint32_t dst_addr;
+    uint64_t src_addr;
+    uint64_t dst_addr;
     uint32_t num_bytes;
     uint32_t counter_snapshot;  // nonposted_write_reqs_sent or posted_write_reqs_sent
     int8_t src_x;
@@ -41,11 +41,12 @@ struct NocWriteEvent {
 };
 
 struct NocWriteSetStateEvent {
+    uint64_t dst_addr;
+    uint32_t num_bytes;  // 0 for the trid variant (its size is supplied at the with-state call)
     int8_t src_x;
     int8_t src_y;
     int8_t dst_x;
     int8_t dst_y;
-    uint32_t num_bytes;  // 0 for the trid variant (its size is supplied at the with-state call)
     bool is_mcast;
     int8_t mcast_end_dst_x;
     int8_t mcast_end_dst_y;
@@ -53,8 +54,8 @@ struct NocWriteSetStateEvent {
 };
 
 struct NocReadEvent {
-    uint32_t src_addr;
-    uint32_t dst_addr;
+    uint64_t src_addr;
+    uint64_t dst_addr;
     uint32_t num_bytes;
     uint32_t counter_snapshot;  // read_resps_recv
     int8_t src_x;
@@ -97,7 +98,7 @@ struct NocFullBarrierEvent {
 // counter-monotonicity checks do not apply. Only a non-posted increment must be flushed before kernel end. For a
 // multicast increment dst_x/dst_y are the rectangle start and mcast_end_dst_x/y the end.
 struct NocSemaphoreIncEvent {
-    uint32_t dst_addr;
+    uint64_t dst_addr;
     int8_t src_x;
     int8_t src_y;
     int8_t dst_x;
@@ -123,7 +124,7 @@ struct ScopedLockEvent {
     int8_t src_x;
     int8_t src_y;
     NocDebuggingEventMetadata::NocDebugEventType event_type;
-    uint32_t locked_address_base;
+    uint64_t locked_address_base;
     uint32_t num_bytes;
 
     bool is_lock() const {
@@ -157,7 +158,7 @@ enum class NOCDebugIssueBaseType : uint8_t {
 // TODO: Move metadata out into a variant so we can have different metadata for each issue types
 struct NOCDebugIssueType {
     NOCDebugIssueBaseType base_type = NOCDebugIssueBaseType::WRITE_FLUSH_BARRIER;
-    uint32_t issue_address = 0;  // The destination address of the violating NOC transaction
+    uint64_t issue_address = 0;  // The destination address of the violating NOC transaction
     uint32_t issue_size = 0;     // The size of the violating NOC transaction in bytes
     uint8_t src_x = 0;
     uint8_t src_y = 0;
@@ -239,7 +240,7 @@ public:
             MEM,
         };
 
-        uint32_t address;
+        uint64_t address;
         uint32_t size;
         LockType lock_type;
 
@@ -257,16 +258,16 @@ private:
         std::array<uint32_t, MAX_NOCS> posted_write_counter_snapshot{};
 
         // Pending reads not flushed yet for each NOC (dst_addr set)
-        std::array<std::unordered_set<uint32_t>, MAX_NOCS> reads_not_flushed{};
+        std::array<std::unordered_set<uint64_t>, MAX_NOCS> reads_not_flushed{};
 
         // Pending writes not flushed yet for each NOC (src_addr -> write type info)
-        std::array<std::unordered_map<uint32_t, PendingWriteInfo>, MAX_NOCS> posted_writes_pending{};
-        std::array<std::unordered_map<uint32_t, PendingWriteInfo>, MAX_NOCS> nonposted_writes_pending{};
+        std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS> posted_writes_pending{};
+        std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS> nonposted_writes_pending{};
 
         // Pending non-posted atomic increments (semaphore inc) not yet flushed for each NOC (dst_addr -> info).
         // Kept separate from writes because on device atomics use their own counter: they are released by an
         // atomic/full barrier, never by a write barrier.
-        std::array<std::unordered_map<uint32_t, PendingWriteInfo>, MAX_NOCS> atomics_pending{};
+        std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS> atomics_pending{};
 
         // Captures if any read or write has occurred yet for each NOC
         std::array<bool, MAX_NOCS> any_reads{};
@@ -282,11 +283,12 @@ private:
         // (WRITE_WITH_STATE / WRITE_WITH_TRID_WITH_STATE), whose own event records the destination core as a
         // placeholder, resolve their real destination from here.
         struct WriteStateInfo {
+            uint64_t dst_addr = 0;  // programmed destination address; supplies the bits above the low word
+            uint32_t num_bytes = 0;
             int8_t dst_x = 0;
             int8_t dst_y = 0;
             int8_t mcast_end_dst_x = 0;
             int8_t mcast_end_dst_y = 0;
-            uint32_t num_bytes = 0;
             bool is_mcast = false;
             bool valid = false;  // false until a WRITE_SET_STATE has been seen on this (processor, noc)
         };
@@ -299,7 +301,7 @@ private:
         std::array<NOCDebugIssue, MAX_PROCESSORS> issue{};
 
         // Check if a NOC write of [write_start, write_start + write_size) hit a locked buffer in this core
-        const LockedBufferInfo* get_noc_write_to_lock_buffer(uint32_t write_start, uint32_t write_size) const;
+        const LockedBufferInfo* get_noc_write_to_lock_buffer(uint64_t write_start, uint32_t write_size) const;
     };
 
     void handle_write_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteEvent event);

@@ -201,11 +201,12 @@ NOCDebugEvent make_noc_debug_event(
             // it (see handle_write_set_state_event). num_bytes is the programmed size for WRITE_SET_STATE and 0 for
             // the trid variant (whose size arrives at the with-state call). Stateful writes are unicast.
             return NOCDebugEvent(NocWriteSetStateEvent{
+                trailer.getDstAddr(),
+                event.getNumBytes(),
                 src_x,
                 src_y,
                 event.dst_x,
                 event.dst_y,
-                event.getNumBytes(),
                 /*is_mcast=*/false,
                 event.mcast_end_dst_x,
                 event.mcast_end_dst_y,
@@ -951,8 +952,14 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     // handle dst coordinates correctly for different NocEventType
                     if (local_noc_event.dst_x == -1 || local_noc_event.dst_y == -1 ||
                         local_noc_event.noc_xfer_type == EMD::NocEventType::READ_WITH_STATE ||
-                        local_noc_event.noc_xfer_type == EMD::NocEventType::WRITE_WITH_STATE) {
-                        // DO NOT emit destination coord; it isn't meaningful
+                        local_noc_event.noc_xfer_type == EMD::NocEventType::READ_WITH_STATE_AND_TRID ||
+                        local_noc_event.noc_xfer_type == EMD::NocEventType::WRITE_WITH_STATE ||
+                        local_noc_event.noc_xfer_type == EMD::NocEventType::WRITE_WITH_TRID_WITH_STATE) {
+                        // DO NOT emit destination coord; it isn't meaningful. A with-state transfer only carries the
+                        // low address word (the hardware keeps the destination coordinates in the command buffer
+                        // programmed by the earlier set-state), so dst_x/dst_y here are the placeholder (0,0) and
+                        // translating them would report core (0,0) as the destination. The trid variants were
+                        // previously missing from this list and emitted exactly that bogus coordinate.
 
                     } else if (local_noc_event.noc_xfer_type == EMD::NocEventType::WRITE_MULTICAST) {
                         auto phys_start_coord = translateNocCoordinatesToNoc0(

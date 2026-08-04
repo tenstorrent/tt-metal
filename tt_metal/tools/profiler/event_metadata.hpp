@@ -105,17 +105,17 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         explicit LocalNocEventDstTrailer(uint32_t) = delete;
         explicit LocalNocEventDstTrailer(int) = delete;
 
-        void setDstAddr(uint32_t addr) {
+        void setDstAddr(uint64_t addr) {
             dst_addr_4b = addr >> 2;
             dst_addr_offset = addr & 0x3;
         }
-        uint32_t getDstAddr() const { return (dst_addr_4b << 2) | (dst_addr_offset & 0x3); }
+        uint64_t getDstAddr() const { return (dst_addr_4b << 2) | (dst_addr_offset & 0x3); }
 
-        void setSrcAddr(uint32_t addr) {
+        void setSrcAddr(uint64_t addr) {
             src_addr_4b = addr >> 2;
             src_addr_offset = addr & 0x3;
         }
-        uint32_t getSrcAddr() const { return (src_addr_4b << 2) | (src_addr_offset & 0x3); }
+        uint64_t getSrcAddr() const { return (src_addr_4b << 2) | (src_addr_offset & 0x3); }
     };
 
     // represents a fabric NOC event
