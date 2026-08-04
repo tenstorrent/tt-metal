@@ -991,6 +991,19 @@ already runs this matmul at ~198 GB/s, i.e. at the DRAM ceiling, so there is no 
 DRAM-sharded machinery to win back — it only adds its own cost. That config earns its keep when the
 weight read is contended or spread across devices, not when a plain 1D config already saturates.
 
+**And sharding only the WEIGHT is not available.** Width-sharding the weight splits the OUTPUT
+columns — the axis needing no reduction — so it looks like the free version of this idea. ttnn
+couples them: a width-sharded `in1` is accepted by ONLY the DRAM-sharded config, which also demands
+a width-sharded `in0`; every other config asserts `in1` is INTERLEAVED
+(`matmul_device_operation.cpp:1188ff`, with the pairing spelled out in the comment at :1199). So
+"sharded weight, interleaved activation" cannot be expressed, and the paired form is the 0.805x above.
+
+An **L1-resident weight** fails the same assertion. It was the interesting one on paper — a resident
+weight is never re-read from DRAM — but the ceiling kills it regardless: Block 1 streams ~3.9 GB per
+frame against **96 MB of total L1 (64 x 1.5 MB), 2.4% of the model**, and that L1 is also wanted by
+the activations and circular buffers. **The model not fitting in L1 is exactly why 194 GB/s is the
+wall**, and no sharding of a 3.9 GB working set changes that.
+
 **Generalisable:** before reaching for a fancier matmul config, check what the current one achieves.
 Every hand-tuned config tried in this port has lost, and in each case the plain one was already at
 the ceiling (see also the 169-vs-193 GB/s program-config result in ttnn_voxtral_gpt).
