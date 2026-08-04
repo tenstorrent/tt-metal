@@ -7,8 +7,9 @@
 
 #include <cstdint>
 
-#include "ttnn/operations/rand/device/rand_device_operation.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/rand/device/rand_device_operation.hpp"
 #include "ttnn/operations/uniform/uniform_range.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <ttnn/distributed/tensor_topology.hpp>
@@ -65,9 +66,10 @@ Tensor rand(
     float to,
     std::uint32_t seed,
     const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
-    TT_FATAL(
-        dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16,
-        "ttnn.rand supports only FLOAT32 and BFLOAT16 output dtypes");
+    TT_FATAL(dtype != DataType::UINT8, "[ttnn::rand] DataType::UINT8 is not supported.");
+
+    const bool needs_typecast = dtype != DataType::FLOAT32 && dtype != DataType::BFLOAT16;
+    const DataType generation_dtype = needs_typecast ? DataType::FLOAT32 : dtype;
 
     ttnn::Shape device_shape = shape;
     ttsl::SmallVector<bool> mesh_dim_is_sharded;
@@ -83,11 +85,11 @@ Tensor rand(
         mesh_dim_is_sharded = build_shard_mask(config);
     }
 
-    const auto output_range = ttnn::operations::uniform::make_inclusive_output_range(from, to, dtype);
+    const auto output_range = ttnn::operations::uniform::make_inclusive_output_range(from, to, generation_dtype);
 
     auto tensor = ttnn::prim::uniform(
         device_shape,
-        dtype,
+        generation_dtype,
         Layout::TILE,
         memory_config,
         device,
@@ -95,6 +97,9 @@ Tensor rand(
         output_range.upper_bound,
         seed,
         std::move(mesh_dim_is_sharded));
+    if (needs_typecast) {
+        tensor = ttnn::typecast(tensor, dtype);
+    }
     if (layout != Layout::TILE) {
         tensor = ttnn::to_layout(tensor, layout);
     }

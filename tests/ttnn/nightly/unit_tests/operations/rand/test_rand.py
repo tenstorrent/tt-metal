@@ -9,21 +9,11 @@ import torch
 import ttnn
 
 
-def get_types_from_binding_framework():
-    if hasattr(ttnn.DataType, "_member_map_"):
-        # nanobind
-        ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
-    else:
-        raise Exception("test_rand.py: ttnn.DataType has unexpected way of holding values. Not matching nanobind.")
-
-    return ALL_TYPES
-
-
 DEFAULT_SHAPE = (32, 32)
 SHAPES = [tuple([32] * i) for i in range(6)]
-ALL_TYPES = get_types_from_binding_framework()
 SUPPORTED_DTYPES = (ttnn.bfloat16, ttnn.float32)
-UNSUPPORTED_DTYPES = tuple(dtype for dtype in ALL_TYPES if dtype not in SUPPORTED_DTYPES)
+LEGACY_DTYPES = (ttnn.bfloat4_b, ttnn.bfloat8_b)
+UNSUPPORTED_DTYPES = (ttnn.uint8,)
 TEST_SEED = 17
 FLOAT32_MIN_NORMAL = torch.finfo(torch.float32).tiny
 FLOAT32_MIN_SUBNORMAL = torch.nextafter(torch.tensor(0.0), torch.tensor(1.0)).item()
@@ -93,8 +83,16 @@ def test_tensor_dtype_and_value_range(device, dtype, layout):
 
 @pytest.mark.parametrize("dtype", UNSUPPORTED_DTYPES)
 def test_rand_rejects_unsupported_dtype(device, dtype, expect_error):
-    with expect_error(RuntimeError, "supports only FLOAT32 and BFLOAT16"):
+    with expect_error(RuntimeError, "UINT8 is not supported"):
         ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device)
+
+
+@pytest.mark.parametrize("dtype", LEGACY_DTYPES)
+def test_rand_preserves_legacy_low_precision_dtypes(device, dtype):
+    tensor = ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device)
+
+    assert tensor.dtype == dtype
+    assert torch.isfinite(ttnn.to_torch(tensor)).all()
 
 
 def test_rand_defaults(device):
