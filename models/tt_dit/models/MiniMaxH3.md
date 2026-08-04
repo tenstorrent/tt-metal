@@ -20,6 +20,29 @@ There is no `__init__.py`: `tt_dit` uses namespace packages, matching `transform
 
 Tests follow the layout of the other models, under `models/tt_dit/tests/models/minimax_h3/`.
 
+## Running the transformer tests with real weights
+
+`MINIMAX_H3_MODEL_PATH` points at a MiniMax-H3 diffusers snapshot (`MINIMAX_H3_SUBFOLDER` picks the
+partition, default `transformer`). Without it, the real-weights cases skip and the rest still run.
+
+```bash
+export MINIMAX_H3_MODEL_PATH=/data/cglagovich/MiniMax-H3-diffusers
+TEST=models/tt_dit/tests/models/minimax_h3/test_transformer_minimax_h3.py
+
+# 2 layers, real weights, checked against the torch reference (PCC ~0.9998)
+scripts/run_safe_pytest.sh $TEST -k "real_weights- and small_s2048"
+
+# all 50 layers, real weights, device only -- no reference, so shape/finiteness checks only
+scripts/run_safe_pytest.sh $TEST -k "transformer_real_weights"
+```
+
+Mind the two selectors: `real_weights-` (trailing dash) is the 2-layer parameter, while
+`transformer_real_weights` is the separate full-depth test. Plain `-k real_weights` matches both.
+
+The 2-layer case reads only the first two blocks (62 of 638 tensors) and takes about a minute; the
+50-layer case spends ~145 s loading weights onto the mesh. Block performance is tracked separately in
+[MiniMaxH3_perf_log.md](MiniMaxH3_perf_log.md).
+
 ## Setup
 
 MiniMax-H3 support is not in a released `diffusers` yet. Bringup is pinned to a specific commit of
