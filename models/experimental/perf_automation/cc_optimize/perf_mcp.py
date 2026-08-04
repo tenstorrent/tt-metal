@@ -1319,10 +1319,38 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     is_matmul = "matmul" in (op_code or "").lower()
     # BOX (0) HOST / dispatch bucket (GAP-A) — NOT a device op, so the matmul ladder (grid/dtype/
     # tt-lang/C++) is meaningless. Its lever is a STRUCTURAL host-loop transform (trace capture /
-    # 2-CQ). Routed via recall_knobs(op_class=host_fallback). Cleared once a measured 'structural'
-    # attempt is on file — a trace that doesn't help still counts as tried (bounded, can't hang).
+    # 2-CQ). Routed via recall_knobs(op_class=host_fallback).
+    #
+    # MEASUREMENT-GATED, not presence-gated. This used to clear the moment ANY attempt of these kinds
+    # existed -- "a trace that doesn't help still counts as tried" -- so one failed attempt sealed the
+    # whole dispatch axis permanently. On gemma-3-12b-it that is exactly what happened: run 20 recorded
+    # trace / 400.44 ms / beat_baseline=False, and across 158 later attempts dispatch was never offered
+    # again while 20.92 ms of host_overhead stayed in every profile. Attempted was being read as
+    # resolved.
+    #
+    # _decode_gate already solves this for the KV-cache lever, in this same file, and its comment names
+    # the failure directly: it "clears ONLY when a KV-cache attempt actually reduced cost". Same rule
+    # here -- clear on a MEASURED win, or after PERF_MCP_MAX_HOST_ATTEMPTS real tries so a genuinely
+    # irreducible dispatch residual cannot loop forever. Wedged attempts count toward the cap, matching
+    # how _decode_gate treats a cache that crashes every time.
     if bound == "host" or (open_op.get("bucket") or "").lower() == "host_fallback":
-        if not (kinds & {"structural", "trace", "trace-capture"}):
+        _host_kinds = {"structural", "trace", "trace-capture"}
+        _host_tried = [a for a in matches if (a.get("kernel_kind") or "").lower() in _host_kinds]
+        # _ledger().is_win OWNS "is a win"; re-deriving it from beat_baseline here would be a second
+        # definition of the same fact (test_single_source_of_truth enforces that). If the ledger is
+        # unreadable, treat it as NOT won -- that keeps the rung open, which is the safe direction.
+        try:
+            _host_won = any(_ledger().is_win(a) for a in _host_tried)
+        except Exception:  # noqa: BLE001
+            _host_won = False
+        try:
+            _host_wedged = sum(
+                1 for a in _load_attempts() if (a.get("kernel_kind") or "").lower() in _host_kinds and a.get("wedged")
+            )
+        except Exception:  # noqa: BLE001
+            _host_wedged = 0
+        _max_host = int(os.environ.get("PERF_MCP_MAX_HOST_ATTEMPTS", "3") or "3")
+        if not (_host_won or (len(_host_tried) + _host_wedged) >= _max_host):
             return (
                 False,
                 "trace-capture",
@@ -1337,9 +1365,10 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
         return (
             True,
             "done",
-            "trace/2-CQ DISPATCH lever tried -> remaining DISPATCH residual is bounded by the loop transform. "
+            "DISPATCH lever %s -> remaining DISPATCH residual is bounded by the loop transform. "
             "This does NOT clear a repeat_prefill RECOMPUTE gap: if the generation_loop 'kv-cache' target is still "
-            "blocking, the residual here is redundant recompute, reducible ONLY by a KV-cache (NOT irreducible).",
+            "blocking, the residual here is redundant recompute, reducible ONLY by a KV-cache (NOT irreducible)."
+            % ("WON a measured reduction" if _host_won else "tried %d time(s), the cap" % len(_host_tried)),
         )
     tries = {"grid": grid_tries, "fidelity": fidelity_tries, "dtype": dtype_tries, "shard": shard_tries}
     # A DEEPER RUNG ON FILE SPENDS THE SECOND-VARIANT ALLOWANCE. _MAX_KNOB_RETRIES exists so a
