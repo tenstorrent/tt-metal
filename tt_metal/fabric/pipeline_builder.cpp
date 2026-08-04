@@ -270,6 +270,7 @@ std::map<std::string, size_t> assign_submeshes(
 }  // anonymous namespace
 
 GraphLayoutResult resolve_graph_layout(
+    const std::vector<std::string>& nodes,
     const std::vector<EdgeInputTuple>& edges,
     const std::vector<std::vector<ChipTuple>>& submesh_chips,
     const std::map<std::string, uint32_t>& node_chip_counts) {
@@ -290,18 +291,23 @@ GraphLayoutResult resolve_graph_layout(
     auto connections = discover_connections(chips);
 
     // ------------------------------------------------------------------
-    // 2. Collect unique node names and separate loopback edges
+    // 2. Collect node names.
+    //
+    // The explicit `nodes` list is authoritative, so graphs whose nodes are
+    // not all covered by edges (e.g. a single-stage pipeline with no edges)
+    // still register every node.  Every endpoint referenced by an edge must
+    // appear in `nodes`; an edge referencing an unlisted node is an error.
     // ------------------------------------------------------------------
-    std::vector<std::string> all_nodes;
-    all_nodes.reserve(edges.size() * 2);
+    std::vector<std::string> all_nodes = nodes;
     {
-        std::set<std::string> seen;
+        // Check all nodes in edges to ensure they are all registered.
+        std::set<std::string> node_set(nodes.begin(), nodes.end());
         for (const auto& [src, dst, is_lb] : edges) {
-            if (seen.insert(src).second) {
-                all_nodes.push_back(src);
+            if (!node_set.contains(src)) {
+                throw std::runtime_error("resolve_graph_layout: node " + src + " not found in the explicit nodes list");
             }
-            if (seen.insert(dst).second) {
-                all_nodes.push_back(dst);
+            if (!node_set.contains(dst)) {
+                throw std::runtime_error("resolve_graph_layout: node " + dst + " not found in the explicit nodes list");
             }
         }
     }
