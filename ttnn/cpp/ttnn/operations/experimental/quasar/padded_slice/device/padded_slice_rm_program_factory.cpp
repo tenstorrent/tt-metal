@@ -256,6 +256,28 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         spec.scratchpads.push_back(ScratchpadSpec{.unique_id = PS_SCRATCH, .size_per_node = scratch_page * kNumTrids});
     }
 
+    // [#48552 DIAG - remove after] The DRAM-slice input gather. Watcher misattributes this to the s2i
+    // reader (stale kernel name), but this is the op that actually asserts. is_non_aligned selects the
+    // TRID scratch-loopback path (reader fills scratch via NoC self-read then loops back to the OUT DFB);
+    // log the path + sizing so the assert (capacity vs scratch vs NoC self-read) can be pinned.
+    {
+        const uint32_t _diag_scratch_page =
+            tt::align((a.logical_shape()[-1] * a.element_size()) + src_buffer_alignment, src_buffer_alignment);
+        log_warning(
+            tt::LogOp,
+            "[PS-DIAG] is_non_aligned={} out_row_bytes={} out_cb_page_sz={} out_dfb_cap(sticks)={} "
+            "src_align={} dst_align={} num_dims={} num_trids={} scratch_page={}",
+            is_non_aligned ? 1u : 0u,
+            output_row_size_bytes,
+            output_cb_page_size,
+            num_output_sticks_per_core,
+            static_cast<uint32_t>(src_buffer_alignment),
+            static_cast<uint32_t>(dst_buffer_alignment),
+            num_dims,
+            kNumTrids,
+            _diag_scratch_page);
+    }
+
     // Reader: interleaved src -> OUTPUT DFB.
     KernelSpec reader{
         .unique_id = PS_READER,
