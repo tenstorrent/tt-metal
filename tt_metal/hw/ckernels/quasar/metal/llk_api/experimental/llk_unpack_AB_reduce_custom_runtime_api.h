@@ -18,8 +18,7 @@
 /**
  * @brief Initializes the block reduce_max_row unpacker (runtime block_ct_dim): programs the MOP.
  *
- * Resolves operandA/operandB to buffer descriptors and programs the block MOP -- the same operand-at-init
- * pattern as native llk_unpack_AB_reduce_init.
+ * Resolves operandA/operandB to buffer descriptors and programs the block MOP.
  *
  * @tparam is_fp32_dest_acc_en  32-bit DEST accumulation mode.
  * @param block_ct_dim     Number of tiles in the width dimension processed as one block.
