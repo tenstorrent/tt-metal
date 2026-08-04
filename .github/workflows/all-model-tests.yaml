@@ -279,20 +279,29 @@ jobs:
                   if found and tier in enabled_tiers and test_type in enabled_test_types:
                       any_tests = True
 
-          # vLLM Model Tests: single pipeline, NOT tier-gated. Match any entry
-          # whose SKU is enabled and whose model matches the filter (tier ignored).
+          # vLLM Model Tests: single pipeline. Not tier-gated on scheduled/standalone
+          # runs, but all-model-tests forwards a single selected tier to the vLLM impl
+          # (see the vllm-tests job). Mirror that effective tier here so preflight
+          # doesn't pass (and build an artifact) for a tier/SKU/model combination the
+          # downstream vLLM matrix would filter to empty.
           vllm_path = "tests/pipeline_reorg/vllm_model_tests.yaml"
           run_vllm = os.environ.get("RUN_VLLM") == "true"
+          # Effective vLLM tier: exactly one selected tier is forwarded; any other
+          # combination (none / multiple / the default all-on) runs every tier.
+          eff_vllm_tier = next(iter(enabled_tiers)) if len(enabled_tiers) == 1 else None
           has_vllm = False
           if os.path.exists(vllm_path):
               with open(vllm_path) as f:
                   vtests = yaml.safe_load(f) or []
               for test in vtests:
                   skus = test.get("skus", {})
-                  if not isinstance(skus, dict):
+                  if not isinstance(skus, dict) or not model_matches(test.get("model", ""), model_filter):
                       continue
-                  if any(s in enabled_skus for s in skus) and model_matches(test.get("model", ""), model_filter):
-                      has_vllm = True
+                  for sku_name, sku_cfg in skus.items():
+                      if sku_name in enabled_skus and (eff_vllm_tier is None or sku_cfg.get("tier") == eff_vllm_tier):
+                          has_vllm = True
+                          break
+                  if has_vllm:
                       break
           results["has-vllm-tests"] = "true" if has_vllm else "false"
           if has_vllm and run_vllm:
