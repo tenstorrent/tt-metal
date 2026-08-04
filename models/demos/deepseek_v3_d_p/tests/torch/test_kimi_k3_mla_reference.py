@@ -303,7 +303,9 @@ def test_k3_accuracy_pinned_blocking():
 
     ibw=2 has the BEST single-chunk PCC of any value -- better than ibw=1, the one that works -- and
     still fails at 20480. The per-op PCC ranking is INVERTED against depth behaviour here, so no
-    op-level measurement can justify raising this; only the depth56k-1u chunked-prefill case can.
+    op-level measurement can justify raising this. Only a deep chunked run can:
+    test_mla_chunked_prefill[k3-production-50k+5k-cpu-8x4-fabric2d] is 11 x 5120 = 56320 tokens at
+    S_loc=640, every iteration asserted.
 
     Resolved through ttMLA rather than by indexing MLA_MATMUL_CONFIG directly: the 640 slot holds
     several candidates and only _select_cfg / _cfg_matches know which one K3 gets.

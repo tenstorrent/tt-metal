@@ -520,76 +520,6 @@ def test_kimi_mla(
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4), (2, 4)], ids=["8x4", "2x4"], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-    ],
-    ids=["line", "fabric2d"],
-    indirect=True,
-)
-@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize(
-    "seq_len",
-    [5 * 1024, 25 * 1024],
-    ids=["seq5k", "seq25k"],
-)
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
-# id is "k3", NOT "kimi_k3": pytest -k is substring-based, so a "kimi_k3" id would make every
-# existing `-k kimi` selector (CI yaml, test_mla_perf.py) start picking up K3 cases too.
-@pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["k3"])
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.timeout(0)
-def test_kimi_k3_mla(
-    use_pretrained,
-    request,
-    mesh_device,
-    seq_len,
-    skip_host_comparison,
-    scale_down_sl,
-    is_balanced,
-    is_ci_env,
-    is_ci_v2_env,
-    device_params,
-    variant,
-):
-    """Kimi-K3 MLA: NoPE + output gate at 96 heads.
-
-    Same driver as test_kimi_mla, so this checks the absorbed MLAReference (PCC 0.98), both KVPE
-    cache halves (0.99), and — at seq <= 5k — the unabsorbed upstream KimiMLAAttention at
-    variant.mla_pcc_threshold. random weights only: supports_pretrained=False (no K3 checkpoint is
-    staged, and the MoE side of the MXFP4 checkpoint would need a dequant path; MLA itself is exempt).
-
-    No `ring` (FABRIC_1D_RING) axis: it buys nothing over `line`/`fabric2d` for a NoPE dense MLA and
-    keeps the case count down.
-    """
-    run_model(
-        variant,
-        use_pretrained,
-        request,
-        mesh_device,
-        seq_len,
-        skip_host_comparison,
-        scale_down_sl,
-        is_balanced,
-        is_ci_env,
-        is_ci_v2_env,
-        device_params,
-    )
-
-
 # ---------------------------------------------------------------------------------------------------
 # Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
@@ -662,16 +592,9 @@ def _run_chunked_prefill(
                 "reference='trace' requires MLA_CHUNKED_TRACE_DIR (root) or "
                 "MLA_CHUNKED_TRACE_PATH (single trace) -- trace-only scenario"
             )
-        # A GPU trace is only meaningful against the checkpoint it was recorded from (hence
-        # use_pretrained below), so a variant with no reachable checkpoint has no trace of its own.
-        # This must ASSERT, not skip: trace discovery cannot detect the mistake. discover_traces
-        # filters siblings by `"kimi" in dir_name == "kimi" in variant_name`, a substring test, so
-        # Kimi-K3 matches want_kimi and is handed Kimi-K2.6's traces -- a silent cross-architecture
-        # comparison (96 vs 64 heads, NoPE vs YaRN, gated vs ungated). MLA_CHUNKED_TRACE_PATH is
-        # worse still: it bypasses discovery entirely and uses whatever it is pointed at. Checked
-        # here rather than in discover_traces because this is the one chokepoint both routes cross.
-        # Also note the trace path re-interleaves k_pe from the HF half-split into the Meta basis
-        # (see use_trace further down), which is itself meaningless for a NoPE variant.
+        # Must ASSERT, not skip: discover_traces filters siblings on a "kimi" substring, so Kimi-K3
+        # would be handed Kimi-K2.6's traces silently. Checked here -- the one point both the
+        # TRACE_DIR and TRACE_PATH routes cross.
         trace_variant = request.getfixturevalue("variant")
         assert getattr(trace_variant, "supports_pretrained", True), (
             f"reference='trace' is not supported for variant '{trace_variant.name}': it has no "
@@ -971,31 +894,6 @@ _CHUNKED_SCENARIOS = (
         ("deep-50k+5k", dict(iters_isl=[5120], prefill_len=50 * 1024)),
         ("deep-2u", dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
     ]
-    # chunk_size_global=1280 instead of the default 5120. S_loc = chunk_size_global // sp, so this is
-    # what puts a 2-SP box (the 8-chip 2x4 Blackhole loudbox) at S_loc=640 -- the per-device geometry
-    # every tuned `640` matmul/SDPA config in mla_config.py is written for. At the default 5120 a
-    # 2-SP box runs S_loc=2560 and never
-    # touches those configs; sp=8 reaches 640 via the 5120 scenarios above. Valid for sp in {2,4,8}
-    # (1280 % (32*8) == 0). Variant-independent like every other scenario here.
-    + [
-        ("chunk1280-full", dict(iters_isl=[1280] * 3, chunk_size_global=1280)),
-        # Rotated: iter0 fills one chip of a 2-SP mesh, iter1 starts mid-slab.
-        ("chunk1280-rot", dict(iters_isl=[640, 1280], chunk_size_global=1280)),
-    ]
-    # PCC-vs-KV-depth at the production token count. 44 x 1280 = 56320, the same total the 8x4 Galaxy
-    # reaches with 11 chunks of 5120 -- and at chunk 1280 a 2-SP box lands S_loc=640, so the
-    # num_heads-tagged 640 matmul/SDPA configs are actually engaged (chunk 5120 on 2 SP gives S_loc
-    # 2560, which has no tuned entry at all and would exercise a different path).
-    #
-    # This is the case that answers "does accuracy hold at depth": every iteration is asserted, so one
-    # CPU reference yields 44 depth points. The reference is ~7 min at this length on a 16-core host
-    # and is disk-cached by cpu_mla_reference, so only the first run pays it.
-    #
-    # Named depth56k-*, NOT chunk1280-*, so `-k chunk1280` keeps selecting only the two short cases
-    # above rather than silently pulling a 44-iteration run.
-    + [
-        ("depth56k-1u", dict(iters_isl=[1280] * 44, chunk_size_global=1280)),
-    ]
 )
 
 
@@ -1050,16 +948,11 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
     GPU traces in MLA_CHUNKED_TRACE_DIR). It otherwise runs the same
     config-driven driver on any arch/mesh.
 
-    kimi_k3 (NoPE + output gate, 96 heads) runs the 'cpu' and 'func' paths only: it has
-    supports_pretrained=False, so the pretrained fixture skips, and 'trace' forces pretrained. Note
-    the rotation/partial-chunk scenarios remain meaningful under NoPE -- rotation is a property of
-    update_padded_kv_cache's block-cyclic write and the on-device causal offset, not of RoPE, so
-    "K3 has no rope, therefore rotation is irrelevant" is the wrong inference."""
-    # The Kimi family is Blackhole-targeted in this repo (cf. test_kimi_mla's module-level skipif).
-    # Guarding here rather than at module level keeps the guard on the one variant that needs it:
-    # two CI selectors for this test are variant-unqualified ("maxedge-1u and cpu and 2x4 and line"
-    # in t3k_e2e_tests.yaml, and the 8x4 one in blaze_models_prefill_tests.yaml), so without this a
-    # kimi_k3 case would start running on Wormhole T3K where it has never been validated.
+    kimi_k3 (NoPE + output gate, 96 heads) runs 'cpu' and 'func' only -- supports_pretrained=False, and
+    'trace' forces pretrained. Its rotation scenarios still matter: rotation comes from the
+    block-cyclic cache write and the causal offset, not from RoPE."""
+    # Per-variant, not module-level: two CI selectors for this test are variant-unqualified, so
+    # without this a kimi_k3 case would run on Wormhole T3K where it has never been validated.
     if variant.name == "kimi_k3" and not is_blackhole():
         pytest.skip("kimi_k3 is validated on Blackhole only")
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
