@@ -66,6 +66,33 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     return ttnn.DRAM_MEMORY_CONFIG
 
 
+# Conservative interleaved-L1 budget for a *single* short-lived activation
+# (post-embed Tilize, RoPE cos/sin slices). Leaves headroom for concurrent
+# temps (LN stats, attention heads). seq=128 @ hidden=5376 BF16 ≈ 1.3 MiB → L1;
+# seq=512 ≈ 5.3 MiB → DRAM. Override / disable (0) via env.
+_DEFAULT_PREFILL_L1_TENSOR_MAX_BYTES = 4 * 1024 * 1024
+
+
+def prefill_tensor_memcfg(numel: int, dtype_bytes: int = 2) -> ttnn.MemoryConfig:
+    """L1 if ``numel * dtype_bytes`` fits the prefill L1 budget, else DRAM.
+
+    Used for post-embed Tilize and RoPE slice outputs so short ISL stays in L1
+    without OOMing long prefill. ``GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES`` overrides
+    the 4 MiB default; ``0`` forces DRAM.
+    """
+    max_bytes = int(os.environ.get("GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES", str(_DEFAULT_PREFILL_L1_TENSOR_MAX_BYTES)))
+    if max_bytes <= 0:
+        return ttnn.DRAM_MEMORY_CONFIG
+    if int(numel) * int(dtype_bytes) <= max_bytes:
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG
+
+
+def prefill_tilize_memcfg(seq_len: int, hidden_size: int, dtype_bytes: int = 2) -> ttnn.MemoryConfig:
+    """Memory config for the post-embed ``to_layout(TILE)`` activation."""
+    return prefill_tensor_memcfg(int(seq_len) * int(hidden_size), dtype_bytes=dtype_bytes)
+
+
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None):
     """Fused QKV matmul (no bias for Gemma4).
 

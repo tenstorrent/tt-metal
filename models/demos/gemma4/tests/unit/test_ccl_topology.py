@@ -12,6 +12,8 @@ from models.demos.gemma4.tt.attention.operations import (
     PREFILL_SDPA_HARD_MAX,
     PREFILL_SDPA_MAX_SEQ,
     prefill_short_lived_memcfg,
+    prefill_tensor_memcfg,
+    prefill_tilize_memcfg,
 )
 from models.demos.gemma4.tt.ccl import ccl_async_enabled, default_ccl_topology
 from models.demos.gemma4.tt.dram_sharded import can_dram_shard
@@ -79,6 +81,19 @@ def test_prefill_l1_act_env(monkeypatch):
     assert prefill_short_lived_memcfg() == ttnn.DRAM_MEMORY_CONFIG
     monkeypatch.setenv("GEMMA4_PREFILL_L1_ACT", "1")
     assert prefill_short_lived_memcfg() == ttnn.L1_MEMORY_CONFIG
+
+
+def test_prefill_tensor_memcfg_size_budget(monkeypatch):
+    """Short activations → L1; over budget / disabled → DRAM."""
+    monkeypatch.delenv("GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES", raising=False)
+    # 128 x 5376 BF16 ≈ 1.3 MiB < 4 MiB default
+    assert prefill_tilize_memcfg(128, 5376) == ttnn.L1_MEMORY_CONFIG
+    # RoPE slice 128 x 256 BF16 ≈ 64 KiB
+    assert prefill_tensor_memcfg(128 * 256) == ttnn.L1_MEMORY_CONFIG
+    # 512 x 5376 BF16 ≈ 5.3 MiB > 4 MiB
+    assert prefill_tilize_memcfg(512, 5376) == ttnn.DRAM_MEMORY_CONFIG
+    monkeypatch.setenv("GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES", "0")
+    assert prefill_tilize_memcfg(128, 5376) == ttnn.DRAM_MEMORY_CONFIG
 
 
 def test_prefill_sdpa_max_seq_clamped_to_hard_max():

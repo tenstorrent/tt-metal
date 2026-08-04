@@ -25,6 +25,7 @@ from tracy import signpost
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.attention.operations import prefill_tensor_memcfg, prefill_tilize_memcfg
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
@@ -350,18 +351,25 @@ class Gemma4Model:
 
             # Embedding: column-parallel (shard hidden dim across TP devices)
             # Each device holds [vocab, hidden/TP]; all-gather after lookup.
+            # Bake sqrt(hidden) into the device table so embed_tokens skips a
+            # BinaryNg mul every prefill/decode step. LM head + host
+            # ``_embed_weight_cpu`` stay unscaled (tied lm_head must not see the
+            # scale; host PLI/parity paths still multiply by embed_scale).
             if tp > 1:
                 embed_mapper = mesh_config.column_parallel(mesh_device)
             else:
                 embed_mapper = replicate
             embed_suffix = f"_{dtype_to_str(embedding_dtype)}"
+            scaled_embed_weight = embed_weight.float() * self.embed_scale
             self.embedding_weight = ttnn.as_tensor(
-                cast_host_for_ttnn(embed_weight.unsqueeze(0).unsqueeze(0), embedding_dtype),
+                cast_host_for_ttnn(scaled_embed_weight.unsqueeze(0).unsqueeze(0), embedding_dtype),
                 device=mesh_device,
                 dtype=embedding_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=embed_mapper,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"embed_tokens.weight{tp_suffix}{embed_suffix}"),
+                cache_file_name=get_cache_file_name(
+                    tensor_cache_path, f"embed_tokens.weight_scaled{tp_suffix}{embed_suffix}"
+                ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
@@ -703,12 +711,15 @@ class Gemma4Model:
         z = self._tt_slice_start_zeros_4
         tt_slice_starts = ttnn.concat([z[0:2], chunk_start_idx, z[3:4]], dim=0)
         ends = self._tt_seq_len_buffer_by_hd[head_dim]
+        # Short ISL cos/sin slices fit L1; long ones stay DRAM (see prefill_tensor_memcfg).
+        slice_mc = prefill_tensor_memcfg(int(seq_len) * head_dim)
         rot_cos_slice = ttnn.slice(
             input_tensor=full_rot_cos,
             starts=tt_slice_starts,
             ends=ends,
             slice_dim=2,
             num_devices=num_parts,
+            memory_config=slice_mc,
         )
         rot_sin_slice = ttnn.slice(
             input_tensor=full_rot_sin,
@@ -716,6 +727,7 @@ class Gemma4Model:
             ends=ends,
             slice_dim=2,
             num_devices=num_parts,
+            memory_config=slice_mc,
         )
         return (rot_cos_slice, rot_sin_slice)
 
@@ -1127,15 +1139,16 @@ class Gemma4Model:
         return logits
 
     def embed_tokens(self, tokens):
-        """Embed input tokens and scale by sqrt(hidden_size).
+        """Embed input tokens with sqrt(hidden_size) scale already baked into weights.
 
-        Embedding is column-parallel (hidden dim sharded across TP devices).
-        All-gather reconstructs full hidden dim after lookup.
+        Device ``embedding_weight`` is pre-multiplied by ``embed_scale`` at load
+        so this path is a single embedding op (plus TP all-gather) — no BinaryNg
+        mul. Embedding is column-parallel (hidden dim sharded across TP devices);
+        all-gather reconstructs the full hidden dim after lookup.
         """
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")
         embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
-        embeds = ttnn.mul(embeds, self.embed_scale)
 
         # All-gather sharded hidden dim back to full hidden
         if self.mesh_config is not None and self.mesh_config.tp > 1:
@@ -1148,14 +1161,15 @@ class Gemma4Model:
     def raw_embed(self, tokens):
         """Token embedding table lookup without the sqrt(hidden) scale.
 
-        This helper exposes the raw table for diagnostics/compatibility. The
-        it-assistant drafter path intentionally uses ``embed_tokens()``, matching
-        HF ``get_input_embeddings()(ids)`` where Gemma4 applies the embedding
-        scale inside the module.
+        Device ``embedding_weight`` is pre-scaled, so this undoes ``embed_scale``
+        after lookup. Prefer host ``_embed_weight_cpu`` when you need the raw
+        table without a device mul. The it-assistant drafter uses
+        ``embed_tokens()`` (scaled), matching HF ``Gemma4TextScaledWordEmbedding``.
         """
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")
         embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
+        embeds = ttnn.mul(embeds, 1.0 / self.embed_scale)
         if self.mesh_config is not None and self.mesh_config.tp > 1:
             embeds = ttnn.unsqueeze_to_4D(embeds)
             from models.demos.gemma4.tt.ccl import ccl_allgather
@@ -1632,7 +1646,11 @@ class Gemma4Model:
                 tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
         else:
             tt_embeds = ttnn.reshape(tt_embeds, (1, 1, per_user_seq_len, self.hidden_size))
-        tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
+        tt_embeds = ttnn.to_layout(
+            tt_embeds,
+            ttnn.TILE_LAYOUT,
+            memory_config=prefill_tilize_memcfg(per_user_seq_len, self.hidden_size),
+        )
 
         return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
 
@@ -1666,7 +1684,11 @@ class Gemma4Model:
             seq_len = tokens.shape[-1]
         tt_embeds = self.embed_tokens(tokens)
         tt_embeds = self._reshape_prefill_embeds(tt_embeds, seq_len)
-        tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
+        tt_embeds = ttnn.to_layout(
+            tt_embeds,
+            ttnn.TILE_LAYOUT,
+            memory_config=prefill_tilize_memcfg(seq_len, self.hidden_size),
+        )
         return tt_embeds, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
     def ttnn_prefill_forward(
