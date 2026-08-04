@@ -5,8 +5,9 @@
 import torch
 import ttnn
 from models.common.utility_functions import nearest_32
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+from models.tt_transformers.tt.common import get_tt_kv_cache_path
 from models.experimental.grok.tt.grok_common import LightweightModule
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 
 
 class TtGrokAttention(LightweightModule):
@@ -115,6 +116,11 @@ class TtGrokAttention(LightweightModule):
             )
         )
         layer_past = [cache_k, cache_v]
+        kv_cache_name = None
+        if not args.dummy_weights:
+            kv_cache_name = get_tt_kv_cache_path(self.model_args.weight_cache_path(dtype)) / (
+                f"{layer_name}.empty_attn_cache_{cache_k.shape}"
+            )
         self.layer_past = [
             ttnn.as_tensor(
                 lp,
@@ -123,7 +129,7 @@ class TtGrokAttention(LightweightModule):
                 dtype=ttnn.bfloat8_b,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 memory_config=self.model_config["ATTN_CACHE_WEIGHTS_MEMCFG"],
-                cache_file_name=cache_name(f"empty_attn_cache_{cache_k.shape}"),
+                cache_file_name=kv_cache_name,
             )
             for lp in layer_past
         ]

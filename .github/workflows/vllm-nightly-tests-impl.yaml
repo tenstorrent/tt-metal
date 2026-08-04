@@ -576,6 +576,7 @@ jobs:
           export HF_MODEL="${{ matrix.test-group.model }}"
           MODEL_NAME="${HF_MODEL/\//--}"
           export TT_CACHE_PATH="$TT_CACHE_HOME/$MODEL_NAME"
+          export TT_KV_CACHE_PATH="$TT_CACHE_PATH"
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000

@@ -10,6 +10,7 @@ import torch
 import ttnn
 from models.common.utility_functions import nearest_32
 from models.demos.t3000.falcon40b.tt.model_utils import determine_tensor_deallocation, falcon_prefill_matmul
+from models.tt_transformers.tt.common import get_tt_kv_cache_path
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
@@ -207,7 +208,7 @@ class TtFalconAttention:
                 self.max_position_embeddings,
                 self.head_dim,
             )
-            kv_cache_path = self.tt_cache_path / f"empty_attn_cache{attn_cache_shape}"
+            kv_cache_path = get_tt_kv_cache_path(self.tt_cache_path) / (f"empty_attn_cache{attn_cache_shape}")
             k_cache = []
             v_cache = []
 

@@ -30,10 +30,12 @@ from models.demos.qwen25_vl.tt.common import (
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.tt_transformers.tt.common import get_tt_kv_cache_path
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer, model_args: ModelArgs, tt_cache_path):
+    tt_cache_path = get_tt_kv_cache_path(tt_cache_path)
     for layer_idx in range(num_layers):
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
 

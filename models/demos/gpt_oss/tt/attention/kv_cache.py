@@ -7,6 +7,7 @@ import ttnn
 from models.common.utility_functions import nearest_y
 from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.tt_transformers.tt.common import get_tt_kv_cache_path
 
 from .config import AttentionConfig
 
@@ -58,13 +59,14 @@ def init_kv_cache(
         if config.users_row_sharded
         else ttnn.ReplicateTensorToMesh(mesh_device)
     )
+    kv_cache_path = get_tt_kv_cache_path(tensor_cache_path)
     k_cache = ttnn.as_tensor(
         torch.zeros(cache_shape),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
         mesh_mapper=mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
+        cache_file_name=get_cache_file_name(kv_cache_path, f"k_cache_{cache_shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -75,7 +77,7 @@ def init_kv_cache(
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
         mesh_mapper=mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}"),
+        cache_file_name=get_cache_file_name(kv_cache_path, f"v_cache_{cache_shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

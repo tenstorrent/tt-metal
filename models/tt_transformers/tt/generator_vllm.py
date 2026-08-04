@@ -33,6 +33,7 @@ except ImportError:
 import ttnn
 from models.common.llama_models import create_vision_mask
 from models.common.utility_functions import is_wormhole_b0, nearest_32
+from models.tt_transformers.tt.common import get_tt_kv_cache_path
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
@@ -52,13 +53,14 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
             ``tensor_idx`` get their own buffer.
         dp_model: list of replicated TT model handles, one per data-parallel
             submesh.
-        tt_cache_path: path used for on-disk weight cache file naming.
+        tt_cache_path: default path used for on-disk KV cache file naming.
 
     Returns:
         ``list[submesh][layer_idx][k_or_v]`` of TT tensors. Multiple
         ``layer_idx`` entries may refer to the same underlying tensor
         objects when they share a ``tensor_idx``.
     """
+    tt_cache_path = get_tt_kv_cache_path(tt_cache_path)
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
