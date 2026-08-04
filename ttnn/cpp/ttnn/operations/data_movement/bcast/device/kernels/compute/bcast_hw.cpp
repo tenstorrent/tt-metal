@@ -8,7 +8,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 
 namespace ckl = compute_kernel_lib;
 

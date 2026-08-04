@@ -5,9 +5,9 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"     // BinaryFpu, DestReuseBinary, PackTile, eltwise_chain
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"      // Rsqrt
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"     // BinaryFpu, DestReuseBinary, PackTile, eltwise_chain
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"     // Rsqrt
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // OptionalChainElement
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"

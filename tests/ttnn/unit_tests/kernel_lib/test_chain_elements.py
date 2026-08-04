@@ -21,9 +21,9 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-DEST_REUSE_PARAM = "ttnn/cpp/ttnn/kernel_lib/tests/axes/dest_reuse_param.cpp"
-MISC_ELEMENTS = "ttnn/cpp/ttnn/kernel_lib/tests/axes/misc_elements.cpp"
-UNARY_BCAST = "ttnn/cpp/ttnn/kernel_lib/tests/axes/unary_bcast.cpp"
+DEST_REUSE_PARAM = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/dest_reuse_param.cpp"
+MISC_ELEMENTS = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/misc_elements.cpp"
+UNARY_BCAST = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/unary_bcast.cpp"
 
 # reuse selector -> name; op selector -> (name, torch fn applied as `lhs op rhs`)
 _REUSE = {0: "DEST_TO_SRCA", 1: "DEST_TO_SRCB"}

@@ -6,9 +6,9 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"  // MulUnary
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"  // MulUnary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 
 namespace ckl = compute_kernel_lib;
 

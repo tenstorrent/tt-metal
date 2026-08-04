@@ -5,11 +5,11 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // Tanh
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"  // FillScalar
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Square, CopyDest
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"    // FillScalar
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"         // Square, CopyDest
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // Tanh
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 
 #define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */
 #define M_2_SQRTPI 1.12837916709551257390f /* 2/sqrt(pi) */

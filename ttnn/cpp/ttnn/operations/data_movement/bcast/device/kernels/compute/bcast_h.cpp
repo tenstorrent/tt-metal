@@ -6,7 +6,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 
 void kernel_main() {
     auto B = get_arg(args::B);

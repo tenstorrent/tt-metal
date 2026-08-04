@@ -6,10 +6,10 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // unary
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Recip
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Negative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // unary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"       // Recip
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"       // Negative
 #include "api/dataflow/dataflow_buffer.h"
 
 namespace ckl = compute_kernel_lib;

@@ -4,16 +4,16 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"  // FillScalar
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_extended.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"  // Ltz
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_special.hpp"     // Where, LgammaStirlingFloat, LgammaAdjusted
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_trig.hpp"        // Sin
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_rounding.hpp"    // Floor, Frac
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"        // Abs
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"        // Log
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"  // FillScalar
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/extended.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/predicates.hpp"  // Ltz
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/special.hpp"     // Where, LgammaStirlingFloat, LgammaAdjusted
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/trig.hpp"        // Sin
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/rounding.hpp"    // Floor, Frac
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"        // Abs
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"        // Log
 
 namespace ckl = compute_kernel_lib;
 

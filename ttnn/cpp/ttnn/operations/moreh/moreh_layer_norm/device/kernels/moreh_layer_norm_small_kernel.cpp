@@ -5,9 +5,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // add/sub/mul
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Rsqrt
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // add/sub/mul
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"       // Rsqrt
 
 namespace ckl = compute_kernel_lib;
 

@@ -4,7 +4,7 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 
 void kernel_main() {
     namespace ckl = compute_kernel_lib;
