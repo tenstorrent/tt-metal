@@ -209,6 +209,89 @@ def _ltx_inputs(preset: Preset) -> Dict[str, Any]:
     )
 
 
+# -----------------------------------------------------------------------------
+# SD3.5-large joint transformer block (blocks/transformer_block.py)
+# -----------------------------------------------------------------------------
+# SD3.5-large: 38 heads padded to 40 for TP=4 (the uneven->padded case phase 7a
+# handles), head_dim 64, dim = 38*64 = 2432. Learned pos-embed, so no rope.
+SD35_ORIG_HEADS, SD35_HEADS, SD35_HEAD_DIM = 38, 40, 64
+SD35_DIM = SD35_ORIG_HEADS * SD35_HEAD_DIM  # 2432
+SD35_S, SD35_P, SD35_BLOCKS, SD35_STEPS = 4096, 352, 38, 28
+
+
+def _sd35_block(preset: Preset) -> Graph:
+    """One SD3.5-large joint ``TransformerBlock``, built and called for real.
+
+    Mirrors ``blocks/transformer_block.py`` + ``blocks/attention.py`` -- the same
+    block ``examples/sd35.py`` models by hand, so it is the second block the dry
+    run derives from source and the second oracle it is held to. The 38->40 head
+    padding runs through the phase-7a shard/shape math.
+    """
+    mesh_device = install(preset.mesh_shape, preset.arch)
+    import ttnn  # the shim
+    from models.tt_dit.blocks.transformer_block import TransformerBlock
+    from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
+    from models.tt_dit.parallel.manager import CCLManager
+    from models.tt_dit.utils.padding import PaddingConfig
+
+    graph = _start(mesh_device, preset, name="sd35_block_dryrun_%s" % preset.name, calls=SD35_BLOCKS, steps=SD35_STEPS)
+    graph.meta.update(
+        {
+            "model": "Stable Diffusion 3.5 Large, dry run from source",
+            "note": "one joint TransformerBlock x%d blocks; %s topology" % (SD35_BLOCKS, preset.topology),
+        }
+    )
+
+    tp = preset.mesh_shape[preset.tp_axis]
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=preset.cfg_axis),
+        sequence_parallel=ParallelFactor(factor=preset.mesh_shape[preset.sp_axis], mesh_axis=preset.sp_axis),
+        tensor_parallel=ParallelFactor(factor=tp, mesh_axis=preset.tp_axis),
+    )
+    ccl = CCLManager(
+        mesh_device,
+        num_links=2,
+        topology=ttnn.Topology.Ring if preset.topology == "Ring" else ttnn.Topology.Linear,
+    )
+    padding_config = PaddingConfig(
+        original_heads=SD35_ORIG_HEADS, target_heads=SD35_HEADS, head_dim=SD35_HEAD_DIM, tensor_parallel_factor=tp
+    )
+
+    block = TransformerBlock(
+        dim=SD35_DIM,
+        num_heads=SD35_ORIG_HEADS,
+        head_dim=SD35_HEAD_DIM,
+        context_pre_only=False,
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+        parallel_config=parallel_config,
+        padding_config=padding_config,
+    )
+    graph.meta["parameters"] = load_meta_weights(block)
+
+    out = block(**_sd35_inputs(preset))
+    graph.outputs = [t.sym for t in out if t is not None]
+    return graph
+
+
+def _sd35_inputs(preset: Preset) -> Dict[str, Any]:
+    sp, tp = preset.sp_axis, preset.tp_axis
+    seq_shard = {sp: 1}
+    feature_shard = {tp: 2}
+    activation = dict(seq_shard)
+    activation.update(feature_shard)
+
+    def tensor(logical, shard=None):
+        return recorder.entry(logical, Dist.make(CTX.mesh, shard or {}), base="input")
+
+    return dict(
+        spatial=tensor([1, SD35_S, SD35_DIM], activation),  # SP on seq, TP on feature
+        prompt=tensor([1, SD35_P, SD35_DIM], feature_shard),  # replicated on SP
+        time_embed=tensor([1, 1, SD35_DIM]),  # replicated
+        spatial_sequence_length=SD35_S,
+    )
+
+
 def _start(mesh_device, preset: Preset, name: str, calls: int = 1, steps: int = 1) -> Graph:
     from . import start
 
@@ -245,6 +328,22 @@ TARGETS: Dict[str, Target] = {
                 tp_axis=0,
                 oracle="ltx_block_bh_2x4",
                 description="Blackhole 2x4, Linear: the explicit-gather path",
+            ),
+        },
+    ),
+    "sd35_block": Target(
+        name="sd35_block",
+        description="SD3.5-large joint transformer block, from models/tt_dit source",
+        build=_sd35_block,
+        presets={
+            "bh_2x4": Preset(
+                name="bh_2x4",
+                mesh_shape=(2, 4),
+                topology="Linear",
+                sp_axis=0,  # SD3.5 oracle: SP=2 on axis 0, TP=4 on axis 1
+                tp_axis=1,
+                oracle="sd35_block",
+                description="Blackhole 2x4: SP=2 (axis0), TP=4 (axis1); every collective load-bearing",
             ),
         },
     ),

@@ -34,8 +34,8 @@ stale copy to disagree.
 | Dry run | **built**: `ditcheck dryrun ltx_block --preset bh_4x8`, real forward under a metadata-only ttnn, weights from torch meta tensors, caller stack per node, `--check-oracle` as the drift test |
 | Capture | 30 monkeypatch hooks written, **never run on hardware**; demoted to the phase 11 conformance path |
 | Graph source | `ditcheck dryrun` from source, or hand-written via `builder.py`; a trace still needs hand-declared placements |
-| Validated on | SD3.5-large block (0 findings), LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear), both reproduced from source by the dry run and asserted in `tests/test_dryrun.py` |
-| Tests | 24 analyzer + 19 dry-run, no device and no pytest required; plus `conform.py` on a device |
+| Validated on | LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear) **and** the SD3.5-large joint block (0 findings) — **both derived from source** by the dry run and diffed against a hand-written oracle, asserted in `tests/test_dryrun.py` |
+| Tests | 24 analyzer + 20 dry-run, no device and no pytest required; plus `conform.py` on a device |
 | Conformance | `conform.py`: per-device shape diff vs real ttnn, **green on the 2×4 Loudbox** (the LTX block's shapes match; 4×8 Ring needs a Galaxy) |
 
 ### Phases
@@ -50,7 +50,7 @@ real code. Plan phase 6 and roadmap phase 13 are the same work.
 | plan 5 — validate on historical wins | **partly** | rediscovers the LTX win from source and passes the SD3.5 precision test; no wider corpus of past AGMM graphs, and none of the human metrics (false-positive rate over a real backlog, time per finding) |
 | **roadmap 6 — dry-run front end** | **done** | — |
 | **roadmap 7 — shape and layout fidelity** | **done (7a); 7b on 2×4, Ring blocked** | tiling, exact shard division, block-float bytes, checkpoint keys, and the chunk rule all shipped and corroborated against real ttnn on the 2×4 Loudbox via `conform.py`; the 4×8 Ring corroboration needs a 32-chip Galaxy |
-| roadmap 8 — op coverage | **next** | DiT block is covered; the tail is VAE/encoder |
+| roadmap 8 — op coverage | **in progress** | LTX **and** SD3.5-large blocks now covered from source (0 unregistered); remaining tail is conv/VAE + the one-registration merge |
 | roadmap 9 — scale | not started | 48-layer rollup, quadratic cost, finding rollup, stable IDs |
 | roadmap 10 — multi-mesh / stage / host | not started | submeshes, encoder→DiT→VAE, carried state, readbacks |
 | roadmap 11 — conformance (needs a device) | not started | **gates trusting findings**, not producing them |
@@ -372,7 +372,21 @@ shipped:
 **Test count: 43 offline (24 analyzer + 19 dry run), no device or pytest needed,
 plus `conform.py` on a device.**
 
-### Phase 8 — Op coverage, one registration per op (3–4 weeks) · closes 2, 14, 15, 16, 17, 18
+### Phase 8 — Op coverage, one registration per op (3–4 weeks) · **in progress** · closes 2, 14, 15, 16, 17, 18
+
+**Landed so far — a second block from source.** The SD3.5-large joint
+`TransformerBlock` (`blocks/transformer_block.py` + `blocks/attention.py`) now runs
+under the shim as `ditcheck dryrun sd35_block --preset bh_2x4` and matches
+`examples/sd35.py` on all four oracle criteria: 0 unregistered ops, 10 collectives
+identical to the oracle, 0 findings (every collective load-bearing). Getting there
+took exactly the coverage phase 8 is about: a real `split_query_key_value_and_split_heads`
+shim (the fused QKV split — LTX uses chunked `to_qkv` and never exercised it),
+a new `recorder.emit_multi` for its three outputs, and the `dit_rms_norm_unary_fused`
+spec (the q/k RMSNorm, mapped to the local `layernorm` semantics). It also runs the
+38→40 padded-head case through the phase-7a shard/shape math on a real block.
+Asserted by `tests/test_dryrun.py::test_sd35_block_matches_oracle`.
+
+**Remaining:**
 
 - Merge shim shape rule and analyzer semantics into a single `OpSpec` (today a
   rule in `dryrun/ops.py` and a spec in `semantics.py` are two edits for one piece

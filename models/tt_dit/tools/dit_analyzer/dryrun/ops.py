@@ -467,6 +467,20 @@ def dit_minimal_matmul_addcmul_fused(x, w, scalar=1.0, a1=None, a2=None, **k) ->
     return pointwise("addcmul", [out, a1, a2])
 
 
+def dit_rms_norm_unary_fused(x, weight=None, bias=None, **k) -> Tensor:
+    """Local RMS norm over the last axis, with a fused unary activation.
+
+    Unlike ``dit_fused_distributed_rmsnorm`` this is *not* distributed: it is the
+    ``RMSNorm``/``LayerNorm`` used for q/k normalisation (``normalization.py:54``),
+    whose reduction axis (head_dim / feature) is not sharded, so no collective is
+    implied. It reduces the last axis, so the analyzer must see that axis in full
+    -- modelled as ``layernorm`` with ``needs_full_axes=[-1]``. Weight/bias, when
+    present, ride along as operands so their layout is checked.
+    """
+    extra = [t for t in (weight, bias) if isinstance(t, Tensor)]
+    return recorder.emit("layernorm", [x, *extra], x.logical, x.dist, attrs={"needs_full_axes": [-1]}, base="norm")
+
+
 # -----------------------------------------------------------------------------
 # norms, heads, attention
 # -----------------------------------------------------------------------------
@@ -564,7 +578,28 @@ def ring_joint_scaled_dot_product_attention(q, key, value, aq=None, ak=None, av=
 
 
 def split_query_key_value_and_split_heads(x, num_heads: int = 1, **k):
-    return tuple(nlp_create_qkv_heads(x, num_heads=num_heads)[0] for _ in range(3))
+    """Fused [B, N, 3*H*Dh] -> q, k, v each [B, H, N, Dh] (heads on axis 1).
+
+    ``num_heads`` is the *local* head count; the fused tensor's feature axis is
+    the TP-fractured ``3 * H * head_dim``, so the global head count is
+    ``num_heads * tp`` and each output moves the head block onto axis 1. Emits one
+    ``split_qkv_heads`` node with three outputs, which the analyzer reasons about
+    directly (per-device QKV column layout, blocker 2/18).
+    """
+    m = _feature_mesh_axis(x)
+    tp = CTX.mesh.shape[m] if m is not None else 1
+    total_heads = num_heads * tp
+    b, n, f = x.logical[-3], x.logical[-2], x.logical[-1]
+    head_dim = f // (3 * total_heads)
+    out_dist = _remap_dist(x.dist, {len(x.logical) - 1: 1, len(x.logical) - 2: 2})
+    outs = [([b, total_heads, n, head_dim], out_dist) for _ in range(3)]
+    return recorder.emit_multi(
+        "split_qkv_heads",
+        [x],
+        outs,
+        attrs={"heads": total_heads, "head_dim": head_dim, "qkv_layout": "per_device"},
+        base="qkv",
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -626,6 +661,7 @@ EXPERIMENTAL_OPS = {
     "all_gather_minimal_matmul_async": all_gather_minimal_matmul_async,
     "minimal_matmul_strided_reduce_scatter_async": minimal_matmul_strided_reduce_scatter_async,
     "dit_minimal_matmul_addcmul_fused": dit_minimal_matmul_addcmul_fused,
+    "dit_rms_norm_unary_fused": dit_rms_norm_unary_fused,
     "dit_fused_distributed_rmsnorm": dit_fused_distributed_rmsnorm,
     "dit_fused_distributed_layernorm": dit_fused_distributed_rmsnorm,
     "dit_fused_distributed_rmsnorm_create_stats_buffer": lambda *a, **k: None,

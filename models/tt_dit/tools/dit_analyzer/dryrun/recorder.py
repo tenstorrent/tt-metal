@@ -13,7 +13,7 @@ where a distribution becomes known without anyone declaring it.
 from __future__ import annotations
 
 import sys
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..ir import ACT, UNREGISTERED_OP, Dist, Graph, Mesh, Node, Placement, TensorSymbol
 from .context import CTX, DISPATCH_FILES, MODEL_MARKER, STACK_DEPTH
@@ -124,6 +124,50 @@ def emit(
         )
     )
     return Tensor(out_logical, out_dist, out_dtype, layout=layout or (tensors[0].layout if tensors else None), sym=sid)
+
+
+def emit_multi(
+    op: str,
+    ins: Sequence[Any],
+    outs: Sequence[Tuple[Sequence[int], Dist]],
+    attrs: Optional[Dict[str, Any]] = None,
+    mesh_axis: Optional[int] = None,
+    dtype=None,
+    label: Optional[str] = None,
+    fused_in: Optional[str] = None,
+    base: Optional[str] = None,
+) -> List[Tensor]:
+    """Record one IR node with several outputs (e.g. fused QKV split -> q, k, v).
+
+    ``outs`` is one ``(logical, dist)`` per output. Every output is a fresh SSA
+    symbol on the same node, so the analyzer spec sees them as ``node.outputs``.
+    """
+    graph = CTX.require_graph()
+    tensors = [t for t in ins if isinstance(t, Tensor)]
+    out_dtype = dtype or (tensors[0].dtype if tensors else None)
+    sids, results = [], []
+    for logical, dist in outs:
+        sid = fresh(base or op)
+        graph.symbols[sid] = TensorSymbol(id=sid, shape=tuple(logical), dtype=dtype_tag(out_dtype), value_id=sid)
+        sids.append(sid)
+        results.append(Tensor(logical, dist, out_dtype, layout=tensors[0].layout if tensors else None, sym=sid))
+    stack = caller_stack()
+    graph.nodes.append(
+        Node(
+            id=fresh(op + "_node"),
+            op=op,
+            inputs=[t.sym for t in tensors],
+            outputs=sids,
+            attrs=dict(attrs or {}),
+            mesh_axis=mesh_axis,
+            loc=stack[0] if stack else None,
+            stack=stack,
+            label=label,
+            calls=CTX.calls,
+            fused_in=fused_in,
+        )
+    )
+    return results
 
 
 def unregistered(call: str, args: Sequence[Any]) -> Optional[Tensor]:

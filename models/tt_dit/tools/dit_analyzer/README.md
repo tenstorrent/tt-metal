@@ -24,6 +24,9 @@ models/tt_dit/tools/ditcheck dryrun ltx_block --preset bh_4x8 --analyze --top 1
 # ... and check it still agrees with the hand-written graph for the same block
 models/tt_dit/tools/ditcheck dryrun ltx_block --preset bh_4x8 --check-oracle
 
+# a second block from source: the SD3.5-large joint block (every collective load-bearing)
+models/tt_dit/tools/ditcheck dryrun sd35_block --preset bh_2x4 --check-oracle
+
 # LTX-2.3 A+V block on BH 4x8 (Ring): 6 provably duplicate TP gathers per block
 models/tt_dit/tools/ditcheck analyze example:ltx_block_bh_4x8 --top 1
 

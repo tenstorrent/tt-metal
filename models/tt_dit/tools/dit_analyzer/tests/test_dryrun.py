@@ -57,6 +57,21 @@ def test_ltx_linear_is_clean():
     proc = _dryrun("dryrun", "ltx_block", "--preset", "bh_2x4", "--check-oracle")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "identical multiset" in proc.stdout, proc.stdout
+
+
+def test_sd35_block_matches_oracle():
+    """SD3.5-large joint block from source: a second block, second oracle.
+
+    Exercises the fused split_query_key_value_and_split_heads shim and the
+    dit_rms_norm_unary_fused spec (both first used here, not by LTX), plus the
+    38->40 padded-head shape math. Every collective is load-bearing -> 0 findings.
+    """
+    proc = _dryrun("dryrun", "sd35_block", "--preset", "bh_2x4", "--check-oracle")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "unregistered ops: none" in proc.stdout, proc.stdout
+    assert "identical multiset" in proc.stdout, proc.stdout
+    assert "findings: none" in proc.stdout, proc.stdout
+    assert "PASS" in proc.stdout, proc.stdout
     assert "findings: none" in proc.stdout, proc.stdout
     assert "PASS" in proc.stdout, proc.stdout
 
