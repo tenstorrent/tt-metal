@@ -44,13 +44,16 @@ uint32_t choose_num_dest_write_slots(
         return 1u;
     }
 
-    // Use full per-core L1 (minus reserved), not live occupancy: slot count is a
-    // compile-time arg / CB size and must stay cache-stable. Occupancy-dependent
-    // sizing would leave a large cached ring after later L1 allocs shrink the ceiling.
-    const uint32_t l1_reserved = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint32_t l1_size = device->l1_size_per_core();
-    TT_FATAL(l1_size > l1_reserved, "L1 size ({}) must exceed reserved base ({})", l1_size, l1_reserved);
-    const uint32_t l1_available = l1_size - l1_reserved;
+    // Budget the staging ring against live L1 occupancy so CBs never collide with
+    // tensors already allocated in L1 (vadv2 regression). CBs grow upward from the
+    // base; L1 tensors are allocated downward from the top. The ceiling is the lowest
+    // occupied L1 address — or the full core size when nothing is live.
+    const uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const std::optional<DeviceAddr> lowest_occupied = device->lowest_occupied_compute_l1_address();
+    const uint32_t l1_ceiling =
+        lowest_occupied.has_value() ? static_cast<uint32_t>(lowest_occupied.value()) : device->l1_size_per_core();
+    TT_FATAL(l1_ceiling > l1_base, "L1 ceiling ({}) must exceed base ({})", l1_ceiling, l1_base);
+    const uint32_t l1_available = l1_ceiling - l1_base;
 
     const uint32_t num_kernel_copies = can_use_dual_kernel ? 2u : 1u;
     const uint32_t source_cb_bytes = cb_size0 * 2u * num_kernel_copies;
