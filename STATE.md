@@ -1283,3 +1283,37 @@ Open, as a *deliberate divergence* rather than a fix: the encoder experiment sho
 norms cost 0.04 percentage points of PCC, so the decoder's fp32 q/k norms could likely go
 bf16 for the 3.2 % typecast plus cheaper LayerNorms. That trades reference parity for speed
 and should be a measured decision, not a silent one.
+
+## Amendment 48 (2026-08-04) — LayerScale fold + HiFi2 elementwise: 1.015x, i.e. marginal
+
+Profiled both changes together against the post-head-fusion baseline:
+
+**10.707 ms -> 10.552 ms (1.015x)**, 54 -> 50 ops.
+
+| op | before us | after us | delta |
+|---|---|---|---|
+| SDPAOperation | 4282.4 | 4285.9 | +3.5 |
+| MinimalMatmul | 3161.0 | 3036.2 | -124.8 |
+| BinaryNg | 1417.3 | 1143.8 | **-273.5** |
+| NLPConcatHeads | 623.2 | 626.6 | +3.5 |
+| LayerNorm | 546.9 | 557.7 | +10.8 |
+| Typecast | 347.1 | 480.8 | +133.7 |
+| NlpCreateHeads | 113.9 | 206.9 | +93.0 |
+
+The fold did what it should -- `BinaryNg` fell 273 us -- but Typecast and NlpCreateHeads rose
+by roughly as much, so the net is ~155 us. The arithmetic that should have come first: **only
+2 of the 22 BinaryNg calls were LayerScale**, so folding them was never worth the 13.2 % that
+category represents. Cost of the lesson: an unnecessary profile run.
+
+The HiFi2 compute config on the q/k `rms_norm` moved nothing measurable (LayerNorm +10.8 us).
+It is kept because it is free and correct, not because it was shown to help.
+
+Both are retained: correct (5 passed, PCC 99.9997 % / 99.9875 %, unchanged), 4 fewer ops, and
+the fold removes two `Parameter`s. But neither is a performance answer.
+
+**SDPA is unmoved at 4285.9 us = 40.6 % of the layer and is the only remaining item of size.**
+Everything else in the layer combined is 6.3 ms. Nothing short of attacking SDPA -- bfp8_b
+K/V, a profiler-driven chunk sweep, or a different attention decomposition -- changes the
+decoder materially. The two anomalies worth pairing with it: NLPConcatHeads measured 42.6 us
+and 580.5 us for identical work in the same trace, and both head ops run on **57 cores** while
+every other op gets 120.

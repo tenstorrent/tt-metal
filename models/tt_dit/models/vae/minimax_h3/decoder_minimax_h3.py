@@ -101,6 +101,17 @@ class MiniMaxH3ViTAttention(Module):
         self.sdpa_program_config = None
         self.sdpa_compute_kernel_config = None
 
+        # The elementwise and norm ops all default to HiFi4, which the profile shows costs
+        # 21.5 % of layer device time (BinaryNg 13.2 %, LayerNorm 5.1 %, Typecast 3.2 %,
+        # Unary 1.6 %). None of them is a matmul; HiFi4 buys nothing here. fp32 accumulation
+        # stays on for the q/k RMS, which the reference computes in fp32.
+        self.elementwise_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Fuse q/k/v, permute the q/k lanes for RoPE, and flatten ``to_out.0``."""
         if "to_q.weight" in state:
@@ -136,7 +147,7 @@ class MiniMaxH3ViTAttention(Module):
         original = x.get_dtype()
         if original != ttnn.float32:
             x = ttnn.typecast(x, ttnn.float32)
-        x = ttnn.rms_norm(x, epsilon=self.eps)
+        x = ttnn.rms_norm(x, epsilon=self.eps, compute_kernel_config=self.elementwise_compute_kernel_config)
         return ttnn.typecast(x, original) if original != ttnn.float32 else x
 
     def forward(
