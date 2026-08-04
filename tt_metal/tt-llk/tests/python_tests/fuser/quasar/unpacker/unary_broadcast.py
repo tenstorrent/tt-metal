@@ -11,18 +11,10 @@ from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
-from helpers.llk_params import BroadcastType
 
 
 class UnaryBroadcastUnpacker(Unpacker):
     loop: FusedLoop = LoopTileByTile()
-
-    def __init__(self, broadcast_type: BroadcastType):
-        if broadcast_type == BroadcastType.None_:
-            raise ValueError(
-                f"Broadcast type {broadcast_type} is not valid for unary broadcast."
-            )
-        self.broadcast_type = broadcast_type
 
     def get_headers(self) -> List[str]:
         return [
@@ -48,7 +40,7 @@ class UnaryBroadcastUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         buf_desc_id = compute_unit.src_b.buf_desc_id
-        broadcast_type = self.broadcast_type.cpp_enum_value
+        broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         return (
             f"_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, {broadcast_type}, false>"
             f"({buf_desc_id}, 1);\n"
@@ -74,6 +66,3 @@ class UnaryBroadcastUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         return ""
-
-    def __str__(self) -> str:
-        return f"UnaryBroadcastUnpacker({self.broadcast_type})"

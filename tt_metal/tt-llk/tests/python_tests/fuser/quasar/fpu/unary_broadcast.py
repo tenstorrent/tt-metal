@@ -12,19 +12,11 @@ from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import BroadcastGolden, get_golden_generator
-from helpers.llk_params import BroadcastType
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 
 class UnaryBroadcastFpu(Fpu):
     loop: FusedLoop = LoopTileByTile()
-
-    def __init__(self, broadcast_type: BroadcastType):
-        if broadcast_type == BroadcastType.None_:
-            raise ValueError(
-                f"Broadcast type {broadcast_type} is not valid for unary broadcast."
-            )
-        self.broadcast_type = broadcast_type
 
     def get_headers(self) -> List[str]:
         return [
@@ -55,7 +47,7 @@ class UnaryBroadcastFpu(Fpu):
         )
         broadcast_golden = get_golden_generator(BroadcastGolden)
         broadcast_result = broadcast_golden(
-            self.broadcast_type,
+            compute_unit.broadcast_type,
             tilized_b,
             compute_unit.src_b.data_format,
             num_faces,
@@ -79,7 +71,7 @@ class UnaryBroadcastFpu(Fpu):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
-        broadcast_type = self.broadcast_type.cpp_enum_value
+        broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         tensor_shape = operation.tile_shape.cpp_value
         return (
             f"// Operation {stage}: Unary Broadcast FPU\n"
@@ -104,6 +96,3 @@ class UnaryBroadcastFpu(Fpu):
         block: BlockData,
     ) -> str:
         return ""
-
-    def __str__(self) -> str:
-        return f"UnaryBroadcastFpu({self.broadcast_type})"

@@ -19,6 +19,7 @@ from fuser.validator import (
     OperationSchemaBase,
     PackSchema,
     UnarySfpuMathSchema,
+    _tile_dims,
 )
 from helpers.llk_params import (
     AccToDest,
@@ -161,6 +162,11 @@ _reduce_params = (
     "Reduce requires both reduce_pool and reduce_dim",
 )
 
+_only_32x32_tile = (
+    lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32),
+    "Only (32, 32) tiles are supported for this operation",
+)
+
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(reuse_dest=s.reuse_dest),
@@ -183,7 +189,7 @@ UNPACKER_MAP = {
         [_no_transpose],
     ),
     "UnaryBroadcastUnpacker": (
-        lambda s: UnaryBroadcastUnpacker(s.broadcast_type),
+        lambda s: UnaryBroadcastUnpacker(),
         [_broadcast_required, _no_transpose, _no_unpack_to_dest],
     ),
 }
@@ -231,12 +237,13 @@ FPU_MAP = {
         ],
     ),
     "UnaryBroadcast": (
-        lambda s: UnaryBroadcastFpu(s.broadcast_type),
+        lambda s: UnaryBroadcastFpu(),
         [
             _broadcast_required,
             _no_reuse_dest,
             _no_broadcast_acc_to_dest,
             _no_unpack_to_dest,
+            _only_32x32_tile,
             _forced_unpacker("UnaryBroadcastUnpacker"),
         ],
     ),
