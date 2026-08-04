@@ -11,6 +11,8 @@
 
 #include <gtest/gtest.h>
 
+#include <enchantum/enchantum.hpp>
+
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 
 namespace tt::tt_fabric {
@@ -68,9 +70,9 @@ TEST(FabricEdgeCapabilityTest, ExpressAndIntermeshAreDistinguishedOnTheSameChip)
 
 TEST(FabricEdgeCapabilityTest, CapabilityNamesAreStable) {
     // These strings appear in configuration failures, so keep them recognizable.
-    EXPECT_STREQ(to_string(EdgeCapability::INTRAMESH_CARDINAL), "INTRAMESH_CARDINAL");
-    EXPECT_STREQ(to_string(EdgeCapability::INTRAMESH_EXPRESS), "INTRAMESH_EXPRESS");
-    EXPECT_STREQ(to_string(EdgeCapability::INTERMESH), "INTERMESH");
+    EXPECT_EQ(enchantum::to_string(EdgeCapability::INTRAMESH_CARDINAL), "INTRAMESH_CARDINAL");
+    EXPECT_EQ(enchantum::to_string(EdgeCapability::INTRAMESH_EXPRESS), "INTRAMESH_EXPRESS");
+    EXPECT_EQ(enchantum::to_string(EdgeCapability::INTERMESH), "INTERMESH");
 }
 
 }  // namespace

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <enchantum/enchantum.hpp>
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
@@ -44,7 +45,7 @@ TEST_F(RouterWiringRulesTest, NonExpressMesh_AndTorus_VC0OnlyLayout) {
             /*express_routing_enabled=*/false,
             nullptr);
 
-        EXPECT_EQ(shape.num_vcs, 1) << "topology " << static_cast<int>(topology);
+        EXPECT_EQ(shape.num_vcs, 1) << "topology " << enchantum::to_string(topology);
         EXPECT_EQ(shape.sender_counts[0], 4);
         EXPECT_EQ(shape.sender_counts[1], 0);
 
@@ -295,10 +296,10 @@ TEST_F(RouterWiringRulesTest, IntermeshVCConfig_FactoryFlags) {
     };
 
     for (const auto& [config, expected] : cases) {
-        EXPECT_EQ(config.requires_vc1, expected.vc1) << "mode " << static_cast<int>(config.mode);
-        EXPECT_EQ(config.requires_vc1_full_mesh, expected.full_mesh) << "mode " << static_cast<int>(config.mode);
+        EXPECT_EQ(config.requires_vc1, expected.vc1) << "mode " << enchantum::to_string(config.mode);
+        EXPECT_EQ(config.requires_vc1_full_mesh, expected.full_mesh) << "mode " << enchantum::to_string(config.mode);
         EXPECT_EQ(config.requires_vc1_mesh_pass_through, expected.pass_through)
-            << "mode " << static_cast<int>(config.mode);
+            << "mode " << enchantum::to_string(config.mode);
     }
 }
 

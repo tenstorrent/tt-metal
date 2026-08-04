@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <enchantum/enchantum.hpp>
 #include <set>
 #include <vector>
 
@@ -100,8 +101,9 @@ TEST_F(RouterTurnSetTest, Linear1D_WiresOnlyTheOpposite) {
                     nullptr);
 
                 const auto& targets = turn_set[0];
-                ASSERT_EQ(targets.size(), 1) << "topology " << static_cast<int>(topology) << " role "
-                                             << static_cast<int>(role) << " facing " << static_cast<int>(facing);
+                ASSERT_EQ(targets.size(), 1)
+                    << "topology " << enchantum::to_string(topology) << " role " << enchantum::to_string(role)
+                    << " facing " << enchantum::to_string(facing);
                 EXPECT_EQ(*targets[0].target_direction, opposite_of(facing));
                 EXPECT_EQ(targets[0].target_vc, 0);
                 EXPECT_TRUE(turn_set[1].empty());
@@ -126,7 +128,7 @@ TEST_F(RouterTurnSetTest, NonExpress2D_WiresEveryNonSelfCardinal) {
                 nullptr);
 
             EXPECT_EQ(target_directions(turn_set, 0), non_self_cardinals(facing))
-                << "facing " << static_cast<int>(facing);
+                << "facing " << enchantum::to_string(facing);
             expect_all_targets_on_vc(turn_set, 0, 0);
         }
     }
@@ -164,7 +166,7 @@ TEST_F(RouterTurnSetTest, NonExpress2D_BoundaryChipAddsBoundaryTargetOnVC0) {
 
         auto expected = non_self_cardinals(facing);
         expected.insert(RoutingDirection::Z);
-        EXPECT_EQ(target_directions(turn_set, 0), expected) << "facing " << static_cast<int>(facing);
+        EXPECT_EQ(target_directions(turn_set, 0), expected) << "facing " << enchantum::to_string(facing);
         expect_all_targets_on_vc(turn_set, 0, 0);
     }
 }
@@ -201,7 +203,7 @@ TEST_F(RouterTurnSetTest, PassThrough_AddsBoundaryTargetOnVC1) {
 
         auto expected_vc1 = non_self_cardinals(RoutingDirection::E);
         expected_vc1.insert(RoutingDirection::Z);
-        EXPECT_EQ(target_directions(turn_set, 1), expected_vc1) << "topology " << static_cast<int>(topology);
+        EXPECT_EQ(target_directions(turn_set, 1), expected_vc1) << "topology " << enchantum::to_string(topology);
         expect_all_targets_on_vc(turn_set, 1, 1);
 
         // No aliasing: every VC1 target names a distinct direction.
@@ -342,7 +344,7 @@ TEST_F(RouterTurnSetTest, BoundaryFacingRequiresBoundaryRole) {
     // port is absent and EXPRESS_CHORD claims it is a same-mesh chord -- both impossible chips,
     // and both derivations must refuse to build them.
     for (auto role : {ZPortRole::NONE, ZPortRole::EXPRESS_CHORD}) {
-        SCOPED_TRACE(static_cast<int>(role));
+        SCOPED_TRACE(enchantum::to_string(role));
         EXPECT_ANY_THROW(turn_set_for_router(
             Topology::Mesh,
             RoutingDirection::Z,
@@ -364,7 +366,7 @@ TEST_F(RouterTurnSetTest, ChordFacingRequiresChordRole) {
     // The mirror image: a same-mesh Z edge is this chip's express chord, so the role cannot claim
     // the port is absent or is the boundary.
     for (auto role : {ZPortRole::NONE, ZPortRole::INTERMESH_BOUNDARY}) {
-        SCOPED_TRACE(static_cast<int>(role));
+        SCOPED_TRACE(enchantum::to_string(role));
         EXPECT_ANY_THROW(turn_set_for_router(
             Topology::Torus,
             RoutingDirection::Z,

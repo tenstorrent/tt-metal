@@ -4,28 +4,11 @@
 
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 
+#include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 namespace tt::tt_fabric {
-
-const char* to_string(EdgeCapability capability) {
-    switch (capability) {
-        case EdgeCapability::INTRAMESH_CARDINAL: return "INTRAMESH_CARDINAL";
-        case EdgeCapability::INTRAMESH_EXPRESS: return "INTRAMESH_EXPRESS";
-        case EdgeCapability::INTERMESH: return "INTERMESH";
-    }
-    return "UNKNOWN";
-}
-
-const char* to_string(ZPortRole role) {
-    switch (role) {
-        case ZPortRole::NONE: return "NONE";
-        case ZPortRole::INTERMESH_BOUNDARY: return "INTERMESH_BOUNDARY";
-        case ZPortRole::EXPRESS_CHORD: return "EXPRESS_CHORD";
-    }
-    return "UNKNOWN";
-}
 
 ZPortRole z_port_role(const ControlPlane& control_plane, FabricNodeId node) {
     // get_chip_neighbors covers both intra- and inter-mesh adjacency, so one query answers both.
@@ -53,8 +36,8 @@ void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability ed
         TT_FATAL(
             edge_capability != EdgeCapability::INTRAMESH_EXPRESS,
             "Router facing {} carries INTRAMESH_EXPRESS, but an express chord lives on the chip's "
-            "extra (Z-facing) port",
-            static_cast<int>(facing));
+            "Z port",
+            enchantum::to_string(facing));
         return;
     }
     switch (edge_capability) {
@@ -63,13 +46,13 @@ void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability ed
                 chip_z_role == ZPortRole::INTERMESH_BOUNDARY,
                 "A Z-facing intermesh edge means the chip's Z port is the boundary: role must be "
                 "INTERMESH_BOUNDARY, got {}",
-                to_string(chip_z_role));
+                enchantum::to_string(chip_z_role));
             break;
         case EdgeCapability::INTRAMESH_EXPRESS:
             TT_FATAL(
                 chip_z_role == ZPortRole::EXPRESS_CHORD,
                 "A same-mesh Z edge is this chip's express chord: role must be EXPRESS_CHORD, got {}",
-                to_string(chip_z_role));
+                enchantum::to_string(chip_z_role));
             break;
         case EdgeCapability::INTRAMESH_CARDINAL:
             TT_FATAL(
@@ -135,16 +118,6 @@ std::optional<EdgeCapability> capability_in_direction(
     return std::nullopt;
 }
 
-const char* to_string(ProtectedDomainEffect effect) {
-    switch (effect) {
-        case ProtectedDomainEffect::NON_RING: return "NON_RING";
-        case ProtectedDomainEffect::REMAIN: return "REMAIN";
-        case ProtectedDomainEffect::ENTER: return "ENTER";
-        case ProtectedDomainEffect::NON_CANONICAL: return "NON_CANONICAL";
-    }
-    return "UNKNOWN";
-}
-
 bool is_injection_effect(ProtectedDomainEffect effect) { return effect == ProtectedDomainEffect::ENTER; }
 
 ProtectedRingQueries make_protected_ring_queries(const ControlPlane& control_plane, FabricNodeId local) {
@@ -175,8 +148,8 @@ ProtectedDomainEffect classify_producer_effect(
         !is_static_dor_forbidden(ingress, ingress_capability, egress, egress_capability),
         "Producer {} -> {} violates dimension order but is still wired. Connection mapping should have unwired it, so "
         "the maps and this derivation disagree.",
-        static_cast<int>(ingress),
-        static_cast<int>(egress));
+        enchantum::to_string(ingress),
+        enchantum::to_string(egress));
 
     if (!queries.is_protected_ring_edge(egress)) {
         return ProtectedDomainEffect::NON_RING;

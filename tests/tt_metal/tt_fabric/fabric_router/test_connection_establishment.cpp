@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <enchantum/enchantum.hpp>
 #include <map>
 #include <set>
 #include <tuple>
@@ -216,7 +217,7 @@ TEST_F(ConnectionEstablishmentTest, FullDevice_EveryWiredTurnIsRecordedOnce) {
         }
         const auto outgoing = registry_.get_connections_by_source_node(r.node);
         EXPECT_EQ(std::count_if(outgoing.begin(), outgoing.end(), is_zward), 1)
-            << "mesh router " << static_cast<int>(r.facing);
+            << "mesh router " << enchantum::to_string(r.facing);
     }
     const auto z_node = routers.back().node;
     EXPECT_EQ(registry_.get_connections_by_source_node(z_node).size(), 4);
@@ -243,12 +244,12 @@ TEST_F(ConnectionEstablishmentTest, FullDevice_DestSlotsInBoundsDistinctAndWorke
     for (const auto& c : registry_.get_all_connections()) {
         const auto* dest = by_facing.at(c.dest_direction);
         ASSERT_LT(c.dest_sender_channel, dest->shape.sender_counts[c.dest_vc])
-            << "slot out of bounds on " << static_cast<int>(c.dest_direction) << " VC" << c.dest_vc;
+            << "slot out of bounds on " << enchantum::to_string(c.dest_direction) << " VC" << c.dest_vc;
         if (c.dest_vc == 0) {
             EXPECT_NE(c.dest_sender_channel, 0) << "VC0 worker slot taken by a wired producer";
         }
         EXPECT_TRUE((slots_per_dest_vc[{c.dest_direction, c.dest_vc}].insert(c.dest_sender_channel).second))
-            << "two producers alias slot " << c.dest_sender_channel << " on " << static_cast<int>(c.dest_direction)
+            << "two producers alias slot " << c.dest_sender_channel << " on " << enchantum::to_string(c.dest_direction)
             << " VC" << c.dest_vc;
     }
 
@@ -362,7 +363,7 @@ TEST_F(ConnectionEstablishmentTest, ExpressChip_XRoutersEmitOnlyAroundTheXRing) 
         if (x_source) {
             const bool x_dest = c.dest_direction == RoutingDirection::E || c.dest_direction == RoutingDirection::W;
             EXPECT_TRUE(x_dest) << "an intramesh X producer was wired back into Y: "
-                                << static_cast<int>(c.dest_direction);
+                                << enchantum::to_string(c.dest_direction);
         }
     }
     // Every turn lands in-bounds on the destination express router's five-wide VC0.

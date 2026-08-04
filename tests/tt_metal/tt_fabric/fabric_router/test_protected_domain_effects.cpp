@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 
+#include <enchantum/enchantum.hpp>
 #include <vector>
 
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
@@ -202,10 +203,10 @@ TEST(ProtectedDomainEffectsTest, OneAxisPairYieldsTwoDifferentGuards) {
 }
 
 TEST(ProtectedDomainEffectsTest, EffectNamesAreStable) {
-    EXPECT_STREQ(to_string(ProtectedDomainEffect::NON_RING), "NON_RING");
-    EXPECT_STREQ(to_string(ProtectedDomainEffect::REMAIN), "REMAIN");
-    EXPECT_STREQ(to_string(ProtectedDomainEffect::ENTER), "ENTER");
-    EXPECT_STREQ(to_string(ProtectedDomainEffect::NON_CANONICAL), "NON_CANONICAL");
+    EXPECT_EQ(enchantum::to_string(ProtectedDomainEffect::NON_RING), "NON_RING");
+    EXPECT_EQ(enchantum::to_string(ProtectedDomainEffect::REMAIN), "REMAIN");
+    EXPECT_EQ(enchantum::to_string(ProtectedDomainEffect::ENTER), "ENTER");
+    EXPECT_EQ(enchantum::to_string(ProtectedDomainEffect::NON_CANONICAL), "NON_CANONICAL");
 }
 
 // --- The slot-level derivation: bound facts to per-channel flags ---

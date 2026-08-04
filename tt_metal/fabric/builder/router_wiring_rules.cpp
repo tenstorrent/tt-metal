@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <enchantum/enchantum.hpp>
 
 namespace tt::tt_fabric {
 
@@ -18,7 +19,7 @@ RoutingDirection get_opposite_direction(RoutingDirection dir) {
         case RoutingDirection::E: return RoutingDirection::W;
         case RoutingDirection::W: return RoutingDirection::E;
         default:
-            TT_FATAL(false, "Invalid routing direction for opposite calculation: {}", static_cast<int>(dir));
+            TT_FATAL(false, "Invalid routing direction for opposite calculation: {}", enchantum::to_string(dir));
             return dir;  // Unreachable
     }
 }

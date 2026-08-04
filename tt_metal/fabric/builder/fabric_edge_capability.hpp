@@ -27,8 +27,6 @@ enum class EdgeCapability : uint8_t {
     INTERMESH,           // crosses a mesh boundary, on any direction
 };
 
-const char* to_string(EdgeCapability capability);
-
 // What this chip's Z port is used for.
 //
 // Historically this port had exactly one role, so "has a Z port" and "has an intermesh boundary"
@@ -43,8 +41,6 @@ enum class ZPortRole : uint8_t {
     INTERMESH_BOUNDARY,  // crosses a mesh boundary; carries no intramesh routing direction
     EXPRESS_CHORD,       // a same-mesh Y-axis express chord; an ordinary routing direction
 };
-
-const char* to_string(ZPortRole role);
 
 /**
  * Per-direction capability set of one chip: each direction's edge capability, indexed by
@@ -125,8 +121,6 @@ enum class ProtectedDomainEffect : uint8_t {
     ENTER,          // acquires a protected ring, needs the stronger guard
     NON_CANONICAL,  // wired, but no canonical route uses this turn
 };
-
-const char* to_string(ProtectedDomainEffect effect);
 
 // Only an acquisition is an injection channel.
 bool is_injection_effect(ProtectedDomainEffect effect);

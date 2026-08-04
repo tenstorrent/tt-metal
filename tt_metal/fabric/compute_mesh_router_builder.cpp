@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_mesh_router_builder.hpp"
+#include <enchantum/enchantum.hpp>
 #include <limits>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
@@ -305,7 +306,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     TT_FATAL(
         facing_capability.has_value(),
         "Router facing {} has no classified edge from discovery",
-        static_cast<int>(location.direction));
+        enchantum::to_string(location.direction));
     const auto edge_capability = *facing_capability;
     // What this chip's Z port is for: an intermesh boundary, an express chord, or nothing.
     const auto chip_z_role = z_role_of(per_direction_capabilities);
@@ -691,7 +692,7 @@ std::vector<std::optional<size_t>> ComputeMeshRouterBuilder::get_variant_to_rout
                 router_flat_id < variant_num_sender_channels,
                 "Builder variant {} owns flat channel {} on VC{} but has only {} sender channels: the "
                 "variant's channel space was not widened for this router's shape",
-                static_cast<int>(builder_type),
+                enchantum::to_string(builder_type),
                 router_flat_id,
                 vc,
                 variant_num_sender_channels);

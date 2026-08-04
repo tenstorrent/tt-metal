@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <enchantum/enchantum.hpp>
 #include <map>
 
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
@@ -39,7 +40,7 @@ TEST(DirectionSlotBijectionTest, PlacementAndNamingRoundTrip) {
             }
             const size_t compact = builder::direction_compact_index(producer, facing);
             EXPECT_EQ(builder::get_sender_channel_direction(facing, 1 + compact), producer)
-                << "facing " << static_cast<int>(facing) << ", producer " << static_cast<int>(producer);
+                << "facing " << enchantum::to_string(facing) << ", producer " << enchantum::to_string(producer);
         }
     }
 }
@@ -53,13 +54,13 @@ TEST(DirectionSlotBijectionTest, CompactIndexInvertsBothWays) {
             EXPECT_EQ(
                 builder::direction_from_compact_index(facing, builder::direction_compact_index(producer, facing)),
                 producer)
-                << "facing " << static_cast<int>(facing) << ", producer " << static_cast<int>(producer);
+                << "facing " << enchantum::to_string(facing) << ", producer " << enchantum::to_string(producer);
         }
         for (size_t compact = 0; compact < 4; ++compact) {
             EXPECT_EQ(
                 builder::direction_compact_index(builder::direction_from_compact_index(facing, compact), facing),
                 compact)
-                << "facing " << static_cast<int>(facing) << ", compact " << compact;
+                << "facing " << enchantum::to_string(facing) << ", compact " << compact;
             EXPECT_NE(builder::direction_from_compact_index(facing, compact), facing)
                 << "compact " << compact << " must never name the facing direction itself";
         }
@@ -79,7 +80,7 @@ TEST(DirectionSlotBijectionTest, MatchesTheRetiredHandWrittenTables) {
     for (const auto& [facing, table] : legacy_tables) {
         for (size_t slot = 1; slot < table.size(); ++slot) {
             EXPECT_EQ(builder::get_sender_channel_direction(facing, slot), table[slot])
-                << "facing " << static_cast<int>(facing) << ", slot " << slot;
+                << "facing " << enchantum::to_string(facing) << ", slot " << slot;
         }
     }
 }
@@ -95,7 +96,7 @@ TEST(DirectionSlotBijectionTest, ReceiverDownstreamIndexIsTheSameRelation) {
             EXPECT_EQ(
                 get_receiver_channel_compact_index(facing, downstream),
                 builder::direction_compact_index(downstream, facing))
-                << "facing " << static_cast<int>(facing) << ", downstream " << static_cast<int>(downstream);
+                << "facing " << enchantum::to_string(facing) << ", downstream " << enchantum::to_string(downstream);
             if (downstream == Z) {
                 EXPECT_EQ(get_receiver_channel_compact_index(facing, downstream), 3u);
             }
@@ -125,12 +126,12 @@ TEST(DirectionSlotBijectionTest, DownstreamSenderChannelVcOffsetsArePinned) {
         EXPECT_EQ(
             builder::get_downstream_sender_channel_for_vc(/*is_2d_routing=*/true, 0, row.producer, row.facing),
             row.vc0_slot)
-            << "producer " << static_cast<int>(row.producer) << " -> facing " << static_cast<int>(row.facing)
+            << "producer " << enchantum::to_string(row.producer) << " -> facing " << enchantum::to_string(row.facing)
             << " (VC0)";
         EXPECT_EQ(
             builder::get_downstream_sender_channel_for_vc(/*is_2d_routing=*/true, 1, row.producer, row.facing),
             row.vc1_slot)
-            << "producer " << static_cast<int>(row.producer) << " -> facing " << static_cast<int>(row.facing)
+            << "producer " << enchantum::to_string(row.producer) << " -> facing " << enchantum::to_string(row.facing)
             << " (VC1)";
     }
 
