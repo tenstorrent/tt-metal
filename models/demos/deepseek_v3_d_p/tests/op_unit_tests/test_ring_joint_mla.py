@@ -9,16 +9,57 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from models.demos.deepseek_v3_d_p.tt.mla.utils import (
-    create_balanced_chunk_order,
-    reorder_tensor_chunks,
-    reverse_reorder_tensor_chunks,
-)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
+
+
+# ring_joint_scaled_dot_product_attention still supports is_balanced=True (zigzag) at the op level,
+# and this test is the op's balanced-order coverage. The deepseek prefill model no longer uses balanced
+# ordering, so the chunk-reorder helpers were removed from tt.mla.utils; vendored here to keep the op
+# test self-contained (mirrors how minimax_m3 / nightly SDPA carry their own copies).
+def create_balanced_chunk_order(sp_factor: int) -> list[int]:
+    """Balanced (zigzag) chunk order: interleaves chunks from the start and end to balance the
+    causal-attention workload. sp_factor=4 -> 2*4=8 chunks ordered 0,7,1,6,2,5,3,4."""
+    num_chunks = 2 * sp_factor
+    balanced_order = []
+    left, right = 0, num_chunks - 1
+    for i in range(num_chunks):
+        if i % 2 == 0:
+            balanced_order.append(left)
+            left += 1
+        else:
+            balanced_order.append(right)
+            right -= 1
+    return balanced_order
+
+
+def reorder_tensor_chunks(tensor: torch.Tensor, chunk_order: list[int], seq_dim: int = -2) -> torch.Tensor:
+    """Reorder tensor chunks along the sequence dimension according to chunk_order."""
+    seq_len = tensor.shape[seq_dim]
+    num_chunks = len(chunk_order)
+    chunk_size = seq_len // num_chunks
+    chunks = []
+    for i in range(num_chunks):
+        start = i * chunk_size
+        end = start + chunk_size
+        if seq_dim == 2:
+            chunks.append(tensor[:, :, start:end, :])
+        elif seq_dim == -2:
+            chunks.append(tensor[..., start:end, :])
+        else:
+            raise NotImplementedError(f"Reordering for seq_dim={seq_dim} not implemented")
+    return torch.cat([chunks[i] for i in chunk_order], dim=seq_dim)
+
+
+def reverse_reorder_tensor_chunks(tensor: torch.Tensor, chunk_order: list[int], seq_dim: int = -2) -> torch.Tensor:
+    """Reverse the chunk reordering to restore original order."""
+    inverse_order = [0] * len(chunk_order)
+    for new_pos, orig_pos in enumerate(chunk_order):
+        inverse_order[orig_pos] = new_pos
+    return reorder_tensor_chunks(tensor, inverse_order, seq_dim)
 
 
 def get_cache_file_path(cache_path, name, dtype, layout):

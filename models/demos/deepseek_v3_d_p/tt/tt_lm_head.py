@@ -170,7 +170,6 @@ class TtLMHead(LightweightModule):
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
-        is_balanced: bool = False,
         weight_cache_path: Optional[Path] = None,
         is_column_parallel: bool = False,
     ):
@@ -188,8 +187,6 @@ class TtLMHead(LightweightModule):
             activations_dtype: Data type for activations (default: bfloat16)
             weights_dtype: Data type for weights (default: bfloat16)
             compute_kernel_config: Compute kernel configuration
-            is_balanced: If True, uses zigzag token mapping. If False (default),
-                         uses sequential mapping. Should match TtMLA's is_balanced.
             weight_cache_path: Optional path to weight cache directory
             is_column_parallel: TP strategy. True - column-parallel (all_gather emb, output
                                 TP-sharded on vocab). False (default) - row-parallel
@@ -209,14 +206,13 @@ class TtLMHead(LightweightModule):
         self.activations_dtype = activations_dtype
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
-        self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
         self.is_column_parallel = is_column_parallel
 
         logger.debug(f"Initializing TtLMHead with emb_dim={emb_dim}, vocab_size={vocab_size}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
         logger.debug(f"CCL config: num_links={num_links}, topology={topology}")
-        logger.debug(f"is_balanced={is_balanced}, weight_cache_path={weight_cache_path}")
+        logger.debug(f"weight_cache_path={weight_cache_path}")
 
         if torch_weight is not None:
             logger.debug("Creating weight from provided torch tensor")
@@ -347,9 +343,7 @@ class TtLMHead(LightweightModule):
         seq_len = seq_len_per_device * self.sp_factor
 
         # Convert global token ID to local token ID on this device.
-        device_id, local_token_id = global_to_local_token_id(
-            global_token_id, self.sp_factor, seq_len, is_balanced=self.is_balanced
-        )
+        device_id, local_token_id = global_to_local_token_id(global_token_id, self.sp_factor, seq_len)
 
         # We only need logits for a single token, but matmul operates on tiles.
         # Find the tile-aligned start position that contains local_token_id.
