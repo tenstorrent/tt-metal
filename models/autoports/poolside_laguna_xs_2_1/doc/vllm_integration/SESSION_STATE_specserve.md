@@ -92,6 +92,48 @@ the PREFILL path. warmup_model_prefill (gen:1210) warms buckets at (1,w) single 
 hypothesis = a serving prefill shape (row-count or a width/pos combo) still first-compiles under the resident
 decode trace. NEEDS on-device repro (C=16 then C=1 back-to-back; watch allocator.cpp:123 + mean ITL >> p99).
 
+## On-device results (serve_diag, uniform, APC-on, 2026-08-03 21:08)
+- BASELINE decode HEALTHY: ISL1024/OSL128/C1 = 27.4 tok/s, Mean TPOT 35.5ms => 28.2 t/s/u; Mean ITL 35.5 ≈
+  P99 39.9. C16 = 100.3 agg, Mean ITL 38.1 ≈ P99 41.4. Trailing C1 (post-C16) = 28.0, ITL 35.0 ≈ P99 38.8.
+- W1 STALL DID NOT REPRODUCE at ISL=1024 (C1→C16→C1). Mean ITL ≈ P99 throughout — no 8-min outlier. The
+  original stall was ISL up to 130k / C16 then 1024/OSL1024/C1: it needs the LONG-CONTEXT / wide-page-table
+  transition, not short ctx. => W1 is an intermittent long-ctx shape-transition issue; can't fix blindly.
+  Next repro to try: ISL 32768 C8 (wide PT + concurrency) then ISL 1024 OSL512 C1, watch mean ITL >> p99.
+- LONG-CTX REPRO (32k C8 then 1k C1): 32k/C8 = Mean ITL 131 >> P99 43.6 / Median 39 (LOOKS like the stall),
+  BUT the server log shows NO unsafe-alloc / compile events in that window (the one unsafe warning was at
+  21:08:41 during the HEALTHY baseline C1). => the 32k/C8 mean-ITL spike is PREFILL-SATURATION scheduling
+  contention (8 concurrent 32k prefills block each other's decode — the known long-ISL-all-at-once artifact,
+  STATUS §Concurrency), NOT the W1 single-request recompile stall. Trailing 1k/C1 was healthy (35ms).
+- CONCLUSION: the ORIGINAL W1 (single-request 25→1.9, ISL1024/OSL1024/C1) did NOT reproduce this session in
+  targeted tests. It is a RARE INTERMITTENT (fired once in a long full sweep). Cannot fix blindly without a
+  deterministic repro. Handoff: instrument decode_forward/_prefill to log every shape-key miss + allocation,
+  then run the ORIGINAL full sweep order to catch it; or add (1..max_num_seqs, w) prefill-warmup coverage
+  defensively (cheap, matches the leading hypothesis) and re-run the sweep to see if it recurs.
+
+## DECISIVE BLOCKER for in-adapter spec-serving (found reading _decode_state + KV write path)
+The spec verify (verify_forward_decode) writes KV for ALL K+1 candidate positions P..P+K (look-ahead), via
+paged_update_cache against the page table. But vLLM's scheduler allocates KV BLOCKS INCREMENTALLY based on
+committed tokens — from its view, decode_forward returns 1 token/step, so it has only allocated blocks up to
+the current position. So positions P+1..P+K may map to blocks vLLM has NOT allocated yet (or belong to another
+request) -> the look-ahead KV writes go OOB / corrupt. This CANNOT be fixed inside decode_forward alone; it
+needs the scheduler to allocate K blocks ahead for the speculative window (exactly what vLLM's native spec
+machinery does — and which platform.py:562 hard-gates OFF for TT).
+=> In-adapter eager spec-serving is NOT a contained change. Options: (a) bounded-K scheme that only speculates
+within already-allocated block slack (limits/complicates K); (b) do the real work: un-gate vLLM spec + build
+the multi-query-per-request decode path (large plugin project, the integration-scope agent's "out of scope").
+The standalone driver avoids this entirely (whole context pre-allocated as an identity page table).
+=> This is why spec-serving is deferred, not just "risky." Documented so the next session doesn't rediscover it.
+
+### RECOMMENDED unblock (no scheduler surgery): bounded-K within the current block's slack
+block_size=64 and vLLM allocates a FULL block at a time, so the current block already has allocated slack
+(avg ~32 slots, = 64 - (pos % 64) - 1). If we cap the speculative window K <= slots_remaining_in_current_block
+(derivable from the position + page table on the host), every look-ahead KV write P+1..P+K lands in an
+ALREADY-ALLOCATED block -> no OOB, no scheduler change. Adaptive-K + the guard already handle a per-step K
+cap, so this slots in cleanly: pass K_cap = 63 - (pos % 64) into the spec round each step (K shrinks to ~0
+right before a boundary, where the next committed token allocates a fresh 64-slot block). This is the
+concrete path to make in-adapter eager spec-serving correct. STILL needs the eager-verify-under-resident-
+decode-trace interaction validated (may relate to W1) + greedy-parity smoke test. Implement with mesh present.
+
 ## HANDOFF — remaining work (do with mesh in front of you)
 1. W1 fix: after the on-device repro pins the exact unseen prefill shape, extend warmup_model_prefill to warm
    that shape (row-count set and/or the width the stall recompiled). Validate: C=16→C=1 no 8-min outlier.

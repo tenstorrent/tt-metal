@@ -69,12 +69,28 @@ attn/dense/shared/KV/LM-head, BFP4 routed experts, fp32/HiFi4 SDPA.
 ## Caveats
 - **Decode SDPA k128 is LOSSY** (teacher top1 0.58, not bit-identical) — it is **spec-verify-only**; the serving
   default is the accurate k64. Prefill is unaffected by k128. (Corrects the old `decode_sdpa_pc_finding.md`.)
-- **Spec-decode reality:** correctness-proven (token-exact vs greedy) and host-replay on real agent trajectories
-  projects **~2.5×** (best min_n=1/max_n=10/K=16, mean(m+1)=2.504). On device: **eager batched decode-verify is
-  the shippable win (~1.53× @4k)**; the suffix-**prefill**-verify path is break-even at long context (0.93×
-  @32k); the **traced** decode-verify path (needed to realize the full ~2.5×) is **BLOCKED** by a ttnn kernel
-  trace hazard (traced `paged_update_cache` RMW of a populated block returns a wrong SDPA read for the anchor
-  row — needs a ttnn fix, not model Python). So: a modest opt-in win exists; the big win is blocked.
+- **Spec-decode — VIABLE ~2× via traced decode-verify (2026-08-03 re-eval; corrects the earlier NO-GO).**
+  A clean re-run at K=4 shows the **traced batched decode-verify captures fine and runs at ~63.8 t/s/u @4k**
+  (mean committed 2.68/verify) ≈ **~2× the production traced decode (~30 t/s/u)**. The earlier
+  `warmup_verify_decode` crash was a **transient** (dirty mesh / K=8), NOT a hard ttnn block. Prefill-verify is
+  still break-even (0.93× @32k) and eager-verify is NOT a win vs traced — the **traced** path is the one that
+  works. **Accuracy nuance:** the output is a valid greedy trajectory (all tokens target-verified by the
+  on-device sampler) but **not bit-identical to plain decode at bf16 near-ties** (verify uses batched/k128 logits
+  + on-device sampler vs plain decode's single/k64) — the same class of tradeoff as the shipped k64 config, not a
+  correctness break. **CONFIRMED via `--mode selfcheck` (2026-08-03):** g_traced == g_eager_sampler == g_eager
+  (host argmax) — the traced verify is provably correct, NO trace bug (the earlier "anchor bug" was a
+  misdiagnosis). **Speed is accept-rate-dependent** (batched K+1 verify ≈ one decode step, so mean(m+1) must
+  exceed ~2 to win) — but on the TARGET agentic workload accept is HIGH: **B1's real-trajectory replay (679 real
+  SWE agent turns) = mean(m+1) 2.5 → ~2×**, because agent context accumulates the agent's own outputs/tool-results
+  and its next output re-quotes them (paths, code, diffs) — exactly ngram's sweet spot, and it improves as the
+  session grows. On device: 4k code prompt accept 1.68 → ~2× (confirms). The **32k accept 0.00 → 0.79×** was a
+  SYNTHETIC cycled-repo prompt whose generation didn't copy — NOT representative of a real agent turn.
+  **Verdict: a real ~2× win on real agentic workloads**; ship with a runtime accept-guard (auto-disable below
+  break-even) as cheap insurance for the occasional low-copy turn so it never regresses. **To ship:** a
+  generation-quality A/B
+  (HumanEval spec-on vs -off), a scale test (higher K / longer ctx), and wiring into the served generator
+  (batch-1; plug-in point in `spec_decode_eager_design.md`). Refs: `spec_decode_accept/{traced_retry.log,
+  b2_verdict.md}`.
 - **Concurrent agent load crashes the engine (Bus error)** — a 4-way concurrent SWE attempt died ~2 min in
   (`EngineDeadError`); **agents must run batch-1**. The batched-decode *token-corruption* is separately fixed
   (`reset_batch=True`), but sustained concurrent long-context agent decode is not stable.
@@ -88,12 +104,32 @@ attn/dense/shared/KV/LM-head, BFP4 routed experts, fp32/HiFi4 SDPA.
   `llm_call_kwargs.extra_body` (bare `--agent-kwarg` values are dropped). Without these it errors before the model.
 
 ## Blockers / deferred
+- **SESSION UPDATE 2026-08-03 (spec-serving investigation; notes: `SESSION_STATE_specserve.md`, commits
+  a19682f/6c46e8e):**
+  - **Spec-decode adaptive-K + runtime accept-guard + multi-trace warmup hang-fix SHIPPED** (opt-in, standalone
+    driver). 32k low-accept guard 24.4→29.1 t/s/u (~1.0×); 4k copy-heavy ~2.5×. Adversarial-review-clean.
+  - **Hybrid-KV re-diagnosed:** NOT the one-line arch-scan fix below. The MODEL is fully hybrid-wired
+    (`_HYBRID_KV_CACHE_GROUPS_ENABLED=True`, `get_kv_cache_spec` emits SlidingWindowSpec, grouped-PT plumbing)
+    and the plugin already prefers the TT-prefixed arch (`worker.py:191-195`) with `support_hybrid_kv_cache=True`.
+    Yet serve_diag boot ran **UNIFORM** (1 group, `num_gpu_blocks_override=2568` → 164,352 tok, 1.25× ctx). So
+    the hook still doesn't fire at serving → a **real capacity project** (pool-sizing sentinel `1<<46` + why the
+    group split doesn't happen), NOT a one-liner, and **NOT a spec-serving prerequisite** (serving passes the
+    uniform page_table). Bug 2 (verify per-layer PT, committed a19682f) future-proofs the hybrid path.
+  - **In-adapter spec-serving BLOCKED (architectural):** the spec verify writes KV look-ahead (P..P+K) but vLLM
+    allocates blocks incrementally → OOB. **Unblock (no scheduler change): bounded-K within the current block's
+    slack** (`K_cap = 63 - pos%64`, block_size 64) keeps writes in already-allocated blocks; adaptive-K/guard
+    already cap K/step. Still needs eager-verify-under-resident-decode-trace validation + greedy-parity smoke
+    test (mesh-present). Deferred, not shipped.
+  - **Served baseline (this boot, APC-on):** ISL1024/OSL128/C1 = **28.2 t/s/u** (Mean ITL 35.5 ≈ P99 39.9),
+    healthy through C1→C16→C1. **W1 single-request stall did NOT reproduce** (the 32k/C8 Mean-ITL-131 spike is
+    prefill-saturation contention, not the recompile stall — no unsafe-alloc/compile events in that window).
 - **Hybrid KV silently dead (correctness-grade — resource_util W5a):** the live plugin `worker.py` scans
   `model_config.architectures` while `platform.py` only prefixes `hf_config.architectures` → the KV-cache spec
   hook never fires → all 40 layers carry full KV (**4.30 GB/dev vs 1.08**), and the pool still pays the
   sliding-window tax. Log proof: `num_gpu_blocks=70368744177664` ⇒ group_size 1; 197,632 tokens (hybrid would
   show 4 groups → 49,408). One-line hook fix + coupled pool resize (W5b) **must ship together** (fixing the hook
-  alone cuts full-attn capacity 197,632 → 49,408 tokens).
+  alone cuts full-attn capacity 197,632 → 49,408 tokens). **[2026-08-03: re-diagnosed above — the model IS
+  wired + plugin arch-lookup already fixed, yet serving still uniform; deeper than a one-liner.]**
 - **Bounded-prefill fix is only partial (1.43×, not the projected 2.4×):** residual ~1.65× gap remains — leading
   suspect the inner `TT_LAGUNA_PREFILL_SDPA_CHUNK` (untouched by the fix) and/or other prefill edits since
   2026-07-24. Follow-up: A/B the inner SDPA chunk + bisect. (`bounded_prefill_regression.md`.)
