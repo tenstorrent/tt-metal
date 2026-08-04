@@ -333,7 +333,6 @@ NB_MODULE(_ttnn, mod) {
     ttnn::d2h_stream_service::py_module(m_d2h_stream_service);
     ttnn::d2d_stream_service::py_module(m_d2d_stream_service);
     ttnn::counter_channel::py_module(m_counter_channel);
-    ttnn::layer_ack_service::py_module(m_layer_ack_service);
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
