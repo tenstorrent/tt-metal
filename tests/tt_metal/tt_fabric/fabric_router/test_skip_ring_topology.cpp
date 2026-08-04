@@ -71,7 +71,7 @@ bool cluster_available() {
 }
 
 std::unique_ptr<ControlPlane> make_control_plane(
-    const std::string& fixture, FabricConfig fabric_config, FabricReliabilityMode reliability_mode) {
+    const std::string& fixture, FabricReliabilityMode reliability_mode, FabricConfig fabric_config) {
     auto& metal = tt::tt_metal::MetalContext::instance();
     const auto path = std::filesystem::path(metal.rtoptions().get_root_dir()) /
                       "tests/tt_metal/tt_fabric/custom_mesh_descriptors" / fixture;
@@ -252,8 +252,8 @@ TEST_F(ControlPlaneFixture, CanonicalRoute8x4) {
     }
     auto control_plane = make_control_plane(
         "skip_links_8x4_mesh_graph_descriptor.textproto",
-        FabricConfig::FABRIC_2D_TORUS_X,
-        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        FabricConfig::FABRIC_2D_TORUS_XY);
 
     const auto node = [](int chip) { return FabricNodeId{MeshId{0}, static_cast<std::uint32_t>(chip)}; };
     const auto chips = [&](const std::vector<FabricNodeId>& route) {
@@ -287,8 +287,8 @@ TEST_F(ControlPlaneFixture, RingPredicates32x4) {
     }
     auto control_plane = make_control_plane(
         "skip_links_32x4_mesh_graph_descriptor.textproto",
-        FabricConfig::FABRIC_2D_TORUS_XY,
-        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        FabricConfig::FABRIC_2D_TORUS_XY);
 
     using D = RoutingDirection;
     using Dim = RoutingDimension;
