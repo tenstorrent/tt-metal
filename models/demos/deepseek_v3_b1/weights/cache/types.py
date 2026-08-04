@@ -26,16 +26,8 @@ class SourceTensorSelection:
     names: tuple[str, ...]
 
 
-# mesh_shape_override: distribute the tensor over this (rows, cols) shape instead
-# of the device's full mesh shape. When it is a strict sub-region of the device
-# mesh (e.g. (4,2) on a 4x4), the tensor is placed as a SUBMESH — allocated only on
-# that leading block of coords (e.g. cols 0-1), reporting the full device as its
-# mesh. Used by the 4x4 forward-replicate attention stage to keep weights on the
-# left 4x2. None -> use the device's full mesh shape (default, unchanged behaviour).
-#
-# mesh_offset_override: SUBMESH anchor within the device mesh (e.g. (0, 2) places a
-# (4,2) submesh on cols 2-3 of a 4x4). Defaults to (0, 0); included in the cache
-# fingerprint when non-zero.
+# Optional mesh_shape_override / mesh_offset_override place the tensor on a SUBMESH
+# region (e.g. shape (4, 2) at offset (0, 2) on a 4x4). Defaults preserve prior behavior.
 @dataclass(frozen=True)
 class ReplicateMeshMapper:
     """Replicate the tensor on every device in the mesh."""

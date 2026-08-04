@@ -38,14 +38,25 @@
 namespace ttnn::distributed {
 namespace {
 
+bool is_zero_mesh_offset(const ttsl::SmallVector<uint32_t>& offset) {
+    return std::all_of(offset.begin(), offset.end(), [](uint32_t v) { return v == 0; });
+}
+
 // Remaps distribution-shape coords onto the device. `global_range` must outlive the returned function.
-// In SUBMESH mode, adds `offset` so (0,...,0) maps to `offset`.
+// In SUBMESH mode, adds `offset` so (0,...,0) maps to `offset`. Empty/all-zero offsets are a no-op.
 auto get_remap_fn(
-    DistributionMode distribution_mode, const MeshCoordinateRange* global_range, const MeshCoordinate& offset) {
-    return [distribution_mode, offset, row_major_dst = global_range->begin()](const MeshCoordinate& src_coord) mutable {
+    DistributionMode distribution_mode,
+    const MeshCoordinateRange* global_range,
+    const ttsl::SmallVector<uint32_t>& offset) {
+    std::optional<MeshCoordinate> offset_coord;
+    if (!is_zero_mesh_offset(offset)) {
+        offset_coord = MeshCoordinate(ttsl::Span<const uint32_t>(offset));
+    }
+    return [distribution_mode, offset_coord, row_major_dst = global_range->begin()](
+               const MeshCoordinate& src_coord) mutable {
         switch (distribution_mode) {
             case DistributionMode::ROW_MAJOR: return *(row_major_dst++);
-            case DistributionMode::SUBMESH: return src_coord + offset;
+            case DistributionMode::SUBMESH: return offset_coord.has_value() ? src_coord + *offset_coord : src_coord;
         }
         TT_THROW("Unreachable");
     };
@@ -62,20 +73,17 @@ bool increment_indices(const ttsl::SmallVector<int>& limits, ttsl::SmallVector<i
     return false;
 }
 
-bool is_zero_mesh_offset(const MeshCoordinate& offset) {
-    return std::all_of(offset.coords().begin(), offset.coords().end(), [](uint32_t v) { return v == 0; });
-}
-
 // Validates `mesh_offset_override`: SUBMESH-only; same dims as the device; sub-rectangle must fit.
-// A zero offset with matching dimensionality is a no-op and skips checks (including ROW_MAJOR).
+// Empty/all-zero offsets are a no-op and skip checks (including ROW_MAJOR), regardless of rank.
 void validate_mesh_offset(
-    const MeshCoordinate& mesh_offset_override,
+    const ttsl::SmallVector<uint32_t>& mesh_offset_override,
     DistributionMode distribution_mode,
     const MeshShape& distribution_shape,
     const MeshShape& device_shape) {
-    if (is_zero_mesh_offset(mesh_offset_override) && mesh_offset_override.dims() == device_shape.dims()) {
+    if (is_zero_mesh_offset(mesh_offset_override)) {
         return;
     }
+    const auto offset_coord = MeshCoordinate(ttsl::Span<const uint32_t>(mesh_offset_override));
     TT_FATAL(
         distribution_mode == DistributionMode::SUBMESH,
         "mesh_offset_override is only supported when the distribution fits within the mesh device per-dimension "
@@ -83,9 +91,9 @@ void validate_mesh_offset(
         distribution_shape,
         device_shape);
     TT_FATAL(
-        mesh_offset_override.dims() == device_shape.dims(),
+        mesh_offset_override.size() == device_shape.dims(),
         "The offset {} must have the same dimensionality as the mesh device shape {}",
-        mesh_offset_override,
+        offset_coord,
         device_shape);
     TT_FATAL(
         distribution_shape.dims() == device_shape.dims(),
@@ -98,7 +106,7 @@ void validate_mesh_offset(
             mesh_offset_override[i] <= device_shape[i] - distribution_shape[i],
             "The sub-rectangle anchored at offset {} with shape {} does not fit within the mesh device shape {} "
             "(dimension {})",
-            mesh_offset_override,
+            offset_coord,
             distribution_shape,
             device_shape,
             i);

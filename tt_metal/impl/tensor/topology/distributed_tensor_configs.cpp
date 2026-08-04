@@ -10,8 +10,19 @@
 namespace tt::tt_metal::distributed {
 namespace {
 
-bool is_nonzero_mesh_offset(const MeshCoordinate& offset) {
-    return std::any_of(offset.coords().begin(), offset.coords().end(), [](uint32_t v) { return v != 0; });
+bool is_nonzero_mesh_offset(const ttsl::SmallVector<uint32_t>& offset) {
+    return std::any_of(offset.begin(), offset.end(), [](uint32_t v) { return v != 0; });
+}
+
+void write_mesh_offset(std::ostream& os, const ttsl::SmallVector<uint32_t>& offset) {
+    os << "(";
+    for (size_t i = 0; i < offset.size(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << offset[i];
+    }
+    os << ")";
 }
 
 }  // namespace
@@ -40,7 +51,8 @@ std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config) {
         os << ", mesh_shape_override=" << *config.mesh_shape_override;
     }
     if (is_nonzero_mesh_offset(config.mesh_offset_override)) {
-        os << ", mesh_offset_override=" << config.mesh_offset_override;
+        os << ", mesh_offset_override=";
+        write_mesh_offset(os, config.mesh_offset_override);
     }
     os << ")";
     return os;
@@ -71,7 +83,8 @@ std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config) {
         os << ", mesh_shape_override=" << *config.mesh_shape_override;
     }
     if (is_nonzero_mesh_offset(config.mesh_offset_override)) {
-        os << ", mesh_offset_override=" << config.mesh_offset_override;
+        os << ", mesh_offset_override=";
+        write_mesh_offset(os, config.mesh_offset_override);
     }
     os << ")";
     return os;

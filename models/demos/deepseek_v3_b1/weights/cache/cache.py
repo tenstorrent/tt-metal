@@ -124,7 +124,7 @@ def build_mesh_mapper_for_target(target: TensorTarget, device):
         cfg = ttnn.MeshMapperConfig(
             placements,
             ttnn.MeshShape(*override),
-            ttnn.MeshCoordinate(*mapper_config.mesh_offset_override),
+            mapper_config.mesh_offset_override,
         )
         return ttnn.create_mesh_mapper(device, cfg)
     if isinstance(mapper_config, ReplicateMeshMapper):
