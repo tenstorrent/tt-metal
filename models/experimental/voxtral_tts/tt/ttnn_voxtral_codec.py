@@ -601,21 +601,30 @@ Hand-rolled rather than ttnn.transformer.scaled_dot_product_attention, which was
         #     out[t] = sum_j  xpad[t+j] @ W[j]
         # so 7 slices, 7 matmuls and 6 adds compute it exactly, touching no halo kernel at all.
         #
-        # IT IS SLOWER HERE AND STILL WORTH IT, by a wide margin, because this runs ONCE PER
-        # UTTERANCE while w2 saves 2.5 ms PER FRAME:
-        #     conv1d                        4.30 ms
-        #     7 matmuls, DRAM               9.80 ms
-        #     7 matmuls, accumulate in L1   9.16 ms   <- this, +4.86 ms
-        #     460-frame utterance: +4.9 ms once against -1150 ms of decode.
-        # (Input in L1 as well would save more but does not fit -- 16.8 MB overflows the allocator.)
+        # SHIFT THE OUTPUT, NOT THE INPUT. Both orders compute the same sum, but the shift has to
+        # be a slice, and slicing the 1024-wide INPUT costs 0.624 ms a time against 0.145 for the
+        # 240-wide OUTPUT. Multiply the full padded input by each tap, THEN slice the narrow result:
+        #     conv1d (broken)                              4.29 ms
+        #     7 matmuls, shift the INPUT  (slice xp)        9.16 ms   +4.87
+        #     7 matmuls, shift the OUTPUT (slice y)         6.27 ms   +1.98   <- this
+        # The input slices were 4.37 of the 9.16 ms, more than the seven matmuls together (1.93).
+        #
+        # STILL SLOWER THAN conv1d AND STILL WORTH IT, because this runs ONCE PER UTTERANCE while
+        # w2 in BFP8 saves 2.5 ms PER FRAME: +2.0 ms once against -1150 ms over 460 frames.
+        #
+        # Not parallelisable, before anyone tries: the seven passes are independent, but every ttnn
+        # op already uses the whole 64-core grid, so running them at once would just give each pass
+        # 9 cores. Nothing is idle. And holding xp in L1 to avoid re-reading it does not fit --
+        # 16.8 MB overflows the allocator.
         L = x.shape[2]
         xp = self._pad_causal(x, PATCH_PROJ_KERNEL - 1, "reflect")
         acc = None
         for j in range(PATCH_PROJ_KERNEL):
-            sl = ttnn.slice(xp, [0, 0, j, 0], [1, 1, j + L, CODEC_DIM])
-            y = ttnn.linear(sl, self._out_taps[j], compute_kernel_config=COMPUTE_CONFIG,
+            y = ttnn.linear(xp, self._out_taps[j], compute_kernel_config=COMPUTE_CONFIG,
                             memory_config=ttnn.L1_MEMORY_CONFIG)
-            acc = y if acc is None else ttnn.add(acc, y, memory_config=ttnn.L1_MEMORY_CONFIG)
+            sl = ttnn.slice(y, [0, 0, j, 0], [1, 1, j + L, PATCH_SIZE],
+                            memory_config=ttnn.L1_MEMORY_CONFIG)
+            acc = sl if acc is None else ttnn.add(acc, sl, memory_config=ttnn.L1_MEMORY_CONFIG)
         return acc
 
     @torch.no_grad()
