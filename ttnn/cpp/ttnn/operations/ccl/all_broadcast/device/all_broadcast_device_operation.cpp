@@ -49,8 +49,7 @@ std::vector<tt::tt_metal::TensorSpec> AllBroadcastDeviceOperation::compute_outpu
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(),
                 input_tensor.tensor_spec().page_config(),
-                operation_attributes.output_mem_config,
-                input_tensor.tensor_spec().tensor_layout().get_alignment())));
+                operation_attributes.output_mem_config)));
     }
     return output_specs;
 }

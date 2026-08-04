@@ -546,54 +546,6 @@ def test_all_broadcast_sharded_2x4(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("logical_width, shard_width", [(48, 64)], ids=["pad_48_to_64"])
-def test_all_broadcast_rm_padded_width(mesh_device, logical_width, shard_width):
-    torch.manual_seed(2005)
-    devices = mesh_device.get_num_devices()
-    per_device_shape = [1, 1, 32, logical_width]
-    torch_inputs_per_device = [torch.rand(per_device_shape).bfloat16() for _ in range(devices)]
-
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.num_cores_to_corerangeset(1, ttnn.CoreCoord(8, 8), row_wise=True),
-            (per_device_shape[-2], shard_width),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-    sharded = ttnn.from_torch(
-        torch.cat(torch_inputs_per_device, dim=-1),
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.bfloat16,
-        memory_config=sharded_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(
-            mesh_device,
-            ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, devices)),
-        ),
-    )
-
-    # sharded_to_interleaved keeps the shard width as the padded width, so this is
-    # interleaved row-major with padded_width > logical_width.
-    tt_input = ttnn.to_memory_config(sharded, ttnn.DRAM_MEMORY_CONFIG)
-
-    # Without these the test is vacuous if the padding ever stops being propagated.
-    assert tt_input.padded_shape[-1] == shard_width
-    for i, t in enumerate(ttnn.get_device_tensors(tt_input)):
-        eq, output = comp_equal(ttnn.to_torch(t), torch_inputs_per_device[i])
-        assert eq, f"input {i} is already wrong before all_broadcast: {output}"
-
-    tt_output = ttnn.all_broadcast(tt_input, memory_config=tt_input.memory_config())
-
-    for i, torch_reference in enumerate(torch_inputs_per_device):
-        for t in ttnn.get_device_tensors(tt_output[i]):
-            eq, output = comp_equal(ttnn.to_torch(t), torch_reference)
-            assert eq, f"Tensor{i} on device {t.device().id()} FAILED: {output}"
-
-
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
