@@ -12,6 +12,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <set>
 
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
@@ -28,6 +29,14 @@ constexpr bool k_no_vc1 = false;
 
 // The VC configuration spelled as a config object -- the same spelling the shape derivation takes.
 const IntermeshVCConfig k_full_mesh = IntermeshVCConfig::full_mesh();
+
+// The full input domains of the wiring primitive, swept by the property tests below.
+constexpr std::array<RoutingDirection, 5> k_all_directions = {
+    RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z};
+constexpr std::array<EdgeCapability, 3> k_all_capabilities = {
+    EdgeCapability::INTRAMESH_CARDINAL, EdgeCapability::INTRAMESH_EXPRESS, EdgeCapability::INTERMESH};
+constexpr std::array<ZPortRole, 3> k_all_z_roles = {
+    ZPortRole::NONE, ZPortRole::INTERMESH_BOUNDARY, ZPortRole::EXPRESS_CHORD};
 
 std::set<RoutingDirection> target_directions(const RouterTurnSet& turn_set, uint32_t vc) {
     std::set<RoutingDirection> dirs;
@@ -98,13 +107,21 @@ TEST(ExpressConnectionWiringTest, IntermeshLandingOnXPortMayBeginY) {
 }
 
 TEST(ExpressConnectionWiringTest, NoRouterIsWiredBackOverItsOwnLink) {
-    // A U-turn would add the one dependency arc the deadlock-freedom argument assumes absent.
-    for (const auto ingress :
-         {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z}) {
-        for (const auto capability : {EdgeCapability::INTRAMESH_CARDINAL, EdgeCapability::INTERMESH}) {
-            EXPECT_FALSE(wires_into(
-                ingress, capability, ingress, ZPortRole::EXPRESS_CHORD, /*express_routing_enabled=*/true, /*vc=*/0))
-                << "ingress " << static_cast<int>(ingress) << " is wired back to itself";
+    // A U-turn would add the one dependency arc the deadlock-freedom argument assumes absent. The
+    // primitive answers the self-turn before any classification, and this full-domain sweep is
+    // what holds it there: the boundary arm answers vc == 1 unconditionally, so anything narrower
+    // would not catch the U-turn check ever moving below the classification.
+    for (const auto ingress : k_all_directions) {
+        for (const auto capability : k_all_capabilities) {
+            for (const auto role : k_all_z_roles) {
+                for (const bool express : {false, true}) {
+                    for (const uint32_t vc : {0u, 1u}) {
+                        EXPECT_FALSE(wires_into(ingress, capability, ingress, role, express, vc))
+                            << "ingress " << static_cast<int>(ingress) << " (" << to_string(capability)
+                            << "), chip role " << to_string(role) << ", express " << express << ", vc " << vc;
+                    }
+                }
+            }
         }
     }
 }
@@ -445,13 +462,6 @@ TEST(ExpressConnectionWiringTest, ArityRespectsPerChipCapabilities) {
 // None of these record answers. Each names a rule the design relies on and checks it everywhere
 // the rule can be stated, so a deliberate policy change moves exactly one property.
 
-constexpr std::array<RoutingDirection, 5> k_all_directions = {
-    RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z};
-constexpr std::array<EdgeCapability, 3> k_all_capabilities = {
-    EdgeCapability::INTRAMESH_CARDINAL, EdgeCapability::INTRAMESH_EXPRESS, EdgeCapability::INTERMESH};
-constexpr std::array<ZPortRole, 3> k_all_z_roles = {
-    ZPortRole::NONE, ZPortRole::INTERMESH_BOUNDARY, ZPortRole::EXPRESS_CHORD};
-
 // The legal archetype space: which (facing, capability, chip role, mode) chips can be built at
 // all. Off the Z port, a cardinal facing never carries express capability, so
 // 4 facings x {INTRAMESH_CARDINAL, INTERMESH} x 3 roles = 24 triples, in either mode. On the
@@ -530,6 +540,27 @@ TEST(ExpressConnectionWiringTest, OnlyTheBoundaryProducerIsVcSensitive) {
                 }
             }
         }
+    }
+}
+
+TEST(ExpressConnectionWiringTest, ImpossiblePairsFoldIntoTheirImpliedRoles) {
+    // The fold is the behaviour, not a formality: pairs no real chip has take the answers of the
+    // role they structurally imply, and an IMPOSSIBLE-returns-false mapping would change these
+    // answers. Pin the positive side of each fold -- the negative sides are swept elsewhere.
+    // (Z, INTRAMESH_CARDINAL) folds into EXPRESS_CHORD: it wires into cardinals like a chord.
+    EXPECT_TRUE(wires_into(
+        RoutingDirection::Z,
+        EdgeCapability::INTRAMESH_CARDINAL,
+        RoutingDirection::N,
+        ZPortRole::EXPRESS_CHORD,
+        k_express,
+        /*vc=*/0));
+    // (E/W, INTRAMESH_EXPRESS) folds into X_RING_ONLY: it continues around the X ring. Its
+    // unwiring from Y is swept by SameMeshXIngressNeverReentersY.
+    for (const auto x : {RoutingDirection::E, RoutingDirection::W}) {
+        EXPECT_TRUE(wires_into(
+            x, EdgeCapability::INTRAMESH_EXPRESS, get_opposite_direction(x), ZPortRole::NONE, k_express, /*vc=*/0))
+            << "producer " << static_cast<int>(x);
     }
 }
 
