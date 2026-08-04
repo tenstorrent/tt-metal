@@ -36,8 +36,13 @@ SCHEMA_VERSION = 1
 
 # check ip/phase -> dashboard category. "other" is the catch-all.
 IP_TO_CATEGORY = {
-    "pcie": "pcie", "gddr": "gddr", "asic": "asic", "fw": "firmware",
-    "thermal": "thermal", "board": "board", "eth": "eth",
+    "pcie": "pcie",
+    "gddr": "gddr",
+    "asic": "asic",
+    "fw": "firmware",
+    "thermal": "thermal",
+    "board": "board",
+    "eth": "eth",
 }
 # eth deployment tests live in the "tests" phase with ip="other". Route them to
 # the eth category by name so they don't land in stress_test.
@@ -56,37 +61,84 @@ ACKNOWLEDGED_CHECKS = {"cpld_fw_old"}
 EXCLUDED_CHECKS = {"snapshot_capture"}
 
 # checks whose details list offending BDFs - keep more text for triage.
-DETAIL_RICH = {"pcie_gen", "gddr_speed", "pcie_lane_width",
-               "physical_vs_fw_location", "asic_location_per_ubb"}
+DETAIL_RICH = {"pcie_gen", "gddr_speed", "pcie_lane_width", "physical_vs_fw_location", "asic_location_per_ubb"}
 
 # numeric forensic checks: dropped from checks_fact, folded into runs rollups.
 GDDR_INFO_PREFIX = "gddr_info_"
 
-SEVERITY = {"PASS": 0, "SKIP": 0, "EXCLUDED": 0, "WARN": 1, "FAIL": 2,
-            "UNKNOWN": 3, "ERROR": 3}
+SEVERITY = {"PASS": 0, "SKIP": 0, "EXCLUDED": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 3, "ERROR": 3}
 COVERED = {"PASS", "WARN", "FAIL"}
 
 RUNS_COLS = [
-    "schema_version", "run_id", "date", "timestamp", "hostname", "slurm_job_id",
-    "row", "rack", "slot", "overall_status", "discard", "discard_reason",
-    "prev_status", "is_regression", "fail_streak",
-    "tier", "tool_version", "tt_smi_version", "tt_kmd_version", "board_rev",
-    "fw_bundle_version", "num_chips", "total_duration_s",
-    "checks_total", "checks_pass", "checks_warn", "checks_fail", "checks_skip",
-    "checks_covered", "pct_covered", "checks_warn_actionable", "top_fail_category",
-    "reset_count", "reset_stable", "gddr_uncorr_total", "pcie_downgraded",
-    "eth_links_down", "max_asic_temp_c", "max_gddr_temp_c",
-    "min_aiclk_mhz", "telemetry_available",
-    "eth_retrain_total", "eth_crc_total", "eth_uncorr_cw_total", "jira_ticket",
+    "schema_version",
+    "run_id",
+    "date",
+    "timestamp",
+    "hostname",
+    "slurm_job_id",
+    "row",
+    "rack",
+    "slot",
+    "overall_status",
+    "discard",
+    "discard_reason",
+    "prev_status",
+    "is_regression",
+    "fail_streak",
+    "tier",
+    "tool_version",
+    "tt_smi_version",
+    "tt_kmd_version",
+    "board_rev",
+    "fw_bundle_version",
+    "num_chips",
+    "total_duration_s",
+    "checks_total",
+    "checks_pass",
+    "checks_warn",
+    "checks_fail",
+    "checks_skip",
+    "checks_covered",
+    "pct_covered",
+    "checks_warn_actionable",
+    "top_fail_category",
+    "reset_count",
+    "reset_stable",
+    "gddr_uncorr_total",
+    "pcie_downgraded",
+    "eth_links_down",
+    "max_asic_temp_c",
+    "max_gddr_temp_c",
+    "min_aiclk_mhz",
+    "telemetry_available",
+    "eth_retrain_total",
+    "eth_crc_total",
+    "eth_uncorr_cw_total",
+    "jira_ticket",
 ]
 
 # checks_fact is normalized: check fields + run_id (+ date). Run-level attributes
 # live once on runs.csv and join back on run_id.
 CHECKS_COLS = [
-    "schema_version", "run_id", "date",
-    "category", "phase", "phase_kind", "check_name", "status", "severity",
-    "is_pass", "is_warn", "is_fail", "is_skip", "is_covered", "acknowledged",
-    "testcases_passed", "testcases_failed", "executed", "details_short",
+    "schema_version",
+    "run_id",
+    "date",
+    "category",
+    "phase",
+    "phase_kind",
+    "check_name",
+    "status",
+    "severity",
+    "is_pass",
+    "is_warn",
+    "is_fail",
+    "is_skip",
+    "is_covered",
+    "acknowledged",
+    "testcases_passed",
+    "testcases_failed",
+    "executed",
+    "details_short",
 ]
 
 
@@ -206,9 +258,11 @@ def machine_meta(report, hostname, job_id, jira_ticket, ts, versions=None):
     versions = versions or {}
     # fw can be missing from the primary snapshot when a run fails early. Fall
     # back to a post-reset snapshot, then the console log, ignoring 0xFF reads.
-    fw = (_find_check(report, "fw_bundle_version_consistent")
-          or _find_check(report, "fw_bundle_version_consistent", primary_only=False)
-          or {})
+    fw = (
+        _find_check(report, "fw_bundle_version_consistent")
+        or _find_check(report, "fw_bundle_version_consistent", primary_only=False)
+        or {}
+    )
     log_fw = versions.get("fw_bundle_version", "")
     if log_fw in FW_SENTINELS:
         log_fw = ""
@@ -221,15 +275,23 @@ def machine_meta(report, hostname, job_id, jira_ticket, ts, versions=None):
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": f"{hostname}:{job_id}",
-        "date": ts[:10], "timestamp": ts,
-        "hostname": hostname, "row": row, "rack": rack, "slot": slot,
-        "slurm_job_id": job_id, "overall_status": overall,
-        "discard": int(dry), "discard_reason": "dry_run" if dry else "",
-        "tier": report.get("tier", ""), "tool_version": report.get("tool_version", ""),
+        "date": ts[:10],
+        "timestamp": ts,
+        "hostname": hostname,
+        "row": row,
+        "rack": rack,
+        "slot": slot,
+        "slurm_job_id": job_id,
+        "overall_status": overall,
+        "discard": int(dry),
+        "discard_reason": "dry_run" if dry else "",
+        "tier": report.get("tier", ""),
+        "tool_version": report.get("tool_version", ""),
         "tt_smi_version": report.get("tt_smi_version", "") or versions.get("tt_smi_version", ""),
         "tt_kmd_version": versions.get("tt_kmd_version", ""),
         "board_rev": report.get("detected_board_rev", ""),
-        "fw_bundle_version": fw_bundle, "num_chips": num_chips,
+        "fw_bundle_version": fw_bundle,
+        "num_chips": num_chips,
         "total_duration_s": report.get("total_duration_s", ""),
         "jira_ticket": jira_ticket,
     }
@@ -252,18 +314,29 @@ def checks_rows(report: dict, meta: dict):
         ran = isinstance(tp, int) and (tp + tf) > 0
         executed = 0 if (cat == "stress_test" and not ran) else 1
         cap = 400 if name in DETAIL_RICH else 140
-        rows.append({
-            "schema_version": meta["schema_version"], "run_id": meta["run_id"],
-            "date": meta["date"],
-            "category": cat, "phase": pname, "phase_kind": phase_kind(pname),
-            "check_name": name, "status": st, "severity": SEVERITY.get(st, 3),
-            "is_pass": int(st == "PASS"), "is_warn": int(st == "WARN"),
-            "is_fail": int(st == "FAIL"), "is_skip": int(st == "SKIP"),
-            "is_covered": int(st in COVERED and executed == 1),
-            "acknowledged": int(name in ACKNOWLEDGED_CHECKS or excluded),
-            "testcases_passed": tp, "testcases_failed": tf, "executed": executed,
-            "details_short": (c.get("details", "") or "").replace("\n", " | ")[:cap],
-        })
+        rows.append(
+            {
+                "schema_version": meta["schema_version"],
+                "run_id": meta["run_id"],
+                "date": meta["date"],
+                "category": cat,
+                "phase": pname,
+                "phase_kind": phase_kind(pname),
+                "check_name": name,
+                "status": st,
+                "severity": SEVERITY.get(st, 3),
+                "is_pass": int(st == "PASS"),
+                "is_warn": int(st == "WARN"),
+                "is_fail": int(st == "FAIL"),
+                "is_skip": int(st == "SKIP"),
+                "is_covered": int(st in COVERED and executed == 1),
+                "acknowledged": int(name in ACKNOWLEDGED_CHECKS or excluded),
+                "testcases_passed": tp,
+                "testcases_failed": tf,
+                "executed": executed,
+                "details_short": (c.get("details", "") or "").replace("\n", " | ")[:cap],
+            }
+        )
     return rows
 
 
@@ -302,23 +375,51 @@ def runs_row(report, meta, checks, telemetry=None):
         overall_status = "PASS"
 
     return {
-        **{k: meta[k] for k in (
-            "schema_version", "run_id", "date", "timestamp", "hostname",
-            "row", "rack", "slot", "slurm_job_id",
-            "discard", "discard_reason", "tier", "tool_version", "tt_smi_version",
-            "tt_kmd_version", "board_rev", "fw_bundle_version", "num_chips",
-            "total_duration_s", "jira_ticket")},
+        **{
+            k: meta[k]
+            for k in (
+                "schema_version",
+                "run_id",
+                "date",
+                "timestamp",
+                "hostname",
+                "row",
+                "rack",
+                "slot",
+                "slurm_job_id",
+                "discard",
+                "discard_reason",
+                "tier",
+                "tool_version",
+                "tt_smi_version",
+                "tt_kmd_version",
+                "board_rev",
+                "fw_bundle_version",
+                "num_chips",
+                "total_duration_s",
+                "jira_ticket",
+            )
+        },
         "overall_status": overall_status,
-        "prev_status": "", "is_regression": "", "fail_streak": "",
-        "checks_total": total, "checks_pass": counts["PASS"],
-        "checks_warn": counts["WARN"], "checks_fail": counts["FAIL"],
-        "checks_skip": counts["SKIP"], "checks_covered": covered,
+        "prev_status": "",
+        "is_regression": "",
+        "fail_streak": "",
+        "checks_total": total,
+        "checks_pass": counts["PASS"],
+        "checks_warn": counts["WARN"],
+        "checks_fail": counts["FAIL"],
+        "checks_skip": counts["SKIP"],
+        "checks_covered": covered,
         "pct_covered": round(100 * covered / total, 1) if total else "",
-        "checks_warn_actionable": sum(warn_cat.values()), "top_fail_category": top,
-        "reset_count": reset_count, "reset_stable": reset_stable,
-        "gddr_uncorr_total": gddr_uncorr, "pcie_downgraded": _pcie_downgraded(report),
+        "checks_warn_actionable": sum(warn_cat.values()),
+        "top_fail_category": top,
+        "reset_count": reset_count,
+        "reset_stable": reset_stable,
+        "gddr_uncorr_total": gddr_uncorr,
+        "pcie_downgraded": _pcie_downgraded(report),
         "eth_links_down": _eth_links_down(report),
-        "max_asic_temp_c": _max_asic_temp(report), "max_gddr_temp_c": max_gddr_t,
+        "max_asic_temp_c": _max_asic_temp(report),
+        "max_gddr_temp_c": max_gddr_t,
         "min_aiclk_mhz": tel.get("min_aiclk_mhz", ""),
         "telemetry_available": int(bool(tel.get("available"))),
         "eth_retrain_total": tel.get("eth_retrain_total", ""),
@@ -330,17 +431,31 @@ def runs_row(report, meta, checks, telemetry=None):
 def error_runs_row(hostname, job_id, ts, reason, jira_ticket=""):
     row, rack, slot = parse_host(hostname)
     r = {c: "" for c in RUNS_COLS}
-    r.update({
-        "schema_version": SCHEMA_VERSION, "run_id": f"{hostname}:{job_id}",
-        "date": ts[:10], "timestamp": ts, "hostname": hostname,
-        "row": row, "rack": rack, "slot": slot, "slurm_job_id": job_id,
-        "overall_status": "ERROR",
-        "discard": 0, "top_fail_category": "run",
-        "checks_total": 0, "checks_pass": 0, "checks_warn": 0, "checks_fail": 0,
-        "checks_skip": 0, "checks_covered": 0, "checks_warn_actionable": 0,
-        "telemetry_available": 0,
-        "jira_ticket": jira_ticket,
-    })
+    r.update(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "run_id": f"{hostname}:{job_id}",
+            "date": ts[:10],
+            "timestamp": ts,
+            "hostname": hostname,
+            "row": row,
+            "rack": rack,
+            "slot": slot,
+            "slurm_job_id": job_id,
+            "overall_status": "ERROR",
+            "discard": 0,
+            "top_fail_category": "run",
+            "checks_total": 0,
+            "checks_pass": 0,
+            "checks_warn": 0,
+            "checks_fail": 0,
+            "checks_skip": 0,
+            "checks_covered": 0,
+            "checks_warn_actionable": 0,
+            "telemetry_available": 0,
+            "jira_ticket": jira_ticket,
+        }
+    )
     return r
 
 
@@ -364,15 +479,13 @@ def _validate(runs, checks):
             RunRecord(**{c: r.get(c, "") for c in RUNS_COLS})
         except Exception as exc:
             bad += 1
-            print(f"WARNING: runs row failed schema validation: "
-                  f"{str(exc).splitlines()[0]}", file=sys.stderr)
+            print(f"WARNING: runs row failed schema validation: " f"{str(exc).splitlines()[0]}", file=sys.stderr)
     for c in checks:
         try:
             CheckRecord(**{k: c.get(k, "") for k in CHECKS_COLS})
         except Exception as exc:
             bad += 1
-            print(f"WARNING: checks row failed schema validation: "
-                  f"{str(exc).splitlines()[0]}", file=sys.stderr)
+            print(f"WARNING: checks row failed schema validation: " f"{str(exc).splitlines()[0]}", file=sys.stderr)
     if bad == 0:
         print("schema validation: OK")
 
@@ -384,14 +497,15 @@ def _normalize(report):
     try:
         from utils.report import normalize_health_report
     except Exception as exc:
-        print(f"WARNING: could not import utils.report.normalize_health_report ({exc}); "
-              "using report as-is", file=sys.stderr)
+        print(
+            f"WARNING: could not import utils.report.normalize_health_report ({exc}); " "using report as-is",
+            file=sys.stderr,
+        )
         return report
     return normalize_health_report(report)
 
 
-def analyze(report, csv_output_dir, hostname, slurm_job_id,
-            jira_ticket="", versions=None, telemetry=None):
+def analyze(report, csv_output_dir, hostname, slurm_job_id, jira_ticket="", versions=None, telemetry=None):
     """Translate a normalized diag_report.json dict into runs.csv (+ checks.csv).
 
     report must already be normalized by the caller so the verdict reflects
@@ -405,8 +519,7 @@ def analyze(report, csv_output_dir, hostname, slurm_job_id,
 
     if not report:
         print("WARNING: no diag_report.json - writing fail-closed ERROR runs row")
-        row = error_runs_row(hostname, slurm_job_id, ts, "no diag_report.json",
-                             jira_ticket)
+        row = error_runs_row(hostname, slurm_job_id, ts, "no diag_report.json", jira_ticket)
         _validate([row], [])
         _write_csv(runs_path, RUNS_COLS, [row])
         return [runs_path]
@@ -436,8 +549,7 @@ def main():
             with open(args.report_file) as f:
                 report = json.load(f)
         except (ValueError, OSError) as exc:
-            print(f"WARNING: could not parse {args.report_file}: {exc}",
-                  file=sys.stderr)
+            print(f"WARNING: could not parse {args.report_file}: {exc}", file=sys.stderr)
     if report:
         report = _normalize(report)
 

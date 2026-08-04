@@ -74,9 +74,7 @@ def _diag_env(tt_metal_path: Path | None) -> dict:
         env.setdefault("LD_LIBRARY_PATH", str(Path(tt_metal_path) / "build" / "lib"))
     # tt-smi often lives at ~/.local/bin or /usr/local/bin but isn't on PATH in
     # non-login SSH sessions.
-    env["PATH"] = os.pathsep.join(
-        [env.get("PATH", ""), str(Path.home() / ".local" / "bin"), "/usr/local/bin"]
-    )
+    env["PATH"] = os.pathsep.join([env.get("PATH", ""), str(Path.home() / ".local" / "bin"), "/usr/local/bin"])
     return env
 
 
@@ -123,9 +121,7 @@ def _build_orchestration_command(
     return cmd, ""
 
 
-def _execute(
-    cmd: list[str], env: dict, timeout_seconds: int, results_dir: Path
-) -> tuple[int, str, Path | None]:
+def _execute(cmd: list[str], env: dict, timeout_seconds: int, results_dir: Path) -> tuple[int, str, Path | None]:
     """Run cmd with a hard timeout, killing the whole process group on expiry.
 
     Returns ``(exit_code, combined_console_output, results_dir | None)``. The
@@ -195,13 +191,9 @@ def run_diag_subprocess(
     report_path = results_dir / "diag_report.json"
 
     if launch_mode == "orchestration":
-        cmd, err = _build_orchestration_command(
-            tier, report_path, tt_metal_path, extra_args
-        )
+        cmd, err = _build_orchestration_command(tier, report_path, tt_metal_path, extra_args)
     else:
-        cmd, err = _build_slurm_command(
-            tier, report_path, tt_metal_path, diag_runner, extra_args
-        )
+        cmd, err = _build_slurm_command(tier, report_path, tt_metal_path, diag_runner, extra_args)
 
     if cmd is None:
         log.error("%s", err)

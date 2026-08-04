@@ -87,9 +87,7 @@ def parse_args() -> argparse.Namespace:
             "and loads the SFTP key from SFTP_KEY_PATH."
         ),
     )
-    p.add_argument(
-        "--log-dir", required=True, help="Directory for logs and credentials"
-    )
+    p.add_argument("--log-dir", required=True, help="Directory for logs and credentials")
     p.add_argument(
         "--tier",
         default="light",
@@ -100,8 +98,7 @@ def parse_args() -> argparse.Namespace:
         "--results-dir",
         default="",
         help=(
-            "Directory for the JSON report and per-test logs. "
-            "Defaults to <log-dir>/<node>-<slurm_job_id>-results."
+            "Directory for the JSON report and per-test logs. " "Defaults to <log-dir>/<node>-<slurm_job_id>-results."
         ),
     )
     p.add_argument(
@@ -114,15 +111,11 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="tt-metal repo root (defaults to $TT_METAL_HOME / the diag suite's own default).",
     )
-    p.add_argument(
-        "--timeout-minutes", type=int, default=30, help="Timeout for the diag run"
-    )
+    p.add_argument("--timeout-minutes", type=int, default=30, help="Timeout for the diag run")
 
     jira = p.add_argument_group("JIRA integration")
     jira.add_argument("--jira-base-url", default="", help="JIRA REST API base URL")
-    jira.add_argument(
-        "--jira-site-url", default="", help="JIRA site URL for browse links"
-    )
+    jira.add_argument("--jira-site-url", default="", help="JIRA site URL for browse links")
     jira.add_argument("--jira-project-key", default="", help="JIRA project key")
     jira.add_argument("--jira-issue-type", default="Bug", help="JIRA issue type")
     jira.add_argument(
@@ -191,9 +184,7 @@ def run_csv_analysis(
         report = None
         if json_report and json_report.is_file():
             try:
-                report = normalize_health_report(
-                    json.loads(json_report.read_text())
-                )
+                report = normalize_health_report(json.loads(json_report.read_text()))
             except (OSError, ValueError) as exc:
                 log.warning("Could not read %s for CSV analysis: %s", json_report, exc)
 
@@ -274,9 +265,7 @@ def main() -> int:
 
     # Run the diag suite as a subprocess. It writes its JSON report + per-test
     # logs straight into results_dir on the host filesystem.
-    results_dir = Path(
-        args.results_dir or (Path(log_dir) / f"{node}-{slurm_job_id}-results")
-    )
+    results_dir = Path(args.results_dir or (Path(log_dir) / f"{node}-{slurm_job_id}-results"))
     exit_code, test_output, artifacts_dir = run_diag_subprocess(
         tier=args.tier,
         timeout_seconds=timeout_seconds,
@@ -322,9 +311,7 @@ def main() -> int:
         except (OSError, ValueError) as exc:
             report = None
             log.warning("Could not read %s to classify failure: %s", json_report, exc)
-        if report is not None and not has_actionable_failure(
-            normalize_health_report(report)
-        ):
+        if report is not None and not has_actionable_failure(normalize_health_report(report)):
             log.info(
                 "No actionable failure after dropping pre-reset snapshot / excluded "
                 "checks; treating run as non-failing and skipping JIRA ticket."
@@ -347,9 +334,7 @@ def main() -> int:
             # inline with the comment/description.
             result_files = []
             if artifacts_dir and artifacts_dir.is_dir():
-                result_files = sorted(
-                    p for p in artifacts_dir.rglob("*") if p.is_file()
-                )
+                result_files = sorted(p for p in artifacts_dir.rglob("*") if p.is_file())
             attachment_names = [f"{node}-{slurm_job_id}.log"] + [
                 artifact_upload_name(p, slurm_job_id) for p in result_files
             ]
@@ -481,9 +466,7 @@ def main() -> int:
     # SFTP upload
     if csv_dir and args.upload_sftp:
         if sftp_user and sftp_host:
-            upload_csv_sftp(
-                csv_dir, sftp_user, sftp_host, log_dir=log_dir, launch_mode=launch_mode
-            )
+            upload_csv_sftp(csv_dir, sftp_user, sftp_host, log_dir=log_dir, launch_mode=launch_mode)
         else:
             log.warning("SFTP credentials not configured, skipping CSV upload")
     elif csv_dir:
