@@ -171,6 +171,24 @@ thread_local uint8_t my_x[NUM_NOCS] = {};
 thread_local uint8_t my_y[NUM_NOCS] = {};
 thread_local uint32_t __emule_logical_x = 0;
 thread_local uint32_t __emule_logical_y = 0;
+////////////////////////////////////////////////////////////
+// Blaze-only experimental firmware-global shim
+// Removal is tracked by issue #50953
+// Silicon-named per-core LOGICAL coords (firmware globals `my_logical_x_/y_`,
+// mirroring hw/firmware/src/tt-1xx/brisc.cc; declared extern by
+// blaze/kernels/kernel_utils.hpp). Defined here so compute (TRISC) kernels that
+// reference them link; restored per fiber swap-in by the scheduler's
+// install_fiber. The dataflow (NCRISC/BRISC) senders that must read a CORRECT
+// per-fiber value instead resolve `my_logical_x_/y_` through the
+// dataflow_utils.hpp shadow's per-fiber accessor (__emule_self->core->logical_*),
+// so this definition is only a link/fallback anchor on other RISCs.
+// These MUST stay at global scope with these exact unmangled names (NOT inside a
+// namespace): under emule there is no firmware, and JIT'd kernels are x86-compiled
+// and resolve these symbols against libtt_metal via dlopen(-rdynamic) — any
+// mangling/rename breaks that lookup.
+thread_local uint8_t my_logical_x_ = 0;
+thread_local uint8_t my_logical_y_ = 0;
+////////////////////////////////////////////////////////////
 
 // NOC encoding constants (matching firmware for Blackhole/Wormhole).
 static constexpr uint32_t NOC_LOCAL_BITS = 36;
