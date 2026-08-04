@@ -2352,22 +2352,6 @@ _CLAMP_MARKERS = ("AICLK failed to settle", "clamped by max-arbiter")
 _LAST_RUN_CLAMPED = False
 
 
-def _visible_device_indices():
-    """The chips this run actually opens, or None for "all of them".
-
-    MAX across the mesh is the right reduction -- a collective runs at the pace of its slowest
-    chip, so one clamped member spoils the reading for all of them. But it must be the max across
-    the MESH, not across the host: on a T3K/TG, or any shared machine, waiting on chips this run
-    never touches would stall for a neighbour's workload.
-    """
-    raw = os.environ.get("TT_VISIBLE_DEVICES") or os.environ.get("TT_METAL_VISIBLE_DEVICES") or ""
-    idx = set()
-    for part in raw.replace(" ", "").split(","):
-        if part.isdigit():
-            idx.add(int(part))
-    return idx or None
-
-
 def _thermal_profile_path():
     return state_dir() / "perf_mcp_thermal_profile.json"
 
@@ -2433,32 +2417,36 @@ def _clamp_threshold_c():
 
 
 def _read_die_temp_c():
-    """Hottest ASIC temperature across visible chips, or None when telemetry is unreadable.
+    """Hottest ASIC temperature across the chips this run can see, or None if unreadable.
+
+    MAX is the right reduction on a mesh: a collective runs at the pace of its slowest chip, so one
+    clamped member spoils the reading for every other one.
+
+    No index filtering is needed to scope that to the mesh -- tt-smi honours TT_VISIBLE_DEVICES
+    itself, verified on a 4-chip p300c: unset reports 4 chips, "0" reports 1, "0,1" and "2,3" each
+    report 2. A filter on top would also be WRONG for a non-zero-based set, since tt-smi returns
+    "2,3" at list positions 0 and 1.
+
+    When visibility is unset -- which is how --devices single presents -- this reduces over every
+    chip on the host. That is deliberate: without the variable there is nothing that says which
+    chip the run will open, and over-waiting is the safe direction.
 
     None means "cannot tell", and every caller treats that as permission to proceed: a board whose
-    telemetry we cannot read must not become a board we refuse to measure.
+    telemetry we cannot read must not become a board we refuse to measure. That is also what
+    happens if TT_VISIBLE_DEVICES names a chip that does not exist -- tt-smi exits non-zero and
+    prints no JSON.
     """
     try:
         r = _sp.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=60)
         doc = json.loads(r.stdout or "{}")
     except Exception:  # noqa: BLE001
         return None
-    devs = doc.get("device_info") or []
-    keep = _visible_device_indices()
     temps = []
-    for i, dev in enumerate(devs):
-        if keep is not None and i not in keep:
-            continue
+    for dev in doc.get("device_info") or []:
         try:
             temps.append(float((dev.get("telemetry") or {}).get("asic_temperature")))
         except (TypeError, ValueError):
             continue
-    if not temps and devs:
-        for dev in devs:
-            try:
-                temps.append(float((dev.get("telemetry") or {}).get("asic_temperature")))
-            except (TypeError, ValueError):
-                continue
     return max(temps) if temps else None
 
 

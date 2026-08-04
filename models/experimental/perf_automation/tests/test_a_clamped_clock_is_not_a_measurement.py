@@ -240,33 +240,41 @@ def _smi(mcp, monkeypatch, temps):
 
 
 def test_it_takes_the_max_across_the_mesh(mcp, monkeypatch):
-    """A collective runs at the pace of its slowest chip, so one hot member governs."""
-    monkeypatch.setenv("TT_VISIBLE_DEVICES", "0,1")
-    _smi(mcp, monkeypatch, [60.0, 85.0, 50.0, 50.0])
-    assert mcp._read_die_temp_c() == 85.0
+    """A collective runs at the pace of its slowest chip, so one hot member governs.
 
-
-def test_chips_outside_the_mesh_are_ignored(mcp, monkeypatch):
-    """On a T3K/TG or a shared host, a neighbour's hot chip must not stall this run."""
-    monkeypatch.setenv("TT_VISIBLE_DEVICES", "0")
-    _smi(mcp, monkeypatch, [60.0, 95.0, 95.0, 95.0])
-    assert mcp._read_die_temp_c() == 60.0
-
-
-def test_no_visibility_set_means_every_chip(mcp, monkeypatch):
-    """Unset is how a full-fabric run presents; it genuinely may touch all of them."""
-    monkeypatch.delenv("TT_VISIBLE_DEVICES", raising=False)
-    monkeypatch.delenv("TT_METAL_VISIBLE_DEVICES", raising=False)
+    Scoping to the mesh needs no filtering here: tt-smi honours TT_VISIBLE_DEVICES itself, so what
+    it returns IS the mesh. Verified on a 4-chip p300c -- unset reports 4 chips, "0" reports 1,
+    "0,1" and "2,3" each report 2. Filtering on top would break "2,3", which tt-smi returns at list
+    positions 0 and 1.
+    """
     _smi(mcp, monkeypatch, [60.0, 85.0])
     assert mcp._read_die_temp_c() == 85.0
 
 
-def test_an_out_of_range_index_falls_back_to_all(mcp, monkeypatch):
-    """A stale TT_VISIBLE_DEVICES naming chips that are not enumerated must not silently disable
-    the gate by leaving it with no temperatures at all."""
-    monkeypatch.setenv("TT_VISIBLE_DEVICES", "9")
-    _smi(mcp, monkeypatch, [60.0, 85.0])
-    assert mcp._read_die_temp_c() == 85.0
+def test_a_single_chip_reading_is_that_chip(mcp, monkeypatch):
+    _smi(mcp, monkeypatch, [57.1])
+    assert mcp._read_die_temp_c() == 57.1
+
+
+def test_unparseable_telemetry_reads_as_unknown(mcp, monkeypatch):
+    """What a stale TT_VISIBLE_DEVICES actually produces: tt-smi exits non-zero with no JSON.
+    Unknown must mean proceed, not refuse."""
+
+    class R:
+        stdout = "Error: device 99 not found\n"
+
+    monkeypatch.setattr(mcp._sp, "run", lambda *a, **k: R())
+    assert mcp._read_die_temp_c() is None
+
+
+def test_a_chip_with_no_temperature_does_not_break_the_read(mcp, monkeypatch):
+    payload = {"device_info": [{"telemetry": {}}, {"telemetry": {"asic_temperature": 71.0}}]}
+
+    class R:
+        stdout = __import__("json").dumps(payload)
+
+    monkeypatch.setattr(mcp._sp, "run", lambda *a, **k: R())
+    assert mcp._read_die_temp_c() == 71.0
 
 
 # ---------------------------------------------------------------- the clamp signal itself
