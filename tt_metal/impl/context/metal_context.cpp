@@ -243,8 +243,7 @@ void MetalContext::initialize(
         dispatch_core_type =
             resolve_dispatch_core_type(MetalEnvAccessor(*env_).impl(), device_id, dispatch_core_config_);
     }
-    const CommandQueueDispatchLayout& cq_dispatch_layout =
-        dispatch_query_manager_->cq_dispatch_layout(dispatch_core_type);
+    const CommandQueueDispatchLayout& cq_dispatch_layout = dispatch_query_manager_->cq_dispatch_layout();
     dispatch_mem_map_ = std::make_unique<DispatchMemMap>(
         dispatch_core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
     // Initialize debug servers. Attaching individual devices done below
