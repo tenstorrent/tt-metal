@@ -9,7 +9,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
-    // src0 / dst0 are borrowed-memory DFBs (formerly the src/dst CB indices).
+    // src0 / dst0 are borrowed-memory DFBs.
     constexpr uint32_t pixel_size = get_arg(args::pixel_size);
     constexpr uint32_t aligned_pixel_size = get_arg(args::aligned_pixel_size);
     constexpr uint32_t aligned_dst_pixel_size = get_arg(args::aligned_dst_pixel_size);
@@ -34,11 +34,11 @@ void kernel_main() {
     constexpr uint32_t elements_per_aligned_pixel = aligned_pixel_size / element_size;
 
     Noc noc;
-    DataflowBuffer src_cb_obj(dfb::src0);
-    DataflowBuffer dst_cb_obj(dfb::dst0);
+    DataflowBuffer dfb_src0(dfb::src0);
+    DataflowBuffer dfb_dst0(dfb::dst0);
 
-    const uint32_t dst_addr_base = dst_cb_obj.get_write_ptr();
-    uint32_t src_addr_base = src_cb_obj.get_read_ptr();
+    const uint32_t dst_addr_base = dfb_dst0.get_write_ptr();
+    uint32_t src_addr_base = dfb_src0.get_read_ptr();
 
     if constexpr (is_aligned) {
         experimental::set_read_state<aligned_chunk_size>(noc, src_addr_base);

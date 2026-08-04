@@ -21,23 +21,23 @@ void kernel_main() {
     const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
-    DataflowBuffer cb_in0(dfb::in0);
+    DataflowBuffer dfb_in0(dfb::in0);
 
-    const uint32_t tile_bytes = cb_in0.get_tile_size();
+    const uint32_t tile_bytes = dfb_in0.get_tile_size();
 
     // Process each block of data
     uint32_t end_block_id = start_block_id + num_blocks;
     for (uint32_t i = start_block_id; i < end_block_id; ++i) {
         // Reserve space in the circular buffer for a row of tiles
         for (uint32_t j = 0; j < tiles_per_width_dim; ++j) {
-            cb_in0.reserve_back(tiles_per_channel_dim);
+            dfb_in0.reserve_back(tiles_per_channel_dim);
             uint32_t l1_offset = 0;
 
             // Read each tile in the current row
             for (uint32_t k = 0; k < tiles_per_channel_dim; ++k) {
                 // Calculate tile index and read from DRAM to L1
                 uint32_t tile_index = tiles_per_width_dim * tiles_per_channel_dim * i + tiles_per_channel_dim * j + k;
-                noc.async_read(s, cb_in0, tile_bytes, {.page_id = tile_index}, {.offset_bytes = l1_offset});
+                noc.async_read(s, dfb_in0, tile_bytes, {.page_id = tile_index}, {.offset_bytes = l1_offset});
                 l1_offset += tile_bytes;
             }
 
@@ -45,7 +45,7 @@ void kernel_main() {
 
             // Ensure all async reads are complete before proceeding
             // Push the completed row of tiles to the circular buffer
-            cb_in0.push_back(tiles_per_channel_dim);
+            dfb_in0.push_back(tiles_per_channel_dim);
         }
     }
 }

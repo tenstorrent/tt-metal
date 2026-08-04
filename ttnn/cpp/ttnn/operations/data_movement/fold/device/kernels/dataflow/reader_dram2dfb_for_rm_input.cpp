@@ -20,24 +20,24 @@ void kernel_main() {
     const auto s_in = TensorAccessor(tensor::src);
 
     Noc noc;
-    DataflowBuffer cb_in0(dfb::in0);
+    DataflowBuffer dfb_in0(dfb::in0);
 
     uint32_t src_index = get_arg(args::src_index);
     uint32_t curr_src_row_index = get_arg(args::curr_src_row_index);
     for (uint32_t input_idx = 0; input_idx < work_per_core; input_idx++) {
         uint32_t curr_src_offset = src_index;
-        cb_in0.reserve_back(1);
+        dfb_in0.reserve_back(1);
         uint32_t l1_offset = 0;
         for (uint32_t i = 0; i < stride_h; i++) {
             for (uint32_t j = 0; j < stride_w; j++) {
-                noc.async_read(s_in, cb_in0, stick_nbytes, {.page_id = curr_src_offset}, {.offset_bytes = l1_offset});
+                noc.async_read(s_in, dfb_in0, stick_nbytes, {.page_id = curr_src_offset}, {.offset_bytes = l1_offset});
                 curr_src_offset++;
                 l1_offset += aligned_stick_nbytes_dram;
             }
             curr_src_offset += input_width - stride_w;
         }
         noc.async_read_barrier();
-        cb_in0.push_back(1);
+        dfb_in0.push_back(1);
 
         curr_src_row_index += stride_w;
         if (curr_src_row_index >= (input_width)) {
