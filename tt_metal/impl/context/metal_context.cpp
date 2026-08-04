@@ -273,7 +273,7 @@ void MetalContext::initialize(
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
-    data_collector_ = std::make_unique<DataCollector>();
+    data_collector_ = std::make_unique<DataCollector>(MetalEnvAccessor(*this->env_).impl());
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
