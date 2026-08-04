@@ -207,10 +207,18 @@ inline CbSizes compute_cb_sizes(
 
     cb.cb0_tiles = M_block_capacity * K_slice_capacity;  // == K_num_blocks_eff * M_block * kb
     cb.cb1_tiles = kCb1Depth * kb * N_sub;
-    cb.cb2_tiles = 2u * out_blk_tiles;
     cb.cb3_tiles = out_blk_tiles;
+    // c_2 (out) must be an exact multiple of the granularity its producer/consumer move, or a push
+    // eventually STRADDLES the FIFO wrap and corrupts the block. The chain moves whole sub-blocks
+    // (out_blk_tiles); reduce-scatter moves ONE CHUNK (max_chunk = ceil(out_blk_tiles/Pk)) per sub-block, and
+    // 2*out_blk_tiles is not generally a multiple of that -- e.g. rs_T=16, Pk=6 -> max_chunk=3 into a 32-tile
+    // CB wraps mid-push on the 11th sub-block, which is exactly why the corruption needed Nbpc >= 11 and grew
+    // with Nbpc. Two chunk slots are sufficient (and smaller) under reduce-scatter: compute pushes one chunk
+    // per sub-block and the writer pops one. See BUG_rscatter_nonfinite.md.
     // The chain's running-sum buffer is not allocated under reduce-scatter (partials travel via c_8/c_9).
     cb.cb7_tiles = (Pk > 1u && !cb.rscatter) ? (kCb7Depth * out_blk_tiles) : 0u;
+
+    cb.cb2_tiles = cb.rscatter ? (2u * ((out_blk_tiles + Pk - 1u) / Pk)) : (2u * out_blk_tiles);
 
     // Under reduce-scatter the writer feeds an owner its OWN SLICE instead of a sub-block row, so each
     // fused operand CB must also be at least one slice deep.
