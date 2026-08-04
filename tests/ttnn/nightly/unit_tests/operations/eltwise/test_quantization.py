@@ -676,6 +676,34 @@ def test_requant_uint8_mixed_dtype_per_tensor_2d(device, in_dtype, in_q_max, out
     check_match_ratio(input_tr, result_tr, ttnn.float32)
 
 
+# The fused and the composite path compute the same expression by different routes, so compare
+# them elementwise as well as by PCC. PCC on its own is blind to a uniform 1-LSB shift: the
+# quantize and requantize pairs below differ on roughly half of their elements and still score
+# well above the 0.9999 threshold.
+def check_dequant_matches_composite(composite, fused, out_dtype):
+    """Dequantize: the two routes agree bit-for-bit in float32. In bfloat16 they can land on
+    adjacent representable values, so allow a distance of one step. Counting steps rather than
+    using a relative tolerance keeps the bound tight, since one bfloat16 step is anywhere between
+    2**-8 and 2**-7 in relative terms depending on where the value sits in its binade."""
+    if out_dtype != ttnn.bfloat16:
+        assert torch.equal(composite, fused)
+        return
+    # Map sign-magnitude to a monotonic ordinal so that adjacent values differ by 1 across zero.
+    lhs = composite.view(torch.int16).to(torch.int32)
+    rhs = fused.view(torch.int16).to(torch.int32)
+    lhs = torch.where(lhs < 0, -32768 - lhs, lhs)
+    rhs = torch.where(rhs < 0, -32768 - rhs, rhs)
+    steps = (lhs - rhs).abs().max().item()
+    assert steps <= 1, f"fused and composite are {steps} bfloat16 steps apart, expected at most 1"
+
+
+def check_within_one_lsb(composite, fused):
+    """Quantize/requantize: the composite fallback narrows with a truncating typecast where the
+    fused LLK rounds to nearest even, so the two disagree by at most 1 LSB."""
+    diff = (composite.to(torch.int64) - fused.to(torch.int64)).abs().max().item()
+    assert diff <= 1, f"fused and composite differ by {diff} LSB, expected at most 1"
+
+
 # Per-channel scale + scalar zero-point takes the fused single-pass QUANT/DEQUANT path (vs the
 # slower composite). Each test checks fused (scalar zp) == composite (tensor zp) == torch golden.
 def _per_channel_amax_scale(input_tr, axis):
@@ -710,6 +738,7 @@ def test_quantize_dequantize_per_channel_symmetric(device, shape, input_dtype):
         q_comp = ttnn.quantize(input_tt, scale_tt, zp_vec_tt, axis=axis)
         q_fused_tr = ttnn.to_torch(q_fused)
         check_pcc(ttnn.to_torch(q_comp), q_fused_tr, False)
+        check_within_one_lsb(ttnn.to_torch(q_comp), q_fused_tr)
         check_pcc(quantized_golden.int_repr(), q_fused_tr, False)
         check_match_ratio(quantized_golden, q_fused_tr, ttnn.int32)
 
@@ -718,6 +747,7 @@ def test_quantize_dequantize_per_channel_symmetric(device, shape, input_dtype):
         dq_comp = ttnn.dequantize(q_fused, scale_tt, zp_vec_tt, axis=axis, dtype=input_dtype)
         dq_fused_tr = ttnn.to_torch(dq_fused)
         check_pcc(ttnn.to_torch(dq_comp), dq_fused_tr, False)
+        check_dequant_matches_composite(ttnn.to_torch(dq_comp), dq_fused_tr, input_dtype)
         check_pcc(dequantized_golden, dq_fused_tr, False)
         check_match_ratio(dequantized_golden, dq_fused_tr, input_dtype)
 
@@ -749,6 +779,7 @@ def test_dequantize_per_channel_scalar_zero_point(device, shape, out_dtype, zero
         dq_comp = ttnn.dequantize(q_tt, scale_tt, zp_vec_tt, axis=axis, dtype=out_dtype)
         dq_fused_tr = ttnn.to_torch(dq_fused)
         check_pcc(ttnn.to_torch(dq_comp), dq_fused_tr, False)
+        check_dequant_matches_composite(ttnn.to_torch(dq_comp), dq_fused_tr, out_dtype)
         check_pcc(golden, dq_fused_tr, False)
         check_match_ratio(golden, dq_fused_tr, out_dtype)
 
@@ -780,6 +811,7 @@ def test_dequantize_per_channel_scalar_zero_point_uint8(device, shape, out_dtype
         dq_comp = ttnn.dequantize(q_tt, scale_tt, zp_vec_tt, axis=axis, dtype=out_dtype)
         dq_fused_tr = ttnn.to_torch(dq_fused)
         check_pcc(ttnn.to_torch(dq_comp), dq_fused_tr, False)
+        check_dequant_matches_composite(ttnn.to_torch(dq_comp), dq_fused_tr, out_dtype)
         check_pcc(golden, dq_fused_tr, False)
         check_match_ratio(golden, dq_fused_tr, out_dtype)
 
@@ -817,6 +849,7 @@ def test_quantize_per_channel_scalar_zero_point(device, shape, input_dtype, zero
         q_comp = ttnn.quantize(input_tt, scale_tt, zp_vec_tt, axis=axis)  # composite path
         q_fused_tr = ttnn.to_torch(q_fused)
         check_pcc(ttnn.to_torch(q_comp), q_fused_tr, False)
+        check_within_one_lsb(ttnn.to_torch(q_comp), q_fused_tr)
         check_pcc(golden.int_repr(), q_fused_tr, False)
         check_match_ratio(golden, q_fused_tr, ttnn.int32)
 
@@ -869,6 +902,7 @@ def test_requantize_per_channel_scalar_zero_point(device, shape, in_zero_point, 
         rq_fused_tr = ttnn.to_torch(rq_fused)
         check_pcc(golden, rq_fused_tr, False)
         check_pcc(ttnn.to_torch(rq_comp), rq_fused_tr, True)
+        check_within_one_lsb(ttnn.to_torch(rq_comp), rq_fused_tr)
         check_match_ratio(golden, rq_fused_tr.to(torch.float32), ttnn.float32)
 
 
