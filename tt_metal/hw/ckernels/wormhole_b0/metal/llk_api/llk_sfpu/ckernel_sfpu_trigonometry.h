@@ -277,6 +277,27 @@ inline void calculate_sine() {
             r = r * c + a;
             r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         }
+        // The Cody-Waite reduction is exact only while j * P0 stays representable in
+        // fp32, which gives out around |x| ~1.7e7. Past that a leaves [-PI/2, PI/2]
+        // and takes the polynomial with it: sin(16845174) returns 1.334, and by
+        // |x| ~1e9 roughly 95% of arguments land outside [-1, 1], the worst 2.6e14.
+        //
+        // |sin| <= 1 is part of the contract rather than an accuracy target, and
+        // callers rely on it -- acos and sqrt(1 - s*s) return NaN on an out-of-range
+        // input rather than an imprecise answer. Clamping restores the invariant
+        // without touching the reduction, and leaves every argument the reduction
+        // still handles exactly bit-identical.
+        //
+        // Finite results only. With a bf16 destination a non-finite argument comes
+        // out of the polynomial as inf rather than NaN, and clamping that to 1.0
+        // would replace an obviously broken result with a plausible one that
+        // propagates silently -- the exact failure mode this change exists to stop.
+        v_if(sfpi::exexp(r, sfpi::ExponentMode::Biased) < 255) {
+            v_if(r > 1.0f) { r = 1.0f; }
+            v_elseif(r < -1.0f) { r = -1.0f; }
+            v_endif;
+        }
+        v_endif;
         sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
@@ -364,6 +385,27 @@ inline void calculate_cosine() {
             r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         }
 
+        // The Cody-Waite reduction is exact only while j * P0 stays representable in
+        // fp32, which gives out around |x| ~1.7e7. Past that a leaves [-PI/2, PI/2]
+        // and takes the polynomial with it: cos(16987826) returns 1.650, and by
+        // |x| ~1e9 roughly 95% of arguments land outside [-1, 1], the worst 2.6e14.
+        //
+        // |cos| <= 1 is part of the contract rather than an accuracy target, and
+        // callers rely on it -- acos and sqrt(1 - s*s) return NaN on an out-of-range
+        // input rather than an imprecise answer. Clamping restores the invariant
+        // without touching the reduction, and leaves every argument the reduction
+        // still handles exactly bit-identical.
+        //
+        // Finite results only. With a bf16 destination a non-finite argument comes
+        // out of the polynomial as inf rather than NaN, and clamping that to 1.0
+        // would replace an obviously broken result with a plausible one that
+        // propagates silently -- the exact failure mode this change exists to stop.
+        v_if(sfpi::exexp(r, sfpi::ExponentMode::Biased) < 255) {
+            v_if(r > 1.0f) { r = 1.0f; }
+            v_elseif(r < -1.0f) { r = -1.0f; }
+            v_endif;
+        }
+        v_endif;
         sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
