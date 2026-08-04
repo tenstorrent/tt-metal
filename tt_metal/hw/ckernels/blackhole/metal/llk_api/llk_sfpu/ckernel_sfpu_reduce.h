@@ -37,7 +37,7 @@ constexpr std::uint32_t ROWS_PER_TILE = 64;
 constexpr std::uint32_t ROWS_PER_FACE = 16;
 
 // Tile-layout address tables shared by the manual column MAX/MIN reduce paths
-// (calculate_reduce_max_min_uint16 / calculate_reduce_max_min_int32). Hoisted to file scope so the two
+// (calculate_reduce_max_min_uint16 / calculate_reduce_max_min_int32). Hoisted to file scope so the
 // paths cannot drift out of sync if the tile layout changes.
 //   COL_REDUCE_ODD_COLUMNS:    dest-word offset between the even- and odd-column halves of a face.
 //   COL_REDUCE_COLUMN_OFFSETS: even/odd column-half selector per face index (even, odd, even, odd).
@@ -53,6 +53,29 @@ constexpr std::uint32_t COL_REDUCE_FINAL_ADDRS[2][2] = {
     {0, 32},  // j=0: Face 0 and Face 2
     {16, 48}  // j=1: Face 1 and Face 3
 };
+
+// Vertically adjacent face pairs walked by the reduce-then-transpose column paths
+// (perform_reduce_col_sum_avg / perform_reduce_col_prod): iteration i reduces the even (i even) or odd
+// (i odd) column half of face pair {upper, lower}. Face f starts at dest word f * ROWS_PER_FACE, so the
+// pairs are (face 0, face 2) twice then (face 1, face 3) twice.
+constexpr std::uint32_t COL_REDUCE_UPPER_FACE_ADDRS[NUM_FACES] = {
+    0 * ROWS_PER_FACE, 0 * ROWS_PER_FACE, 1 * ROWS_PER_FACE, 1 * ROWS_PER_FACE};
+constexpr std::uint32_t COL_REDUCE_LOWER_FACE_ADDRS[NUM_FACES] = {
+    2 * ROWS_PER_FACE, 2 * ROWS_PER_FACE, 3 * ROWS_PER_FACE, 3 * ROWS_PER_FACE};
+
+// Dest-word rows holding the 8 partial row-reduce results of one tile: the row-reduce paths leave one
+// result per 4-row load group in column 0, at rows 0/4/8/12 of the upper face pair and the same offsets
+// in the lower face pair (which starts 2 * ROWS_PER_FACE words in). Shared by every
+// *_first_columns_across_tiles helper so the layout lives in exactly one place.
+constexpr std::uint32_t ROW_REDUCE_RESULT_ROWS[8] = {
+    0,
+    ROWS_PER_LOAD,
+    2 * ROWS_PER_LOAD,
+    3 * ROWS_PER_LOAD,
+    2 * ROWS_PER_FACE + 0,
+    2 * ROWS_PER_FACE + ROWS_PER_LOAD,
+    2 * ROWS_PER_FACE + 2 * ROWS_PER_LOAD,
+    2 * ROWS_PER_FACE + 3 * ROWS_PER_LOAD};
 
 // Register holding the 0x0000FFFF mask used to clear garbage high bits when loading UInt16 data
 // from a 32-bit (fp32 dest accumulation) dest word. Maps to sfpi::vConstIntPrgm0 on Blackhole.
@@ -224,19 +247,15 @@ inline void perform_reduce_col_sum_avg() {
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
          INSTRUCTION_MODE == InstrModLoadStore::LO16);
 
-    constexpr std::uint32_t UPPER_FACE_ADDRS[NUM_FACES] = {0, 0, 16, 16};    // Face 0, 0, 1, 1
-    constexpr std::uint32_t LOWER_FACE_ADDRS[NUM_FACES] = {32, 32, 48, 48};  // Face 2, 2, 3, 3
-    constexpr std::uint32_t COLUMN_OFFSETS[NUM_FACES] = {0, 2, 0, 2};        // even, odd, even, odd
-
     // Optimized column reduction: Reduce → Add → Transpose → HalfReduce
     // Instead of the naive Transpose → Reduce → Transpose → Reduce → Add approach, we first reduce
     // across registers, then add upper+lower faces (all 4 positions carry meaningful partial sums),
     // then transpose, then do a final half-reduce on LREG0-3 only. This eliminates one transpose
     // and halves the second reduction pass, saving 4 instructions per iteration.
     for (std::uint32_t i = 0; i < NUM_FACES; i++) {
-        const std::uint32_t upper_face_addr = UPPER_FACE_ADDRS[i];
-        const std::uint32_t lower_face_addr = LOWER_FACE_ADDRS[i];
-        const std::uint32_t column_offset = COLUMN_OFFSETS[i];
+        const std::uint32_t upper_face_addr = COL_REDUCE_UPPER_FACE_ADDRS[i];
+        const std::uint32_t lower_face_addr = COL_REDUCE_LOWER_FACE_ADDRS[i];
+        const std::uint32_t column_offset = COL_REDUCE_COLUMN_OFFSETS[i];
 
         // Step 1: Tree-reduce across registers (LREG0-3→LREG0, LREG4-7→LREG4) without transpose.
         // After this, each of the 4 positions in LREG0 holds the sum of rows at that position
@@ -647,31 +666,29 @@ inline void perform_reduce_row_max_int32_tile(
  */
 template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void max_first_columns_across_tiles(std::uint32_t tile_row_base, std::uint32_t block_ct_dim) {
-    constexpr std::uint32_t RESULT_ROWS[8] = {0, 4, 8, 12, 32, 36, 40, 44};
-
     for (std::uint32_t batch = 0; batch < 2; batch++) {
         std::uint32_t base_idx = batch * 4;
 
         load_and_clear_high_bits<clear_high_bits>(
-            p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
+            p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
         load_and_clear_high_bits<clear_high_bits>(
-            p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
+            p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
         load_and_clear_high_bits<clear_high_bits>(
-            p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
+            p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
         load_and_clear_high_bits<clear_high_bits>(
-            p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
+            p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
 
         for (std::uint32_t t = 1; t < block_ct_dim; t++) {
             std::uint32_t tile_offset = tile_row_base + t * ROWS_PER_TILE;
 
             load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 0]);
+                p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
             load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 1]);
+                p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
             load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 2]);
+                p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
             load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 3]);
+                p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
 
             TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG4, 1);
             TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG5, 1);
@@ -683,10 +700,10 @@ inline void max_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
         // UInt16 in a 32-bit dest (pack_low16); a 32-bit output keeps the plain INSTRUCTION_MODE store.
         constexpr std::uint32_t STORE_MODE =
             pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
-        TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
-        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
-        TT_SFPSTORE(p_sfpu::LREG2, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
-        TT_SFPSTORE(p_sfpu::LREG3, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
+        TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
+        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
+        TT_SFPSTORE(p_sfpu::LREG2, STORE_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
+        TT_SFPSTORE(p_sfpu::LREG3, STORE_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
     }
 }
 
@@ -706,20 +723,19 @@ inline void max_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
 template <bool clear_high_bits = false, bool pack_low16 = false>
 inline void max_first_columns_across_tiles_int32(std::uint32_t tile_row_base, std::uint32_t block_ct_dim) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32;  // raw load/store; cast is explicit
-    constexpr std::uint32_t RESULT_ROWS[8] = {0, 4, 8, 12, 32, 36, 40, 44};
 
     for (std::uint32_t batch = 0; batch < 2; batch++) {
         std::uint32_t base_idx = batch * 4;
 
         // Tile 0's intermediates are already sign-magnitude, so load them straight into the accumulators.
         load_and_clear_high_bits<false>(
-            p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
+            p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
         load_and_clear_high_bits<false>(
-            p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
+            p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
         load_and_clear_high_bits<false>(
-            p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
+            p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
         load_and_clear_high_bits<false>(
-            p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
+            p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
 
         for (std::uint32_t t = 1; t < block_ct_dim; t++) {
             std::uint32_t tile_offset = tile_row_base + t * ROWS_PER_TILE;
@@ -727,13 +743,13 @@ inline void max_first_columns_across_tiles_int32(std::uint32_t tile_row_base, st
             // Accumulators and operands are all sign-magnitude, so load the four operands into LREG4-7 and
             // compare-and-swap with no cast — the same pipelined shape as the float cross-tile path.
             load_and_clear_high_bits<false>(
-                p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 0]);
+                p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
             load_and_clear_high_bits<false>(
-                p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 1]);
+                p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
             load_and_clear_high_bits<false>(
-                p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 2]);
+                p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
             load_and_clear_high_bits<false>(
-                p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 3]);
+                p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
             TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG4, 1);
             TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG5, 1);
             TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG6, 1);
@@ -747,10 +763,10 @@ inline void max_first_columns_across_tiles_int32(std::uint32_t tile_row_base, st
         convert_int_representation_inplace(p_sfpu::LREG2, p_sfpu::LREG6);
         convert_int_representation_inplace(p_sfpu::LREG3, p_sfpu::LREG7);
 
-        TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
-        TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
-        TT_SFPSTORE(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
-        TT_SFPSTORE(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
+        TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
+        TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
+        TT_SFPSTORE(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
+        TT_SFPSTORE(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
     }
 }
 
@@ -1013,20 +1029,19 @@ inline void sum_first_columns_across_tiles(
          INSTRUCTION_MODE == InstrModLoadStore::LO16);
 
     // Row offset for each of the 8 partial row-sum results (face 0: 0,4,8,12; face 2: 32,36,40,44)
-    constexpr std::uint32_t RESULT_ROWS[8] = {0, 4, 8, 12, 32, 36, 40, 44};
 
     for (std::uint32_t batch = 0; batch < 2; batch++) {
         std::uint32_t base_idx = batch * 4;
 
         // Load tile 0's four LREGs at this batch's offsets (0,4,8,12 or 32,36,40,44) into LREG0-3
         load_and_clear_high_bits<clear_high_bits>(
-            p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
+            p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
         load_and_clear_high_bits<clear_high_bits>(
-            p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
+            p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
         load_and_clear_high_bits<clear_high_bits>(
-            p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
+            p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
         load_and_clear_high_bits<clear_high_bits>(
-            p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
+            p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
 
         // Int32: dest holds sign-magnitude; convert tile 0's partial sums to two's-complement so the
         // cross-tile SFPIADD accumulation below is correct (Blackhole INT32_2S_COMP load is a no-op).
@@ -1049,20 +1064,23 @@ inline void sum_first_columns_across_tiles(
                 // accumulator. LREG5-7 stay free for scratch.
                 for (std::uint32_t j = 0; j < 4; j++) {
                     load_and_clear_high_bits<clear_high_bits>(
-                        p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + j]);
+                        p_sfpu::LREG4,
+                        INSTRUCTION_MODE,
+                        ADDR_MOD_7,
+                        tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + j]);
                     convert_int_representation_inplace(p_sfpu::LREG4, p_sfpu::LREG5);
                     TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0 + j, 4);  // LREG(j) += LREG4
                 }
             } else {
                 // Load tile t's four LREGs at the same offsets into LREG4-7
                 load_and_clear_high_bits<clear_high_bits>(
-                    p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 0]);
+                    p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
                 load_and_clear_high_bits<clear_high_bits>(
-                    p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 1]);
+                    p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
                 load_and_clear_high_bits<clear_high_bits>(
-                    p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 2]);
+                    p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
                 load_and_clear_high_bits<clear_high_bits>(
-                    p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 3]);
+                    p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
 
                 // Add LREG4-7 into LREG0-3
                 if constexpr (is_integer_mode) {
@@ -1107,10 +1125,10 @@ inline void sum_first_columns_across_tiles(
         // high 16 bits); a 32-bit output (e.g. UInt32) is stored with the plain INSTRUCTION_MODE.
         constexpr std::uint32_t STORE_MODE =
             pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
-        TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
-        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
-        TT_SFPSTORE(p_sfpu::LREG2, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
-        TT_SFPSTORE(p_sfpu::LREG3, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
+        TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
+        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
+        TT_SFPSTORE(p_sfpu::LREG2, STORE_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
+        TT_SFPSTORE(p_sfpu::LREG3, STORE_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
     }
 }
 
@@ -1723,11 +1741,14 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
 // tree reduce -> horizontal reduce for rows) but combines operands with a multiply
 // instead of an add. TTI_SFPADD(a, LCONST_1, b, d) and TTI_SFPMUL(a, b, LCONST_0, d)
 // are the same SFPMAD instruction (d = a * b + c): the SUM path picks b = 1.0 to add,
-// the PROD path picks c = 0.0 to multiply. The reduction runs in fp32 LREGs regardless
-// of the dest/output format, so the only rounding is the single final store. PROD is
-// restricted to float formats: SFPMUL is a float multiply, so an integer product would
-// need a different primitive, and the ttnn.prod block-float/fp32 driver that motivated
-// this needs float first.
+// the PROD path picks c = 0.0 to multiply. Every combine runs in fp32 LREGs regardless of
+// the dest/output format, so within one tile the only rounding is the final store. A row
+// reduce over block_ct_dim > 1 is the exception: perform_reduce_row_prod_tile writes each
+// tile's partial products back to dest and prod_first_columns_across_tiles reloads them, so
+// with a 16-bit dest (dest_acc off, Float16_b) those partials round to bf16 before the
+// cross-tile multiply. PROD is restricted to float formats: SFPMUL is a float multiply, so
+// an integer product would need a different primitive, and the ttnn.prod block-float/fp32
+// driver that motivated this needs float first.
 
 /**
  * @brief Records the multiplicative tree-reduce replay buffer for the PROD reduce.
@@ -1738,11 +1759,12 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
  *     separated from its producer.
  *   - positions 6-8: half tree reduce over LREG0-3 only (column reduce's second pass,
  *     after the cross-face combine + transpose).
- * @tparam INSTRUCTION_MODE Float load/store mode (FP32/FP16B/DEFAULT).
+ *
+ * The recorded tree only touches LREG operands, so it carries no load/store mode and takes no
+ * INSTRUCTION_MODE (unlike init_reduce_sum_avg, which needs it to pick the int vs float tree).
  * @note Paired with calculate_reduce_prod; init_reduce records this once before the
  *       first calculate_reduce.
  */
-template <InstrModLoadStore INSTRUCTION_MODE>
 inline void init_reduce_prod() {
     _init_sfpu_config_reg();
 
@@ -1815,14 +1837,10 @@ inline void horizontal_reduce_prod() {
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void perform_reduce_col_prod() {
-    constexpr std::uint32_t UPPER_FACE_ADDRS[NUM_FACES] = {0, 0, 16, 16};
-    constexpr std::uint32_t LOWER_FACE_ADDRS[NUM_FACES] = {32, 32, 48, 48};
-    constexpr std::uint32_t COLUMN_OFFSETS[NUM_FACES]   = {0, 2, 0, 2};
-
     for (std::uint32_t i = 0; i < NUM_FACES; i++) {
-        const std::uint32_t upper_face_addr = UPPER_FACE_ADDRS[i];
-        const std::uint32_t lower_face_addr = LOWER_FACE_ADDRS[i];
-        const std::uint32_t column_offset   = COLUMN_OFFSETS[i];
+        const std::uint32_t upper_face_addr = COL_REDUCE_UPPER_FACE_ADDRS[i];
+        const std::uint32_t lower_face_addr = COL_REDUCE_LOWER_FACE_ADDRS[i];
+        const std::uint32_t column_offset = COL_REDUCE_COLUMN_OFFSETS[i];
 
         // Step 1: vertical product tree over the 8 loaded rows -> LREG0 (upper), LREG4 (lower).
         load_face_data<INSTRUCTION_MODE, false>(upper_face_addr, lower_face_addr, column_offset);
@@ -1851,12 +1869,16 @@ inline void perform_reduce_col_prod() {
  * offsets 0,4,8,12 (faces 0/1) and 32,36,40,44 (faces 2/3).
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
-inline void perform_reduce_row_prod_tile(std::uint32_t tile_row_offset, std::uint32_t result_store_mode) {
+inline void perform_reduce_row_prod_tile(std::uint32_t tile_row_offset) {
+    // A float-only PROD never needs the SUM path's mode-9 (SFPSTORE_MOD0_FMT_LO16) UInt16 store, so
+    // the store mode is just the constexpr load/store mode.
+    constexpr std::uint32_t STORE_MODE = static_cast<std::uint32_t>(INSTRUCTION_MODE);
+
     for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++) {
         std::uint32_t face_pair_base = face_pair * 2 * ROWS_PER_FACE;
 
         for (std::uint32_t row_group = 0; row_group < 2; row_group++) {
-            std::uint32_t row_offset_first  = row_group * 8;
+            std::uint32_t row_offset_first = row_group * 8;
             std::uint32_t row_offset_second = row_offset_first + 4;
 
             const std::uint32_t group_a_base = tile_row_offset + face_pair_base + row_offset_first;
@@ -1865,19 +1887,19 @@ inline void perform_reduce_row_prod_tile(std::uint32_t tile_row_offset, std::uin
             load_and_clear_high_bits<false>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base);
             load_and_clear_high_bits<false>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + 2);
             load_and_clear_high_bits<false>(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE);
-            load_and_clear_high_bits<false>(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE + 2);
+            load_and_clear_high_bits<false>(
+                p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE + 2);
             load_and_clear_high_bits<false>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base);
             load_and_clear_high_bits<false>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + 2);
             load_and_clear_high_bits<false>(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE);
-            load_and_clear_high_bits<false>(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE + 2);
+            load_and_clear_high_bits<false>(
+                p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE + 2);
 
             lltt::replay(0, 6);        // vertical product tree -> LREG0, LREG4
             horizontal_reduce_prod();  // horizontal product -> LREG0[0], LREG4[0]
 
-            TT_SFPSTORE(
-                p_sfpu::LREG0, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
-            TT_SFPSTORE(
-                p_sfpu::LREG4, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second);
+            TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
+            TT_SFPSTORE(p_sfpu::LREG4, STORE_MODE, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second);
         }
     }
 }
@@ -1891,23 +1913,29 @@ inline void perform_reduce_row_prod_tile(std::uint32_t tile_row_offset, std::uin
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void prod_first_columns_across_tiles(std::uint32_t tile_row_base, std::uint32_t block_ct_dim) {
-    constexpr std::uint32_t RESULT_ROWS[8] = {0, 4, 8, 12, 32, 36, 40, 44};
-
     for (std::uint32_t batch = 0; batch < 2; batch++) {
         std::uint32_t base_idx = batch * 4;
 
-        load_and_clear_high_bits<false>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
-        load_and_clear_high_bits<false>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
-        load_and_clear_high_bits<false>(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
-        load_and_clear_high_bits<false>(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
+        load_and_clear_high_bits<false>(
+            p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
+        load_and_clear_high_bits<false>(
+            p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
+        load_and_clear_high_bits<false>(
+            p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
+        load_and_clear_high_bits<false>(
+            p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
 
         for (std::uint32_t t = 1; t < block_ct_dim; t++) {
             std::uint32_t tile_offset = tile_row_base + t * ROWS_PER_TILE;
 
-            load_and_clear_high_bits<false>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 0]);
-            load_and_clear_high_bits<false>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 1]);
-            load_and_clear_high_bits<false>(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 2]);
-            load_and_clear_high_bits<false>(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 3]);
+            load_and_clear_high_bits<false>(
+                p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
+            load_and_clear_high_bits<false>(
+                p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
+            load_and_clear_high_bits<false>(
+                p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
+            load_and_clear_high_bits<false>(
+                p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
 
             TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
             TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
@@ -1915,10 +1943,26 @@ inline void prod_first_columns_across_tiles(std::uint32_t tile_row_base, std::ui
             TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
         }
 
-        TT_SFPSTORE(p_sfpu::LREG0, static_cast<std::uint32_t>(INSTRUCTION_MODE), ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
-        TT_SFPSTORE(p_sfpu::LREG1, static_cast<std::uint32_t>(INSTRUCTION_MODE), ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
-        TT_SFPSTORE(p_sfpu::LREG2, static_cast<std::uint32_t>(INSTRUCTION_MODE), ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
-        TT_SFPSTORE(p_sfpu::LREG3, static_cast<std::uint32_t>(INSTRUCTION_MODE), ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
+        TT_SFPSTORE(
+            p_sfpu::LREG0,
+            static_cast<std::uint32_t>(INSTRUCTION_MODE),
+            ADDR_MOD_7,
+            tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 0]);
+        TT_SFPSTORE(
+            p_sfpu::LREG1,
+            static_cast<std::uint32_t>(INSTRUCTION_MODE),
+            ADDR_MOD_7,
+            tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 1]);
+        TT_SFPSTORE(
+            p_sfpu::LREG2,
+            static_cast<std::uint32_t>(INSTRUCTION_MODE),
+            ADDR_MOD_7,
+            tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 2]);
+        TT_SFPSTORE(
+            p_sfpu::LREG3,
+            static_cast<std::uint32_t>(INSTRUCTION_MODE),
+            ADDR_MOD_7,
+            tile_row_base + ROW_REDUCE_RESULT_ROWS[base_idx + 3]);
     }
 }
 
@@ -1930,14 +1974,12 @@ inline void prod_first_columns_across_tiles(std::uint32_t tile_row_base, std::ui
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void perform_reduce_row_prod(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
-    const std::uint32_t tile_store_mode = static_cast<std::uint32_t>(INSTRUCTION_MODE);
-
     for (std::uint32_t i = 0; i < block_rt_dim; i++) {
         std::uint32_t tile_row_offset = ROWS_PER_TILE * block_ct_dim * i;
 
         for (std::uint32_t j = 0; j < block_ct_dim; j++) {
             std::uint32_t tile_offset = tile_row_offset + (ROWS_PER_TILE * j);
-            perform_reduce_row_prod_tile<INSTRUCTION_MODE>(tile_offset, tile_store_mode);
+            perform_reduce_row_prod_tile<INSTRUCTION_MODE>(tile_offset);
         }
 
         if (block_ct_dim > 1) {
@@ -1950,14 +1992,24 @@ inline void perform_reduce_row_prod(std::uint32_t block_ct_dim, std::uint32_t bl
  * @brief Column/row product reduction dispatcher (float only).
  * @tparam reduce_dim REDUCE_COL (32 column products in row 0) or REDUCE_ROW (per-row
  *         products in column 0).
- * @tparam INSTRUCTION_MODE Float load/store mode (FP32/FP16B/DEFAULT).
+ * @tparam INSTRUCTION_MODE Float load/store mode: FP32 or FP16B, the only two
+ *         GetSfpLoadStoreInstrMod yields for Float32 / Float16_b.
  * @note Paired with init_reduce_prod.
+ * @note Fill any padded (non-data) lane with 1.0, the multiplicative identity, before calling this.
+ *       A sub-tile column reduce that pads with 0 (the additive identity the SUM path uses)
+ *       annihilates the whole product instead of leaving it unchanged.
  */
 template <ReduceDim reduce_dim, InstrModLoadStore INSTRUCTION_MODE>
 inline void calculate_reduce_prod(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL || reduce_dim == ReduceDim::REDUCE_ROW,
         "PROD reduction supports REDUCE_COL and REDUCE_ROW only");
+    // SFPMUL is a float multiply, so an int load/store mode would run the product tree over raw
+    // integer bit patterns. Guarded here as well as in calculate_reduce because this function is in
+    // the public ckernel::sfpu namespace and kernels call it directly.
+    static_assert(
+        INSTRUCTION_MODE == InstrModLoadStore::FP32 || INSTRUCTION_MODE == InstrModLoadStore::FP16B,
+        "PROD reduction supports only the float load/store modes (FP32, FP16B)");
 
     if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
         perform_reduce_col_prod<INSTRUCTION_MODE>();
@@ -1973,8 +2025,9 @@ inline void calculate_reduce_prod(std::uint32_t block_ct_dim, std::uint32_t bloc
 /**
  * @brief Unified reduction init kernel wrapper for SFPU reduce kernel.
  *        Determines the instruction mode from format, then dispatches to the appropriate init kernel.
- * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
- * @tparam format The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b)
+ * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN, PROD)
+ * @tparam format The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b).
+ *         PROD accepts only the float formats (Float32, Float16_b).
  * @param block_ct_dim Block dimension (used for MAX/MIN reduction to specify number of columns, default is 1 for single
  * tile)
  */
@@ -2025,7 +2078,7 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
         static_assert(
             format == DataFormat::Float32 || format == DataFormat::Float16_b,
             "PROD reduction supports only float formats (Float32, Float16_b)");
-        init_reduce_prod<INSTRUCTION_MODE>();
+        init_reduce_prod();
     } else {
         static_assert(
             pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
@@ -2037,15 +2090,15 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
 /**
  * @brief Unified reduction kernel wrapper for a 32x32 tile.
  *        Determines the instruction mode from format, then dispatches to the appropriate reduction kernel.
- * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
+ * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN, PROD)
  * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (SUM/MAX/MIN all
- * formats; AVG float formats only).
+ * formats; AVG and PROD float formats only).
  * @tparam format The INPUT data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b). Drives the
- *         instruction mode and load-time high-bit masking.
+ *         instruction mode and load-time high-bit masking. PROD accepts only the float formats.
  * @tparam output_format The packer-visible OUTPUT data format (defaults to @p format). Drives the final store mode:
  *         UInt16 output in a 32-bit dest is stored via mode 9 (low->high 16-bit swap), while a 32-bit output (e.g.
  *         UInt32) is stored with the plain instruction mode. This lets UInt16 input be summed into a UInt32 output
- *         without overflow.
+ *         without overflow. PROD is float in and float out, so it rejects a UInt16 output.
  * @param block_ct_dim Block dimension (used for SUM/AVG column reduction to specify number of columns, default is 1 for
  * single tile)
  * @param block_rt_dim Block dimension (used for MAX/MIN reduction to specify block height, or SUM/MAX row reduction;
@@ -2126,6 +2179,11 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
             block_ct_dim, block_rt_dim);
     } else if constexpr (pool_type == PoolType::PROD) {
         static_assert(is_float_format, "PROD reduction supports only float formats (Float32, Float16_b)");
+        // is_float_format is derived from the INPUT format, which leaves the OUTPUT format free: a UInt16
+        // output would set pack_low16 and demand the mode-9 (SFPSTORE_MOD0_FMT_LO16) final store that the
+        // float-only PROD path never emits, so the packer would read the wrong half-word.
+        static_assert(
+            !pack_low16, "PROD reduction supports only float output formats (Float32, Float16_b), not UInt16");
         calculate_reduce_prod<reduce_dim, INSTRUCTION_MODE>(block_ct_dim, block_rt_dim);
     } else {
         static_assert(

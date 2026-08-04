@@ -34,6 +34,9 @@ enum class PoolType : std::uint8_t
     AVG,
     MAX,
     MIN,
+    // SFPU-only. The FPU pool instructions are GAPOOL (add) and GMPOOL (max) with no product variant, so
+    // PROD is implemented solely by the SFPU reduce (ckernel_sfpu_reduce.h init_reduce/calculate_reduce).
+    // The FPU reduce entry points static_assert against it rather than silently pooling a sum.
     PROD,
 };
 

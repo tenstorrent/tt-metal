@@ -2614,7 +2614,7 @@ class UnarySFPUGolden:
         ).item()
 
     def _reduce_columns(self, x, reduce_pool: ReducePool):
-        """Reduce columns across tiles, computing sum, average, or max."""
+        """Reduce columns across tiles, computing sum, average, min, max, or product."""
         # Reduce columns within this tensor
         # Take max along the height (dim=0) for each column
         if reduce_pool == ReducePool.Max:
@@ -2639,7 +2639,7 @@ class UnarySFPUGolden:
         return reduced_tile_tensor
 
     def _reduce_rows(self, x, reduce_pool: ReducePool):
-        """Reduce rows across tiles, computing sum, average, min, or max."""
+        """Reduce rows across tiles, computing sum, average, min, max, or product."""
         if reduce_pool == ReducePool.Max:
             reduced_tile = torch.max(x, dim=1).values
         elif reduce_pool == ReducePool.Min:

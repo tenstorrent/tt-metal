@@ -112,6 +112,8 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape)
 {
+    static_assert(pool_type != PoolType::PROD, "PROD is SFPU-only; the FPU pool instructions GAPOOL/GMPOOL have no product variant");
+
     // Validate tensor shape for tile-dependent operations
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
@@ -152,6 +154,8 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uint32_t address_b)
 {
+    static_assert(pool_type != PoolType::PROD, "PROD is SFPU-only; the FPU pool instructions GAPOOL/GMPOOL have no product variant");
+
     // Reset address counters for both unpackers
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 

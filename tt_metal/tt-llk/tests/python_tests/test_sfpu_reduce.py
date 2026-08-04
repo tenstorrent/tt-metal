@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -56,19 +57,35 @@ dimension_combinations = [
     if m * n <= max_tiles * TILE_DIM * TILE_DIM
 ]
 
+# Pool types swept by the reduce suite. Product is Blackhole-only: PROD exists solely in the Blackhole
+# PoolType (tt_llk_blackhole/llk_lib/llk_defs.h) and only the Blackhole ckernel_sfpu_reduce.h has a PROD
+# branch, so on Wormhole/Quasar MATH_OP would emit a `ckernel::PoolType::PROD` that does not compile.
+REDUCE_POOLS = [
+    ReducePool.Min,
+    ReducePool.Max,
+    ReducePool.Sum,
+    ReducePool.Average,
+]
+if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+    REDUCE_POOLS.append(ReducePool.Product)
+
 
 def get_format_input_bounds(
     reduce_pool: ReducePool, formats: InputOutputFormat
-) -> list[tuple[int, int]]:
+) -> list[tuple[float, float]]:
     """Get valid stimuli bounds based on data format.
     - range needs to be cut off at 1000 for Sum reduction kernels with UInt16 input format to avoid overflow.
-    - Product multiplies 32 values per output element, so magnitudes must stay near 1.0 or the
-      product overflows/underflows the float range (e.g. 1000**32 >> fp32 max). A tight band around
-      1.0 keeps the 32-term products O(1) — meaningful (well above the PCC signal floor) yet in range
-      for both Float32 and Float16_b.
+    - Product multiplies 32 values per output element for a column reduce, and up to 128 for the widest
+      row reduce, so magnitudes must stay near 1.0 or the product overflows/underflows the float range
+      (e.g. 1000**32 >> fp32 max). Bands tight around unit magnitude keep even a 128-term product inside
+      1.4e-6 .. 5.2e5 — well above the PCC signal floor and in range for Float32 and Float16_b alike
+      (bf16 shares fp32's 8-bit exponent, so the two have the same range).
+    - The all-negative band makes every partial product in the SFPMUL tree, the cross-face multiply and
+      the horizontal rotate fold alternate sign, so a dropped or masked-away sign bit fails the
+      comparison. The all-positive band cannot see that class of error.
     """
     if reduce_pool == ReducePool.Product:
-        return [(0.9, 1.1)]
+        return [(0.9, 1.1), (-1.1, -0.9)]
     if formats.input_format in [DataFormat.UInt32, DataFormat.UInt16]:
         return [(0, 1000)]
     return [(-1000, 1000), (0, 1000), (-1000, 0)]
@@ -83,12 +100,16 @@ def get_supported_reduce_axioms(
     if reduce_pool in (ReducePool.Sum, ReducePool.Max, ReducePool.Min):
         return [MathOperation.ReduceRow, MathOperation.ReduceColumn]
     # Product is a float-only SFPU reduce (SFPMUL is a float multiply). Both column and row are
-    # supported; the row sweep is capped to a single column tile (see the dimension filter) so every
-    # product stays a 32-term product and cannot overflow. get_reduce_formats already restricts
-    # Product to float, so this branch only ever sees float input formats.
+    # supported across every dimension combination: the near-unit input bands keep even a 128-column
+    # row product in float range, so the multi-column-tile fold (prod_first_columns_across_tiles) is
+    # swept too. get_reduce_formats already restricts Product to float, so this branch only ever sees
+    # float input formats.
     # Only Float32/Float16_b: the kernel's `is_float_format` AVG/PROD row gate treats just these two
     # as float, so a Float16 row AVG/PROD would hit the calculate_reduce static_assert at compile time.
-    if reduce_pool in (ReducePool.Average, ReducePool.Product) and formats.input_format in (
+    if reduce_pool in (
+        ReducePool.Average,
+        ReducePool.Product,
+    ) and formats.input_format in (
         DataFormat.Float32,
         DataFormat.Float16_b,
     ):
@@ -160,6 +181,12 @@ def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
         if input_format.is_integer():
             return INT32_MAX
         return 3.0e30  # float "+inf"-ish
+    if reduce_pool == ReducePool.Product:
+        # Multiplicative identity. 0 would annihilate the product instead of leaving it unchanged, so the
+        # additive identity below must never be reused here (ttnn's get_pad_value TT_FATALs on
+        # ReduceType::Prod rather than fall through to 0). Product is currently excluded from the sub-tile
+        # sweep by get_reduce_extents; this keeps re-enabling it from silently passing with zeros.
+        return 1.0
     # Sum (Average is excluded from the sub-tile sweep): additive identity.
     return 0
 
@@ -303,25 +330,11 @@ def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
     mathop=get_supported_reduce_axioms,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_bounds=get_format_input_bounds,
-    reduce_pool=[
-        ReducePool.Min,
-        ReducePool.Max,
-        ReducePool.Sum,
-        ReducePool.Average,
-        ReducePool.Product,
-    ],
-    dimension_combinations=lambda mathop, dest_acc, formats, reduce_pool: [
+    reduce_pool=REDUCE_POOLS,
+    dimension_combinations=lambda mathop, dest_acc, formats: [
         dim
         for dim in dimension_combinations
         if is_valid_reduce_dimension(mathop, dest_acc, formats, dim)
-        # Product row reduce is capped to a single column tile (n == 32): a row reduce over n
-        # columns multiplies n values, and n > 32 would push the 32-term-safe product out of range.
-        # Column reduce always folds exactly 32 rows, so every column-tile count stays in range.
-        and not (
-            reduce_pool == ReducePool.Product
-            and mathop == MathOperation.ReduceRow
-            and dim[1] != TILE_DIM
-        )
     ],
     reduced_extent=get_reduce_extents,
 )
