@@ -35,6 +35,7 @@ Run (ttnn venv)::
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from dataclasses import dataclass, field
@@ -165,11 +166,12 @@ class _Built:
     eos_id: int
 
 
-def _build(mesh_device, num_users: int, spare_sessions: int = 0) -> _Built:
+def _build(mesh_device, num_users: int, prefetcher: contextlib.ExitStack, spare_sessions: int = 0) -> _Built:
     """Build the model, capture nothing yet, and open one session per user.
 
     ``spare_sessions`` reserves extra session slots (and their share of the block pool)
-    beyond the ``num_users`` opened here.
+    beyond the ``num_users`` opened here. ``prefetcher`` is the caller's stack, which owns
+    the DRISC prefetcher session so it spans prefill and generation both.
     """
     from transformers import AutoTokenizer
     from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
@@ -206,6 +208,12 @@ def _build(mesh_device, num_users: int, spare_sessions: int = 0) -> _Built:
         top_cache.file("lm_head") if top_cache else None,
         dtype=_WEIGHT_DTYPE,
     )
+    # One session for the whole run, not one per step: starting the DRISC senders is not
+    # free and each GCB's ring state carries across steps. A no-op when the model was
+    # built without the prefetcher.
+    prefetcher.enter_context(model.prefetcher_session())
+    logger.info(f"tensor prefetcher: {'on' if model.use_prefetcher else 'off'}")
+
     total_sessions = num_users + spare_sessions
     model.prepare_static_decode(
         rope,
@@ -238,81 +246,84 @@ def _build(mesh_device, num_users: int, spare_sessions: int = 0) -> _Built:
 )
 def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
     """Round-robin multi-user decode over shared paged KV pools and one trace set."""
-    # One spare session slot for the isolation re-run at the end.
-    built = _build(mesh_device, _NUM_USERS, spare_sessions=1)
-    model, tokenizer, sessions = built.model, built.tokenizer, built.sessions
-    prompts, max_seq, eos_id = built.prompts, built.max_seq, built.eos_id
-    logger.info(
-        f"multi-user paged decode: users={_NUM_USERS} max_new_tokens={_MAX_NEW_TOKENS} "
-        f"block_size={_PAGE_BLOCK_SIZE} max_seq={max_seq} pool usage {model.session_usage()}"
-    )
-
-    # --- prefill each user's prompt ----------------------------------------- #
-    for session in sessions:
-        logger.info(f"prefill user {session.user_id}: {prompts[session.user_id]!r} ({session.prompt_len} tokens)")
-        for pos in range(session.prompt_len):
-            session.next_token = _decode(model, session, session.prompt_ids[pos], pos)
-        session.pos = session.prompt_len
-        session.generated.append(session.next_token)
+    # The prefetcher session spans prefill and generation both, so it is opened inside
+    # ``_build`` (once the model exists) against this stack.
+    with contextlib.ExitStack() as prefetcher:
+        # One spare session slot for the isolation re-run at the end.
+        built = _build(mesh_device, _NUM_USERS, prefetcher, spare_sessions=1)
+        model, tokenizer, sessions = built.model, built.tokenizer, built.sessions
+        prompts, max_seq, eos_id = built.prompts, built.max_seq, built.eos_id
         logger.info(
-            f"user {session.user_id} prefill done -> first gen token "
-            f"{session.next_token} {tokenizer.decode([session.next_token])!r}"
+            f"multi-user paged decode: users={_NUM_USERS} max_new_tokens={_MAX_NEW_TOKENS} "
+            f"block_size={_PAGE_BLOCK_SIZE} max_seq={max_seq} pool usage {model.session_usage()}"
         )
 
-    # --- round-robin generation: one token per user per round --------------- #
-    # Within a round each user is scheduled without waiting for its own logits: the
-    # step's on-device argmax is only read back at the start of that user's *next*
-    # turn, by which point every other user's step has been enqueued behind it.
-    decode_tokens = 0
-    decode_time = 0.0
-    total_tokens = 0
-    total_time = 0.0
-    for step in range(1, _MAX_NEW_TOKENS):
-        active = [s for s in sessions if not s.done]
-        if not active:
-            break
-        t0 = time.perf_counter()
-        for session in active:
-            if session.pending:
-                session.next_token = _await(model)
-                session.pending = False
-                session.generated.append(session.next_token)
-                if session.next_token == eos_id:
-                    logger.info(f"user {session.user_id} hit EOS at pos {session.pos}; stopping")
+        # --- prefill each user's prompt ------------------------------------- #
+        for session in sessions:
+            logger.info(f"prefill user {session.user_id}: {prompts[session.user_id]!r} ({session.prompt_len} tokens)")
+            for pos in range(session.prompt_len):
+                session.next_token = _decode(model, session, session.prompt_ids[pos], pos)
+            session.pos = session.prompt_len
+            session.generated.append(session.next_token)
+            logger.info(
+                f"user {session.user_id} prefill done -> first gen token "
+                f"{session.next_token} {tokenizer.decode([session.next_token])!r}"
+            )
+
+        # --- round-robin generation: one token per user per round ----------- #
+        # Within a round each user is scheduled without waiting for its own logits: the
+        # step's on-device argmax is only read back at the start of that user's *next*
+        # turn, by which point every other user's step has been enqueued behind it.
+        decode_tokens = 0
+        decode_time = 0.0
+        total_tokens = 0
+        total_time = 0.0
+        for step in range(1, _MAX_NEW_TOKENS):
+            active = [s for s in sessions if not s.done]
+            if not active:
+                break
+            t0 = time.perf_counter()
+            for session in active:
+                if session.pending:
+                    session.next_token = _await(model)
+                    session.pending = False
+                    session.generated.append(session.next_token)
+                    if session.next_token == eos_id:
+                        logger.info(f"user {session.user_id} hit EOS at pos {session.pos}; stopping")
+                        session.done = True
+                        continue
+                if session.pos >= max_seq:
+                    logger.warning(f"user {session.user_id} hit max_seq {max_seq}; stopping")
                     session.done = True
                     continue
-            if session.pos >= max_seq:
-                logger.warning(f"user {session.user_id} hit max_seq {max_seq}; stopping")
-                session.done = True
-                continue
-            _schedule(model, session, session.next_token, session.pos)
-            session.pending = True
-            session.pos += 1
-        elapsed = time.perf_counter() - t0
-        scheduled = sum(1 for s in active if s.pending)
-        decode_time += elapsed
-        decode_tokens += scheduled
-        total_time += elapsed
-        total_tokens += scheduled
+                _schedule(model, session, session.next_token, session.pos)
+                session.pending = True
+                session.pos += 1
+            elapsed = time.perf_counter() - t0
+            scheduled = sum(1 for s in active if s.pending)
+            decode_time += elapsed
+            decode_tokens += scheduled
+            total_time += elapsed
+            total_tokens += scheduled
 
-        if step % 10 == 0 and decode_time > 0:
-            users_now = max(scheduled, 1)
-            logger.info(
-                f"round {step:4d}: {decode_tokens / decode_time:.2f} tok/s total, "
-                f"{decode_tokens / decode_time / users_now:.2f} tok/s/user "
-                f"({decode_tokens} tokens in {decode_time:.2f}s over {users_now} users)"
-            )
-            decode_tokens = 0
-            decode_time = 0.0
+            if step % 10 == 0 and decode_time > 0:
+                users_now = max(scheduled, 1)
+                logger.info(
+                    f"round {step:4d}: {decode_tokens / decode_time:.2f} tok/s total, "
+                    f"{decode_tokens / decode_time / users_now:.2f} tok/s/user "
+                    f"({decode_tokens} tokens in {decode_time:.2f}s over {users_now} users)"
+                )
+                decode_tokens = 0
+                decode_time = 0.0
 
-    # Drain the last in-flight step of every user.
-    for session in sessions:
-        if session.pending:
-            t0 = time.perf_counter()
-            session.next_token = _await(model)
-            total_time += time.perf_counter() - t0
-            session.pending = False
-            session.generated.append(session.next_token)
+        # Drain the last in-flight step of every user.
+        for session in sessions:
+            if session.pending:
+                t0 = time.perf_counter()
+                session.next_token = _await(model)
+                total_time += time.perf_counter() - t0
+                session.pending = False
+                session.generated.append(session.next_token)
 
     for session in sessions:
         logger.info(f"USER {session.user_id} PROMPT    : {tokenizer.decode(session.prompt_ids)!r}")

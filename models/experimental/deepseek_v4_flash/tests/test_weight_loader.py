@@ -156,6 +156,6 @@ def test_has_round_trips(loader: DeepseekV4WeightLoader) -> None:
 
 
 @pytestmark_needs_ckpt
-def test_missing_tensor_raises(loader: DeepseekV4WeightLoader) -> None:
-    with pytest.raises(KeyError):
+def test_missing_tensor_raises(loader: DeepseekV4WeightLoader, expect_error) -> None:
+    with expect_error(KeyError, "not found in checkpoint"):
         loader.get_tensor("model.this.is.not.a.real.tensor")
