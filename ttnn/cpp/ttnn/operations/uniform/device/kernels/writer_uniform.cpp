@@ -30,7 +30,8 @@ void kernel_main() {
         cb_output.wait_front(1);
         uint32_t output_cb_read_ptr = cb_output.get_read_ptr();
         noc.async_write(CoreLocalMem<uint32_t>(output_cb_read_ptr), output_addrg, page_bytes, {}, {.page_id = i});
-        noc.async_write_barrier();
+        noc.async_writes_flushed();
         cb_output.pop_front(1);
     }
+    noc.async_write_barrier();
 }
