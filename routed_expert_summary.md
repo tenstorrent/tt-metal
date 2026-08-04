@@ -666,6 +666,24 @@ short-ISL cases needed re-centring on their min/max midpoint after a second obse
 (kimi x_rm+IL isl-256 measured 183.1 and 197.8 us; glm x_tile+ND isl-256 117.4 and 129.6).
 `_MARGIN` = 8% covers the observed spread; long-ISL cases sit inside 1%.
 
+**Update after the M=4/w=16 rebaseline (section 13): the noise is BIMODAL and the band had
+to become ISL-dependent.** Two full 72-case runs of the same build on the same card had a
+median run-to-run ratio of 1.004 — no systematic drift — but the spread split sharply:
+within 4.4% for isl >= 1024, out to 15.5% for isl <= 512. Resampling the five outliers four
+times each showed two clusters rather than a spread, e.g. w_ndshard glm isl-128 at
+115,641 / 115,724 / 125,984 / 126,724 ns (~11 us apart), and four of the five outliers were
+high by a near-identical **+17-18 us** regardless of model or ISL — a fixed additive step,
+not a proportional one, which is the signature of one occasional stalled read round rather
+than clock or thermal drift.
+
+The cause is chunk count: at isl <= 512 the op runs a SINGLE chunk, so one stall lands whole
+in the measurement with nothing to average against; from isl 1024 up there are several
+chunks. Making the op faster made this worse in relative terms — the same ~17 us absolute
+stall is a larger fraction of 150 us than of 190 us. Hence `_MARGIN_SHORT_ISL` = 15% at
+isl <= 512 and `_MARGIN_LONG_ISL` = 8% above, with multi-sample cases centred on their
+MEDIAN (not the min/max midpoint, which a bimodal sample set misrepresents). Tightening
+either band needs multi-iteration averaging in the harness.
+
 Trap worth recording: an earlier verification showed **7** failures, of which only ONE was a
 perf miss. The other six were Tracy infrastructure errors
 (`profile_log_device.csv is also missing`, `CalledProcessError`) caused by running TWO
@@ -745,29 +763,279 @@ one; the guard then has room to keep `in0_block_w` at 16, and at short ISL the s
 costs nothing because there is only one chunk either way. The runtime picker already adapts
 `per_core_M` downward — what it cannot adapt is the CB sizing, so the caller has to choose it.
 
-### 13d. Experiment matrix
+### 13d. Measured: the sweep (kimi_k26, x_rm, w_interleaved, card 0)
 
-Sweep at fixed shape, isl in {64, 128, 256, 512} plus 2048/5120 as the regression guard:
+Both knobs were exposed as temporary env overrides in the program factory (`DS_CHUNK_M`,
+`DS_W_GU`, plus a `log_info` reporting the config the guard settled on), so the
+`(per_core_M_max, in0_block_w)` plane could be swept from the shell with one build. Hooks
+removed afterwards; the numbers below are device time in ns, one sample each.
 
-| chunk_M_tiles | per_core_M_max | in0_block_w the guard should allow | note |
+**Knob 1 — w alone at per_core_M_max = 8.** 13b's sign is confirmed:
+
+| w | K-blocks | L1 | isl-64 | isl-256 | isl-2048 |
+|---|---|---|---|---|---|
+| 2 | 112 | 996 KB | 282,734 | 290,267 | 1,200,176 |
+| 4 | 56 | 1104 KB | 200,636 | 251,276 | 736,816 |
+| **8 (was default)** | 28 | 1320 KB | 161,792 | 192,305 | 591,630 |
+| 16 (guard dropped M to 5) | 14 | 1235 KB | 143,213 | 156,136 | 715,515 |
+
+Predicted +60 us for w=4; measured **+59**. Predicted -31 us for w=16; measured **-36**. The
+model's sign and magnitude both hold. It over-predicts only at w=2 (+182 predicted vs +98
+measured), i.e. some of the "fixed" barrier cost does overlap once blocks get very short.
+
+**Knob 2 — w at per_core_M_max = 1**, which isolates w from M entirely (chunk_M=8):
+
+| w | K-blocks | L1 | isl-64 | isl-128 | isl-256 |
+|---|---|---|---|---|---|
+| 8 | 28 | 396 KB | 160,984 | 177,224 | 189,007 |
+| 16 | 14 | 545 KB | 143,167 | 146,296 | 153,581 |
+| 28 | 8 | 767 KB | 142,900 | 145,512 | 151,513 |
+| 56 | 4 | 1287 KB | 141,631 | 152,989 | 151,218 |
+
+The curve **plateaus at w=16**. Beyond that the model over-attributes: it predicts another
+13 us going 16 -> 28, measured is ~2 us. So w=16 captures essentially the whole win, and the
+extra L1 that w=28/56 costs buys nothing.
+
+### 13e. The prime-divisor trap — a real latent perf bug, found by accident
+
+With w forced to 16 the guard dropped `per_core_M` to 5, and isl >= 512 appeared to regress
+badly (+103 us at isl-512). That is **not** a w effect. `per_core_M_for_chunk()` picks the
+smallest **DIVISOR** of `per_core_M_max` that covers the tail chunk, and the L1 guard walked
+`per_core_M` down by 1 at a time — landing on **5, a prime**, whose only divisors are {1, 5}:
+
+| isl | m_tiles | rows/core the tail needs | max=8 picks | max=5 picks | cost |
+|---|---|---|---|---|---|
+| 512 | 16 | 2 | 2 | **5** | 2.5x the M-work, +103 us |
+| 1024 | 32 | 4 | 4 | **5** | 1.25x, +64 us |
+| 2048 | 64 | 3, plus one full chunk | 8, one chunk | **5, two chunks** | 1.25x + an extra chunk |
+
+Confirmed by holding w at 8 and setting chunk_M=40: isl-512 measured 356,874 vs 247,924 at
+chunk_M=64 — the regression follows the prime `per_core_M_max`, not the K-block width.
+
+This bites any model whose dims make the guard fire, silently, with no wrong answers — the
+tail chunk just does up to 2.5x the M-work it needs to. **Fixed** by offering the guard only
+per_core_M values that are DIVISORS of the requested max (8 -> 8, 4, 2, 1), which keeps the
+tail ladder at least as fine as the request's own.
+
+### 13f. Chosen config: per_core_M_max = 4, in0_block_w = 16
+
+`kMaxChunkMTiles` 64 -> 32. With per_core_M_max=4 the **existing** default `in0_block_w=16`
+already fits (1062 KB of 1379 KB), so the guard no longer fires at all for kimi and no w
+logic had to change. 4 is a power of two, so the tail ladder stays fine (13e).
+
+| isl | M=8, w=8 (was) | M=4, w=16 | speedup |
 |---|---|---|---|
-| 64 (today) | 8 | 8 | baseline |
-| 32 | 4 | 16 | half the K-blocks |
-| 16 | 2 | 16-28 | |
-| 8 | 1 | 28+ | exactly matches runtime per_core_M at isl <= 256 |
+| 0 | 3,983 | 3,979 | 1.00x |
+| 64 | 161,792 | 143,172 | **1.13x** |
+| 128 | 172,144 | 146,963 | **1.17x** |
+| 256 | 192,305 | 152,941 | **1.26x** |
+| 512 | 247,924 | 197,268 | **1.26x** |
+| 1024 | 309,273 | 305,239 | 1.01x |
+| 2048 | 591,630 | 607,656 | 0.97x |
+| 4096 | 1,174,488 | 1,192,784 | 0.98x |
+| 5120 | 1,468,690 | 1,490,742 | 0.99x |
 
-Two knobs to separate, because they are confounded today:
+The cost above isl-1024 is extra chunk passes (chunk_M 32 vs 64), bounded at 3%. Net win
+across the prefill range, concentrated exactly where the sweep spends its time.
 
-1. **`in0_block_w` alone** — force w while holding `chunk_M_tiles` at 64, accepting the L1
-   overflow by dropping something else, to get the clean w-curve and test 13b's sign.
-2. **weight CB depth** — at fixed w, go from 2 slots to 3-4. This is the part of the
-   colleague's latency argument that survives: with only double buffering the reader can run
-   just ONE block ahead, so the fetch latency is exposed rather than hidden. Deeper CBs at the
-   same w hide it without multiplying the barrier count. Pairs with per-subset
-   (transaction-ID) barriers so the multicast of K-row n can start while n+1 is still in
-   flight (section 8 item 4, still unimplemented).
+**Rejected: per_core_M_max = 2, w = 28** (chunk_M=16, 1001 KB). ~2 us better at isl <= 256
+(142,510 / 144,927 / 150,265) but far worse above: 217,529 @512, 390,259 @1024, 764,730
+@2048, 1,526,454 @4096, 1,887,283 @5120 — 1.28x SLOWER at 4096. Too many chunk passes to
+buy 2 us.
 
-Falsifiable predictions to check the model against: w 8 -> 16 should save ~30 us of gate/up
-overhead at short ISL and be neutral at isl >= 2048; w 8 -> 4 should COST ~60 us. If instead
-w 8 -> 4 helps, the fixed/scaling split above is wrong and the barrier cost is not
-per-block — which would itself be the useful finding.
+### 13g. Why per_core_M_max is the price of K-block width
+
+The footprint model, validated to the KB against the guard's own arithmetic:
+
+```
+footprint(M, w) = base + w * (13.5 + M * 5.06) KB          [x_rm]
+    cb_in0_x = M * w * 1088 B        cb_x_rm = M * w * 2 * 2048 B     <- the M*w PRODUCT
+    cb_in1_gate / cb_in1_up = w * per_core_N_gu * 2 * 576 B each      <- bfp4, cheap
+```
+
+The weights are the *cheap* part of a wider K-block (13.5 KB/w, bfp4). What makes width
+expensive is **x staging**, which is sized `M * in0_block_w` tiles in bf16 — at M=8, w=16
+that is 136 KB + 512 KB. So `per_core_M_max` sets the PRICE of width: 54 KB/w at M=8,
+38.9 at M=5, 18.6 at M=1 (measured slopes matched all three). Halving the max halves the
+price, which is why 4/16 fits where 8/16 does not.
+
+### 13h. Full 72-case validation of M=4 / w=16 (2026-08-04, card 0)
+
+Speedup vs the 2026-07-29 baselines, all four layout combinations, both models. 72/72
+captured, zero Tracy infra errors, single perf session.
+
+| isl | kimi x_rm/int | kimi x_rm/nds | kimi x_tile/int | kimi x_tile/nds | glm x_rm/int | glm x_rm/nds | glm x_tile/int | glm x_tile/nds |
+|---|---|---|---|---|---|---|---|---|
+| 64 | **1.13x** | 1.07x | 0.99x | 1.04x | 1.08x | 1.07x | 1.02x | 1.06x |
+| 128 | **1.18x** | 1.08x | 0.99x | 1.00x | **1.15x** | 1.06x | 1.03x | 0.99x |
+| 256 | **1.21x** | 1.10x | 1.00x | 0.96x | **1.18x** | 1.08x | 1.01x | 1.06x |
+| 512 | **1.31x** | **0.91x** | 1.02x | 1.06x | **1.20x** | **0.93x** | 1.00x | 1.04x |
+| 1024 | 1.02x | 1.02x | 1.02x | 1.03x | 1.01x | 1.03x | 1.09x | 1.02x |
+| 2048 | 0.98x | 1.01x | 0.99x | 1.00x | 1.00x | 1.00x | 0.99x | 1.00x |
+| 4096 | 0.99x | 1.01x | 0.99x | 0.98x | 1.00x | 1.03x | 0.99x | 0.99x |
+| 5120 | 1.00x | 1.02x | 0.99x | 1.00x | 0.98x | 1.02x | 0.98x | 1.00x |
+
+Two structural readings:
+
+1. **`x_tile` is flat by construction (0.96-1.09x).** It has no `cb_x_rm`, so its footprint
+   already fit `in0_block_w=16` at per_core_M_max=8 — the guard never fired on that path.
+   It only gave up per_core_M_max, and lost nothing for it. All of the win is on `x_rm`,
+   which is the production path (the dispatch emits ROW_MAJOR).
+2. **The gains do not stack with ND-sharding.** Both changes attack the same fixed
+   per-K-block weight read, so the ND-shard advantage at isl <= 512 shrank from 1.19-1.48x
+   to 1.05-1.23x. The second optimization to land collects what the first left.
+
+**One real regression: `x_rm`/`w_ndshard` at isl-512, 0.91x / 0.93x** — the only cells below
+0.96 in the matrix, and the only place ND-sharding is now slower than interleaved (196,139
+vs 191,997 for kimi). Confirmed real, not jitter, over three samples each (kimi 203,310 /
+196,139 / 188,815; glm 172,155 / 166,087 / 170,537; the baselines record the medians).
+Chunking is provably identical at isl-512 across old and new (m_tiles=16 => tail needs 2
+rows/core; 2 is a divisor of both 8 and 4, so both pick per_core_M=2, one chunk), so the
+cause is the width alone. Working hypothesis: with per-tile interleaved requests there are
+already `w * per_core_N` = 96+ reads per block, far past any outstanding-transaction limit,
+so widening changes nothing; with ND-shard whole-K-row requests there are exactly `w`, so
+8 -> 16 doubles the reads in flight per block and may cross that limit. Not verified —
+it also fails to explain why only isl-512 regresses while 64/128/256 improve.
+
+### 13i. Why M=4 / w=16 is the knee — bounds on both knobs
+
+Asked directly: what stops us going further, smaller M and wider w? Both ends are measured,
+and they bind for different reasons.
+
+**w saturates at 16.** Measured at per_core_M_max=1, where L1 permits anything up to w=56
+(13d knob 2): w=16 -> 28 buys ~2 us, w=28 -> 56 buys nothing. The overhead is
+`(K/w)*2932 + K*per_core_N*66`; by w=16 the first term is down to ~30 us while the second is
+**w-invariant** — it is the bytes actually moved. Nothing can be optimised below the traffic,
+so once the per-block fixed cost stops dominating, w has nothing left to collect. The
+fixed-cost model over-predicts beyond 16 precisely because it books as "fixed" some barrier
+cost that in reality overlaps.
+
+**Lowering M is bounded by chunk count, not by L1.** `chunk_M = M * GRID_Y`, and every chunk
+re-reads the ENTIRE weight set (~137 us fixed: 99.7 read + 37.6 mcast, section 7). So halving
+M halves the ISL at which an extra full weight pass starts being paid:
+
+| per_core_M_max | chunk_M | one chunk up to | isl-256 | isl-1024 | isl-4096 |
+|---|---|---|---|---|---|
+| 8 (was) | 64 | m_tiles 64 = isl-2048 | 192,305 | 309,273 | 1,174,488 |
+| **4 (chosen)** | 32 | m_tiles 32 = **isl-1024** | 152,941 | 305,239 | 1,192,784 |
+| 2 | 16 | m_tiles 16 = isl-512 | 150,265 | 390,259 | 1,526,454 |
+
+M=4 is exactly the knee: chunk_M=32 = 32 m_tiles means **one chunk all the way to isl-1024**,
+so the full low-ISL plateau is bought at the largest M that still avoids a second weight pass
+in the sweep's dense region. M=2 halves that reach to isl-512 and pays 1.28x at isl-4096 to
+buy 2 us at isl-256.
+
+**L1 is no longer the binding constraint at all.** M=4/w=16 uses 1062 KB of 1379 KB — 317 KB
+spare that w cannot productively spend. The one axis that can still use it is weight CB
+depth, at 13.5 KB per extra K-row (13g: the bfp4 weight CBs are the cheap term). That is
+13j.
+
+### 13j. Are we DRAM bound? The read is; the op is not
+
+Achieved rate for the new config, counting ACTUAL DRAM traffic served
+(`chunks * 3*K_e*N_h*576` weight bytes + x + output, x and output at `m_tiles * K_e` tiles).
+The byte model reproduces section 12's published GB/s to within 0.7%, so it is the same
+accounting:
+
+| model | isl | best cell | us | chunks | GB/s actual | GB/s useful | % of 310 | % of 379 |
+|---|---|---|---|---|---|---|---|---|
+| kimi | 64 | x_tile/nd | 116.7 | 1 | **221** | 221 | 71% | 58% |
+| kimi | 256 | x_tile/nd | 141.3 | 1 | 203 | 203 | 65% | 54% |
+| kimi | 512 | x_tile/nd | 157.8 | 1 | 206 | 206 | 67% | 54% |
+| kimi | 1024 | x_tile/nd | 271.9 | 1 | 148 | 148 | 48% | 39% |
+| kimi | 2048 | x_tile/nd | 534.9 | 2 | 151 | 105 | 49% | 40% |
+| kimi | 5120 | x_tile/nd | 1315.7 | 5 | 153 | 78 | 49% | 40% |
+| glm | 64 | x_tile/nd | 106.5 | 1 | 207 | 207 | 67% | 55% |
+| glm | 512 | x_tile/nd | 141.6 | 1 | 197 | 197 | 64% | 52% |
+| glm | 5120 | x_tile/nd | 1146.7 | 5 | 151 | 77 | 49% | 40% |
+
+("useful" counts the weights ONCE — the gap between the two columns is redundant re-reads.)
+
+Op-level, 221 GB/s is 58% of the 379 GB/s bank ceiling and ~43% of the 512 GB/s spec, so it
+looks far off. But decomposing kimi isl-64's 116.7 us:
+
+```
+weight read      67 us    24.77 MB at 368 GB/s = 97% of the 379 GB/s bank ceiling
+multicast        37.6 us  DRAM completely IDLE
+everything else  ~12 us
+                116.6 us   (matches the measured 116.7)
+```
+
+**The read phase is already at 97% of the bank limit.** The op only shows 221 GB/s because
+~32% of the wall clock is multicast with DRAM idle, and read and multicast are serialised
+because THE SAME RISC does both (section 10b: the mcast is irreducible at 37.6 us/chunk and
+additive with the read). So more DRAM bandwidth would buy essentially nothing at low ISL.
+
+The lever is **overlap, not bandwidth**: if the multicast hid fully behind the read, isl-64
+would go 116.7 -> ~79 us (**1.48x**) and the rate to ~325 GB/s = 86% of the ceiling. That
+needs the read and the mcast on separate RISCs, or per-transaction-ID barriers so K-row n's
+mcast can start while n+1 is still in flight — 13k.
+
+And note the tension the "useful" column exposes: at isl >= 2048 half the DRAM traffic is
+redundant weight re-reads (151 GB/s actual vs 78 useful, 5 chunks). Low ISL wants a wider
+`in0_block_w`, high ISL wants a bigger `per_core_M_max` to cut chunk passes, and the two
+compete for the same L1 — which is precisely why M=4 sits at a knee rather than an optimum.
+
+### 13k. Can the multicast be overlapped, or turned into unicast?
+
+**What is actually multicast, per K-block** (kimi, `per_core_N_gu = ceil(64/11) = 6`, bfp4
+576 B/tile; `gate_block_bytes = in0_block_w_gu * per_core_N_gu * 576`):
+
+| unit | tiles | bytes | count/chunk | total |
+|---|---|---|---|---|
+| gate block, w=16 | 96 | **55,296 = 54 KB** | 14 | 756 KB |
+| up block, w=16 | 96 | **54 KB** | 14 | 756 KB |
+| down block | 6 x 21 = 126 | **72,576 = 71 KB** | 11 | 780 KB |
+| **per sender per chunk** | | | | **2.35 MB** |
+
+Two independent cross-checks: 2.35 MB at the measured 61.3 GB/s column-multicast rate is
+**38.3 us**, against the 37.6 us/chunk measured directly (section 10b); and `cb_in1_gate` =
+16*6*2*576 = 108 KB, exactly double-buffering one 54 KB block. At the old w=8 the block was
+27 KB. The natural finer unit is one K-row = 6 tiles = **3.4 KB**.
+
+**Dual NoC: already done.** `unified_routed_expert_ffn_reader.cpp:233` sets up `Noc noc_read(0)`
+for DRAM weight reads and leaves the kernel's default NoC for mcasts/semaphores, and phase 4
+already runs in1_down reads concurrently with the activated mcast. So NoC ports are NOT the
+constraint and "multicast on the other NoC" is not an available further win.
+
+The real serialisation is at `reader.cpp:689`: all `w` reads are issued, then
+`noc_read.async_read_barrier()` waits for **the whole block**, and only then is the whole
+54 KB block multicast. Nothing can go out until the last tile of the block has landed. The
+fix is barrier GRANULARITY, not a different NoC: barrier per transaction ID on a subset and
+multicast that subset while the rest is still in flight. Splitting the read/mcast across the
+two RISCs is the other form, and needs weight CB depth >= 2 blocks so producer and consumer
+are not lockstep.
+
+**Unicast instead of multicast: no — 5.8x worse.** Multicast sends ONE copy down a reserved
+path to all 8 column receivers; unicast sends 8, i.e. 8 * 2.35 MB = 18.8 MB out of a single
+core's port. That port ceils at 86.4 GB/s and the multicast already achieves 61.3 GB/s of it
+(71%), so unicast costs **>= 218 us/chunk against 37.6**. It buys an earlier start by paying
+8x the traffic. The intent is achievable without the 8x: split the multicast finer (per
+K-row, 3.4 KB) so receivers start ~w x earlier on the same single copy.
+
+**And the multicast is not the biggest target anyway.** Per K-block at w=8 (section 13b):
+
+| component | cy | share |
+|---|---|---|
+| ready-barrier + peer-valid wait | 2503 | **41%** |
+| read issue | 2070 | 34% |
+| multicast | 1099 | 18% |
+| read completion tail | 429 | 7% |
+
+The largest item is the HANDSHAKE — the sender waiting for receivers to free the previous
+slot — which is attacked by CB depth, not by NoC placement. That is the one thing the chosen
+config leaves on the table: **317 KB of L1 is spare and a K-row of weight buffering costs
+13.5 KB** (13g). Deeper weight CBs and per-trid barriers are complementary, and between them
+they are what would take isl-64 from 116.7 us toward the ~79 us full-overlap figure in 13j.
+
+### 13l. Still on the table
+
+- **Weight CB depth at fixed w** (the part of the original latency argument that survives):
+  with only double buffering the reader runs one block ahead, so the fetch is exposed. Deeper
+  weight CBs cost only 13.5 KB per extra K-row — the cheap axis — and hide latency without
+  multiplying the barrier count. Pairs with per-subset (transaction-ID) barriers so K-row n's
+  multicast can start while n+1 is still in flight (section 8 item 4).
+- **Runtime-selected CB sizing** would remove the tradeoff in 13f entirely, but CB extents
+  are compile-time; the op is compiled once for the 5K buffer and must serve any runtime
+  token count. `chunk_M_tiles` being an op attribute means a caller *could* compile a
+  short-sequence variant, at the cost of a second program-cache entry.

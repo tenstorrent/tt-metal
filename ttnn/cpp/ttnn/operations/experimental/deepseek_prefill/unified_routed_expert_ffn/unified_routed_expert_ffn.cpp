@@ -38,9 +38,24 @@ ttnn::Tensor unified_routed_expert_ffn(
     // past the count are skipped entirely (no matmul, no mcast).
     //
     // The host only sets the CB-sized MAXIMUM chunk (kMaxChunkMTiles => per_core_M
-    // 8). The program factory's L1 guard may lower it for large models; the
+    // 4). The program factory's L1 guard may lower it for large models; the
     // device picker never exceeds whatever max the CBs were sized to.
-    constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M_max = 8 (L1 cap)
+    //
+    // Why 4 rows/core and not the 8 that L1 can hold: per_core_M_max and the
+    // gate/up K-block width in0_block_w_gu compete for the same L1, and the
+    // K-block width is worth more. The x-staging CBs (cb_in0_x + cb_x_rm) are
+    // sized M * in0_block_w_gu tiles, so widening the K-block costs
+    // 13.5 + M*5.06 KB per tile of width — i.e. per_core_M_max sets the PRICE of
+    // a wider K-block. At M=8 the default width 16 does not fit and the guard
+    // narrows it to 8, doubling the number of K-blocks; each block costs a fixed
+    // ~2932 cy of mcast-ready barrier round plus read tail that does NOT shrink
+    // with width. Halving per_core_M_max to 4 buys width 16 (1062 KB of a 1379 KB
+    // budget), which halves the block count: measured 1.13x at isl-64, 1.26x at
+    // isl-256 and isl-512, 1.01x at isl-1024, and 0.97-0.99x at isl >= 2048 where
+    // the smaller chunk costs extra chunk passes. Net win across the prefill
+    // range. Keep this a POWER OF TWO * kGridY: per_core_M_for_chunk() quantizes
+    // tail chunks to divisors of per_core_M_max.
+    constexpr uint32_t kMaxChunkMTiles = 32;  // per_core_M_max = 4 (see above)
     // This expert's M in tiles. Defaults to x's allocated M; a caller passing a
     // shared x buffer (wider than one region) supplies the per-expert value.
     const uint32_t M_tiles_full = input_m_tiles.value_or(x.padded_shape()[-2] / 32);
