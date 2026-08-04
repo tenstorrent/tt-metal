@@ -12,16 +12,16 @@
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::uniform::detail {
+namespace ttnn::operations::uniform {
 
 struct InclusiveOutputRange {
     float lower_bound;
     float upper_bound;
 };
 
-constexpr uint32_t bfloat16_discarded_bits_mask = 0x0000FFFFU;
-constexpr uint32_t bfloat16_encoding_step = 0x00010000U;
-constexpr uint32_t float_sign_mask = 0x80000000U;
+constexpr std::uint32_t bfloat16_discarded_bits_mask = 0x0000FFFFU;
+constexpr std::uint32_t bfloat16_encoding_step = 0x00010000U;
+constexpr std::uint32_t float_sign_mask = 0x80000000U;
 // FP32 and BF16 have the same exponent field, hence the same minimum normal
 // value when BF16 is widened to FP32. SFPU arithmetic flushes subnormals.
 constexpr float minimum_normal = std::numeric_limits<float>::min();
@@ -54,15 +54,16 @@ inline float smallest_supported_bfloat16_at_least(float value) {
         return 0.0F;
     }
 
-    const uint32_t bits = std::bit_cast<uint32_t>(value);
-    const uint32_t truncated_bits = bits & ~bfloat16_discarded_bits_mask;
+    const std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
+    const std::uint32_t truncated_bits = bits & ~bfloat16_discarded_bits_mask;
     if ((bits & bfloat16_discarded_bits_mask) == 0) {
         return value;
     }
 
     // Dropping the low bits rounds negative values towards +infinity. Positive
     // values need the next BF16 encoding to obtain the mathematical ceiling.
-    const uint32_t ceiling_bits = (bits & float_sign_mask) ? truncated_bits : truncated_bits + bfloat16_encoding_step;
+    const std::uint32_t ceiling_bits =
+        (bits & float_sign_mask) ? truncated_bits : truncated_bits + bfloat16_encoding_step;
     return std::bit_cast<float>(ceiling_bits);
 }
 
@@ -74,17 +75,17 @@ inline float largest_supported_bfloat16_below(float value) {
         return -minimum_normal;
     }
 
-    const uint32_t bits = std::bit_cast<uint32_t>(value);
-    const uint32_t truncated_bits = bits & ~bfloat16_discarded_bits_mask;
+    const std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
+    const std::uint32_t truncated_bits = bits & ~bfloat16_discarded_bits_mask;
     if ((bits & bfloat16_discarded_bits_mask) != 0) {
         // Truncation is already below a positive input. For a negative input it
         // rounds upwards, so advance one encoding towards -infinity.
-        const uint32_t predecessor_bits =
+        const std::uint32_t predecessor_bits =
             (bits & float_sign_mask) ? truncated_bits + bfloat16_encoding_step : truncated_bits;
         return std::bit_cast<float>(predecessor_bits);
     }
 
-    const uint32_t predecessor_bits =
+    const std::uint32_t predecessor_bits =
         (bits & float_sign_mask) ? bits + bfloat16_encoding_step : bits - bfloat16_encoding_step;
     return std::bit_cast<float>(predecessor_bits);
 }
@@ -125,4 +126,4 @@ inline InclusiveOutputRange make_inclusive_output_range(float from, float to, Da
     }
 }
 
-}  // namespace ttnn::operations::uniform::detail
+}  // namespace ttnn::operations::uniform

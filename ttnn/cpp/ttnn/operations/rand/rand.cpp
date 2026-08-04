@@ -5,6 +5,8 @@
 
 #include "rand.hpp"
 
+#include <cstdint>
+
 #include "ttnn/operations/rand/device/rand_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/uniform/uniform_range.hpp"
@@ -61,7 +63,7 @@ Tensor rand(
     const MemoryConfig& memory_config,
     float from,
     float to,
-    uint32_t seed,
+    std::uint32_t seed,
     const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
     TT_FATAL(
         dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16,
@@ -81,7 +83,7 @@ Tensor rand(
         mesh_dim_is_sharded = build_shard_mask(config);
     }
 
-    const auto output_range = ttnn::operations::uniform::detail::make_inclusive_output_range(from, to, dtype);
+    const auto output_range = ttnn::operations::uniform::make_inclusive_output_range(from, to, dtype);
 
     auto tensor = ttnn::prim::uniform(
         device_shape,
