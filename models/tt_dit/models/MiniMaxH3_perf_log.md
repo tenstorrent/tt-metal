@@ -3,6 +3,10 @@
 Append-only. One entry per measured change, newest at the bottom. Never rewrite an entry: the point
 is to be able to see what a change actually bought, including the ones that bought little.
 
+The commit column is the one thing here that may need rewriting: it was refreshed once when the
+bringup commits were squashed, which rebased every later commit and changed its hash. If you rewrite
+this branch's history again, refresh it again -- a dangling hash makes the entry unbisectable.
+
 All numbers are **device time for one transformer block**, from
 `test_transformer_block_perf_minimax_h3.py` under `--profile`, analysed with
 `project_block_perf.py` (which reproduces `tt-perf-report`'s totals exactly). 768P (768x1344) on
@@ -22,13 +26,13 @@ python models/tt_dit/tests/models/minimax_h3/project_block_perf.py 5s=<csv>
 
 | # | date | change | 5s | 10s | 15s | commit |
 |---|------|--------|----|-----|-----|--------|
-| 1 | 2026-08-03 | baseline: block + attention as first brought up | 26.03 ms | 57.65 ms | 98.72 ms | `12c0e27c922` |
-| 2 | 2026-08-03 | addcmul gates + adaLN scale/shift folded into the fused norm | 25.61 ms | 57.19 ms | 97.63 ms | `1739353a695` |
-| 3 | 2026-08-04 | ring SDPA chunk sizes tuned from a measured sweep | 24.80 ms | 57.19 ms | 97.63 ms | `acfc6885b12` |
-| 4 | 2026-08-04 | QK-norm + head split + RoPE fused into one op | 18.53 ms | not measured | not measured | `9c9f54d877d` |
-| 5 | 2026-08-04 | all-gather folded into the matmuls (AGMM), placeholder block sizes | 18.20 ms | 43.22 ms | 78.26 ms | `368722dcf48` |
-| 6 | 2026-08-04 | AGMM block sizes from a measured sweep | 17.79 ms | 42.43 ms | 77.01 ms | `45489e2b6ba` |
-| 7 | 2026-08-04 | attention gate addcmul folded into the to_out AGMM epilogue | 17.58 ms | 42.31 ms | 76.96 ms | `9d4a5d85c2d` |
+| 1 | 2026-08-03 | baseline: the transformer as first brought up | 26.03 ms | 57.65 ms | 98.72 ms | `3329c4834ee` |
+| 2 | 2026-08-03 | addcmul gates + adaLN scale/shift folded into the fused norm | 25.61 ms | 57.19 ms | 97.63 ms | `bb4bff6beb0` |
+| 3 | 2026-08-04 | ring SDPA chunk sizes tuned from a measured sweep | 24.80 ms | 57.19 ms | 97.63 ms | `ffd1617cae7` |
+| 4 | 2026-08-04 | QK-norm + head split + RoPE fused into one op | 18.53 ms | not measured | not measured | `23022b34768` |
+| 5 | 2026-08-04 | all-gather folded into the matmuls (AGMM), placeholder block sizes | 18.20 ms | 43.22 ms | 78.26 ms | `0928969663b` |
+| 6 | 2026-08-04 | AGMM block sizes from a measured sweep | 17.79 ms | 42.43 ms | 77.01 ms | `9587b239154` |
+| 7 | 2026-08-04 | attention gate addcmul folded into the to_out AGMM epilogue | 17.58 ms | 42.31 ms | 76.96 ms | `989f329d0c9` |
 
 Cumulative at 5s: **26.03 -> 17.58 ms, -32.5%**; 1.30 -> 0.88 s per 50-layer step, 65.1 -> 43.9 s per video.
 At 10s: 57.65 -> 42.31 ms (-26.6%). At 15s: 98.72 -> 76.96 ms (-22.0%).
