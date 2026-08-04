@@ -252,8 +252,7 @@ void kernel_main() {
         tile_regs_acquire();
         reconfig_data_format_srca(dfb_ex2pe_id);
 
-        reconfig_data_format_srca(dfb_ex2pe_id);
-        pack_reconfig_data_format(dfb_ex2pe_id);
+        compute_kernel_hw_startup(dfb_ex2pe_id, dfb_ex2pe_id);
         unary_bcast_init<BroadcastType::COL>(dfb_ex2pe_id);
         unary_bcast<BroadcastType::COL>(dfb_ex2pe_id, 0, dst0);
         dfb_ex2pe.pop_front(onetile);

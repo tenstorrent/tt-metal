@@ -128,8 +128,7 @@ constexpr uint32_t packed_partials_tiles_per_row = 4U;
 
 // Broadcast a COL-scalar tile from a CB into a DEST register (init + bcast).
 inline void bcast_col_to_reg(const uint32_t cb_src, const uint32_t reg_dst) {
-    reconfig_data_format_srca(cb_src);
-    pack_reconfig_data_format(cb_src);
+    compute_kernel_hw_startup(cb_src, cb_src);
     unary_bcast_init<BroadcastType::COL>(cb_src);
     unary_bcast<BroadcastType::COL>(cb_src, 0, reg_dst);
 }
