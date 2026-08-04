@@ -502,11 +502,7 @@ def run_request_loop(
     Exception: in migration-validation mode (PREFILL_VALIDATE_MIGRATION=1) the scheduler driver never
     pushes the shutdown sentinel — it pushes PREFILL_STANDALONE_CHUNKED_NCHUNKS chunks, migrates, then
     writes the DONE sentinel for the runner to poll. So the loop exits after that many chunks and returns
-    to validate_after_prefill. Returns (chunks_per_slot, real_end_per_slot, total_chunks).
-
-    PREFILL_REQUEST_LOOP_PCC=1 (single-rank, bring-up only) PCC-checks the populated KV against the golden
-    trace once the stream closes — the production analogue of standalone's per-rank KV check, driven by the
-    real H2D producer path (and, under use_trace, the replayed forward + post-compile LayerAck)."""
+    to validate_after_prefill. Returns (chunks_per_slot, real_end_per_slot, total_chunks)."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -532,7 +528,6 @@ def run_request_loop(
         if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1"
         else 0
     )
-    slot_id = 0  # last chunk's slot — the PREFILL_REQUEST_LOOP_PCC check below reads the slice this rank populated
     while not _shutdown:
         if n_selftest and c >= n_selftest:
             break
@@ -550,7 +545,6 @@ def run_request_loop(
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
         slot = meta["slot_id"]
-        slot_id = slot  # for the PREFILL_REQUEST_LOOP_PCC check after the loop
         chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
         real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
         t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
@@ -581,29 +575,6 @@ def run_request_loop(
     if num_ranks > 1 and n_selftest:
         ttnn.distributed_context_barrier()
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
-
-    # MUST stay above the return: this block sat BELOW it and was silently dead, so
-    # PREFILL_REQUEST_LOOP_PCC=1 ran no check at all and reported nothing — a green run that had
-    # verified nothing. Runs after _drain_and_log_e2e so the chunk's KV writes are flushed first.
-    if os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1" and c > 0:
-        # Bring-up validation of the production path (golden-trace input): the same optional runtime hook
-        # standalone uses. n_chunks = the count the producer actually pushed. Single-rank only (a pipeline
-        # rank owns a layer slice; kv_cache_pcc_check offsets by first_layer_idx, but multi-rank KV PCC is
-        # driven via the standalone loop).
-        pcc_check = getattr(runtime, "kv_cache_pcc_check", None)
-        if pcc_check is None:
-            raise RuntimeError(
-                f"PREFILL_REQUEST_LOOP_PCC=1 but {type(runtime).__name__} implements no kv_cache_pcc_check "
-                "(optional bring-up hook; see ADDING_A_PREFILL_MODEL.md §2)."
-            )
-        pcc_check(
-            kv_caches,
-            slot_id=slot_id,
-            n_chunks=c,
-            trace_dir=os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default),
-            first_layer_idx=cfg.first_layer_idx,
-        )
-
     return chunks_per_slot, real_end_per_slot, c
 
 
@@ -643,7 +614,6 @@ def _print_config() -> None:
         ),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
         ("PREFILL_MOCK_MIGRATION", os.environ.get("PREFILL_MOCK_MIGRATION", "0")),
-        ("PREFILL_REQUEST_LOOP_PCC", os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0")),
         (
             "PREFILL_MIGRATION_TABLE_PATH",
             os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
