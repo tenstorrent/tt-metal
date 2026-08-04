@@ -1,5 +1,23 @@
 ---
-allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh api:*)
+allowed-tools:
+  - Agent
+  - Task
+  - Read
+  - Grep
+  - Glob
+  - Skill
+  - TodoWrite
+  - Bash(gh issue view:*)
+  - Bash(gh search:*)
+  - Bash(gh issue list:*)
+  - Bash(gh pr comment:*)
+  - Bash(gh pr diff:*)
+  - Bash(gh pr view:*)
+  - Bash(gh pr list:*)
+  - Bash(gh api:*)
+  - mcp__deepwiki__*
+  - mcp__atlassian__*
+  - mcp__glean_default__*
 description: Code review a pull request
 ---
 
