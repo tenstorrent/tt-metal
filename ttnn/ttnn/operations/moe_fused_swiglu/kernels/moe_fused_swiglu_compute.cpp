@@ -6,8 +6,8 @@
 // Per M-block, on every one of the HGROUPS x KGROUPS worker cores:
 //   1. fused tilize of the row-major x slice this core injects (bf16 activation path only);
 //   2. gate and up matmuls over the SAME resident x block, interleaved chunk by chunk over the
-//      hidden axis. One K-block == the whole per-row K extent, so `WaitAndRetainOnLastBlock`
-//      retains x for both and the kernel pops it once at the end;
+//      hidden axis. For a full-size x slot, up consumes each progressively published M row-group,
+//      then gate reuses the resident x; compute pops the complete slot once at the end;
 //   3. the reduce-scatter + SwiGLU epilogue: every core folds only ITS OWN SLICE over all KGROUPS
 //      contributors and runs the epilogue on that slice, so the SFPU SiLU — the dominant cost —
 //      is parallelised KGROUPS ways and the bias walk collapses to one call;
@@ -253,11 +253,10 @@ void kernel_main() {
         // power of two: m_t 5 computes 5 rows of an 8-row block, m_t 3 computes 3 of 4.
         //
         // Only gate/up may use it, and that is a property of the HELPER's input policy rather than a
-        // choice: gate/up runs with num_k_blocks == 1, so every call is the last K-block, so
-        // `WaitAndRetainOnLastBlock` never pops — this kernel pops x itself at `x_slot_tiles`
-        // (= m_eff * KR_PAD) below. Shrinking the shape therefore shrinks only the helper's
-        // `wait_front`, which is harmless: the reader pushed the full m_eff block and waiting for a
-        // prefix of it is always satisfied. `down` has no such freedom — see shape_dn.
+        // choice: both calls use the retaining `WaitAndRetainPerMSubblock` lifecycle, with its
+        // runtime shape bit selecting a progressive prefix wait or one bulk wait. Neither pops
+        // because gate/up has num_k_blocks == 1. This kernel pops x itself at `x_slot_tiles`
+        // (= m_eff * KR_PAD) below. `down` has no such freedom — see shape_dn.
         const uint32_t m_rows = moe_fused_swiglu::m_tiles_real(m_t, b, M_BLOCK);
 
         // gate/up: [m_eff, HN_PAD] = x[m_eff, kr] @ W[kr, HN_PAD]. ONE K-block whose width is the
@@ -296,10 +295,9 @@ void kernel_main() {
         }
 
         // ---- 2. gate and up over the same resident x block ----
-        // The two matmuls walk the HIDDEN axis in GU_CHUNKS chunks, INTERLEAVED (gate c, up c,
-        // gate c+1, ...), so each chunk's matmul runs while the next chunk's block is still in
-        // DRAM. Alternating rather than gate-then-up spends both NoCs' streams under both
-        // matmuls. `out_col_offset` + `caller_owns_pack_target` keep the layout m-major.
+        // The two matmuls walk the HIDDEN axis in GU_CHUNKS chunks, interleaved per chunk. Full-size
+        // M slots run up then gate because W_up is available during x multicast; smaller slots
+        // retain gate then up. `out_col_offset` + `caller_owns_pack_target` keep the layout m-major.
         {
             MaybeDeviceZoneScope("compute_gateup");
             gate_buf.reserve_back(gu_block_tiles);
@@ -334,75 +332,51 @@ void kernel_main() {
                 shape_c.last_in1_subblock_w_valid =
                     (valid < GU_CHUNK_W) ? (valid - (GU_IN1_SUBBLOCKS - 1) * HN_BLOCK) : 0;
 
-                matmul_block<
-                    /*transpose=*/false,
-                    /*packer_l1_acc=*/true,
-                    LastBlockTarget::Interm,
-                    OutputCBLayout::TileRowMajor,
-                    matmul_config::InitMode::Short,
-                    InputPolicy::WaitAndRetainOnLastBlock,
-                    InputPolicy::WaitAndPopPerKBlock,
-                    NoPostCompute,
-                    NoPreKBlock,
-                    NoPostKBlock,
-                    /*untilize_block_ct_dim=*/0,
-                    KrSteps,
-                    NoIn0Source,
-                    NoIn1BaseOffset,
-                    /*caller_owns_pack_target=*/true,
-                    NoneActivation,
-                    // RECONFIG ONLY ON THE FIRST CALL OF THE M-BLOCK. Every gate/up chunk call
-                    // has identical operand formats, so every reconfig after the first is MMIO for
-                    // a format change that never happens. Only chunk 0's gate call follows a
-                    // different phase. Measured at up to 1.19x.
-                    matmul_config::DataFormatReconfig::NONE>(
-                    x_buf,
-                    wg_buf,
-                    gate_buf,
-                    gate_buf,
-                    shape_c,
-                    {},
-                    {},
-                    /*in1_per_core_w=*/GU_CHUNK_W,
-                    /*out_row_width=*/HN_PAD,
-                    {},
-                    KrSteps{kr},
-                    {},
-                    {},
-                    /*out_col_offset=*/h0);
-
-                matmul_block<
-                    /*transpose=*/false,
-                    /*packer_l1_acc=*/true,
-                    LastBlockTarget::Interm,
-                    OutputCBLayout::TileRowMajor,
-                    matmul_config::InitMode::Short,
-                    InputPolicy::WaitAndRetainOnLastBlock,
-                    InputPolicy::WaitAndPopPerKBlock,
-                    NoPostCompute,
-                    NoPreKBlock,
-                    NoPostKBlock,
-                    /*untilize_block_ct_dim=*/0,
-                    KrSteps,
-                    NoIn0Source,
-                    NoIn1BaseOffset,
-                    /*caller_owns_pack_target=*/true,
-                    NoneActivation,
-                    matmul_config::DataFormatReconfig::NONE>(
-                    x_buf,
-                    wu_buf,
-                    up_buf,
-                    up_buf,
-                    shape_c,
-                    {},
-                    {},
-                    /*in1_per_core_w=*/GU_CHUNK_W,
-                    /*out_row_width=*/HN_PAD,
-                    {},
-                    KrSteps{kr},
-                    {},
-                    {},
-                    /*out_col_offset=*/h0);
+                // One two-pass body keeps M runtime without cloning the helper instantiation.
+                // Full-size M slots run up first with progressive waits; smaller slots retain the
+                // original gate-first order and bulk wait because their short multicast cannot
+                // repay the extra CB bookkeeping.
+                const bool stream_m = (m_eff == M_BLOCK);
+                for (uint32_t pass = 0; pass < 2; ++pass) {
+                    const bool run_up = stream_m ? (pass == 0) : (pass != 0);
+                    CircularBuffer& weight_buf = run_up ? wu_buf : wg_buf;
+                    CircularBuffer& accum_buf = run_up ? up_buf : gate_buf;
+                    shape_c.wait_in0_per_m_subblock = stream_m && (pass == 0);
+                    matmul_block<
+                        /*transpose=*/false,
+                        /*packer_l1_acc=*/true,
+                        LastBlockTarget::Interm,
+                        OutputCBLayout::TileRowMajor,
+                        matmul_config::InitMode::Short,
+                        InputPolicy::WaitAndRetainPerMSubblock,
+                        InputPolicy::WaitAndPopPerKBlock,
+                        NoPostCompute,
+                        NoPreKBlock,
+                        NoPostKBlock,
+                        /*untilize_block_ct_dim=*/0,
+                        KrSteps,
+                        NoIn0Source,
+                        NoIn1BaseOffset,
+                        /*caller_owns_pack_target=*/true,
+                        NoneActivation,
+                        // Every gate/up call has identical operand formats; the phase-level
+                        // reconfig above is sufficient for either order. Measured at up to 1.19x.
+                        matmul_config::DataFormatReconfig::NONE>(
+                        x_buf,
+                        weight_buf,
+                        accum_buf,
+                        accum_buf,
+                        shape_c,
+                        {},
+                        {},
+                        /*in1_per_core_w=*/GU_CHUNK_W,
+                        /*out_row_width=*/HN_PAD,
+                        {},
+                        KrSteps{kr},
+                        {},
+                        {},
+                        /*out_col_offset=*/h0);
+                }
             }
             gate_buf.push_back(gu_block_tiles);
             up_buf.push_back(gu_block_tiles);
@@ -523,7 +497,14 @@ void kernel_main() {
             copy<blk_in(cb_out_interm), blk_out(cb_out_tiles)>(blk_shape(out_block_tiles));
         }
 
-        // The resident x block was retained by both matmuls; release it now.
+        // The resident x block was retained by both matmuls; release it now. A ragged full-size
+        // slot (for example m_rows=7, m_eff=8) deliberately computes only the real prefix, so
+        // explicitly front the final padding-row publication before popping the whole reservation.
+        // Exact full blocks already fronted the last row in the progressive matmul; smaller slots
+        // are published atomically, so neither needs another wait.
+        if (m_eff == M_BLOCK && m_rows != m_eff) {
+            x_buf.wait_front(x_slot_tiles);
+        }
         x_buf.pop_front(x_slot_tiles);
     }
 }

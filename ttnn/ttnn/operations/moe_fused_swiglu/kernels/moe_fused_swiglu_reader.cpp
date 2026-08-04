@@ -336,9 +336,9 @@ void kernel_main() {
 
         // ---- Phase 1a: stage x, then multicast it along the grid row ----
         // cb_x_tiles is ONE slot, so its write pointer is the same L1 address on every core in the
-        // row — which mcast_pipe requires of the landing address. W_gate is ISSUED here and only
-        // barriered after the x rounds: x is small and universally blocking, the weights are not,
-        // and that order is worth -1.8 %. See DESIGN_NOTES.md §4.
+        // row — which mcast_pipe requires of the landing address. W_gate is issued before the x
+        // chain and published after it as before; compute starts early on W_up, whose independent
+        // writer stream is already live while these rounds run.
         auto issue_wg_chunk = [&](uint32_t c) {
             cb_reserve_back(cb_w_gate, WG_CHUNK_TILES);
             MaybeDeviceZoneScope("reader_wg_issue");
@@ -416,20 +416,21 @@ void kernel_main() {
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)) = b + 1;
         }
 
-        // The staging prologue's barriers are behind us, so this prefetch now has the multicast chain
-        // AND the whole gate matmul to land under, instead of standing in front of the stick reads.
+        // The staging prologue's barriers are behind us, so this prefetch has the multicast chain
+        // and the up matmul to land under instead of standing in front of the stick reads.
         issue_wg_chunk(0);
 
         // ---- x multicast chain ----
         // m_eff rounds, not M_BLOCK: at count 128 (M_t 4) this is HALF the handshake chain and half
         // the staged bytes, and at count 32 an eighth. m_eff divides M_BLOCK, so cb_x_tiles' write
         // pointer stays block-aligned and identical on every core in the row (which mcast_pipe
-        // requires of the landing address).
-#ifndef ABLATE_NO_X_XFER  // /perf-measure: drop the x transport, keep cb_x_tiles' reserve/push
+        // requires of the landing address). A full M block stays wholly reserved but publishes each
+        // completed row separately; smaller blocks retain the cheaper one-push handoff.
         {
             MaybeDeviceZoneScope("reader_xmcast");
-            if constexpr (xmc.active) {
-                for (uint32_t t = 0; t < m_eff; ++t) {
+            for (uint32_t t = 0; t < m_eff; ++t) {
+#ifndef ABLATE_NO_X_XFER  // /perf-measure: drop the x transport, keep cb_x_tiles' reserve/push
+                if constexpr (xmc.active) {
                     // PERF 13 — round `t` carries tile-row `t` (unchanged); only the LANE that
                     // sends it is skewed by the grid row, which is what turns a round's injector set
                     // from a column into a diagonal. Every core in the row derives the same lane
@@ -442,10 +443,17 @@ void kernel_main() {
                         x_recv.receive(round);
                     }
                 }
+#endif
+                if (m_eff == M_BLOCK) {
+                    cb_push_back(cb_x_tiles, KR_PAD);
+                }
             }
         }
-#endif
-        cb_push_back(cb_x_tiles, x_slot_tiles);
+        if (m_eff != M_BLOCK) {
+            // At small M the multicast is already short, and per-row CB bookkeeping costs more
+            // than it can hide. Preserve the original one-push handoff for those blocks.
+            cb_push_back(cb_x_tiles, x_slot_tiles);
+        }
 
         // ---- Phase 1b: W_gate landed under the x rounds; publish it ----
         // (W_up is the writer's twin on NoC1.) Publish chunk c, then issue c+1 and block on it, so

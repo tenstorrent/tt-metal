@@ -142,6 +142,9 @@ ALWI void matmul_block(
         caller_owns_pack_target_supported(
             caller_owns_pack_target, tile_order == OutputCBLayout::TileRowMajor, packer_l1_acc, pack_last_to_interm),
         "caller_owns_pack_target requires TileRowMajor + packer_l1_acc + last_block_target == Interm");
+    static_assert(
+        in1_policy != InputPolicy::WaitAndRetainPerMSubblock,
+        "WaitAndRetainPerMSubblock is an in0-only policy");
 
     // Cache integer IDs for legacy LLK calls. buf_id() resolves to
     // get_cb_id() on CircularBuffer or get_id() on DataflowBuffer.
@@ -158,6 +161,9 @@ ALWI void matmul_block(
     ASSERT(shape.out_subblock_h > 0);
     ASSERT(shape.out_subblock_w > 0);
     ASSERT(shape.batch > 0);
+    if constexpr (in0_policy == InputPolicy::WaitAndRetainPerMSubblock) {
+        ASSERT(shape.num_k_blocks == 1);
+    }
     ASSERT(in0_cb_id != out_cb_id);
     ASSERT(in1_cb_id != out_cb_id);
     ASSERT(shape.out_subblock_h * shape.out_subblock_w <= compute_kernel_lib::DEST_AUTO_LIMIT);
@@ -261,14 +267,20 @@ ALWI void matmul_block(
             // of the same fronted in1 region (see NoIn1BaseOffset).
             const uint32_t in1_base_offset = in1_base_offset_fn(block);
 
-            // Full-block wait for both modes. Every caller has the
-            // full in0 block resident before invoking the helper, so progressive
-            // per-subblock waits are pure polling overhead on TRISCs.
+            // Full-block wait for the ordinary modes. WaitAndRetainPerMSubblock instead
+            // fronts each cumulative M prefix immediately before it is consumed below,
+            // allowing a producer to publish a resident in0 one row-group at a time.
             // in0_policy=NoWaitNoPop: the caller fronted the whole in0 region once (it is read by
             // several matmuls and/or the K-blocks are strided windows of it), so a per-K-block
             // wait here would over-wait the region's own size and deadlock.
             if constexpr (in0_policy != InputPolicy::NoWaitNoPop) {
-                active_in0_buf.wait_front(in0_block_num_tiles);
+                if constexpr (in0_policy == InputPolicy::WaitAndRetainPerMSubblock) {
+                    if (!shape.wait_in0_per_m_subblock) {
+                        active_in0_buf.wait_front(in0_block_num_tiles);
+                    }
+                } else {
+                    active_in0_buf.wait_front(in0_block_num_tiles);
+                }
             }
             // in1_policy=NoWaitNoPop: caller manages in1 lifecycle externally
             // (cross-chip global-CB receivers; pre-populated L1-sharded in1).
@@ -301,6 +313,13 @@ ALWI void matmul_block(
             // the same fronted in0 region — the in0 mirror of in1_base_offset (see NoIn0BaseOffset).
             int in0_index_subblock_offset = static_cast<int>(in0_base_offset_fn(block));
             for (uint32_t in0_subblock = 0; in0_subblock < shape.in0_num_subblocks; in0_subblock++) {
+                if constexpr (in0_policy == InputPolicy::WaitAndRetainPerMSubblock) {
+                    if (shape.wait_in0_per_m_subblock) {
+                        // No pop occurs between waits, so the CB contract requires cumulative counts.
+                        // One increment is exactly the M-row-group this subblock will read.
+                        active_in0_buf.wait_front((in0_subblock + 1) * in0_subblock_num_tiles);
+                    }
+                }
                 if constexpr (tile_order == OutputCBLayout::TileRowMajor && !caller_owns_pack_target) {
                     // Row-major path reserves per M-row-group (one row of all N-subblocks).
                     // Smaller than full-block reserve, so shared out/interm buffers don't deadlock.
@@ -555,7 +574,7 @@ ALWI void matmul_block(
                     active_in0_buf.pop_front(in0_block_num_tiles);
                 }
             }
-            // NoWaitNoPop: no pop at all — the caller owns in0's rd_ptr.
+            // WaitAndRetainPerMSubblock and NoWaitNoPop: no pop at all — the caller owns in0's rd_ptr.
             // WaitAndRetainOnLastBlock: skip the pop on the last K-block (caller reuses in1);
             // intermediate blocks pop. NoWaitNoPop: no pop at all (caller manages in1's rd_ptr).
             if constexpr (in1_policy == InputPolicy::WaitAndPopPerKBlock) {

@@ -18,10 +18,10 @@ silu(pad @ Wg) * (pad @ Wu) @ Wd, undefined in exactly the same way.
 WHY ONLY GATE/UP, and why this is not a free choice. `matmul_block` derives its in0 CB accounting
 from the block shape (`in0_block_num_tiles = in0_subblock_num_tiles * shape.in0_num_subblocks`,
 matmul_block_helpers.inl:196), so shrinking the shape shrinks the pops too. gate/up survives that
-because it runs with num_k_blocks == 1: every call is the last K-block, `WaitAndRetainOnLastBlock`
-never pops, and the compute kernel pops x itself at `m_eff * KR_PAD`. So the shrink only shrinks a
-`wait_front`, and waiting for a prefix of what the reader pushed is always satisfied. `down` reads h
-under `WaitAndPopPerKBlock`, where the shrink DID shrink a `cb_pop_front` — cb_h_local drifted by
+because it runs with num_k_blocks == 1 under `WaitAndRetainPerMSubblock`, which never pops; the
+compute kernel pops x itself at `m_eff * KR_PAD`. So the shrink only changes the prefix waited for,
+and waiting for a prefix of what the reader publishes is always satisfied. `down` reads h under
+`WaitAndPopPerKBlock`, where the shrink DID shrink a `cb_pop_front` — cb_h_local drifted by
 (m_eff - m_rows) * HN_PAD tiles per K-block and the op hung. `down` therefore stays on m_eff.
 
 WHAT THIS FILE PINS. Every reachable `m_t` shape, because the shrink is a per-tail-block decision and

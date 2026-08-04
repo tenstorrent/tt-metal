@@ -69,12 +69,21 @@ enum class LastBlockTarget : uint8_t { Out, OutWithRelu, Interm, OutWithUntilize
  * WaitAndRetainOnLastBlock wait each K-block; skip the pop on the last so an outer
  *                          loop can reuse the data (in0 reused across K-chunks, or
  *                          in1 weights reused across invocations where num_k_blocks=1).
+ * WaitAndRetainPerMSubblock (in0 only) wait cumulatively as each M subblock is
+ *                          published; never pop. Requires num_k_blocks=1 and lets
+ *                          compute consume a row-streamed resident in0 before its
+ *                          whole M block has arrived. The caller releases the block.
  * NoWaitNoPop              (in1 only; static_assert on in0) skip wait and pop — caller
  *                          manages in1 lifecycle externally (cross-chip global-CB
  *                          receiver advancing rd_ptr via PostKBlockFn; pre-populated
  *                          L1-sharded in1 with no in-program producer).
  */
-enum class InputPolicy : uint8_t { WaitAndPopPerKBlock, WaitAndRetainOnLastBlock, NoWaitNoPop };
+enum class InputPolicy : uint8_t {
+    WaitAndPopPerKBlock,
+    WaitAndRetainOnLastBlock,
+    WaitAndRetainPerMSubblock,
+    NoWaitNoPop
+};
 
 namespace matmul_config {
 
@@ -153,6 +162,12 @@ struct MatmulBlockShape {
     // fewer columns than out_subblock_w for the last subblock. Pack region stays full-width;
     // the writer drops the padded output columns.
     uint32_t last_in1_subblock_w_valid = 0;
+
+    // Runtime gate for InputPolicy::WaitAndRetainPerMSubblock. True streams cumulative M
+    // prefixes; false performs one ordinary full-block wait while retaining the no-pop lifecycle.
+    // This lets a runtime-M caller select the profitable schedule without duplicating the matmul
+    // template instantiation. Ignored by every other input policy.
+    bool wait_in0_per_m_subblock = true;
 
     static constexpr MatmulBlockShape of(
         uint32_t in0_num_subblocks,
