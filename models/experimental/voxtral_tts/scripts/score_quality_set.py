@@ -252,7 +252,8 @@ def main():
     print(f"\n  NATURAL-TEXT WER {clean[0]/max(clean[1],1)*100:.2f}% over {clean[1]} words "
           f"(reference scores 0.0%) -- split below, and read the split, not this")
     print(f"    long-form  {longform[0]/max(longform[1],1)*100:6.2f}% over {longform[1]:>3} words "
-          f"<- THE GATE. 0.00% in every run measured; a regression here is real.")
+          f"= {round(longform[0]):g} wrong  <- THE GATE. Read the COUNT: at 298 words one word is"
+          f" 0.34%, so quote errors, not a percentage that looks like precision it does not have.")
     print(f"    short      {shortform[0]/max(shortform[1],1)*100:6.2f}% over {shortform[1]:>3} words "
           f"<- SEED NOISE at this length. Same code, seeds 0/1/2, moved this bucket enough to "
           f"swing the headline 0.88-2.06%. Only believe a case that moves the same way across "
