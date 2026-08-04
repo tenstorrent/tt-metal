@@ -52,46 +52,49 @@ inline void _llk_math_fast_tilize_addrmod_config_(const std::uint32_t unpack_dst
 
     // next two addrmods are mostly used for jumping to and from the offset for the bottom faces
     // offset for the bottom faces is always half the number of rows in the dest bank (512 / 2 for 16bit and 256 / 2 for 32bit since DstSync is always Half)
-    std::uint32_t bottom_face_offset = (unpack_dst_format == to_underlying(DataFormat::Tf32) ? 256 : 512) / 2;
-    // unit_dim 1 copies 2 faces before jumping so at the moment of the jump dest RWC is
-    // 2*16 (two faces) -  8 (number of rows moved by current instruction)
-    // unit_dim 2 copies 4 faces before jumping so at the moment of the jump dest RWC is
-    // 4*16 (four faces) - 8 (number of rows moved by current instruction)
-    std::uint8_t unit_dim_1_forward_jump = bottom_face_offset - (1 * (TILE_NUM_FACES / 2) * FACE_R_DIM - 8);
-    std::uint8_t unit_dim_2_forward_jump = bottom_face_offset - (2 * (TILE_NUM_FACES / 2) * FACE_R_DIM - 8);
-
-    // jumping back to the offset for the next tile is logically -bottom_face_offset if dest RWC is at the correct offset for the bottom faces of the next tile
-    // only catch is the need to compensate for the current instruction, for unit_dim 1 that is MOVA2D while for unit_dim 2 and 3 that is MOVB2D
-    std::int16_t unit_dim_1_backward_jump = -bottom_face_offset + 8;
-    std::int16_t unit_dim_2_backward_jump = -bottom_face_offset + 4;
+    const std::uint32_t bottom_face_offset = (unpack_dst_format == to_underlying(DataFormat::Tf32) ? 256 : 512) / 2;
 
     if (unit_dim == 1)
     {
+        // unit_dim 1 copies 2 faces before jumping so at the moment of the jump dest RWC is
+        // 2*16 (two faces) -  8 (number of rows moved by current instruction)
+        const std::uint8_t forward_jump = bottom_face_offset - (1 * (TILE_NUM_FACES / 2) * FACE_R_DIM - 8);
+        // jumping back to the offset for the next tile is logically -bottom_face_offset if dest RWC is at the correct
+        // offset for the bottom faces of the next tile, only catch is the need to compensate for the current
+        // instruction, which is MOVA2D for unit_dim 1
+        const std::int16_t backward_jump = -bottom_face_offset + 8;
+
         // this follows MOVA2D in src and jumps to the offset for the bottom faces (for unit_dim 1 and 2, for unit_dim 3 that is handled the other way)
         addr_mod_t {
             .srca = {.incr = 8},
-            .dest = {.incr = unit_dim_1_forward_jump},
+            .dest = {.incr = forward_jump},
         }
             .set(ADDR_MOD_3);
 
         // this jumps back to the offset for the next tile, RWCs for source registers are reset separately when clearing dvalids
         addr_mod_t {
-            .dest = {.incr = unit_dim_1_backward_jump},
+            .dest = {.incr = backward_jump},
         }
             .set(ADDR_MOD_0);
     }
     else
     {
+        // unit_dim 2 copies 4 faces before jumping so at the moment of the jump dest RWC is
+        // 4*16 (four faces) - 8 (number of rows moved by current instruction)
+        const std::uint8_t forward_jump = bottom_face_offset - (2 * (TILE_NUM_FACES / 2) * FACE_R_DIM - 8);
+        // same rationale as for unit_dim 1, except that the instruction to compensate for is MOVB2D for unit_dim 2 and 3
+        const std::int16_t backward_jump = -bottom_face_offset + 4;
+
         // this follows MOVA2D in src and jumps to the offset for the bottom faces (for unit_dim 1 and 2, for unit_dim 3 that is handled the other way)
         addr_mod_t {
             .srca = {.incr = 8},
-            .dest = {.incr = unit_dim_2_forward_jump},
+            .dest = {.incr = forward_jump},
         }
             .set(ADDR_MOD_3);
 
         // this jumps back to the offset for the next tile, RWCs for source registers are reset separately when clearing dvalids
         addr_mod_t {
-            .dest = {.incr = unit_dim_2_backward_jump},
+            .dest = {.incr = backward_jump},
         }
             .set(ADDR_MOD_0);
     }
@@ -203,6 +206,9 @@ inline void _llk_math_fast_tilize_block_(
     // make life easier by lying to set_dst_write_addr that tile shape is 32x16 so correct stride is obtained for dst_index
     math::set_dst_write_addr<DstTileShape::Tile32x16, UnpackDestination::SrcRegs>(dst_index);
 
+    // number of tiles that fit into the dest bank, used by unit_dim 3 to offset to the bottom faces (loop invariant)
+    const std::uint32_t dest_bank_tile_capacity = unpack_dst_format == to_underlying(DataFormat::Tf32) ? 4 : 8;
+
     for (std::uint32_t i = 0; i < num_units; i++)
     {
         if (unit_dim == 1)
@@ -290,10 +296,10 @@ inline void _llk_math_fast_tilize_block_(
             // also clear dest RWC since we use dest offset for forward jump here
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
             // don't have enough address mods to have unit_dim 3 forward jump so dest offset is used here
-            std::uint32_t top_face_offset = dst_index + i * 3; // copy 3 tiles per iteration
+            const std::uint32_t top_face_offset = dst_index + i * 3; // copy 3 tiles per iteration
             // offset to the bottom is the number of tiles that fit into the dest bank
             // since half size faces are specified, this gets into the correct position in the second half
-            std::uint32_t bottom_face_offset = top_face_offset + (unpack_dst_format == to_underlying(DataFormat::Tf32) ? 4 : 8);
+            const std::uint32_t bottom_face_offset = top_face_offset + dest_bank_tile_capacity;
             math::set_dst_write_addr<DstTileShape::Tile32x16, UnpackDestination::SrcRegs>(bottom_face_offset);
             // srcA has the top 8 rows of the bottom faces (6 of them), copy them
             // inside mop:

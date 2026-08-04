@@ -669,7 +669,7 @@ inline void _llk_unpack_fast_tilize_mop_config_()
  * @note On the math thread, pair with @ref _llk_math_fast_tilize_init_ and on the pack thread with @ref _llk_pack_fast_tilize_init_ (same unit_dim).
  * @ref _llk_unpack_fast_tilize_block_ is the matching execute call.
  */
-inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format, std::uint32_t full_dim)
+inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t full_dim)
 {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
@@ -704,7 +704,7 @@ inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format,
     // for unit_dim 1 unpacker reads whole tile per iteration so CH1 counter is not used
     // why are CH1 strides in bytes?
     // SCALE_DATUM_SIZE wouldn't work here since it doesn't have a case for TF32
-    std::uint32_t ch1_x_stride = (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float32) ? 4 : 2;
+    const std::uint32_t ch1_x_stride = (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float32) ? 4 : 2;
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(TILE_C_DIM * ch1_x_stride);
     cfg_reg_rmw_tensix<UNP1_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(TILE_C_DIM * ch1_x_stride);
 
@@ -770,12 +770,12 @@ inline void _llk_unpack_fast_tilize_block_(
         (unit_dim == 2 && num_faces == 2) || num_faces == 4, "16x32 tiny tiles are only supported for tensors with even-sized tile widths for fast_tilize");
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
 
-    std::uint32_t address = base_address + (SCALE_DATUM_SIZE(unpack_src_format, tile_index * TILE_C_DIM) >> 4); // move by tile width in 16B words
+    const std::uint32_t address = base_address + (SCALE_DATUM_SIZE(unpack_src_format, tile_index * TILE_C_DIM) >> 4); // move by tile width in 16B words
     // for unit_dim 2 UNPA reads top faces and UNPB reads bottom faces
     // for unit_dim 3 UNPA reads top 8 rows of top then bottom faces, UNPB reads bottom 8 rows of top then bottom faces
     // tiny tiles will use same UPKB scheme as unit_dim 3, but only does top faces
-    std::uint32_t unpB_row_offset = unit_dim == 2 && num_faces == 4 ? FACE_R_DIM : (FACE_R_DIM / 2);
-    std::uint32_t unpB_address    = address + (SCALE_DATUM_SIZE(unpack_src_format, full_dim * TILE_C_DIM * unpB_row_offset) >> 4);
+    const std::uint32_t unpB_row_offset = unit_dim == 2 && num_faces == 4 ? FACE_R_DIM : (FACE_R_DIM / 2);
+    const std::uint32_t unpB_address    = address + (SCALE_DATUM_SIZE(unpack_src_format, full_dim * TILE_C_DIM * unpB_row_offset) >> 4);
 
     // reset all counters since X start and end are set after this
     TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::XY));

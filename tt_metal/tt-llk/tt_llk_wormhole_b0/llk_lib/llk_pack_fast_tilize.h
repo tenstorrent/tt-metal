@@ -135,7 +135,7 @@ inline void _llk_pack_fast_tilize_init_(
     }
 
     // set the address offset to the size of the tile in 16B words
-    std::uint32_t tile_size = _llk_pack_output_size_bytes_(pack_dst_format, l1_tile_elements) >> 4;
+    const std::uint32_t tile_size = _llk_pack_output_size_bytes_(pack_dst_format, l1_tile_elements) >> 4;
     TT_SETDMAREG(p_setdmareg::PAYLOAD_IMMEDIATE, tile_size, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
 
     // since faces are interleaved and the top and bottom faces are in the separate halves of the active dest bank, each packer needs a special offset

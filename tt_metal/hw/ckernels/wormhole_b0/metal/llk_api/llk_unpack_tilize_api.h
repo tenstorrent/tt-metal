@@ -263,7 +263,7 @@ inline void llk_unpack_tilizeA_B_block(
  * @param operand  Input circular buffer / operand index.
  * @param full_dim Full row dimension of the input being tilized.
  */
-inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32_t full_dim) {
+inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, const std::uint32_t full_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
     _llk_unpack_fast_tilize_init_(unpack_dst_format[operand_id], full_dim);
