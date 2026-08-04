@@ -431,7 +431,12 @@ class OperationSchemaBase(BaseModel):
                 f"dest_sync={self.dest_sync.name}, dest_acc={dest_acc}"
             )
 
-        pack_nodes = [entry.to_node(operands) for entry in self.pack]
+        for p in self.pack:
+            p._block_size = self.block_size
+        for m in self.math:
+            m._block_size = self.block_size
+
+        pack_nodes = [p.to_node(operands) for p in self.pack]
 
         math_ops = [m.to_node(operands) for m in self.math]
 
