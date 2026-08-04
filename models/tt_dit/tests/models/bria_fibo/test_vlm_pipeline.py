@@ -13,6 +13,7 @@ on-device.
 
 SLOW (host CPU autoregressive decode of the JSON caption on an 8B VLM) -- run on-demand, not fast CI.
 """
+
 import gc
 import importlib.util
 import json

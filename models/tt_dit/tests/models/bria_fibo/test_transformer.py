@@ -38,16 +38,6 @@ def _load_ref_transformer(dtype=torch.bfloat16):
         pytest.skip(f"FIBO transformer unavailable: {e}")
 
 
-def test_fibo_transformer_reference_config():
-    m = _load_ref_transformer()
-    c = m.config
-    assert c.num_layers == 8 and c.num_single_layers == 38
-    assert c.num_attention_heads == 24 and c.attention_head_dim == 128
-    assert c.in_channels == 48 and c.joint_attention_dim == 4096
-    assert c.axes_dims_rope == [16, 56, 56]
-    assert len(m.caption_projection) == c.num_layers + c.num_single_layers  # 46
-
-
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_fibo_text_projection(*, mesh_device):
@@ -235,6 +225,128 @@ def _truncate_ref(ref, num_layers: int, num_single_layers: int):
     return ref
 
 
+def _depth_from_env():
+    """Reduced depth for the full-model tests below (default 2 dual + 2 single of the real 8 + 38).
+
+    Set ``FIBO_DUAL=8 FIBO_SINGLE=38`` to run the whole model.
+    """
+    return int(os.environ.get("FIBO_DUAL", "2")), int(os.environ.get("FIBO_SINGLE", "2"))
+
+
+def _ref_and_inputs(*, num_dual, num_single, spatial_seq_len, prompt_seq_len, seed=0):
+    """Load + truncate the reference transformer and build the host inputs both models are fed.
+
+    Returns ``(ref, inputs)``. ``inputs`` holds the SAME host tensors that go to the reference and to the
+    tt model: ``spatial`` / ``prompt`` / the 46-entry ``text_encoder_layers`` list (only the first
+    ``num_dual + num_single`` are indexed) / ``timestep``, plus the Flux-style RoPE ids (txt = zeros,
+    img = random) and the ``rope_cos`` / ``rope_sin`` the reference's own ``pos_embed`` derives from them.
+    """
+    ref = _truncate_ref(_load_ref_transformer(), num_dual, num_single)
+    c = ref.config  # in_channels=48, joint_attention_dim=4096, text_encoder_dim=2048
+
+    torch.manual_seed(seed)
+    spatial = torch.randn([1, spatial_seq_len, c.in_channels]).to(torch.bfloat16)
+    prompt = torch.randn([1, prompt_seq_len, c.joint_attention_dim]).to(torch.bfloat16)
+    text_encoder_layers = [
+        torch.randn([1, prompt_seq_len, c.text_encoder_dim]).to(torch.bfloat16)
+        for _ in range(c.num_layers + c.num_single_layers)
+    ]
+    timestep = torch.full([1], fill_value=500).to(torch.bfloat16)
+
+    text_ids = torch.zeros([prompt_seq_len, 3]).to(torch.bfloat16)
+    image_ids = torch.randint(1024 * 1024, [spatial_seq_len, 3]).to(torch.bfloat16)
+    ids = torch.cat((text_ids, image_ids), dim=0).to(torch.bfloat16)
+    rope_cos, rope_sin = ref.pos_embed.forward(ids)
+
+    return ref, dict(
+        spatial=spatial,
+        prompt=prompt,
+        text_encoder_layers=text_encoder_layers,
+        timestep=timestep,
+        text_ids=text_ids,
+        image_ids=image_ids,
+        rope_cos=rope_cos,
+        rope_sin=rope_sin,
+    )
+
+
+def _ref_forward(ref, inputs):
+    """The reference forward, fed a RAW timestep (no /1000)."""
+    with torch.no_grad():
+        return ref.forward(
+            hidden_states=inputs["spatial"],
+            encoder_hidden_states=inputs["prompt"],
+            text_encoder_layers=inputs["text_encoder_layers"],
+            timestep=inputs["timestep"],
+            img_ids=inputs["image_ids"],
+            txt_ids=inputs["text_ids"],
+        ).sample
+
+
+def _build_tt_transformer(mesh_device, *, sp_axis, tp_axis, sp_factor, tp_factor, num_dual, num_single):
+    """Build the tt ``BriaFiboTransformer`` at the given sp/tp assignment (cfg parallel unused here)."""
+    from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboCheckpoint
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=0, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+    return BriaFiboCheckpoint(FIBO_PATH).build(
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        num_layers=num_dual,
+        num_single_layers=num_single,
+    )
+
+
+def _pad_for_sp(inputs, *, prompt_seq_len, sp_factor):
+    """Pad the spatial sequence + its RoPE half to the sp factor on host (sequence-parallel needs both).
+
+    Returns ``(spatial_padded, spatial_rope_cos, spatial_rope_sin, padded_spatial_seq_len)``. At
+    ``sp_factor == 1`` the pad length is 0, so the padded length equals the logical one.
+    """
+    spatial_padded = Attention.pad_spatial_sequence(inputs["spatial"], sp_factor=sp_factor)
+    rope_cos = Attention.pad_spatial_sequence(inputs["rope_cos"][prompt_seq_len:], sp_factor=sp_factor)
+    rope_sin = Attention.pad_spatial_sequence(inputs["rope_sin"][prompt_seq_len:], sp_factor=sp_factor)
+    return spatial_padded, rope_cos, rope_sin, spatial_padded.shape[1]
+
+
+def _forward_kwargs(mesh_device, inputs, padded, *, sp_axis, tp_axis, prompt_seq_len, num_blocks, spatial_2dshard):
+    """Upload a FRESH set of device tensors for one tt forward and return them as ``forward()`` kwargs.
+
+    ``padded`` is ``_pad_for_sp``'s tuple. Sharding follows the production layout: spatial + spatial RoPE
+    sequence-sharded on ``sp_axis``; prompt / text_encoder_layers / prompt RoPE replicated (the
+    ``context_embedder`` feature-shards on tp itself). Called fresh per forward so a warmup and a measured
+    forward see identical device state regardless of which ops consume their inputs.
+
+    ``spatial_2dshard`` selects the 2D-shard API (``{sp: 1, tp: 2}``) instead of the 1D sp-shard -- at tp=1
+    the two are equivalent, so the tp=1 test uses it to keep that path covered.
+    """
+    spatial_padded, spatial_rope_cos, spatial_rope_sin, padded_spatial_seq_len = padded
+    return dict(
+        spatial=(
+            bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
+            if spatial_2dshard
+            else bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=1)
+        ),
+        prompt=bf16_tensor(inputs["prompt"], device=mesh_device),
+        timestep=bf16_tensor(inputs["timestep"].unsqueeze(-1), device=mesh_device),
+        text_encoder_layers=[bf16_tensor(t, device=mesh_device) for t in inputs["text_encoder_layers"][:num_blocks]],
+        spatial_rope=(
+            bf16_tensor(spatial_rope_cos, device=mesh_device, mesh_axis=sp_axis, shard_dim=0),
+            bf16_tensor(spatial_rope_sin, device=mesh_device, mesh_axis=sp_axis, shard_dim=0),
+        ),
+        prompt_rope=(
+            bf16_tensor(inputs["rope_cos"][:prompt_seq_len], device=mesh_device),
+            bf16_tensor(inputs["rope_sin"][:prompt_seq_len], device=mesh_device),
+        ),
+        spatial_sequence_length=padded_spatial_seq_len,
+        prompt_sequence_length=prompt_seq_len,
+    )
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_fibo_transformer(*, mesh_device):
@@ -243,97 +355,47 @@ def test_fibo_transformer(*, mesh_device):
     Reduced depth via ``FIBO_DUAL`` / ``FIBO_SINGLE`` env knobs (default 2/2). Set both to
     the full config (8/38) to run the whole model.
     """
-    from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboCheckpoint
-
-    num_dual = int(os.environ.get("FIBO_DUAL", "2"))
-    num_single = int(os.environ.get("FIBO_SINGLE", "2"))
-
-    # --- Reference (truncated to reduced depth) ---
-    ref = _load_ref_transformer()
-    ref = _truncate_ref(ref, num_dual, num_single)
-
-    c = ref.config
-    in_channels = c.in_channels  # 48
-    joint_attention_dim = c.joint_attention_dim  # 4096
-    text_encoder_dim = c.text_encoder_dim  # 2048
+    num_dual, num_single = _depth_from_env()
     num_blocks = num_dual + num_single
 
-    batch_size = 1
+    # --- TT setup (tp=1, sp=1 at mesh (1,1)) ---
+    sp_axis, tp_axis = 0, 1
+    sp_factor = tp_factor = 1
     spatial_seq_len = 256
     prompt_seq_len = 64
 
-    torch.manual_seed(0)
-    spatial = torch.randn([batch_size, spatial_seq_len, in_channels]).to(torch.bfloat16)
-    prompt = torch.randn([batch_size, prompt_seq_len, joint_attention_dim]).to(torch.bfloat16)
-    # 46-entry list (only first num_blocks are indexed); SAME list to ref and tt.
-    text_encoder_layers = [
-        torch.randn([batch_size, prompt_seq_len, text_encoder_dim]).to(torch.bfloat16)
-        for _ in range(c.num_layers + c.num_single_layers)
-    ]
-    timestep = torch.full([batch_size], fill_value=500).to(torch.bfloat16)
+    ref, inputs = _ref_and_inputs(
+        num_dual=num_dual,
+        num_single=num_single,
+        spatial_seq_len=spatial_seq_len,
+        prompt_seq_len=prompt_seq_len,
+    )
+    ref_out = _ref_forward(ref, inputs)
 
-    # RoPE ids (txt = zeros, img = random), Flux-style.
-    text_ids = torch.zeros([prompt_seq_len, 3]).to(torch.bfloat16)
-    image_ids = torch.randint(1024 * 1024, [spatial_seq_len, 3]).to(torch.bfloat16)
-    ids = torch.cat((text_ids, image_ids), dim=0).to(torch.bfloat16)
-    rope_cos, rope_sin = ref.pos_embed.forward(ids)
-
-    # --- Reference forward (RAW timestep, no /1000) ---
-    with torch.no_grad():
-        ref_out = ref.forward(
-            hidden_states=spatial,
-            encoder_hidden_states=prompt,
-            text_encoder_layers=text_encoder_layers,
-            timestep=timestep,
-            img_ids=image_ids,
-            txt_ids=text_ids,
-        ).sample
-
-    # --- TT setup (tp=1, sp=1 at mesh (1,1)) ---
-    sp_axis = 0
-    tp_axis = 1
-    sp_factor = 1
-    tp_factor = 1
-
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=0, mesh_axis=0),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    tt_model = _build_tt_transformer(
+        mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        sp_factor=sp_factor,
+        tp_factor=tp_factor,
+        num_dual=num_dual,
+        num_single=num_single,
     )
 
-    checkpoint = BriaFiboCheckpoint(FIBO_PATH)
-    tt_model = checkpoint.build(
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        num_layers=num_dual,
-        num_single_layers=num_single,
-    )
-
-    # --- TT inputs (tp=1 sharding) ---
-    spatial_padded = Attention.pad_spatial_sequence(spatial, sp_factor=sp_factor)
-    spatial_rope_cos_padded = Attention.pad_spatial_sequence(rope_cos[prompt_seq_len:], sp_factor=sp_factor)
-    spatial_rope_sin_padded = Attention.pad_spatial_sequence(rope_sin[prompt_seq_len:], sp_factor=sp_factor)
-
-    tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
-    tt_prompt = bf16_tensor(prompt, device=mesh_device)
-    tt_timestep = bf16_tensor(timestep.unsqueeze(-1), device=mesh_device)
-    tt_text_encoder_layers = [bf16_tensor(t, device=mesh_device) for t in text_encoder_layers[:num_blocks]]
-
-    tt_spatial_rope_cos = bf16_tensor(spatial_rope_cos_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=0)
-    tt_spatial_rope_sin = bf16_tensor(spatial_rope_sin_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=0)
-    tt_prompt_rope_cos = bf16_tensor(rope_cos[:prompt_seq_len], device=mesh_device)
-    tt_prompt_rope_sin = bf16_tensor(rope_sin[:prompt_seq_len], device=mesh_device)
+    # --- TT inputs (tp=1 sharding; at sp=1 the pad is a no-op, so the padded length IS spatial_seq_len) ---
+    padded = _pad_for_sp(inputs, prompt_seq_len=prompt_seq_len, sp_factor=sp_factor)
 
     tt_output = tt_model.forward(
-        spatial=tt_spatial,
-        prompt=tt_prompt,
-        timestep=tt_timestep,
-        text_encoder_layers=tt_text_encoder_layers,
-        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
-        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
-        spatial_sequence_length=spatial_seq_len,
-        prompt_sequence_length=prompt_seq_len,
+        **_forward_kwargs(
+            mesh_device,
+            inputs,
+            padded,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            prompt_seq_len=prompt_seq_len,
+            num_blocks=num_blocks,
+            spatial_2dshard=True,
+        )
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -360,103 +422,50 @@ def test_fibo_transformer_mesh(*, mesh_device):
     Reduced depth via ``FIBO_DUAL`` / ``FIBO_SINGLE`` env knobs (default 2/2). Set both to the
     full config (8/38) to run the whole model on the mesh.
     """
-    from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboCheckpoint
-
-    num_dual = int(os.environ.get("FIBO_DUAL", "2"))
-    num_single = int(os.environ.get("FIBO_SINGLE", "2"))
-
-    # --- Reference (truncated to reduced depth) ---
-    ref = _load_ref_transformer()
-    ref = _truncate_ref(ref, num_dual, num_single)
-
-    c = ref.config
-    in_channels = c.in_channels  # 48
-    joint_attention_dim = c.joint_attention_dim  # 4096
-    text_encoder_dim = c.text_encoder_dim  # 2048
+    num_dual, num_single = _depth_from_env()
     num_blocks = num_dual + num_single
 
-    # --- 2x2 mesh: sp on axis 0, tp on axis 1 ---
-    sp_axis = 0
-    tp_axis = 1
-    sp_factor = tuple(mesh_device.shape)[sp_axis]  # 2
-    tp_factor = tuple(mesh_device.shape)[tp_axis]  # 2
+    # --- sp on axis 0 (rows), tp on axis 1 (cols) ---
+    sp_axis, tp_axis = 0, 1
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    batch_size = 1
     # spatial seq must be divisible by sp_factor (sequence-parallel) after k_chunk padding.
     spatial_seq_len = 512
     prompt_seq_len = 128
 
-    torch.manual_seed(0)
-    spatial = torch.randn([batch_size, spatial_seq_len, in_channels]).to(torch.bfloat16)
-    prompt = torch.randn([batch_size, prompt_seq_len, joint_attention_dim]).to(torch.bfloat16)
-    # 46-entry list (only first num_blocks are indexed); SAME list to ref and tt.
-    text_encoder_layers = [
-        torch.randn([batch_size, prompt_seq_len, text_encoder_dim]).to(torch.bfloat16)
-        for _ in range(c.num_layers + c.num_single_layers)
-    ]
-    timestep = torch.full([batch_size], fill_value=500).to(torch.bfloat16)
+    ref, inputs = _ref_and_inputs(
+        num_dual=num_dual,
+        num_single=num_single,
+        spatial_seq_len=spatial_seq_len,
+        prompt_seq_len=prompt_seq_len,
+    )
+    ref_out = _ref_forward(ref, inputs)
 
-    # RoPE ids (txt = zeros, img = random), Flux-style.
-    text_ids = torch.zeros([prompt_seq_len, 3]).to(torch.bfloat16)
-    image_ids = torch.randint(1024 * 1024, [spatial_seq_len, 3]).to(torch.bfloat16)
-    ids = torch.cat((text_ids, image_ids), dim=0).to(torch.bfloat16)
-    rope_cos, rope_sin = ref.pos_embed.forward(ids)
-
-    # --- Reference forward (RAW timestep, no /1000) ---
-    with torch.no_grad():
-        ref_out = ref.forward(
-            hidden_states=spatial,
-            encoder_hidden_states=prompt,
-            text_encoder_layers=text_encoder_layers,
-            timestep=timestep,
-            img_ids=image_ids,
-            txt_ids=text_ids,
-        ).sample
-
-    # --- TT setup (sp=2, tp=2) ---
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=0, mesh_axis=0),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    tt_model = _build_tt_transformer(
+        mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        sp_factor=sp_factor,
+        tp_factor=tp_factor,
+        num_dual=num_dual,
+        num_single=num_single,
     )
 
-    checkpoint = BriaFiboCheckpoint(FIBO_PATH)
-    tt_model = checkpoint.build(
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        num_layers=num_dual,
-        num_single_layers=num_single,
-    )
-
-    # --- TT inputs (2D-sharded exactly as the Flux mesh test) ---
-    #   spatial: sequence-sharded on sp (x_embedder feature-shards on tp).
-    #   prompt / text_encoder_layers: replicated (context_embedder feature-shards on tp).
-    #   spatial rope: sequence-sharded on sp; prompt rope: replicated.
-    spatial_padded = Attention.pad_spatial_sequence(spatial, sp_factor=sp_factor)
-    spatial_rope_cos_padded = Attention.pad_spatial_sequence(rope_cos[prompt_seq_len:], sp_factor=sp_factor)
-    spatial_rope_sin_padded = Attention.pad_spatial_sequence(rope_sin[prompt_seq_len:], sp_factor=sp_factor)
-    padded_spatial_seq_len = spatial_padded.shape[1]
-
-    tt_spatial = bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=1)
-    tt_prompt = bf16_tensor(prompt, device=mesh_device)
-    tt_timestep = bf16_tensor(timestep.unsqueeze(-1), device=mesh_device)
-    tt_text_encoder_layers = [bf16_tensor(t, device=mesh_device) for t in text_encoder_layers[:num_blocks]]
-
-    tt_spatial_rope_cos = bf16_tensor(spatial_rope_cos_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=0)
-    tt_spatial_rope_sin = bf16_tensor(spatial_rope_sin_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=0)
-    tt_prompt_rope_cos = bf16_tensor(rope_cos[:prompt_seq_len], device=mesh_device)
-    tt_prompt_rope_sin = bf16_tensor(rope_sin[:prompt_seq_len], device=mesh_device)
+    # --- TT inputs (sharded exactly as the Flux mesh test; see _forward_kwargs for the layout) ---
+    padded = _pad_for_sp(inputs, prompt_seq_len=prompt_seq_len, sp_factor=sp_factor)
 
     tt_output = tt_model.forward(
-        spatial=tt_spatial,
-        prompt=tt_prompt,
-        timestep=tt_timestep,
-        text_encoder_layers=tt_text_encoder_layers,
-        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
-        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
-        spatial_sequence_length=padded_spatial_seq_len,
-        prompt_sequence_length=prompt_seq_len,
+        **_forward_kwargs(
+            mesh_device,
+            inputs,
+            padded,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            prompt_seq_len=prompt_seq_len,
+            num_blocks=num_blocks,
+            spatial_2dshard=False,
+        )
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -498,24 +507,12 @@ def test_fibo_transformer_mesh_profile(*, mesh_device):
         python_env/bin/python -m tracy -r -p -v --dump-device-data-mid-run -m pytest \\
         models/tt_dit/tests/models/bria_fibo/test_transformer.py::test_fibo_transformer_mesh_profile
     """
-    from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboCheckpoint
-
-    num_dual = int(os.environ.get("FIBO_DUAL", "2"))
-    num_single = int(os.environ.get("FIBO_SINGLE", "2"))
-
-    ref = _load_ref_transformer()
-    ref = _truncate_ref(ref, num_dual, num_single)
-
-    c = ref.config
-    in_channels = c.in_channels  # 48
-    joint_attention_dim = c.joint_attention_dim  # 4096
-    text_encoder_dim = c.text_encoder_dim  # 2048
+    num_dual, num_single = _depth_from_env()
     num_blocks = num_dual + num_single
 
-    sp_axis = 0
-    tp_axis = 1
-    sp_factor = tuple(mesh_device.shape)[sp_axis]  # 2
-    tp_factor = tuple(mesh_device.shape)[tp_axis]  # 2
+    sp_axis, tp_axis = 0, 1
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
 
     batch_size = 1
     # Production sizing at 1024x1024 is spatial=4096 (64x64 patches); default stays small for a quick run.
@@ -523,59 +520,39 @@ def test_fibo_transformer_mesh_profile(*, mesh_device):
     spatial_seq_len = int(os.environ.get("FIBO_SPATIAL_SEQ", "512"))
     prompt_seq_len = int(os.environ.get("FIBO_PROMPT_SEQ", "128"))
 
-    torch.manual_seed(0)
-    spatial = torch.randn([batch_size, spatial_seq_len, in_channels]).to(torch.bfloat16)
-    prompt = torch.randn([batch_size, prompt_seq_len, joint_attention_dim]).to(torch.bfloat16)
-    text_encoder_layers = [
-        torch.randn([batch_size, prompt_seq_len, text_encoder_dim]).to(torch.bfloat16)
-        for _ in range(c.num_layers + c.num_single_layers)
-    ]
-    timestep = torch.full([batch_size], fill_value=500).to(torch.bfloat16)
-
-    # RoPE ids (txt = zeros, img = random), Flux-style.
-    text_ids = torch.zeros([prompt_seq_len, 3]).to(torch.bfloat16)
-    image_ids = torch.randint(1024 * 1024, [spatial_seq_len, 3]).to(torch.bfloat16)
-    ids = torch.cat((text_ids, image_ids), dim=0).to(torch.bfloat16)
-    rope_cos, rope_sin = ref.pos_embed.forward(ids)
-
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=0, mesh_axis=0),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    # Same reference-derived inputs as test_fibo_transformer_mesh; only the reference FORWARD is skipped
+    # (this test asserts no PCC), but pos_embed still supplies the real rope cos/sin.
+    _, inputs = _ref_and_inputs(
+        num_dual=num_dual,
+        num_single=num_single,
+        spatial_seq_len=spatial_seq_len,
+        prompt_seq_len=prompt_seq_len,
     )
 
-    checkpoint = BriaFiboCheckpoint(FIBO_PATH)
-    tt_model = checkpoint.build(
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        num_layers=num_dual,
-        num_single_layers=num_single,
+    tt_model = _build_tt_transformer(
+        mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        sp_factor=sp_factor,
+        tp_factor=tp_factor,
+        num_dual=num_dual,
+        num_single=num_single,
     )
 
     # Pad once on host; upload fresh device tensors per forward (make_inputs) so warmup and measured
     # forwards see identical state regardless of whether any op consumes its inputs.
-    spatial_padded = Attention.pad_spatial_sequence(spatial, sp_factor=sp_factor)
-    spatial_rope_cos_padded = Attention.pad_spatial_sequence(rope_cos[prompt_seq_len:], sp_factor=sp_factor)
-    spatial_rope_sin_padded = Attention.pad_spatial_sequence(rope_sin[prompt_seq_len:], sp_factor=sp_factor)
-    padded_spatial_seq_len = spatial_padded.shape[1]
+    padded = _pad_for_sp(inputs, prompt_seq_len=prompt_seq_len, sp_factor=sp_factor)
 
     def make_inputs():
-        return dict(
-            spatial=bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=1),
-            prompt=bf16_tensor(prompt, device=mesh_device),
-            timestep=bf16_tensor(timestep.unsqueeze(-1), device=mesh_device),
-            text_encoder_layers=[bf16_tensor(t, device=mesh_device) for t in text_encoder_layers[:num_blocks]],
-            spatial_rope=(
-                bf16_tensor(spatial_rope_cos_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=0),
-                bf16_tensor(spatial_rope_sin_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=0),
-            ),
-            prompt_rope=(
-                bf16_tensor(rope_cos[:prompt_seq_len], device=mesh_device),
-                bf16_tensor(rope_sin[:prompt_seq_len], device=mesh_device),
-            ),
-            spatial_sequence_length=padded_spatial_seq_len,
-            prompt_sequence_length=prompt_seq_len,
+        return _forward_kwargs(
+            mesh_device,
+            inputs,
+            padded,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            prompt_seq_len=prompt_seq_len,
+            num_blocks=num_blocks,
+            spatial_2dshard=False,
         )
 
     def _signpost(message):

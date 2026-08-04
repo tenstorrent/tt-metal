@@ -75,7 +75,7 @@ _PROFILE_DEVICE_PARAMS = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_smal
 
 def _fibo_local():
     try:
-        return snapshot_download(FIBO_PATH, local_files_only=True)
+        return snapshot_download(FIBO_PATH, local_files_only=False)
     except Exception as e:
         pytest.skip(f"FIBO not cached: {e}")
 
@@ -276,43 +276,8 @@ def _perf_breakdown(
         pipe.release_traces()
 
 
-# Run the 4x8 Galaxy wall-clock breakdown (-k "mesh_device1" selects the 4x8 mesh; append
-# ' and traced' or ' and untraced' to -k for a single variant). Use -s to print the per-stage table:
-#   HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
-#     python_env/bin/python -m pytest \
-#     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_pipeline_perf_breakdown \
-#     -k "mesh_device1" -v -s --timeout=1800
-@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
-@pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
-@pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 3)])
-@pytest.mark.parametrize("traced", [False, True], ids=["untraced", "traced"])
-def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inference_steps, num_measured_runs, traced):
-    """Per-stage wall-clock breakdown for a short free-text prompt on the mesh (2x2 or 4x8; gs=5.0 -> CFG on).
-
-    Runs both untraced and traced (parametrized) so the denoise it/s delta from tracing is visible in
-    one command. Sanity-asserts the produced image is valid + non-degenerate (proves the timed path
-    really ran); it does NOT assert on timing (dev instrument, not a regression gate). Use ``-s`` to
-    see the log. Runtime ~ (1 warmup + num_measured_runs) generations + ~44s model build, per param.
-    """
-    pipe = _build_pipe(mesh_device, height, width)
-    _perf_breakdown(
-        pipe,
-        label="text",
-        prompt="a luxury sports car",
-        negative_prompt="white background",
-        guidance_scale=5.0,
-        seed=0,
-        height=height,
-        width=width,
-        num_inference_steps=num_inference_steps,
-        num_measured_runs=num_measured_runs,
-        traced=traced,
-    )
-
-
-# Run the 4x8 Galaxy wall-clock breakdown for the JSON prompt (-k "mesh_device1" selects the 4x8 mesh;
-# append ' and traced' or ' and untraced' to -k for a single variant):
-#   HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+# Run the 4x8 Galaxy or 2x2 QB2 wall-clock breakdown (-k "mesh_device1" selects the 4x8 mesh, "mesh_device0" selects the 2x2 mesh;
+# append ' and traced' or ' and untraced' to -k for a single variant). Use -s to print the per-stage table.
 #     python_env/bin/python -m pytest \
 #     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_pipeline_perf_breakdown_json \
 #     -k "mesh_device1" -v -s --timeout=1800
@@ -355,8 +320,43 @@ def test_fibo_pipeline_perf_breakdown_json(
     )
 
 
-# Run the 4x8 encode-only wall-clock perf (-k "mesh_device1" selects the 4x8 mesh). Use -s to print the timing:
-#   HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+# Run the 4x8 Galaxy or 2x2 QB2 wall-clock breakdown (-k "mesh_device1" selects the 4x8 mesh, "mesh_device2" selects the 2x2 mesh;
+# append ' and traced' or ' and untraced' to -k for a single variant). Use -s to print the per-stage table.
+#     python_env/bin/python -m pytest \
+#     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_pipeline_perf_breakdown \
+#     -k "mesh_device1" -v -s --timeout=1800
+@pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
+@pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 3)])
+@pytest.mark.parametrize("traced", [False, True], ids=["untraced", "traced"])
+def test_fibo_pipeline_perf_breakdown_short_text(
+    *, mesh_device, height, width, num_inference_steps, num_measured_runs, traced
+):
+    """Per-stage wall-clock breakdown for a short free-text prompt on the mesh (2x2 or 4x8; gs=5.0 -> CFG on).
+
+    Runs both untraced and traced (parametrized) so the denoise it/s delta from tracing is visible in
+    one command. Sanity-asserts the produced image is valid + non-degenerate (proves the timed path
+    really ran); it does NOT assert on timing (dev instrument, not a regression gate). Use ``-s`` to
+    see the log.
+    """
+    pipe = _build_pipe(mesh_device, height, width)
+    _perf_breakdown(
+        pipe,
+        label="text",
+        prompt="a luxury sports car",
+        negative_prompt="white background",
+        guidance_scale=5.0,
+        seed=0,
+        height=height,
+        width=width,
+        num_inference_steps=num_inference_steps,
+        num_measured_runs=num_measured_runs,
+        traced=traced,
+    )
+
+
+# Run the 4x8 Galaxy or 2x2 QB2 wall-clock breakdown (-k "mesh_device1" selects the 4x8 mesh, "mesh_device2" selects the 2x2 mesh;
+# append ' and traced' or ' and untraced' to -k for a single variant). Use -s to print the per-stage table.
 #     python_env/bin/python -m pytest \
 #     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_encode_perf \
 #     -k "mesh_device1" -v -s --timeout=1800
@@ -367,20 +367,13 @@ def test_fibo_encode_perf(*, mesh_device, traced):
     """Encode-only wall-clock perf: time the pipeline's ``_encode`` (positive + negative prompt), no perf-report.
 
     Builds the full ``BriaFiboPipeline`` and times ONLY ``pipe._encode(prompt, negative_prompt, do_cfg=True)``
-    -- the same encode the pipeline runs under CFG, encoding both prompts SEQUENTIALLY and returning
+    the same encode the pipeline runs under CFG, encoding both prompts SEQUENTIALLY and returning
     ``(cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states)``. On the 4x8 Galaxy the encoder
     runs SP=8 (axis 1) x TP=4 (axis 0) on the whole mesh: the token sequence (padded to its bucket -- the
     long JSON positive -> 1024, the short negative -> 256) is sharded across the SP axis (all-gather K/V per
     attention layer) and Q/K/V/O are tensor-parallel on the TP axis. ``traced`` captures/replays the encoder
     device forward per bucket (pos and neg land on DIFFERENT buckets here, so two traces; the warmup encodes
-    both, so all measured runs are pure replay) --
-    the same flag the DiT denoise uses; untraced, the encode is host-op-dispatch-bound (the traced replay
-    removes those gaps, ~3.6x on the JSON prompt). The hidden-state readback reads only the SP shards from one TP row via
-    get_device_tensors (~0.6 s) instead of the mesh composer over all 32 devices (~10 s). Positive prompt is FIBO's intended structured-JSON caption (the committed
-    ``fibo_vlm_prompt.json``, ~833 tokens); negative is a short free-text string. 1 warmup (absorbs op
-    compilation) + N measured passes with boundary device syncs; logs encode seconds (avg/min/max) and the
-    produced output shapes. Plain pytest -- no Tracy, no signposts, no device-op CSV. Use ``-s`` to see the
-    timing. Runtime ~ (1 warmup + N) encodes + ~44s model build, per mesh.
+    both, so all measured runs are pure replay)
     """
     if not _JSON_PROMPT_PATH.is_file():
         pytest.skip(f"JSON prompt fixture missing: {_JSON_PROMPT_PATH}")
@@ -388,18 +381,12 @@ def test_fibo_encode_perf(*, mesh_device, traced):
     negative_prompt = "blurry, low quality, distorted, watermark, text"
     num_measured_runs = 3
 
-    # encode is spatial-size independent; 1024x1024 just satisfies _build_pipe's DiT/VAE build.
-    # run_allocation_pass=False: this test only calls _encode (never captures a denoise trace), so we
-    # skip the __init__ full-generation warmup and its on-device VAE decode (conv3d).
     pipe = _build_pipe(mesh_device, 1024, 1024, run_allocation_pass=False)
     submesh = pipe._submesh
 
     def encode_once():
         ttnn.synchronize_device(submesh)  # drain enqueued work so t0 is a real boundary
         t0 = perf_counter()
-        # Encode-only: no denoise trace exists here, so the pipeline's _encode (which gates encoder
-        # tracing on the denoise trace) would never trace. Trace the encoder directly via the wrapper --
-        # safe because with no denoise trace there are no buffers for the encoder replay to clobber.
         cond = pipe._text_encoder.encode_prompt(prompt, traced=traced)
         uncond = pipe._text_encoder.encode_prompt(negative_prompt, traced=traced)
         ttnn.synchronize_device(submesh)  # wait for this encode's device work to finish
@@ -408,8 +395,6 @@ def test_fibo_encode_perf(*, mesh_device, traced):
     logger.info("encode perf: warmup run...")
     encode_once()  # warmup: compile/populate the program cache (traced: captures both bucket traces)
     if traced:
-        # Settle: the first traced replay after capture pays one-time costs (first output-buffer
-        # read-back, lazy replay-path prog-cache). Absorb them untimed so measured runs are steady state.
         logger.info("encode perf: settle run (untimed, absorbs first-replay one-time cost)...")
         encode_once()
 
@@ -437,7 +422,6 @@ def test_fibo_encode_perf(*, mesh_device, traced):
 
 # Run the 4x8 whole-pipeline device-op CSV (Tracy build required; -k "mesh_device1" selects the 4x8 mesh):
 #   TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=24000 \
-#     HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
 #     python_env/bin/python -m tracy -r -p -v --dump-device-data-mid-run -m pytest \
 #     models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_pipeline_device_profile \
 #     -k "mesh_device1" --timeout=1800
@@ -464,7 +448,7 @@ def test_fibo_pipeline_device_profile(*, mesh_device, height, width, num_inferen
     signpost around the measured pass, but at full-pipeline trace volume (~66k CSV rows / ~40 GB device log)
     the host tracy-capture DROPS the signpost message -- it never lands in the CSV, so tt-perf-report reports
     "No signposts found" and analyzes the entire file: the pipe ``__init__`` allocation generation + the
-    warmup pass + the measured pass, all mixed (~16.7k merged ops). Verified 2026-07-10. For FOCUSED
+    warmup pass + the measured pass, all mixed (~16.7k merged ops). For focused
     per-stage reports -- where the signpost DOES survive (small capture) and tt-perf-report brackets exactly
     the measured forward -- use the per-component profiles at the bottom of this file
     (``test_fibo_{encode,denoise,decode}_device_profile``). Keep this test as a whole-pipeline op-mix
@@ -531,7 +515,6 @@ def test_fibo_pipeline_device_profile(*, mesh_device, height, width, num_inferen
 #   1. Record the raw device-op CSV. This captures the WHOLE process: model build + warmup forward +
 #      measured forward, with one row PER DEVICE (the 2x2 mesh -> x4 rows/op).
 #        TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=6000 \
-#          HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
 #          python_env/bin/python -m tracy -r -p -v --dump-device-data-mid-run -m pytest \
 #          models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_denoise_device_profile \
 #          --timeout=1800

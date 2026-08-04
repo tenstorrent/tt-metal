@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -15,6 +16,16 @@ from models.tt_dit.utils import tensor as tt_tensor
 from models.tt_dit.utils.check import assert_quality
 
 FIBO_PATH = os.environ.get("FIBO_PATH", "briaai/FIBO")
+
+# The committed structured-JSON caption fixture, in the parent bria_fibo test dir (this file lives in its
+# ``smollm3/`` subdir, so parents[1] IS that dir -- see test_performance_bria_fibo.py::_JSON_PROMPT_PATH).
+_JSON_PROMPT_PATH = Path(__file__).resolve().parents[1] / "fibo_vlm_prompt.json"
+
+
+def _json_prompt():
+    if not _JSON_PROMPT_PATH.is_file():
+        pytest.skip(f"JSON prompt fixture missing: {_JSON_PROMPT_PATH}")
+    return _JSON_PROMPT_PATH.read_text().strip()
 
 
 def _load_hf_smollm3():
@@ -117,8 +128,6 @@ def test_fibo_wrapper_encode(*, mesh_device):
     output against HF. ``len(hidden) == len(ref.hidden_states)`` (the transformer-block count follows from
     ``build_text_encoder_layers``).
     """
-    from pathlib import Path
-
     from huggingface_hub import snapshot_download
 
     from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper
@@ -133,10 +142,7 @@ def test_fibo_wrapper_encode(*, mesh_device):
     except Exception as e:
         pytest.skip(f"FIBO unavailable: {e}")
 
-    json_path = Path(__file__).resolve().parents[2] / "models" / "bria_fibo" / "fibo_vlm_prompt.json"
-    if not json_path.is_file():
-        pytest.skip(f"JSON prompt fixture missing: {json_path}")
-    json_prompt = json_path.read_text().strip()
+    json_prompt = _json_prompt()
 
     ccl = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Linear)
     wrapper = SmolLM3TextEncoderWrapper(
@@ -179,8 +185,6 @@ def test_fibo_wrapper_encode_traced(*, mesh_device):
     stability ONLY, not vs HF: it has a known ~0.98 short-sample HF gap that is present untraced too, so
     a traced-vs-HF check on it would confound the replay-stability signal this test exists to guard.
     """
-    from pathlib import Path
-
     from huggingface_hub import snapshot_download
 
     from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper
@@ -195,10 +199,7 @@ def test_fibo_wrapper_encode_traced(*, mesh_device):
     except Exception as e:
         pytest.skip(f"FIBO unavailable: {e}")
 
-    json_path = Path(__file__).resolve().parents[2] / "models" / "bria_fibo" / "fibo_vlm_prompt.json"
-    if not json_path.is_file():
-        pytest.skip(f"JSON prompt fixture missing: {json_path}")
-    json_prompt = json_path.read_text().strip()
+    json_prompt = _json_prompt()
 
     ccl = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Linear)
     wrapper = SmolLM3TextEncoderWrapper(
