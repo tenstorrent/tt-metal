@@ -68,11 +68,9 @@ MINIMAX_H3_VAE_NORM_EPS = 1e-6
 _SILU_ACTIVATION = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
 
 # Carry the resnet chain in TILE (see :func:`_as_flat_tile`) rather than ROW_MAJOR.
-# The trade is a tilize per residual against a much cheaper add: a ROW_MAJOR add of two
-# 285 MB tensors measures 23.5 ms, the tiled one ~2.2 ms. Whether it wins depends on what
-# tilize actually costs in the model, which is not what it costs standalone -- see the
-# probe in ``probe_tilize_minimax_h3.py`` -- so this stays a switch and the answer is
-# measured, not assumed.
+# **Measured a wash and left off** (STATE.md amendment 56): a ROW_MAJOR add of two 285 MB
+# tensors profiles at 23.5 ms against ~2.2 ms tiled, but carrying TILE moves the cost into
+# Tilize rather than removing it -- level 0 goes 432 -> 439 ms, level 1 322 -> 327.
 MINIMAX_H3_FLAT_TILE_RESIDUAL = False
 
 # Compute the group variance as E[x^2] - E[x]^2 rather than centring first. Saves one full

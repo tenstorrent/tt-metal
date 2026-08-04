@@ -1937,3 +1937,25 @@ K-tap filter, and the AMP blocks use K = 3, 7, 11, so the conv1d slicer fallback
 likely bulk of those counts. `TernaryDeviceOperation` at 20.9 % over 56 calls is the snake
 activation (`x + (1/alpha) sin^2(alpha x)`) -- worth checking against
 `existing-fast-paths.md` for a fused form before hand-rolling.
+
+## Amendment 65 (2026-08-04) — cleanup pass 1: WIP profiling and sweep scripts removed
+
+Test-file count 30 -> 19 against LTX's 13. Deleted, with every finding they produced already
+recorded in amendments 52-64 so nothing is lost:
+
+`measure_trace`, `probe_datamovement`, `probe_fused_gn`, `probe_tilize`,
+`profile_audio_decoder`, `profile_downblock`, `profile_encoder`, `profile_vit_layer`,
+`sweep_conv3d_fidelity`, `sweep_conv3d`, `time_downblock` (all `*_minimax_h3.py`).
+
+`build_adaln_table.py` is kept -- `test_adaln_precompute_minimax_h3.py` imports it.
+`wan2_2/bruteforce_conv3d_sweep.py` is the canonical blocking sweeper per the skill docs, so
+the H3 copy was redundant; the comment in `conv_minimax_h3.py` now points there.
+
+Encoder gate re-run after the deletions: **7 passed**, PCC 99.9094 % / 99.9132 %, unchanged.
+
+**Still to do on cleanup:** the remaining 19 is above LTX's 13, and the dead
+`MINIMAX_H3_FLAT_TILE_RESIDUAL` branch (default False, measured a wash) plus `_as_flat_tile`
+/ `_as_row_major_5d` are only reachable through it -- deleting that branch is the next step
+and needs one re-gate. `MiniMaxH3FrameGroupNorm` is likewise dead: the stats norm won on
+measurement at every shape (amendment 56), so the `ttnn.group_norm` path and
+`MINIMAX_H3_USE_STATS_GROUPNORM` can go with it.

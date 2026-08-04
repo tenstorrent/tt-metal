@@ -43,7 +43,7 @@ from ....utils.conv3d import _FP32_BLOCKINGS, _ntuple, aligned_channels, get_con
 # fallback is slow but not fatal -- conv_in is 9 ms at (1,256,256) and 305 ms at
 # (17,256,256) -- so it is a performance problem, not a correctness blocker.
 #
-# **Swept**, not stubs: measured per shape with `sweep_conv3d_minimax_h3.py`, which
+# **Swept**, not stubs: measured per shape with `wan2_2/bruteforce_conv3d_sweep.py`, which
 # brute-forces every legal blocking and times it on hardware under a trace. Against the
 # conv3d.py table baseline the winners are 2.5x-25.6x per layer and 9.5x summed, which is
 # what the encoder needed -- it was running at ~2.3 TFLOP/s against the ViT decoder's 14.0
