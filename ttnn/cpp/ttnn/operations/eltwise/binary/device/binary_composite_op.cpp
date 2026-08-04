@@ -547,8 +547,9 @@ Tensor remainder(
 
     // The unary SFPU fast path does not support INT32. Float scalars promote INT32 inputs
     // above; integral scalars must route through binary_ng.
-    if (operation_input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
-        post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {
+    if (operation_input.dtype() != DataType::INT32 && !output_dtype.has_value() &&
+        !operation_sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&
+        rhs_activations.empty()) {
         return ttnn::unary_remainder(
             operation_input, scalar, output_mem_config, output_tensor, operation_sub_core_grids);
     }
