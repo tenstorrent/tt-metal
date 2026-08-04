@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <map>
 #include <unordered_map>
 #include <utility>
@@ -322,9 +321,26 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         }
         TT_FATAL(!w_gu_candidates.empty(), "K_gate_tiles ({}) has no valid in0_block_w_gu", K_gate_tiles);
 
+        // Candidate per_core_M values: DIVISORS of the requested per_core_M_max,
+        // largest first. per_core_M_for_chunk() quantizes a tail chunk to the
+        // smallest DIVISOR of per_core_M_max that covers it, so a max with a
+        // coarse divisor ladder leaves the tail nowhere fine to land and silently
+        // inflates its M-work. Walking M down by 1 could stop on a prime: at
+        // per_core_M_max=5, a 16-tile tail needs 2 rows/core but the only
+        // divisors are {1,5}, so it runs 5 — 2.5x the M-work, measured as +103us
+        // at isl-512. Restricting to divisors of the request keeps the tail
+        // ladder as fine as the request's own.
+        const uint32_t requested_per_core_M = per_core_M;
+        std::vector<uint32_t> m_gu_candidates;
+        for (uint32_t M = requested_per_core_M; M >= 1; --M) {
+            if (requested_per_core_M % M == 0) {
+                m_gu_candidates.push_back(M);
+            }
+        }
+
         uint32_t fit_M = 0;
         uint32_t fit_w = 0;
-        for (uint32_t M = per_core_M; M >= 1; --M) {
+        for (const uint32_t M : m_gu_candidates) {
             for (const uint32_t w : w_gu_candidates) {
                 if (cb_footprint_bytes(M, w) <= l1_budget) {
                     fit_M = M;
