@@ -16,8 +16,13 @@ layer. Where it doesn't, the honest answer is zero, and 7 of 15 cells returned o
 3. One cell **built a candidate, shipped it disabled, and never screened it** — it is worth **26× more than
    what that cell did ship**.
 
-**Total left on the table: ≈ 8.0 ms/model across four cells.** All four were identifiable by a **one-line
+**Total left on the table from placement: ≈ 8.0 ms/model across four cells**, all identifiable by a **one-line
 static check that needs no device time** (§3.8).
+
+**And placement is not where the money is.** The corpus's single largest cost is **191 ms/model — 24.4 % of
+qwen B's decode time — in tile ↔ row-major conversions** on one graph edge, correctly priced by the advisor at
+**0.000 µs** because they are legally required. That is 14× every shipped win in the corpus combined, and it is
+a kernel gap, not a placement problem (§3.18).
 
 **And the correctness objection to the biggest one does not survive contact with an absolute oracle.** Against
 the model's own higher-precision reference, the discarded candidate scores **0.99931** and the configuration
@@ -98,7 +103,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The sixteen findings that matter
+## 3. The eighteen findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -431,6 +436,59 @@ DRAM-advice, and the cliff check filters it out precisely because the advisor do
 at the same batch, which cell is anomalously slow? It costs nothing and answers a question no single cell can
 ask. → [`ADVISOR-VALUE`](ADVCHAL-V2-ADVISOR-VALUE.md) §8, [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E19
 
+### 3.17 The largest apparent opportunity is a metric artefact — and it retracts one of my own recommendations
+
+Generalising the cliff check to *any* op the advisor wants widened, ranked by `us × (1 − shipped/advised)`:
+
+| op | rows | "parallelisable" µs | cells |
+|---|---|---|---|
+| **`linear`** | 67 | **4,970** | 13 |
+| `rms_norm` | 53 | 1,057 | 9 |
+
+`linear` dominates at 4.7× the norm, always **shipped 12 cores, advised 55–99**. Measured on north-mini, one
+knob from the shipped default:
+
+| | median ms | vs default |
+|---|---|---|
+| 12-core DRAM-sharded matmul (shipped) | 0.172532 / 0.172563 | — |
+| wide L1-sharded — **the advisor's direction** | 0.284863 / 0.285367 | **+65.2 %** |
+| MoE expert matmuls at 48/64 and 16/16 cores | 0.522919 / 0.528120 | +0.96 % / +1.96 % |
+
+**DS matmuls are DRAM-bandwidth-bound, so core count isn't the limiting resource** — the metric is
+reduction-shaped and the op is bandwidth-shaped. Corpus plus these probes: **1 win in 7 measured
+matmul-widening candidates.**
+
+⚠ **This retracts part of my action point C5.** I had recommended treating a `ds_family` grid mismatch as
+screenable; that would have spent device time on a 65 % regression. The field is still worth recording; the
+recommendation to screen those rows is withdrawn.
+
+### 3.18 The biggest cost in the corpus is a layout crossing, and it is correctly invisible
+
+Chasing §3.17 exposed a bucket my own per-op dataset had been silently dropping — `boundary`. Recovered from
+the reconciliations' `disagreements[]`, corpus-wide it is **76.5 % `retilize`** (4,114 µs of 5,376), the tile ↔
+row-major crossing, and the most expensive conversion class in the corpus (6.7–10.0 µs each vs 1.4–1.9 for an
+L1 regrid).
+
+| cell | kind | retilize/layer | share of layer | layers | **per model** | advisor ceiling |
+|---|---|---|---|---|---|---|
+| **qwen B** | **linear_attention** | **3,983.5 µs** | **25.2 %** | 48 | **191,210 µs** | **0.000 µs** |
+| phi FN | dense | 63.7 | 8.8 % | 32 | 2,038 | 71.637 |
+| qwen FN | full_attention | 21.2 | 2.1 % | 16 | 339 | 34.282 |
+
+**191 ms/model = 24.4 % of qwen B's decode time — 14× every shipped win in the corpus combined.** The ops are
+`UntilizeWithUnpadding` ×3 at **819 µs each** and `TilizeWithValPadding` ×2 at **671 µs each**, all on the
+`add → rms_norm` edge, all **already on 109 of 110 cores**. So it is not under-parallelisation; it is the
+crossing itself, and the decoder's own source says why:
+
+> *Conv, reshape, and recurrent composite kernels currently require interleaved tensors; cross that boundary
+> once after the packed projection instead of four times before four independent matmuls.*
+
+The decoder has already minimised the *number* of crossings. **And the advisor's ceiling of 0.000 µs is
+correct** — the advice places these conversions too, because they are legally required. The stage filed the cost
+under `boundary`: reported, out of scope, uncredited. Honest, and enormous.
+
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E20–E21
+
 ---
 
 ## 4. What makes a model advisor-compatible
@@ -539,21 +597,26 @@ fastest — and the whole win is usually just the first step off one core.**
 
 ## 8. Still on the table
 
-| # | opportunity | value |
-|---|---|---|
-| 1 | Ship phi FN's combined candidate under an absolute oracle at the model's own bar | **+8.5 pp** on that cell |
-| 2 | Ship north-mini's 16-core MoE norm | **−264 µs/model**, ≈ +1 pp |
-| 2b | Ship gemma-4-26B onA's 44-core norm instead of 88 | **−375 µs/model**, at PCC 1.0 |
-| 2c | **Ship gemma-4-26B B's `GEMMA4_OPT_RESIDUAL_SHARD_CORES=22`** (sliding only) | **−3,918 µs/model** — 26× what it shipped, and **more accurate than what shipped** |
-| 3 | Tracer support for qwen's linear-attention `ttnn.copy` boundary | **97 %** of qwen's model decode time, currently unadvised |
-| 4 | `ttnn.sparse_matmul` tracer support | unblocks north-mini onA; 58–65 % of every gemma-4-26B window |
-| 5 | Sweep the legal ladder both sides of the advice in every norm cell | 1–5 pp per affected cell |
-| 6 | Re-screen qwen B's geometry off the one-row worker grid | currently a hard zero |
-| 7 | ~~Re-screen phi exp17's overlapping candidate at higher replay count~~ | **tested and dead** — tightening doesn't separate it (§3.7). Its 83.6 µs/layer ceiling is genuinely unmeasurable here |
+**From the advisor: essentially nothing new.** After matmuls are ruled out (§3.17) and
+`nlp_create_qkv_heads_decode` is shown to be a batch artefact (§3.15), the actionable `chain` pool is 5,067 µs
+corpus-wide: `rms_norm` 26.6 % (the proven class), then `multiply` 9.0 %, `add` 4.8 %, `slice_static` 3.1 %,
+`rotary_embedding` 2.7 %, `concat` 2.0 % — all small.
+
+**Outside the advisor: a great deal, and bigger.** Ranked by scale:
+
+| # | opportunity | scale | kind of fix |
+|---|---|---|---|
+| 1 | **`retilize` on qwen's `add → rms_norm` edge** | **191 ms/model — 24.4 %** | tt-metal: tiled input for the conv/recurrent composites |
+| 2 | qwen's untraced linear attention | **97 %** of its decode time never advised on | tt-metal: tracer support for mutable-state `ttnn.copy` |
+| 3 | `ttnn.sparse_matmul` tracer support | unblocks north-mini onA; 58–65 % of every gemma-4-26B window | tt-metal |
+| 4 | `concatenate_heads` wrong-op in gemma-4-12B | ≈2.6 ms/model, 3.9× what that cell shipped | tt-metal (sharded GQA SDPA output) then a decoder change |
+| 5 | phi FN's discarded combined candidate | **+8.5 pp** on that cell | stage: absolute oracle at the model's own bar |
+| 6 | gemma-4-26B B's `RESIDUAL_SHARD_CORES=22`, sliding only | **−3,918 µs/model**, 26× what it shipped, *and more accurate* | ship it |
+| 7 | gemma-4-26B onA at 44 cores instead of 88 | −375 µs/model, bit-identical output | ship it |
+| 8 | north-mini FN at 16 cores instead of 32 | −264 µs/model | ship it |
+| 9 | sweep the legal ladder both sides of the advice | 1–5 pp per affected cell | stage |
 
 What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md).
-
----
 
 ## 9. Corrections to earlier published versions of these documents
 

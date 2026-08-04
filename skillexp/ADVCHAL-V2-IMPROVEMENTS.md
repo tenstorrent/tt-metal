@@ -331,9 +331,18 @@ agreement regardless of grid (advisor score level 3 beats core count). Without t
 misreading — it misled this analysis once.
 
 **Quantified.** Matmul/linear ops are **62.3 %** of the profiled window on average (up to 89.8 %), and
-**55 rows carrying 64.7 % of all matmul cost — ≈5.0 ms across the corpus — differ in grid from the shipped
-placement yet carry no verdict** because both sides are DS. None was ever screened. A `ds_family` match with a
-*different grid* is a candidate, not an agreement.
+**55 rows carrying 64.7 % of all matmul cost differ in grid from the shipped placement yet carry no verdict**
+because both sides are DS.
+
+⚠ **RETRACTED, by my own experiment.** I originally wrote that a `ds_family` match with a different grid *"is a
+candidate, not an agreement"*. **Measured: it is an agreement.** Turning off DRAM sharding on north-mini's dense
+projections — exactly the advisor's 12 → 77-core direction — is **+65.2 % slower** (0.1725 → 0.2849 ms), and the
+MoE expert-matmul geometries lose too (+0.96 %, +1.96 %). DS matmuls are DRAM-bandwidth-bound, so core count is
+not the limiting resource. Corpus plus probes: **1 win in 7 measured matmul-widening candidates.**
+
+**What still stands:** record the field. It is needed for legibility — `12→99, agrees` reading as agreement
+without saying *why* misled this analysis once. **What is withdrawn:** the recommendation to screen those rows.
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E20.
 
 ### C5a. Drop the "screen DS-matmul advice last" rule
 
@@ -408,7 +417,7 @@ applies an unrecorded criterion. Add the comparison actually used to the trace.
 
 - **Evidence:** [`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §5.
 
-## E0. Add a cross-model op-cost comparison — it finds defects the stage's question cannot express ⭐
+## E0a. Add a cross-model op-cost comparison — it finds defects the stage's question cannot express ⭐
 
 Everything the stage does is *intra-cell*: one decoder against one advisor plan, asking *"which conversions does
 the plan not place?"* — a question about **layouts**. A 15-cell corpus supports a question it never asks: **for
@@ -454,6 +463,34 @@ So one kernel gap costs at least: two cells' top-ranked boundary candidate, plus
 The op height-shards over batch, so its core count *is* the batch size — exactly, across all 23 rows in the
 corpus (batch 1 → 1 core, batch 32 → 32 cores). **The advisor advising 1 core is correct.** I flagged this as an
 opportunity and disproved it; the check is one line of arithmetic against `decode_batch`.
+
+## E-1. Tiled input for the conv/recurrent composites ⭐⭐⭐ the largest single number in the corpus
+
+**Measured: 3,983.5 µs/layer — 25.2 % of qwen B's 15,833 µs linear-attention layer — in `retilize`, i.e. the
+tile ↔ row-major crossing. Across 48 layers that is 191,210 µs/model, 24.4 % of its 783,981 µs decode time, and
+14× every shipped win in this corpus combined.**
+
+The ops: `UntilizeWithUnpaddingDeviceOperation` ×3 at **819 µs each** and `TilizeWithValPaddingDeviceOperation`
+×2 at **671 µs each**, all on the `add → rms_norm` edge, all **already on 109 of 110 cores**. Not
+under-parallelised — the crossing itself. The decoder's own comment names the cause:
+
+> *Conv, reshape, and recurrent composite kernels currently require interleaved tensors; cross that boundary
+> once after the packed projection instead of four times before four independent matmuls.*
+
+The decoder has already minimised the *number* of crossings; what remains is forced by the kernels.
+
+**Why nobody looked:** the advisor's ceiling for that layer kind is **0.000 µs and that is correct** — the
+advice places these conversions too, because they are legally required. The stage filed the cost under
+`boundary`: reported, out of scope, uncredited. Both the advisor and the stage behaved correctly, and a quarter
+of a 27B model's decode time sits there.
+
+**Action.** Accept tiled input in the conv / recurrent composite kernels (or provide a tiled variant).
+`retilize` is **76.5 % of all boundary cost in the corpus** — the single highest-leverage kernel change
+identified anywhere in this analysis.
+
+- ⚠ qwen **FN** almost certainly carries the same cost and it is **unmeasured** — that arm's linear kind was
+  declared tracer-unreachable, so no reconciliation exists. Measuring it is the cheapest confirmation.
+- → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E21.
 
 ## E. Coverage (tt-mlir / tt-metal) — the biggest prize
 
