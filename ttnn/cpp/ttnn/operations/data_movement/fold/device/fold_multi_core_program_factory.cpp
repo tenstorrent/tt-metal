@@ -37,12 +37,12 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
     const KernelSpecName READER{"reader"};
 
     constexpr const char* FOLD_KERNEL =
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_dfb2s_row_major.cpp";
 
     auto all_cores = input.shard_spec()->grid;
     auto shard_shape = input.shard_spec()->shape;
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(input.dtype());
 
     uint32_t pixel_size = shard_shape[1] * input.element_size();
     uint32_t num_pixels = shard_shape[0];
@@ -58,13 +58,13 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
     const uint32_t aligned_pixel_size = tt::align(pixel_size, hal::get_l1_alignment());
     const uint32_t aligned_dst_pixel_size = tt::align(dst_pixel_size, hal::get_l1_alignment());
 
-    // Input DFB — borrowed onto the sharded input buffer (formerly a globally-allocated CB).
+    // Input DFB — borrowed onto the sharded input buffer.
     // The backing L1 address resolves at runtime from the INPUT tensor argument.
     DataflowBufferSpec src0_dfb{
         .unique_id = SRC0,
         .entry_size = aligned_pixel_size,
         .num_entries = num_pixels,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = dfb_data_format,
         .borrowed_from = INPUT,
     };
 
@@ -73,7 +73,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
         .unique_id = DST0,
         .entry_size = aligned_dst_pixel_size,
         .num_entries = num_dst_pixels,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = dfb_data_format,
         .borrowed_from = OUTPUT,
     };
 

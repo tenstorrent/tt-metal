@@ -33,7 +33,7 @@ void kernel_main() {
     const auto dst = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer input_cb(dfb::in1);
+    DataflowBuffer dfb_in1(dfb::in1);
 
     // Processing loop bounds and state variables
     const uint32_t end_block_id = start_block_id + num_blocks;
@@ -49,9 +49,9 @@ void kernel_main() {
 
         // Process each tile in the width dimension
         for (uint32_t tile_idx = 0; tile_idx < tiles_per_width_dim; tile_idx++) {
-            input_cb.wait_front(tiles_per_channel_dim);
+            dfb_in1.wait_front(tiles_per_channel_dim);
             // Source the write pointer of the input DFB (matches the legacy WRITE_PTR selector).
-            const uint32_t src_base = input_cb.get_write_ptr();
+            const uint32_t src_base = dfb_in1.get_write_ptr();
             uint32_t src_offset = 0;
 
             const uint32_t width_limit =
@@ -82,7 +82,7 @@ void kernel_main() {
 
             // Ensure all writes complete before moving to next set of tiles_per_channel_dim tiles
             noc.async_write_barrier();
-            input_cb.pop_front(tiles_per_channel_dim);
+            dfb_in1.pop_front(tiles_per_channel_dim);
         }
 
         // Update patch offset for next block
