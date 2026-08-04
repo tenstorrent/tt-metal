@@ -42,7 +42,8 @@ PERFORMANCE, steady state on one N150, long-form cases:
     Block 2 flow        ~23.0 ms/frame   ~46%
     host embed_frame      0.2 ms/frame    0.4%
     TOTAL               49.0-52.5 ms/frame, mean 50.4 over the 15-case fixture
-    prefill 0.1-1.5 s once; Block 3 codec ~9% of wall time
+    prefill 0.1-1.5 s once; Block 3 codec 97 ms warm, i.e. 0.4% -- but SECONDS the first
+    time a bucket length is seen, which is COMPILE cost, not compute (STATUS.md 6.10)
     RTF 0.62-0.71 on 14 of 15 cases   (RTF = generation / audio, lower is better)
 
 The 15th is case 0 at RTF 1.89, and that is COLD-START, not a slow case: it pays the first codec
@@ -61,7 +62,10 @@ map. What is left is different in each:
     cost -- proven by tracing, which removes host dispatch and changes nothing (6.6). Fewer ops
     does not help; bigger kernels and L1-resident operands do. Its worst single line is
     nlp_create_qkv_heads, whose ~97 us is a FIXED cost (same at 10.7x the data).
-  * Block 3 is ~9% of wall and is the least explored part of the pipeline.
+  * Block 3 is NOT a target: 97 ms warm against a ~26 s generation, i.e. 0.4%. Its
+    seconds-scale appearance in a fresh run is first-call kernel compilation per bucket,
+    not compute. An earlier version of this file called it ~9% of wall; that was derived
+    by subtraction and conflated the two. STATUS.md 6.10.
 
 The one structural idea left is throughput, not latency: a 3-token sequence wastes 26 of 32 tile
 rows and nothing in ONE utterance can fill them (Euler steps are sequential, frames are
