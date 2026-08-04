@@ -112,12 +112,22 @@ class ParallelFeedForward(Module):
             ccl_manager=ccl_manager,
         )
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, parallel_config=None) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, compute_kernel_config=None, parallel_config=None, default_block_size=None
+    ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
+
+        `default_block_size` is forwarded to ff1 only, for callers that have measured block sizes for
+        their ff1 shape; ff2 keeps the generic path.
         """
-        ff1_out = self.ff1(x, compute_kernel_config=compute_kernel_config, parallel_config=parallel_config)
+        ff1_out = self.ff1(
+            x,
+            compute_kernel_config=compute_kernel_config,
+            parallel_config=parallel_config,
+            default_block_size=default_block_size,
+        )
         return self.ff2(ff1_out, compute_kernel_config=compute_kernel_config)
 
     def forward_fused_addcmul(

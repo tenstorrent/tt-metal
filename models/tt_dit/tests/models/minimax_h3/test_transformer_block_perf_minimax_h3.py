@@ -50,6 +50,7 @@ from tracy import signpost
 
 import ttnn
 
+from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
@@ -215,6 +216,8 @@ def test_minimax_h3_transformer_block_perf(
     rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
     with torch.no_grad():
         rope_cos, rope_sin = rope(position_ids)
+    # The fused RoPE consumes head_dim-wide tables in the interleaved layout.
+    rope_cos, rope_sin = prepare_rope_tables(rope_cos, rope_sin, HEAD_DIM)
     rotary_dim = rope_cos.shape[-1]
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -228,6 +231,7 @@ def test_minimax_h3_transformer_block_perf(
         hidden_size=HIDDEN_SIZE,
         num_heads=NUM_HEADS,
         head_dim=HEAD_DIM,
+        rotary_dim=2 * 3 * ROPE_FREQ_DIM,
         ffn_dim=FFN_DIM,
         time_embed_dim=TIME_EMBED_DIM,
         norm_eps=NORM_EPS,
