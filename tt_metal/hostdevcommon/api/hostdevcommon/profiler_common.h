@@ -174,7 +174,20 @@ enum SpscControlBuffer {
     // and the host can map it back however it likes. It rides along free in every bulk read, since the
     // control vector is the first 256 B of the span -- a drainer never injects or constructs identity.
     SPSC_CORE_XY = 2 * PROFILER_SPSC_MAX_RISC + 1,
-    SPSC_CONTROL_END,  // first unused word; grow the layout here
+    // Per-RISC count of times this producer BLOCKED on a full ring. Written by the producer itself in the
+    // stall path, read by the host directly out of L1 at teardown.
+    //
+    // This is the knee metric, and it lives here rather than being counted from decoded PROFILER_STALL_ZONE
+    // markers because a marker has to survive the whole pipeline to be counted -- DRISC frame, PCIe FIFO,
+    // buffer pool, decoder, BroadcastRing -- and every one of those can drop it (measured: 1.29 M records
+    // dropped at the ring, ~27 K unaccounted elsewhere). A counter in the producer's own L1 cannot be lost,
+    // and reading it needs no decode at all, so the measurement stops perturbing the thing it measures.
+    //
+    // 8 slots, indexed by processor id: enough for Tensix (5), Eth and DRAM, without pushing
+    // SPSC_CONTROL_END past the 64-word control vector.
+    SPSC_STALL_COUNT_0 = 2 * PROFILER_SPSC_MAX_RISC + 2,
+    SPSC_STALL_COUNT_MAX = 8,
+    SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
 };
 
 // STICKY_META (SPSC/X280 backend): an 8B context packet emitted once per RISC per launch at the main
@@ -246,77 +259,44 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE
 //   [1]                       payload_words = PROFILER_L1_CONTROL_VECTOR_SIZE + shipped ring words
 //   [2 .. PREFIX)             zero
 //   [PREFIX .. +CONTROL)      the worker's profiler control vector, verbatim
-//   [.. +payload)             for each RISC in ascending order, its ring slice(s) (see spsc_span_run)
+//   [.. +payload)             for each RISC in ascending order, its LIVE run, packed exactly
 //   [.. frame_words)          zero pad to a 64 B socket page
 //
-// The host recomputes the slice geometry from the control vector with the SAME helper the drainer used,
-// so there is nothing on the wire to desynchronize: no lane tags, no run lengths, no core id.
+// The host recomputes the geometry from the control vector the frame carries -- run = tail - head per
+// RISC -- so there is nothing on the wire to desynchronize: no lane tags, no run lengths, no core id.
 //
-// Prefix is 16 words (64 B) so the control vector starts at 64 B and the first ring slice at 320 B --
-// both multiples of L1_ALIGNMENT (16 B on Blackhole). Alignment is not a nicety here: the NoC
-// MIS-DELIVERS a misaligned transfer rather than rejecting it.
+// Runs are packed EXACTLY, with no per-lane alignment padding, because the drainer assembles the frame with
+// CPU loads and stores out of a bulk snapshot rather than landing NoC reads into it. That is the payoff of
+// the fused read: L1-local copies are not bound by L1_ALIGNMENT, so the alignment hazard below cannot arise
+// on the payload at all, and the ring wrap is resolved device-side into a flat array.
+//
+// Prefix is 16 words (64 B) so the control vector starts at 64 B and the payload at 320 B -- both
+// multiples of L1_ALIGNMENT (16 B on Blackhole), which keeps the WHOLE-PAGE PCIe write aligned. Alignment
+// is not a nicety here: the NoC MIS-DELIVERS a misaligned transfer rather than rejecting it.
 constexpr static std::uint32_t SPSC_SPAN_PREFIX_WORDS = 16;
 // Wire type code. Must equal PP_BULK_SPAN in tools/x280_bm/include/prof_packet.h, which is plain C and
 // cannot include this header; x280_profzone_decode.hpp static_asserts that the two agree.
 constexpr static std::uint32_t SPSC_SPAN_PACKET_TYPE = 13;
 // Where the packet type sits in word0 of every packet in this stream (PP_TYPE_SHIFT in prof_packet.h).
 constexpr static std::uint32_t SPSC_SPAN_TYPE_SHIFT = 27;
-// Ring slices are cut on this word granularity to keep both ends of every NoC copy 16 B-aligned.
-constexpr static std::uint32_t SPSC_SPAN_ALIGN_WORDS = 4;
 // Socket page granularity, in words -- a frame is padded up to a whole number of these.
+//
+// MEASURED, do not "optimize" again without re-measuring: setting this to the whole frame (2,640 words)
+// collapsed page operations 165x (2.5 M -> 8.9 K) and cut bytes shipped 41%, and bought NOTHING -- total
+// busy time went 34.0 -> 34.3 ms. It also concentrated the same credit-wait into fewer, longer stalls
+// (167 -> 339 us per busy sweep), pushing the worst sweep past the ring-fill deadline and turning 0
+// producer stalls into 952. Socket page bookkeeping is not the host-egress wall.
 constexpr static std::uint32_t SPSC_SPAN_PAGE_WORDS = 16;
 
-struct SpscSpanSlice {
-    std::uint32_t start;  // first word of the slice within the ring
-    std::uint32_t words;  // slice length, always a multiple of SPSC_SPAN_ALIGN_WORDS
-};
-
-// Geometry of one RISC's contribution to a span frame: the aligned ring slices that cover [head, tail),
-// where the live run begins inside the concatenation of those slices, and how long it is. Two slices
-// when the run wraps the ring, one otherwise, none when there is nothing to ship.
+// Live words one RISC contributes to a span frame. With exact packing this is the entire geometry: the
+// drainer ships `run` words and the host consumes `run` words, both derived from the same control vector.
 //
-// Because the slices are concatenated in the page, the host walks `run` words from `skip` LINEARLY --
-// the ring wrap is resolved by the framing, not by modular arithmetic on the host.
-struct SpscSpanRun {
-    SpscSpanSlice slice[2];
-    std::uint32_t nslices;
-    std::uint32_t words;  // total shipped (sum of slice lengths)
-    std::uint32_t skip;   // live run starts this many words into the shipped block
-    std::uint32_t run;    // live words
-};
-
-inline SpscSpanRun spsc_span_run(std::uint32_t head, std::uint32_t tail, std::uint32_t cap) {
-    SpscSpanRun g = {};
-    // Head and tail are monotonic word counters, so the subtraction is wrap-safe. A lossless producer
-    // blocks at capacity, so a run wider than the ring means the control vector was read torn.
-    std::uint32_t run = tail - head;
-    if (run > cap) {
-        run = cap;
-    }
-    g.run = run;
-    if (run == 0) {
-        return g;
-    }
-    const std::uint32_t mask = ~(SPSC_SPAN_ALIGN_WORDS - 1u);
-    const std::uint32_t s = head % cap;
-    const std::uint32_t a = s & mask;
-    g.skip = s - a;
-    const std::uint32_t e = s + run;  // exclusive; may run past the end of the ring
-    if (e <= cap) {
-        const std::uint32_t end = (e + SPSC_SPAN_ALIGN_WORDS - 1u) & mask;
-        g.slice[0].start = a;
-        g.slice[0].words = end - a;
-        g.nslices = 1;
-    } else {
-        const std::uint32_t end2 = (e - cap + SPSC_SPAN_ALIGN_WORDS - 1u) & mask;
-        g.slice[0].start = a;
-        g.slice[0].words = cap - a;
-        g.slice[1].start = 0;
-        g.slice[1].words = end2;
-        g.nslices = 2;
-    }
-    g.words = g.slice[0].words + (g.nslices > 1 ? g.slice[1].words : 0u);
-    return g;
+// Head and tail are monotonic word counters, so the subtraction is wrap-safe. A lossless producer blocks at
+// capacity, so a run wider than the ring means the snapshot was read torn -- clamped here, and counted by
+// the caller rather than trusted.
+inline std::uint32_t spsc_span_live(std::uint32_t head, std::uint32_t tail, std::uint32_t cap) {
+    const std::uint32_t run = tail - head;
+    return run > cap ? cap : run;
 }
 
 inline std::uint32_t spsc_span_w0() { return SPSC_SPAN_PACKET_TYPE << SPSC_SPAN_TYPE_SHIFT; }
@@ -327,9 +307,8 @@ inline std::uint32_t spsc_span_frame_words(std::uint32_t payload_words) {
     return (n + SPSC_SPAN_PAGE_WORDS - 1u) & ~(SPSC_SPAN_PAGE_WORDS - 1u);
 }
 
-static_assert(PROFILER_L1_VECTOR_SIZE % SPSC_SPAN_ALIGN_WORDS == 0, "ring capacity must be slice-aligned");
 static_assert(
     (SPSC_SPAN_PREFIX_WORDS + PROFILER_L1_CONTROL_VECTOR_SIZE) % SPSC_SPAN_PAGE_WORDS == 0,
-    "the first ring slice must land on a socket page boundary");
+    "the payload must start on a socket page boundary");
 
 }  // namespace kernel_profiler
