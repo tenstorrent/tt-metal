@@ -124,8 +124,35 @@ jobs:
       - name: Build runner report matrix
         id: runner_matrix
         if: always() && hashFiles('out/runner_failure_report.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          HOURS: ${{ github.event.inputs.hours || '24' }}
         run: |
-          runner_matrix="$(jq -c '(.runner_failures // {}) | to_entries | map({runner_name: .key, triggering_failures: .value})' out/runner_failure_report.json)"
+          runner_count="$(jq '(.runner_failures // {}) | length' out/runner_failure_report.json)"
+          if [[ "$runner_count" -gt 0 ]]; then
+            python3 .github/scripts/runner_failure_report.py \
+              --hours "$HOURS" \
+              --owner-repo tenstorrent/tt-metal \
+              --export-live-jobs-json out/live_github_jobs.json || {
+                echo "warning: live GitHub enrichment export failed; continuing without precomputed enrichment."
+                printf '{"jobs":[]}\n' > out/live_github_jobs.json
+              }
+          else
+            printf '{"jobs":[]}\n' > out/live_github_jobs.json
+          fi
+          runner_matrix="$(
+            jq -c --slurpfile live out/live_github_jobs.json '
+              (($live[0].jobs // []) | group_by(.runner_name | ascii_downcase) |
+                map({key: (.[0].runner_name | ascii_downcase), value: .}) | from_entries) as $live_by_runner |
+              (.runner_failures // {}) | to_entries |
+              map({
+                runner_name: .key,
+                triggering_failures: .value,
+                enrichment_jobs: ($live_by_runner[(.key | ascii_downcase)] // [])
+              })
+            ' out/runner_failure_report.json
+          )"
           echo "runner_matrix=$runner_matrix" >> "$GITHUB_OUTPUT"
           echo "Runner report matrix: $runner_matrix"
 
@@ -160,12 +187,15 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         runner: ${{ fromJson(needs.scan.outputs.runner_matrix) }}
     uses: ./.github/workflows/runner-failure-report.yaml
     with:
       runner_name: ${{ matrix.runner.runner_name }}
       triggering_failures_json: ${{ toJson(matrix.runner.triggering_failures) }}
+      enrichment_jobs_json: ${{ toJson(matrix.runner.enrichment_jobs) }}
+      run_enrichment: false
       hours: ${{ github.event.inputs.hours || '24' }}
       post_to_slack: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event.inputs.post-to-slack == 'true' }}
     secrets: inherit

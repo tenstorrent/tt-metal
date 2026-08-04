@@ -38,11 +38,24 @@ TCP_IFACE="${3:-ens5f0np0}"
 # (models/demos/common/prefill/runners -> 5 levels up).
 TT_METAL_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 export TT_METAL_HOME PYTHONPATH="$TT_METAL_HOME"
+# ttrun.py runs on THIS (launch) host and must use the venv interpreter (loguru etc.); peer ranks get
+# it via -x PATH below. Activate here so callers don't have to remember to source the venv first.
+[ -z "${VIRTUAL_ENV:-}" ] && [ -f "$TT_METAL_HOME/python_env/bin/activate" ] && source "$TT_METAL_HOME/python_env/bin/activate"
 # Per-host LOCAL JIT cache. A shared (NFS) TT_METAL_CACHE makes both hosts write the same generated
 # kernel files (defines_generated.h, ...) concurrently on a cold cache -> "Stale file handle" compile
 # failures. /tmp is per-host, so each rank compiles into its own dir. ttrun auto-propagates TT_* vars.
 export TT_METAL_CACHE="${PP_TT_METAL_CACHE:-/tmp/tt-metal-cache-pp}"
 cd "$TT_METAL_HOME"
+
+# Optional shell-selected model: forward PREFILL_MANIFEST / PREFILL_MODEL to every rank when set, so a
+# GENERIC binding (one that does not set the model in its global_env) can run any model without a
+# per-model binding, e.g.
+#   PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
+#     ./run_pipeline_prefill.sh <generic_binding.yaml> <host_list>
+# Use this with a binding that leaves the model unset; don't also set it in that binding's global_env.
+FWD_ENV=""
+[ -n "${PREFILL_MANIFEST:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MANIFEST"
+[ -n "${PREFILL_MODEL:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MODEL"
 
 # -x PATH/LD_LIBRARY_PATH: ttrun only forwards TT_*/ARCH_*/... prefixed vars, not PATH, so peer ranks
 # would otherwise resolve a bare `python3` to the system interpreter (no ttnn). Forwarding the launch
@@ -50,5 +63,5 @@ cd "$TT_METAL_HOME"
 exec python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface "$TCP_IFACE" \
   --rank-binding "$RANK_BINDING" \
-  --mpi-args "--host ${HOST_LIST} --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH" \
+  --mpi-args "--host ${HOST_LIST} --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH${FWD_ENV}" \
   python3 -m models.demos.common.prefill.runners.prefill_runner

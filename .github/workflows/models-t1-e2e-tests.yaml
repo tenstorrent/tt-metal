@@ -25,6 +25,8 @@ on:
           - gemma-4-31b
           - flux.1-schnell
           - flux.1-dev
+          - wan-2.2-t2v
+          - wan-2.2-i2v
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -42,6 +44,7 @@ on:
           - "bh_p300 (P300)"
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
+          - "bh_sc4-mgd (BH Supercluster 4 / MGD)"
       platform:
         required: false
         type: choice
@@ -90,7 +93,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc4-mgd"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
@@ -116,11 +119,17 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-e2e-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    # id-token: write is required by the nested exabox multihost job (ttop OIDC). Job-level
+    # permissions replace inherited defaults, so restate the reads the container legs need too.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:

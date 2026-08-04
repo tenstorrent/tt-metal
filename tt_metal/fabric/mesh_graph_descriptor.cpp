@@ -11,6 +11,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
+#include <regex>
+#include <map>
+#include <set>
 #include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
@@ -246,14 +249,17 @@ std::unordered_map<std::string, uint32_t> MeshGraphDescriptor::count_instances_b
     return counts;
 }
 
-FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
-    const auto& dim_types = mesh_desc->device_topology().dim_types();
+namespace {
+
+template <typename Descriptor>
+FabricType infer_declared_fabric_type_from_dim_types(const Descriptor* descriptor) {
+    const auto& dim_types = descriptor->device_topology().dim_types();
     if (dim_types.size() < 2) {
         return FabricType::MESH;
     }
 
-    bool y_is_ring = (dim_types[0] == proto::TorusTopology::RING);
-    bool x_is_ring = (dim_types[1] == proto::TorusTopology::RING);
+    const bool y_is_ring = (dim_types[0] == proto::TorusTopology::RING);
+    const bool x_is_ring = (dim_types[1] == proto::TorusTopology::RING);
 
     if (y_is_ring && x_is_ring) {
         return FabricType::TORUS_XY;
@@ -265,6 +271,16 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Me
         return FabricType::TORUS_X;
     }
     return FabricType::MESH;
+}
+
+}  // namespace
+
+FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
+    return infer_declared_fabric_type_from_dim_types(mesh_desc);
+}
+
+FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc) {
+    return infer_declared_fabric_type_from_dim_types(switch_desc);
 }
 
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
@@ -1580,49 +1596,394 @@ void MeshGraphDescriptor::print_all_nodes() {
     print_node(top_level_id_, 0);
 }
 
+namespace {
+struct IdPatternResult {
+    std::vector<uint32_t> ids;
+    std::string error;
+};
+
+std::string trim_id_pattern(const std::string& pattern) {
+    auto b = pattern.find_first_not_of(" \t");
+    auto e = pattern.find_last_not_of(" \t");
+    return (b == std::string::npos) ? std::string{} : pattern.substr(b, e - b + 1);
+}
+
+bool is_range_list_pattern(const std::string& p) { return p.find_first_not_of("0123456789,- \t") == std::string::npos; }
+
+// Validate range/list/regex syntax without expanding against a domain.
+void validate_id_pattern_syntax(
+    const std::string& pattern, const std::string& field_label, std::vector<std::string>& errors) {
+    const std::string p = trim_id_pattern(pattern);
+    if (p.empty()) {
+        errors.push_back(fmt::format("{} is empty", field_label));
+        return;
+    }
+
+    if (is_range_list_pattern(p)) {
+        std::stringstream ss(p);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            const auto dash = tok.find('-');
+            try {
+                if (dash == std::string::npos) {
+                    if (tok.find_first_not_of("0123456789 \t") != std::string::npos || tok.empty()) {
+                        errors.push_back(fmt::format("{} has malformed token '{}'", field_label, tok));
+                    } else {
+                        (void)std::stoul(tok);
+                    }
+                } else {
+                    if (dash == 0 || dash + 1 >= tok.size()) {
+                        errors.push_back(fmt::format("{} has malformed range token '{}'", field_label, tok));
+                        continue;
+                    }
+                    const auto lo = static_cast<uint32_t>(std::stoul(tok.substr(0, dash)));
+                    const auto hi = static_cast<uint32_t>(std::stoul(tok.substr(dash + 1)));
+                    if (lo > hi) {
+                        errors.push_back(fmt::format("{} has inverted range '{}' in token '{}'", field_label, p, tok));
+                    }
+                }
+            } catch (const std::exception&) {
+                errors.push_back(fmt::format("{} has malformed token '{}'", field_label, tok));
+            }
+        }
+        return;
+    }
+
+    try {
+        (void)std::regex(p);
+    } catch (const std::regex_error& e) {
+        errors.push_back(fmt::format("{} has invalid regex '{}': {}", field_label, p, e.what()));
+    }
+}
+
+// Expand a pinning id pattern against a domain of valid ids. Supports:
+//   - inclusive numeric range   "0-8"          -> ids in domain within 0..8
+//   - comma list of the above   "0,2,4-6"      -> ids in domain matching any token
+//   - std::regex (full match)   "\\d*[02468]"  -> every id whose decimal string matches
+// The result is the subset of `domain` (in domain order) selected by the pattern.
+IdPatternResult expand_id_pattern(const std::string& pattern, const std::vector<uint32_t>& domain) {
+    const std::string p = trim_id_pattern(pattern);
+    IdPatternResult result;
+    if (p.empty()) {
+        result.error = "id pattern is empty";
+        return result;
+    }
+
+    // Pure digits/commas/dashes -> treat as a range/list; anything else -> regex.
+    if (is_range_list_pattern(p)) {
+        struct TokenSpec {
+            bool is_range = false;
+            uint32_t single = 0;
+            uint32_t lo = 0;
+            uint32_t hi = 0;
+        };
+        std::vector<TokenSpec> specs;
+        std::stringstream ss(p);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            const auto dash = tok.find('-');
+            try {
+                if (dash == std::string::npos) {
+                    if (tok.find_first_not_of("0123456789 \t") != std::string::npos || tok.empty()) {
+                        result.error = fmt::format("malformed token '{}'", tok);
+                        return result;
+                    }
+                    specs.push_back({false, static_cast<uint32_t>(std::stoul(tok)), 0, 0});
+                } else {
+                    if (dash == 0 || dash + 1 >= tok.size()) {
+                        result.error = fmt::format("malformed range token '{}'", tok);
+                        return result;
+                    }
+                    const auto lo = static_cast<uint32_t>(std::stoul(tok.substr(0, dash)));
+                    const auto hi = static_cast<uint32_t>(std::stoul(tok.substr(dash + 1)));
+                    if (lo > hi) {
+                        result.error = fmt::format("inverted range in token '{}'", tok);
+                        return result;
+                    }
+                    specs.push_back({true, 0, lo, hi});
+                }
+            } catch (const std::exception&) {
+                result.error = fmt::format("malformed token '{}'", tok);
+                return result;
+            }
+        }
+
+        for (uint32_t id : domain) {
+            for (const auto& spec : specs) {
+                const bool matches = spec.is_range ? (id >= spec.lo && id <= spec.hi) : (id == spec.single);
+                if (matches) {
+                    result.ids.push_back(id);
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+
+    try {
+        const std::regex re(p);
+        for (uint32_t id : domain) {
+            if (std::regex_match(std::to_string(id), re)) {
+                result.ids.push_back(id);
+            }
+        }
+    } catch (const std::regex_error& e) {
+        result.error = fmt::format("invalid regex '{}': {}", p, e.what());
+    }
+    return result;
+}
+
+constexpr uint32_t kPhysicalIdDomainMax = 255;
+
+const std::vector<uint32_t>& physical_id_domain() {
+    static const std::vector<uint32_t> domain = []() {
+        std::vector<uint32_t> ids;
+        ids.reserve(kPhysicalIdDomainMax + 1);
+        for (uint32_t i = 0; i <= kPhysicalIdDomainMax; ++i) {
+            ids.push_back(i);
+        }
+        return ids;
+    }();
+    return domain;
+}
+
+std::vector<AsicPosition> expand_physical_asic_positions(
+    const google::protobuf::RepeatedPtrField<proto::PhysicalAsicPosition>& physical_positions, std::string& error) {
+    const auto& domain = physical_id_domain();
+    std::vector<AsicPosition> positions;
+    std::set<std::pair<uint32_t, uint32_t>> seen;
+    for (const auto& physical_pos : physical_positions) {
+        std::vector<uint32_t> trays;
+        if (physical_pos.tray_id_regex().empty()) {
+            trays = {physical_pos.tray_id()};
+        } else {
+            IdPatternResult tray_result = expand_id_pattern(physical_pos.tray_id_regex(), domain);
+            if (!tray_result.error.empty()) {
+                error = fmt::format("tray_id_regex: {}", tray_result.error);
+                return {};
+            }
+            trays = std::move(tray_result.ids);
+        }
+
+        std::vector<uint32_t> asic_locs;
+        if (physical_pos.asic_location_regex().empty()) {
+            asic_locs = {physical_pos.asic_location()};
+        } else {
+            IdPatternResult loc_result = expand_id_pattern(physical_pos.asic_location_regex(), domain);
+            if (!loc_result.error.empty()) {
+                error = fmt::format("asic_location_regex: {}", loc_result.error);
+                return {};
+            }
+            asic_locs = std::move(loc_result.ids);
+        }
+
+        for (uint32_t tray : trays) {
+            for (uint32_t loc : asic_locs) {
+                if (seen.insert({tray, loc}).second) {
+                    positions.emplace_back(tt::tt_metal::TrayID{tray}, tt::tt_metal::ASICLocation{loc});
+                }
+            }
+        }
+    }
+    return positions;
+}
+
+bool pinning_entry_uses_regex(const proto::AsicPinning& pinning) {
+    for (const auto& n : pinning.logical_fabric_node_id()) {
+        if (!n.mesh_id_regex().empty() || !n.chip_id_regex().empty()) {
+            return true;
+        }
+    }
+    for (const auto& p : pinning.physical_asic_position()) {
+        if (!p.tray_id_regex().empty() || !p.asic_location_regex().empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+}  // namespace
+
 void MeshGraphDescriptor::populate_pinnings() {
     pinnings_.clear();
 
-    // Extract pinnings from top-level pinnings section
-    for (const auto& pinning : proto_->pinnings()) {
-        // Extract LogicalFabricNodeId from proto
-        const auto& logical_node_id = pinning.logical_fabric_node_id();
-        ::tt::tt_fabric::FabricNodeId fabric_node(MeshId{logical_node_id.mesh_id()}, logical_node_id.chip_id());
-
-        // Extract PhysicalAsicPosition from proto and convert to AsicPosition
-        const auto& physical_pos = pinning.physical_asic_position();
-        AsicPosition asic_pos(
-            tt::tt_metal::TrayID{physical_pos.tray_id()}, tt::tt_metal::ASICLocation{physical_pos.asic_location()});
-
-        // Store as pair(AsicPosition, FabricNodeId) for C++ compatibility
-        // MeshId is embedded in FabricNodeId, so no need to group by MeshId
-        pinnings_.emplace_back(asic_pos, fabric_node);
+    // Domain for logical-id regex expansion: instantiated local mesh ids and their chip counts.
+    std::map<uint32_t, uint32_t> mesh_chip_count;  // local mesh_id -> chip count
+    for (GlobalNodeId gid : mesh_instances_) {
+        const auto& inst = get_instance(gid);
+        mesh_chip_count[static_cast<uint32_t>(inst.local_id)] = get_chip_count(inst);
     }
+    std::vector<uint32_t> all_mesh_ids;
+    all_mesh_ids.reserve(mesh_chip_count.size());
+    for (const auto& [m, _] : mesh_chip_count) {
+        all_mesh_ids.push_back(m);
+    }
+
+    // Extract pinnings from the top-level pinnings section, preserving the many-to-many grouping.
+    //
+    // Each AsicPinning entry may list multiple logical fabric nodes and multiple physical ASIC
+    // positions (all-to-all). We keep the group intact here: any listed node may map to any listed
+    // position. Downstream consumers enumerate each group into the existing 1:many pinning format --
+    // one (fabric_node -> asic_positions) entry per node -- so no downstream interface changes. A
+    // single-node/single-position entry reproduces the classic one-to-one pin.
+    for (const auto& pinning : proto_->pinnings()) {
+        std::string expand_error;
+        // Physical positions are shared by every group produced from this entry (regex-expanded when used).
+        const std::vector<AsicPosition> positions =
+            expand_physical_asic_positions(pinning.physical_asic_position(), expand_error);
+        TT_FATAL(expand_error.empty(), "Failed to expand physical ASIC positions: {}", expand_error);
+
+        // Fast path: no regex fields anywhere in this entry -> preserve the original single-group behavior.
+        if (!pinning_entry_uses_regex(pinning)) {
+            AsicPinningGroup group;
+            group.fabric_nodes.reserve(pinning.logical_fabric_node_id().size());
+            for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
+                group.fabric_nodes.emplace_back(MeshId{logical_node_id.mesh_id()}, logical_node_id.chip_id());
+            }
+            group.asic_positions = positions;
+            pinnings_.push_back(std::move(group));
+            continue;
+        }
+
+        // Regex path: expand into concrete (mesh_id -> chips), grouped BY MESH so each matched mesh gets its
+        // own all-to-all group (preserving the per-mesh bijection).
+        std::map<uint32_t, std::vector<uint32_t>> mesh_to_chips;  // ordered mesh -> ordered unique chips
+        std::map<uint32_t, std::set<uint32_t>> seen_chips;
+        for (const auto& n : pinning.logical_fabric_node_id()) {
+            std::vector<uint32_t> meshes;
+            if (n.mesh_id_regex().empty()) {
+                meshes = {n.mesh_id()};
+            } else {
+                IdPatternResult mesh_result = expand_id_pattern(n.mesh_id_regex(), all_mesh_ids);
+                TT_FATAL(
+                    mesh_result.error.empty(),
+                    "Failed to expand mesh_id_regex '{}': {}",
+                    n.mesh_id_regex(),
+                    mesh_result.error);
+                meshes = std::move(mesh_result.ids);
+            }
+            for (uint32_t m : meshes) {
+                std::vector<uint32_t> chips;
+                if (n.chip_id_regex().empty()) {
+                    chips = {n.chip_id()};
+                } else {
+                    std::vector<uint32_t> chip_domain;
+                    auto it = mesh_chip_count.find(m);
+                    const uint32_t cc = (it != mesh_chip_count.end()) ? it->second : 0;
+                    chip_domain.reserve(cc);
+                    for (uint32_t c = 0; c < cc; ++c) {
+                        chip_domain.push_back(c);
+                    }
+                    IdPatternResult chip_result = expand_id_pattern(n.chip_id_regex(), chip_domain);
+                    TT_FATAL(
+                        chip_result.error.empty(),
+                        "Failed to expand chip_id_regex '{}': {}",
+                        n.chip_id_regex(),
+                        chip_result.error);
+                    chips = std::move(chip_result.ids);
+                }
+                for (uint32_t c : chips) {
+                    if (seen_chips[m].insert(c).second) {
+                        mesh_to_chips[m].push_back(c);
+                    }
+                }
+            }
+        }
+        for (const auto& [m, chips] : mesh_to_chips) {
+            AsicPinningGroup group;
+            group.fabric_nodes.reserve(chips.size());
+            for (uint32_t c : chips) {
+                group.fabric_nodes.emplace_back(MeshId{m}, c);
+            }
+            group.asic_positions = positions;
+            pinnings_.push_back(std::move(group));
+        }
+    }
+
+    // A logical fabric node may appear in several pinning groups. Each group is carried through as its own
+    // constraint; the consumer filters out whatever is not present on the physical mesh being solved and
+    // applies the rest, so a node listed in a wide group and in a 1:1 anchor is narrowed by the anchor.
 }
 
 void MeshGraphDescriptor::validate_pinnings(
     const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
-    // Track duplicate pinnings for the same logical_fabric_node_id
-    std::map<std::pair<uint32_t, uint32_t>, uint32_t> fabric_node_pinning_count;
-
     for (const auto& pinning : proto.pinnings()) {
-        const auto& logical_node_id = pinning.logical_fabric_node_id();
-
-        uint32_t mesh_id = logical_node_id.mesh_id();
-        uint32_t chip_id = logical_node_id.chip_id();
-
-        // Check for duplicate pinnings
-        auto key = std::make_pair(mesh_id, chip_id);
-        fabric_node_pinning_count[key]++;
-        if (fabric_node_pinning_count[key] > 1) {
-            error_messages.push_back(
-                fmt::format("Duplicate pinning for fabric node (mesh_id: {}, chip_id: {})", mesh_id, chip_id));
+        // All-to-all entries must list at least one logical node and at least one physical position.
+        if (pinning.logical_fabric_node_id().empty()) {
+            error_messages.push_back("Pinning entry has no logical_fabric_node_id");
+        }
+        if (pinning.physical_asic_position().empty()) {
+            error_messages.push_back("Pinning entry has no physical_asic_position");
         }
 
-        // Validate that mesh_id exists in the mesh instances
-        // Note: We can't fully validate chip_id range without knowing which mesh descriptor
-        // corresponds to which mesh_id, but we can at least check that mesh_id is reasonable
-        // More precise validation would require checking the top_level_instance structure
+        // A single pinning entry must not mix regex and non-regex logical_fabric_node_id fields.
+        // Allowing both would make expansion ambiguous (literal nodes vs pattern-expanded nodes in
+        // the same group).
+        bool has_regex_node = false;
+        bool has_non_regex_node = false;
+        for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
+            if (!logical_node_id.mesh_id_regex().empty() || !logical_node_id.chip_id_regex().empty()) {
+                has_regex_node = true;
+            } else {
+                has_non_regex_node = true;
+            }
+        }
+        if (has_regex_node && has_non_regex_node) {
+            error_messages.push_back(
+                "Pinning entry mixes regex and non-regex logical_fabric_node_id fields; use separate entries");
+        }
+
+        for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
+            if (!logical_node_id.mesh_id_regex().empty()) {
+                validate_id_pattern_syntax(
+                    logical_node_id.mesh_id_regex(), "logical_fabric_node_id.mesh_id_regex", error_messages);
+            }
+            if (!logical_node_id.chip_id_regex().empty()) {
+                validate_id_pattern_syntax(
+                    logical_node_id.chip_id_regex(), "logical_fabric_node_id.chip_id_regex", error_messages);
+            }
+            if (!logical_node_id.mesh_id_regex().empty() && logical_node_id.has_mesh_id()) {
+                error_messages.push_back(
+                    "logical_fabric_node_id sets both mesh_id_regex and mesh_id; use one or the other");
+            }
+            if (!logical_node_id.chip_id_regex().empty() && logical_node_id.has_chip_id()) {
+                error_messages.push_back(
+                    "logical_fabric_node_id sets both chip_id_regex and chip_id; use one or the other");
+            }
+        }
+
+        // A single pinning entry must not mix regex and non-regex physical_asic_position fields.
+        bool has_regex_physical = false;
+        bool has_non_regex_physical = false;
+        for (const auto& physical_pos : pinning.physical_asic_position()) {
+            if (!physical_pos.tray_id_regex().empty() || !physical_pos.asic_location_regex().empty()) {
+                has_regex_physical = true;
+            } else {
+                has_non_regex_physical = true;
+            }
+        }
+        if (has_regex_physical && has_non_regex_physical) {
+            error_messages.push_back(
+                "Pinning entry mixes regex and non-regex physical_asic_position fields; use separate entries");
+        }
+
+        for (const auto& physical_pos : pinning.physical_asic_position()) {
+            if (!physical_pos.tray_id_regex().empty()) {
+                validate_id_pattern_syntax(
+                    physical_pos.tray_id_regex(), "physical_asic_position.tray_id_regex", error_messages);
+            }
+            if (!physical_pos.asic_location_regex().empty()) {
+                validate_id_pattern_syntax(
+                    physical_pos.asic_location_regex(), "physical_asic_position.asic_location_regex", error_messages);
+            }
+            if (!physical_pos.tray_id_regex().empty() && physical_pos.has_tray_id()) {
+                error_messages.push_back(
+                    "physical_asic_position sets both tray_id_regex and tray_id; use one or the other");
+            }
+            if (!physical_pos.asic_location_regex().empty() && physical_pos.has_asic_location()) {
+                error_messages.push_back(
+                    "physical_asic_position sets both asic_location_regex and asic_location; use one or the other");
+            }
+        }
     }
 }
 }  // namespace tt::tt_fabric

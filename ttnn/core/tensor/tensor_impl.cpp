@@ -16,6 +16,7 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -37,6 +38,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <tracy/Tracy.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::tensor_impl {
 
@@ -329,12 +331,12 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
 }
 
 template <>
-std::string to_string_impl<tt::tt_metal::tensor_impl::bfloat8_b>(const ttnn::Tensor& tensor) {
+std::string to_string_impl<bfloat8_b>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
 template <>
-std::string to_string_impl<tt::tt_metal::tensor_impl::bfloat4_b>(const ttnn::Tensor& tensor) {
+std::string to_string_impl<bfloat4_b>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
@@ -344,7 +346,7 @@ std::string to_string_impl<float8_e4m3>(const ttnn::Tensor& tensor) {
 }
 
 std::string to_string(const ttnn::Tensor& tensor) {
-    return tt::tt_metal::tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
+    return dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
 }
 
 // ======================================================================================
@@ -431,7 +433,7 @@ tt::tt_metal::HostTensor view(
 
     // TODO (#25340): Review tensor topology logic for reshape
     const auto& buffer = tensor.buffer();
-    return tt::tt_metal::HostTensor::from_buffer(buffer, new_spec, tensor.tensor_topology());
+    return host_tensor_from_buffer_with_topology(buffer, new_spec, tt::tt_metal::get_tensor_topology(tensor));
 }
 
 // ======================================================================================
@@ -456,14 +458,12 @@ ttnn::Tensor extract_shard_impl(const ttnn::Tensor& tensor, const uint32_t& core
 }
 
 template <>
-ttnn::Tensor extract_shard_impl<tt::tt_metal::tensor_impl::bfloat8_b>(
-    const ttnn::Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl<bfloat8_b>(const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
 template <>
-ttnn::Tensor extract_shard_impl<tt::tt_metal::tensor_impl::bfloat4_b>(
-    const ttnn::Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl<bfloat4_b>(const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
@@ -475,8 +475,7 @@ ttnn::Tensor extract_shard_impl<float8_e4m3>(const ttnn::Tensor&, const uint32_t
 }
 
 ttnn::Tensor extract_shard(const ttnn::Tensor& tensor, const uint32_t& core_id) {
-    return tt::tt_metal::tensor_impl::dispatch(
-        tensor.dtype(), [&]<typename T>() { return extract_shard_impl<T>(tensor, core_id); });
+    return dispatch(tensor.dtype(), [&]<typename T>() { return extract_shard_impl<T>(tensor, core_id); });
 }
 
 }  // namespace ttnn::tensor_impl

@@ -83,8 +83,28 @@ void report_result(const string& target_name, string_view op, const string& cmd,
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
+    if (!ec) {
+        return;
+    }
+    // Fall back to copying, but use the non-throwing overload so a failure is
+    // reported with both paths and both error codes instead of escaping as a bare
+    // std::filesystem_error.
+    //
+    // Note we deliberately do NOT treat an already-existing `link` as reusable, even
+    // when it is already equivalent to `target`. Temp object names are per-process
+    // (see FileRenamer::generate_temp_path) and the caller removes them once linking
+    // finishes, so adopting another process's temp file would let that process delete
+    // it while our LTO link still has it open.
+    const std::error_code link_ec = ec;
+    ec.clear();
+    std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing, ec);
     if (ec) {
-        std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing);
+        TT_THROW(
+            "Failed to hard link or copy {} to {}: copy failed with '{}' (hard link failed with '{}')",
+            target.string(),
+            link.string(),
+            ec.message(),
+            link_ec.message());
     }
 }
 
@@ -238,6 +258,10 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_kernels_early_return()) {
         this->defines_ += "-DDEBUG_EARLY_RETURN_KERNELS ";
+    }
+
+    if (rtoptions.get_measure_dfb_init_time_enabled()) {
+        this->defines_ += "-DDFB_INIT_TIMING_ENABLED ";
     }
 
     if (rtoptions.get_watcher_debug_delay()) {

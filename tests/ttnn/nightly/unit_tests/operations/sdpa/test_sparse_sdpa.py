@@ -305,3 +305,50 @@ def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv, expected_ms):
 def test_sparse_sdpa_perf_scaled_fp8_production(device, H):
     """Production DeepSeek and GLM geometries using the scaled mixed-format cache."""
     _run_sparse_sdpa_perf(device, H, 640, 56320, 2048, 256, "dense", "scaled_fp8")
+
+
+@run_for_blackhole()
+@skip_with_watcher("Watcher perturbs host dispatch timing.")
+def test_sparse_sdpa_indexed_cache_hit_host_dispatch_is_cheap(device):
+    """The indexed cache hit must patch runtime args in place, not re-run create_descriptor. A rebuild-on-hit
+    stays one cache entry (invisible to entry-count asserts) yet its host cost scales with the full compute grid
+    and is paid on every indexed-decode dispatch. Host enqueue time is the only signal, so assert min-of-N stays
+    an order of magnitude below the >1ms a full-descriptor rebuild costs on the production grid."""
+    import time
+
+    H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 8
+    device.clear_program_cache()
+    gen = torch.Generator().manual_seed(0)
+    q = torch.randn(1, H, S, K_DIM, generator=gen, dtype=torch.float32)
+    kv_full = torch.randn(B, 1, T, K_DIM, generator=gen, dtype=torch.float32)
+    indices = torch.stack([torch.randperm(T, generator=gen)[:TOPK] for _ in range(S)]).reshape(1, 1, S, TOPK)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_kv = to_dev(kv_full.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+
+    def hit(cb):
+        return ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_kv,
+            tt_idx,
+            V_DIM,
+            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            k_chunk_size=kc,
+            cache_batch_idx=cb,
+        )
+
+    hit(0)  # warm: cache miss / compile
+    entries = device.num_program_cache_entries()
+    samples = []
+    for i in range(200):
+        t0 = time.perf_counter_ns()
+        hit(i % B)  # vary the slot so the override actually re-applies kv_batch_page_offset
+        samples.append(time.perf_counter_ns() - t0)
+    ttnn.synchronize_device(device)
+    assert device.num_program_cache_entries() == entries, "timed calls must be pure cache hits"
+    min_us = min(samples) / 1000.0
+    logger.info(f"sparse_sdpa indexed cache-hit host dispatch: min={min_us:.1f}us over {len(samples)} hits")
+    assert min_us < 1000.0, (
+        f"indexed cache-hit host dispatch {min_us:.0f}us: override_runtime_arguments is rebuilding the full "
+        f"descriptor on every hit instead of patching the runtime-arg slots in place"
+    )

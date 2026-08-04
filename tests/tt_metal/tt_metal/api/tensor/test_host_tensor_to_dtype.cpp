@@ -15,8 +15,8 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
@@ -84,10 +84,7 @@ std::pair<UnpackedBfp, PackedBfp> generate_float_to_bfp4_dataset(const Shape& sh
 
 template <typename T>
 HostTensor make_host_tensor(std::vector<T> data, const TensorSpec& spec) {
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [data = std::move(data)]() mutable { return HostBuffer(std::move(data)); });
-    return HostTensor::from_buffer(std::move(dist_buffer), spec, TensorTopology{});
+    return HostTensor::from_buffer(HostBuffer(std::move(data)), spec);
 }
 
 bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
@@ -120,41 +117,6 @@ TEST(HostTensorToDtype, NonBfpPreservesMetadata) {
     EXPECT_EQ(result.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(result.layout(), Layout::TILE);
     EXPECT_EQ(result.tensor_spec().tile(), tile);
-}
-
-TEST(HostTensorToDtype, RowMajorToBfpChangesLayoutToTileAndPreservesTile) {
-    const Shape shape{32, 32};
-    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto alignment = tt::tt_metal::Alignment({32, 32});
-    auto tile = Tile({16, 16});
-
-    // Create a ROW_MAJOR tensor, but specify a tile in the page config (embedded tile)
-    auto source_spec = TensorSpec(
-        shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR, tile), memory_config, alignment));
-    auto source = HostTensor::from_vector<float>(data, source_spec);
-
-    auto result = to_dtype(source, DataType::BFLOAT8_B);
-
-    auto expected_spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
-    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
-    EXPECT_EQ(result.layout(), Layout::TILE);
-    EXPECT_EQ(result.tensor_spec().tile(), tile);
-
-    // Value check on the aligned supported path
-    // We can unpack the BFP8_B data to float and check if it matches the original data
-    auto result_packed_data = host_buffer::get_as<uint32_t>(result);
-    auto unpacked_data =
-        unpack_bfp8_tiles_into_float_vec(result_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-    auto rm_data =
-        tensor_impl::to_row_major_layout(expected_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_data));
-
-    EXPECT_EQ(rm_data.size(), data.size());
-    for (size_t i = 0; i < data.size(); ++i) {
-        EXPECT_NEAR(rm_data[i], data[i], 1.0f);
-    }
 }
 
 TEST(HostTensorToDtype, TileBfp8ToFloat32ValueCheck) {
@@ -340,10 +302,7 @@ TEST(HostTensorToDtype, OversizedBufferToDtype) {
     auto oversized_data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume() + 100);
 
     // Create tensor from buffer (from_buffer accepts oversized buffers if they are large enough)
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<float>(oversized_data)); });
-    auto host_tensor = HostTensor::from_buffer(std::move(dist_buffer), spec, TensorTopology{});
+    auto host_tensor = HostTensor::from_buffer(HostBuffer(std::vector<float>(oversized_data)), spec);
 
     // Currently to_dtype asserts on exact packed size, so it will fail if it's oversized.
     EXPECT_ANY_THROW(to_dtype(host_tensor, DataType::BFLOAT16));
@@ -359,12 +318,8 @@ TEST(HostTensorToDtype, UndersizedBufferToDtypeThrows) {
     // Create an undersized buffer
     auto undersized_data = std::vector<uint32_t>(10, 0);  // Much smaller than required
 
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<uint32_t>(undersized_data)); });
-
     // from_buffer doesn't check size, so this succeeds
-    auto host_tensor = HostTensor::from_buffer(std::move(dist_buffer), spec, TensorTopology{});
+    auto host_tensor = HostTensor::from_buffer(HostBuffer(std::vector<uint32_t>(undersized_data)), spec);
 
     EXPECT_ANY_THROW(to_dtype(host_tensor, DataType::FLOAT32));
 }
@@ -379,11 +334,7 @@ TEST(HostTensorToDtype, MalformedBfpBufferToDtypeThrows) {
     size_t expected_size_bytes = spec.compute_packed_buffer_size_bytes();
     auto malformed_data = std::vector<uint32_t>((expected_size_bytes / sizeof(uint32_t)) - 1, 0);
 
-    auto dist_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    dist_buffer.emplace_shard(
-        distributed::MeshCoordinate(0, 0), [&]() { return HostBuffer(std::vector<uint32_t>(malformed_data)); });
-
-    auto host_tensor = HostTensor::from_buffer(std::move(dist_buffer), spec, TensorTopology{});
+    auto host_tensor = HostTensor::from_buffer(HostBuffer(std::vector<uint32_t>(malformed_data)), spec);
 
     EXPECT_ANY_THROW(to_dtype(host_tensor, DataType::FLOAT32));
 }
@@ -391,16 +342,15 @@ TEST(HostTensorToDtype, RowMajorToBfpPhysicalMismatchThrows) {
     const Shape shape{32, 24};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    // Alignment that is NOT a multiple of 16 (tile size)
+    // Alignment that is NOT a multiple of the default tile width
     auto alignment = tt::tt_metal::Alignment({32, 24});
-    auto tile = Tile({16, 16});
 
-    auto source_spec = TensorSpec(
-        shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR, tile), memory_config, alignment));
+    auto source_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
     auto source = HostTensor::from_vector<float>(data, source_spec);
 
-    // This should throw because BFLOAT8_B forces TILE layout, which forces alignment to be multiple of 16
-    // So output physical shape width will be 32 instead of 24
+    // This should throw because BFLOAT8_B forces TILE layout, which forces alignment to be
+    // a multiple of the tile size. So output physical shape width will be 32 instead of 24.
     EXPECT_ANY_THROW(to_dtype(source, DataType::BFLOAT8_B));
 }
 

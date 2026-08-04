@@ -110,6 +110,6 @@ void kernel_main() {
     copy_tile_to_dst_init_short(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1, cb_out1);
+    tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 }

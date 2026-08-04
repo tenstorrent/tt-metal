@@ -18,6 +18,7 @@ import torch
 import ttnn
 from typing import Optional, Dict, Tuple
 import ast
+from loguru import logger
 
 
 def parse_placement_from_traced(tensor_placement: Optional[Dict]) -> Optional[ttnn.TensorMemoryLayout]:
@@ -190,7 +191,240 @@ def shard_grid_bounds(mc):
     return max_x, max_y
 
 
+# ── Job-level device reuse (opt-in via TTNN_SWEEP_JOB_DEVICE=1) ───────────────
+# When the sweeps runner keeps ONE process per job (persistent worker), a single
+# open mesh device is reused across every module/vector that needs the SAME
+# device configuration, and only reopened when the resolved config actually
+# changes. This avoids the per-module device reopen that force-reinitializes
+# dispatch on Galaxy and wedges a dispatch core (run_mailbox=0x40). Every module
+# opens its device through create_mesh_device() and closes via
+# ttnn.close_mesh_device(), so caching + a deferred-close guard here is
+# transparent to the modules (a module that opens its own device just gets the
+# cached one; its per-module close is deferred to job end / config change).
+# Device-count boundary between single-host clusters (N150=1, N300=2, T3K=8) and
+# multi-host Galaxy (32 chips). Galaxy is the only place the per-module device
+# reopen wedges a dispatch core, so job-level device reuse is gated to clusters
+# with MORE than this many devices.
+_SINGLE_HOST_MAX_DEVICES = 8
+
+_JOB_DEVICE = None
+_JOB_DEVICE_KEY = None
+_orig_close_mesh_device = ttnn.close_mesh_device
+
+
+def _job_device_enabled() -> bool:
+    """Job-level device reuse is opt-in (TTNN_SWEEP_JOB_DEVICE=1) AND restricted to
+    Galaxy (>8 devices). The per-module device reopen it avoids only force-reinits
+    dispatch (and wedges a core) on Galaxy; single-host (N150/N300/T3K) has no such
+    issue AND has modules that take a SINGLE-device path (ttnn.open_device, e.g.
+    clamp/fast_reduce_nc when get_mesh_shape() returns None on 1 chip) that would
+    collide with a held cached mesh device. Gating to Galaxy keeps every single-host
+    lane on the original per-module behavior. TTNN_SWEEP_JOB_DEVICE_FORCE=1 bypasses
+    the device-count gate (for validation on smaller clusters)."""
+    if os.environ.get("TTNN_SWEEP_JOB_DEVICE") != "1":
+        return False
+    if os.environ.get("TTNN_SWEEP_JOB_DEVICE_FORCE") == "1":
+        return True
+    try:
+        return ttnn.get_num_devices() > _SINGLE_HOST_MAX_DEVICES
+    except Exception:
+        return False
+
+
+def _axis_token(dispatch_core_axis):
+    """Canonical lowercase token ('row'/'col') for a dispatch axis.
+
+    str(ttnn.DispatchCoreAxis.COL) is 'DispatchCoreAxis.COL' while the
+    TTNN_DISPATCH_AXIS env override is 'col'. Keying on the raw str() made those two
+    DIFFERENT keys for the SAME physical device, so a module that derived COL from its
+    vector grid missed the cache against the worker's env-derived 'col' device and did a
+    full close+reopen -- on Galaxy every needless reopen risks wedging a dispatch core
+    (run_mailbox=0x40). Measured on the Galaxy vector set: 18 of the 44 reopens in the
+    modules that open per vector were this mismatch alone (linear: 19 of its 68 vectors).
+    """
+    return str(dispatch_core_axis).split(".")[-1].strip().lower()
+
+
+def _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth):
+    """Canonical key for the device config create_mesh_device WOULD open. Must be
+    identical for the same intended device regardless of whether the caller passes
+    an explicit axis or relies on env/auto-detect, so the worker's open and a
+    module's own _ensure_*_device() open collapse to one cached device. Returns
+    None when the config can't be keyed safely (auto axis with no env override) —
+    caching is skipped so an ambiguous config never returns the wrong device."""
+    arch = os.environ.get("ARCH_NAME", "").lower()
+    if not arch:
+        try:
+            arch = ttnn.get_arch_name().lower()
+        except Exception:
+            arch = ""
+    if "blackhole" in arch:
+        disp = ("default",)
+    else:
+        try:
+            single_host = ttnn.get_num_devices() <= _SINGLE_HOST_MAX_DEVICES
+        except Exception:
+            single_host = False
+        if single_host and prefer_eth:
+            disp = ("ETH",)  # ETH intent (may fall back to WORKER, but the key stays consistent)
+        elif dispatch_core_axis is not None:
+            disp = ("WORKER", _axis_token(dispatch_core_axis))
+        else:
+            env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
+            if env_axis in ("col", "row"):
+                disp = ("WORKER", env_axis)
+            else:
+                return None  # auto-detect axis is op-dependent -> not safe to share
+    return (tuple(mesh_shape), int(l1_small_size), bool(prefer_eth), disp)
+
+
 def create_mesh_device(
+    mesh_shape: Tuple[int, int],
+    device_ids: Optional[list] = None,
+    l1_small_size: int = 79104,
+    dispatch_core_axis=None,
+    prefer_eth: bool = True,
+) -> ttnn.MeshDevice:
+    """Open a mesh device, reusing a cached job-level device when
+    TTNN_SWEEP_JOB_DEVICE=1 and the resolved config matches (see
+    _job_device_key). On a config change the prior job device is closed first so
+    the reopen/reconfig is legal (SetFabricConfig requires no open devices)."""
+    if not _job_device_enabled():
+        return _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
+
+    global _JOB_DEVICE, _JOB_DEVICE_KEY
+    key = _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth)
+    if key is None:
+        # Not safely keyable (e.g. auto-detect axis) -> don't cache this device.
+        # Close any live cached device FIRST so this uncached open never runs a
+        # SECOND mesh alongside it (the open guard also closes, but do it
+        # explicitly here so the one-live-device invariant is local and obvious).
+        # Refuse if the close fails rather than open a second live mesh.
+        if _JOB_DEVICE is not None and not close_job_device():
+            raise RuntimeError(
+                "create_mesh_device: refusing an unkeyable open because the cached "
+                "job device could not be closed (would leave two live mesh devices)"
+            )
+        return _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
+
+    if _JOB_DEVICE is not None and _JOB_DEVICE_KEY == key:
+        return _JOB_DEVICE
+    if _JOB_DEVICE is not None:
+        # Config changed: really close the old device before opening the new one
+        # (a device must be closed before a fabric reconfig). If the close FAILS,
+        # refuse to reopen -- a second live mesh corrupts context state; surface
+        # the teardown error instead of silently reopening. close_job_device()
+        # nulls _JOB_DEVICE/_KEY on success.
+        if not close_job_device():
+            raise RuntimeError(
+                "create_mesh_device: refusing to reopen on a config change because "
+                "the prior job device could not be closed (would leave two live meshes)"
+            )
+    _JOB_DEVICE = _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
+    _JOB_DEVICE_KEY = key
+    return _JOB_DEVICE
+
+
+def _guarded_close_mesh_device(device, *args, **kwargs):
+    """Deferred close: a module's per-module/per-vector close of the shared job
+    device is a no-op (it stays open for the next module); the real close happens
+    at job end (close_job_device) or on a config change (in create_mesh_device)."""
+    if _JOB_DEVICE is not None and device is _JOB_DEVICE:
+        return None
+    return _orig_close_mesh_device(device, *args, **kwargs)
+
+
+# Install the deferred-close guard. No-op behavior when the job device is disabled
+# (or nothing is cached), since it just passes through to the original close.
+ttnn.close_mesh_device = _guarded_close_mesh_device
+
+
+_orig_set_fabric_config = getattr(ttnn, "set_fabric_config", None)
+
+
+def _guarded_set_fabric_config(*args, **kwargs):
+    """A fabric config change requires ALL devices closed. Modules that change
+    fabric (e.g. conv2d heavy<->light: close -> set_fabric_config -> reopen) call
+    ttnn.close_mesh_device first, but that is deferred for the cached job device —
+    so really close it here before the reconfig, or metal asserts 'SetFabricConfig
+    not allowed while devices are still open'. create_mesh_device reopens after.
+    If the close FAILS, refuse the reconfig rather than reconfigure fabric with a
+    live device (which is illegal / corrupts state)."""
+    if not close_job_device():
+        raise RuntimeError(
+            "set_fabric_config: refusing to reconfigure fabric because the cached job "
+            "device could not be closed (a live mesh would make the reconfig illegal)"
+        )
+    return _orig_set_fabric_config(*args, **kwargs)
+
+
+if _orig_set_fabric_config is not None:
+    ttnn.set_fabric_config = _guarded_set_fabric_config
+
+
+_orig_open_mesh_device = ttnn.open_mesh_device
+
+
+def _guarded_open_mesh_device(*args, **kwargs):
+    """Some modules (linear/matmul gather_in0 ring, batched DRAM-sharded) open their
+    OWN mesh device directly via ttnn.open_mesh_device instead of create_mesh_device,
+    so they bypass the job-device cache. With the deferred-close guard the cached job
+    device stays open, so a direct open would run a SECOND device alongside it — on
+    Galaxy that corrupts device/context state (TT_FATAL metal_context.cpp:74
+    'context_id ... is invalid', kernel.cpp:443 'binary not found', dispatch.cpp:254
+    event-order). Really close the cached job device first so only ONE device is ever
+    open; the next create_mesh_device reopens and re-caches it. Safe against the
+    cache-miss reopen path in create_mesh_device (which nulls _JOB_DEVICE before
+    calling _create_mesh_device_uncached -> here close_job_device is a no-op) and
+    calls _orig_open_mesh_device (not the wrapper), so no re-entrancy. If the close
+    FAILS, refuse to open rather than leave two live mesh devices."""
+    if _job_device_enabled():
+        if not close_job_device():
+            raise RuntimeError(
+                "open_mesh_device: refusing to open a new mesh because the cached job "
+                "device could not be closed (would leave two live mesh devices)"
+            )
+    return _orig_open_mesh_device(*args, **kwargs)
+
+
+ttnn.open_mesh_device = _guarded_open_mesh_device
+
+
+def clear_job_device_program_cache() -> None:
+    """Clear the cached job device's program cache — call at each module boundary
+    so a new module doesn't collide with an earlier module's cached programs /
+    kernel binaries on the reused device (TT_FATAL kernel.cpp:443 'binary not
+    found')."""
+    if _JOB_DEVICE is not None:
+        try:
+            _JOB_DEVICE.clear_program_cache()
+        except Exception:
+            pass
+
+
+def close_job_device() -> bool:
+    """Really close the cached job device (job end / worker teardown, config
+    change, fabric reconfig).
+
+    Returns True on success (or when nothing is cached). On a close FAILURE it
+    KEEPS _JOB_DEVICE set (does not forget it) and returns False, so callers that
+    require all devices closed before proceeding — a fabric reconfig or a fresh
+    mesh open — can refuse rather than run a second live mesh and corrupt context.
+    Best-effort teardown callers may ignore the result."""
+    global _JOB_DEVICE, _JOB_DEVICE_KEY
+    if _JOB_DEVICE is None:
+        return True
+    try:
+        _orig_close_mesh_device(_JOB_DEVICE)
+    except Exception:
+        logger.exception("close_job_device: failed to close the cached job device; keeping it cached")
+        return False
+    _JOB_DEVICE = None
+    _JOB_DEVICE_KEY = None
+    return True
+
+
+def _create_mesh_device_uncached(
     mesh_shape: Tuple[int, int],
     device_ids: Optional[list] = None,
     l1_small_size: int = 79104,
@@ -261,7 +495,7 @@ def create_mesh_device(
     # ETH dispatch cores can't be allocated and a failed ETH open re-inits
     # MetalContext and wedges the command queue, so leave those on WORKER.
     try:
-        _single_host = ttnn.get_num_devices() <= 8
+        _single_host = ttnn.get_num_devices() <= _SINGLE_HOST_MAX_DEVICES
     except Exception:
         _single_host = False
     # prefer_eth=False lets a caller opt out of ETH dispatch. conv2d needs WORKER
@@ -1062,6 +1296,29 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
     return None
 
 
+_LOGGED_MESH_SHAPE = None
+
+
+def _log_resolved_mesh_shape(shape, source):
+    """Log the resolved model-traced mesh shape once per process, then return it.
+
+    Nothing else in a sweep run records which mesh shape was opened, so a job whose
+    vectors were traced across several topologies gave no way to tell from the logs which
+    one they actually ran on (verified against Galaxy job 90192732565: MESH_DEVICE_SHAPE
+    never appears, and neither does any opened-shape line). Logged once, not per vector,
+    to keep it out of the per-vector noise.
+    """
+    global _LOGGED_MESH_SHAPE
+    entry = (tuple(shape), source)
+    if _LOGGED_MESH_SHAPE != entry:
+        _LOGGED_MESH_SHAPE = entry
+        try:
+            logger.info(f"SWEEPS: model-traced mesh shape resolved to {tuple(shape)} via {source}.")
+        except Exception:
+            pass  # logging must never break device setup
+    return shape
+
+
 def get_model_traced_mesh_shape() -> Tuple[int, int]:
     """Get mesh shape for model-traced sweep modules.
 
@@ -1070,11 +1327,28 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     only reproduced when the sweep re-executes on a mesh device.
 
     Priority: MESH_DEVICE_SHAPE env var > master JSON > auto-detect.
+
+    NOTE the priority list is misleading: get_mesh_shape() ALREADY falls back to hardware
+    auto-detect, so it returns non-None on any host with >= 2 devices and the master-JSON
+    and auto-detect blocks below are unreachable there. They only run on a single-device
+    host (or before ttnn is initialised). On Galaxy the answer is therefore always (4, 8),
+    from auto-detect -- the master JSON never influences it.
+
+    Only ttnn-model-trace-sweep-validation-impl.yaml sets MESH_DEVICE_SHAPE (per matrix
+    batch); ttnn-run-sweeps-impl.yaml does not, and never downloads the master JSON either
+    (the sweep job pulls only the 'sweeps-vectors' artifact). So a lead-model Galaxy job
+    runs every vector on (4, 8) even though its vectors were traced across several
+    topologies (4x8: 1138, 4x4: 413, 8x4: 366, 1x32: 38, 1x1: 37). The 404 traced at
+    (8, 4)/(1, 32) fail create_tensor_on_mesh's actual_rows/cols >= traced_rows/cols test
+    and fall back to ReplicateTensorToMesh. The result is logged (once per process)
+    because nothing else in a run records it -- verified absent from Galaxy job
+    90192732565's log, which is why this was invisible in CI.
     """
     # Env var takes priority — CI sets this per batch to match traced topology.
     shape = get_mesh_shape()
     if shape:
-        return shape
+        _src = "MESH_DEVICE_SHAPE env" if os.environ.get("MESH_DEVICE_SHAPE", "").strip() else "hardware auto-detect"
+        return _log_resolved_mesh_shape(shape, _src)
 
     # Fall back to master JSON, filtering by current arch AND card count.
     try:
@@ -1105,6 +1379,15 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
 
             with open(_master_path) as _f_ms:
                 _m_ms = _json_ms.load(_f_ms)
+            # Tally EVERY matching config's shape and take the most common one rather
+            # than returning the first hit. The scan walks ALL ops, so "first" was
+            # whichever op happened to lead the JSON, not the op being run: with the
+            # 32-card master JSON it yields ttnn.add's (8, 4) even when running softmax,
+            # although (4, 8) is the majority (1138 vectors vs 366). This branch is only
+            # reachable on a single-device host (see the docstring), so this is a
+            # correctness/consistency fix rather than a behaviour change on Galaxy --
+            # majority-wins now agrees with what auto-detect picks.
+            _shape_votes = {}
             for _op_ms in _m_ms.get("operations", {}).values():
                 for _cfg_ms in _op_ms.get("configurations", []):
                     _mi_ms = _cfg_ms.get("traced_machine_info") or {}
@@ -1133,7 +1416,11 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                         if isinstance(_ms_val, str):
                             _ms_val = _ast_ms.literal_eval(_ms_val)
                         if isinstance(_ms_val, list) and len(_ms_val) == 2:
-                            return tuple(_ms_val)
+                            _key_ms = tuple(_ms_val)
+                            _shape_votes[_key_ms] = _shape_votes.get(_key_ms, 0) + 1
+            if _shape_votes:
+                _best = max(_shape_votes.items(), key=lambda kv: kv[1])[0]
+                return _log_resolved_mesh_shape(_best, f"master JSON majority of {_shape_votes}")
     except Exception:
         pass  # Intentionally ignored: master config parsing is best-effort, fall through to auto-detect
     # Auto-detect mesh shape from available hardware.
@@ -1142,16 +1429,16 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     try:
         num_devices = ttnn.get_num_devices()
         if num_devices >= 32:
-            return (4, 8)  # Galaxy
+            return _log_resolved_mesh_shape((4, 8), f"auto-detect ({num_devices} devices, Galaxy)")
         elif num_devices >= 8:
-            return (1, 8)  # T3000
+            return _log_resolved_mesh_shape((1, 8), f"auto-detect ({num_devices} devices, T3000)")
         elif num_devices >= 2:
-            return (1, num_devices)
+            return _log_resolved_mesh_shape((1, num_devices), f"auto-detect ({num_devices} devices)")
     except Exception:
         # ttnn may not be initialized yet (env var path is preferred).
         # Fall through to a 1x1 default for non-mesh runs.
         pass
-    return (1, 1)
+    return _log_resolved_mesh_shape((1, 1), "default (no mesh detected)")
 
 
 def _replicated_single_copy(device_tensors, to_torch_fn):

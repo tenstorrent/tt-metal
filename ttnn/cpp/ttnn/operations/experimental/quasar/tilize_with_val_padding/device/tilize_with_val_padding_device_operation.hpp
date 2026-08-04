@@ -43,7 +43,7 @@ struct TilizeWithValPaddingDeviceOperation {
 Tensor tilize_with_val_padding(
     const Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
-    const tt::tt_metal::PadValue& pad_value,
+    const ttnn::PadValue& pad_value,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     bool use_multicore,

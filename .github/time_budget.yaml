@@ -122,14 +122,29 @@ ttnn:
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
   # Sweep budgets: per-SKU caps for the ttnn-run-sweeps and sweep-validation
-  # workflows. Budget planning uses a 30-min figure per job (the verify step
-  # passes --timeout-minutes 30); actual job timeout is 60 min.
+  # workflows.
   sweep:
-    wh_n150: 900        # ~30 jobs × 30 min
-    wh_n300: 900
-    bh_p150b_civ2: 900
-    wh_galaxy: 900      # lead-models + model-traced Galaxy sweeps
-    bh_loudbox: 300
+    # Each ceiling is the TOTAL time budget for a SKU for ONE run — the sum of
+    # every batch's timeout on that SKU — NOT a per-job number. The sweep matrix
+    # is dynamic (modules discovered at runtime, then batched), so per-job
+    # timeouts are built up per op from tests/pipeline_reorg/ttnn_sweep_tests.yaml
+    # (batch.overhead/default/overrides) and the whole-SKU total is enforced here.
+    # verify_time_budget.py sums skus.<sku>.timeout per (team, sku) from that file
+    # against these caps; compute_sweep_matrix.py additionally reports each run's
+    # live batch-timeout sum against the same budget. Seeded from observed
+    # wall-clock with ceiling headroom (Lead run 29559503564: 29 galaxy batches /
+    # ~4h28m total, no job hitting its ceiling; Model-Traced run 30553811243, where
+    # 42 of 119 jobs WERE killed by their ceiling and the model_traced per-op
+    # numbers had to roughly double — see that file's header). SKU names are the
+    # existing logical SKUs in sku_config.yaml. Shared SKUs cover both targets'
+    # entries, so wh_n150_civ2 carries lead + model_traced.
+    wh_galaxy: 640            # lead galaxy (obs ~4h28m total / 29 batches)
+    wh_n150_civ2: 1100        # lead(150) + model_traced(950)
+    wh_n300_civ2: 990         # model_traced
+    wh_llmbox: 920            # model_traced t3k
+    bh_p100a_civ2_viommu: 660 # model_traced
+    bh_p150b_civ2_viommu: 640 # model_traced
+    bh_p300_viommu: 720       # model_traced
   sweep_validation:
     wh_n150: 120
     wh_n300: 120
@@ -231,15 +246,15 @@ runtime:
     sim_wormhole_b0_galaxy: 10
     sim_blackhole_galaxy: 10
   unit:
-    wh_n150_civ2: 226
+    wh_n150_civ2: 232
     wh_n300_civ2: 99
     wh_llmbox: 20
     bh_p150b_civ2: 214
     bh_p300: 69
-    bh_p150b_civ2_viommu: 5
-    bh_p100a_civ2_viommu: 74
+    bh_p150b_civ2_viommu: 11
+    bh_p100a_civ2_viommu: 79
     bh_loudbox: 20
-    wh_galaxy: 35
+    wh_galaxy: 39
   integration:
     wh_n150_civ2: 360
     bh_p150b_civ2: 360
@@ -252,6 +267,9 @@ runtime:
     # measured, budgeted at 10 min in runtime_perf_tests.yaml).
     wh_n300_civ2: 65
     bh_p150_perf: 50
+  perf_profiler:
+    wh_n300_civ2: 5
+    bh_p150_perf: 5
 
 triage:
   merge_gate:
@@ -277,6 +295,9 @@ llk:
   perf:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
+  bit_exact:
+    wh_n150_civ2: 90
+    bh_p150b_civ2: 180
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
@@ -312,6 +333,7 @@ models:
     bh_p150: 27
     bh_quietbox_2: 195
     bh_galaxy: 78
+    bh_sc4-mgd: 120
   e2e_tier2:
     wh_llmbox_perf: 266
     wh_n150: 30
@@ -337,8 +359,9 @@ models:
     wh_galaxy_perf: 45
     bh_p150: 20
     bh_quietbox_2: 260
-    bh_galaxy: 70
+    bh_galaxy: 75
     bh_sc1: 25  # Flux multihost tests (timeout 20 + headroom)
+    bh_sc4-mgd: 50 # WAN 2.2 transformer-block multihost quad unit
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172
@@ -369,7 +392,8 @@ models:
     wh_galaxy_perf: 150
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
-    bh_sc1: 480
+    bh_sc1: 437
+    bh_sc1_high_power: 108
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

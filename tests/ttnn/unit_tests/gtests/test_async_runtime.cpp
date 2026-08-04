@@ -29,10 +29,10 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -70,10 +70,11 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     // Running sum-reduce with preallocated output
     // Preallocate Input and Output Tensors on Device
     tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-    ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(input_shape));
+    ASSERT_EQ(
+        input_buf_size_datums * datum_size_bytes, tensor_layout.impl().compute_packed_buffer_size_bytes(input_shape));
     ASSERT_EQ(
         output_buf_size_datums * datum_size_bytes,
-        tensor_layout.compute_packed_buffer_size_bytes(np_out.padded_shape()));
+        tensor_layout.impl().compute_packed_buffer_size_bytes(np_out.padded_shape()));
     auto input_tensor = ttnn::create_device_tensor(TensorSpec(input_shape, tensor_layout), device);
     auto output_tensor = ttnn::create_device_tensor(TensorSpec(np_out.logical_shape(), tensor_layout), device);
     // Populate input_tensor with data
@@ -122,7 +123,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             }
 
             TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-            ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
+            ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.impl().compute_packed_buffer_size_bytes(shape));
             auto input_tensor = ttnn::create_device_tensor(TensorSpec(shape, tensor_layout), device_);
             ttnn::write_buffer(io_cq, input_tensor, {host_data});            // Write using cq 1
             auto write_event = ttnn::record_event(device_->mesh_command_queue(*io_cq));  // Record write on cq 1
@@ -136,14 +137,12 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             // #43725 diag: record sqrt's output buffer address before `neg` reassigns output_tensor.
             const uint64_t dbg_S = static_cast<uint64_t>(output_tensor.buffer()->address());
 
-            auto dummy_buffer_0 =
-                tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
+            auto dummy_tensor_0 = ttnn::create_device_tensor(TensorSpec(shape, tensor_layout), device_);
 
             ttnn::with_command_queue_id(workload_dispatch_cq, [&]() { output_tensor = ttnn::neg(output_tensor); });
 
             // Allocate this buffer to stress test async allocation across op execution and explicit allocation
-            auto dummy_buffer_1 =
-                tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
+            auto dummy_tensor_1 = ttnn::create_device_tensor(TensorSpec(shape, tensor_layout), device_);
             // Record cq 0 prog execution
             auto workload_event = ttnn::record_event(device_->mesh_command_queue(*workload_dispatch_cq));
             // Wait until cq 0 prog execution is done
@@ -152,9 +151,9 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             // #43725 diag: capture the buffer addresses in play right before the CQ1 readback. output_tensor
             // now holds neg's output (N), which is also the buffer the read below sources from.
             const uint64_t dbg_input = static_cast<uint64_t>(input_tensor.buffer()->address());
-            const uint64_t dbg_D0 = static_cast<uint64_t>(dummy_buffer_0->address());
+            const uint64_t dbg_D0 = static_cast<uint64_t>(dummy_tensor_0.buffer()->address());
             const uint64_t dbg_N = static_cast<uint64_t>(output_tensor.buffer()->address());
-            const uint64_t dbg_D1 = static_cast<uint64_t>(dummy_buffer_1->address());
+            const uint64_t dbg_D1 = static_cast<uint64_t>(dummy_tensor_1.buffer()->address());
 
             // Read using cq 1
             ttnn::read_buffer(io_cq, output_tensor, {readback_data});
@@ -202,7 +201,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
     TensorSpec tensor_spec(shape, tensor_layout);
     for (int loop = 0; loop < 100000; loop++) {
-        auto input_buffer_dummy = tt::tt_metal::tensor_impl::allocate_device_buffer(device_, tensor_spec);
+        auto input_tensor_dummy = ttnn::create_device_tensor(tensor_spec, device_);
     }
 }
 }  // namespace

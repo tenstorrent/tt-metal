@@ -173,6 +173,33 @@ enum class DstTileShape : std::uint8_t
     Tile32x32 = 6
 };
 
+constexpr std::uint32_t get_dest_tile_size_log2(const DstTileShape tile_shape)
+{
+    return ckernel::to_underlying(tile_shape) < ckernel::to_underlying(DstTileShape::Tile32x8) ? ckernel::to_underlying(DstTileShape::Tile32x8)
+                                                                                               : ckernel::to_underlying(tile_shape);
+}
+
+/**
+ * @brief Calculates the maximum number of tiles that fit in the math destination region.
+ *
+ * Destination addressing uses a minimum 16-row footprint for tile shapes smaller
+ * than 32x16.
+ *
+ * @tparam SYNC_MODE: Destination synchronization mode, values = <SyncHalf/SyncFull>
+ * @tparam ACCUM_MODE: Accumulation mode, true for 32-bit and false for 16-bit
+ * @tparam TILE_SHAPE: Destination tile shape
+ * @return Maximum number of destination tiles.
+ */
+template <ckernel::DstSync SYNC_MODE, bool ACCUM_MODE, DstTileShape TILE_SHAPE>
+constexpr std::uint32_t get_dest_max_tiles()
+{
+    constexpr std::uint32_t DEST_REGISTER_SIZE = SYNC_MODE == ckernel::DstSync::SyncHalf
+                                                     ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                     : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+
+    return DEST_REGISTER_SIZE >> get_dest_tile_size_log2(TILE_SHAPE);
+}
+
 /**
  * @brief Sets the destination register base address, each Trisc0/1/2/3 has separate
  * registers for setting dest base address.
@@ -290,7 +317,7 @@ inline void _update_dest_register_offset_()
 // Semaphores mapping and trisc space -> tensix space conversion
 struct semaphore
 {
-    // The math thread is always the middleman, for regular unpack and for unpack_to_dest.
+    // The math thread is the middleman, for regular unpack and for unpack_to_dest.
     // When unpacking to dest, math thread doesn't produce data, it just bridges UNPACK_MATH -> MATH_PACK.
     // Packer only listens on MATH_PACK, so something has to translate the unpack completion into a
     // pack-visible event. Math being the forwarder is also what makes future fused ops cheap:
@@ -299,8 +326,10 @@ struct semaphore
     // Keep pairwise naming with producer_consumer direction:
     // - MATH_PACK = math->pack
     // - UNPACK_MATH = unpack->math
+    // - PACK_UNPACK = pack->unpack
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
+    constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {

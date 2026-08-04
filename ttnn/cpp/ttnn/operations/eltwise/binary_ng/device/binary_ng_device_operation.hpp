@@ -130,6 +130,16 @@ struct BinaryNgDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& c);
+
+        // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer
+        // addresses), since compute_program_hash excludes the tensor volume. Correct by construction —
+        // re-derives from the same shared builder create_descriptor() uses, no address inference. See the .cpp.
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& c,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
@@ -138,22 +148,6 @@ struct BinaryNgDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
-
-    // Re-apply ALL per-dispatch state to the cached program on every program-cache hit — the
-    // descriptor-era analog of the legacy override_runtime_arguments().  compute_program_hash
-    // EXCLUDES the tensor volume, so one cached program is reused across differently-shaped and
-    // differently-allocated (incl. in-place, out=x) calls; this re-derives every per-core runtime
-    // arg AND every tensor-backed circular-buffer base address for the CURRENT tensors, via the same
-    // shared builder create_descriptor() uses.  Correct by construction — no address inference, so
-    // in-place / mixed-aliasing / matmul(X,X)-style cases can't be mis-patched.  An op that defines
-    // this MUST NOT also define get_dynamic_runtime_args (the adapter static_asserts it); override
-    // supersedes both it and resolve_bindings, which this op no longer uses.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& c,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::binary_ng

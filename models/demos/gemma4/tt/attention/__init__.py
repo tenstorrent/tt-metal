@@ -165,6 +165,13 @@ class Gemma4Attention:
         cache = kv_cache or self.kv_cache
         cos_cache, sin_cache = rope_mats
 
+        # Release any sliding-window prefill tail left over from the last
+        # prefill chunk. These cloned DRAM buffers are only needed between
+        # continuation chunks, not during decode. Placed before both decode
+        # dispatches (packed and ordinary) so neither path retains stale tails.
+        if is_decode and getattr(self, "_sliding_prefill_tail", None) is not None:
+            self._release_sliding_prefill_tail()
+
         if is_decode and packed is not None:
             return packed_decode_forward(
                 hidden_states=hidden_states,

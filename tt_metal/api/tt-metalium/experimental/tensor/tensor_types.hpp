@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <variant>
 #include <vector>
 #include <algorithm>
 
@@ -23,8 +22,6 @@
 #include <tt_stl/fmt.hpp>
 
 namespace tt::tt_metal {
-
-static constexpr std::uint8_t VERSION_ID = 5;
 
 enum class DataType {
     BFLOAT16 = 0,
@@ -90,7 +87,6 @@ struct NdShardSpec {
     bool operator!=(const NdShardSpec& other) const = default;
 };
 
-using PadValue = std::variant<uint32_t, float>;
 std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
 
 }  // namespace tt::tt_metal

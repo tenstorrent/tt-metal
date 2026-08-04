@@ -4,6 +4,9 @@
 
 #include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/tensor_serialization_support.hpp>
+
 namespace ttnn {
 
 CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
@@ -199,7 +202,7 @@ tt::tt_metal::TensorLayout from_flatbuffer(const flatbuffer::TensorLayout* layou
         }
     }();
 
-    return tt::tt_metal::TensorLayout::restore_from_serialized(
+    return tt::tt_metal::restore_tensor_layout_from_serialized(
         from_flatbuffer(layout->data_type()),
         page_config,
         ttnn::from_flatbuffer(layout->memory_config()),
@@ -267,7 +270,7 @@ tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* confi
     if (config->nd_shard_spec()) {
         nd_shard_spec = from_flatbuffer(config->nd_shard_spec());
     }
-    auto memory_config = tt::tt_metal::MemoryConfig::create_with_prepopulated_shard_specs(
+    auto memory_config = tt::tt_metal::create_memory_config_with_prepopulated_shard_specs(
         from_flatbuffer(config->memory_layout()),
         from_flatbuffer(config->buffer_type()),
         shard_spec,
