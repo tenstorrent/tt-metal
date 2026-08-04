@@ -326,6 +326,8 @@ enum class BinaryOp : std::uint8_t
     MAX             = 17,
     MIN             = 18,
     FMOD            = 19,
+    LOGADDEXP       = 20,
+    LOGADDEXP2      = 21,
     REMAINDER       = 20,
     BITWISE_AND     = 21,
     BITWISE_OR      = 22,

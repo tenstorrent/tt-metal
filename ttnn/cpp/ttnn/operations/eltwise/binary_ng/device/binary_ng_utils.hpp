@@ -88,6 +88,8 @@ struct OpConfig {
         EQ,
         NE,
         ISCLOSE,
+    LOGADDEXP,
+    LOGADDEXP2,
     };
 
     template <class EnumT>
