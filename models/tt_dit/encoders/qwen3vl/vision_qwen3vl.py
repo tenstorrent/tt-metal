@@ -273,6 +273,16 @@ class Qwen3VlVisionAttention(Module):
         self.qkv = Linear(hidden_size, 3 * self.inner, bias=True, mesh_device=mesh_device)
         self.proj = Linear(self.inner, hidden_size, bias=True, mesh_device=mesh_device)
 
+        # Match the decoder attention's SDPA precision (`model_qwen3vl.py::Qwen3VlAttention`):
+        # HiFi4 with fp32 accumulation. The default is lower precision, and while a single block still
+        # scores ~99.99% either way, 27 of them compound -- the tower is deep enough that the
+        # difference is visible in the merged output where one block hides it.
+        self._sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         kw = dict(num_heads=self.num_heads, head_dim=self.head_dim, padded=self.padded_head_dim)
         if (w := state.get("qkv.weight")) is not None:
@@ -312,7 +322,14 @@ class Qwen3VlVisionAttention(Module):
         k = _apply_vision_rope(k, cos, sin, self.head_dim)
 
         if cu_seqlens is None or len(cu_seqlens) <= 2:
-            attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, scale=self.scale)
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=False,
+                scale=self.scale,
+                compute_kernel_config=self._sdpa_compute_kernel_config,
+            )
         else:
             if cu_seqlens[0] != 0 or cu_seqlens[-1] != seq_len:
                 msg = f"cu_seqlens must span [0, {seq_len}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
@@ -325,6 +342,7 @@ class Qwen3VlVisionAttention(Module):
                         v[:, :, start:end, :],
                         is_causal=False,
                         scale=self.scale,
+                        compute_kernel_config=self._sdpa_compute_kernel_config,
                     )
                     for start, end in zip(cu_seqlens[:-1], cu_seqlens[1:])
                 ],
