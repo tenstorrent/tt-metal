@@ -2149,3 +2149,52 @@ chains) and so cut host dispatch, but amendment 68 measures it as *increasing* d
 it moves the wrong number. Trace becomes the binding lever the moment device time drops under
 ~500 ms — i.e. after (1) — and it will still be there. That is exactly why the skill puts it
 last.
+
+## Amendment 69 (2026-08-04) — T-folding is only worth the tile-padding waste, not the row count
+
+Amendment 66 showed cost tracks **rows**, not bytes (s6's conv1d at 165606 rows costs 2.16x
+s5's at 82806 rows for the identical 5.3 MB). `(B, T, C) -> (B, T/S, S·C)` is the same
+ROW_MAJOR buffer, so folding T into C looked like a free S x. Measured on the snake, the one
+op in `Activation1d` that is pure per-channel elementwise and therefore folds with no boundary
+work (α/β simply tile S times — `rel_max 0.00e+00` at every S, bit-exact):
+
+| shape | S=1 | S=4 | S=16 | S=64 |
+|---|---|---|---|---|
+| (2, 331200, 8) | — (S·C < 32) | 4.095 ms | 3.376 ms | 3.340 ms |
+| (2, 165600, 16) | — (S·C < 32) | 2.580 ms | 2.329 ms | — |
+| (2, 82800, 32) | 1.846 ms | 1.862 ms | 1.801 ms | — |
+
+Timed end to end including both reshapes and the tilize/untilize, i.e. what the model would
+actually pay. **The gain saturates at S·C = 32 and there is none at all once C is already 32.**
+So the win is not the row count — it is that `C = 8` in TILE layout wastes 3/4 of every tile,
+and folding to 32 real channels recovers exactly that. Beyond 32 channels, nothing.
+
+In-model that is s6.snake 104 -> ~60 ms and s5.snake 54 -> ~42 ms, **~57 ms of 1493 (3.8 %)**,
+for a change to `SnakeBeta` that LTX's vocoder shares. Not worth it, and not pursued.
+
+The row-bound ops are the ROW_MAJOR ones — `conv1d`, `concat`, `slice` inside the filters —
+and those cannot fold without solving K-tap adjacency across fold boundaries. Folding does not
+rescue them cheaply.
+
+### Audio decode: the catalogue is exhausted for this bound class
+
+0.988 s against 0.05 s, a **20x gap**, and every lever in `optimization-levers.md` has now
+been matched against the measured bound class:
+
+| lever | status |
+|---|---|
+| 1 parallelism | T-shard factor 4 shipped. Ceiling ~1.55x (amendment 67), factor 8 wrong (63) |
+| 2 kernel research | `ttnn.conv1d` measured **2-3x slower** than the code it would replace (68). Nothing in `existing-fast-paths.md` covers depthwise-1D-over-rows |
+| 3 layout round-trips | The tilize/untilize around `snake_beta` is real; folding recovers 3.8 % (this amendment) |
+| 4 math fidelity | Data-movement bound at ~65 GB/s per pass (68); fidelity cannot move it, same finding as conv3d in amendment 56 |
+| 5 fusion | **This is the one that is left, and it is a kernel:** a fused multi-tap FIR, one read + one write instead of 2K-1 passes |
+| 6 blocking sweeps | Nothing to sweep — the hot ops are `slice`/`multiply`/`add`/`concat` |
+| 7 trace | Capped at 1.07x until device time falls under the 504 ms of host dispatch (66) |
+
+The honest statement is that **audio decode cannot approach 0.05 s by configuration.**
+`Activation1d` is 79 % of device time; its two filters make 2K-1 passes over the activation
+where one is possible, and each pass is already near bandwidth. A fused depthwise FIR
+(`sum_k tap_k · x[t + k·d]`, one op, arbitrary C, ROW_MAJOR in/out) would take the filters from
+34 passes to 2 and is the only change with the magnitude the target needs — worth an estimated
+5-10x on `Activation1d`, i.e. audio decode to roughly 0.15-0.25 s, with trace then available on
+top. That is `tt-dit-kernel-research` work, and it is the recommended next task.
