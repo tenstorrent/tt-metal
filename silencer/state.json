@@ -11,7 +11,8 @@
     "30675480001",
     "30765286317",
     "30789033630",
-    "30227858718"
+    "30227858718",
+    "30737004712"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -22,7 +23,8 @@
     "t3000-unit-tests.yaml",
     "galaxy-sanity.yaml",
     "single-card-demo-tests.yaml",
-    "t3000-demo-tests.yaml"
+    "t3000-demo-tests.yaml",
+    "models-t3-unit-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -86,10 +88,16 @@
       "pattern": "-Wunused-but-set-variable: reset_index / output_tile_index in groupnorm compute kernels (72x across 2 files in job sample)",
       "status": "pr-just-opened-dispatch-requested",
       "note": "Removed dead reset_index and output_tile_index vars from groupnorm.cpp and groupnorm_sharded_v2.cpp. Dispatched t3000-demo-tests safe-output tool in same turn for compile validation. Next run: resolve PR number via search_pull_requests and check CI status."
+    },
+    {
+      "branch": "silencer/demote-watcher-attach-detach-log",
+      "pattern": "Watcher attached device {} / Watcher detached device {} - top LLRuntime info-severity lines (130x each in one job sample), fired unconditionally once per device per attach/detach cycle",
+      "status": "pr-just-opened-dispatch-requested",
+      "note": "Demoted log_info->log_debug at 3 call sites (attach_devices, detach_devices, isolated_dump) in tt_metal/impl/debug/watcher_server.cpp, matching existing log_debug for 'Watcher initialized device'. Dispatched models-t3-unit-tests safe-output tool in same turn for validation. Next run: resolve PR number via search_pull_requests and check CI status."
     }
   ],
   "backlog_cursor": {
     "next_category": 6,
-    "note": "From histogram of run 30227858718 (t3000-demo-tests, jobs 89870148981/89870149000): conv_bmm_tilize.cpp -Wdeprecated-declarations (pack_tile_block/copy_block_matmul_partials) already fixed on main - do not re-target. Remaining candidates from same diagnostic TSV: -Wunused-but-set-variable reset_index (36x) and output_tile_index (36x), likely in groupnorm-adjacent or other normalization kernels - verify file/line and liveness before targeting. info/Metal Fabric-initialized-per-device already covered by PR #51849. Need fresh workflow rotation next run (t3000-demo-tests now sampled)."
+    "note": "From histogram of run 30737004712 (models-t3-unit-tests, jobs 91469569372/91469569414): top LLRuntime info lines (Watcher attached/detached device) targeted this run via silencer/demote-watcher-attach-detach-log. Remaining candidates from same histogram not yet targeted: info/Metal 'Watcher checking device {}' (watcher_device_reader.cpp:412, 156x) - lower priority, only fires when watcher enabled and file redirected; info/Metal 'Fabric initialized on Device' family already covered by PR #51849; info/LLRuntime 'Watcher thread stopped watching...'/'Watcher server initialized' fire only a handful of times per job (18x) - not yet worth a fix. warning/Op mem-config-mismatch already covered by PR #51894. Next run: sample a workflow not yet in workflows_sampled, or re-check in-flight PR CI outcomes."
   }
 }
