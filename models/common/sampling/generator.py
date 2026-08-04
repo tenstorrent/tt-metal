@@ -665,8 +665,12 @@ class SeedManager:
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
 
-    def reset_seed_from_slots_if_needed(self, seeds, user_ids) -> None:
-        """Reset only active slots whose slot-indexed seed changed."""
+    def reset_seed_from_slots_if_needed(self, seeds, user_ids) -> list[int]:
+        """Reset only active slots whose slot-indexed seed changed.
+
+        Returns the reset slots: they hold newly admitted requests, so their host
+        position is authoritative even when the rest of the batch's is not.
+        """
         if user_ids is None:
             user_ids = range(self.max_batch_size)
         reset_slots = []
@@ -676,6 +680,7 @@ class SeedManager:
                 reset_slots.append(slot)
         if reset_slots:
             self.reset_seed_from_slots(seeds, reset_slots)
+        return reset_slots
 
     def align_seed_counters_to_positions(self, seeds, user_ids, positions, offset: int = 1):
         """Make explicit-seed decode independent of persistent slot lifetime.
@@ -685,6 +690,10 @@ class SeedManager:
         slots. For explicit request seeds, deriving the per-token device seed
         from the absolute decode position keeps the stream reproducible even
         when the Python-side slot counter was reset or moved.
+
+        ``positions`` MUST be authoritative for the slots being aligned: the
+        counter self-advances per token, so aligning to a position that lags
+        under async scheduling makes the stream timing-dependent (#51981).
         """
         if positions is None:
             return
@@ -831,8 +840,13 @@ class SeedManager:
                 assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
                 new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
 
+        self._copy_seeds_to_device(new_seeds)
+        self._reseted = False
+
+    def _copy_seeds_to_device(self, new_seeds):
+        """Push one step's per-slot device seeds. Split out so host-only tests
+        can drive the seed bookkeeping without a device."""
         new_seed_tt = ttnn.from_torch(
             torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
         )
         ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
-        self._reseted = False

@@ -1283,6 +1283,32 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         on_device_sampling = (sampling_params is not None) or defer_device_sampling
         B = tokens.shape[0]
 
+        # Are the host tokens/positions authoritative this step, or is the device
+        # copy ahead? Trace reload and seed alignment must agree, so compute it
+        # once here instead of privately in the trace path (#51981).
+        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
+        self._prev_on_device_sampling = on_device_sampling
+        sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
+        reload_inputs = (
+            not enable_trace
+            or not self.trace_ids_decode[on_device_sampling]
+            or not on_device_sampling
+            or reset_batch
+            or mode_switched
+            or sampling_mode_changed
+            or any(
+                getattr(self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False)
+                for i in range(self.data_parallel)
+            )
+        )
+        # vLLM sees re-admissions the model cannot (tenstorrent/vllm#456), so
+        # either side asserting authority is enough.
+        if kwargs.get("reload_inputs"):
+            reload_inputs = True
+        # Deferred sampling calls sample_decode_on_device() out of band; stash the
+        # flag so that call need not thread it.
+        self._decode_reload_inputs = reload_inputs
+
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
@@ -1376,12 +1402,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         }
 
         if enable_trace:
-            # A real batch reset / slot remap (reset_batch) also makes the device
-            # token/current_pos trace buffers stale, not just a prefill->decode
-            # mode switch, so both must force a full traced-input reset.
+            # reset_batch (real reset / slot remap) and a prefill->decode switch
+            # both stale the device buffers; both are folded into reload_inputs.
             tt_decode_output = self._decode_forward_trace_text(
                 **decode_kwargs,
-                reset_batch=reset_batch or mode_switched,
+                reload_inputs=reload_inputs,
             )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(
@@ -1402,6 +1427,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
+                reload_inputs=reload_inputs,
             )
         # Host sampling
         if read_from_device:
@@ -1552,10 +1578,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         on_device_sampling=False,
-        reset_batch=False,
+        reload_inputs=False,
     ):
         """
         Run decode forward text with tracing
+
+        ``reload_inputs`` (from decode_forward): host token/position inputs are
+        authoritative this step and must overwrite the device-resident ones.
         """
         # The trace is different depending on whether we are doing device sampling or not
         if not self.trace_ids_decode[on_device_sampling]:
@@ -1566,19 +1595,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.trace_inputs_decode[on_device_sampling] = device_inputs
             self.trace_output_decode[on_device_sampling] = tt_out_trace
 
-        # reset inputs when mode switches from prefill to decode,
-        # or when sampling mode changes (different trace has stale inputs)
-        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
-        self._prev_on_device_sampling = on_device_sampling
-        sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
-        reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed
         page_table_changed = page_table is not None and (
             self.prev_page_table is None
             or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
         )
 
         for i in range(self.data_parallel):
-            refresh_trace_inputs = reset_inputs or getattr(
+            refresh_trace_inputs = reload_inputs or getattr(
                 self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False
             )
             user_page_table = page_table[i] if page_table is not None else None
@@ -1620,7 +1643,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         enable_trace=False,
+        reload_inputs=None,
     ):
+        """Sample this decode step's tokens on device.
+
+        ``reload_inputs``: host inputs are authoritative, so ``start_pos`` may
+        re-anchor the seed counters. ``None`` takes the last decode_forward's
+        value (the deferred path calls this out of band).
+        """
+        if reload_inputs is None:
+            reload_inputs = getattr(self, "_decode_reload_inputs", True)
         # sampling_dp may differ from data_parallel for models that internally
         # shard users across mesh rows (users_row_sharded) — each row samples
         # 32 users independently, so sampling params must be chunked by the
@@ -1686,6 +1718,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # flow). Position alignment then keeps the stream reproducible even
             # when vLLM evicts a running request and re-admits it in a different
             # slot under async scheduling. Mirrors the llama3_70b_galaxy decode path.
+            #
+            # Align only from a trustworthy position (#51981): the counter
+            # self-advances per token, so re-anchoring to a lagging host start_pos
+            # is what breaks reproducibility. Trustworthy = reload_inputs, or a
+            # slot just reseeded (freshly admitted, position from its prefill).
             if active_seed_slots:
                 seed_bs = sampling_module.tt_sampling.max_batch_size
                 if len(model_chunks) == 1:
@@ -1695,10 +1732,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     for chunk in model_chunks:
                         s = format_sampling_params(chunk, seed_bs).seed
                         seed_values += s if isinstance(s, list) else [s] * seed_bs
-                sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
-                sampling_module.seed_manager.align_seed_counters_to_positions(
-                    seed_values, active_seed_slots, start_values
+                reseeded_slots = sampling_module.seed_manager.reset_seed_from_slots_if_needed(
+                    seed_values, active_seed_slots
                 )
+                align_slots = active_seed_slots if reload_inputs else reseeded_slots
+                if align_slots:
+                    sampling_module.seed_manager.align_seed_counters_to_positions(
+                        seed_values, align_slots, start_values
+                    )
             sampling_module.seed_manager.get_new_values(active_seed_slots)
 
         sampled_outputs = []
