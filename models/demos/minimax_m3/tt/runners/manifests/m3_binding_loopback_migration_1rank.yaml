@@ -34,7 +34,7 @@ global_env:
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
-  PREFILL_MIGRATION_CLIENT_DIR: "/data/philei/tt-metal/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python"
+  PREFILL_MIGRATION_CLIENT_DIR: "${PREFILL_MIGRATION_CLIENT_DIR}"
 
   PREFILL_VALIDATE_MIGRATION: "1"
   # dst == src fidelity (golden-free). Comment out for the burst variant (src and dst both vs golden).
