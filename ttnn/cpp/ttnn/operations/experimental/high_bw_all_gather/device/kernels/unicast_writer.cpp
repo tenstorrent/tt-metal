@@ -37,7 +37,13 @@ void kernel_main() {
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
     constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(7);
     constexpr uint32_t slice_step = get_compile_time_arg_val(8);
-    constexpr auto output_tensor_args = TensorAccessorArgs<9>();
+    constexpr bool linearized_mesh_ring = get_compile_time_arg_val(9) != 0;
+    constexpr auto snake_orientation =
+        static_cast<ttnn::operations::experimental::high_bw_all_gather::snake_ring::Orientation>(
+            get_compile_time_arg_val(10));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(11);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(12);
+    constexpr auto output_tensor_args = TensorAccessorArgs<13>();
 
 #ifdef USE_WORKER_MUX
     // Fabric-mux geometry, appended by ccl::fabric_mux_connection_ct_args (after the tensor-accessor args).
@@ -167,7 +173,16 @@ void kernel_main() {
     // MAIN
     ///////////////////////////////////////////////////
 
-    OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices, slice_step>
+    OutputStripeIterator<
+        output_chunks_per_stripe,
+        output_chunks_per_page,
+        output_chunk_size,
+        num_devices,
+        slice_step,
+        linearized_mesh_ring,
+        snake_orientation,
+        mesh_rows,
+        mesh_cols>
         it;
 
     uint32_t stripe = initial_stripe;

@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "snake_ring.hpp"
 
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
@@ -50,7 +51,11 @@ template <
     uint32_t output_chunks_per_page,
     uint32_t output_chunk_size,
     uint32_t num_devices,
-    uint32_t slice_step>
+    uint32_t slice_step,
+    bool linearized_mesh_ring,
+    ttnn::operations::experimental::high_bw_all_gather::snake_ring::Orientation snake_orientation,
+    uint32_t mesh_rows,
+    uint32_t mesh_cols>
 class OutputStripeIterator {
     static constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
     static constexpr uint32_t stripe_distance_chunks = num_devices * output_chunks_per_stripe;
@@ -59,6 +64,13 @@ class OutputStripeIterator {
 public:
     // Point at `stripe` for the chunk range [start, start + count).
     FORCE_INLINE void init(uint32_t stripe, uint32_t start, uint32_t count) {
+        if constexpr (linearized_mesh_ring) {
+            // Fabric walks a snake Hamiltonian ring, while tensor shards retain
+            // normal row-major rank order. Translate the ring stripe here so
+            // local copies and relays address the canonical output position.
+            stripe = ttnn::operations::experimental::high_bw_all_gather::snake_ring::row_major_index(
+                stripe, mesh_rows, mesh_cols, snake_orientation);
+        }
         if constexpr (slice_step > 1) {
             static_assert(output_chunks_per_page == 1, "strided bank-owned schedule requires matched output pages");
             stripe_ = stripe;
