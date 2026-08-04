@@ -408,26 +408,52 @@ applies an unrecorded criterion. Add the comparison actually used to the trace.
 
 - **Evidence:** [`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §5.
 
-## E0. Test the two starved classes the advisor declines to widen ⭐ largest untested hypothesis
+## E0. Add a cross-model op-cost comparison — it finds defects the stage's question cannot express ⭐
 
-`rms_norm` is the only starved class the advisor wants widened, and widening it paid **6–13 %/layer every time
-it was measured**. Two more classes sit on ≤2 cores with comparable share, and the advisor says leave them:
+Everything the stage does is *intra-cell*: one decoder against one advisor plan, asking *"which conversions does
+the plan not place?"* — a question about **layouts**. A 15-cell corpus supports a question it never asks: **for
+the same logical operation at the same batch, which cell is anomalously slow?**
 
-| op | sum µs | cells | max share of window | advisor advises | screened in v2? |
+**It immediately finds the corpus's largest un-screened defect, and of a class the stage is blind to:**
+
+| op | cells | rows | mean µs | max µs | cores |
 |---|---|---|---|---|---|
-| `nlp_create_qkv_heads_decode` | 283 | 5 | **9.27 %** | **1 core** | **no** — recorded as agreement |
-| `concatenate_heads` | 154 | 1 | **7.79 %** | **DRAM** | **no** — recorded as DRAM-advice |
+| **`concatenate_heads`** | **gemma-4-12B only** | 2 | **76.9** | **102.6** | **1** |
+| `nlp_concat_heads_decode` | 13 others | 18 | **3.4** | 9.4 | 16 / 24 / 32 |
 
-Neither reaches the ranked worklist, because the reconciliation treats "advisor agrees" and "advisor says DRAM"
-as nothing to screen. v1's analysis independently flagged 1-core `concatenate_heads` as its single largest miss,
-and it is still unmeasured.
+gemma-4-12B calls a **different TTNN op** for the same logical step: 102.6 µs on one core, **7.79 %** of its
+full-attention window, against a 3.4 µs corpus mean. Estimated ≈**2.4–2.6 ms/model — 3.9× what that cell
+shipped** — in the corpus's *most thoroughly screened* cell.
 
-**Action.** Add a knob for each and screen it exactly like the norm ladder: enumerate the legal grids, sweep
-both sides, absolute oracle at the model's own bar. Expected effort is one knob per model; expected payoff, if
-the class behaves like `rms_norm`, is the same order — several hundred µs/model per affected cell.
+Nothing in the stage could reach it: the advisor advised **DRAM**, the reconciliation filed it under DRAM-advice,
+and the cliff check (C1b) filters it out *because the advisor does not want it widened*.
 
-**Note the ordering dependency:** this is only reachable if C1b (screen the cliff first) and C5 (`agreed_on`)
-land — otherwise these rows stay invisible for the same reason they were invisible in v2.
+**Action.** Emit, alongside each reconciliation, a table of this cell's per-op costs against the corpus median
+for the same op at the same batch — and fail the gate on a ≥5× outlier that carries ≥2 % of the window without a
+recorded explanation. Cost: arithmetic over profiles that already exist.
+
+- **Then fix the instance.** The blocking chain, measured: `nlp_concat_heads_decode` needs a sharded input →
+  SDPA must emit sharded → `TT_FATAL: Sharded output not supported for GQA` (recorded independently by phi
+  exp17 and gemma-4-26B FN). So this instance depends on **E1a** below. Three in-place routes were tried and
+  all failed; see [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E19.
+- **Candidates the lens ranks next**, within-family and same core count so shape and parallelism are fixed:
+  phi's SDPA (27.46 % of a window, **3.8×** between arms on 110 cores) and phi's
+  `nlp_create_qkv_heads_decode` (7.80 %, **3.5×** on 32 cores). ⚠ Not isolated — the arms also differ in math
+  fidelity and KV-cache dtype. Candidates, not results.
+
+### E1a. Sharded output support for GQA SDPA — it gates more than one thing
+
+`TT_FATAL: Sharded output not supported for GQA` was recorded as a dead end by **two** cells independently, and
+E19 shows it is also what blocks the concat-heads fix: the peers that pay 3.4 µs keep the whole
+SDPA → concat → O-projection run sharded, and a decoder that drops to interleaved at SDPA cannot rejoin.
+So one kernel gap costs at least: two cells' top-ranked boundary candidate, plus ≈2.5 ms/model in a third.
+
+### E0b. What is NOT a defect, recorded so nobody re-chases it
+
+`nlp_create_qkv_heads_decode` on 1 core looks starved (283 µs, up to 9.27 % of window, 5 cells) and **is not**.
+The op height-shards over batch, so its core count *is* the batch size — exactly, across all 23 rows in the
+corpus (batch 1 → 1 core, batch 32 → 32 cores). **The advisor advising 1 core is correct.** I flagged this as an
+opportunity and disproved it; the check is one line of arithmetic against `decode_batch`.
 
 ## E. Coverage (tt-mlir / tt-metal) — the biggest prize
 

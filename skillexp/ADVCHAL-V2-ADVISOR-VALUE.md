@@ -113,31 +113,42 @@ where anyone measured it. At the op-row level its own accounting records it 0 ti
 
 ---
 
-## 5. Two starved op classes the advisor steers *away* from
+## 5. Which starved classes are real, and which are artefacts
 
-`rms_norm` is the **only** starved class the advisor wants widened. Every op sitting on ≤2 cores anywhere in
-the corpus:
+`rms_norm` is the **only** starved class the advisor wants widened. Every op sitting on ≤2 cores anywhere in the
+corpus:
 
-| op on ≤2 cores | rows | sum µs | cells | max share of window | what the advisor advises |
-|---|---|---|---|---|---|
-| `rms_norm` | 37 | 1,030 | 6 | 9.48 % | **8 / 11 / 22 / 88 cores — widen** ✅ |
-| `nlp_create_qkv_heads_decode` | 13 | 283 | 5 | **9.27 %** | **1 core — keep it starved** ❌ |
-| `concatenate_heads` | 2 | 154 | 1 | **7.79 %** | **move to DRAM** ❌ |
-| `rotary_embedding` | 18 | 88 | 5 | 2.23 % | 2 cores |
-| `embedding` | 20 | 52 | 7 | 0.43 % | DRAM |
-| `typecast` | 5 | 4 | 5 | 0.15 % | 1 core |
+| op on ≤2 cores | rows | sum µs | cells | max share of window | advisor advises | real defect? |
+|---|---|---|---|---|---|---|
+| `rms_norm` | 37 | 1,030 | 6 | 9.48 % | **widen to 8/11/22/88** | **✅ yes — 6–13 %/layer every time measured** |
+| `nlp_create_qkv_heads_decode` | 13 | 283 | 5 | 9.27 % | keep on 1 core | **❌ no — see below** |
+| **`concatenate_heads`** | 2 | 154 | 1 | **7.79 %** | move to DRAM | **✅ yes — but it's the wrong *op*, §8** |
+| `rotary_embedding` | 18 | 88 | 5 | 2.23 % | 2 cores | not investigated |
+| `embedding` | 20 | 52 | 7 | 0.43 % | DRAM | too small |
+| `typecast` | 5 | 4 | 5 | 0.15 % | 1 core | too small |
 
-Filtering to "advisor wants it widened and it is ≥1 % of the window" leaves **`rms_norm` alone** — 23 rows,
-925 µs.
+### `nlp_create_qkv_heads_decode` on 1 core is **not** a defect — and the advisor is right
 
-So the two next-largest starved classes — one at **9.27 %** of a layer window, one at **7.79 %** — are ops the
-advisor explicitly declines to widen. Nobody screened either in v2, because both are recorded as agreement or
-DRAM-advice and neither appears in the ranked worklist.
+I initially flagged this as a second starved class. It is not. The op **height-shards over batch**, so its core
+count is the batch size, exactly:
 
-**This is the corpus's largest untested hypothesis:** the starved-reduction class paid 6–13 % per layer every
-time it was measured, and there are two more starved classes of comparable share that were never tried
-*because the advisor said no*. v1's analysis independently flagged `concatenate_heads` on one core as its
-single largest miss.
+| batch | shipped core counts, all 23 rows |
+|---|---|
+| **1** | **[1]** |
+| **32** | **[32]** |
+
+Perfect correlation across every cell. One core at batch 1 is the op's own semantics, not a placement defect,
+and **the advisor advising 1 core is correct**. Corrected before publication.
+
+### `concatenate_heads` is real, and it is a different kind of defect
+
+That leaves one genuine starved class besides the norm — and it turns out not to be a *layout* problem at all
+but an *op-selection* one: gemma-4-12B calls a different TTNN op than every other cell and pays **23×** for it.
+That is §8, and it is the corpus's largest un-screened defect.
+
+**So the "starved op" hypothesis narrows to exactly two things:** the low-core reduction (proven, 6–13 %/layer)
+and one wrong-op call (measured cost, estimated saving). v1's analysis independently flagged 1-core
+`concatenate_heads` as its single largest miss, and it is still unfixed.
 
 ---
 
@@ -189,6 +200,79 @@ Stating it as narrowly as the evidence allows.
 stage that measures it is priced to reward the half of its output that is a coin flip while recording the half
 that works as `below_threshold`. The cheapest improvements are therefore not to the advisor at all — they are
 to the detection rule (§1), the grid sweep (§2), and the accounting (§4).
+
+---
+
+## 8. A lens the stage does not have: compare the same operation across models
+
+Everything the stage does is *intra-cell* — it compares one decoder against one advisor plan. A 15-cell
+corpus supports a comparison it never makes: **for the same logical operation at the same batch, which cell
+is anomalously slow?** No advisor, no ceiling, no screening — just the profiles already collected.
+
+### It immediately finds the corpus's largest un-screened defect
+
+| op | cells | rows | mean µs | max µs | cores |
+|---|---|---|---|---|---|
+| **`concatenate_heads`** | **gemma-4-12B only** | 2 | **76.9** | **102.6** | **1** |
+| `nlp_concat_heads_decode` | 13 others | 18 | **3.4** | 9.4 | 16 / 24 / 32 |
+
+gemma-4-12B calls a **different TTNN op** for the same logical step and pays **23×** the corpus mean —
+7.79 % of its full-attention window, ≈2.4–2.6 ms/model, **3.9× what that cell shipped**. Full account in
+[`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E19, including the three kernel walls that block an
+in-place fix.
+
+**This is a defect class the stage cannot express.** Its question is about *layouts* — "which conversions does
+the plan not place". This is about *op selection*. The advisor advised DRAM, the reconciliation filed it under
+DRAM-advice, and neither the ceiling, the cliff check, the grid ladder nor the oracle could reach it.
+
+### Cross-family outliers, batch-matched — a ranked candidate list
+
+Worst cell vs the median across cells at the same batch, ops ≥10 µs, ≥3 cells:
+
+| op | batch | worst cell | worst µs | median | ratio | cores | share |
+|---|---|---|---|---|---|---|---|
+| `add` | 32 | qwen B | 156.2 | 3.0 | **51.6×** | 12 | 0.99 % |
+| `multiply` | 32 | qwen B | 182.0 | 9.8 | **18.6×** | 12 | 1.15 % |
+| `rotary_embedding` | 1 | g26 onA | 32.7 | 1.9 | **17.1×** | 16 | 1.65 % |
+| `rms_norm` | 32 | qwen B | 79.4 | 7.5 | **10.6×** | 110 | 0.50 % |
+| `nlp_create_qkv_heads_decode` | 32 | phi FN | 56.6 | 16.4 | 3.5× | 32 | **7.80 %** |
+| `paged_scaled_dot_product_attention` | 32 | phi B | 192.2 | 59.5 | 3.2× | 110 | **27.46 %** |
+| `linear` | 1 | g26 onA | 172.2 | 55.5 | 3.1× | 88 | 8.70 % |
+| `linear` | 32 | qwen B | 295.3 | 114.8 | 2.6× | 12 | 23.30 % |
+
+⚠ **Read these as candidates, not findings.** Cross-*family* comparison confounds architecture: qwen B
+dominates the list partly because four of its rows come from its **linear-attention** kind, which is
+structurally unlike anything else in the corpus (its layer costs 15.85 ms against ~1.2 ms elsewhere). Only
+`concatenate_heads` in §8's first table is confirmed, because there the difference is a **different op name**,
+not a different shape.
+
+### The stronger form: within one model family, same op, same core count
+
+| family | op | cores | max µs (cell) | min µs (cell) | ratio | share at max |
+|---|---|---|---|---|---|---|
+| phi | `linear` | 32 | 171.7 (exp17) | 30.4 (FN) | **5.7×** | 16.89 % |
+| phi | `paged_scaled_dot_product_attention` | 110 | 192.2 (B) | 50.4 (FN) | **3.8×** | 27.46 % |
+| phi | `nlp_create_qkv_heads_decode` | 32 | 56.6 (FN) | 16.4 (A) | **3.5×** | **7.80 %** |
+| phi | `linear` | 96 | 183.0 (exp17) | 72.6 (FN) | 2.5× | 18.01 % |
+| g26 | `linear` | 88 | 172.2 (onA) | 87.0 (B) | 2.0× | 8.70 % |
+| nm | `nlp_create_qkv_heads_decode` | 1 | 26.0 (onA) | 14.2 (B) | 1.8× | 3.14 % |
+
+Same architecture, same batch, same shipped core count — so shape and parallelism are held fixed. **The `linear`
+rows are explained by precision policy** (phi FN quantises attention and MLP weights to `BFLOAT4_B`; exp17 does
+not), so they are not defects.
+
+**The two rows worth screening are the non-weight ops**, where weight quantisation cannot be the explanation:
+phi's SDPA (27.46 % of a window, 3.8× between arms on 110 cores) and phi's `nlp_create_qkv_heads_decode`
+(7.80 %, 3.5× on 32 cores). ⚠ Still not isolated: phi A additionally runs `LoFi` math fidelity and a
+`bfloat8_b` KV cache, either of which could account for it. **Candidates for the next corpus, not results.**
+
+### Why add this to the stage
+
+It costs nothing — the profiles exist, the comparison is arithmetic — and it answers a question no cell can ask
+alone: *"is my decoder unusually bad at something?"* In this corpus it found a 2.6 ms/model defect in the
+most-screened cell, of a class the stage's own question cannot reach.
+
+---
 
 ⚠ **Scope.** 15 cells, 5 model families, one host, decode only, batch 32 / batch 1. Every quantitative claim
 here is measured, but "the advisor is not needed for this class" is a claim about *this* class on *this*

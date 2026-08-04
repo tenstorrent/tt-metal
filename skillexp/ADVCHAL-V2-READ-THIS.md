@@ -98,7 +98,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The fifteen findings that matter
+## 3. The sixteen findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -389,20 +389,47 @@ model** — which is what an objective with no latency term should be.
 
 → [`ADVISOR-VALUE`](ADVCHAL-V2-ADVISOR-VALUE.md)
 
-### 3.15 Two more starved op classes, both of which the advisor says to leave alone
+### 3.15 Which starved classes are real — one of my own flags was wrong
 
-`rms_norm` is the **only** starved class the advisor wants widened. The two next-largest:
+`rms_norm` is the only starved class the advisor wants widened. Of the two others I flagged:
 
-| op on ≤2 cores | sum µs | cells | max share of window | advisor says |
+| op on ≤2 cores | sum µs | max share | advisor says | real defect? |
 |---|---|---|---|---|
-| `rms_norm` | 1,030 | 6 | 9.48 % | widen to 8/11/22/88 ✅ |
-| `nlp_create_qkv_heads_decode` | 283 | 5 | **9.27 %** | **keep it on 1 core** ❌ |
-| `concatenate_heads` | 154 | 1 | **7.79 %** | **move to DRAM** ❌ |
+| `rms_norm` | 1,030 | 9.48 % | widen | **✅ 6–13 %/layer every time measured** |
+| `nlp_create_qkv_heads_decode` | 283 | 9.27 % | keep on 1 core | **❌ not a defect** |
+| `concatenate_heads` | 154 | 7.79 % | move to DRAM | **✅ but it's the wrong *op* — §3.16** |
 
-Neither was screened in v2 — both are recorded as agreement or DRAM-advice, so neither reaches the worklist.
-Given that the starved-reduction class paid 6–13 %/layer *every time it was measured*, **these are the
-corpus's largest untested hypothesis.** v1's analysis independently flagged 1-core `concatenate_heads` as its
-single largest miss.
+**`nlp_create_qkv_heads_decode` was my error, corrected before publication.** The op height-shards over batch,
+so its core count *is* the batch size — perfectly, across all 23 rows (batch 1 → 1 core; batch 32 → 32 cores).
+One core at batch 1 is the op's semantics, and the advisor advising 1 is **correct**.
+
+So the "starved op" hypothesis narrows to exactly two things: the low-core reduction, and one wrong-op call.
+
+### 3.16 A defect class the stage cannot see: the wrong op
+
+Chasing the largest starved op in the corpus led outside the stage's question entirely.
+
+gemma-4-12B spends **102.6 µs — 7.79 % of its full-attention window — concatenating heads on ONE core**
+(verified: 24 of 24 profile instances on 1 core; the layer norms on that same core cost 9.2 µs). Every other
+cell does the same logical step for **3.4 µs mean** on 16–32 cores:
+
+| op | cells | mean µs | cores |
+|---|---|---|---|
+| **`concatenate_heads`** | **gemma-4-12B only** | **76.9** | **1** |
+| `nlp_concat_heads_decode` | 13 others | **3.4** | 16 / 24 / 32 |
+
+**It calls a different TTNN op.** Estimated ≈**2.4–2.6 ms/model** — **3.9× what that cell shipped** — in the
+corpus's *most thoroughly screened* cell (28 measurements). I tried three in-place fixes; all hit kernel walls
+(`bad optional access` ×2, then `TT_FATAL: Input tensor must be sharded`, which chains into the
+`Sharded output not supported for GQA` wall two other cells already recorded).
+
+**The stage's question is about layouts** — *which conversions does the plan not place*. This is about **op
+selection**, so nothing in it could reach this: the advisor advised DRAM, the reconciliation filed it under
+DRAM-advice, and the cliff check filters it out precisely because the advisor does *not* want it widened.
+
+**The lens that found it is a cross-model comparison the stage never makes** — for the same logical operation
+at the same batch, which cell is anomalously slow? It costs nothing and answers a question no single cell can
+ask. → [`ADVISOR-VALUE`](ADVCHAL-V2-ADVISOR-VALUE.md) §8, [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E19
 
 ---
 

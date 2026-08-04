@@ -19,6 +19,7 @@ there.
 | **E16** | report the **best measured decoder**, not the advisor delta | the stage credited the advisor with **67 %** of what its own directions deliver (13.6 ms vs 20.2 ms) |
 | **E17** | change the **batch** | **not testable** — the wins are batch-32-pinned by construction, and nothing records the dependency |
 | **E18** | measure **two layers**, or measure **eagerly** | two layers are additive to ±1.8 %; and **eager measurement inverts every norm win** — the traced-replay rule is load-bearing |
+| **E19** | look for the **wrong op**, not the wrong layout | gemma-4-12B pays **23×** the corpus mean to concatenate heads because it calls a different TTNN op — a defect class the stage cannot express |
 
 ---
 
@@ -323,6 +324,7 @@ cell's own 0.807152 — a ~1.6 µs spread across the whole session, which is the
 | batch | **record it** — the wins are batch-pinned and the pin is undocumented | correctness of every published delta |
 | one isolated layer | **no action** — two consecutive layers are additive to ±1.8 % (eager; traced case open) | nothing |
 | traced replay, not eager | **already right, and say why** — eager inverts every norm win in the corpus | the entire win class |
+| the question itself: layouts only | **widen it** — "wrong op" is invisible to a layout-diff stage | ≈2.4–2.6 ms/model in one cell |
 
 ---
 
@@ -407,3 +409,77 @@ mixing of the two measurement modes will produce contradictory rankings.
 **No change needed — this setting is already right.** Recorded because it is the one place where the stage's
 strictness is load-bearing, and because the *reason* is not stated anywhere in the skill: the file justifies
 tracing as "what production does", not as "the only mode in which a placement win is visible".
+
+---
+
+## E19 — a defect class the stage is structurally blind to: the wrong op
+
+Chasing the largest starved op in the corpus led somewhere the stage cannot look.
+
+### The observation
+
+gemma-4-12B's decode path spends **102.6 µs (7.79 % of its full-attention window) concatenating heads on
+ONE core**, and 51.1 µs (4.26 %) on sliding. Verified in its own profile CSV: `NLPConcatHeadsDeviceOperation`,
+**24 of 24 instances on 1 core**, ~102.6 µs each — for comparison the layer norms on that same single core
+cost 9.2 µs, so this is **12× the most expensive other 1-core op**.
+
+### Every head-concatenation in the corpus, side by side
+
+| op | cells | rows | mean µs | max µs | shipped cores |
+|---|---|---|---|---|---|
+| **`concatenate_heads`** | **gemma-4-12B only** | 2 | **76.9** | **102.6** | **1** |
+| `nlp_concat_heads_decode` | 13 others | 18 | **3.4** | 9.4 | 16 / 24 / 32 |
+
+Batch-matched (batch 32): phi 4.7–4.8 µs, llama 3.9–5.6 µs, qwen 9.0–9.4 µs — all on 24–32 cores.
+**gemma-4-12B pays 23× the corpus mean for the same logical operation, because it calls a different TTNN op.**
+
+### I tried to fix it in place. Three attempts, three kernel walls
+
+`nlp_concat_heads` is handed `ttnn.L1_MEMORY_CONFIG` (interleaved) and the *very next line* reshards the
+result into `self.decode_o_input_memcfg`, which is already width-sharded. So the obvious change is to have
+concat write straight into it:
+
+| attempt | result |
+|---|---|
+| `memory_config=self.decode_o_input_memcfg` (width-sharded) | `RuntimeError: bad optional access` |
+| `memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG` | `RuntimeError: bad optional access` |
+| switch to `ttnn.experimental.nlp_concat_heads_decode` | `TT_FATAL: Input tensor must be sharded` |
+
+The third wall is the informative one, and it chains into a constraint the corpus already documented
+elsewhere: `nlp_concat_heads_decode` needs a **sharded input**, which means SDPA must emit a sharded output,
+and two other cells recorded exactly `TT_FATAL: Sharded output not supported for GQA` when they tried that
+(phi exp17, gemma-4-26B FN). So the peers that pay 3.4 µs get there by keeping the whole
+SDPA → concat → O-projection run sharded; gemma-4-12B drops to interleaved at SDPA and cannot rejoin.
+
+**Controls measured while probing** (unchanged code, batch 32): full attention 1.308639 / 1.308410 ms,
+sliding 1.219387 / 1.219423 ms — reproducible to 0.2 µs, so the probe harness was sound and the failures are
+the kernel's.
+
+### Size of it — measured cost, estimated saving
+
+| | |
+|---|---|
+| **measured** | 102.6 µs/layer (full, 8 layers) and 51.1 µs/layer (sliding, 40 layers) on 1 core |
+| **peer cost, measured on 13 other cells** | 3.4 µs mean, 9.4 µs worst |
+| **estimated saving if it reached peer cost** | 8 × ~97 + 40 × ~46 ≈ **2,600 µs/model** (~4.5 % of its 58,520 µs estimate) |
+| conservative, at the *worst* peer (9.4 µs) | ≈ **2,400 µs/model** |
+| what that cell actually shipped | **−666.8 µs/model (−1.14 %)** |
+
+⚠ **The saving is an estimate under a stated assumption** — that a sharded concat would reach peer cost. I
+could not demonstrate it; all three in-place routes hit kernel constraints. The *cost* and the *peer
+comparison* are measured; the *saving* is not.
+
+### Why this matters more than the number
+
+**The stage cannot express this defect.** Its question is *"which conversions does the advisor's plan not
+place?"* — a question about **layouts**. This is a question about **op selection**: the decoder calls
+`concatenate_heads` where its peers call `nlp_concat_heads_decode`. The advisor advised **DRAM** for the op,
+the reconciliation duly filed it under DRAM-advice, and nothing in the ranked worklist could have surfaced it.
+Neither the ceiling, nor the cliff check (C1b — the op *is* on ≤2 cores, but the advisor does not want it
+widened, so rule A filters it out), nor the oracle, nor the grid ladder.
+
+It is also **3.9× larger than what that cell shipped**, and the cell in question is the corpus's most
+thoroughly screened (28 measurements, the most of any cell).
+
+**The lens that found it is not in the stage at all: compare the same logical operation across models.**
+See [`ADVISOR-VALUE`](ADVCHAL-V2-ADVISOR-VALUE.md) §8.
