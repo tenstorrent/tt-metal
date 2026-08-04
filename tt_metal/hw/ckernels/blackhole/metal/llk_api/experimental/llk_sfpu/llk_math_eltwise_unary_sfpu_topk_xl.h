@@ -11,28 +11,28 @@
 
 namespace ckernel {
 
-template <std::uint32_t K, bool APPROXIMATE, bool fused>
+template <uint32_t K, bool APPROXIMATE, bool fused>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_topk_xl_init_<K, fused>);
 }
 
-template <std::uint32_t K, bool APPROXIMATE>
+template <uint32_t K, bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_local_sort(
-    std::uint32_t dst_index, bool ascending, VectorMode vector_mode = VectorMode::RC_custom) {
+    uint32_t dst_index, bool ascending, VectorMode vector_mode = VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_topk_xl_local_sort_<K, APPROXIMATE>, dst_index, vector_mode, dst_index, ascending);
 }
 
-template <std::uint32_t K, bool APPROXIMATE, bool fused>
+template <uint32_t K, bool APPROXIMATE, bool fused>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_merge(
-    std::uint32_t dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
+    uint32_t dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_topk_xl_merge_<K, APPROXIMATE, fused>, dst_index, vector_mode, dst_index);
 }
 
-template <std::uint32_t K, bool APPROXIMATE, bool fused>
+template <uint32_t K, bool APPROXIMATE, bool fused>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_rebuild(
-    std::uint32_t dst_index, bool ascending, VectorMode vector_mode = VectorMode::RC_custom) {
+    uint32_t dst_index, bool ascending, VectorMode vector_mode = VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_topk_xl_rebuild_<K, APPROXIMATE, fused>, dst_index, vector_mode, dst_index, ascending);
 }
@@ -42,8 +42,8 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_topk_xl_add_lsb_indices_init_);
 }
 
-template <std::uint32_t K, bool APPROXIMATE, std::uint32_t core_id>
-inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices(std::uint32_t dst_index) {
+template <uint32_t K, bool APPROXIMATE, uint32_t core_id>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices(uint32_t dst_index) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_topk_xl_add_lsb_indices_<K, APPROXIMATE, core_id>, dst_index, VectorMode::RC_custom);
 }
@@ -53,8 +53,8 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values_init() {
     ckernel::sfpu::_topk_xl_remove_msb_values_init_();
 }
 
-template <std::uint32_t K, bool APPROXIMATE, DstSync Dst>
-inline void llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values(std::uint32_t dst_index) {
+template <uint32_t K, bool APPROXIMATE, DstSync Dst>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values(uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH | p_stall::PACK);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -62,7 +62,7 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values(std::uint32_t 
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_init(std::uint32_t group_id_bit_shift) {
+inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_init(uint32_t group_id_bit_shift) {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(
         ckernel::sfpu::_topk_xl_separate_indices_init_, group_id_bit_shift);
 }
@@ -72,18 +72,18 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_init(std::uint3
 // `ckernel_sfpu_topk_xl.h`; the base TopK XL wrappers above and below are
 // otherwise unchanged.
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init(std::uint32_t chunk_base) {
+inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init(uint32_t chunk_base) {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(
         ckernel::sfpu::_topk_xl_separate_indices_row_major_init_, chunk_base);
 }
 
-template <bool APPROXIMATE, std::uint32_t chunk_base_upper16>
-inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init_upper(std::uint32_t chunk_base_low16) {
+template <bool APPROXIMATE, uint32_t chunk_base_upper16>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init_upper(uint32_t chunk_base_low16) {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(
         ckernel::sfpu::_topk_xl_separate_indices_row_major_init_upper_<chunk_base_upper16>, chunk_base_low16);
 }
 
-template <bool APPROXIMATE, std::uint32_t chunk_base_upper16, std::uint32_t chunk_base_lower16>
+template <bool APPROXIMATE, uint32_t chunk_base_upper16, uint32_t chunk_base_lower16>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init_static() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(
         ckernel::sfpu::_topk_xl_separate_indices_row_major_init_static_<chunk_base_upper16, chunk_base_lower16>);
@@ -96,20 +96,20 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_reini
 }
 // END TOPK_LARGE_INDICES ADDITION: row-major UINT32 index split API.
 
-template <std::uint32_t K, bool APPROXIMATE, std::uint32_t group_id>
-inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices(std::uint32_t dst_index) {
+template <uint32_t K, bool APPROXIMATE, uint32_t group_id>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices(uint32_t dst_index) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_topk_xl_separate_indices_<K, APPROXIMATE, group_id>, dst_index, VectorMode::RC_custom);
 }
 
 // TOPK_LARGE_INDICES ADDITION: row-major UINT32 index split execution API.
-template <std::uint32_t K, bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major(std::uint32_t dst_index) {
+template <uint32_t K, bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major(uint32_t dst_index) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_topk_xl_separate_indices_row_major_<K, APPROXIMATE>, dst_index, VectorMode::RC_custom);
 }
 
-template <std::uint32_t K, bool APPROXIMATE>
+template <uint32_t K, bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_advance_chunk_base() {
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     ckernel::sfpu::_topk_xl_separate_indices_row_major_advance_chunk_base_<K>();
