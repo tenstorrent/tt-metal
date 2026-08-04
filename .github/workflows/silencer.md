@@ -73,6 +73,15 @@ safe-outputs:
     # is a separate `workflow_dispatch` run whose result lands after the agent turn ends,
     # so at PR-creation time nothing is validated and draft is still the honest state.
     draft: true
+    # Without this, gh-aw's create_pull_request handler appends a random 4-byte hex
+    # suffix (crypto.randomBytes(4)) to whatever branch name the agent proposes, and
+    # that suffix is generated in the safe_outputs job, after the agent's turn has
+    # already ended — so it is unknowable to the agent. *Validating changes via CI*
+    # below requires the dispatch-workflow `ref` to be "the identical branch string"
+    # used for this PR; with the random suffix, that string can never match the
+    # branch gh-aw actually creates, and dispatch always fails with "No ref found
+    # for: ...". preserve-branch-name uses the agent's branch name exactly as given.
+    preserve-branch-name: true
     title-prefix: "[silencer] "
     labels: [automation, silencer]
     # Scope patches to source-like files only: a mistaken or manipulated agent response
