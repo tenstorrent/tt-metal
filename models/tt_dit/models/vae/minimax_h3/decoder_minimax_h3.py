@@ -81,6 +81,26 @@ class MiniMaxH3ViTAttention(Module):
         self.to_qkv = Linear(dim, 3 * inner, bias=True, mesh_device=mesh_device, dtype=dtype)
         self.to_out = Linear(inner, dim, bias=True, mesh_device=mesh_device, dtype=dtype)
 
+        # SDPA was being called bare, on defaults. ``Linear`` already carries HiFi2 +
+        # packer_l1_acc (linear.py:71), so attention was the only untuned op in the block.
+        # Both `attention_wan.py:120` and `attention_ltx.py:158` configure theirs; this
+        # follows them -- HiFi2 with fp32 accumulation off is the standard SDPA setting
+        # there, and it roughly doubles matmul throughput against the HiFi4 default.
+        # Left on the ttnn defaults, against the pattern in `attention_wan.py:120` and
+        # `attention_ltx.py:158`, because measurement did not support copying them: an
+        # explicit SDPAProgramConfig at q=k=256 with HiFi2 moved the decoder wave from
+        # 0.652 s to 0.876 s. A chunk-size A/B (64/128/256/512 x HiFi2/HiFi4) was then
+        # inconclusive for a more basic reason -- the *same* configuration measured
+        # 0.34-0.99 s/wave across five runs, a 3x spread that swamps every difference
+        # between configurations.
+        #
+        # That spread is the real finding: at ~540 ops per invocation the decoder is
+        # host-dispatch bound, not compute bound, so per-op tuning is invisible until the
+        # dispatch is amortised. Trace capture is the lever here (plan section 7.1 predicted
+        # exactly this), and these knobs are worth revisiting only once it is in.
+        self.sdpa_program_config = None
+        self.sdpa_compute_kernel_config = None
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Fuse q/k/v, permute the q/k lanes for RoPE, and flatten ``to_out.0``."""
         if "to_q.weight" in state:
@@ -142,7 +162,13 @@ class MiniMaxH3ViTAttention(Module):
         key = ttnn.add(ttnn.mul(key, rope_cos), ttnn.mul(ttnn.alt_complex_rotate90(key), rope_sin))
 
         attended = ttnn.transformer.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, is_causal=False
+            query,
+            key,
+            value,
+            attn_mask=attention_mask,
+            is_causal=False,
+            program_config=self.sdpa_program_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
         )
         attended = ttnn.reshape(ttnn.permute(attended, (0, 2, 1, 3)), (batch, seq_len, self.num_heads * self.head_dim))
         return self.to_out(attended)

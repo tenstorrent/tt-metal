@@ -979,3 +979,70 @@ as notes on how to test a halo:
   shard against its window of the globally padded reference**, which is also strictly
   stronger -- it pins down which rows each device received, so an interior halo taken from
   the wrong neighbour fails, not just a bad global edge.
+
+## Amendment 40 (2026-08-04) — the encoder blocking sweep: 1.70x, and two traps
+
+`sweep_conv3d_minimax_h3.py` brute-forces every legal blocking per conv shape and times it
+on hardware under a trace. Encoder wave of 32 units: **3.714 s -> 2.187 s (1.70x)**.
+768P/5s total **31.4 s -> 19.9 s**. Correctness unchanged: 36 passed, encoder PCC
+99.982-99.992 %.
+
+Per-layer gains against the conv3d.py table baseline ranged 2.5x to 25.6x, but the
+end-to-end 1.70x is the number that counts -- the baseline column is what conv3d.py's own
+table gives, not what the H3 stubs gave, since the sweep tool never imports
+`conv_minimax_h3`.
+
+Two traps, both of which produced a table that looked right and failed:
+
+1. **The level channel map.** `block_in_channels = (block_out[0],) + block_out[:-1]`, so
+   against `block_out = (128,256,256,512,512,1024)` the levels are 128->128, 128->256,
+   **256->256**, 256->512, 512->512, 512->1024. The first sweep list had 512-channel convs
+   at b2's spatial size when b2 is 256->256. Nothing complains -- the swept values are
+   simply for shapes the model never runs.
+2. **The sweep's L1 model is optimistic.** It times a bare conv3d; the model's conv also
+   carries fp32 weights and a ROW_MAJOR output, so its circular buffers are larger. Up to
+   **13 sweep-approved candidates were rejected in a row** before one built. Entries are now
+   chosen by constructing the real conv at every layer sharing the key (`validate_table.py`).
+   Overflow is driven by `C_in_block x C_out_block x T_out_block`, not the H/W split: two
+   different H/W splits at 64x128x6 both failed at an identical **1753984 B** against a
+   1572864 B L1. That unchanging byte count across three different tables is what proved the
+   failing conv was one the table never covered -- the same tell as the audio matmul in
+   amendment 30.
+
+## Amendment 41 (2026-08-04) — the ViT decoder is host-dispatch bound; per-op tuning is unmeasurable
+
+Following the question of whether the ViT is as fast as wan/ltx get theirs: it calls
+`ttnn.transformer.scaled_dot_product_attention` **bare**, while `attention_wan.py:120` and
+`attention_ltx.py:158` both configure an `SDPAProgramConfig` and a HiFi2 compute kernel
+config. `Linear` already carries HiFi2 + packer_l1_acc (`linear.py:71`), so SDPA was the
+only untuned op in the block.
+
+Copying that configuration did **not** help, and the reason turned out to be more
+fundamental than the choice of chunk size. Decoder wave, 32 units, same code, repeated:
+
+| configuration | min | avg | max |
+|---|---|---|---|
+| ttnn defaults | 0.3383 | 0.7158 | 0.9854 |
+| HiFi2 only | 0.6519 | 0.7993 | 0.9267 |
+| HiFi4 only | 0.8479 | 0.8821 | 0.9115 |
+| q=k=64 + HiFi2 | 0.5947 | 0.8107 | 0.9639 |
+| q=k=128 + HiFi2 | 0.8731 | 0.9227 | 0.9757 |
+| q=k=256 + HiFi2 | 0.5875 | 0.8652 | 0.9532 |
+| q=k=512 + HiFi2 | L1 overflow | | |
+
+**The same configuration spans 0.34-0.99 s/wave -- a 3x spread that swamps every difference
+between configurations.** The perf harness shows it too: the unmodified decoder measured
+0.652 s at 00:20 and 0.866 s at 00:52. An earlier note in this session that the tuned SDPA
+"made the decoder slower (0.652 -> 0.876)" was reading that noise as signal; it is not
+supported, and neither is any claim that the defaults are better.
+
+At ~540 ops per invocation (36 layers x ~15 ops) the decoder is **host-dispatch bound**,
+which plan section 7.1 predicted in as many words: "at ~540 ops per decoder invocation x 308
+invocations, trace capture is the whole perf story; without it this is host-bound". The
+0.3383 s minimum is roughly what the device does when the host keeps up; the 0.99 s maximum
+is host starvation.
+
+So SDPA is left on the ttnn defaults with that reasoning recorded in the code, and **trace
+capture is the next decoder work**. No per-op decoder tuning -- SDPA config, bfp8 weights,
+matmul program configs -- can be evaluated until dispatch is amortised, because the
+measurement floor is wider than the effects being measured.
