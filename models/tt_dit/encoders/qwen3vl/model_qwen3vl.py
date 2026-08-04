@@ -41,6 +41,59 @@ class Qwen3VlContext:
     fsdp_mesh_axis: int | None = None
 
 
+def vision_token_runs(input_ids: torch.Tensor, image_token_id: int) -> list[tuple[int, int]]:
+    """`(start, length)` of each contiguous run of `image_token_id` in a single sequence.
+
+    Qwen3-VL presentations never interleave a vision block with anything: MiniMax-H3 emits a
+    `"<Picture i>: "` label, then `<|vision_start|>`, then one run of `<|image_pad|>`, then
+    `<|vision_end|>`. So one image is one run, and the merged vision tokens map onto the runs in order.
+    """
+    if input_ids.ndim == 2:
+        if input_ids.shape[0] != 1:
+            msg = f"expected a single sequence, got batch {input_ids.shape[0]}"
+            raise ValueError(msg)
+        input_ids = input_ids[0]
+    runs: list[tuple[int, int]] = []
+    start = None
+    for index, token in enumerate(input_ids.tolist()):
+        if token == image_token_id and start is None:
+            start = index
+        elif token != image_token_id and start is not None:
+            runs.append((start, index - start))
+            start = None
+    if start is not None:
+        runs.append((start, len(input_ids) - start))
+    return runs
+
+
+def _scatter_rows(base: ttnn.Tensor, values: ttnn.Tensor, runs: Sequence[tuple[int, int]], *, add: bool) -> ttnn.Tensor:
+    """Write `values` into the row ranges `runs` of `base`, either replacing or adding.
+
+    Done by slicing and concatenating rather than a masked scatter: the vision positions are contiguous
+    runs, so this is exact, and row slicing on the sequence axis is already how this module trims its
+    padding. `values` rows are consumed in run order.
+    """
+    total = sum(length for _, length in runs)
+    if values.shape[-2] != total:
+        msg = f"runs cover {total} rows but values has {values.shape[-2]}"
+        raise ValueError(msg)
+
+    pieces: list[ttnn.Tensor] = []
+    cursor = taken = 0
+    for start, length in runs:
+        if start < cursor:
+            msg = f"runs must be sorted and disjoint; {start} overlaps {cursor}"
+            raise ValueError(msg)
+        if start > cursor:
+            pieces.append(base[:, cursor:start, :])
+        chunk = values[:, taken : taken + length, :]
+        pieces.append(ttnn.add(base[:, start : start + length, :], chunk) if add else chunk)
+        cursor, taken = start + length, taken + length
+    if cursor < base.shape[-2]:
+        pieces.append(base[:, cursor:, :])
+    return ttnn.concat(pieces, dim=-2) if len(pieces) > 1 else pieces[0]
+
+
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L769
 class Qwen3VlTextEncoder(Module):
     def __init__(
@@ -139,7 +192,24 @@ class Qwen3VlTextEncoder(Module):
         *,
         attention_mask: ttnn.Tensor | None = None,
         pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
+        vision_embeds: ttnn.Tensor | None = None,
+        vision_runs: Sequence[tuple[int, int]] | None = None,
+        deepstack_embeds: Sequence[ttnn.Tensor] | None = None,
     ) -> list[ttnn.Tensor]:
+        """Args beyond the text path, all optional so text-only callers are unaffected:
+
+        vision_embeds: the vision tower's merged tokens, which *replace* the embeddings of the
+            `<|image_pad|>` rows named by `vision_runs` (see [`vision_token_runs`]).
+        deepstack_embeds: one feature per entry of the tower's `deepstack_visual_indexes`, *added* to
+            the vision rows after decoder layers `0 .. len(deepstack_embeds) - 1`. The reference keys
+            these off the list length, not the vision layer indexes they came from.
+        """
+        if (vision_embeds is None) != (vision_runs is None):
+            msg = "vision_embeds and vision_runs must be passed together"
+            raise ValueError(msg)
+        if deepstack_embeds and vision_runs is None:
+            msg = "deepstack_embeds needs vision_runs to know which rows to add to"
+            raise ValueError(msg)
         batch_size, seq_len = input_ids.shape
 
         if attention_mask is not None:
@@ -174,6 +244,9 @@ class Qwen3VlTextEncoder(Module):
             # clone to move out of persistent buffer
             input_embeds = ttnn.clone(input_embeds)
 
+        if vision_embeds is not None:
+            input_embeds = _scatter_rows(input_embeds, vision_embeds, vision_runs, add=False)
+
         hidden_states = input_embeds
         captured: list[ttnn.Tensor] = []
 
@@ -183,6 +256,10 @@ class Qwen3VlTextEncoder(Module):
                 attention_bias=attention_bias,
                 pos_embeds=pos_embeds,
             )
+            # Vision also enters here, not only at the embeddings: the tower's intermediate features are
+            # added to the vision rows of the first few layers.
+            if deepstack_embeds and layer_idx < len(deepstack_embeds):
+                hidden_states = _scatter_rows(hidden_states, deepstack_embeds[layer_idx], vision_runs, add=True)
             if self._activation_layers is not None and layer_idx in self._activation_layers:
                 captured.append(hidden_states)
 
