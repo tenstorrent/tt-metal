@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025-2026 The Moonshot AI Team, DeepSeek-AI, and The HuggingFace Inc. team.
+# SPDX-License-Identifier: Apache-2.0
+
 # coding=utf-8
 # Copyright 2025-2026 The Moonshot AI Team, DeepSeek-AI, and HuggingFace Inc. team. All rights reserved.
 #
