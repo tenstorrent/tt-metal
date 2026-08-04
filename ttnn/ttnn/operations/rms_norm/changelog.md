@@ -190,3 +190,89 @@
   wide row is a near-uniform scale error PCC is largely blind to).
   `test_rms_norm_perf.py` extended in place with `test_rms_norm_perf_reduce_datapath`
   (4 shapes at the `_perf_case` config) so the D7 A/B is re-measurable.
+
+## Refinement 2 — Sharded placements: local HEIGHT shard + cross-core WIDTH/BLOCK combine
+
+- Date: 2026-08-04
+- What was done:
+  - **`SUPPORTED["memory_layout"]` grew all three sharded values.** A placement PLANNER
+    (`_plan_placement`) resolves the axis into three internal schemes, each a pure function
+    of (layout, placement, shard geometry, alignment, L1 budget):
+    `SCHEME_ROWS` (Phase 0's row split + TensorAccessor — also the universal L1 bail-out),
+    `SCHEME_SHARD_H` (Lamp L3 knob-turn: rows come from the shard, reduce stays local),
+    `SCHEME_SHARD_W` (Lamp L4 scheme-change: width comes from the shard, cross-core combine).
+  - **Native, not tolerated.** For TILE activations `cb_input_tiles` / `cb_output_tiles` are
+    `ttnn.cb_descriptor_from_sharded_tensor` — zero-copy over the tensor's own resident L1,
+    so there is **no NoC read for x at all** and no arena allocation for either CB. The
+    reader only PUBLISHES the shard's pages once (`cb_reserve_back` + `cb_push_back`); the
+    writer takes a completion barrier and moves nothing.
+  - **The §3.4 cross-core combine, built as specified**, and placed in the WRITER (NoC1 is
+    idle through pass A, so the handshake overlaps the reader's NoC0 x/gamma traffic, and
+    `cb_row_stat` stays compute-private): every core packs its raw partial into a DEDICATED
+    `cb_sum_handoff`, `noc_async_write`s it into its slot of the root's
+    `cb_partials_gathered` and remote-incs the root's arrival semaphore; the root sums the
+    group's partials elementwise (`ckl::copy` + `ckl::add` in place, per-tile streaming, so
+    no slot needs to be contiguous), runs the *same* `transform_in_place` finalize, and
+    multicasts the stat back with `mcast_pipe.hpp`. `GRID_H`/`GRID_W` and every
+    `(w_start, w_count)` are read off the shard spec.
+  - **`GRID_W`'s `NotImplementedError` guard deleted.** The knob now drives the same combine
+    on an INTERLEAVED input (Lamp L1 — the occupancy lever Refinement 3 needs on `Rt = 1`),
+    clamped to the largest divisor of `Wt` that fits the grid so every core owns the same
+    width. Parked at its byte-identical 1.
+  - **A ragged width tail is handled, not refused**: the last core of a group owns fewer real
+    width tiles than the shard is wide, so the reader zeroes its PAD tiles once at boot
+    (they then contribute exactly 0 to `sum(x^2)`), the gamma push is topped up to
+    `WT_CHUNK`, and the writer skips `wt >= Wt`. Exercised by `(1,1,32,7168)`/75 cores (2-tile
+    tail), `(1,1,32,4064)`/64 cores (1-tile tail) and `(1,1,8192,1024)`/110 cores.
+  - New knob `L1_CB_ARENA_BASE_RESERVE`; new descriptor deviation **D8** (the reduce-datapath
+    crossover is measured against the core's whole reduce dim, not `WT_CHUNK`).
+- Accuracy achieved: PCC 0.99997–1.000000, rel RMS 0.0023–0.0126 across
+  HEIGHT/WIDTH/BLOCK on `(1,1,256,512)`, `(1,1,224,72)`, `(1,1,32,40)`, `(1,1,17,50)`,
+  `(1,1,3232,96)`, `(1,1,32,2048)`, `(1,1,32,4064)`, `(1,1,32,7168)`, `(1,1,8192,1024)`,
+  `(1,224,11008)`, `(1,1,96,6144)`. The golden gate is `TOLERANCES[bfloat16]`
+  (pcc 0.995 / rms 0.04) and the sharded perf cases' soft `pcc_threshold = 0.9995`.
+- Golden test progress: **387 / 387 loose cases** (299 pass, 3 infeasible-skipped,
+  85 xfail) and the full **40320-cell cartesian** (4407 pass, 1995 xfail,
+  `supported_fail = 0`). Zero hangs. No regression: unit dir 298 passed / 30 skipped.
+- Issues encountered (all diagnosed to a root cause, none guessed):
+  1. **Inactive cores touched shard-backed CBs.** A WIDTH shard grid is row-major-packed, not
+     a rectangle, so the multicast runs over its bounding box and the in-box/out-of-shard
+     cores must join the program (their `cb_row_final` is where the stat lands) — but they
+     hold no shard. `--dev`'s watcher caught the read to `L1[0x000000]`; all three kernels
+     now early-out on `num_rows == 0`.
+  2. **`Mcast1D`'s per-row sender rect EXCLUDES the sender** while `Mcast2D`'s contains it, so
+     the BLOCK root never got its own finalized stat (PCC 0.91). The root now places its own
+     copy and broadcasts IN PLACE (`src == dst` ⇒ EXCLUDE-source) — one behaviour for both
+     emitters.
+  3. **`Semaphore::up(value)` is a NON-ATOMIC local read-modify-write** (the header says so).
+     The root's self-signal raced the members' remote atomic incs and dropped one — a hang in
+     one group of eight. Triage was unambiguous: exactly one grid row stuck, root at
+     `wait_min`, all seven members already parked in `receive()`. The root writes its own slot
+     synchronously, so it waits for `GROUP_SIZE - 1` and never bumps the counter itself.
+  4. **`L1_SAFETY_FRACTION` is proportional and cannot cover a fixed offset.** The CB arena
+     begins 70656 B above the worker-L1 unreserved base, and metal's check is absolute. Four
+     loose cases failed to launch; the reserve is now subtracted whenever a shard is
+     L1-resident (and only then, so interleaved builds are byte-identical).
+  5. **A resident shard silently switched Refinement 1b's precision fix off** (D8): a 344-tile
+     shard squeezed `WT_CHUNK` to 2, below the `AccumulateViaAdd` crossover, and rms 0.127
+     came back on exactly the cells 1b closed. Gating on the whole reduce dim fixes it.
+  6. **`ROW_MAJOR` + WIDTH/BLOCK shards are a STRUCTURAL gap → `EXCLUSIONS` + Refinement 2b.**
+     An RM shard edge rounds to (1 stick × `L1_align/elem_size` elements) and a shard may not
+     hold a partial page, so the tensor's PAGE becomes the shard's row SEGMENT (8 or 32
+     elements): no core holds a whole width tile, and a stick read keyed on the page index
+     lands inside one segment and runs off the end of the shard (PCC 0.005 plus
+     out-of-bounds L1 traffic, which is what was cascading later tests into dispatch
+     failures). HEIGHT_SHARDED is unaffected — its shard spans the full row, so the page IS
+     the stick (PCC 1.000000).
+  7. Not an issue, recorded so it is not re-chased:
+     `test_translated.py::test_rms_norm_sharded_uneven_multicore_logical_width[
+     w200_c3_nonaligned-bfloat8_b]` misses at frobenius 0.112 vs a 0.10 budget, and is
+     **bit-identical INTERLEAVED vs WIDTH_SHARDED (0.11224 both)** — the
+     `{bfloat8_b, w_non_aligned}` corner `feature_spec.INVALID` already declares out of scope
+     (a 1000.0 pad poison raises the shared exponent of the block straddling the logical
+     width). The other 11 params of that test went from all-failing to passing.
+- Tests added: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py` — the
+  three schemes × both layouts × the ragged-tail geometries, the pad-poison shapes under
+  every placement, a native-dataflow assertion (the plan really is zero-copy, checked
+  against the descriptor rather than against output values), and a `GRID_W > 1` case that
+  exercises the interleaved width split so the knob is live rather than dead code.

@@ -206,7 +206,7 @@ runs once; the op selects it from a new crossover knob `REDUCE_ACC_VIA_ADD_MIN_W
 
 ---
 
-### [ ] Refinement 2 — Sharded placements: local HEIGHT shard + cross-core WIDTH/BLOCK combine
+### [~] Refinement 2 — Sharded placements: local HEIGHT shard + cross-core WIDTH/BLOCK combine
 
 **Goal**: add all three sharded values to `SUPPORTED["memory_layout"]` —
 `HEIGHT_SHARDED`, `WIDTH_SHARDED`, `BLOCK_SHARDED` — natively, for both layouts and for a
@@ -267,6 +267,104 @@ of work, one refinement because they share all of the placement plumbing:
 **Done when**: the 4834 `memory_layout`-blocked xfail cells (including the 279 sharded
 loose cases and the sharded `_perf_case` geometries) pass, with `supported_fail = 0` and
 no regression on the interleaved cells.
+
+**Outcome** (`[~]` partial): all three sharded values are LIVE in
+`SUPPORTED["memory_layout"]` and NATIVE for TILE activations — `cb_input_tiles` /
+`cb_output_tiles` are `ttnn.cb_descriptor_from_sharded_tensor` (zero-copy, **no NoC read
+for x at all**), and the §3.4 cross-core width combine is built as specified (dedicated
+`cb_sum_handoff` → per-sender slot of the root's `cb_partials_gathered` +
+`noc_semaphore_inc` → root sums + runs the *same* `transform_in_place` finalize → stat
+multicast back via `mcast_pipe.hpp`). `GRID_W`'s `NotImplementedError` guard is gone; the
+knob now drives the *same* combine on an interleaved input (Lamp L1, the lever
+Refinement 3 needs), clamped to a divisor of `Wt` and parked at its byte-identical 1.
+Golden: **387 / 387 loose cases** (299 pass, 3 infeasible-skipped, 85 xfail) and the full
+**40320-cell cartesian** (4407 pass, 1995 xfail, `supported_fail = 0`), zero hangs, no
+regression (unit dir 298/298).
+
+Deferred to **Refinement 2b**: `{ROW_MAJOR, WIDTH_SHARDED}` and
+`{ROW_MAJOR, BLOCK_SHARDED}` are now op-side `EXCLUSIONS`. Five findings:
+* **Two host emitters, one kernel.** A WIDTH shard grid is row-major-*packed*, not a
+  rectangle (64 cores on an 11-wide grid = 5 full rows + 9), so its group is ONE
+  `Mcast2D` over the bounding box with the few in-box/out-of-shard cores joining as
+  INACTIVE (`row_count == 0`) purely so the stat multicast lands in a `cb_row_final` this
+  program owns. BLOCK is a true rectangle whose grid ROWS are the groups — `Mcast1D`
+  `PerRow`. Both emit the identical 5-word CT / 4-word RT wire, so `McastArgs` decodes
+  either and the kernel is one code path.
+* **`Mcast1D`'s per-row sender rect EXCLUDES the sender** (`sender_rect_`), while
+  `Mcast2D`'s contains it — so the BLOCK root never received its own finalized stat
+  (PCC 0.91). The root now places its own copy and broadcasts **in place**
+  (`src == dst` ⇒ EXCLUDE-source), which makes the two emitters behave identically.
+* **`Semaphore::up(value)` is NON-ATOMIC** (a local read-modify-write; the header says so).
+  The root's self-signal raced the members' remote atomic incs and dropped one — a hang in
+  whichever group lost, one group in eight. The root writes its own slot synchronously, so
+  it waits for `GROUP_SIZE - 1` and never bumps the counter itself.
+* **`L1_SAFETY_FRACTION` cannot cover a FIXED offset.** The CB arena starts 70656 B above
+  the worker-L1 unreserved base, and metal's check is absolute ("static circular buffer
+  region ends at 179072 / L1 buffer allocated at 163840"). A shard pair holding 1.38 MB of
+  1.53 MB leaves 52 kB of real headroom while 0.85 of the nominal remainder claims 105 kB.
+  New knob `L1_CB_ARENA_BASE_RESERVE`, subtracted only when a shard is L1-resident, so
+  every interleaved build stays byte-identical.
+* **A resident shard can switch Refinement 1b's precision fix OFF** (descriptor **D8**).
+  The `AccumulateViaAdd` crossover was measured against `WT_CHUNK`; a 344-tile shard
+  squeezed `WT_CHUNK` to 2, dropping below the threshold and bringing rms 0.127 back on
+  exactly the cells 1b closed. The gate is now this core's WHOLE reduce dim
+  (`wt_per_core`) — identical in RESIDENT, and the total is what decides once L1 chunks.
+
+Known non-issue, recorded so it is not re-chased: `test_translated.py::
+test_rms_norm_sharded_uneven_multicore_logical_width[w200_c3_nonaligned-bfloat8_b]`
+fails at frobenius 0.112 vs a 0.10 budget. Measured **bit-identical INTERLEAVED and
+WIDTH_SHARDED (0.11224 both)** — it is the `{bfloat8_b, w_non_aligned}` corner
+`feature_spec.INVALID` already declares out of scope (a 1000.0 pad poison raises the
+shared exponent of the block that straddles the logical width), not a placement bug. The
+other 11 params of that test went from *all failing* (the op refused the placement) to
+passing.
+
+---
+
+### [ ] Refinement 2b — ROW_MAJOR shards that cut the width axis
+
+**Goal**: close the two `EXCLUSIONS` Refinement 2 added —
+`{layout: ROW_MAJOR, memory_layout: WIDTH_SHARDED}` and
+`{..., BLOCK_SHARDED}`. Everything else about sharding is done and native; this is the
+one placement × layout corner left.
+
+**Why it is not a knob-turn.** `eval.sharding` rounds an RM shard edge to
+(1 stick × `L1_align / elem_size` elements) — 8 for bf16, 4 for fp32 — and a shard may not
+hold a partial page, so the tensor's **page becomes the shard's row SEGMENT, not the row**:
+`(1,1,224,3072)` width-shards to `[224, 32]` and `(1,1,256,512)` to `[256, **8**]`. Two
+consequences, both measured:
+* no core holds a whole width TILE, so the tile-granular combine Refinement 2 built cannot
+  be mounted on the placement; and
+* the SCHEME_ROWS fallback cannot reach a row either — `read_sticks_for_tilize` keys on the
+  page index, so a stick read lands inside one segment and runs off the end of the shard
+  (**PCC 0.005**, plus out-of-bounds L1 traffic that cascaded every later test in the same
+  process into dispatch failures until the cell was excluded).
+
+**The exact next lever**, in preference order:
+1. **Segment-gathered staging, gated on cost.** `read_sticks_for_tilize` already takes
+   `start_page` + `byte_offset_within_page`; a row is reachable as
+   `nw = ceil(W_gran / shard_w_gran)` reads per stick. Viable only when `nw` is small —
+   it is 96 for `(1,1,224,3072)` and 8 × 100 000 sticks for `(99991,64)`, so this needs an
+   explicit `nw` ceiling with SCHEME_ROWS-on-a-DRAM-copy or a refusal above it. Verify the
+   page ORDER first (`page = stick * nw + segment` is the assumption, unconfirmed).
+2. **Native band tilize when `shard_w % 32 == 0`.** When the RM shard's width happens to be
+   a whole number of tile columns (`per_w * w_gran % 32 == 0`, true for
+   `(1,1,224,3072)`: 32 elements = 1 tile), the band IS resident and the core can stage it
+   from its own L1 with `shard_h` local reads, then join the *existing* width combine
+   unchanged. That covers the aligned subset natively and leaves only sub-tile shards to
+   lever 1 — likely the best value-per-line here.
+
+**Verifier notes**:
+* Do **not** reach for `ttnn.to_memory_config` / `to_layout` to sidestep this: the op's
+  contract is native placement, and a host-side relayout would also be a new tensor.
+* `feature_spec.INVALID` already skips `{ROW_MAJOR, *_SHARDED, gamma_layout: TILE}`, so the
+  in-scope cells all pair RM activations with RM gamma. The gamma side already works —
+  `stage_gamma_chunk`'s RM branch reads gamma's own (interleaved) sticks and is
+  placement-independent.
+* The regression net for lever 1 is the `_RESILIENCE_SHAPES` × ROW_MAJOR × {WIDTH, BLOCK}
+  cells (2 per shape × 44 shapes) plus `test_rms_norm.py`'s RM regime-pinned cases. Watch
+  for the out-of-bounds signature specifically: a wrong page mapping shows up as a
+  *cascading* dispatch failure in later tests, not as a local PCC miss.
 
 ---
 

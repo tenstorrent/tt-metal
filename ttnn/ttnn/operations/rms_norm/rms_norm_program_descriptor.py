@@ -208,6 +208,35 @@ the scheme, topology, work split and helper mapping are unchanged):
       reduce-block micro-benchmark will over-predict; the levers with headroom
       are the byte-count / occupancy ones (Lamp L1 / L5), not this one.
       Precision, not speed, is why the knob ships.
+  D8  Refinement 2 refines D7's crossover INPUT: it is now measured against this
+      core's WHOLE reduce dim (`wt_per_core`) rather than against WT_CHUNK.  In
+      the RESIDENT regime the two are equal, so this is byte-identical to
+      Refinement 1b; they differ only when L1 forces a chunked width.
+
+      WHY.  D7's threshold of 4 came from a PERF bake-off measured per reduce()
+      call, but the precision motive scales with the TOTAL reduce dim: Refinement
+      1 established the error is bit-invariant across chunk count (it is the FPU
+      matmul reduce's within-tile 32-column sum, which chunking cannot reach).
+      Refinement 2 made that gap reachable -- a HEIGHT-sharded (1,1,160,11008)
+      holds a 344-tile shard in L1, which squeezed WT_CHUNK to 2, dropped below
+      the threshold, and brought rms 0.127 back on exactly the cells 1b closed.
+      Gating on the total keeps AccumulateViaAdd wherever the row is wide enough
+      to need it, at the cost of running it at 1-2 tiles per call (0.67x-0.94x on
+      the reduce step alone) for those L1-squeezed builds -- a trade this op
+      should always take, since rms_norm is dataflow-bound at those widths (see
+      D7's whole-op A/B: the datapath is worth 1.00x-1.06x either way).
+
+      Narrow rows are unaffected and BOTH datapaths stay covered: the pad-poison
+      shapes span Wt = 2, 3 (partial-SCALER pair) and 5, 7 (0/1 MASK tile), and
+      those are RESIDENT, so wt_per_core == WT_CHUNK == Wt there.
+  D9  Refinement 2's placement layer.  The three SCHEME_* values, the zero-copy
+      (shard-backed) cb_input_tiles / cb_output_tiles, the cross-core width
+      combine's four CBs and L1_CB_ARENA_BASE_RESERVE are all documented at
+      their definitions above; the one thing worth stating here is what stayed
+      the same.  The COMPUTE kernel's phase sequence, every helper call, the
+      block/depth knob set and the L1 predicate are unchanged -- a sharded build
+      differs only in (a) who fills cb_input_tiles, (b) which CB pass B reads the
+      stat from, and (c) whether the finalize runs locally or on a group root.
 """
 
 from __future__ import annotations
@@ -281,6 +310,24 @@ REDUCE_BULK = 1
 # WT_CHUNK*32 serial ones.  Raise it to 10**9 to pin the op back to ReduceTile
 # everywhere; lower it to 1 to force AccumulateViaAdd everywhere.
 REDUCE_ACC_VIA_ADD_MIN_WT = 4
+
+# Per-CALL floor on the same datapath (D8).  REDUCE_ACC_VIA_ADD_MIN_WT is measured
+# against the core's whole reduce dim, but AccumulateViaAdd degenerates at ONE tile
+# per call: its within-tile SFPU finalize runs on the last chunk only
+# (Accumulate::at_last), so a 1-tile chunk carries the running total through the
+# cross-chunk reload for every one of Wt steps.  MEASURED at HiFi4 on the prime-Wt
+# shapes D1 collapses to WT_CHUNK == 1 (one fresh run per variant, rel RMS):
+#
+#   shape             fp32_dest_acc_en   AccViaAdd   ReduceTile
+#   (1,1,32,4064) RM        True           0.0609      0.0103   <- 6x WORSE
+#   (1,1,32,4064) RM        False          0.0039      0.0263
+#   (1,1,32,2848) RM        True           0.0455      0.0079   <- 6x WORSE
+#   (1,1,32,2848) RM        False          0.0037      0.0174
+#
+# So the datapath needs BOTH a wide total (the error it fixes) and a chunk with
+# something to pair up (2 tiles is the smallest that has). Raise to 10**9 to pin
+# the op back to ReduceTile everywhere.
+REDUCE_ACC_VIA_ADD_MIN_CHUNK_WT = 2
 
 # Ring depth of cb_row_stat, in units of BLOCK_ROWS.  MUST be >= 2 -- this is a
 # correctness constant, not a perf knob.  See D6.
@@ -892,7 +939,9 @@ def create_program_descriptor(
     # AccumulateViaAdd's cross-chunk Accumulate indexes a resident block, hence
     # BulkWaitBulkPop only: the two knobs are coupled here (one place), and the
     # compute kernel static_asserts it.
-    reduce_acc_via_add = REDUCE_BULK == 1 and wt_per_core >= REDUCE_ACC_VIA_ADD_MIN_WT
+    reduce_acc_via_add = (
+        REDUCE_BULK == 1 and wt_per_core >= REDUCE_ACC_VIA_ADD_MIN_WT and wt_chunk >= REDUCE_ACC_VIA_ADD_MIN_CHUNK_WT
+    )
     # Tiles the reader actually pushes into cb_scaler, and the compute pops.
     # AccumulateViaAdd takes ONE: the 0/1 mask (partial W) or an unused 1.0 scaler.
     # ReduceTile takes the [full, partial] pair when W is not tile-aligned.
