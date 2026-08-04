@@ -511,6 +511,25 @@ REDUCE_ACC_VIA_ADD_MIN_CHUNK_WT = 2
 # correctness constant, not a perf knob.  See D6.
 CB_ROW_STAT_DEPTH = 2
 
+# Largest WT_CHUNK at which pass A's `square` folds the width tiles straight into
+# DEST (DestAccumulation::PerRow) instead of packing every x^2 tile out to
+# cb_x_squared and having the reduce read them all back -- op_design.md Lamp L6(d).
+# See D12.  It is a CEILING, not a floor, because the fold's accumulation runs
+# SERIALLY over the chunk's width tiles inside a DEST register that is only 16-bit
+# at fp32_dest_acc_en=False; bounding the chunk bounds that depth.  0 disables the
+# fold everywhere (byte-identical to Refinement 3); 10**9 forces it wherever it is
+# legal.
+DEST_ACC_SQUARE_MAX_WT = 8
+
+# Faces of each fp32 partial tile that the cross-core width combine's GATHER ships
+# from a member into the group root -- see D13.  A tile is 2x2 faces of 16x16; a
+# REDUCE_ROW partial is a column vector, so only faces 0 and 2 can carry data.
+#   2  COMPACT (shipped): half the bytes, two face-sized transfers per tile.
+#   4  WHOLE: one whole-tile transfer -- Refinement 2/3's behaviour, byte-identical.
+# The A/B handle for the gather-byte lever; the stat MULTICAST back is deliberately
+# left whole-tile (it has no fan-in multiplier on it).
+GATHER_FACES = 2
+
 
 # ---------------------------------------------------------------------------
 # Small host helpers (ttnn exposes no div_up / round_up binding).
@@ -1512,6 +1531,21 @@ def create_program_descriptor(
     scaler_tiles = 1 if reduce_acc_via_add else scaler_pages
     assert scaler_tiles <= scaler_pages, "rms_norm: cb_scaler is sized below the tiles the reader pushes"
 
+    # ---- pass A's square: fold into DEST, or pack to L1?  (Lamp L6d, D12) ---
+    # With the fold on, `square` runs DestAccumulation::PerRow: the chunk's width
+    # tiles are multiplied and ACCUMULATED in DEST, so cb_x_squared receives ONE
+    # tile per tile-row instead of WT_CHUNK, and the reduce's per-call width drops
+    # to 1.  ONE source of truth for the decision; `x_squared_wt` below is the only
+    # place the resulting page count is spelled.
+    #
+    # Gated on PARTIAL_W == 0: the pad lanes of the row's last width tile are folded
+    # in BEFORE the reduce runs, so the reduce's partial scaler / 0-1 mask can no
+    # longer reach them.  (The BAND scheme passes kernel_partial_w == 0 and zeroes
+    # its staging ring, so its pad lanes are an exact 0 and it keeps the fold.)
+    square_dest_acc_per_row = kernel_partial_w == 0 and wt_chunk <= DEST_ACC_SQUARE_MAX_WT
+    # Width tiles cb_x_squared holds per tile-row, and the reduce's per-call width.
+    x_squared_wt = 1 if square_dest_acc_per_row else wt_chunk
+
     # ---- circular buffers -------------------------------------------------
     # Every page count below is a function of the block/depth knobs only.
     # cb_gamma_* is the one place a whole-op width appears; it *is* the gamma
@@ -1533,7 +1567,8 @@ def create_program_descriptor(
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT_TILES, input_tensor))
     else:
         cbs.append(_cb(CB_INPUT_TILES, bt, cb_x_depth * block_rows * wt_chunk, input_tensor.dtype, all_cores))
-    cbs.append(_cb(CB_X_SQUARED, bt, block_rows * wt_chunk, input_tensor.dtype, all_cores))
+    # x_squared_wt == 1 under the DEST fold (D12), else wt_chunk -- one source.
+    cbs.append(_cb(CB_X_SQUARED, bt, block_rows * x_squared_wt, input_tensor.dtype, all_cores))
     cbs.append(_cb(CB_SCALER, st, scaler_pages, ttnn.bfloat16, all_cores))
     # D6: CB_ROW_STAT_DEPTH * block_rows, so transform_in_place's rotation leaves
     # a PARTIAL final block's stat tiles contiguous for pass B's indexed read.
@@ -1633,8 +1668,9 @@ def create_program_descriptor(
         out_shard_pages,  # 12 pages of the resident out shard (native only)
         1 if plan.band else 0,  # 13 BAND: write the band back stick-by-stick
         plan.out_shard_row_bytes,  # 14 L1 stick stride inside the out shard (0 => accessor)
+        GATHER_FACES,  # 15 faces per partial tile the gather ships (D13)
     ]
-    assert len(writer_ct_args) == 15, "rms_norm_writer.cpp expects McastArgs<15, 10>()"
+    assert len(writer_ct_args) == 16, "rms_norm_writer.cpp expects McastArgs<16, 10>()"
     assert (
         writer_ct_args[WRITER_CT_OUT_SHARD_ROW_BYTES] == plan.out_shard_row_bytes
     ), "WRITER_CT_OUT_SHARD_ROW_BYTES index drifted"
@@ -1657,7 +1693,9 @@ def create_program_descriptor(
         scaler_tiles,  # 11 tiles the reader pushed into cb_scaler
         1 if combine else 0,  # 12 COMBINE: partial sum -> gather -> mcast-back
         plan.group_size,  # 13 cores per width group (GRID_W)
+        x_squared_wt,  # 14 reduce's per-call width == cb_x_squared's row stride (D12)
     ]
+    assert x_squared_wt in (1, wt_chunk), "rms_norm: x_squared_wt must be 1 (DEST fold) or WT_CHUNK"
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()

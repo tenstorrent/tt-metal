@@ -241,3 +241,62 @@ def test_rms_norm_perf_row_major_band(device, shape, memory_layout):
         x, gamma=g, compute_kernel_config=_perf_case_config(), memory_config=(mc if mc is not None else None)
     )
     assert tuple(out.shape) == tuple(shape)
+
+
+# ---------------------------------------------------------------------------
+# Refinement 4's targets: the PREFILL profiles and the PINNED sharded geometries
+# from `feature_spec.LOOSE_CASES`' `_perf_case` table.
+#
+# Prefill is the opposite regime from Refinement 3's decode work: Rt = 256 fills
+# the 110-core grid on the plain row split, so the width split correctly declines
+# (WIDTH_SPLIT_MIN_GAIN) and the binding constraint is BYTES + per-block overhead,
+# not occupancy.  Every case runs the declared `_perf_case` config
+# (bfloat16 / TILE / HiFi2 / fp32_dest_acc_en=False).
+# ---------------------------------------------------------------------------
+
+# ONE test function so a single space-free `-k r4target` selects the whole set:
+# `--profile` re-invokes pytest through the Tracy wrapper, which loses the quoting
+# of a multi-word `-k` expression.  `shard` is None for the interleaved rows.
+R4_TARGET_CASES = [
+    # --- interleaved PREFILL profiles (achievable_ns from _perf_case) ---------
+    pytest.param((1, 1, 8192, 1024), None, _ML.INTERLEAVED, id="r4target_prefill_w1024"),  # 96744
+    pytest.param((1, 1, 8192, 2304), None, _ML.INTERLEAVED, id="r4target_prefill_w2304"),  # 211345
+    pytest.param((1, 1, 8192, 5120), None, _ML.INTERLEAVED, id="r4target_prefill_w5120"),  # 738307
+    pytest.param((1, 1, 8192, 7168), None, _ML.INTERLEAVED, id="r4target_prefill_w7168"),  # 1032281
+    # --- the measured-fastest sharded geometries, PINNED (not auto-derived), --
+    #     because the geometry IS what the reference latency was measured on.
+    pytest.param((1, 1, 32, 1024), ([32, 128], (8, 1)), _ML.WIDTH_SHARDED, id="r4target_wshard_w1024_8c"),  # 4110
+    pytest.param((1, 1, 32, 2304), ([32, 256], (9, 1)), _ML.WIDTH_SHARDED, id="r4target_wshard_w2304_9c"),  # 4617
+    pytest.param((1, 1, 32, 5120), ([32, 160], (8, 4)), _ML.WIDTH_SHARDED, id="r4target_wshard_w5120_32c"),  # 5267
+    pytest.param((1, 1, 32, 7168), ([32, 256], (7, 4)), _ML.WIDTH_SHARDED, id="r4target_wshard_w7168_28c"),  # 5481
+    pytest.param((1, 1, 8192, 1024), ([1024, 128], (8, 8)), _ML.BLOCK_SHARDED, id="r4target_bshard_64c"),  # 25640
+]
+
+
+@pytest.mark.parametrize("shape, shard, memory_layout", R4_TARGET_CASES)
+def test_rms_norm_perf_r4target(device, shape, shard, memory_layout):
+    """Refinement 4's targets at the declared `_perf_case` config."""
+    from eval.sharding import shard_config
+
+    torch.manual_seed(42)
+    W = shape[-1]
+    mc = None
+    if shard is not None:
+        mc = shard_config(
+            shard[0], shard[1], memory_layout, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+        )
+    x = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mc,
+    )
+    g = ttnn.from_torch(
+        torch.randn(W, dtype=torch.bfloat16).reshape(1, 1, 1, W),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    out = rms_norm(x, gamma=g, compute_kernel_config=_perf_case_config(), memory_config=mc)
+    assert tuple(out.shape) == tuple(shape)

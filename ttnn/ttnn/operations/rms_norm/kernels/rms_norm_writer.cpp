@@ -64,6 +64,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"  // DataflowBuffer, for the boot zeroing below
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
@@ -103,7 +104,11 @@ void kernel_main() {
     // offset (legal only for a stick-paged output: interleaved / height-sharded).
     constexpr uint32_t BAND = get_compile_time_arg_val(13);
     constexpr uint32_t OUT_SHARD_ROW_BYTES = get_compile_time_arg_val(14);
-    constexpr auto mc = dataflow_kernel_lib::McastArgs</*CT=*/15, /*RT=*/10>();
+    // Refinement 4 (descriptor D13): faces per partial tile the GATHER ships.  4 is
+    // the whole tile (Refinement 2/3's behaviour); 2 ships only the two faces that
+    // can hold a REDUCE_ROW column vector.  See COMPACT_GATHER below.
+    constexpr uint32_t GATHER_FACES = get_compile_time_arg_val(15);
+    constexpr auto mc = dataflow_kernel_lib::McastArgs</*CT=*/16, /*RT=*/10>();
     constexpr auto out_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
     constexpr bool RM = (IS_TILE == 0);
@@ -240,6 +245,70 @@ void kernel_main() {
 
     if constexpr (CROSS_CORE) {
         const uint32_t stat_bytes = get_tile_size(cb_stat_handoff);
+        // ---- COMPACT GATHER (Refinement 4, descriptor D13) ------------------
+        // The gather is the only per-GROUP_SIZE term in the combine: every member
+        // ships its partial into ONE root, so the root's L1 ingress carries
+        // (GROUP_SIZE - 1) * BLOCK_ROWS tiles per round while the stat multicast
+        // back carries BLOCK_ROWS tiles TOTAL however big the group is.  Shrinking
+        // the gather transfer is therefore the byte lever with the fan-in
+        // multiplier on it, and the mcast is deliberately left whole-tile.
+        //
+        // A partial is a REDUCE_ROW result, so it does not fill its tile: a 32x32
+        // tile is stored as 2x2 faces of 16x16 (1024 B each at offsets 0 / 1024 /
+        // 2048 / 3072), and the reduce writes only the parts of it that pass B's
+        // mul<BroadcastDim::Col> can read back.  GATHER_FACES is how many LEADING
+        // faces a member ships -- 4 is the whole tile, 3 drops the trailing face and
+        // is a third fewer bytes, all in ONE transaction per tile either way.
+        //
+        // Whatever the gather does not write stays whatever was in the root's L1, so
+        // the number is only lowerable as far as the faces the datapath actually
+        // reads; see D13 for the measurement that fixed it.
+        //   4  the whole tile -- one contiguous run over all `rows` tiles.
+        //   3  faces 0,1,2 contiguously -- one transfer per tile, 3/4 of the bytes.
+        //   2  faces 0 and 2 only (the pair that can hold a column vector) -- two
+        //      face-sized transfers per tile, HALF the bytes.
+        static_assert(GATHER_FACES >= 2 && GATHER_FACES <= 4, "rms_norm: GATHER_FACES must be 2, 3 or 4");
+        const uint32_t face_bytes = stat_bytes / 4;
+        // ONE definition of the member -> root partial transfer, used by the root for
+        // its own slot (local) and by every member (remote).
+        auto ship_partial = [&](uint32_t src, uint64_t dst_noc, uint32_t rows) {
+            if constexpr (GATHER_FACES == 4) {
+                noc_async_write(src, dst_noc, rows * stat_bytes);  // one contiguous run
+            } else if constexpr (GATHER_FACES == 3) {
+                for (uint32_t r = 0; r < rows; ++r) {
+                    const uint32_t off = r * stat_bytes;
+                    noc_async_write(src + off, dst_noc + off, 3 * face_bytes);
+                }
+            } else {
+                for (uint32_t r = 0; r < rows; ++r) {
+                    const uint32_t off = r * stat_bytes;
+                    noc_async_write(src + off, dst_noc + off, face_bytes);
+                    noc_async_write(src + off + 2 * face_bytes, dst_noc + off + 2 * face_bytes, face_bytes);
+                }
+            }
+        };
+        // Boot: make the faces the gather never writes DEFINED, so no undefined L1
+        // ever reaches the root's elementwise sum / rsqrt.  Zeroing exactly the
+        // UNSHIPPED faces (and nothing else) is what makes this race-free: a member's
+        // partial can land at any time, and it only ever touches faces the root
+        // leaves alone -- which is why zeroing the whole CB here does NOT work (it
+        // wipes members that already arrived; measured as pcc 0.87-0.99 with a large
+        // rms across every combine cell).  Only the root reads this CB, so only the
+        // root pays.
+        if constexpr (GATHER_FACES < 4) {
+            if (is_root != 0) {
+                DataflowBuffer gather_dfb(cb_partials_gathered);
+                const uint32_t pages = gather_dfb.get_total_size_bytes() / stat_bytes;
+                for (uint32_t p = 0; p < pages; ++p) {
+                    const uint32_t base = p * stat_bytes;
+                    if constexpr (GATHER_FACES == 2) {  // faces 1 and 3 unshipped
+                        noc.async_write_zeros(gather_dfb, face_bytes, {.offset_bytes = base + face_bytes});
+                    }
+                    noc.async_write_zeros(gather_dfb, face_bytes, {.offset_bytes = base + 3 * face_bytes});
+                }
+                noc.write_zeros_l1_barrier();
+            }
+        }
         if (is_root != 0) {
             auto sender = mc.sender(noc);
             for (uint32_t blk = 0; blk < num_blocks; ++blk) {
@@ -249,10 +318,10 @@ void kernel_main() {
                 // 1. the root's own partial goes into slot 0 of its own gather CB.
                 cb_wait_front(cb_sum_handoff, rows);
                 cb_reserve_back(cb_partials_gathered, GROUP_SIZE * rows);
-                noc_async_write(
+                ship_partial(
                     get_read_ptr(cb_sum_handoff),
                     get_noc_addr(get_write_ptr(cb_partials_gathered) + my_slot * rows * stat_bytes),
-                    rows * stat_bytes);
+                    rows);
                 noc_async_write_barrier();
                 // NO self-signal here.  Semaphore::up(value) is a NON-ATOMIC local
                 // read-modify-write (noc_semaphore.h: "multiple cores incrementing
@@ -301,10 +370,10 @@ void kernel_main() {
 
                 // 1. ship this core's raw partial to the root's slot, then signal.
                 cb_wait_front(cb_sum_handoff, rows);
-                noc_async_write(
+                ship_partial(
                     get_read_ptr(cb_sum_handoff),
                     get_noc_addr(root_x, root_y, get_write_ptr(cb_partials_gathered) + my_slot * rows * stat_bytes),
-                    rows * stat_bytes);
+                    rows);
                 noc_async_write_barrier();  // data before signal
                 gather_sem.up(noc, root_x, root_y, 1);
                 cb_pop_front(cb_sum_handoff, rows);

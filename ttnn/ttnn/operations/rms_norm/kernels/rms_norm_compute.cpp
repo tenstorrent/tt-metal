@@ -83,6 +83,12 @@ void kernel_main() {
     // the dataflow; see op_design.md section 3.4).
     constexpr uint32_t COMBINE = get_compile_time_arg_val(12);
     constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(13);
+    // Refinement 4 / Lamp L6d (descriptor D12): cb_x_squared's width tiles per
+    // tile-row, and hence the reduce's per-call reduce-dim width.  1 means pass A's
+    // `square` folds the chunk's width tiles straight into DEST
+    // (DestAccumulation::PerRow) rather than packing WT_CHUNK x^2 tiles out to L1
+    // for the reduce to read back; WT_CHUNK is the unfolded (Phase-0) path.
+    constexpr uint32_t X_SQUARED_WT = get_compile_time_arg_val(14);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // tile-rows owned by this core
     // Only the core holding the row's LAST width tile applies the partial-W
@@ -152,6 +158,32 @@ void kernel_main() {
                                                    : ckl::ReducePartialScaler::last_tile_at(1));
     // RESIDENT holds x across both passes -> pass A must not pop it.
     constexpr auto PASS_A_POP = X_RESIDENT ? ckl::PopPolicy::None : ckl::PopPolicy::AtEnd;
+
+    // Lamp L6d / D12: fold pass A's square straight into DEST.  The chunk's width
+    // tiles are multiplied and ACCUMULATED in one DEST slot, so cb_x_squared takes
+    // one tile per tile-row (X_SQUARED_WT == 1) and the reduce's per-call width is 1
+    // -- deleting WT_CHUNK-1 packs and the matching unpacks per tile-row.  The
+    // cross-chunk carry still runs through the fp32 cb_row_stat, so the accumulation
+    // DEST sees is bounded by WT_CHUNK, which is exactly what the descriptor's
+    // DEST_ACC_SQUARE_MAX_WT ceiling bounds.
+    constexpr bool SQ_FOLD = (X_SQUARED_WT == 1) && (WT_CHUNK > 1);
+    static_assert(
+        X_SQUARED_WT == 1 || X_SQUARED_WT == WT_CHUNK,
+        "rms_norm: X_SQUARED_WT must be 1 (the DEST fold) or WT_CHUNK (the packed path)");
+    static_assert(
+        !SQ_FOLD || PARTIAL_W == 0,
+        "rms_norm: the DEST fold folds the last width tile's pad lanes in BEFORE the "
+        "reduce, so the reduce's partial scaler / mask can no longer reach them");
+    // The fold's pack is per-OUTER (one tile per tile-row of the grid), which is the
+    // policy pair DestAccumulation::PerRow requires.
+    constexpr auto SQ_OUT_FOLDED = ckl::output(
+        cb_x_squared,
+        ckl::ReservePolicy::PerOuter,
+        ckl::PushPolicy::PerOuter,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::PackRelu::Disabled,
+        ckl::L1Accumulation::Disabled,
+        ckl::DestAccumulation::PerRow);
     constexpr uint32_t NORM_OUT = HAS_G ? cb_normalized : cb_output_tiles;
     constexpr bool CROSS_CORE = (COMBINE != 0);
     // Pass B's Col operand: the multicast landing CB when the stat was combined
@@ -183,9 +215,15 @@ void kernel_main() {
             if constexpr (RM) {
                 ckl::tilize<WT_CHUNK, cb_input_sticks, cb_input_tiles>(rows);
             }
-            ckl::square<
-                ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, PASS_A_POP, ckl::OperandKind::Block),
-                ckl::output(cb_x_squared)>(ckl::EltwiseShape::grid(rows, WT_CHUNK));
+            if constexpr (SQ_FOLD) {
+                ckl::square<
+                    ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, PASS_A_POP, ckl::OperandKind::Block),
+                    SQ_OUT_FOLDED>(ckl::EltwiseShape::grid(rows, WT_CHUNK));
+            } else {
+                ckl::square<
+                    ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, PASS_A_POP, ckl::OperandKind::Block),
+                    ckl::output(cb_x_squared)>(ckl::EltwiseShape::grid(rows, WT_CHUNK));
+            }
 
             ckl::accumulate_reduce_block<
                 ckernel::PoolType::SUM,
@@ -196,7 +234,7 @@ void kernel_main() {
                 REDUCE_POLICY,
                 ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                 ReduceFp32Mode::Fast,
-                REDUCE_ALGO>(ckl::ReduceInputBlockShape::of(rows, WT_CHUNK), c, NUM_W_CHUNKS, PARTIAL_SCALER);
+                REDUCE_ALGO>(ckl::ReduceInputBlockShape::of(rows, X_SQUARED_WT), c, NUM_W_CHUNKS, PARTIAL_SCALER);
         }
 
         // ================= finalize: 1/rms = rsqrt(sum/W + eps) ============
