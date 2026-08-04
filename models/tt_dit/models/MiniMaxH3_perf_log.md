@@ -28,9 +28,10 @@ python models/tt_dit/tests/models/minimax_h3/project_block_perf.py 5s=<csv>
 | 4 | 2026-08-04 | QK-norm + head split + RoPE fused into one op | 18.53 ms | not measured | not measured | `9c9f54d877d` |
 | 5 | 2026-08-04 | all-gather folded into the matmuls (AGMM), placeholder block sizes | 18.20 ms | 43.22 ms | 78.26 ms | `368722dcf48` |
 | 6 | 2026-08-04 | AGMM block sizes from a measured sweep | 17.79 ms | 42.43 ms | 77.01 ms | `45489e2b6ba` |
+| 7 | 2026-08-04 | attention gate addcmul folded into the to_out AGMM epilogue | 17.58 ms | 42.31 ms | 76.96 ms | `9d4a5d85c2d` |
 
-Cumulative at 5s: **26.03 -> 17.79 ms, -31.7%**; 1.30 -> 0.89 s per 50-layer step, 65.1 -> 44.5 s per video.
-At 10s: 57.65 -> 42.43 ms (-26.4%). At 15s: 98.72 -> 77.01 ms (-22.0%).
+Cumulative at 5s: **26.03 -> 17.58 ms, -32.5%**; 1.30 -> 0.88 s per 50-layer step, 65.1 -> 43.9 s per video.
+At 10s: 57.65 -> 42.31 ms (-26.6%). At 15s: 98.72 -> 76.96 ms (-22.0%).
 
 ## Notes per entry
 
@@ -68,6 +69,41 @@ sweep is the follow-up; these numbers are the floor, not the result.
 legal divisors of 42. The three AGMM ops fall 5.02 -> 4.58 ms at 5s. The (K, N) keying transferred --
 the same block shapes were swept at M=4768 and hold at 10s and 15s.
 
+**7. Attention gate fusion.** Ternary ops 2 -> 1 (0.29 -> 0.14 ms) with the AGMM growing 0.06 ms.
+Real but marginal, and honestly at the edge of what this measurement resolves: op-level accounting
+predicts -0.085 ms while the block moved -0.21 / -0.12 / -0.05 ms, against run-to-run variance of
+around 0.7%. Treat entry 7 as "a small win, not a measurable one" at 15s.
+
+## Measured negative results
+
+Kept so nobody re-attempts these blind. A negative result with a diagnosis is worth as much as a win.
+
+**Fused matmul + reduce-scatter + addcmul for the feed-forward: 45% regression on that stage.**
+Replacing ff2 + reduce-scatter + the gate-MLP addcmul with one
+`minimal_matmul_strided_reduce_scatter_async` turned 1.75 ms (0.94 + 0.67 + 0.15) into 2.55 ms --
+**+3.3% on the block at 5s, +2.6% at 10s, +2.3% at 15s.** Three ops became one and it got slower.
+
+The cause is blocking, not the fusion. The unfused path reaches `get_matmul_config(..., default_block_size)`
+and so uses our swept sizes, running ff2 at 64.5% FLOP util; the fused path goes through
+`get_fused_mmrs_config`, a *separate* table keyed on `(M, K, N)` that holds only Wan's
+`(9472, 3456, 5120)` and `(2368, 3456, 5120)` on the 12x10 grid, so ours takes
+`default_fused_mmrs_config`.
+
+It misses **silently**: that helper warns only when the *grid* is unknown, and 12x10 is registered. When
+AGMM had the same problem an illegal `K_block` produced a hard TT_FATAL and it was fixed in minutes;
+here there was no diagnostic at all and only the measurement caught it. Anyone reasoning "three ops
+into one must be faster" would have committed the regression.
+
+Prerequisite before re-trying: swept fused-MMRS entries, one per duration since M varies
+(4768 / 9216 / 13632). `sweep_mm_block_sizes.py` covers `mm` and `agmm` but not MMRS, so the sweep
+needs extending first. The hooks are in place -- `ParallelFeedForward.forward_fused_addcmul` now takes
+`default_block_size` -- but the fused path routes block sizes through `get_fused_mmrs_config`, not
+that argument, so wiring is still required.
+
+General lesson, now twice observed: **fusing an op without tuning its blocking can be worse than not
+fusing it.** AGMM was +1.8% before its sweep and +2.3% after; MMRS is -3.3% before a sweep it has not
+had.
+
 ## Where the time goes, from the 5s profile after entry 6
 
 54 ops, 17.78 ms. Measured shares:
@@ -87,17 +123,13 @@ the same block shapes were swept at M=4768 and hold at 10s and 15s.
 Ordered by expected value. "Measured" means taken from a profile; "est." is a projection from
 measured shares and should be treated as a hypothesis, not a result.
 
-### A. Reachable from existing building blocks -- no new kernels
+### A. Reachable from existing building blocks
 
-1. **Fused matmul + reduce-scatter + addcmul for the feed-forward.**
-   `ParallelFeedForward.forward_fused_addcmul` -> `RowParallelLinear.forward_fused_addcmul` ->
-   `minimal_matmul_strided_reduce_scatter_async` already exists and computes
-   `addcmul_a + scalar * rs_result * addcmul_b`, which is exactly this block's
-   `addcmul(residual, ff_out, gate_mlp)`. Collapses ff2 + reduce-scatter + gate addcmul into one op:
-   **1.76 ms measured today, 9.9% of the block.** We simply do not call it.
-2. **Fold the attention gate into the `to_out` AGMM.** `all_gather_minimal_matmul_async` takes
-   `addcmul_input_tensor1/2`; `WanAttention._to_out_fused_addcmul` is the precedent. Removes the
-   gate-MSA addcmul, 139 us measured.
+1. **Fused matmul + reduce-scatter + addcmul for the feed-forward.** ATTEMPTED AND REVERTED -- a 45%
+   regression on that stage. See "Measured negative results". The op exists and the arithmetic is
+   right; what is missing is a swept fused-MMRS blocking for our shapes. Still worth ~1.6 ms if that
+   is done, so it stays on the list, but it is no longer a free win.
+2. ~~**Fold the attention gate into the `to_out` AGMM.**~~ DONE, entry 7.
 
 ### B. Dispatch -- the largest wall-clock lever, and not a device-time item
 
