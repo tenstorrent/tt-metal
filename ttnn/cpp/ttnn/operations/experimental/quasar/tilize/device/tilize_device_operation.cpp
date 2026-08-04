@@ -193,7 +193,7 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         }
         return ttnn::prim::qsr::TilizeMultiCoreDefaultProgramFactory{};
     }
-    if (!operation_attributes.enough_space_width) {
+    if (!operation_attributes.enough_space_height) {
         return ttnn::prim::qsr::TilizeMultiCoreBlockProgramFactory{};
     }
     auto sub_core_grids = operation_attributes.sub_core_grids;
@@ -238,7 +238,7 @@ ttnn::Tensor tilize(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
     bool use_multicore,
-    bool enough_space_width,
+    bool enough_space_height,
     bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::device_operation::launch<TilizeDeviceOperation>(
@@ -246,7 +246,7 @@ ttnn::Tensor tilize(
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .output_dtype = output_dtype.value_or(input_tensor.dtype()),
             .use_multicore = use_multicore,
-            .enough_space_width = enough_space_width,
+            .enough_space_height = enough_space_height,
             .use_low_perf = use_low_perf,
             .sub_core_grids = sub_core_grids,
         },

@@ -66,8 +66,7 @@ ttnn::Tensor tilize(
     const uint32_t staging_bytes_per_tile = input_single_tile_size / input_tile_height;
     const uint32_t fixed_staging_bytes = 2 * dram_alignment;
 
-    // True when L1 can hold default-path CBs sized for one full tile-row (num_tiles_per_row tiles).
-    bool enough_space_width = ttnn::operations::data_movement::is_enough_space(
+    bool enough_space_height = ttnn::operations::data_movement::is_enough_space(
         input_tensor,
         input_single_tile_size,
         output_single_tile_size,
@@ -83,7 +82,7 @@ ttnn::Tensor tilize(
         // and exceed L1. Reroute via interleaved DRAM so the prim selects
         // TilizeMultiCoreBlockProgramFactory, whose CBs are bounded by
         // max_l1 / (input_tile_size + output_tile_size) by construction.
-        if (input_tensor.memory_config().is_sharded() && !enough_space_width) {
+        if (input_tensor.memory_config().is_sharded() && !enough_space_height) {
             log_debug(tt::LogOp, "ttnn::tilize: rerouting wide sharded input via DRAM interleaved (#45331)");
             const auto target_memory_config = memory_config.value_or(input_tensor.memory_config());
             auto interleaved_input = ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG);
@@ -92,7 +91,7 @@ ttnn::Tensor tilize(
                 ttnn::DRAM_MEMORY_CONFIG,
                 output_dtype,
                 use_multicore,
-                /*enough_space_width=*/false,
+                /*enough_space_height=*/false,
                 use_low_perf,
                 tile,
                 sub_core_grids);
@@ -103,7 +102,7 @@ ttnn::Tensor tilize(
             memory_config,
             output_dtype,
             use_multicore,
-            enough_space_width,
+            enough_space_height,
             use_low_perf,
             tile,
             sub_core_grids);

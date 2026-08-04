@@ -26,8 +26,7 @@ struct UntilizeOperationAttributes {
     bool use_multicore{};
     bool fp32_dest_acc_en{};
     std::optional<CoreRangeSet> sub_core_grids;
-    // Host L1 heuristic: default multicore path CBs fit one full tile-row (tensor width in tiles).
-    bool enough_space_width{};
+    bool enough_space_height{};
     uint32_t pf_type{};
 };
 
