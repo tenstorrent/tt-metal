@@ -153,7 +153,7 @@ with the 282s reference config, num_layers=32, use_trace=False):
 
 Breakdown of 216.5s: step-1 compile **133.7s** (one-time on-device conv-kernel compile, amortizable)
 + loop 46.4s @ 947 ms/step + bf16 VAE 36.4s. The host round-trip was ~4600 ms/step (~83% of the
-hybrid step). vs hybrid 351.4s = **-38.4% E2E**; vs the 282s reference (2782 ms/step, pre-my-wins)
+hybrid step). vs hybrid 351.4s = **-38.4% E2E** (NB: the hybrid render used **fp32 VAE 56.4s** [loop 294.7+vae 56.4=351.4], on-device **bf16 36.4s** -> ~20s of the 135s E2E gain is the VAE dtype, ~115s is host-glue; the VAE-independent host-glue win is the per-step **5548->947 ms/step**); vs the 282s reference (2782 ms/step, pre-my-wins)
 my 4 device-forward wins take steady 2782 -> 947.
 
 WARM (compile amortized, e.g. resident server / 2nd render) = loop 46.4 + vae 36.4 = **~83 s/image**
