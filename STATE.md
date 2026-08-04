@@ -1959,3 +1959,101 @@ Encoder gate re-run after the deletions: **7 passed**, PCC 99.9094 % / 99.9132 %
 and needs one re-gate. `MiniMaxH3FrameGroupNorm` is likewise dead: the stats norm won on
 measurement at every shape (amendment 56), so the `ttnn.group_norm` path and
 `MINIMAX_H3_USE_STATS_GROUPNORM` can go with it.
+
+## Amendment 66 (2026-08-04) — there is no 1 s of host overhead: audio decode is device-bound, and Tracy undercounts it 6x
+
+Amendment 64 read 224 ms of device time inside a 1284 ms wall clock and called the difference
+host overhead. **It is not.** Splitting `Vocoder.forward_BCT` with an explicit
+`synchronize_device` between every stage (single device, 5 s clip, warm, min of 3):
+
+| stage | ms |
+|---|---|
+| `dec_in_proj` stage (upload + k1 conv + readback) | 3.21 |
+| `_upload_BCT` | 2.31 |
+| `_forward_device` **dispatch return** (no sync) | 504.64 |
+| `synchronize_device` **after** dispatch returned | **730.74** |
+| `to_torch` readback | 11.93 |
+| host crop | 0.03 |
+| SUM | 1252.86 (full call 1292.96) |
+
+The host finishes enqueueing all 1680 ops in 504 ms and the device still has **731 ms of
+work outstanding**. So device busy time is between 731 ms and 1235 ms, not 224 ms:
+**Tracy's `DEVICE FW DURATION` undercounts this model by ~5-6x.** Amendment 56 already
+recorded Tracy *inflating* data-movement ops on the visual encoder; on the audio decoder it
+under-reads. Neither direction is safe — use it for ranking only, never for magnitude.
+
+This also explains trace's 1.07x (amendment 60) exactly, and retires it as a mystery: the
+504 ms of host dispatch is *not on the critical path* because it overlaps device execution.
+Trace deletes host dispatch, and the device still needs ~1.2 s. Nothing was wrong with the
+trace.
+
+Two other candidates die here too. The readback is **11.93 ms**, not seconds, despite the
+final tensor being the worst imaginable readback shape — `(2, 165600, 1)` ROW_MAJOR fp32,
+a 4-byte page. And the host crop is 0.03 ms.
+
+### Where the 1.5 s of device time actually is
+
+Same method one level down: `synchronize_device` before and after every leaf submodule of the
+vocoder, one warm call. Serializing host and device inflates the wall clock to 1654 ms, but
+each entry is honest device time for that module. **1493 ms of the 1654 ms is accounted.**
+
+By role, summed over all seven stages:
+
+| role | ms | share |
+|---|---|---|
+| `Activation1d.upsample` (UpSample1d, ratio 2 polyphase, K=12) | **588.7** | **39.4 %** |
+| `Activation1d.downsample` (DownSample1d, K=12 stride 2) | **321.6** | **21.5 %** |
+| `Activation1d.act` (`ttnn.snake_beta`, incl. its tilize) | **265.1** | **17.8 %** |
+| `DilatedConv1d` (AMP `convs1`/`convs2`) | 286.7 | 19.2 % |
+| `ups[i]` (ConvTranspose1dViaConv3d) | 21.8 | 1.5 % |
+| `conv_pre` + `conv_post` | 9.6 | 0.6 % |
+
+**`Activation1d` is 1175 ms — 78.7 % of audio decode device time.** The convolutions the
+model is nominally made of are 19 %. The anti-aliasing wrapper around the activation is the
+model. Per stage, `Activation1d` only (18 calls each, i.e. 3 blocks x (3 acts1 + 3 acts2)):
+
+| stage | C | T in | up | snake | down | total |
+|---|---|---|---|---|---|---|
+| s0 | 512 | 1035 | 140.9 | 9.9 | 11.0 | **161.8** |
+| s1 | 256 | 5175 | 43.7 | 21.7 | 25.0 | 90.4 |
+| s2 | 128 | 10350 | 53.9 | 22.9 | 39.0 | 115.8 |
+| s3 | 64 | 20700 | 58.3 | 24.5 | 41.0 | 123.8 |
+| s4 | 32 | 41400 | 69.5 | 27.7 | 44.1 | 141.3 |
+| s5 | 16 | 82800 | 71.1 | 51.7 | 51.8 | 174.6 |
+| s6 | 8 | 165600 | 143.3 | 101.1 | 104.0 | **348.4** |
+| act_post | 8 | 165600 | 8.0 | 5.6 | 5.8 | 19.4 |
+
+Effective bandwidth is the tell. s6's upsample moves ~50 MB per call in 8.0 ms — **~6 GB/s**,
+against the ~112 GB/s the visual encoder's stats norm achieves. These tensors are 4-6 MB;
+nothing here is bandwidth-limited by size. Two distinct causes, one per end of the stack:
+
+* **Deep stages (s4-s6) are page-limited.** `C = 32/16/8` in ROW_MAJOR fp32 is a **128/64/32
+  byte page** over 41k-166k rows. s6 alone is 348 ms, 23 % of the whole decoder, at C=8.
+* **s0 is op-count-limited.** `ttnn.conv1d` HEIGHT_SHARDED finds no valid slice configuration
+  at `(T_pad=1041, C=512, K=7, stride=1)` and falls back to `_depthwise_tap_mac`
+  **36 times per forward** (counted, not inferred — every polyphase phase of every one of the
+  18 `Activation1d`s at that stage). At 2K-1 = 13 ops each plus slices that is **~720 of the
+  1680 ops**, on a 4.2 MB tensor, which is why s0's upsample costs 141 ms where s1's costs 44.
+
+And a layout round-trip sits inside every one of the 126 `Activation1d` calls:
+`UpSample1d` and `DownSample1d` both assert ROW_MAJOR, `SnakeBeta.forward` tilizes its input
+and returns TILE, and `Activation1d.forward:333` untilizes it back. The tilize is inside the
+265 ms snake row; the untilize is most of the 160 ms this table does not account for.
+
+### What this re-ranks
+
+`_depthwise_tap_mac` was the standing suspect (amendments 62-64) and it is real but local —
+one stage, ~110 ms of 1493 ms. The lever list for audio decode is now:
+
+1. **Narrow-C ROW_MAJOR data movement in s4-s6** — 664 ms of `Activation1d` at C = 32/16/8.
+   Biggest single item and not previously identified at all.
+2. **The `UpSample1d` polyphase form itself** — 589 ms across all stages for what is one
+   depthwise `conv_transpose1d`; `ttnn.conv_transpose2d` exists and is unused here.
+3. **The conv1d slicer at `(1041, 512, 7)`** — a config fix worth ~110 ms, and it deletes
+   720 of 1680 ops, which is most of amendment 64's elementwise count.
+4. **The tilize/untilize around `snake_beta`**, 126 round trips per forward.
+
+Parallelism stays the largest lever on paper (this is 1.5 s of device time on one device of
+32), but amendment 63's 1.30x at `t_factor=4` is explained by the same two causes: sharding T
+makes the deep stages' rows *fewer* while leaving the page 32 bytes wide, and it makes the
+s0 conv1d slicer fail at more shapes, not fewer.
