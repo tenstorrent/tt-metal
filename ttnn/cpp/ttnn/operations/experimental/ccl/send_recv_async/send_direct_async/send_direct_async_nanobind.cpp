@@ -15,12 +15,10 @@ void bind_send_direct_async(nb::module_& mod) {
     ttnn::bind_function<"send_direct_async", "ttnn.experimental.">(
         mod,
         R"doc(
-        Performs a direct send of multi-device :attr:`input_tensor` to a :attr:`mesh_socket`.
+        Sends :attr:`input_tensor` over :attr:`mesh_socket`, paired with recv_direct_async.
 
-        Unlike send_async, the sender writes each page straight into the receiver's output tensor
-        instead of the socket FIFO. The socket is used only to advertise the sender handshake-buffer
-        address (over which the receiver writes back its output tensor address) and to signal
-        completion with a single page.
+        Unlike send_async, pages are written straight into the receiver's output tensor rather than
+        through the socket FIFO, which carries only the address exchange and the completion signal.
 
         Args:
             input_tensor (ttnn.Tensor): device tensor.

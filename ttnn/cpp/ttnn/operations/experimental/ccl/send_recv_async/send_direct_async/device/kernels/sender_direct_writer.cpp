@@ -31,8 +31,6 @@ constexpr uint32_t output_args_crta_idx = 0;
 // Offsets are in bytes from the base of handshake page 0.
 constexpr uint32_t DEST_VALID_OFFSET = 0;
 constexpr uint32_t DEST_OUTPUT_ADDR_OFFSET = 4;
-constexpr uint32_t DEST_PAGE_SIZE_OFFSET = 8;
-constexpr uint32_t DEST_NUM_PAGES_OFFSET = 12;
 
 FORCE_INLINE void fabric_write_page(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
@@ -61,9 +59,7 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    // Two fabric headers stored in fabric_packet_header_cb:
-    //  - data_packet_header: issues direct writes to the receiver (output tensor + handshake advertise)
-    //  - socket_packet_header: used by socket APIs for control flow
+    // Separate headers so the data path and the socket control path do not clobber each other.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
@@ -122,15 +118,11 @@ void kernel_main() {
     // STEP 3: stream pages directly into the receiver's output tensor
     //////////////////////////////////////////////////
     if constexpr (enable_bank_packing) {
-        // Interleaved bank-contiguous packing. Pages whose indices differ by num_banks live in the
-        // same bank at consecutive slots, so the receiver's output tensor stores them contiguously
-        // too, and a single fabric packet covering {p, p + num_banks, ..., p + (count - 1) * num_banks}
-        // lands at the head page's noc address.
-        //
-        // The reader produced one CB entry per super-block of (num_banks * num_pages_per_packet)
-        // pages, with bank b's packet at a fixed region [b * bank_region_bytes]. We drain each entry
-        // as up to num_banks combined fabric packets. The iteration mirrors the reader exactly so the
-        // CB FIFO stays in sync. No per-iteration modulus is needed.
+        // Pages whose indices differ by num_banks share a bank at consecutive slots, so they are
+        // contiguous on the receiver too and one packet covering {p, p + num_banks, ...} lands at the
+        // head page's noc address. The reader hands over one CB entry per super-block of
+        // (num_banks * num_pages_per_packet) pages, bank b at region [b * bank_region_bytes]; this
+        // iteration mirrors the reader exactly so the CB FIFO stays in sync.
         constexpr uint32_t super_block_pages = num_banks * num_pages_per_packet;
         constexpr uint32_t bank_region_bytes = num_pages_per_packet * output_page_size;
         const uint32_t end_page = page_start_offset + num_pages;

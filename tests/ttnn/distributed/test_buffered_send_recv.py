@@ -3,18 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Unit tests for the ``buffered_send`` / ``buffered_recv`` experimental ops.
+Correctness tests for the ``buffered_send`` / ``buffered_recv`` experimental ops.
 
-These ops transfer a tensor between two submeshes of a single ``MeshDevice`` using an intra-process
-``ttnn.MeshSocket`` pair, mirroring the setup used by ``tests/ttnn/distributed/test_socket_perf.py``.
-
-``buffered_send`` behaves the same as ``send_direct_async``: the sender writes each page straight
-into the receiver's output tensor and uses the socket only for the handshake/completion signal.
-
-``buffered_recv`` differs from ``recv_direct_async`` in that it takes ``N`` output tensors (a ring of
-receive buffers); buffer availability is coordinated through an internally-allocated, zero-initialized
-persistent L1_SMALL buffer. These tests exercise the op wiring and validate correctness across the
-rotating receive-buffer ring.
+``buffered_recv`` takes ``N`` output tensors forming a ring of receive buffers, so these tests send a
+different tensor on each iteration and check it lands in the expected slot of the rotation.
 """
 
 import pytest
@@ -25,11 +17,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 
 def _build_socket_connections(mesh_shape: ttnn.MeshShape, num_connections: int):
-    """Build a ``num_connections``-per-device connection list.
-
-    Sender cores are laid out in row 0, receiver cores in row 1, so the two sets of cores never
-    overlap (the socket runtime forbids a core appearing in two connections of the same socket).
-    """
+    # Senders in core row 0, receivers in row 1: the socket runtime forbids a core appearing in two
+    # connections of the same socket.
     sender_cores = [ttnn.CoreCoord(i, 0) for i in range(num_connections)]
     recv_cores = [ttnn.CoreCoord(i, 1) for i in range(num_connections)]
 
@@ -60,7 +49,7 @@ def _run_buffered_send_recv_case(
     mesh_shape = sender_mesh_device.shape
 
     socket_connections = _build_socket_connections(mesh_shape, num_connections)
-    # buffered_send/buffered_recv require an L1 socket storage type for the handshake FIFO.
+    # The handshake FIFO must be in L1; only the handshake page flows through it.
     socket_mem_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_page_size * 4)
     socket_config = ttnn.SocketConfig(socket_connections, socket_mem_config)
     send_socket, recv_socket = ttnn.create_socket_pair(sender_mesh_device, receiver_mesh_device, socket_config)
@@ -78,20 +67,18 @@ def _run_buffered_send_recv_case(
 
     num_iterations = 4
 
-    # buffered_recv takes N output tensors (the ring of receive buffers).
-    torch_input, input_tensor = _make_input(0)
+    _, spec_tensor = _make_input(0)
     output_tensors = [
-        ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device) for _ in range(num_buffers)
+        ttnn.allocate_tensor_on_device(spec_tensor.spec, receiver_mesh_device) for _ in range(num_buffers)
     ]
 
     for iteration in range(num_iterations):
-        # Give send a unique input on each iteration so we can confirm the right data arrives.
+        # A unique input per iteration, so a stale buffer would show up as a mismatch.
         torch_input, input_tensor = _make_input(iteration)
         ttnn.experimental.buffered_send(input_tensor, send_socket)
         ttnn.experimental.buffered_recv(output_tensors, recv_socket)
         ttnn.synchronize_device(sender_mesh_device)
         ttnn.synchronize_device(receiver_mesh_device)
-        print(f"Synchronized devices (iteration {iteration})")
 
         input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(sender_mesh_device, dim=0))
         output_data = ttnn.to_torch(
@@ -99,7 +86,6 @@ def _run_buffered_send_recv_case(
             mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0),
         )
         eq, msg = comp_equal(input_data, output_data)
-        print(f"iteration {iteration}: {msg}")
         assert eq, f"iteration {iteration}: {msg}"
 
 
@@ -135,11 +121,7 @@ def test_buffered_send_recv(
     tensor_shape,
     num_buffers,
 ):
-    """Send a per-chip tensor with ``buffered_send`` and receive it with ``buffered_recv``.
-
-    A 2x2 mesh is split row-wise into two 1x2 submeshes; the top row is the sender and the bottom
-    row is the receiver. Correctness is verified against the rotating receive-buffer ring.
-    """
+    """Send a tensor from the device at (0, 0) to the device at (0, 1) and back through the ring."""
     _run_buffered_send_recv_case(
         mesh_device,
         num_connections,

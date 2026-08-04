@@ -57,48 +57,41 @@ RecvDirectAsyncMeshWorkloadFactory::create_at(
     std::vector<CoreCoord> receiver_core_coords;
     std::vector<tt::tt_fabric::FabricNodeId> sender_fabric_node_ids;
     std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
-    std::vector<uint32_t> connection_indices;
 
-    for (uint32_t i = 0; i < socket_connection_config.size(); ++i) {
-        const auto& connection = socket_connection_config[i];
+    for (const auto& connection : socket_connection_config) {
         if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
             receiver_core_coords.push_back(connection.receiver_core.core_coord);
             receiver_fabric_node_ids.push_back(
                 output_tensor.device()->get_fabric_node_id(connection.receiver_core.device_coord));
             sender_fabric_node_ids.push_back(mesh_socket.get_fabric_node_id(
                 tt::tt_metal::distributed::SocketEndpoint::SENDER, connection.sender_core.device_coord));
-            connection_indices.push_back(i);
         }
     }
     uint32_t num_cores = receiver_core_coords.size();
+    TT_FATAL(
+        num_cores > 0,
+        "recv_direct_async found no socket connections whose receiver core is on device {}",
+        target_device->id());
 
     // cores must not exceed available fabric links
-    if (num_cores > 0) {
-        const auto& receiver_fabric_node_id = receiver_fabric_node_ids[0];
-        const auto& sender_fabric_node_id = sender_fabric_node_ids[0];
+    {
         auto available_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_ids[0], sender_fabric_node_ids[0]);
         uint32_t num_available_links = available_link_indices.size();
 
         TT_FATAL(
             num_cores <= num_available_links,
             "Cannot create {} receiver-sender pairs with only {} available fabric links between devices. "
-            "Reduce the number of cores per device. "
-            "Available links: {}, Requested pairs: {}",
+            "Reduce the number of cores per device.",
             num_cores,
-            num_available_links,
-            num_available_links,
-            num_cores);
+            num_available_links);
     }
 
     auto max_alignment = std::max(
         target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
         output_tensor.buffer()->alignment());
-    auto output_page_size = output_tensor.buffer()->aligned_page_size();
-    auto total_num_pages = output_tensor.buffer()->num_pages();
 
-    // Must match the sender's handshake page size.
-    uint32_t handshake_page_size = tt::align(static_cast<uint32_t>(64), max_alignment);
+    uint32_t handshake_page_size = ttnn::send_recv_utils::handshake_page_size(max_alignment);
 
     auto receiver_core_range_set = CoreRangeSet(std::set<CoreRange>());
     for (const auto& core : receiver_core_coords) {
@@ -137,8 +130,6 @@ RecvDirectAsyncMeshWorkloadFactory::create_at(
         std::vector<uint32_t> handshake_rt_args = {
             mesh_socket.get_config_buffer()->address(),  // socket_config_addr
             output_tensor.buffer()->address(),           // output_base_addr
-            static_cast<uint32_t>(output_page_size),     // output_page_size
-            static_cast<uint32_t>(total_num_pages),      // num_pages
         };
 
         auto link_indices = tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);

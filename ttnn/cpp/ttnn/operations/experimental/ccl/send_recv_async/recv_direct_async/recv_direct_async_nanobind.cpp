@@ -15,11 +15,10 @@ void bind_recv_direct_async(nb::module_& mod) {
     ttnn::bind_function<"recv_direct_async", "ttnn.experimental.">(
         mod,
         R"doc(
-        Performs a direct recv paired with send_direct_async.
+        Receives a tensor sent by send_direct_async.
 
-        The sender writes the payload straight into :attr:`output_tensor`. This op advertises the
-        receiver's output tensor address to the sender (over the socket) and waits for a single
-        completion page before returning.
+        The sender writes :attr:`output_tensor` directly, so this op only advertises its address over
+        the socket and waits for the completion signal.
 
         Args:
             output_tensor (ttnn.Tensor): Tensor to receive the data into.

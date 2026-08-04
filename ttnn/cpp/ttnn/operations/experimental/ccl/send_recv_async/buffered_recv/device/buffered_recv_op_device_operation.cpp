@@ -10,6 +10,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/buffered_common/buffered_async_types.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 namespace ttnn::experimental::prim {
 void BufferedRecvDeviceOperation::validate_on_program_cache_miss(
@@ -27,8 +28,8 @@ void BufferedRecvDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(output_tensor.device() != nullptr, "buffered_recv op requires a device");
     }
 
-    // All output tensors form a ring of receive buffers, so they must be homogeneous: same device,
-    // dtype, layout and memory config.
+    // The ring is advertised to the sender as a single page geometry derived from the first tensor,
+    // so every tensor must agree on shape as well as dtype, layout and memory config.
     const auto& first_output_tensor = output_tensors.front();
     for (const auto& output_tensor : output_tensors) {
         TT_FATAL(
@@ -43,11 +44,23 @@ void BufferedRecvDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             output_tensor.memory_config() == first_output_tensor.memory_config(),
             "buffered_recv op requires all output tensors to have the same memory config");
+        TT_FATAL(
+            output_tensor.padded_shape() == first_output_tensor.padded_shape(),
+            "buffered_recv op requires all output tensors to have the same padded shape, got {} and {}",
+            first_output_tensor.padded_shape(),
+            output_tensor.padded_shape());
     }
     TT_FATAL(
         mesh_socket.get_socket_endpoint_type() == tt::tt_metal::distributed::SocketEndpoint::RECEIVER,
         "buffered_recv op requires a {} socket",
         enchantum::to_string(tt::tt_metal::distributed::SocketEndpoint::RECEIVER));
+
+    // Only the handshake page goes through the FIFO; the payload is written straight into the
+    // selected output tensor by the sender.
+    send_recv_utils::validate_fifo_size(
+        mesh_socket,
+        "buffered_recv",
+        send_recv_utils::handshake_page_size(send_recv_utils::socket_max_alignment(first_output_tensor, mesh_socket)));
 
     // The handshake reads the advertised sender-buffer address out of the socket FIFO, which requires
     // the FIFO to live in L1.

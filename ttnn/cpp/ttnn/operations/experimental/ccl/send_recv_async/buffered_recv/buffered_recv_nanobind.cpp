@@ -15,16 +15,14 @@ void bind_buffered_recv(nb::module_& mod) {
     ttnn::bind_function<"buffered_recv", "ttnn.experimental.">(
         mod,
         R"doc(
-        Performs a buffered recv paired with buffered_send.
+        Receives data sent by buffered_send.
 
-        Unlike recv_direct_async (which takes a single output tensor), buffered_recv takes N
-        output tensors that act as a ring of receive buffers and the receive :attr:`mesh_socket`.
-        Buffer availability is coordinated through an internally-allocated, zero-initialized
-        persistent L1_SMALL buffer (no caller-provided global semaphore is required).
+        Unlike recv_direct_async, which takes a single output tensor, this takes N tensors forming a
+        ring of receive buffers. All of them must share a shape, dtype, layout and memory config.
 
         Note:
-            This op returns None. The actual buffer written by each send is selected by device-side
-            ring state.
+            Which buffer a given send lands in is chosen by device-side ring state, not by the
+            caller, so callers must track the rotation themselves.
 
         Args:
             output_tensors (List[ttnn.Tensor]): Tensors to receive the data into.

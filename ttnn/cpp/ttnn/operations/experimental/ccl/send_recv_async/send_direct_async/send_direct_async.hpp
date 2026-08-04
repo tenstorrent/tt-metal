@@ -11,9 +11,8 @@
 
 namespace ttnn::experimental {
 
-// Sends `input_tensor` directly into the receiver's output tensor (bypassing the socket FIFO for
-// payload data). The socket is only used to advertise the sender handshake-buffer address and to
-// signal completion. See recv_direct_async for the matching receiver op.
+// Writes `input_tensor` straight into the receiver's output tensor, using the socket only to
+// exchange addresses and signal completion. Matching receiver op: recv_direct_async.
 std::vector<ttnn::Tensor> send_direct_async(
     const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 

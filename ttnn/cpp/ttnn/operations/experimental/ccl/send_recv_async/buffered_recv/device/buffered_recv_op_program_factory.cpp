@@ -49,8 +49,8 @@ BufferedRecvMeshWorkloadFactory::create_at(
     std::vector<Tensor>& /*tensor_return_value*/) {
     auto mesh_socket = operation_attributes.mesh_socket;
 
-    // Use the first output tensor as the representative for device and page geometry; runtime args
-    // below carry every receive-buffer base address in the ring.
+    // Validation guarantees the ring is homogeneous, so tensor 0 stands in for page geometry;
+    // runtime args below carry every base address.
     const auto& output_tensor = tensor_args.at(0);
     auto* mesh_device = output_tensor.device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : output_tensor.device();
@@ -62,38 +62,34 @@ BufferedRecvMeshWorkloadFactory::create_at(
     std::vector<CoreCoord> receiver_core_coords;
     std::vector<tt::tt_fabric::FabricNodeId> sender_fabric_node_ids;
     std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
-    std::vector<uint32_t> connection_indices;
 
-    for (uint32_t i = 0; i < socket_connection_config.size(); ++i) {
-        const auto& connection = socket_connection_config[i];
+    for (const auto& connection : socket_connection_config) {
         if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
             receiver_core_coords.push_back(connection.receiver_core.core_coord);
             receiver_fabric_node_ids.push_back(
                 output_tensor.device()->get_fabric_node_id(connection.receiver_core.device_coord));
             sender_fabric_node_ids.push_back(mesh_socket.get_fabric_node_id(
                 tt::tt_metal::distributed::SocketEndpoint::SENDER, connection.sender_core.device_coord));
-            connection_indices.push_back(i);
         }
     }
     uint32_t num_cores = receiver_core_coords.size();
+    TT_FATAL(
+        num_cores > 0,
+        "buffered_recv found no socket connections whose receiver core is on device {}",
+        target_device->id());
 
     // cores must not exceed available fabric links
-    if (num_cores > 0) {
-        const auto& receiver_fabric_node_id = receiver_fabric_node_ids[0];
-        const auto& sender_fabric_node_id = sender_fabric_node_ids[0];
+    {
         auto available_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_ids[0], sender_fabric_node_ids[0]);
         uint32_t num_available_links = available_link_indices.size();
 
         TT_FATAL(
             num_cores <= num_available_links,
             "Cannot create {} receiver-sender pairs with only {} available fabric links between devices. "
-            "Reduce the number of cores per device. "
-            "Available links: {}, Requested pairs: {}",
+            "Reduce the number of cores per device.",
             num_cores,
-            num_available_links,
-            num_available_links,
-            num_cores);
+            num_available_links);
     }
 
     auto max_alignment = std::max(
@@ -102,19 +98,21 @@ BufferedRecvMeshWorkloadFactory::create_at(
     auto output_page_size = output_tensor.buffer()->aligned_page_size();
     auto total_num_pages = output_tensor.buffer()->num_pages();
 
-    // Must match the sender's handshake page size.
-    uint32_t handshake_page_size = tt::align(static_cast<uint32_t>(64), max_alignment);
+    uint32_t handshake_page_size = ttnn::send_recv_utils::handshake_page_size(max_alignment);
 
     auto receiver_core_range_set = CoreRangeSet(std::set<CoreRange>());
     for (const auto& core : receiver_core_coords) {
         receiver_core_range_set = receiver_core_range_set.merge(CoreRangeSet({CoreRange(core, core)}));
     }
 
-    // Internally-allocated persistent L1_SMALL buffer used to coordinate receive-buffer availability
-    // (replaces the previously caller-provided global semaphore). One uint32 per receiver core,
-    // HEIGHT_SHARDED so every core sees its word at the same L1 address, mirroring how GlobalSemaphore
-    // allocates its backing buffer. Zero-initialized below with a blocking write so the kernel always
-    // observes a clean slate before it runs.
+    // Persistent L1_SMALL buffer holding the OutputTensorInfo ring state. HEIGHT_SHARDED one page per
+    // receiver core so every core sees the struct at the same L1 address.
+    //
+    // NOTE: this only runs on a program-cache miss, and the kernel treats a non-zero num_tensors as
+    // "handshake already done". Sender and receiver cache independently (they are separate
+    // MeshDevices with separate program caches), so a miss on one side and a hit on the other leaves
+    // the two disagreeing about whether to handshake, which hangs. Callers must keep the socket and
+    // the ring stable for the lifetime of a cached program.
     uint32_t coordination_page_size = 256 * sizeof(uint32_t);
     auto coordination_shard_parameters = tt::tt_metal::ShardSpecBuffer(
         receiver_core_range_set, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
@@ -129,12 +127,13 @@ BufferedRecvMeshWorkloadFactory::create_at(
     auto coordination_buffer = tt::tt_metal::distributed::AnyBuffer::create(coordination_buffer_config);
     auto coordination_buffer_addr = static_cast<uint32_t>(coordination_buffer.get_buffer()->address());
 
-    // Zero-initialize the coordination buffer (blocking, so the reset lands before the program runs).
+    // Enqueued on the same queue the workload is dispatched on, so it is ordered ahead of the
+    // program without a host stall.
     {
-        std::vector<uint32_t> zeros(256 * num_cores, 0);
+        std::vector<uint32_t> zeros(coordination_page_size / sizeof(uint32_t) * num_cores, 0);
         auto coordination_mesh_buffer = coordination_buffer.get_mesh_buffer();
         tt::tt_metal::distributed::EnqueueWriteMeshBuffer(
-            mesh_device->mesh_command_queue(), coordination_mesh_buffer, zeros, /*blocking=*/true);
+            mesh_device->mesh_command_queue(), coordination_mesh_buffer, zeros, /*blocking=*/false);
     }
 
     uint32_t packet_header_cb_num_pages = 2;
@@ -164,9 +163,7 @@ BufferedRecvMeshWorkloadFactory::create_at(
         receiver_core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(handshake_compile_args));
 
-    log_info(tt::LogOp, "Coordination buffer address: {}", coordination_buffer_addr);
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
-        log_info(tt::LogOp, "Launching buffered recv receiver kernel for core {}", receiver_core_coords[core_idx]);
         const auto& receiver_core_coord = receiver_core_coords[core_idx];
         const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
@@ -177,7 +174,6 @@ BufferedRecvMeshWorkloadFactory::create_at(
             static_cast<uint32_t>(total_num_pages),      // num_pages
             coordination_buffer_addr,                    // coordination_buffer_addr (persistent L1_SMALL)
         };
-        // One base address per output tensor in the ring of receive buffers.
         for (const auto& tensor : tensor_args) {
             handshake_rt_args.push_back(tensor.buffer()->address());
         }

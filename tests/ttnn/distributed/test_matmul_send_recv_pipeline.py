@@ -3,17 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Host-side timing comparison for a two-matmul pipeline.
+Host-side timing comparison for a two-matmul pipeline, run both on a single device and split across
+two devices with each of the three send/recv transfer modes.
 
-The pipeline is:
-    [32, 4096] @ [4096, 4096] -> [32, 4096]
-    [32, 4096] @ [4096, 512]  -> [32, 512]
-
-It is measured four ways:
-    * both matmuls on the same 1x1 submesh
-    * first matmul on one 1x1 submesh, second matmul on another, with send_async/recv_async
-    * same split with send_direct_async/recv_direct_async
-    * same split with buffered_send/buffered_recv
+The pipeline is [M, K] @ [K, N0] -> [M, N0] @ [N0, N1], with the transfer sitting between the two
+matmuls. All four variants are checked against the single-device result.
 """
 
 import time
@@ -82,6 +76,10 @@ def _second_matmul(hidden_tensor, weight_tensor):
 def _sync_devices(*mesh_devices):
     for mesh_device in mesh_devices:
         ttnn.synchronize_device(mesh_device)
+
+
+def _read_profilers(*mesh_devices):
+    for mesh_device in mesh_devices:
         ttnn.ReadDeviceProfiler(mesh_device)
 
 
@@ -137,6 +135,7 @@ def _to_host(output_tensor, mesh_device):
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 2048}], indirect=True
 )
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 def test_two_matmul_pipeline_transfer_host_time(mesh_device):
     torch.manual_seed(0)
 
@@ -169,6 +168,7 @@ def test_two_matmul_pipeline_transfer_host_time(mesh_device):
         lambda: _sync_devices(same_mesh_device),
     )
     rows.append(row)
+    _read_profilers(same_mesh_device)
 
     def run_split_mode(transfer_mode):
         send_socket, recv_socket = _make_socket_pair(sender_mesh_device, receiver_mesh_device)
@@ -198,6 +198,7 @@ def test_two_matmul_pipeline_transfer_host_time(mesh_device):
                         ttnn.allocate_tensor_on_device(hidden_sender.spec, receiver_mesh_device)
                         for _ in range(NUM_BUFFERED_RECV_BUFFERS)
                     ]
+                # Mirrors the device-side ring counter, which starts at 0 and advances per send.
                 buffer_idx = transfer_count % NUM_BUFFERED_RECV_BUFFERS
                 ttnn.experimental.buffered_send(hidden_sender, send_socket)
                 ttnn.experimental.buffered_recv(buffered_outputs, recv_socket)
@@ -217,6 +218,7 @@ def test_two_matmul_pipeline_transfer_host_time(mesh_device):
     for transfer_mode in ["async", "direct", "buffered"]:
         row, outputs[transfer_mode] = run_split_mode(transfer_mode)
         rows.append(row)
+        _read_profilers(sender_mesh_device, receiver_mesh_device)
 
     print("\n[Two Matmul Pipeline Host Time]\n" + _format_timing_table(rows))
 

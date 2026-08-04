@@ -35,16 +35,10 @@ void kernel_main() {
     auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr);
 
     if constexpr (enable_bank_packing) {
-        // Interleaved bank-contiguous packing. Pages whose indices differ by num_banks live in the
-        // same bank at consecutive slots, so they are contiguous in memory and can be gathered with a
-        // single noc_async_read and forwarded in a single fabric packet covering
-        // {p, p + num_banks, ..., p + (count - 1) * num_banks}.
-        //
-        // Each CB entry holds one super-block of (num_banks * num_pages_per_packet) pages. Within the
-        // entry, bank b occupies a fixed region [b * bank_region_bytes]. We issue one read per bank
-        // before a single barrier so the reads overlap across DRAM banks (preserving read
-        // parallelism). The first num_banks consecutive pages each start a distinct bank, and
-        // stepping by num_banks stays within that bank, so no per-iteration modulus is needed.
+        // Pages whose indices differ by num_banks share a bank at consecutive slots, so they are
+        // contiguous and one read can gather them. Each CB entry holds a super-block of
+        // (num_banks * num_pages_per_packet) pages with bank b at region [b * bank_region_bytes]; one
+        // read per bank is issued before a single barrier so they overlap across DRAM banks.
         constexpr uint32_t super_block_pages = num_banks * num_pages_per_packet;
         constexpr uint32_t bank_region_bytes = num_pages_per_packet * input_page_size;
         const uint32_t end_page = page_start_offset + num_pages;

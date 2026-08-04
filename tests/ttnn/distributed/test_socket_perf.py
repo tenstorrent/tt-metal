@@ -5,20 +5,12 @@
 """
 Bandwidth micro-benchmark for ``ttnn.MeshSocket``.
 
-The test sends a tensor between two submeshes of a single ``MeshDevice`` using
-an intra-process socket pair, and measures the achieved end-to-end bandwidth.
+Sends a tensor between two single-device submeshes of one ``MeshDevice`` and reports the achieved
+bandwidth for each of the three transfer modes (FIFO-based ``send_async``, and the direct-write
+``send_direct_async`` / ``buffered_send`` pairs).
 
-Parameterized over:
-    * Socket FIFO page size (controls the size of the L1 streaming buffer used
-      by the socket runtime - has a direct impact on pipelining behavior).
-    * Per-chip total tensor size in bytes (drives the number of pages
-      transmitted per iteration).
-    * Number of socket connections per device (1, 2 or 4). Each connection
-      maps a distinct sender/receiver core pair, so more connections means
-      more parallel ethernet channels per chip.
-
-See ``tests/ttnn/distributed/test_multi_mesh.py`` for the inter-process
-socket usage pattern that this benchmark mirrors at a single-process level.
+Each socket connection maps a distinct sender/receiver core pair, so more connections means more
+parallel channels per chip.
 """
 
 import csv
@@ -36,10 +28,10 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 NUM_WARMUP_ITERS = 3
 NUM_MEASURED_ITERS = 100
 NUM_BUFFERED_RECV_BUFFERS = 3
+# Warmup uses one receive buffer per iteration.
+assert NUM_WARMUP_ITERS <= NUM_BUFFERED_RECV_BUFFERS
 
 BFLOAT16_BYTES = 2
-TILE_HEIGHT = 32
-TILE_WIDTH = 32
 
 CSV_COLUMNS = [
     "transfer_mode",
@@ -56,12 +48,7 @@ CSV_COLUMNS = [
 
 @pytest.fixture(scope="session")
 def bandwidth_csv_writer():
-    """Session-scoped CSV sink for bandwidth results.
-
-    Output path is taken from the ``MESH_SOCKET_BW_CSV`` env var if set,
-    otherwise defaults to ``mesh_socket_bandwidth.csv`` in the current
-    working directory. The header is written once per session.
-    """
+    """CSV sink for bandwidth results, at ``$MESH_SOCKET_BW_CSV`` or ``./mesh_socket_bandwidth.csv``."""
     csv_path = Path(os.environ.get("MESH_SOCKET_BW_CSV", "mesh_socket_bandwidth.csv")).resolve()
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     file_handle = csv_path.open("w", newline="")
@@ -85,7 +72,6 @@ def bandwidth_csv_writer():
 
 
 def _format_results_table(rows: list[dict]) -> str:
-    """Render the accumulated CSV rows as an ASCII table."""
     headers = CSV_COLUMNS
     str_rows = [[str(row[col]) for col in headers] for row in rows]
     widths = [max(len(headers[i]), *(len(r[i]) for r in str_rows)) for i in range(len(headers))]
@@ -101,12 +87,8 @@ def _format_results_table(rows: list[dict]) -> str:
 
 
 def _build_socket_connections(mesh_shape: ttnn.MeshShape, num_connections: int):
-    """Build a ``num_connections``-per-device connection list.
-
-    Sender cores are laid out in row 0, receiver cores in row 1, so the two
-    sets of cores never overlap (the socket runtime forbids a core appearing
-    in two connections of the same socket).
-    """
+    # Senders in core row 0, receivers in row 1: the socket runtime forbids a core appearing in two
+    # connections of the same socket.
     sender_cores = [ttnn.CoreCoord(i, 0) for i in range(num_connections)]
     recv_cores = [ttnn.CoreCoord(i, 1) for i in range(num_connections)]
 
@@ -122,19 +104,6 @@ def _build_socket_connections(mesh_shape: ttnn.MeshShape, num_connections: int):
     return connections
 
 
-def _per_chip_shape_for_bytes(total_bytes_per_chip: int):
-    """Pick a tile-aligned 4D shape whose bfloat16 footprint matches ``total_bytes_per_chip``."""
-    assert total_bytes_per_chip % (TILE_HEIGHT * TILE_WIDTH * BFLOAT16_BYTES) == 0, (
-        f"total_bytes_per_chip={total_bytes_per_chip} must be a multiple of a bfloat16 tile "
-        f"({TILE_HEIGHT * TILE_WIDTH * BFLOAT16_BYTES} bytes)"
-    )
-    num_elems = total_bytes_per_chip // BFLOAT16_BYTES
-    # Shape it as [1, 1, TILE_HEIGHT, W] so that W is tile-aligned.
-    width = num_elems // TILE_HEIGHT
-    assert width % TILE_WIDTH == 0, f"derived width {width} not tile-aligned"
-    return [1, 1, TILE_HEIGHT, width]
-
-
 def _run_mesh_socket_bandwidth_case(
     mesh_device,
     num_connections,
@@ -143,15 +112,7 @@ def _run_mesh_socket_bandwidth_case(
     bandwidth_csv_writer,
     transfer_mode="async",
 ) -> None:
-    """Run one ``MeshSocket`` bandwidth measurement and record the result.
-
-    ``transfer_mode`` selects between the FIFO-based ``send_async``/``recv_async`` ops and the
-    direct-write ``send_direct_async``/``recv_direct_async`` ops (which bypass the socket FIFO for
-    payload data and only use it for the handshake and completion signal).
-    """
-    import time
-
-    torch.manual_seed(time.time())
+    torch.manual_seed(0)
 
     if transfer_mode == "buffered":
         send_op = ttnn.experimental.buffered_send
@@ -170,7 +131,9 @@ def _run_mesh_socket_bandwidth_case(
     num_chips = mesh_shape[0] * mesh_shape[1]
 
     socket_connections = _build_socket_connections(mesh_shape, num_connections)
-    if transfer_mode == "direct":
+    if transfer_mode in ("direct", "buffered"):
+        # Payload bypasses the FIFO, so it only has to hold the handshake page and
+        # socket_page_size does not apply.
         socket_mem_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 128)
     else:
         socket_mem_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_page_size * 4)
@@ -194,6 +157,9 @@ def _run_mesh_socket_bandwidth_case(
         ttnn.allocate_tensor_on_device(input_tensors[i].spec, receiver_mesh_device)
         for i in range(NUM_BUFFERED_RECV_BUFFERS)
     ]
+
+    # Warmup doubles as the correctness check and populates the program cache, which trace capture
+    # below requires: building a program mid-capture would fail.
     for i in range(NUM_WARMUP_ITERS):
         send_op(input_tensors[i], send_socket)
         if transfer_mode == "buffered":
@@ -203,9 +169,7 @@ def _run_mesh_socket_bandwidth_case(
     for i in range(NUM_WARMUP_ITERS):
         output_data = ttnn.to_torch(output_tensors[i])
         eq, msg = comp_equal(torch_input[i], output_data)
-        assert eq, msg
-
-    start = time.perf_counter()
+        assert eq, f"warmup iteration {i}: {msg}"
 
     sender_trace = ttnn.begin_trace_capture(sender_mesh_device, cq_id=0)
     receiver_trace = ttnn.begin_trace_capture(receiver_mesh_device, cq_id=0)
@@ -255,7 +219,6 @@ def _run_mesh_socket_bandwidth_case(
             "aggregate_bw_gbps": round(aggregate_bw_gbps, 4),
         }
     )
-    assert eq, msg
 
 
 fabric_router_config = ttnn.FabricRouterConfig()
@@ -303,13 +266,10 @@ def test_mesh_socket_bandwidth(
     tensor_shape,
     bandwidth_csv_writer,
 ):
-    """Measure ``MeshSocket`` send/recv bandwidth.
+    """Measure ``MeshSocket`` send/recv bandwidth from the device at (0, 0) to the one at (1, 0).
 
-    A 2x2 mesh is split row-wise into two 1x2 submeshes; the top row is the
-    sender and the bottom row is the receiver. The same per-chip tensor is
-    transmitted ``NUM_MEASURED_ITERS`` times and the average bandwidth is
-    reported. Correctness is verified once after the timed loop to catch
-    misconfigured tests (page size too small, etc.).
+    The tensor is transmitted ``NUM_MEASURED_ITERS`` times from a captured trace and the average
+    bandwidth is reported. Correctness is checked during warmup, before the timed replay.
     """
     _run_mesh_socket_bandwidth_case(
         mesh_device,
