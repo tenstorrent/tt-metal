@@ -81,12 +81,6 @@ bool wires_into(
 RoutingDirection get_opposite_direction(RoutingDirection dir);
 
 /**
- * Per-direction capability set of one chip: each direction's edge capability, indexed by
- * RoutingDirection enum value (E=0, W=1, N=2, S=3, Z=4); nullopt where the direction is absent.
- */
-using PerDirectionCapabilities = std::array<std::optional<EdgeCapability>, 5>;
-
-/**
  * @brief The canonical express-endpoint chip: every cardinal intramesh, Z is the chord
  *
  * This is the capability set the express family-max count is evaluated against. It attains

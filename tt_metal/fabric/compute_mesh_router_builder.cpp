@@ -178,7 +178,7 @@ RouterChannelCounts compute_router_channel_counts(
     const auto edge_capability =
         capability_in_direction(control_plane, fabric_node_id, direction).value_or(EdgeCapability::INTRAMESH_CARDINAL);
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
-    const auto shape = router_vc_shape(
+    const auto vc_shape = router_vc_shape(
         topology,
         direction,
         edge_capability,
@@ -187,9 +187,9 @@ RouterChannelCounts compute_router_channel_counts(
         &intermesh_config);
 
     RouterChannelCounts counts;
-    for (uint32_t vc = 0; vc < shape.num_vcs; ++vc) {
-        counts.sender[vc] = shape.sender_counts[vc];
-        counts.receiver[vc] = shape.receiver_counts[vc];
+    for (uint32_t vc = 0; vc < vc_shape.num_vcs; ++vc) {
+        counts.sender[vc] = vc_shape.sender_counts[vc];
+        counts.receiver[vc] = vc_shape.receiver_counts[vc];
     }
     return counts;
 }
@@ -226,14 +226,14 @@ ComputeMeshRouterBuilder::ComputeMeshRouterBuilder(
     const RouterLocation& location,
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
     std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-    RouterVcShape shape,
+    RouterVcShape vc_shape,
     RouterTurnSet turns_by_vc,
     bool downstream_is_tensix_builder,
     std::shared_ptr<ConnectionRegistry> connection_registry) :
     FabricRouterBuilder(local_node, location),
     erisc_builder_(std::move(erisc_builder)),
     tensix_builder_(std::move(tensix_builder)),
-    shape_(std::move(shape)),
+    vc_shape_(std::move(vc_shape)),
     turns_by_vc_(std::move(turns_by_vc)),
     downstream_is_tensix_builder_(downstream_is_tensix_builder),
     connection_registry_(std::move(connection_registry)),
@@ -246,6 +246,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     tt::tt_metal::Program& program,
     FabricNodeId local_node,
     const RouterLocation& location,
+    const PerDirectionCapabilities& per_direction_capabilities,
     std::shared_ptr<ConnectionRegistry> connection_registry) {
     // Get fabric context and config
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
@@ -290,19 +291,24 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
     // The facts behind this router's mappings are resolved once, each at its own scope: topology
-    // and the intermesh VC config (fabric), express_routing_enabled (mesh), z_port_role (chip),
-    // facing and edge capability (router); the eth channel enters only at establishment. Both
-    // mappings are pure functions of those facts, so routers with an identical fact tuple are
-    // byte-identical archetypes -- and constructing one to ask "what would a router like this look
-    // like" (the fabric-wide max pass, the peer fast-path query below) is intended use.
+    // and the intermesh VC config (fabric), express_routing_enabled (mesh), the chip's edge
+    // capabilities and Z port role (chip, classified once at discovery and threaded in), facing
+    // (router); the eth channel enters only at establishment. Both mappings are pure functions of
+    // those facts, so routers with an identical fact tuple are byte-identical archetypes -- and
+    // constructing one to ask "what would a router like this look like" (the fabric-wide max pass,
+    // the peer fast-path query below, which asks about ANOTHER chip and so stays a live query) is
+    // intended use.
     //
-    // The capability comes through the one derivation route (neighbor resolved from the direction),
-    // the same path the counts pass uses, so the two cannot classify the edge differently.
-    const auto edge_capability = capability_in_direction(control_plane, local_node, location.direction)
-                                     .value_or(EdgeCapability::INTRAMESH_CARDINAL);
-    // What this chip's extra port is for: an intermesh boundary, an express chord, or nothing.
-    // One query with one answer.
-    const auto chip_z_role = z_port_role(control_plane, local_node);
+    // The router exists because discovery found and classified a neighbor in this direction, so
+    // the array entry must be present.
+    const auto& facing_capability = per_direction_capabilities[static_cast<size_t>(location.direction)];
+    TT_FATAL(
+        facing_capability.has_value(),
+        "Router facing {} has no classified edge from discovery",
+        static_cast<int>(location.direction));
+    const auto edge_capability = *facing_capability;
+    // What this chip's Z port is for: an intermesh boundary, an express chord, or nothing.
+    const auto chip_z_role = z_role_of(per_direction_capabilities);
 
     // Create the archetype EARLY (the shape is needed for computing injection flags). The
     // Z-related channel shapes exist to reach an intermesh Z router, so they are gated on that
@@ -316,7 +322,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto archetype = router_archetype(
         topology, location.direction, edge_capability, chip_z_role, express_enabled, &intermesh_config);
-    const auto& shape = archetype.shape;
+    const auto& vc_shape = archetype.shape;
 
     // Compute injection channel flags at router level BEFORE creating builders
     // Injection semantics are per-VC, so compute for each VC and flatten into router-level vector
@@ -325,9 +331,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     // First, compute the total number of channels across all VCs
     size_t total_router_channels = 0;
-    uint32_t num_vcs = shape.num_vcs;
+    uint32_t num_vcs = vc_shape.num_vcs;
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        total_router_channels += shape.sender_counts[vc];
+        total_router_channels += vc_shape.sender_counts[vc];
     }
 
     std::vector<bool> router_injection_flags;
@@ -338,14 +344,21 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // by the ring and an acquisition when fed by a leaf attachment, and both share one axis pair.
     // Non-express meshes keep the heuristic untouched.
     const bool express_injection = express_enabled;
+    // Bound once for every VC's derivation: the predicates describe this node's rings.
+    const auto protected_ring_queries = make_protected_ring_queries(control_plane, local_node);
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        uint32_t num_channels_in_vc = shape.sender_counts[vc];
-        auto vc_injection_flags =
-            express_injection ? compute_sender_channel_injection_flags_for_express(
-                                    control_plane, local_node, eth_direction, vc, num_channels_in_vc, edge_capability)
-                              : compute_sender_channel_injection_flags_for_vc(
-                                    topology, eth_direction, vc, num_channels_in_vc);
+        uint32_t num_channels_in_vc = vc_shape.sender_counts[vc];
+        auto vc_injection_flags = express_injection ? compute_sender_channel_injection_flags_for_express(
+                                                          protected_ring_queries,
+                                                          per_direction_capabilities,
+                                                          chip_z_role,
+                                                          location.direction,
+                                                          edge_capability,
+                                                          vc,
+                                                          num_channels_in_vc)
+                                                    : compute_sender_channel_injection_flags_for_vc(
+                                                          topology, eth_direction, vc, num_channels_in_vc);
 
         // Flatten into router-level vector
         for (uint32_t ch_idx = 0; ch_idx < num_channels_in_vc; ++ch_idx) {
@@ -356,8 +369,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // Build reverse channel maps and compute injection flags for each builder variant
     // Get ERISC's channel count from config
     size_t erisc_num_channels = edm_config.num_used_sender_channels;
-    auto erisc_to_router_channel_map =
-        get_variant_to_router_channel_map(shape, downstream_is_tensix_builder, BuilderType::ERISC, erisc_num_channels);
+    auto erisc_to_router_channel_map = get_variant_to_router_channel_map(
+        vc_shape, downstream_is_tensix_builder, BuilderType::ERISC, erisc_num_channels);
     auto erisc_injection_flags =
         get_child_builder_variant_sender_channel_injection_flags(router_injection_flags, erisc_to_router_channel_map);
 
@@ -365,7 +378,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     if (downstream_is_tensix_builder) {
         size_t tensix_num_channels = builder_config::get_num_tensix_sender_channels(topology, fabric_tensix_config);
         auto tensix_to_router_channel_map = get_variant_to_router_channel_map(
-            shape, downstream_is_tensix_builder, BuilderType::TENSIX, tensix_num_channels);
+            vc_shape, downstream_is_tensix_builder, BuilderType::TENSIX, tensix_num_channels);
         tensix_injection_flags = get_child_builder_variant_sender_channel_injection_flags(
             router_injection_flags, tensix_to_router_channel_map);
     }
@@ -374,8 +387,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     std::array<std::size_t, builder_config::MAX_NUM_VCS> actual_sender_channels_per_vc{};
     std::array<std::size_t, builder_config::MAX_NUM_VCS> actual_receiver_channels_per_vc{};
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        actual_sender_channels_per_vc[vc] = shape.sender_counts[vc];
-        actual_receiver_channels_per_vc[vc] = shape.receiver_counts[vc];
+        actual_sender_channels_per_vc[vc] = vc_shape.sender_counts[vc];
+        actual_receiver_channels_per_vc[vc] = vc_shape.receiver_counts[vc];
     }
 
     // Resolve channel trimming for this router: capture lookup + global override application
@@ -512,19 +525,18 @@ size_t ComputeMeshRouterBuilder::get_configured_risc_count() const {
 }
 
 std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_express(
-    const ControlPlane& control_plane,
-    const FabricNodeId& local_node,
-    eth_chan_directions direction,
+    const ProtectedRingQueries& queries,
+    const PerDirectionCapabilities& per_direction_capabilities,
+    ZPortRole chip_z_role,
+    RoutingDirection egress,
+    EdgeCapability egress_capability,
     uint32_t vc,
-    uint32_t num_channels,
-    EdgeCapability egress_capability) {
+    uint32_t num_channels) {
     std::vector<bool> injection_flags(num_channels, false);
 
     // This router transmits over its own link, so its direction is the egress. Each sender channel is
     // fed by one upstream producer, and the channel index identifies which ingress that is.
-    const auto egress = control_plane.eth_direction_to_routing_direction(direction);
-    const auto queries = make_protected_ring_queries(control_plane, local_node);
-    const auto chip_z_role = z_port_role(control_plane, local_node);
+    const auto egress_eth = builder::routing_direction_to_eth_direction(egress);
 
     // VC2 stays out of the derivation: the optional existing VC2 behavior is separate from the
     // express design, and its sender is not a fixed-direction producer slot that the table below
@@ -548,13 +560,13 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
             continue;  // beyond the four possible non-self producers
         }
 
-        const auto ingress_eth = builder::get_sender_channel_direction(direction, direction_slot);
+        const auto ingress_eth = builder::get_sender_channel_direction(egress_eth, direction_slot);
         if (ingress_eth == eth_chan_directions::COUNT) {
             continue;  // this slot has no producer direction
         }
-        const auto ingress = control_plane.eth_direction_to_routing_direction(ingress_eth);
+        const auto ingress = builder::eth_direction_to_routing_direction(ingress_eth);
 
-        const auto ingress_capability = capability_in_direction(control_plane, local_node, ingress);
+        const auto& ingress_capability = per_direction_capabilities[static_cast<size_t>(ingress)];
         if (!ingress_capability.has_value()) {
             continue;  // no neighbour that way, so nothing is wired into this slot
         }
@@ -563,7 +575,7 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
         // primitive the map is built from. The sender-channel direction table is static and names
         // an ingress for every slot, but under express wiring some slots carry no producer: an
         // intramesh X ingress is dimension-order-unwired from every intramesh Y egress, and
-        // nothing is wired into a Z egress on a chip with no extra port. Skipping those slots here
+        // nothing is wired into a Z egress on a chip with no Z port. Skipping those slots here
         // is what keeps the derivation's dimension-order failure meaningful -- a DOR-forbidden
         // turn that still reaches classify_producer_effect genuinely signals a disagreement
         // between the maps and this derivation, not a correctly unwired slot.
@@ -659,7 +671,7 @@ std::vector<bool> ComputeMeshRouterBuilder::get_child_builder_variant_sender_cha
 }
 
 std::vector<std::optional<size_t>> ComputeMeshRouterBuilder::get_variant_to_router_channel_map(
-    const RouterVcShape& shape,
+    const RouterVcShape& vc_shape,
     bool downstream_is_tensix_builder,
     BuilderType builder_type,
     size_t variant_num_sender_channels) {
@@ -669,12 +681,12 @@ std::vector<std::optional<size_t>> ComputeMeshRouterBuilder::get_variant_to_rout
     // identity over the owned channels; the shape carries the flat bases that make it so.
     std::vector<std::optional<size_t>> variant_to_router_channel_map(variant_num_sender_channels);
 
-    for (uint32_t vc = 0; vc < shape.num_vcs; ++vc) {
+    for (uint32_t vc = 0; vc < vc_shape.num_vcs; ++vc) {
         if (builder_type_for_vc(vc, downstream_is_tensix_builder) != builder_type) {
             continue;
         }
-        for (uint32_t ch = 0; ch < shape.sender_counts[vc]; ++ch) {
-            const size_t router_flat_id = shape.flat_sender_id(vc, ch);
+        for (uint32_t ch = 0; ch < vc_shape.sender_counts[vc]; ++ch) {
+            const size_t router_flat_id = vc_shape.flat_sender_id(vc, ch);
             TT_FATAL(
                 router_flat_id < variant_num_sender_channels,
                 "Builder variant {} owns flat channel {} on VC{} but has only {} sender channels: the "
@@ -723,7 +735,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
     // Every direction-matching target is established: there is no longer a type-based filter --
     // the boundary turns (to and from the intermesh Z router) are wired through the same path as
     // every other local turn, which is what made the second establishment pass redundant.
-    uint32_t num_vcs = shape_.num_vcs;
+    uint32_t num_vcs = vc_shape_.num_vcs;
 
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
@@ -764,10 +776,10 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
             // Validate the channel index against the downstream router's shape, then take the
             // flat channel ID from its prefix sums (bounds-checked there as well).
             TT_FATAL(
-                downstream_sender_channel < downstream_router.shape_.sender_counts[vc],
+                downstream_sender_channel < downstream_router.vc_shape_.sender_counts[vc],
                 "Computed downstream sender channel {} exceeds available channels ({}) for VC{} on downstream router",
                 downstream_sender_channel,
-                downstream_router.shape_.sender_counts[vc],
+                downstream_router.vc_shape_.sender_counts[vc],
                 vc);
 
             // Get downstream builder and the flat channel ID
@@ -776,7 +788,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(ComputeMeshRouter
             // Get both absolute and VC-relative channel IDs
             // - absolute_channel_id: flattened across all VCs (used for flat arrays)
             // - vc_relative_channel_id: 0-based within the VC (used for allocator calls)
-            uint32_t absolute_channel_id = downstream_router.shape_.flat_sender_id(vc, downstream_sender_channel);
+            uint32_t absolute_channel_id = downstream_router.vc_shape_.flat_sender_id(vc, downstream_sender_channel);
             uint32_t vc_relative_channel_id = downstream_sender_channel;  // This is already VC-relative
 
             // Setup producer → consumer connection
@@ -882,7 +894,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         defines["FABRIC_2D"] = "";
 
         // FABRIC_2D_VC1_ACTIVE: Set when router actually has VC1 channels
-        bool vc1_active = shape_.sender_counts[1] > 0;
+        bool vc1_active = vc_shape_.sender_counts[1] > 0;
         if (vc1_active) {
             defines["FABRIC_2D_VC1_ACTIVE"] = "";
         }
@@ -904,7 +916,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         }
 
         // FABRIC_2D_VC2_SERVICED: Set when router has VC2 sender channels
-        bool vc2_active = shape_.sender_counts[2] > 0;
+        bool vc2_active = vc_shape_.sender_counts[2] > 0;
         if (vc2_active) {
             defines["FABRIC_2D_VC2_SERVICED"] = "";
         }

@@ -30,6 +30,18 @@ inline eth_chan_directions routing_direction_to_eth_direction(RoutingDirection d
     }
 }
 
+// Inverse of routing_direction_to_eth_direction.
+inline RoutingDirection eth_direction_to_routing_direction(eth_chan_directions direction) {
+    switch (direction) {
+        case eth_chan_directions::EAST: return RoutingDirection::E;
+        case eth_chan_directions::WEST: return RoutingDirection::W;
+        case eth_chan_directions::NORTH: return RoutingDirection::N;
+        case eth_chan_directions::SOUTH: return RoutingDirection::S;
+        case eth_chan_directions::Z: return RoutingDirection::Z;
+        default: TT_FATAL(false, "eth_direction_to_routing_direction: not a port direction");
+    }
+}
+
 // The canonical direction <-> slot bijection for 2D mesh-like routers.
 //
 // A router facing D has four non-self directions; the compact index is a direction's rank among

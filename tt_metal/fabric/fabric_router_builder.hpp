@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // FabricNodeId
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
+#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"           // PerDirectionCapabilities
 
 namespace tt::tt_metal {
 class IDevice;
@@ -78,13 +79,15 @@ public:
      * @param program The fabric program
      * @param local_node The local fabric node ID
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
+     * @param per_direction_capabilities The chip's edge capabilities, classified at discovery
      * @return A unique_ptr to the appropriate FabricRouterBuilder implementation
      */
     static std::unique_ptr<FabricRouterBuilder> create(
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
-        const RouterLocation& location);
+        const RouterLocation& location,
+        const PerDirectionCapabilities& per_direction_capabilities);
 
     // ============ Connection Methods ============
 

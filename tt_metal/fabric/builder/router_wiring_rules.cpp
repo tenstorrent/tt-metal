@@ -31,16 +31,6 @@ constexpr std::array<RoutingDirection, 5> k_all_directions = {
 constexpr std::array<RoutingDirection, 4> k_cardinal_directions = {
     RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W};
 
-// The chip Z port's role from a per-direction capability set: absent means NONE, an intermesh Z is
-// the boundary, anything else same-mesh is the chord.
-ZPortRole z_role_of(const PerDirectionCapabilities& caps) {
-    const auto& z = caps[static_cast<size_t>(RoutingDirection::Z)];
-    if (!z.has_value()) {
-        return ZPortRole::NONE;
-    }
-    return *z == EdgeCapability::INTERMESH ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::EXPRESS_CHORD;
-}
-
 // What the turn matrix keys on, per port: the reduction of the (direction, capability) pair.
 // Computed from both, substituting for neither -- direction and capability stay independent axes.
 enum class TurnRole : uint8_t {

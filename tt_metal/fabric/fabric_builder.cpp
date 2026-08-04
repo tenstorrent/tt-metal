@@ -67,14 +67,15 @@ void FabricBuilder::discover_channels() {
         // Cache neighbor and channel info
         FabricNodeId neighbor_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
 
-        // Classify the edge for its validation only. A same-mesh Z on a mesh without validated express
-        // intent means topology intent and the neighbor graph disagree, and catching that at discovery
-        // gives a far better message than whatever fails later. The capability itself is resolved again
-        // where it is used, since each consumer needs it for its own router.
+        // Classify the edge once, here: the answer is threaded into the per-router build rather
+        // than re-derived per consumer. A same-mesh Z on a mesh without validated express intent
+        // means topology intent and the neighbor graph disagree, and catching that at discovery
+        // gives a far better message than whatever fails later.
         //
         // An express chord needs no rejection here any more: it is wired like any other direction, on
         // the fifth VC0 sender, with its guard derived from the protected-ring effects.
-        (void)classify_fabric_edge(control_plane, local_node_, neighbor_fabric_node_id, direction);
+        per_direction_capabilities_[static_cast<size_t>(direction)] =
+            classify_fabric_edge(control_plane, local_node_, neighbor_fabric_node_id, direction);
 
         chip_neighbors_.emplace(direction, neighbor_fabric_node_id);
         channels_by_direction_[direction] = active_eth_chans;
@@ -114,7 +115,8 @@ void FabricBuilder::create_routers() {
             cluster.register_sim_fabric_endpoint_direction(
                 device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
 
-            auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location);
+            auto router_builder =
+                FabricRouterBuilder::create(device_, program_, local_node_, location, per_direction_capabilities_);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
     }

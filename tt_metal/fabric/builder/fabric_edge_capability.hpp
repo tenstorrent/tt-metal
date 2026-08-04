@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -44,6 +45,17 @@ enum class ZPortRole : uint8_t {
 };
 
 const char* to_string(ZPortRole role);
+
+/**
+ * Per-direction capability set of one chip: each direction's edge capability, indexed by
+ * RoutingDirection enum value (E=0, W=1, N=2, S=3, Z=4); nullopt where the direction is absent.
+ */
+using PerDirectionCapabilities = std::array<std::optional<EdgeCapability>, 5>;
+
+// The Z port's role read off a per-direction capability set: absent means NONE, an intermesh Z is
+// the boundary, anything else same-mesh is the chord. The pure spelling of the fact z_port_role
+// queries the neighbor graph for.
+ZPortRole z_role_of(const PerDirectionCapabilities& caps);
 
 // The chip-level cross-check: a Z-facing router's own edge capability and the chip's Z-port
 // role are two spellings of one fact and must agree -- a Z-facing intermesh edge means role

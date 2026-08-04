@@ -39,6 +39,14 @@ ZPortRole z_port_role(const ControlPlane& control_plane, FabricNodeId node) {
     return ZPortRole::NONE;
 }
 
+ZPortRole z_role_of(const PerDirectionCapabilities& caps) {
+    const auto& z = caps[static_cast<size_t>(RoutingDirection::Z)];
+    if (!z.has_value()) {
+        return ZPortRole::NONE;
+    }
+    return *z == EdgeCapability::INTERMESH ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::EXPRESS_CHORD;
+}
+
 void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability edge_capability, ZPortRole chip_z_role) {
     if (facing != RoutingDirection::Z) {
         // The chord lives on the chip's Z port; a cardinal-facing router can never carry it.

@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/connection_registry.hpp"
 
@@ -37,6 +38,7 @@ public:
      * @param program The fabric program
      * @param local_node The local fabric node ID
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
+     * @param per_direction_capabilities The chip's edge capabilities, classified at discovery
      * @param connection_registry Optional registry to record connections for testing
      * @return A unique_ptr to the constructed ComputeMeshRouterBuilder
      */
@@ -45,7 +47,39 @@ public:
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
         const RouterLocation& location,
+        const PerDirectionCapabilities& per_direction_capabilities,
         std::shared_ptr<ConnectionRegistry> connection_registry = nullptr);
+
+    /**
+     * Injection flags for an express-routing mesh, derived from protected-ring facts.
+     *
+     * Replaces the cardinal axis-turn heuristic, which cannot represent express routing: at an
+     * express node the same Z output is same-ring transit when fed by the ring and a ring
+     * acquisition when fed by a leaf attachment, and both producers share one axis pair. Each
+     * producer's total effect is derived instead, and only an acquisition becomes an injection
+     * channel.
+     *
+     * Every fact arrives bound -- the ring predicates, the chip's edge capabilities, and its Z
+     * port role -- so the slot arithmetic is drivable from a host-side ring model without a
+     * ControlPlane. Public for that regression.
+     *
+     * @param queries Protected-ring predicates bound to the local node
+     * @param per_direction_capabilities The chip's edge capabilities, classified at discovery
+     * @param chip_z_role The chip's Z port role (boundary, chord, or none)
+     * @param egress The router's own direction, which is its egress edge
+     * @param egress_capability Capability of this router's own edge
+     * @param vc The virtual channel to compute flags for
+     * @param num_channels Number of channels in this VC
+     * @return Array indicating which sender channels are injection channels for this VC
+     */
+    static std::vector<bool> compute_sender_channel_injection_flags_for_express(
+        const ProtectedRingQueries& queries,
+        const PerDirectionCapabilities& per_direction_capabilities,
+        ZPortRole chip_z_role,
+        RoutingDirection egress,
+        EdgeCapability egress_capability,
+        uint32_t vc,
+        uint32_t num_channels);
 
     // ============ FabricRouterBuilder Interface Implementation ============
 
@@ -109,7 +143,7 @@ private:
         const RouterLocation& location,
         std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
         std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-        RouterVcShape shape,
+        RouterVcShape vc_shape,
         RouterTurnSet turns_by_vc,
         bool downstream_is_tensix_builder,
         std::shared_ptr<ConnectionRegistry> connection_registry);
@@ -139,30 +173,6 @@ private:
         Topology topology, eth_chan_directions direction, uint32_t vc, uint32_t num_channels);
 
     /**
-     * Injection flags for an express-routing mesh, derived from protected-ring facts.
-     *
-     * Replaces the cardinal axis-turn heuristic above, which cannot represent express routing: at an
-     * express node the same Z output is same-ring transit when fed by the ring and a ring acquisition
-     * when fed by a leaf attachment, and both producers share one axis pair. Each producer's total
-     * effect is derived instead, and only an acquisition becomes an injection channel.
-     *
-     * @param control_plane Source of the protected-ring predicates
-     * @param local_node The chip this router belongs to
-     * @param direction The router's own direction, which is its egress edge
-     * @param vc The virtual channel to compute flags for
-     * @param num_channels Number of channels in this VC
-     * @param egress_capability Capability of this router's own edge
-     * @return Array indicating which sender channels are injection channels for this VC
-     */
-    static std::vector<bool> compute_sender_channel_injection_flags_for_express(
-        const ControlPlane& control_plane,
-        const FabricNodeId& local_node,
-        eth_chan_directions direction,
-        uint32_t vc,
-        uint32_t num_channels,
-        EdgeCapability egress_capability);
-
-    /**
      * Map router-level injection flags to a child builder variant's channel space.
      * This is a generic helper that doesn't know which builder variant it's serving.
      *
@@ -181,7 +191,7 @@ private:
      * Iterates the shape's (vc, channel) pairs, keeps the ones the given builder variant owns
      * (builder_type_for_vc), and maps their internal channel IDs to router channel IDs.
      *
-     * @param shape The router's per-VC channel shape
+     * @param vc_shape The router's per-VC channel shape
      * @param downstream_is_tensix_builder Whether VC0 channels are tensix-owned (MUX mode)
      * @param builder_type Which builder variant (ERISC or TENSIX)
      * @param variant_num_sender_channels Number of sender channels the variant has
@@ -189,7 +199,7 @@ private:
      *         (nullopt for internal-only channels not exposed to external topology)
      */
     static std::vector<std::optional<size_t>> get_variant_to_router_channel_map(
-        const RouterVcShape& shape,
+        const RouterVcShape& vc_shape,
         bool downstream_is_tensix_builder,
         BuilderType builder_type,
         size_t variant_num_sender_channels);
@@ -205,7 +215,7 @@ private:
     // Compute-mesh specific state
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_;
-    RouterVcShape shape_;
+    RouterVcShape vc_shape_;
     RouterTurnSet turns_by_vc_;
     bool downstream_is_tensix_builder_ = false;
     std::shared_ptr<ConnectionRegistry> connection_registry_;
