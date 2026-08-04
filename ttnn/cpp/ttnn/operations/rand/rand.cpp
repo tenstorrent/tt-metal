@@ -7,7 +7,6 @@
 
 #include "ttnn/operations/rand/device/rand_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/uniform/uniform_range.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <ttnn/distributed/tensor_topology.hpp>
@@ -86,7 +85,7 @@ Tensor rand(
 
     auto tensor = ttnn::prim::uniform(
         device_shape,
-        DataType::FLOAT32,
+        dtype,
         Layout::TILE,
         memory_config,
         device,
@@ -94,9 +93,6 @@ Tensor rand(
         output_range.upper_bound,
         seed,
         std::move(mesh_dim_is_sharded));
-    if (dtype != DataType::FLOAT32) {
-        tensor = ttnn::typecast(tensor, dtype);
-    }
     if (layout != Layout::TILE) {
         tensor = ttnn::to_layout(tensor, layout);
     }
