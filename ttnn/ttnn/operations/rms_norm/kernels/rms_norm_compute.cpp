@@ -55,6 +55,12 @@ constexpr uint32_t cb_gamma_tiles = 6;
 constexpr uint32_t cb_normalized = 7;
 constexpr uint32_t cb_output_tiles = 8;
 constexpr uint32_t cb_output_sticks = 9;
+// Cross-core width combine (op_design.md section 3.4) -- allocated only when the
+// plan says COMBINE.
+constexpr uint32_t cb_sum_handoff = 10;
+constexpr uint32_t cb_partials_gathered = 11;
+constexpr uint32_t cb_stat_handoff = 12;
+constexpr uint32_t cb_row_final = 13;
 }  // namespace
 
 void kernel_main() {
@@ -71,8 +77,24 @@ void kernel_main() {
     constexpr uint32_t REDUCE_BULK = get_compile_time_arg_val(9);
     constexpr uint32_t REDUCE_ACC_VIA_ADD = get_compile_time_arg_val(10);
     constexpr uint32_t SCALER_TILES = get_compile_time_arg_val(11);
+    // Refinement 2: the cross-core width combine.  COMBINE == 1 means this core
+    // owns only a width SLICE of its rows, so pass A yields a PARTIAL sum(x^2)
+    // that the group root sums, finalizes and multicasts back (the writer owns
+    // the dataflow; see op_design.md section 3.4).
+    constexpr uint32_t COMBINE = get_compile_time_arg_val(12);
+    constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(13);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // tile-rows owned by this core
+    // Only the core holding the row's LAST width tile applies the partial-W
+    // scaler/mask; 1 on the whole-row schemes.
+    const uint32_t owns_last_w = get_arg_val<uint32_t>(1);
+    const uint32_t is_root = get_arg_val<uint32_t>(2);  // group root: sums + finalizes
+
+    // An INACTIVE core (see the reader): no shard, no work, and its reader pushed
+    // nothing -- return before any CB or LLK state is touched.
+    if (num_rows == 0) {
+        return;
+    }
 
     constexpr bool RM = (IS_TILE == 0);
     constexpr bool HAS_G = (HAS_GAMMA != 0);
@@ -118,13 +140,33 @@ void kernel_main() {
     //                      broadcast-mul, PARTIAL_W valid lanes.
     // Both zero the pad lanes by multiplying them with an exact 0, so the reader's
     // pad-lane invariant (no inf/NaN in padding) is what it always was.
-    constexpr auto PARTIAL_SCALER =
-        (PARTIAL_W == 0) ? ckl::ReducePartialScaler::none()
-                         : (ACC_VIA_ADD ? ckl::ReducePartialScaler::partial_mask(PARTIAL_W, /*mask_idx=*/0)
-                                        : ckl::ReducePartialScaler::last_tile_at(1));
+    //
+    // Under a cross-core width split only ONE core in the group holds the row's
+    // last width tile, so the choice is per-core (runtime `owns_last_w`).  A
+    // non-owning core takes none(), which is exactly right on BOTH datapaths:
+    // ReduceTile then uses cb_scaler tile 0 (the FULL 1.0 scaler) everywhere, and
+    // AccumulateViaAdd ignores cb_scaler entirely when there is no partial.
+    const auto PARTIAL_SCALER = (PARTIAL_W == 0 || owns_last_w == 0)
+                                    ? ckl::ReducePartialScaler::none()
+                                    : (ACC_VIA_ADD ? ckl::ReducePartialScaler::partial_mask(PARTIAL_W, /*mask_idx=*/0)
+                                                   : ckl::ReducePartialScaler::last_tile_at(1));
     // RESIDENT holds x across both passes -> pass A must not pop it.
     constexpr auto PASS_A_POP = X_RESIDENT ? ckl::PopPolicy::None : ckl::PopPolicy::AtEnd;
     constexpr uint32_t NORM_OUT = HAS_G ? cb_normalized : cb_output_tiles;
+    constexpr bool CROSS_CORE = (COMBINE != 0);
+    // Pass B's Col operand: the multicast landing CB when the stat was combined
+    // across cores, the local accumulator otherwise.
+    constexpr uint32_t CB_STAT_B = CROSS_CORE ? cb_row_final : cb_row_stat;
+
+    // 1/rms = rsqrt(sum/W + eps).  ONE definition, used by the local path and by
+    // the root's post-combine finalize -- INV_W is the LOGICAL width either way.
+    auto finalize = [](uint32_t dst) {
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst, INV_W_BITS);  // x (1/W): the LOGICAL width (R1)
+        add_unary_tile(dst, EPS_BITS);
+        rsqrt_tile_init();
+        rsqrt_tile(dst);
+    };
 
     // ---- gamma: resident for the whole core's assignment (RESIDENT) -------
     if constexpr (HAS_G && X_RESIDENT && G_RM) {
@@ -159,14 +201,32 @@ void kernel_main() {
 
         // ================= finalize: 1/rms = rsqrt(sum/W + eps) ============
         // Pops before reserving, so the `rows`-page accumulator CB suffices.
-        for (uint32_t i = 0; i < rows; ++i) {
-            ckl::transform_in_place(cb_row_stat, [](uint32_t dst) {
-                binop_with_scalar_tile_init();
-                mul_unary_tile(dst, INV_W_BITS);  // x (1/W): the LOGICAL width (R1)
-                add_unary_tile(dst, EPS_BITS);
-                rsqrt_tile_init();
-                rsqrt_tile(dst);
-            });
+        if constexpr (!CROSS_CORE) {
+            for (uint32_t i = 0; i < rows; ++i) {
+                ckl::transform_in_place(cb_row_stat, finalize);
+            }
+        } else {
+            // Hand this core's RAW partial to the writer, which ships it to the
+            // group root.  cb_sum_handoff is DEDICATED to that handoff so the
+            // writer never becomes a second consumer of cb_row_stat.
+            ckl::copy<ckl::input(cb_row_stat), ckl::output(cb_sum_handoff)>(ckl::EltwiseShape::tiles(rows));
+            if (is_root != 0) {
+                // Sum the group's GROUP_SIZE partials ELEMENTWISE: each is a
+                // column-shaped REDUCE_ROW result, so the row total is their
+                // elementwise sum regardless of which lanes the datapath filled.
+                // Slot 0 seeds the accumulator (this core's own partial), then the
+                // remaining slots fold in-place -- per-tile streaming throughout,
+                // so no slot has to be contiguous with any other.
+                ckl::copy<ckl::input(cb_partials_gathered), ckl::output(cb_row_stat)>(ckl::EltwiseShape::tiles(rows));
+                for (uint32_t g = 1; g < GROUP_SIZE; ++g) {
+                    ckl::add<ckl::input(cb_row_stat), ckl::input(cb_partials_gathered), ckl::output(cb_row_stat)>(
+                        ckl::EltwiseShape::tiles(rows));
+                }
+                for (uint32_t i = 0; i < rows; ++i) {
+                    ckl::transform_in_place(cb_row_stat, finalize);
+                }
+                ckl::copy<ckl::input(cb_row_stat), ckl::output(cb_stat_handoff)>(ckl::EltwiseShape::tiles(rows));
+            }
         }
 
         // ================= pass B: scale ===================================
@@ -184,7 +244,7 @@ void kernel_main() {
             // popped -- every width chunk of this block re-reads it.
             ckl::mul<
                 ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::input(cb_row_stat, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
+                ckl::input(CB_STAT_B, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
                 ckl::output(NORM_OUT),
                 ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(rows, WT_CHUNK));
 
@@ -207,7 +267,7 @@ void kernel_main() {
             }
         }
 
-        cb_pop_front(cb_row_stat, rows);
+        cb_pop_front(CB_STAT_B, rows);
     }
 
     // SCALER_TILES is the descriptor's single source of truth for how many tiles

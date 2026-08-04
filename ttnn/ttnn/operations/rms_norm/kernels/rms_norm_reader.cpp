@@ -69,9 +69,16 @@ void kernel_main() {
     constexpr uint32_t R_RM = get_compile_time_arg_val(10);
     constexpr uint32_t W_ELEMS = get_compile_time_arg_val(11);
     constexpr uint32_t REDUCE_ACC_VIA_ADD = get_compile_time_arg_val(12);
-    constexpr auto x_args = TensorAccessorArgs<13>();
+    // Refinement 2: NATIVE_IN == 1 means cb_input_tiles is BACKED ON THE INPUT
+    // SHARD (ttnn.cb_descriptor_from_sharded_tensor).  x is already resident in
+    // this core's L1, so there is no NoC read for it at all -- the reader only
+    // PUBLISHES the pages once so cb_wait_front can see them.
+    constexpr uint32_t NATIVE_IN = get_compile_time_arg_val(13);
+    constexpr uint32_t IN_SHARD_PAGES = get_compile_time_arg_val(14);
+    constexpr auto x_args = TensorAccessorArgs<15>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
+    constexpr bool NATIVE_X = (NATIVE_IN != 0);
     constexpr bool RM = (IS_TILE == 0);
     constexpr bool HAS_G = (HAS_GAMMA != 0);
     constexpr bool G_RM = (GAMMA_IS_RM != 0);
@@ -91,6 +98,18 @@ void kernel_main() {
     const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
     const uint32_t row_start = get_arg_val<uint32_t>(2);  // this core's first tile-row
     const uint32_t num_rows = get_arg_val<uint32_t>(3);   // tile-rows owned by this core
+    // Width slice this core owns (Lamp L1/L4).  On the whole-row schemes this is
+    // (0, WT_CHUNK); under a width split it is the core's shard column range.
+    const uint32_t w_start = get_arg_val<uint32_t>(4);
+    const uint32_t w_real = get_arg_val<uint32_t>(5);  // REAL width tiles (<= WT_CHUNK)
+
+    // An INACTIVE core: it joined the program only so the width combine's stat
+    // multicast lands in a cb_row_final this program owns (a width shard grid need
+    // not be a rectangle, so the mcast box can be larger than the grid).  It holds
+    // no shard, so it must not touch a shard-backed CB at all.
+    if (num_rows == 0) {
+        return;
+    }
 
     const auto x_acc = TensorAccessor(x_args, x_addr);
 
@@ -136,25 +155,41 @@ void kernel_main() {
     // ---- gamma: one chunk's worth of tiles (or sticks) --------------------
     // In RESIDENT this runs once per core before the row-block loop and the
     // tiles are never popped; in STREAM it runs per pass-B chunk.
+    // `w_start` shifts every gamma index/offset by this core's width slice; on the
+    // whole-row schemes it is 0 and this is byte-identical to Phase 0.
     auto stage_gamma_chunk = [&](uint32_t c) {
         if constexpr (HAS_G) {
             const auto g_acc = TensorAccessor(gamma_args, gamma_addr);
+            const uint32_t first_wt = w_start + c * WT_CHUNK;
             if constexpr (G_RM) {
                 // gamma is a single stick; row 0 of the staged tile-row is the
                 // only row BroadcastDim::Row reads.
-                const uint32_t row_bytes = (c + 1 == NUM_W_CHUNKS) ? G_LAST_CHUNK_ROW_BYTES : G_CHUNK_ROW_BYTES;
-                dataflow_kernel_lib::read_sticks_for_tilize<cb_gamma_sticks>(
-                    g_acc,
-                    /*total_num_rows=*/1,
-                    row_bytes,
-                    /*start_page=*/0,
-                    /*byte_offset_within_page=*/c * G_CHUNK_ROW_BYTES);
+                const uint32_t off = first_wt * TILE_DIM * GAMMA_ELEM_BYTES;
+                const uint32_t total = W_ELEMS * GAMMA_ELEM_BYTES;
+                const uint32_t remaining = (off < total) ? (total - off) : 0;
+                const uint32_t row_bytes = (remaining < G_CHUNK_ROW_BYTES) ? remaining : G_CHUNK_ROW_BYTES;
+                if (row_bytes != 0) {
+                    dataflow_kernel_lib::read_sticks_for_tilize<cb_gamma_sticks>(
+                        g_acc,
+                        /*total_num_rows=*/1,
+                        row_bytes,
+                        /*start_page=*/0,
+                        /*byte_offset_within_page=*/off);
+                } else {  // pad-only slice: keep the CB balanced with an empty push
+                    cb_reserve_back(cb_gamma_sticks, WT_CHUNK);
+                    cb_push_back(cb_gamma_sticks, WT_CHUNK);
+                }
             } else {
                 const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
                 cb_reserve_back(cb_gamma_tiles, WT_CHUNK);
                 uint32_t l1_addr = get_write_ptr(cb_gamma_tiles);
                 for (uint32_t w = 0; w < WT_CHUNK; ++w) {
-                    noc_async_read_tile(c * WT_CHUNK + w, g_acc, l1_addr);
+                    // A RAGGED width shard ends in whole PAD tiles that have no
+                    // gamma counterpart; clamp so the read stays inside the tensor
+                    // (the product lands in the output shard's pad region and is
+                    // never read back).
+                    const uint32_t wt = first_wt + w;
+                    noc_async_read_tile((wt < WT) ? wt : (WT - 1), g_acc, l1_addr);
                     l1_addr += gamma_tile_bytes;
                 }
                 noc_async_read_barrier();
@@ -167,13 +202,37 @@ void kernel_main() {
         stage_gamma_chunk(0);
     }
 
+    // ---- native x: publish the resident shard, once ------------------------
+    // The shard IS the per-core block, so the only thing to do is make its pages
+    // visible to the compute kernel.  A RAGGED width shard (Wt not a multiple of
+    // the shard's tile width) ends each of its tile-rows in whole PAD tiles whose
+    // L1 content is undefined; zero them once so they contribute exactly 0 to
+    // sum(x^2) (the same pad-lane invariant the ROW_MAJOR staging ring gets).
+    if constexpr (NATIVE_X) {
+        if (w_real < WT_CHUNK) {
+            const uint32_t tile_bytes = get_tile_size(cb_input_tiles);
+            const uint32_t pad_tiles = WT_CHUNK - w_real;
+            Noc noc;
+            DataflowBuffer x_dfb(cb_input_tiles);
+            for (uint32_t r = 0; r * WT_CHUNK < IN_SHARD_PAGES; ++r) {
+                noc.async_write_zeros(
+                    x_dfb, pad_tiles * tile_bytes, {.offset_bytes = (r * WT_CHUNK + w_real) * tile_bytes});
+            }
+            noc.write_zeros_l1_barrier();
+        }
+        cb_reserve_back(cb_input_tiles, IN_SHARD_PAGES);
+        cb_push_back(cb_input_tiles, IN_SHARD_PAGES);
+    }
+
     // ---- one width chunk of one row-block of x ---------------------------
     // Transaction granularity is WT_CHUNK tiles (one tile-row of the chunk):
     // a single knob-derived unit that divides every CB ring by construction,
     // and >= 4 tiles per barrier whenever the block allows it.
     const uint32_t x_tile_bytes = get_tile_size(cb_input_tiles);
     auto stage_x_chunk = [&](uint32_t first_tile_row, uint32_t rows, uint32_t c) {
-        if constexpr (RM) {
+        if constexpr (NATIVE_X) {
+            return;  // already resident and published above -- no NoC read for x
+        } else if constexpr (RM) {
             const uint32_t stick_start = first_tile_row * TILE_DIM;
             uint32_t sticks = rows * TILE_DIM;
             if (stick_start + sticks > R_RM) {
@@ -184,7 +243,10 @@ void kernel_main() {
                 x_acc, sticks, row_bytes, stick_start, /*byte_offset_within_page=*/c * CHUNK_ROW_BYTES);
         } else {
             for (uint32_t r = 0; r < rows; ++r) {
-                const uint32_t tile_base = (first_tile_row + r) * WT + c * WT_CHUNK;
+                // + w_start: this core's width slice under a cross-core width split
+                // (0 on the whole-row schemes).  The ROW_MAJOR branch above needs no
+                // such term: an RM build never takes a width-split plan.
+                const uint32_t tile_base = (first_tile_row + r) * WT + w_start + c * WT_CHUNK;
                 cb_reserve_back(cb_input_tiles, WT_CHUNK);
                 uint32_t l1_addr = get_write_ptr(cb_input_tiles);
                 for (uint32_t w = 0; w < WT_CHUNK; ++w) {

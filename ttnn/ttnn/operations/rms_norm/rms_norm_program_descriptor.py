@@ -352,6 +352,90 @@ CB_GAMMA_TILES = 6  # gamma tiles (row 0 valid)
 CB_NORMALIZED = 7  # x * (1/rms), only when gamma is present
 CB_OUTPUT_TILES = 8  # output tiles
 CB_OUTPUT_STICKS = 9  # ROW_MAJOR only: untilized row-major staging of out
+# --- Refinement 2, WIDTH/BLOCK sharded only (cross-core width combine) -------
+CB_SUM_HANDOFF = 10  # fp32: this core's raw partial sum(x^2), compute -> writer
+CB_PARTIALS_GATHERED = 11  # fp32: root's per-sender landing slots, writer -> compute
+CB_STAT_HANDOFF = 12  # fp32: root's finalized 1/rms tiles, compute -> writer (mcast src)
+CB_ROW_FINAL = 13  # fp32: mcast landing of the finalized 1/rms, writer -> compute
+
+
+# ---------------------------------------------------------------------------
+# Placement (`memory_layout`) — Refinement 2
+# ---------------------------------------------------------------------------
+#
+# op_design.md section 5.3 maps each TARGET memory_layout onto this op's axes:
+#
+#   INTERLEAVED     -> no placement-imposed split; the op splits `row` itself.
+#   HEIGHT_SHARDED  -> cuts the INDEPENDENT `row` axis  => knob-turn (Lamp L3).
+#                      Each core already holds whole rows, so the reduction is
+#                      LOCAL and the shard IS the per-core block: cb_input_tiles
+#                      / cb_output_tiles are backed directly on the shard
+#                      (zero-copy, no NoC read for x at all).
+#   WIDTH_SHARDED   -> cuts the DEPENDENT `width` axis   => scheme-change (L4/L1).
+#   BLOCK_SHARDED      Per-core partial sum(x^2) must be combined across the
+#                      group of cores that share a row range: gather to the
+#                      group root, finalize there, multicast the stat back
+#                      (op_design.md section 3.4).
+#
+# Three internal SCHEMES realize that mapping.  The scheme is a pure function of
+# (layout, placement, shard geometry, L1 budget) -- see _plan_placement.
+SCHEME_ROWS = "rows"  # split `row` over the full grid, TensorAccessor dataflow
+SCHEME_SHARD_H = "shard_h"  # rows come from the shard, zero-copy CBs, local reduce
+SCHEME_SHARD_W = "shard_w"  # width comes from the shard, cross-core combine
+
+_INTERLEAVED = ttnn.TensorMemoryLayout.INTERLEAVED
+_HEIGHT_SHARDED = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+_WIDTH_SHARDED = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+_BLOCK_SHARDED = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+_SHARDED = (_HEIGHT_SHARDED, _WIDTH_SHARDED, _BLOCK_SHARDED)
+
+
+def _shard_shape(tensor):
+    """Per-core shard extent in ELEMENTS, or None for an interleaved tensor."""
+    mc = tensor.memory_config()
+    if mc.memory_layout == _INTERLEAVED or mc.shard_spec is None:
+        return None
+    return (int(mc.shard_spec.shape[0]), int(mc.shard_spec.shape[1]))
+
+
+def _shard_l1_bytes(tensor):
+    """Per-core L1 bytes this tensor's shard occupies (0 when not L1-sharded).
+
+    The CB arena and the allocator's L1 buffers share one L1 region, so a
+    resident shard is budget the CBs may NOT spend.  Counting it here is what
+    keeps a sharded build from CB-OOM'ing (an op-charged failure) on exactly the
+    geometries sharding exists to serve.
+    """
+    sh = _shard_shape(tensor)
+    if sh is None or tensor.memory_config().buffer_type != ttnn.BufferType.L1:
+        return 0
+    if tensor.layout == ttnn.TILE_LAYOUT:
+        return (sh[0] // TILE_DIM) * (sh[1] // TILE_DIM) * ttnn.tile_size(tensor.dtype)
+    align = int(ttnn._ttnn.device.get_l1_alignment())
+    row_bytes = sh[1] * _stick_elem_bytes(tensor)
+    return sh[0] * (((row_bytes + align - 1) // align) * align)
+
+
+def _shard_tile_extent(tensor):
+    """(shard_h_tiles, shard_w_tiles) for a TILE-layout sharded tensor."""
+    sh = _shard_shape(tensor)
+    assert sh is not None, "rms_norm: _shard_tile_extent on an interleaved tensor"
+    assert sh[0] % TILE_DIM == 0 and sh[1] % TILE_DIM == 0, f"rms_norm: TILE shard {sh} is not tile-aligned"
+    return sh[0] // TILE_DIM, sh[1] // TILE_DIM
+
+
+def _same_shard_spec(a, b):
+    """Two tensors carry the identical placement (layout + geometry + grid)."""
+    ma, mb = a.memory_config(), b.memory_config()
+    if ma.memory_layout != mb.memory_layout:
+        return False
+    if ma.shard_spec is None or mb.shard_spec is None:
+        return ma.shard_spec is None and mb.shard_spec is None
+    return (
+        _shard_shape(a) == _shard_shape(b)
+        and ma.shard_spec.grid == mb.shard_spec.grid
+        and ma.shard_spec.orientation == mb.shard_spec.orientation
+    )
 
 
 def _core_range_set_full_grid(device):
@@ -375,6 +459,276 @@ def _cb(index, page_size, num_pages, data_format, core_ranges):
     )
 
 
+class _Plan:
+    """The resolved placement plan: which scheme, which cores own what.
+
+    One object so the scheme decision has a single source of truth that the L1
+    solve, the CB table, all three CT-arg lists and the RT-arg loop all read
+    from -- nothing re-derives "who owns which width tiles" a second time.
+    """
+
+    __slots__ = (
+        "scheme",
+        "assignment",  # [(core, row_start, row_count, w_start, w_real, is_root, slot)]
+        "all_cores",  # CoreRangeSet the program (kernels + arena CBs) covers
+        "native_in",  # cb_input_tiles is backed on the input shard (zero-copy)
+        "native_out",  # cb_output_tiles is backed on the output shard (zero-copy)
+        "wt_per_core",  # width tiles a core owns == the shard row stride
+        "combine",  # cross-core width combine active (GRID_W > 1)
+        "group_size",  # cores per width group (GRID_W)
+        "mcast",  # ttnn.Mcast1D / Mcast2D, or None
+        "gather_sem_id",  # arrival semaphore for the partial gather, or None
+        "l1_reserved",  # per-core L1 bytes the resident shards already hold
+    )
+
+    def __init__(self, **kw):
+        for k in self.__slots__:
+            setattr(self, k, kw.get(k))
+
+
+def _plan_interleaved_width_split(device, input_tensor, output_tensor, Rt, Wt):
+    """GRID_W > 1 on an interleaved input: Lamp L1, the cross-core width split.
+
+    The dependent `width` axis is cut across `GRID_W` cores of each grid row and
+    the partials are combined with the SAME topology the sharded schemes use --
+    only `native_in` differs (x still arrives through a TensorAccessor, because
+    an interleaved tensor has no resident per-core slice).  This is the knob
+    Refinement 3 turns to fill the grid on an `Rt = 1` decode profile; at the
+    shipped GRID_W == 1 it is not reached at all.
+
+    GRID_W is clamped to the largest DIVISOR of Wt that fits the grid width, so
+    every core owns the same number of width tiles (the same uniformity the
+    sharded path gets from a non-ragged shard).
+    """
+    grid = device.compute_with_storage_grid_size()
+    gw = _largest_divisor_at_most(Wt, min(GRID_W, grid.x))
+    gh = max(1, min(Rt, grid.y))
+    wt_per_core = Wt // gw
+    crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gw - 1, gh - 1))])
+    base, extra = divmod(Rt, gh)
+    assignment = []
+    for core in _cores_in(crs):
+        y = core.y
+        rows = base + (1 if y < extra else 0)
+        row_start = y * base + min(y, extra)
+        w_start = core.x * wt_per_core
+        assignment.append((core, row_start, rows, w_start, wt_per_core, core.x == 0, core.x))
+    mcast = (
+        ttnn.Mcast1D(
+            device,
+            crs,
+            ttnn.Mcast1DShape.PerRow,
+            0,
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True, base_sem_id=0),
+        )
+        if gw > 1
+        else None
+    )
+    return _Plan(
+        scheme=SCHEME_SHARD_W,
+        assignment=assignment,
+        all_cores=crs,
+        native_in=False,
+        native_out=False,
+        wt_per_core=wt_per_core,
+        combine=mcast is not None,
+        group_size=gw,
+        mcast=mcast,
+        gather_sem_id=(mcast.next_base_sem_id() if mcast is not None else None),
+        l1_reserved=_shard_l1_bytes(input_tensor) + _shard_l1_bytes(output_tensor),
+    )
+
+
+def _plan_rows(device, input_tensor, output_tensor, Rt, Wt):
+    """SCHEME_ROWS: split the independent `row` axis over the FULL grid.
+
+    Phase 0's scheme, and the universal fallback: every tensor is reached through
+    a TensorAccessor, which resolves an interleaved *or* a sharded buffer, so it
+    is correct for any placement.  Used for INTERLEAVED, for every ROW_MAJOR
+    sharded build (see _plan_placement's note on the RM shard granule) and as the
+    L1 bail-out for a tiled shard whose per-core block does not fit.
+    """
+    if GRID_W > 1 and Wt > 1 and input_tensor.layout == ttnn.TILE_LAYOUT:
+        return _plan_interleaved_width_split(device, input_tensor, output_tensor, Rt, Wt)
+    num_cores, all_cores, g1, g2, rpc1, rpc2 = ttnn.split_work_to_cores(_core_range_set_full_grid(device), Rt, True)
+    assignment = []
+    row_cursor = 0
+    for group_cores, rpc in ((_cores_in(g1), rpc1), (_cores_in(g2), rpc2)):
+        for core in group_cores:
+            assignment.append((core, row_cursor, rpc, 0, Wt, True, 0))
+            row_cursor += rpc
+    assert row_cursor == Rt, f"rms_norm: work split covers {row_cursor} of {Rt} tile-rows"
+    assert len(assignment) == num_cores, f"rms_norm: {len(assignment)} cores assigned, expected {num_cores}"
+    return _Plan(
+        scheme=SCHEME_ROWS,
+        assignment=assignment,
+        all_cores=all_cores,
+        native_in=False,
+        native_out=False,
+        wt_per_core=Wt,
+        combine=False,
+        group_size=1,
+        mcast=None,
+        gather_sem_id=None,
+        l1_reserved=_shard_l1_bytes(input_tensor) + _shard_l1_bytes(output_tensor),
+    )
+
+
+def _plan_placement(device, input_tensor, output_tensor, *, is_tile, Rt, Wt, partial_w, force_rows=False):
+    """Resolve `memory_layout` into one of the three internal schemes.
+
+    A pure function of (layout, placement, shard geometry, alignment) -- no
+    device-grid or work-distribution input beyond the grid the shard already
+    names, so the scheme is reproducible for a fixed input.
+
+    ROW_MAJOR sharded tensors deliberately take SCHEME_ROWS.  Their shard
+    granule is FINER than this op's tile block -- `eval.sharding` rounds an RM
+    shard to (1 stick x L1_align/elem_size elements), e.g. 3 sticks x 512 for a
+    height-sharded (1,1,256,512) bf16 tensor and 256 x **8 elements** for the
+    width-sharded one -- so neither a tile-row nor a width tile is resident on
+    any single core and the shard cannot be adopted as the per-core block.  The
+    accessor path is not a dodge there, it is the only expressible mapping; the
+    data is still L1-resident, so no DRAM traffic is paid either way.
+    """
+    in_ml = input_tensor.memory_config().memory_layout
+    if force_rows or not is_tile or in_ml == _INTERLEAVED:
+        return _plan_rows(device, input_tensor, output_tensor, Rt, Wt)
+
+    shard_h_t, shard_w_t = _shard_tile_extent(input_tensor)
+    shard_grid = input_tensor.memory_config().shard_spec.grid
+    shard_cores = _cores_in(shard_grid)
+    l1_reserved = _shard_l1_bytes(input_tensor) + _shard_l1_bytes(output_tensor)
+    # A zero-copy OUTPUT CB is only meaningful when the output shard is laid out
+    # exactly like the input's -- same grid, same per-core extent, same order --
+    # because then core `i`'s output block is the block it just computed.
+    native_out = output_tensor.layout == ttnn.TILE_LAYOUT and _same_shard_spec(input_tensor, output_tensor)
+
+    if in_ml == _HEIGHT_SHARDED:
+        # Lamp L3 knob-turn: the shard cuts `row`, so the shard IS the per-core
+        # block and the reduce stays local.  A legal HEIGHT shard spans the full
+        # padded width by construction; refuse to guess if it somehow does not.
+        if shard_w_t != Wt:
+            return _plan_rows(device, input_tensor, output_tensor, Rt, Wt)
+        assignment = []
+        for i, core in enumerate(shard_cores):
+            row_start = i * shard_h_t
+            row_count = max(0, min(shard_h_t, Rt - row_start))
+            assignment.append((core, min(row_start, Rt), row_count, 0, Wt, True, 0))
+        return _Plan(
+            scheme=SCHEME_SHARD_H,
+            assignment=assignment,
+            all_cores=shard_grid,
+            native_in=True,
+            native_out=native_out,
+            wt_per_core=Wt,
+            combine=False,
+            group_size=1,
+            mcast=None,
+            gather_sem_id=None,
+            l1_reserved=l1_reserved,
+        )
+
+    # ---- WIDTH / BLOCK: the shard cuts the DEPENDENT `width` axis ------------
+    # Lamp L4 (superset of L1).  Each core owns a width SLICE of a row, so its
+    # sum(x^2) is a PARTIAL and must be combined across the group of cores that
+    # share the row range.
+    #
+    # Bail-out: a RAGGED width tail (Wt not a multiple of the shard's tile width)
+    # leaves the last core's block ending in whole PAD tiles.  Zeroing those pad
+    # tiles keeps a tile-aligned W exact, but when W is ALSO non-tile-aligned the
+    # partial-W mask would have to land on the last REAL width tile rather than
+    # the block's last page, which no ReducePartialScaler can express.  That
+    # combination takes SCHEME_ROWS (correct, just not width-split).
+    ragged_w = (Wt % shard_w_t) != 0
+    if ragged_w and partial_w:
+        return _plan_rows(device, input_tensor, output_tensor, Rt, Wt)
+
+    bbox = shard_grid.bounding_box()
+    nx = bbox.end.x - bbox.start.x + 1
+    ny = bbox.end.y - bbox.start.y + 1
+
+    if in_ml == _WIDTH_SHARDED:
+        # Every core holds the full row range and one width slice, so the whole
+        # shard grid is ONE group.  That grid is row-major-packed and need not be
+        # a rectangle (64 cores on an 11-wide grid = 5 full rows + 9), so the
+        # multicast runs over its BOUNDING BOX and the few cores inside the box
+        # but outside the shard join the program as INACTIVE (row_count == 0).
+        # They exist only so the stat multicast lands in a cb_row_final this
+        # program owns instead of in whatever else holds that L1.
+        group_size = len(shard_cores)
+        root = shard_cores[0]
+        assignment = []
+        owned = {(c.x, c.y): i for i, c in enumerate(shard_cores)}
+        for core in _cores_in(bbox_crs := ttnn.CoreRangeSet([ttnn.CoreRange(bbox.start, bbox.end)])):
+            i = owned.get((core.x, core.y))
+            if i is None:
+                assignment.append((core, 0, 0, 0, 0, False, 0))  # inactive padding core
+                continue
+            w_start = i * shard_w_t
+            assignment.append((core, 0, Rt, w_start, min(shard_w_t, Wt - w_start), i == 0, i))
+        all_cores = bbox_crs
+        mcast = (
+            ttnn.Mcast2D(
+                device,
+                bbox_crs,
+                ttnn.CoreCoord(root.x, root.y),
+                ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True, base_sem_id=0),
+                group_size - 1,
+            )
+            if group_size > 1
+            else None
+        )
+    else:  # _BLOCK_SHARDED
+        # A rectangle: grid column x owns width slice x, grid row y owns row
+        # block y (eval.sharding maps rows->y, cols->x).  Each grid ROW is a
+        # width group with its root at column 0 -- exactly Mcast1D's PerRow
+        # line family, one CT block covering all ny groups.
+        assert shard_grid.num_cores() == nx * ny, f"rms_norm: BLOCK shard grid {shard_grid} is not a full rectangle"
+        group_size = nx
+        assignment = []
+        for core in _cores_in(shard_grid):
+            x, y = core.x - bbox.start.x, core.y - bbox.start.y
+            row_start = y * shard_h_t
+            w_start = x * shard_w_t
+            assignment.append(
+                (
+                    core,
+                    min(row_start, Rt),
+                    max(0, min(shard_h_t, Rt - row_start)),
+                    w_start,
+                    min(shard_w_t, Wt - w_start),
+                    x == 0,
+                    x,
+                )
+            )
+        all_cores = shard_grid
+        mcast = (
+            ttnn.Mcast1D(
+                device,
+                shard_grid,
+                ttnn.Mcast1DShape.PerRow,
+                0,
+                ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True, base_sem_id=0),
+            )
+            if group_size > 1
+            else None
+        )
+
+    return _Plan(
+        scheme=SCHEME_SHARD_W,
+        assignment=assignment,
+        all_cores=all_cores,
+        native_in=True,
+        native_out=native_out,
+        wt_per_core=shard_w_t,
+        combine=mcast is not None,
+        group_size=group_size,
+        mcast=mcast,
+        gather_sem_id=(mcast.next_base_sem_id() if mcast is not None else None),
+        l1_reserved=l1_reserved,
+    )
+
+
 def create_program_descriptor(
     input_tensor: "ttnn.Tensor",
     output_tensor: "ttnn.Tensor",
@@ -383,16 +737,6 @@ def create_program_descriptor(
     epsilon: float = 1e-6,
     compute_kernel_config: "ttnn.ComputeConfigDescriptor" = None,
 ) -> "ttnn.ProgramDescriptor":
-    # GRID_W is a live knob, but turning it past 1 is a SCHEME-CHANGE (Lamp L1:
-    # cross-core partial-sum combine + mcast), not just a wider grid -- the
-    # dependent `width` axis cannot be split without it.  Fail loudly rather than
-    # silently computing every core's slice as if it were the whole row.
-    if GRID_W != 1:
-        raise NotImplementedError(
-            f"rms_norm: GRID_W={GRID_W} requires the cross-core partial-sum combine "
-            f"(op_design.md Lamp L1); Phase 0 only implements GRID_W == 1"
-        )
-
     device = input_tensor.device()
     shape = list(input_tensor.shape)
 
@@ -417,91 +761,100 @@ def create_program_descriptor(
     elem_bytes = _stick_elem_bytes(input_tensor)
     gamma_elem_bytes = _stick_elem_bytes(gamma) if has_gamma else 0
 
-    # ---- L1 byte budget (derived from the device, never a literal) --------
-    l1_budget = int(ttnn.get_max_worker_l1_unreserved_size() * L1_SAFETY_FRACTION)
-
     bt = ttnn.tile_size(input_tensor.dtype)  # x / x^2 / normalized / out
     gt = ttnn.tile_size(gamma.dtype) if has_gamma else 0
     st = ttnn.tile_size(ttnn.bfloat16)  # scaler CB (R4: value exactly 1.0)
-    ft = ttnn.tile_size(ttnn.float32)  # cb_row_stat
+    ft = ttnn.tile_size(ttnn.float32)  # cb_row_stat & the combine CBs
 
     # Scaler CB page count: one source of truth for the budget term, the CB
     # allocation and (via PARTIAL_W) the compute kernel's final pop.
     scaler_pages = 2 if partial_w else 1
     scaler_bytes = st * scaler_pages
 
-    # Depth > 1 only buys overlap when the producer/consumer pair spans two
-    # processors.  On the ROW_MAJOR path cb_input_tiles is produced by the
-    # `tilize` compute helper and cb_output_tiles is consumed by `untilize`;
-    # sequential compute helpers own all three TRISCs and cannot pipeline, so
-    # those CBs drop to depth 1 (and must instead hold a whole block — R5), and
-    # the depth search below collapses to its single trivial candidate.
-    depth_candidates = CB_DEPTH_CANDIDATES if is_tile else (1,)
+    # ---- placement -> scheme, cores, per-core (row, width) extents ---------
+    # Refinement 2.  The scheme decides which axis the cores cut, whether the
+    # x / out CBs alias a resident shard, and whether a cross-core combine runs;
+    # everything below reads it from the plan rather than re-deriving it.
+    plan = _plan_placement(device, input_tensor, output_tensor, is_tile=is_tile, Rt=Rt, Wt=Wt, partial_w=partial_w)
 
-    def _resident_fit(depth):
-        """(block_rows_l1_max, per-block CB multiplier) for a candidate depth."""
+    def _solve_blocking(plan):
+        """(block_rows, wt_chunk, num_w_chunks, cb_x_depth, cb_out_depth) or None.
+
+        None => this plan's per-core block does not fit L1 at all, and the caller
+        must fall back to SCHEME_ROWS (which can chunk `width`).
+        """
+        wt_core = plan.wt_per_core
+        # The resident shards share L1 with the CB arena, so they are budget the
+        # CBs may not spend (_shard_l1_bytes).
+        budget = int((ttnn.get_max_worker_l1_unreserved_size() - plan.l1_reserved) * L1_SAFETY_FRACTION)
+        max_rows = max((a[2] for a in plan.assignment), default=1) or 1
+        # A CB backed on the shard costs ZERO arena bytes (it aliases the tensor's
+        # own L1), so its depth term drops out of the block multiplier -- and with
+        # no NoC read to overlap, depth buys nothing there either.
+        dx0 = 0 if plan.native_in else None
+        do0 = 0 if plan.native_out else None
+        # Depth > 1 only buys overlap when the producer/consumer pair spans two
+        # processors.  On the ROW_MAJOR path cb_input_tiles is produced by the
+        # `tilize` compute helper and cb_output_tiles is consumed by `untilize`;
+        # sequential compute helpers own all three TRISCs and cannot pipeline, so
+        # those CBs drop to depth 1 (and must instead hold a whole block — R5).
+        depth_candidates = CB_DEPTH_CANDIDATES if is_tile else (1,)
+        # fp32 pages per tile-row of a block: cb_row_stat, plus the combine's
+        # handoff / gather / mcast CBs when the width split is active.
+        f32_pages = CB_ROW_STAT_DEPTH + ((1 + plan.group_size + 1 + CB_ROW_STAT_DEPTH) if plan.combine else 0)
+
+        def _resident_fit(depth):
+            mult = _cb_block_mult(depth if dx0 is None else dx0, depth if do0 is None else do0, has_gamma)
+            fixed = (
+                (wt_core * gt)  # cb_gamma_tiles
+                + (wt_core * gt if gamma_is_rm else 0)  # cb_gamma_sticks
+                + (2 * CB_RM_STAGE_DEPTH * wt_core * bt if not is_tile else 0)  # stick staging
+                + scaler_bytes
+            )
+            per_tilerow = wt_core * bt * mult + f32_pages * ft
+            return max(0, (budget - fixed) // max(1, per_tilerow)), mult
+
+        for depth in depth_candidates:
+            brmax, _ = _resident_fit(depth)
+            if brmax >= 1:
+                # RESIDENT: the whole per-core row slice is resident; take the
+                # coarsest row block that fits, i.e. the entire assignment when it does.
+                return min(max_rows, brmax), wt_core, 1, depth, depth
+
+        if plan.scheme != SCHEME_ROWS:
+            return None  # a shard-derived width cannot be chunked -> caller falls back
+
+        # STREAM: one tile-row's width does not fit at ANY depth -> chunk `width`
+        # (an L1 fallback, not a parallelization).  The chunk size adapts to L1,
+        # so keep the preferred (coarsest) depth: overlap is affordable and the
+        # byte count is already paid.
+        depth = depth_candidates[0]
         mult = _cb_block_mult(depth, depth, has_gamma)
-        fixed = (
-            (Wt * gt)  # cb_gamma_tiles
-            + (Wt * gt if gamma_is_rm else 0)  # cb_gamma_sticks
-            + (2 * CB_RM_STAGE_DEPTH * Wt * bt if not is_tile else 0)  # stick staging
-            + scaler_bytes
-        )
-        # + cb_row_stat's pages per tile-row (CB_ROW_STAT_DEPTH of them -- D6)
-        per_tilerow = Wt * bt * mult + CB_ROW_STAT_DEPTH * ft
-        return max(0, (l1_budget - fixed) // per_tilerow), mult
-
-    # ---- cross-core split of the independent `row` axis: SIZE and COUNT ----
-    (
-        num_cores,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        rows_per_core_g1,
-        rows_per_core_g2,
-    ) = ttnn.split_work_to_cores(
-        _core_range_set_full_grid(device), Rt, True
-    )  # row_wise=True is mandatory
-    max_rows_per_core = max(rows_per_core_g1, rows_per_core_g2)
-
-    # ---- regime selection (op_design.md section 4.2, extended by D4) -------
-    # Walk the depth candidates coarsest-first and take RESIDENT at the first
-    # depth whose whole-row working set fits.  Only if no depth fits do we drop
-    # to STREAM, which is the genuinely expensive fallback (x re-read in pass B
-    # => ~2x the DRAM bytes).  Still a pure function of
-    # (layout, dtypes, gamma format, Wt, budget) — device-independent, so the
-    # regime-pinned tests stay reproducible.
-    resident_depth = None
-    for depth in depth_candidates:
-        brmax, mult = _resident_fit(depth)
-        if brmax >= 1:
-            resident_depth, block_rows_l1_max, cb_block_mult = depth, brmax, mult
-            break
-
-    if resident_depth is not None:
-        # RESIDENT: the whole row is resident; take the coarsest row block that
-        # fits, i.e. the entire per-core assignment whenever it fits.
-        cb_x_depth = cb_out_depth = resident_depth
-        block_rows = min(max_rows_per_core, block_rows_l1_max)
-        wt_chunk = Wt
-        num_w_chunks = 1
-    else:
-        # STREAM: one tile-row's width does not fit at ANY depth -> chunk
-        # `width` (an L1 fallback, not a parallelization).  The chunk size
-        # adapts to L1, so keep the preferred (coarsest) depth here: overlap is
-        # affordable and the byte count is already paid.
-        cb_x_depth = cb_out_depth = depth_candidates[0]
-        cb_block_mult = _cb_block_mult(cb_x_depth, cb_out_depth, has_gamma)
-        block_rows = 1
         per_chunk_tile_bytes = (
-            bt * cb_block_mult
+            bt * mult
             + (gt * (2 if gamma_is_rm else 1) if has_gamma else 0)
             + (2 * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)  # D2
         )
-        fixed_stream = scaler_bytes + CB_ROW_STAT_DEPTH * ft  # block_rows == 1 here
-        wt_chunk_l1_max = max(1, (l1_budget - fixed_stream) // per_chunk_tile_bytes)
-        wt_chunk = _largest_divisor_at_most(Wt, wt_chunk_l1_max)  # D1
-        num_w_chunks = Wt // wt_chunk
+        fixed_stream = scaler_bytes + f32_pages * ft  # block_rows == 1 here
+        wt_chunk_l1_max = max(1, (budget - fixed_stream) // per_chunk_tile_bytes)
+        wtc = _largest_divisor_at_most(wt_core, wt_chunk_l1_max)  # D1
+        return 1, wtc, wt_core // wtc, depth, depth
+
+    solved = _solve_blocking(plan)
+    if solved is None:
+        # L1 bail-out: the tiled shard's per-core block does not fit even at
+        # BLOCK_ROWS == 1, and a shard-derived width is not chunkable.  Re-plan on
+        # SCHEME_ROWS, which reads x through the accessor and CAN chunk `width`.
+        plan = _plan_placement(
+            device, input_tensor, output_tensor, is_tile=is_tile, Rt=Rt, Wt=Wt, partial_w=partial_w, force_rows=True
+        )
+        solved = _solve_blocking(plan)
+        assert solved is not None, "rms_norm: no admissible blocking even on SCHEME_ROWS"
+    block_rows, wt_chunk, num_w_chunks, cb_x_depth, cb_out_depth = solved
+    all_cores = plan.all_cores
+    assignment = plan.assignment
+    wt_per_core = plan.wt_per_core
+    combine = plan.combine
 
     # X_RESIDENT == GAMMA_RESIDENT == (NUM_W_CHUNKS == 1) is derived in the
     # kernels from the NUM_W_CHUNKS CT arg -- one source of truth, so it is
@@ -519,30 +872,27 @@ def create_program_descriptor(
     scaler_tiles = 1 if reduce_acc_via_add else scaler_pages
     assert scaler_tiles <= scaler_pages, "rms_norm: cb_scaler is sized below the tiles the reader pushes"
 
-    # ---- per-core assignment: (row_start, row_count) prefix sum -----------
-    cores_g1 = _cores_in(core_group_1)
-    cores_g2 = _cores_in(core_group_2)
-    assignment = []  # [(core, row_start, row_count)]
-    row_cursor = 0
-    for core in cores_g1:
-        assignment.append((core, row_cursor, rows_per_core_g1))
-        row_cursor += rows_per_core_g1
-    for core in cores_g2:
-        assignment.append((core, row_cursor, rows_per_core_g2))
-        row_cursor += rows_per_core_g2
-    assert row_cursor == Rt, f"rms_norm: work split covers {row_cursor} of {Rt} tile-rows"
-    assert len(assignment) == num_cores, f"rms_norm: {len(assignment)} cores assigned, expected {num_cores}"
-
     # ---- circular buffers -------------------------------------------------
     # Every page count below is a function of the block/depth knobs only.
-    # cb_gamma_* is the one place Wt appears; it *is* the gamma tensor's extent
-    # and is bounded by the same L1 predicate through `fixed_resident`
-    # (collapsing to WT_CHUNK in the STREAM regime).
+    # cb_gamma_* is the one place a whole-op width appears; it *is* the gamma
+    # tensor's per-core extent and is bounded by the same L1 predicate.
+    #
+    # cb_input_tiles / cb_output_tiles are ZERO-COPY when the plan says native:
+    # cb_descriptor_from_sharded_tensor aliases the tensor's own resident L1, so
+    # there is no NoC read for x and no arena allocation at all.
     cbs = []
     if not is_tile:
         cbs.append(_cb(CB_INPUT_STICKS, bt, CB_RM_STAGE_DEPTH * wt_chunk, input_tensor.dtype, all_cores))
         cbs.append(_cb(CB_OUTPUT_STICKS, bt, CB_RM_STAGE_DEPTH * wt_chunk, output_tensor.dtype, all_cores))
-    cbs.append(_cb(CB_INPUT_TILES, bt, cb_x_depth * block_rows * wt_chunk, input_tensor.dtype, all_cores))
+    in_shard_pages = 0
+    out_shard_pages = 0
+    if plan.native_in:
+        sh_t, sw_t = _shard_tile_extent(input_tensor)
+        in_shard_pages = sh_t * sw_t
+        assert sw_t == wt_chunk, f"rms_norm: native x CB row stride {sw_t} != WT_CHUNK {wt_chunk}"
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT_TILES, input_tensor))
+    else:
+        cbs.append(_cb(CB_INPUT_TILES, bt, cb_x_depth * block_rows * wt_chunk, input_tensor.dtype, all_cores))
     cbs.append(_cb(CB_X_SQUARED, bt, block_rows * wt_chunk, input_tensor.dtype, all_cores))
     cbs.append(_cb(CB_SCALER, st, scaler_pages, ttnn.bfloat16, all_cores))
     # D6: CB_ROW_STAT_DEPTH * block_rows, so transform_in_place's rotation leaves
@@ -553,12 +903,28 @@ def create_program_descriptor(
             cbs.append(_cb(CB_GAMMA_STICKS, gt, wt_chunk, gamma.dtype, all_cores))
         cbs.append(_cb(CB_GAMMA_TILES, gt, wt_chunk, gamma.dtype, all_cores))
         cbs.append(_cb(CB_NORMALIZED, bt, block_rows * wt_chunk, input_tensor.dtype, all_cores))
-    cbs.append(_cb(CB_OUTPUT_TILES, bt, cb_out_depth * block_rows * wt_chunk, output_tensor.dtype, all_cores))
+    if plan.native_out:
+        osh_t, osw_t = _shard_tile_extent(output_tensor)
+        out_shard_pages = osh_t * osw_t
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT_TILES, output_tensor))
+    else:
+        cbs.append(_cb(CB_OUTPUT_TILES, bt, cb_out_depth * block_rows * wt_chunk, output_tensor.dtype, all_cores))
+    if combine:
+        # op_design.md section 3.4.  cb_sum_handoff is DEDICATED to the cross-kernel
+        # handoff and deliberately distinct from cb_row_stat: a dataflow reader on
+        # the compute accumulator would be a second consumer.
+        # cb_partials_gathered lands on EVERY core (not just the roots) so its L1
+        # address is identical everywhere -- that is how a sender computes the
+        # root's landing address without the host having to know a CB address.
+        cbs.append(_cb(CB_SUM_HANDOFF, ft, block_rows, ttnn.float32, all_cores))
+        cbs.append(_cb(CB_PARTIALS_GATHERED, ft, plan.group_size * block_rows, ttnn.float32, all_cores))
+        cbs.append(_cb(CB_STAT_HANDOFF, ft, block_rows, ttnn.float32, all_cores))
+        cbs.append(_cb(CB_ROW_FINAL, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
 
     # ---- reader -----------------------------------------------------------
     reader_ct_args = [
         1 if is_tile else 0,  # 0  IS_TILE
-        Wt,  # 1  WT
+        Wt,  # 1  WT (whole-row width tiles: gamma / x tile ids)
         wt_chunk,  # 2  WT_CHUNK
         num_w_chunks,  # 3  NUM_W_CHUNKS
         block_rows,  # 4  BLOCK_ROWS
@@ -570,12 +936,13 @@ def create_program_descriptor(
         R_rm,  # 10 total ROW_MAJOR sticks (0 for TILE)
         W,  # 11 logical width (elements)
         1 if reduce_acc_via_add else 0,  # 12 REDUCE_ACC_VIA_ADD (picks mask vs scaler pair)
+        1 if plan.native_in else 0,  # 13 NATIVE_IN: cb_input_tiles aliases the shard
+        in_shard_pages,  # 14 pages of the resident x shard to publish (native only)
     ]
     # The kernel reads its accessor args at TensorAccessorArgs<N>() -- N must equal
     # the scalar CT-arg count above.  Assert it here so adding a scalar arg fails
     # in Python instead of mis-parsing on device.
-    n_reader_scalars = len(reader_ct_args)
-    assert n_reader_scalars == 13, "rms_norm_reader.cpp expects TensorAccessorArgs<13>()"
+    assert len(reader_ct_args) == 15, "rms_norm_reader.cpp expects TensorAccessorArgs<15>()"
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
@@ -584,6 +951,9 @@ def create_program_descriptor(
     )
 
     # ---- writer -----------------------------------------------------------
+    # The writer owns the whole cross-core combine (gather -> root -> mcast back):
+    # it runs on NoC1, which is idle through pass A, so the reader's NoC0 keeps
+    # streaming x / gamma while the combine handshake runs.
     writer_ct_args = [
         1 if is_tile else 0,  # 0  IS_TILE
         Wt,  # 1  WT
@@ -593,8 +963,14 @@ def create_program_descriptor(
         elem_bytes,  # 5  output element bytes
         R_rm,  # 6  total ROW_MAJOR sticks (0 for TILE)
         W,  # 7  logical width (elements)
+        1 if plan.native_out else 0,  # 8  NATIVE_OUT: cb_output_tiles aliases the shard
+        1 if combine else 0,  # 9  COMBINE: cross-core width combine active
+        (plan.gather_sem_id if combine else 0),  # 10 gather arrival semaphore id
+        plan.group_size,  # 11 cores per width group (GRID_W)
+        out_shard_pages,  # 12 pages of the resident out shard (native only)
     ]
-    assert len(writer_ct_args) == 8, "rms_norm_writer.cpp expects TensorAccessorArgs<8>()"
+    assert len(writer_ct_args) == 13, "rms_norm_writer.cpp expects McastArgs<13, 6>()"
+    writer_ct_args.extend(plan.mcast.compile_time_args() if combine else [0] * 5)
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     # ---- compute ----------------------------------------------------------
@@ -611,6 +987,8 @@ def create_program_descriptor(
         REDUCE_BULK,  # 9  reduce input policy knob
         1 if reduce_acc_via_add else 0,  # 10 REDUCE_ACC_VIA_ADD (reduce datapath, D7)
         scaler_tiles,  # 11 tiles the reader pushed into cb_scaler
+        1 if combine else 0,  # 12 COMBINE: partial sum -> gather -> mcast-back
+        plan.group_size,  # 13 cores per width group (GRID_W)
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -619,10 +997,15 @@ def create_program_descriptor(
     x_addr = input_tensor.buffer_address()
     out_addr = output_tensor.buffer_address()
     g_addr = gamma.buffer_address() if has_gamma else 0
-    for core, row_start, row_count in assignment:
-        reader_rt[core.x][core.y] = [x_addr, g_addr, row_start, row_count]
-        writer_rt[core.x][core.y] = [out_addr, row_start, row_count]
-        compute_rt[core.x][core.y] = [row_count]
+    for core, row_start, row_count, w_start, w_real, is_root, slot in assignment:
+        # owns_last_w: only the core holding the row's LAST width tile applies the
+        # partial-W scaler / mask.  On the whole-row schemes that is every core.
+        owns_last_w = 1 if (w_start + w_real >= Wt) else 0
+        reader_rt[core.x][core.y] = [x_addr, g_addr, row_start, row_count, w_start, w_real]
+        writer_rt[core.x][core.y] = [out_addr, row_start, row_count, w_start, 1 if is_root else 0, slot] + (
+            list(plan.mcast.runtime_args(core)) if combine else []
+        )
+        compute_rt[core.x][core.y] = [row_count, owns_last_w, 1 if is_root else 0]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
@@ -646,8 +1029,16 @@ def create_program_descriptor(
         config=compute_kernel_config,  # passed through unmodified
     )
 
+    # The mcast helper owns its two handshake semaphores; the partial-gather needs
+    # one more (the root's arrival counter), taken from the next free id so the
+    # two families can never collide.
+    semaphores = []
+    if combine:
+        semaphores = list(plan.mcast.owned_semaphores())
+        semaphores.append(ttnn.SemaphoreDescriptor(id=plan.gather_sem_id, core_ranges=all_cores, initial_value=0))
+
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
-        semaphores=[],
+        semaphores=semaphores,
         cbs=cbs,
     )

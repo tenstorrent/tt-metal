@@ -109,8 +109,19 @@ SUPPORTED = {
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
-    # Sharded placements are Lamps L3/L4 (op_design.md section 5.3).
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    # Refinement 2: all four placements.  HEIGHT_SHARDED is the Lamp-L3 knob-turn
+    # (the shard cuts the independent `row` axis, so the shard IS the per-core
+    # block and the reduce stays local -- zero-copy CBs, no NoC read for x);
+    # WIDTH/BLOCK_SHARDED are the Lamp-L4 scheme-change (the shard cuts the
+    # dependent `width` axis, so per-core partial sums are gathered to each
+    # group's root, finalized there and multicast back).  See op_design.md 5.3
+    # and the SCHEME_* map in rms_norm_program_descriptor.py.
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 }
 
 
