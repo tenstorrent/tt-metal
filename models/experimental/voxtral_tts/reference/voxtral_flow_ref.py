@@ -50,7 +50,6 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     END_AUDIO_ID,
     FM_DIM,
     FM_HEAD_DIM,
-    FM_HIDDEN_DIM,
     FM_INPUT_DIM,
     FM_N_HEADS,
     FM_N_KV_HEADS,

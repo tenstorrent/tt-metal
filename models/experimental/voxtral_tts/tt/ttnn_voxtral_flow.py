@@ -29,19 +29,27 @@ the velocity net is 349M params (3 layers x 116.4M) at BFP8, so 7 steps stream ~
 194 GB/s Block 1 demonstrably reaches that is a 13.4 ms floor. The solve measured 35 ms -- 74 GB/s,
 38% of the ceiling.
 
-THE GAP IS OP COUNT, not bytes. A step is ~88 ops and only 18 of them carry weights; the rest are
-reshapes, transposes, softmaxes, slices and typecasts on tiny tensors, each paying a fixed latency.
-That diagnosis is what the two most recent wins came from, and both removed OPS rather than bytes:
-the GQA row fold in `_block` (1.40x) and the width-sharded RMSNorm (below). Anything proposed here
-should be judged on ops removed first.
+THE GAP IS PER-KERNEL COST -- and note the precise wording, because the obvious reading of it is
+wrong and was tested. A step is ~88 ops and only 18 carry weights; the rest are reshapes,
+transposes, softmaxes, slices and typecasts on tiny tensors. It is tempting to conclude "delete
+small ops", and that DOES NOT WORK: fusing the CFG combine from 5 ops to 3 measured 1.001x, and
+`inplace=True` on the norm measured 0.997x. Tracing, which removes host dispatch entirely, is
++0.16 ms. The cost is device-side and per KERNEL, and these kernels are already at the floor.
 
-WHERE THE TIME GOES, per frame, steady state on one N150 (~31 ms of a ~66 ms frame -- Block 1's
-34.8 ms is the larger half again):
+WHAT ACTUALLY WORKS IS FEWER, BIGGER KERNELS. Every win here has that shape: the CFG row fold
+(2.23x) and the GQA row fold (1.40x) both made matmuls bigger by folding work into unused tile
+rows, and the qkv fusion (0.96 ms) merged a 2048-wide matmul that was costing the same as a
+4096-wide one into a single larger call. Judge a proposal on whether it makes kernels BIGGER, not
+on how many ops it deletes.
 
-    _solve -- 7 Euler steps          ~27 ms    7 SEQUENTIAL velocity evaluations, each a 3-layer
+WHERE THE TIME GOES, per frame, steady state on one N150 (~28 ms of a ~60 ms frame; Block 1's
+31.4 ms is the larger half):
+
+    _solve -- 7 Euler steps          ~26 ms    7 SEQUENTIAL velocity evaluations, each a 3-layer
                                                transformer over 3 tokens, CFG batch-2 folded to 6
                                                rows. Floor is 13.4 ms (2.6 GB at 194 GB/s), so
-                                               there is still ~2x of pure op overhead in here.
+                                               there is still ~2x of per-kernel cost in here, and
+                                               no known way to spend it down.
     semantic_code                      1.25 ms [B,8320] masked argmax, now ON DEVICE in fp32.
                                                Was 2.74 ms of real host CPU. fp32 is mandatory --
                                                it produces an INDEX; see semantic_dev.
@@ -51,18 +59,25 @@ WHERE THE TIME GOES, per frame, steady state on one N150 (~31 ms of a ~66 ms fra
                                                qkv fusion and the device semantic head)
 
 The structural problem is the SEQUENCE: 7 steps that each depend on the previous, so none of the
-usual batching tricks apply within a frame. What HAS been tried and rejected: lower math fidelity
-(HiFi2/LoFi save ~4 ms and cost 10-20x the integer-code errors -- see COMPUTE_CONFIG), and a device
-trace (correct and bit-identical, but ~6 ms/frame SLOWER -- removed). BFP8 weights ARE on and were
-worth 1.23x. Two ideas still open: sdpa for the attention interior measures 1.65x against the row
-fold's 1.40x but costs accuracy (STATUS.md), and the 3-token sequence wastes 26 of 32 tile rows, so
-CONCURRENT REQUESTS could fill them -- throughput, not latency.
+usual batching tricks apply within a frame.
 
-The trace was RE-MEASURED after the op removals above and is still not worth it, but the reason
-moved: it used to cost ~6 ms/frame, and now it is +0.16 ms (1.006x) with bit-identical codes. That
-settles something useful for anyone optimizing here -- host dispatch is NOT the bottleneck, so the
-~2x still separating the solve from its 13.4 ms weight-read floor is device-side per-kernel cost.
-Fewer, BIGGER kernels help; merely issuing fewer commands does not. STATUS.md 6.6 has the table.
+TRIED AND REJECTED, so they do not get retried: lower math fidelity (HiFi2/LoFi save ~4 ms for
+10-20x the integer-code errors -- see COMPUTE_CONFIG); sdpa for the attention interior (1.147x, but
+codes differing from the fp32 reference go 7/288 -> 21/288 over 8 draws -- rejected once before
+BFP8 and again after, same answer); the CFG-combine and inplace-norm micro-fusions above; and a
+device trace, re-measured after all of the above at +0.16 ms (1.006x) with bit-identical codes.
+BFP8 weights ARE on and were worth 1.23x.
+
+STILL OPEN, and both are structural rather than op-level:
+  * FEWER EULER STEPS. 7 -> 5 removes 28% of the solve outright. This changes what the model
+    produces, so it needs a listening pass, not a metric.
+  * CONCURRENT REQUESTS. The 3-token sequence wastes 26 of 32 tile rows and nothing within one
+    utterance can fill them, since the steps are sequential and the frames autoregressive. This is
+    throughput, not latency -- it will not move RTF for a single utterance.
+
+That trace result is the load-bearing evidence for the per-kernel framing at the top: tracing
+removes host command submission almost entirely, and removing it changes nothing. STATUS.md 6.6
+has the table.
 
 HOST vs DEVICE. The whole Euler solve -- the 3-layer transformer, the CFG combine and the state
 update -- runs on device, with nothing left in the loop that a trace could not capture. Two things
@@ -135,6 +150,11 @@ DTYPE = ttnn.bfloat16
 # the fold, bfp8 wins.
 WEIGHT_DTYPE = ttnn.bfloat8_b
 
+# The SEMANTIC head is the one thing here that is not bf16/BFP8, and it is not a free
+# choice -- see semantic_dev in __init__. It emits an INDEX, so a rounding difference is
+# not a small error, it is a different code.
+SEMANTIC_DTYPE = ttnn.float32
+
 # RMSNORM, WIDTH-SHARDED. Same finding as Block 1's _NORM_SHARD, and it matters more here: 7 norms
 # per Euler step x 7 steps = 49 calls per frame. Interleaved, each costs ~115 us on a [1,6,3072]
 # tensor -- latency, not arithmetic, since one core reduces the row with a DRAM round trip either
@@ -183,12 +203,12 @@ class TtVoxtralFlow:
         # The mask is additive and prebuilt rather than the host version's two -inf assignments:
         # -1e9 underflows exp() to zero the same way, and one add is cheaper than two writes.
         # [EMPTY_AUDIO] is forbidden; [END_AUDIO] is ALLOWED, since that is how generation stops.
-        self.semantic_dev = up(w["semantic_codebook_output.weight"].float().t(), ttnn.float32)
+        self.semantic_dev = up(w["semantic_codebook_output.weight"].float().t(), SEMANTIC_DTYPE)
         _vocab = w["semantic_codebook_output.weight"].shape[0]
         _mask = torch.zeros(1, 1, _vocab)
         _mask[:, :, EMPTY_AUDIO_ID] = -1e9
         _mask[:, :, N_AUDIO_SPECIAL + SEMANTIC_CODEBOOK_SIZE:] = -1e9
-        self.semantic_mask = up(_mask, ttnn.float32)
+        self.semantic_mask = up(_mask, SEMANTIC_DTYPE)
 
         self.proj = {k: lin(w[f"{k}.weight"]) for k in
                      ("input_projection", "time_projection", "llm_projection",
@@ -351,7 +371,7 @@ class TtVoxtralFlow:
         """h [B,3072] -> [B,1]. Masked greedy argmax, on device in fp32 -- see semantic_dev."""
         B = llm_hidden.shape[0]
         h = ttnn.from_torch(llm_hidden.reshape(1, B, -1).float().contiguous(),
-                            dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
+                            dtype=SEMANTIC_DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device)
         logits = ttnn.add(ttnn.linear(h, self.semantic_dev, compute_kernel_config=COMPUTE_CONFIG),
                           self.semantic_mask)
         return ttnn.to_torch(ttnn.argmax(logits, dim=-1)).reshape(B, 1).long()
