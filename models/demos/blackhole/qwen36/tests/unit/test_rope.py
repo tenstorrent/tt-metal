@@ -172,3 +172,83 @@ class TestGetRotMats:
 
         assert (cos_ref[pos] - cos.float()).abs().max().item() < MAX_ABS_DIFF
         assert (sin_ref[pos] - sin.float()).abs().max().item() < MAX_ABS_DIFF
+
+
+class TestDeviceRopeConversions:
+    """Numerical coverage for the on-device rope paths.
+
+    These exist because the decode rope plumbing changed: cos/sin used to be computed on host and
+    packed (pack_rope_host / unpack_rope), and the old test_rope_pack_roundtrip only asserted
+    SHAPES of that now-retired path. Decode now sends a position index and gathers the rotation on
+    device (ttnn.embedding), and prefill slices the device table, so the live paths need VALUE
+    checks against the host trig reference -- a shape assertion would not catch a wrong rotation.
+    """
+
+    @pytest.mark.parametrize("positions", [[0], [1], [7], [100], [1000], [4095], [0, 1, 5, 63]])
+    def test_rot_mats_decode_matches_host_reference(self, rope_setup, positions):
+        """rot_mats_decode gathers from the device table; must equal host trig at those positions."""
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
+
+        setup, args = rope_setup
+        cos_tt, sin_tt = rot_mats_decode(
+            setup.device,
+            args.rope_head_dim,
+            args.max_seq_len,
+            args.rope_theta,
+            torch.tensor(positions, dtype=torch.int32),
+        )
+        cos_ref_all, sin_ref_all = compute_rope_freqs(args.rope_head_dim, args.max_seq_len, theta=args.rope_theta)
+        cos_ref = cos_ref_all[positions]  # [B, rope_dim]
+        sin_ref = sin_ref_all[positions]
+
+        cos_got = ttnn.to_torch(cos_tt).reshape(-1, args.rope_head_dim)[: len(positions)].float()
+        sin_got = ttnn.to_torch(sin_tt).reshape(-1, args.rope_head_dim)[: len(positions)].float()
+
+        cos_err = (cos_ref - cos_got).abs().max().item()
+        sin_err = (sin_ref - sin_got).abs().max().item()
+        logger.info(f"rot_mats_decode pos={positions}: cos max abs err {cos_err:.5f}, sin {sin_err:.5f}")
+        assert cos_err < MAX_ABS_DIFF, f"decode cos rotation wrong at {positions}: err {cos_err}"
+        assert sin_err < MAX_ABS_DIFF, f"decode sin rotation wrong at {positions}: err {sin_err}"
+
+    # Deliberately includes non-32-aligned start/length: the earlier implementation guarded on
+    # 32-alignment because it sliced a TILE table. The tables are ROW_MAJOR now, so these must work.
+    @pytest.mark.parametrize("start,length", [(0, 128), (0, 96), (7, 33), (128, 128), (1000, 64), (33, 97)])
+    def test_get_prefill_rot_mats_matches_host_reference(self, rope_setup, start, length):
+        """The prefill device slice must equal host trig over [start, start+length)."""
+        setup, args = rope_setup
+        setup._req_cos = None  # text-only path (no M-RoPE table staged)
+        cos_tt, sin_tt = setup.get_prefill_rot_mats(start, length)
+
+        cos_ref_all, sin_ref_all = compute_rope_freqs(args.rope_head_dim, args.max_seq_len, theta=args.rope_theta)
+        cos_ref = cos_ref_all[start : start + length]
+        sin_ref = sin_ref_all[start : start + length]
+
+        cos_got = ttnn.to_torch(cos_tt).reshape(-1, args.rope_head_dim)[:length].float()
+        sin_got = ttnn.to_torch(sin_tt).reshape(-1, args.rope_head_dim)[:length].float()
+
+        cos_err = (cos_ref - cos_got).abs().max().item()
+        sin_err = (sin_ref - sin_got).abs().max().item()
+        logger.info(f"prefill slice [{start},{start+length}): cos err {cos_err:.5f}, sin {sin_err:.5f}")
+        assert cos_err < MAX_ABS_DIFF, f"prefill cos wrong for start={start} length={length}: {cos_err}"
+        assert sin_err < MAX_ABS_DIFF, f"prefill sin wrong for start={start} length={length}: {sin_err}"
+
+    def test_device_table_grows_beyond_initial_rows(self, rope_setup):
+        """A position past the current table end must grow the table, not silently wrap or clip.
+
+        This replaces the host-trig fallback that used to cover out-of-range positions.
+        """
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables, rot_mats_decode
+
+        setup, args = rope_setup
+        far = args.max_seq_len - 1
+        cos_tt, _ = rot_mats_decode(
+            setup.device, args.rope_head_dim, args.max_seq_len, args.rope_theta, torch.tensor([far], dtype=torch.int32)
+        )
+        cos_ref_all, _ = compute_rope_freqs(args.rope_head_dim, args.max_seq_len, theta=args.rope_theta)
+        cos_got = ttnn.to_torch(cos_tt).reshape(-1, args.rope_head_dim)[0].float()
+        err = (cos_ref_all[far] - cos_got).abs().max().item()
+        logger.info(f"grown-table lookup at pos={far}: max abs err {err:.5f}")
+        assert err < MAX_ABS_DIFF, f"rotation at grown position {far} wrong: {err}"
+
+        tbl_cos, _ = _rope_dev_tables(setup.device, args.rope_head_dim, far + 1, args.rope_theta)
+        assert int(tbl_cos.shape[0]) >= far + 1, f"table did not grow to cover {far}: rows={tbl_cos.shape[0]}"
