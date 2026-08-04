@@ -53,8 +53,13 @@ GOLDEN = {
     (128, 6144, 4608): (125.27, 0.05, "Mt4 chain bank-local 96c"),
     (256, 2048, 1024): (19.54, 0.08, "Mt8 reduce-scatter in1-near 64c; noisiest shape in the corpus"),
     (256, 6144, 768): (35.72, 0.05, "Mt8 chain mesh 96c"),
-    (256, 15360, 768): (86.86, 0.05, "Mt8 reduce-scatter mesh 96c; deep K"),
-    (256, 6144, 6144): (187.48, 0.05, "Mt8 reduce-scatter in1-near 96c; largest reduce-scatter shape"),
+    # Re-baselined 2026-07-31: the exhaustive resweep moved this pick from (6,1,2,2,3)/96c to
+    # (5,1,2,4,3)/80c, a measured -5.0%. The old 86.86 threshold would still pass but no longer bounds
+    # the current implementation tightly enough to catch a regression.
+    (256, 15360, 768): (81.30, 0.05, "Mt8 reduce-scatter mesh 80c; deep K"),
+    # Re-baselined 2026-08-03: Tier 1 resweep moved this pick from (6,1,2,4,2) to (6,1,2,2,6),
+    # a confirmed -5.0% (two relaunches). Old threshold 187.48 would no longer bound the impl.
+    (256, 6144, 6144): (177.57, 0.05, "Mt8 reduce-scatter 96c; large square"),
     (512, 6144, 2304): (109.95, 0.05, "Mt16 chain mesh 96c"),
     (512, 6144, 4608): (180.16, 0.05, "Mt16 chain mesh 96c; the one compute-floor-bound shape"),
 }

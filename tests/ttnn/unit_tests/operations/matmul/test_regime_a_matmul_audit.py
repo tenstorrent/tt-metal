@@ -301,3 +301,59 @@ def test_audit_picker_large_mt_deep_k_rescue(device, M, K, N):
     """config=None must resolve these to a feasible M-split config instead of raising."""
     got, ref = _mm(device, M, K, N)
     assert_with_pcc(ref, got, PCC)
+
+# ---------------------------------------------------------------------------------------------------
+# 9. REGRESSION cases for the reduce-scatter c_2 WRAP-ALIGNMENT bug (fixed 2026-08-03).
+#
+#    ROOT CAUSE: c_2 (out_cb) was sized 2*out_blk_tiles, but under reduce-scatter both producer and consumer
+#    move max_chunk = ceil(out_blk_tiles/Pk) tiles per sub-block. When 2*rs_T is not a multiple of max_chunk a
+#    push eventually STRADDLES the circular-buffer wrap, corrupting a partial block: e.g. rs_T=16, Pk=6 ->
+#    max_chunk=3 into a 32-tile CB first misaligns on the 11th sub-block. Hence the bug needed Nbpc >= 11 and
+#    got worse with Nbpc (244 non-finite at Nbpc=12, 1188 at Nbpc=16), was independent of Kt, and vanished
+#    whenever max_chunk divided 2*rs_T (Pk=4, or Pk=5 with rem=1, or nsb=4 lowering Nbpc below the wrap).
+#    Fix: size c_2 in max_chunk units under reduce-scatter. Analysis: picker_gen/BUG_rscatter_nonfinite.md
+#
+#    These cases exist because the suite's only uneven-partition coverage was uneven_9over4 / uneven_6over4,
+#    BOTH at Pk=4 -- a value where max_chunk happens to divide the CB. That gap is why it shipped undetected.
+#
+#    They assert FINITENESS as well as PCC: the corruption was ~0.015% of elements, so finite garbage at that
+#    density would leave PCC at ~0.9999 and pass every threshold we use. NaN only tripped PCC because it
+#    poisons the whole correlation.
+# ---------------------------------------------------------------------------------------------------
+_RS_WRAP = [
+    # (rs_T, Pk, max_chunk, 2*rs_T, first misaligned push, Nbpc)
+    ("wrap_16over6_nbpc12", 256, 6144, 6144, (6, 1, 1, 2, 2)),   # 16,6,3,32 -> push 11, Nbpc 12
+    ("wrap_32over6_nbpc12", 512, 3072, 6144, (6, 1, 1, 2, 2)),   # 32,6,6,64 -> push 11, Nbpc 12
+    ("wrap_32over5_nbpc12", 512, 2304, 6144, (5, 1, 1, 2, 2)),   # 32,5,7,64 -> push 10, Nbpc 12
+    ("wrap_16over6_nbpc16", 256, 1536, 8192, (6, 1, 1, 2, 2)),   # worst observed: 1188 non-finite pre-fix
+    ("wrap_14over6_nbpc12", 224, 1536, 6144, (6, 1, 1, 2, 2)),   # 14,6,3,28 -> push 10, Nbpc 12
+]
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
+@pytest.mark.parametrize("label,M,K,N,cfg", _RS_WRAP, ids=[c[0] for c in _RS_WRAP])
+def test_audit_reduce_scatter_cb_wrap_alignment(device, label, M, K, N, cfg):
+    got, ref = _mm(device, M, K, N, cfg)
+    assert torch.isfinite(got).all(), (
+        f"{label}: {int((~torch.isfinite(got)).sum())} non-finite elements of {got.numel()}"
+    )
+    assert_with_pcc(ref, got, PCC)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Regime-A matmul is Blackhole-only")
+@pytest.mark.parametrize(
+    "label,M,K,N,cfg",
+    [
+        ("pk4_rem2_clean", 256, 6144, 6144, (4, 1, 3, 2, 2)),   # rs_T=6,  Pk=4 -> rem 2 : CLEAN
+        ("pk5_rem1_clean", 256, 6144, 6144, (5, 1, 1, 1, 2)),   # rs_T=16, Pk=5 -> rem 1 : CLEAN
+        ("pk5_rem2_nbpc1_clean", 256, 15360, 768, (5, 1, 2, 4, 3)),  # max_chunk 3 divides 24, Nbpc 1: shipped cfg
+    ],
+    ids=["pk4_rem2_clean", "pk5_rem1_clean", "pk5_rem2_nbpc1_clean"],
+)
+def test_audit_reduce_scatter_uneven_controls(device, label, M, K, N, cfg):
+    """Configs where max_chunk DIVIDES 2*rs_T (or Nbpc is below the wrap), so they were clean even before the
+    fix. Kept as controls: they must stay clean, and they guard against a regression that would only show up
+    on the aligned cases."""
+    got, ref = _mm(device, M, K, N, cfg)
+    assert torch.isfinite(got).all(), f"{label}: non-finite output in a control case"
+    assert_with_pcc(ref, got, PCC)
