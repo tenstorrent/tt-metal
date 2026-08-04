@@ -11,7 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name, is_galaxy
-from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import load_lora_weights_te_compat
+from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from models.demos.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc
 
@@ -187,7 +187,7 @@ def test_text_encoder_lora_fusion_pcc(mesh_device, te_lora_path):
     tt_pipeline = TtSDXLPipeline(mesh_device, torch_pipeline_for_tt, pipeline_config)
 
     tt_pipeline.load_lora_weights(te_lora_path)
-    components = tt_pipeline._lora_weights_manager.text_encoder_components()
+    components = tt_pipeline._lora_weights_manager.adapter_state()["text_encoder_components"]
     assert components, (
         "Chosen LoRA does not impact any text encoder; pick a LoRA that trains "
         "text_encoder / text_encoder_2 to exercise this path."
@@ -204,7 +204,7 @@ def test_text_encoder_lora_fusion_pcc(mesh_device, te_lora_path):
         torch_dtype=torch.float32,
         use_safetensors=True,
     )
-    load_lora_weights_te_compat(ref_pipeline, te_lora_path)
+    TtLoRAWeightsManager._load_lora_weights_te_compat(ref_pipeline, te_lora_path)
     ref_pipeline.fuse_lora(components=components, lora_scale=1.0)
 
     for component in components:

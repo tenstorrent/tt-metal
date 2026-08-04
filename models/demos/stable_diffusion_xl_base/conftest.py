@@ -427,13 +427,15 @@ def _resolve_local_lora_file_path(path_input):
     return str(resolved_path)
 
 
-@pytest.fixture(scope="function")
-def lora_path(request, is_ci_env, is_ci_v2_env):
-    """
-    Resolve LoRA weights path.
+def _resolve_lora_weights_path(request, is_ci_env, is_ci_v2_env, default_repo_id, default_filename):
+    """Resolve a LoRA weights path.
+
     1) --lora-weights: full path to a local .safetensors file.
     2) --lora-hf-repo and --lora-hf-filename: download from Hugging Face.
-    3) If nothing provided: use default weights (HF download).
+    3) If nothing provided: use the supplied default weights (HF download).
+
+    Shared by the LoRA fixtures below, which differ only in which adapter they
+    default to; resolution order and download behaviour are identical.
     """
     lora_weights_cli_path = request.config.getoption("--lora-weights", default=None)
     hf_repo_id = request.config.getoption("--lora-hf-repo", default=None)
@@ -452,10 +454,10 @@ def lora_path(request, is_ci_env, is_ci_v2_env):
 
     if not (hf_repo_id and hf_filename):
         logger.warning(
-            f"No LoRA weights provided. Using default weights. Repo: {TEST_LORA_REPO_ID}, File: {TEST_LORA_FILENAME}"
+            f"No LoRA weights provided. Using default weights. Repo: {default_repo_id}, File: {default_filename}"
         )
-        hf_repo_id = TEST_LORA_REPO_ID
-        hf_filename = TEST_LORA_FILENAME
+        hf_repo_id = default_repo_id
+        hf_filename = default_filename
 
     try:
         from huggingface_hub import hf_hub_download
@@ -472,35 +474,22 @@ def lora_path(request, is_ci_env, is_ci_v2_env):
 
 
 @pytest.fixture(scope="function")
-def te_lora_path(request, is_ci_env, is_ci_v2_env):
-    """Resolve a text-encoder-impacting LoRA (trains both CLIP encoders + UNet).
+def lora_path(request, is_ci_env, is_ci_v2_env):
+    """LoRA weights path, defaulting to the UNet-only test adapter."""
+    return _resolve_lora_weights_path(request, is_ci_env, is_ci_v2_env, TEST_LORA_REPO_ID, TEST_LORA_FILENAME)
 
-    Honors --lora-weights / --lora-hf-repo|--lora-hf-filename overrides just like
-    `lora_path`; otherwise falls back to the TE_TEST_LORA_* default. This is the
-    adapter used to exercise the text-encoder fuse/rollback path.
+
+@pytest.fixture(scope="function")
+def te_lora_path(request, is_ci_env, is_ci_v2_env):
+    """LoRA weights path, defaulting to a text-encoder-impacting adapter.
+
+    That default trains both CLIP encoders plus the UNet, so it is the adapter used
+    to exercise the text-encoder fuse/rollback path. Resolution is identical to
+    `lora_path` — only the default differs.
+
+    TODO(#47509): confirm alienzkin-sdxl is mirrored in the CI HF cache; until then
+    this skips on offline CI runners rather than failing.
     """
     from models.demos.stable_diffusion_xl_base.lora.config import TE_TEST_LORA_FILENAME, TE_TEST_LORA_REPO_ID
 
-    lora_weights_cli_path = request.config.getoption("--lora-weights", default=None)
-    if lora_weights_cli_path is not None and str(lora_weights_cli_path).strip():
-        resolved_lora_path = _resolve_local_lora_file_path(lora_weights_cli_path)
-        if resolved_lora_path:
-            return resolved_lora_path
-
-    hf_repo_id = request.config.getoption("--lora-hf-repo", default=None) or TE_TEST_LORA_REPO_ID
-    hf_filename = request.config.getoption("--lora-hf-filename", default=None) or TE_TEST_LORA_FILENAME
-
-    try:
-        from huggingface_hub import hf_hub_download
-
-        return hf_hub_download(
-            repo_id=hf_repo_id, filename=hf_filename, local_files_only=is_ci_env and not is_ci_v2_env
-        )
-    except Exception as _:
-        # TODO(#47509): confirm alienzkin-sdxl is mirrored in the CI HF cache; until
-        # then this skips on offline CI runners rather than failing.
-        pytest.skip(
-            f"Text-encoder LoRA weights not available from HF ({hf_repo_id}, {hf_filename}). "
-            f"Use --lora-weights for a local file path, or ensure network/cache for HF."
-        )
-        return
+    return _resolve_lora_weights_path(request, is_ci_env, is_ci_v2_env, TE_TEST_LORA_REPO_ID, TE_TEST_LORA_FILENAME)
