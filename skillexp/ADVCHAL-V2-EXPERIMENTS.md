@@ -459,8 +459,13 @@ change moved its differential PCC by almost exactly the same amount on the same 
 model (0.98225), and it then **passed the absolute real-weight oracle at PCC 0.999629**. Synthetic weights
 with `BFLOAT8_B` experts amplify reassociation, which is what both figures look like.
 
-But that is inference, not measurement. **Stated plainly: the −12.4 % timing win on g26 B is solid and
-reproduced four times; its correctness is unverified and requires the real weights.**
+But that is inference, not measurement. **Stated plainly at the time: the −12.4 % timing win on g26 B is solid
+and reproduced four times; its correctness was unverified.**
+
+✅ **Settled afterwards in [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E9.** Against the model's own
+bfloat16 `FunctionalDecoder` the candidate scores **0.99931** and the **shipped incumbent 0.98347** — on sliding
+attention the incumbent is the one that fails the 0.995 bar. The differential number above was flagging the
+*better* configuration.
 
 And that is exactly the ambiguity action point **A1** exists to remove. With only a differential number I
 cannot distinguish "reassociated" from "wrong", and the stage's rule would say *reject* — which is how a

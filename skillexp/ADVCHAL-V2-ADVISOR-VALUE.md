@@ -4,7 +4,7 @@ The stage measures *"how much faster did the decoder get when we followed the ad
 different question: **for the wins that were found, was the advisor necessary?**
 
 Three independent tests, all from measured data. Then the accounting defect that hides the advisor's one real
-strength, two starved op classes it steers away from, and what 7.4 hours of device time bought.
+strength, which starved op classes are real, what 7.4 hours bought, and a lens the stage does not have.
 
 Companion to [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md).
 
