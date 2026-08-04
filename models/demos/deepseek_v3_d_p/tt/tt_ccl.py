@@ -217,18 +217,21 @@ class TT_CCL:
             )
         return self.mla_chunked_kv_buffers[key]
 
-    def get_shared_rs_intermediate(self, input_tensor):
+    def get_shared_rs_intermediate(self, input_tensor, topology):
         """Lazily allocate (once per mesh) and return the shared reduce_scatter intermediate
-        accumulator. Line (Linear) topology needs a double-sized leading dim for the
-        forward/backward halves: shape = [2, *input_shape]. Interleaved DRAM, input dtype/layout,
-        replicated across the mesh. A single buffer is reused at a stable address by every
-        shared-expert reduce_scatter — all layers share the same shape and run sequentially, so one
-        buffer for the whole model is safe."""
+        accumulator. The Ring tiled path requires the persistent intermediate to have the same
+        shape, dtype, and layout as its input. The Linear path retains its double-sized leading
+        dimension for forward/backward halves. Interleaved DRAM, replicated across the mesh. A
+        single buffer is reused at a stable address by every shared-expert reduce_scatter — all
+        layers share the same shape and run sequentially, so one buffer for the whole model is safe."""
         import torch
 
         if self.shared_rs_intermediate is None:
+            intermediate_shape = list(input_tensor.shape)
+            if topology == ttnn.Topology.Linear:
+                intermediate_shape = [2] + intermediate_shape
             self.shared_rs_intermediate = ttnn.from_torch(
-                torch.zeros([2] + list(input_tensor.shape)),
+                torch.zeros(intermediate_shape),
                 device=self.mesh_device,
                 layout=input_tensor.layout,
                 dtype=input_tensor.dtype,

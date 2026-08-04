@@ -45,6 +45,9 @@ class GateComputeMode(Enum):
     # DeepSeek-V4 hash routing fully on device: matmul device, moe_hash_gate device. The tid2eid[input_ids]
     # lookup is fused into the op's reader kernel; weights reuse the shared activation/normalize/scale path.
     HASH_DEVICE = "hash_device"
+    # GPT-OSS routing: top-k on (x@W + bias) raw logits, then softmax over the selected top-k.
+    GPT_HOST = "gpt_host"  # matmul device, topk+softmax on host
+    GPT_DEVICE = "gpt_device"  # matmul device, ttnn.topk + ttnn.softmax on device
 
 
 @dataclass
@@ -310,6 +313,15 @@ class TtMoEGatePrefill(LightweightModule):
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.fallback_mode = fallback_mode
         self.is_balanced = is_balanced
+        # Memoization of the per-(actual_isl, padding_side, actual_start) padding_config built on HOST.
+        # build_padding_config ends in a ttnn.from_torch, so re-issuing it per chunk costs a host
+        # transfer; caching the device tensor avoids that. Owned here => callers must NOT deallocate it.
+        self._padding_config_cache: dict = {}
+        # Persistent output row for the DEVICE-built padding config (build_padding_config_device). A
+        # host from_torch is illegal inside a trace capture, so the traced path derives the config
+        # on-device instead and refreshes THIS buffer in place — a stable address the capture can keep
+        # writing across replays. Allocated lazily on first use (warm-up, before any capture).
+        self._padding_config_device: Optional[ttnn.Tensor] = None
 
         if weight is not None and bias is not None:
             weights = self._convert_and_cache_gate_weights(
@@ -605,6 +617,16 @@ class TtMoEGatePrefill(LightweightModule):
         if padding_side not in ("right", "left"):
             raise ValueError(f"padding_side must be 'right' or 'left', got {padding_side!r}")
 
+        # actual_start MUST be part of the key: under rotated chunked prefill the per-chip real-token
+        # counts are derived from it (rotated_chip_real_token_counts below), so two chunks with the same
+        # actual_isl but different starts need different configs. Keying on (actual_isl, padding_side)
+        # alone returned the first chunk's config for every later chunk of equal length, sentinel-marking
+        # real tokens and dispatching pad rows as real.
+        cache_key = (actual_isl, padding_side, actual_start or 0)
+        cached = self._padding_config_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         sp_factor = self.mesh_device.shape[0]
         seq_len_per_chip = self.config.sp_dim
         total_tokens = sp_factor * seq_len_per_chip
@@ -659,7 +681,7 @@ class TtMoEGatePrefill(LightweightModule):
 
                 padding_config.append([local_real_tokens, pad_side])
 
-        return ttnn.from_torch(
+        config_tensor = ttnn.from_torch(
             torch.tensor(padding_config, dtype=torch.int32),
             device=self.mesh_device,
             dtype=ttnn.uint32,
@@ -670,6 +692,68 @@ class TtMoEGatePrefill(LightweightModule):
                 dims=(0, None),
                 mesh_shape=self.mesh_device.shape,
             ),
+        )
+        self._padding_config_cache[cache_key] = config_tensor
+        return config_tensor
+
+    def build_padding_config_device(self, metadata, padding_side: str = "right") -> ttnn.Tensor:
+        """Trace-safe twin of build_padding_config: derive the per-device
+        ``[local_real_tokens, pad_side]`` row ON DEVICE from this chunk's metadata tensors.
+
+        The host builder ends in a ``ttnn.from_torch``, which is an illegal host->device write inside a
+        trace capture, so a captured program can only ever replay the config of the chunk it was
+        captured with. This path instead hands the op the two 1-element uint32 tensors the runtime
+        already advances per chunk, and the kernel recomputes the row on-device — so one capture
+        replays correctly across chunks with padding awareness left ON.
+
+        ``metadata`` is the runtime's ``(slot_id, actual_start, actual_end)`` tuple; only actual_start
+        and actual_end are read (the count needs no separate ISL — valid_end == actual_end).
+
+        The output is a persistent buffer allocated once here and refreshed in place, so its address is
+        stable across replays. Owned here => callers must NOT deallocate it.
+
+        is_balanced=True is rejected: the zigzag per-device count is not expressible in the op's
+        closed form. Rotated chunked prefill implies is_balanced=False (ttMLA._chunked_attn asserts
+        it), so a traced run can never legitimately need it — fail loudly rather than silently
+        compute a wrong config.
+        """
+        if padding_side not in ("right", "left"):
+            raise ValueError(f"padding_side must be 'right' or 'left', got {padding_side!r}")
+        if self.is_balanced:
+            raise ValueError(
+                "build_padding_config_device (the traced padding-config path) does not support "
+                "is_balanced=True: the zigzag placement's per-device real-token count is not "
+                "expressible in the device op's closed form. Run with is_balanced=False, or run "
+                "untraced so the host builder (build_padding_config) handles the balanced layout."
+            )
+
+        sp_factor = self.mesh_device.shape[0]
+        if self._padding_config_device is None:
+            # Allocate the persistent row once. Same spec the host builder produces, so the consumers
+            # (moe_grouped_topk / dispatch) see an identical tensor either way.
+            self._padding_config_device = ttnn.from_torch(
+                torch.zeros((sp_factor, 2), dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(0, None),
+                    mesh_shape=self.mesh_device.shape,
+                ),
+            )
+
+        _, actual_start, actual_end = metadata
+        return ttnn.experimental.deepseek_prefill.moe_padding_config(
+            self._padding_config_device,
+            actual_start,
+            actual_end,
+            tokens_per_chip=self.config.sp_dim,
+            pad_side=0 if padding_side == "right" else 1,
+            # SP is mesh axis 0 — the same axis sp_factor is read from above and that the config is
+            # sharded along, so the op's per-chip coordinate matches the host builder's row order.
+            cluster_axis=0,
         )
 
     def _device_grouped_gate_fp32(
@@ -691,9 +775,10 @@ class TtMoEGatePrefill(LightweightModule):
         combine skip them.  For SP > 1, the padding config tensor carries
         per-device local real-token counts.
 
-        If a caller-owned ``padding_config`` is provided it is used as-is (and the
-        caller is responsible for deallocating it, since it may be shared with the
-        dispatch op). Otherwise one is built locally and freed here.
+        A caller-supplied ``padding_config`` is used as-is; otherwise one is fetched from
+        build_padding_config. Either way the tensor is owned by build_padding_config's memo cache
+        (it is reused across forwards and trace replays), so neither this method nor the caller
+        deallocates it.
         """
         owns_padding_config = padding_config is None
         if owns_padding_config:
@@ -717,8 +802,8 @@ class TtMoEGatePrefill(LightweightModule):
             score_func=self.config.score_func,
             padding_config=padding_config,
         )
-        if owns_padding_config and padding_config is not None:
-            ttnn.deallocate(padding_config)
+        # padding_config is memoized + owned by build_padding_config (reused across forwards/replays). Do
+        # NOT deallocate it here even on the owns_padding_config path — freeing it breaks the next cache hit.
         return ttnn_scores, ttnn_top_k_experts_indices
 
     def _device_hash_gate(
@@ -759,8 +844,8 @@ class TtMoEGatePrefill(LightweightModule):
         )
         ttnn.deallocate(logits_f32)
         ttnn.deallocate(input_ids_dev)
-        if owns_padding_config and padding_config is not None:
-            ttnn.deallocate(padding_config)
+        # padding_config is memoized + owned by build_padding_config (reused across forwards/replays). Do
+        # NOT deallocate it here even on the owns_padding_config path — freeing it breaks the next cache hit.
         return ttnn_scores, ttnn_top_k_experts_indices
 
     def _host_grouped_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -775,6 +860,35 @@ class TtMoEGatePrefill(LightweightModule):
             self.config.n_limited_groups,
             self.config.n_activated_experts,
         )
+
+    def _device_gpt_gate(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """GPT-OSS routing on device: top-k on (logits + bias), softmax over the selected top-k.
+
+        Unlike the DeepSeek grouped gate, the bias is folded into the logits before selection and the
+        weights are a softmax over just the chosen experts (no per-expert activation / sum-normalize).
+        ttnn.topk expects a tiled, interleaved input, so the L1 all-reduce output is normalized first.
+        """
+        logits_tiled = ttnn.to_memory_config(logits, ttnn.DRAM_MEMORY_CONFIG)
+        biased = ttnn.add(logits_tiled, self.bias)
+        # sorted=True so the top-k order matches torch.topk (descending) in the golden, keeping the
+        # element-wise scores PCC aligned.
+        values, indices = ttnn.topk(biased, k=self.config.n_activated_experts, dim=-1, sorted=True)
+        scores = ttnn.softmax(values, dim=-1, numeric_stable=True)
+        ttnn.deallocate(biased)
+        ttnn.deallocate(values)
+        ttnn.deallocate(logits_tiled)
+        return scores, indices
+
+    def _host_gpt_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """GPT-OSS routing on host. Returns (indices, scores).
+
+        Mirrors the reference GptOssTopKRouter: top-k on (logits + bias) raw logits, then softmax over
+        the selected top-k values.
+        """
+        biased = host_logits.float() + self.torch_bias.float()
+        top_vals, top_idx = torch.topk(biased, self.config.n_activated_experts, dim=-1)
+        scores = torch.softmax(top_vals, dim=-1)
+        return top_idx, scores
 
     # ------------------------------------------------------------------
     # Forward
@@ -798,6 +912,8 @@ class TtMoEGatePrefill(LightweightModule):
             GateComputeMode.DEVICE_FP32,
             GateComputeMode.HOST_GROUPED_GATE,
             GateComputeMode.HASH_DEVICE,
+            GateComputeMode.GPT_HOST,
+            GateComputeMode.GPT_DEVICE,
         ):
             logits = self._device_matmul(x)
         elif mode == GateComputeMode.HASH_HOST:
@@ -860,6 +976,15 @@ class TtMoEGatePrefill(LightweightModule):
                 padding_config=padding_config,
                 actual_start=actual_start,
             )
+
+        elif mode == GateComputeMode.GPT_DEVICE:
+            ttnn_scores, ttnn_top_k_experts_indices = self._device_gpt_gate(logits)
+
+        elif mode == GateComputeMode.GPT_HOST:
+            host_logits = self._compose_logits_to_host(logits)
+            host_indices, host_scores = self._host_gpt_gate(host_logits)
+            ttnn_scores = self._host_scores_to_device(host_scores)
+            ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
 
         return (
             ttnn_scores,

@@ -47,6 +47,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/graph/graph_serialization.hpp"
 #include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include <ttnn/tensor/to_string.hpp>
@@ -59,6 +60,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 
 #include <tracy/Tracy.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 using namespace tt::tt_metal;
 
@@ -189,6 +191,38 @@ struct RowMajorHostBuffer {
     ttnn::DataType data_type = ttnn::DataType::INVALID;
 };
 
+HostBuffer unpack_block_float_tiles_to_float(const HostBuffer& buffer, const TensorSpec& tensor_spec) {
+    const auto tt_dtype = tensor_spec.data_type();
+    TT_FATAL(is_block_float(tt_dtype), "Expected block-float dtype, got {}", tt_dtype);
+
+    const auto& tile = tensor_spec.tile();
+    ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
+    auto float_unpacked_data =
+        tt_dtype == DataType::BFLOAT8_B
+            ? unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
+            : unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+    return HostBuffer(std::move(float_unpacked_data));
+}
+
+// Unpacks BFLOAT8_B / BFLOAT4_B tiles to float, then untilizes / strips padding to logical RM.
+// Kept separate from the generic path: HostTensor::to_vector would re-unpack if the TensorSpec
+// still reported a block-float dtype over a float buffer.
+RowMajorHostBuffer convert_block_float_to_logical_row_major(const HostBuffer& buffer, const TensorSpec& tensor_spec) {
+    // Buffer is float tiles; TensorSpec must match so to_vector only untilizes / strips padding.
+    TensorSpec decode_spec(
+        tensor_spec.logical_shape(),
+        TensorLayout::fromPaddedShape(
+            DataType::FLOAT32,
+            tensor_spec.page_config(),
+            MemoryConfig{},
+            tensor_spec.logical_shape(),
+            tensor_spec.padded_shape()));
+    auto logical_data =
+        HostTensor::from_buffer(unpack_block_float_tiles_to_float(buffer, tensor_spec), decode_spec)
+            .to_vector<float>();
+    return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
+}
+
 // Converts a TT tensor to a RowMajorHostBuffer.
 //
 // If `padded_output` is true, the returned buffer will be padded to the tile size.
@@ -202,12 +236,20 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
 
     const auto& tensor_spec = tt_tensor.tensor_spec();
 
-    // Performs logical data conversion on the concrete data type.
+    // Performs data conversion on the concrete data type (padded untilize, or logical via to_vector).
     auto dispatch_to_concrete = [&tensor_spec, padded_output]<typename T>(HostBuffer host_buffer) {
         if (padded_output) {
             if (tensor_spec.layout() == Layout::TILE) {
-                auto row_major_data = tt::tt_metal::tensor_impl::to_row_major_layout(
-                    tensor_spec.physical_shape(), tensor_spec.tile(), host_buffer.view_as<const T>());
+                const auto& tile = tensor_spec.tile();
+                auto row_major_data = convert_layout(
+                    host_buffer.view_as<const T>(),
+                    tensor_spec.physical_shape(),
+                    TensorLayoutType::TILED_NFACES,
+                    TensorLayoutType::LIN_ROW_MAJOR,
+                    tile.get_tile_shape(),
+                    tile.get_face_shape(),
+                    tile.get_transpose_within_face(),
+                    tile.get_transpose_of_faces());
                 return RowMajorHostBuffer::create_padded(HostBuffer(std::move(row_major_data)), tensor_spec);
             }
             return RowMajorHostBuffer::create_padded(std::move(host_buffer), tensor_spec);
@@ -216,12 +258,12 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         // Previous impl only copied if data needed transformation. Instead *always* copy
         // because the HostBuffer will be returned directly to the other python frameworks
         // wrapped in an ndarray
-
-        auto logical_data = tt::tt_metal::tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
+        auto logical_data =
+            HostTensor::from_buffer(std::move(host_buffer), tensor_spec).to_vector<T>();
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
     };
 
-    auto convert_to_logical = [&tensor_spec, &dispatch_to_concrete](const HostBuffer& buffer) {
+    auto convert_to_logical = [&tensor_spec, &dispatch_to_concrete, padded_output](const HostBuffer& buffer) {
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
             case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(buffer);
@@ -233,15 +275,12 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(buffer);
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B: {
-                const auto& tile = tensor_spec.tile();
-                ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
-                auto float_unpacked_data = tt_dtype == DataType::BFLOAT8_B
-                                               ? unpack_bfp8_tiles_into_float_vec(
-                                                     uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                                               : unpack_bfp4_tiles_into_float_vec(
-                                                     uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                auto input_float_buffer = tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
-                return dispatch_to_concrete.template operator()<float>(input_float_buffer);
+                if (!padded_output) {
+                    return convert_block_float_to_logical_row_major(buffer, tensor_spec);
+                }
+                // Padded path: unpack to float tiles, then untilize without stripping pad.
+                return dispatch_to_concrete.template operator()<float>(
+                    unpack_block_float_tiles_to_float(buffer, tensor_spec));
             }
             case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_dtype);
         }
@@ -1342,7 +1381,7 @@ void pytensor_module(nb::module_& mod) {
                     !experimental::per_core_allocation::is_per_core_allocation(
                         self.mesh_buffer().device_local_config().sharding_args),
                     "Per-core allocated tensors do not have a single address. Use "
-                    "experimental_per_core_buffer_address(core) instead.");
+                    "experimental_per_core_buffer_address(device_coord, core) instead.");
                 return self.mesh_buffer().address();
             },
             R"doc(
@@ -1356,22 +1395,50 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "device_coords",
+            [](const Tensor& self) -> std::vector<tt::tt_metal::distributed::MeshCoordinate> {
+                TT_FATAL(is_device_tensor(self), "{} doesn't support device_coords", self.storage_type());
+                const auto coords = self.device_storage().get_coords();
+                return {coords.begin(), coords.end()};
+            },
+            R"doc(
+            The mesh coordinates this tensor's storage spans.
+
+            One entry for a single-device tensor (whichever coordinate it was built at), and one
+            per device for a mesh tensor, in row-major order. Use it to name a device when
+            querying per-(device, core) state:
+
+            .. code-block:: python
+
+                addr = t.experimental_per_core_buffer_address(t.device_coords()[0], core)
+                per_dev = [t.experimental_per_core_buffer_address(c, core) for c in t.device_coords()]
+
+        )doc")
+        .def(
             "experimental_per_core_buffer_address",
-            [](const Tensor& self, const CoreCoord& core) -> uint32_t {
+            [](const Tensor& self,
+               const tt::tt_metal::distributed::MeshCoordinate& device_coord,
+               const CoreCoord& core) -> uint32_t {
                 TT_FATAL(
                     is_device_tensor(self),
                     "{} doesn't support experimental_per_core_buffer_address",
                     self.storage_type());
                 TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
-                return experimental::per_core_allocation::get_per_core_address(self.mesh_buffer(), core);
+                return experimental::per_core_allocation::get_per_core_address(self.mesh_buffer(), device_coord, core);
             },
+            nb::arg("device_coord"),
             nb::arg("core"),
             R"doc(
-            Get the per-core L1 address for a specific core (experimental per-core allocation).
+            Get the per-(device, core) L1 address for a core on a specific mesh device
+            (experimental per-core allocation).
+
+            Per-core allocation gives a different address per (device, core), so this is the
+            correct query for a multi-device tensor.
 
             .. code-block:: python
 
-                address = tt_tensor.experimental_per_core_buffer_address(ttnn.CoreCoord(0, 0))
+                address = tt_tensor.experimental_per_core_buffer_address(
+                    ttnn.MeshCoordinate(0, 1), ttnn.CoreCoord(0, 0))
 
         )doc")
         .def(
@@ -1386,14 +1453,14 @@ void pytensor_module(nb::module_& mod) {
             R"doc(
             Returns True if this tensor was allocated with experimental per-core L1 allocation.
 
-            Per-core allocated tensors have a different physical address per core, so they
-            cannot be queried with ``buffer_address()``. Use this property to branch between
-            ``buffer_address()`` and ``experimental_per_core_buffer_address(core)``.
+            Per-core allocated tensors have a different physical address per (device, core), so
+            they cannot be queried with ``buffer_address()``. Use this property to branch between
+            ``buffer_address()`` and ``experimental_per_core_buffer_address(device_coord, core)``.
 
             .. code-block:: python
 
                 if tensor.is_per_core_allocated():
-                    addr = tensor.experimental_per_core_buffer_address(core)
+                    addr = tensor.experimental_per_core_buffer_address(tensor.device_coords()[0], core)
                 else:
                     addr = tensor.buffer_address()
 
@@ -1544,7 +1611,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "to_list",
             [](Tensor& self) -> nb::object {
-                using namespace tt::tt_metal::tensor_impl;
+                using namespace ttnn::tensor_impl;
                 return dispatch(self.dtype(), [&]<typename T>() -> nb::object {
                     const auto& logical_shape = self.logical_shape();
                     auto shape_vec = CMAKE_UNIQUE_NAMESPACE::ttnn_shape_to_ndarray(logical_shape);
@@ -1679,7 +1746,8 @@ void pytensor_module(nb::module_& mod) {
                 {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}},
                 {coord});
             DeviceStorage device_storage(
-                MeshTensor::from_buffer(std::move(*mesh_buffer), tensor_spec, std::move(topology)), {coord});
+                mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), tensor_spec, std::move(topology)),
+                {coord});
             return Tensor(std::move(device_storage));
         },
         nb::arg("host_tensor"),

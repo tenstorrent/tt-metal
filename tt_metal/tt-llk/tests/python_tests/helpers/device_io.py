@@ -56,19 +56,17 @@ def read_from_device(
     num_bytes=4,
     context=None,
     noc_id=None,
-    use_4B_mode=None,
     safe_mode=None,
 ):
     if num_bytes <= MAX_TRANSFER_BYTES:
         return _read_from_device(
             location,
             addr,
-            device_id,
-            num_bytes,
-            context,
-            noc_id,
-            use_4B_mode,
-            safe_mode,
+            device_id=device_id,
+            num_bytes=num_bytes,
+            context=context,
+            noc_id=noc_id,
+            safe_mode=safe_mode,
         )
 
     # Resolve once so each chunk skips re-parsing the "x,y" location string.
@@ -77,24 +75,22 @@ def read_from_device(
         return _read_from_device(
             coordinate,
             addr,
-            device_id,
-            num_bytes,
-            context,
-            noc_id,
-            use_4B_mode,
-            safe_mode,
+            device_id=device_id,
+            num_bytes=num_bytes,
+            context=context,
+            noc_id=noc_id,
+            safe_mode=safe_mode,
         )
 
     return b"".join(
         _read_from_device(
             coordinate,
             addr + offset,
-            device_id,
-            min(MAX_TRANSFER_BYTES, num_bytes - offset),
-            context,
-            noc_id,
-            use_4B_mode,
-            safe_mode,
+            device_id=device_id,
+            num_bytes=min(MAX_TRANSFER_BYTES, num_bytes - offset),
+            context=context,
+            noc_id=noc_id,
+            safe_mode=safe_mode,
         )
         for offset in range(0, num_bytes, MAX_TRANSFER_BYTES)
     )
@@ -107,7 +103,6 @@ def write_to_device(
     device_id=0,
     context=None,
     noc_id=None,
-    use_4B_mode=None,
     safe_mode=None,
 ):
     if isinstance(data, list):
@@ -115,13 +110,25 @@ def write_to_device(
 
     if len(data) <= MAX_TRANSFER_BYTES:
         return _write_to_device(
-            location, addr, data, device_id, context, noc_id, use_4B_mode, safe_mode
+            location,
+            addr,
+            data,
+            device_id=device_id,
+            context=context,
+            noc_id=noc_id,
+            safe_mode=safe_mode,
         )
 
     coordinate = convert_coordinate(location, device_id, context)
     if not _splitting_helps(coordinate):
         return _write_to_device(
-            coordinate, addr, data, device_id, context, noc_id, use_4B_mode, safe_mode
+            coordinate,
+            addr,
+            data,
+            device_id=device_id,
+            context=context,
+            noc_id=noc_id,
+            safe_mode=safe_mode,
         )
 
     for offset in range(0, len(data), MAX_TRANSFER_BYTES):
@@ -129,11 +136,10 @@ def write_to_device(
             coordinate,
             addr + offset,
             data[offset : offset + MAX_TRANSFER_BYTES],
-            device_id,
-            context,
-            noc_id,
-            use_4B_mode,
-            safe_mode,
+            device_id=device_id,
+            context=context,
+            noc_id=noc_id,
+            safe_mode=safe_mode,
         )
 
 
@@ -144,7 +150,6 @@ def read_words_from_device(
     word_count=1,
     context=None,
     noc_id=None,
-    use_4B_mode=None,
     safe_mode=None,
 ):
     num_bytes = 4 * word_count
@@ -152,16 +157,21 @@ def read_words_from_device(
         return _read_words_from_device(
             location,
             addr,
-            device_id,
-            word_count,
-            context,
-            noc_id,
-            use_4B_mode,
-            safe_mode,
+            device_id=device_id,
+            word_count=word_count,
+            context=context,
+            noc_id=noc_id,
+            safe_mode=safe_mode,
         )
 
     raw = read_from_device(
-        location, addr, device_id, num_bytes, context, noc_id, use_4B_mode, safe_mode
+        location,
+        addr,
+        device_id=device_id,
+        num_bytes=num_bytes,
+        context=context,
+        noc_id=noc_id,
+        safe_mode=safe_mode,
     )
     return list(struct.unpack(f"<{word_count}I", raw))
 
@@ -173,21 +183,25 @@ def write_words_to_device(
     device_id=0,
     context=None,
     noc_id=None,
-    use_4B_mode=None,
     safe_mode=None,
 ):
     if isinstance(data, int) or len(data) * 4 <= MAX_TRANSFER_BYTES:
         return _write_words_to_device(
-            location, addr, data, device_id, context, noc_id, use_4B_mode, safe_mode
+            location,
+            addr,
+            data,
+            device_id=device_id,
+            context=context,
+            noc_id=noc_id,
+            safe_mode=safe_mode,
         )
 
     return write_to_device(
         location,
         addr,
         b"".join(word.to_bytes(4, "little") for word in data),
-        device_id,
-        context,
-        noc_id,
-        use_4B_mode,
-        safe_mode,
+        device_id=device_id,
+        context=context,
+        noc_id=noc_id,
+        safe_mode=safe_mode,
     )

@@ -5,10 +5,9 @@
 """Quasar fuser config parser.
 
 Supports: eltwise binary (Elwadd/Elwmul/Elwsub), datacopy, matmul, reduce,
-unary SFPU, binary SFPU.
+unary SFPU, binary SFPU, eltwise broadcast (COL/ROW/SCALAR).
 Unsupported on Quasar: MatmulNoMop, ReduceBlockMax, ReduceBlockMaxRuntime,
 SubBcastColCustom.
-No broadcast, no transpose.
 """
 
 from typing import Annotated, ClassVar, List, Union
@@ -28,6 +27,7 @@ from helpers.llk_params import (
     MathFidelity,
     MathOperation,
     Transpose,
+    UnpackToDest,
 )
 from pydantic import Field
 
@@ -35,11 +35,13 @@ from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
 from .fpu.reduce import ReduceFpu
+from .packer.matmul import MatmulPacker
 from .packer.packer import Packer
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
+from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
 
@@ -48,16 +50,29 @@ _no_broadcast = (
     "Quasar does not support broadcast in fuser",
 )
 
+_no_unpack_to_dest = (
+    lambda s, a, b: s.unpack_to_dest == UnpackToDest.Yes,
+    "unpack_to_dest is not supported for this kernel",
+)
+
+_no_transpose_unpack_to_dest = (
+    lambda s, a, b: s.unpack_to_dest == UnpackToDest.Yes
+    and (
+        s.unpack_transpose_faces == Transpose.Yes
+        or s.unpack_transpose_within_face == Transpose.Yes
+    ),
+    "Quasar does not support transpose with unpack_to_dest",
+)
+
 _no_transpose = (
     lambda s, a, b: s.unpack_transpose_faces == Transpose.Yes
     or s.unpack_transpose_within_face == Transpose.Yes,
-    "Quasar does not support transpose in unpack",
+    "Quasar does not support transpose for this unpacker",
 )
 
-_dest_to_srca_needs_acc = (
-    lambda s, a, b: s.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
-    and s.acc_to_dest != AccToDest.Yes,
-    "reuse_dest DEST_TO_SRCA requires acc_to_dest: true",
+_no_transpose_mismatch = (
+    lambda s, a, b: s.unpack_transpose_faces != s.unpack_transpose_within_face,
+    "Quasar requires both transpose_faces and transpose_within_face to have the same value",
 )
 
 _eltwise_unpacker_reuse = (
@@ -74,12 +89,25 @@ _eltwise_unpacker_default = (
     "Eltwise: unpacker must be UnpackerAB",
 )
 
+_no_broadcast_reuse_dest = (
+    lambda s, a, b: s.broadcast_type != BroadcastType.None_
+    and s.reuse_dest != EltwiseBinaryReuseDestType.NONE,
+    "Quasar broadcast does not support reuse_dest",
+)
+
+_no_broadcast_acc_to_dest = (
+    lambda s, a, b: s.broadcast_type != BroadcastType.None_
+    and s.acc_to_dest == AccToDest.Yes,
+    "Quasar broadcast does not support acc_to_dest",
+)
+
 _eltwise_checks = [
-    _no_broadcast,
-    _no_transpose,
-    _dest_to_srca_needs_acc,
+    _no_transpose_unpack_to_dest,
+    _no_transpose_mismatch,
     _eltwise_unpacker_reuse,
     _eltwise_unpacker_default,
+    _no_broadcast_reuse_dest,
+    _no_broadcast_acc_to_dest,
 ]
 
 _lofi_only = (
@@ -98,6 +126,11 @@ _datacopy_unpacker = (
     lambda s, a, b: s.unpacker is not None
     and s.unpacker not in {"UnpackerA", "UnpackerTilizeA"},
     "Datacopy: unpacker must be UnpackerA or UnpackerTilizeA",
+)
+
+_block_full_width = (
+    lambda s, a, b: s._block_size[1] != a.dimensions[1],
+    "block width must be same as operand width",
 )
 
 _forced_unpacker = lambda name: (
@@ -122,12 +155,16 @@ _reduce_params = (
 
 UNPACKER_MAP = {
     "UnpackerA": (
-        lambda s: UnpackerA(),
-        [_no_broadcast, _no_transpose],
+        lambda s: UnpackerA(reuse_dest=s.reuse_dest),
+        [_no_transpose_unpack_to_dest, _no_transpose_mismatch],
+    ),
+    "UnpackerTilizeA": (
+        lambda s: UnpackerTilizeA(),
+        [_no_transpose, _block_full_width, _no_unpack_to_dest],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
-        [_no_broadcast, _no_transpose],
+        [_no_transpose],
     ),
     "MatmulUnpacker": (
         lambda s: MatmulUnpacker(),
@@ -135,7 +172,7 @@ UNPACKER_MAP = {
     ),
     "ReduceUnpacker": (
         lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
-        None,
+        [_no_transpose],
     ),
 }
 
@@ -154,12 +191,19 @@ FPU_MAP = {
     ),
     "Datacopy": (
         lambda s: DatacopyFpu(),
-        [_no_reuse_dest, _datacopy_unpacker, _no_broadcast, _no_transpose],
+        [
+            _no_reuse_dest,
+            _datacopy_unpacker,
+            _no_broadcast,
+            _no_transpose_unpack_to_dest,
+            _no_transpose_mismatch,
+        ],
     ),
     "Matmul": (
         lambda s: MatmulFpu(),
         [
             _no_reuse_dest,
+            _no_broadcast,
             _matmul_dim_check,
             _forced_unpacker("MatmulUnpacker"),
             _matmul_inner_dims,
@@ -169,6 +213,7 @@ FPU_MAP = {
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),
         [
             _no_reuse_dest,
+            _no_broadcast,
             _reduce_params,
             _forced_unpacker("ReduceUnpacker"),
         ],
@@ -183,6 +228,7 @@ _l1_acc_format = (
 
 PACKER_MAP = {
     "Packer": (Packer, [_l1_acc_format]),
+    "MatmulPacker": (MatmulPacker, [_l1_acc_format]),
 }
 
 _eltwise_dims = lambda a, b: (min(a[0], b[0]), min(a[1], b[1]))
@@ -266,12 +312,4 @@ class OperationSchema(OperationSchemaBase):
     pack: List[PackEntrySchema] = Field(..., min_length=1)
 
     def _arch_validate(self):
-        for m in self.math:
-            if isinstance(m, FpuMathSchema):
-                if m.broadcast_type != BroadcastType.None_:
-                    raise ValueError("Quasar does not support broadcast in fuser")
-                if (
-                    m.unpack_transpose_faces == Transpose.Yes
-                    or m.unpack_transpose_within_face == Transpose.Yes
-                ):
-                    raise ValueError("Quasar does not support transpose in unpack")
+        pass
