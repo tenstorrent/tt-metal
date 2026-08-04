@@ -127,7 +127,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run grouping ci failures
-        uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@ebanerjee/json-state-ci-failure-grouping
+        uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@main
         with:
           # Every call the action makes is a read against this repository: run
           # and job metadata for commit hashes and job names, the run list, and
@@ -183,14 +183,11 @@ jobs:
             echo "Incremental JSON file not found, skipping upload"
           fi
 
-      # TEMPORARY - REVERT BEFORE MERGE
-      # The SFTP upload step is deleted on this branch so validation runs cannot
-      # reach the production database. Restore it before merging.
-      - name: Upload generated rows for inspection
-        if: ${{ success() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Upload job failure cluster data
+        if: ${{ success() && steps.check-json.outputs.is_empty == 'false' }}
+        uses: ./.github/actions/upload-data-via-sftp
         with:
-          name: generated-rows
-          path: generated/job_failure_cluster/
-          if-no-files-found: warn
-          retention-days: 7
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/job_failure_cluster_batchfile.txt
+          username: job-failure-cluster-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
