@@ -77,6 +77,11 @@ void kernel_main() {
 #endif
 #ifdef FUSE_BETA
     DataflowBuffer dfb_beta(dfb::beta);
+#endif
+    // beta is applied only in the company of gamma, so the output buffer is driven directly only on
+    // that combined path. Without gamma the normalized result is already packed into the output, and
+    // dfb_normed_output is the handle for it.
+#if defined(FUSE_GAMMA) && defined(FUSE_BETA)
     DataflowBuffer dfb_out(dfb::out);
 #endif
 

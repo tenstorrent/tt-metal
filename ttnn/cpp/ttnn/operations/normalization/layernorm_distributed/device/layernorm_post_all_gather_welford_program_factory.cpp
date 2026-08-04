@@ -203,6 +203,17 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         intermed7_tiles,
         block_size);
 
+    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
+    // UnpackToDest (set below). UnpackToDest is what bypasses the unpacker's
+    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    // UnpackToDest writes into. Without fp32 DEST, UnpackToDest can't be enabled
+    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
+    TT_FATAL(
+        !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "layer_norm_post_all_gather with Float32 input requires fp32_dest_acc_en=true in the "
+        "compute kernel config; otherwise precision is silently lost in the unpacker format "
+        "conversion.");
+
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t max_cores_y = grid_size.y;
     uint32_t tiles_per_core_y = Wt;
@@ -271,8 +282,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
         gamma_is_row_major = 1;
-    } else if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
-        gamma_stick_size = gamma.value().element_size() * 1024;  // size of tile in bytes bf16
     }
     uint32_t beta_stick_size = 0;
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
@@ -280,8 +289,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         bool beta_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(beta_stick_size);
         TT_FATAL(beta_stick_size_is_power_of_two, "Only power of 2 betas are supported");
         beta_is_row_major = 1;
-    } else if (beta.has_value() and beta.value().layout() == Layout::TILE) {
-        beta_stick_size = beta.value().element_size() * 1024;  // size of tile in bytes bf16
     }
     // Reader uses this compile-time reduction width to generate the AVG scaler tile.
     const uint32_t reduce_factor = logical_W * num_devices;

@@ -431,10 +431,44 @@ Two kernel-side declarations that were dead alongside `c_9` went with it:
    `use_2d_core_grid` request appears to produce only `E(x²)` into a two-column output tensor. The port
    reproduces this exactly and does not act on it.
 
-2. **The Post-Welford factory's `is_rmsnorm` compute-source branch is unreachable** — validation
-   rejects RMSNorm + Welford before the factory runs. The branch is kept as written, and the buffer set
-   and argument schema are built for the Welford kernel, the only reachable source. Worth deleting on
-   the ops track, together with a decision on whether RMSNorm + Welford should ever be supported.
+2. **The Post-Welford factory's RMSNorm compute-source branch is unreachable, and was never wired up
+   correctly.** `validate_on_program_cache_miss` rejects RMSNorm together with Welford before any factory
+   runs, so the `is_rmsnorm` arm of the compute-source choice can never be taken. The port leaves it
+   exactly as it found it; the buffer set and argument schema are built for the Welford kernel, the only
+   reachable source.
+
+   Two things about that branch are worth an owner's attention, and neither is the port's to settle.
+
+   First, it never worked. Pre-port the factory passed eight positional compile-time args, and the
+   RMSNorm kernel read a different meaning into almost every slot:
+
+   | slot | factory supplied | RMSNorm kernel read it as |
+   |---|---|---|
+   | 0 | `tiles_per_core_y` | `Wt` ✓ |
+   | 1 | `W` | `blk` ✗ |
+   | 2 | `block_size` | `stats_tiles_cols` ✗ |
+   | 3 | `stats_tiles_cols` | `do_gamma` ✗ |
+   | 4 | `gamma.has_value()` | `do_beta` ✗ |
+   | 5 | `beta.has_value()` | `FLOAT32_DTYPE` ✗ |
+   | 7 | `cb_length` | `LEGACY_RSQRT` ✗ |
+
+   Everything past slot 0 was wrong. The branch compiled only because every index the kernel reads
+   happened to be within the eight supplied.
+
+   Second, the port changes how that brokenness would present. Named arguments are addressed by name, so
+   there is no way to reproduce "compiles, reads the wrong slot": the ported factory does not supply
+   `legacy_rsqrt` and does not bind a variance buffer, so if the config were ever enabled the failure
+   would come at kernel-compile time instead of as silently wrong output. That is the same effect
+   described in *Handoff points* #1 and it is intrinsic to naming, not a choice made here.
+
+   **Deliberately not acted on.** Three responses were considered. Deleting the branch is dead-code
+   removal, which is outside a port's scope and would bury in a port commit the record that the config
+   was never wired up. Supplying the missing `legacy_rsqrt` and variance buffer would make a path work
+   that has never produced correct output, which is a functional change to unreachable code, and a larger
+   departure than deletion. Leaving it as found is the only option that changes nothing, so that is what
+   the port does. The decision the ops team actually faces is whether RMSNorm with Welford should be
+   supported at all; if not, the branch and the buffers it would need can go together, in a change whose
+   history says so.
 
 3. **`log_debug(tt::LogOp, "device_id: {}", gamma.value().device()…)`** in
    `layernorm_post_all_gather_welford_program_factory.cpp` dereferences `gamma` unconditionally, so a
@@ -536,6 +570,32 @@ Single-device `layer_norm_pre_all_gather` → `layer_norm_post_all_gather` with
 This is the behavior change described in *Handoff points* #1: the legacy path returned garbage, the
 ported path is correct. The residual max-abs error is ordinary bfloat16 rounding on the i/o tensors.
 
+### A check the self-audit was missing: did every legacy `TT_FATAL` survive?
+
+Review of this port found a `TT_FATAL` that the rewrite dropped. The Welford post-allgather factory used
+to reject a Float32 input combined with `fp32_dest_acc_en = false`, because that pairing silently narrows
+the input to TF32 instead of keeping full precision. The guard sat inside the block that was rewritten to
+carry the `unpack_modes` settings across, and it went out with the old text. Nothing else covered it: the
+sibling pre-allgather Welford factory kept its identical guard, the non-Welford post factory kept its own
+broader one, and the device operation's validation only checks that dtypes are in the supported set. So
+for a while `layer_norm_post_all_gather` with `use_welford=True`, a Float32 input and
+`fp32_dest_acc_en = false` built and ran, quietly losing precision.
+
+It is restored, and a direct probe confirms both halves: that combination is now rejected with the
+original message, and the same call with `fp32_dest_acc_en = true` still runs.
+
+No test caught it, and none could have — every Welford test sets `fp32_dest_acc_en = true`, so the guard
+was never reached. The checklist below could have, but does not ask the question. **Every item in it is
+about Metal 2.0 idioms** (bindings, named arguments, `opt_level`, hardware-config values); none is about
+whether the port carried across everything the legacy factory did that is not part of the API swap.
+Validation is the obvious instance, because a dropped `TT_FATAL` has no symptom until someone hits the
+config it guarded.
+
+*Suggested doc change:* add a mechanical check to the anti-pattern self-audit — diff the `TT_FATAL` lines
+in the op directory against the pre-port revision and account for every one that disappeared. It is a
+one-line `git diff` and it catches a class of error that no amount of reading the new code will surface,
+since the omission is only visible against what used to be there.
+
 ### Anti-pattern self-audit
 
 | check | result |
@@ -543,6 +603,7 @@ ported path is correct. The residual max-abs error is ordinary bfloat16 rounding
 | No `tensor.buffer()->address()` survived | ✅ zero hits in code |
 | No magic CB indices / `CBIndex` / `CBDescriptor` in the op directory | ✅ zero hits |
 | No `TensorAccessorArgs<N>()` in any ported kernel | ✅ zero hits |
+| Every `TT_FATAL` present before the port is still present after it | ✅ now, after restoring the one this port dropped from the Welford post factory. Not originally part of this checklist; see the section above |
 | Every `unpack_modes` entry is an individual decision, not one filled in by a blanket rule | ✅ each entry is a separate named call sitting beside the binding it describes, conditioned the same way. Deriving them from a rule that tests "buffer is Float32 and consumed" would satisfy program-spec validation while cancelling the choice it asks for; see *Friction* #4 |
 | Conditional DFB bindings follow the pattern | ✅ `FUSE_PRE_ADD`, `FUSE_GAMMA`, `FUSE_BETA`, `IS_MERGE_CORE` each bound conditionally on the host, emitted as a `compiler_options.defines` entry, and `#ifdef`-gated on both the alias and every use. No binding made unconditional as a workaround. |
 | No `.id` extraction or temp DFB wrappers at LLK call sites | ✅ zero hits |
