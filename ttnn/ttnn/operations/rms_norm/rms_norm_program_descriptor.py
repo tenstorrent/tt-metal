@@ -13,11 +13,16 @@ Knob map (all tunable parameters, none inlined):
   primary (the only hand-set numbers)
     L1_SAFETY_FRACTION      fraction of usable per-core L1 the CBs may take
     CB_RM_STAGE_DEPTH       depth of the ROW_MAJOR stick staging CBs
+    CB_DEPTH_CANDIDATES     ordered depths the regime search may give the two
+                            cross-processor CBs (see D4)
     GRID_W                  cores along `width` (Lamp L1 lives at its trivial 1)
-    CB_X_DEPTH / CB_OUT_DEPTH   cross-processor CB depth (2 when the producer /
-                            consumer is a dataflow kernel, 1 when it is a
-                            sequential compute helper — depth buys nothing then)
     REDUCE_BULK             reduce input policy (BulkWaitBulkPop vs per-tile)
+
+  derived buffer depths
+    CB_X_DEPTH / CB_OUT_DEPTH   the depth the regime search settled on; forced
+                            to 1 on the ROW_MAJOR path, where the producer /
+                            consumer is a sequential compute helper (tilize /
+                            untilize) and depth buys no overlap
 
   derived block factors
     BLOCK_ROWS   tile-rows per compute block = min(per-core assignment,
@@ -46,6 +51,37 @@ the scheme, topology, work split and helper mapping are unchanged):
       template slot (streaming_reduce_helpers.hpp:47-61), so the reduce runs at
       the default Fast mode.  fp32 DEST accumulation still comes from
       fp32_dest_acc_en=True.
+  D4  The regime predicate SEARCHES the depth knob rather than fixing it: it
+      walks CB_DEPTH_CANDIDATES coarsest-first and takes RESIDENT at the first
+      depth whose whole-row working set fits, dropping to STREAM only when no
+      candidate fits.  With the shipped CB_DEPTH_CANDIDATES = (2,) this is
+      BYTE-IDENTICAL to the design's fixed-depth predicate; the search exists so
+      the depth is a live knob instead of an inlined constant.  Still a pure
+      function of the same inputs as the design's predicate, so section 4.2's
+      device-independent reproducibility property holds.
+
+      MEASURED, and the reason the second candidate is NOT shipped
+      (blackhole p150b, 110-core grid, ~1.35 GHz, bf16 + gamma, one fresh-cache
+      run per variant):
+
+        shape                     depth=(2,)   depth=(2,1)
+        (1,1,32,4032) g=TILE        38399 ns     46136 ns   0.83x  REGRESSION
+        (1,1,32,3072) g=RM          32712 ns     33076 ns   0.99x
+        (1,1,32,4096) g=RM          42442 ns     42404 ns   1.00x  (outside band)
+        (1,1,8192,1024) g=RM        88354 ns     88247 ns   1.00x  (outside band)
+
+      Only widths in the band between the depth-2 and depth-1 residency
+      thresholds (Wt in [91,126] for TILE gamma, [80,105] for ROW_MAJOR gamma)
+      can move at all; test_rms_norm_perf.py::test_rms_norm_perf_depth_band
+      pins two of them.  Inside the band, depth 1 does halve the DRAM bytes
+      (x read once instead of twice) and still LOSES: at Rt = 1 the core has a
+      single row-block, so depth 1 serializes reader -> compute -> writer for
+      that block, and the lost overlap costs more than the saved bytes.
+      Complementary step before depth 1 is worth offering: Lamp L5 (row-resident
+      W-chunked third regime) removes STREAM's pass-B re-read WITHOUT giving up
+      depth 2 -- strictly better than this trade -- and Lamp L1 (cross-core
+      width split) gives the core many blocks again so depth 1 would no longer
+      serialize.  Recorded as a follow-up, not a finished win.
 """
 
 from __future__ import annotations
@@ -69,6 +105,17 @@ L1_SAFETY_FRACTION = 0.85
 
 # Depth of the ROW_MAJOR stick staging CBs (reader <-> tilize overlap).
 CB_RM_STAGE_DEPTH = 2
+
+# Ordered depth candidates for the two cross-processor CBs (cb_input_tiles,
+# cb_output_tiles), COARSEST FIRST.  The regime search (D4) walks them and takes
+# the RESIDENT regime at the first depth whose whole-row working set fits L1.
+#
+# Parked at the single value 2 -- byte-identical to the design's fixed-depth
+# predicate -- because (2, 1) was MEASURED to be a net loss today; see D4 for
+# the numbers and for the complementary step (Lamp L5 / L1) that would make a
+# shallower depth worth offering.  This stays a live knob: appending 1 is the
+# one-line change a later refinement flips once that step lands.
+CB_DEPTH_CANDIDATES = (2,)
 
 # Cores along the `width` axis.  Trivial value 1 in Phase 0 = one core owns the
 # whole width of every row it owns; Lamp L1 turns this knob up and adds the
@@ -177,15 +224,6 @@ def create_program_descriptor(
     elem_bytes = input_tensor.element_size()
     gamma_elem_bytes = gamma.element_size() if has_gamma else 0
 
-    # ---- buffer-depth knobs ------------------------------------------------
-    # Depth > 1 only buys overlap when the producer/consumer pair spans two
-    # processors.  On the ROW_MAJOR path cb_input_tiles is produced by the
-    # `tilize` compute helper and cb_output_tiles is consumed by `untilize`;
-    # sequential compute helpers own all three TRISCs and cannot pipeline, so
-    # those CBs drop to depth 1 (and must instead hold a whole block — R5).
-    cb_x_depth = 2 if is_tile else 1
-    cb_out_depth = 2 if is_tile else 1
-
     # ---- L1 byte budget (derived from the device, never a literal) --------
     l1_budget = int(ttnn.get_max_worker_l1_unreserved_size() * L1_SAFETY_FRACTION)
 
@@ -194,22 +232,28 @@ def create_program_descriptor(
     st = ttnn.tile_size(ttnn.bfloat16)  # scaler CB (R4: value exactly 1.0)
     ft = ttnn.tile_size(ttnn.float32)  # cb_row_stat
 
-    # tiles-per-block multiplier over the block-scoped, input-dtype CBs:
-    #   cb_input_tiles + cb_x_squared + cb_normalized + cb_output_tiles
-    cb_block_mult = cb_x_depth + 1 + (1 if has_gamma else 0) + cb_out_depth
-
     scaler_bytes = st * (2 if partial_w else 1)
 
-    # ---- regime selection (op_design.md section 4.2; pure function of
-    # (layout, dtypes, gamma format, Wt, budget) — device-independent) -------
-    fixed_resident = (
-        (Wt * gt)  # cb_gamma_tiles
-        + (Wt * gt if gamma_is_rm else 0)  # cb_gamma_sticks
-        + (2 * CB_RM_STAGE_DEPTH * Wt * bt if not is_tile else 0)  # stick staging
-        + scaler_bytes
-    )
-    per_tilerow_bytes = Wt * bt * cb_block_mult + ft  # + one cb_row_stat page
-    block_rows_l1_max = max(0, (l1_budget - fixed_resident) // per_tilerow_bytes)
+    # Depth > 1 only buys overlap when the producer/consumer pair spans two
+    # processors.  On the ROW_MAJOR path cb_input_tiles is produced by the
+    # `tilize` compute helper and cb_output_tiles is consumed by `untilize`;
+    # sequential compute helpers own all three TRISCs and cannot pipeline, so
+    # those CBs drop to depth 1 (and must instead hold a whole block — R5), and
+    # the depth search below collapses to its single trivial candidate.
+    depth_candidates = CB_DEPTH_CANDIDATES if is_tile else (1,)
+
+    def _resident_fit(depth):
+        """(block_rows_l1_max, per-block CB multiplier) for a candidate depth."""
+        # cb_input_tiles + cb_x_squared + cb_normalized + cb_output_tiles
+        mult = depth + 1 + (1 if has_gamma else 0) + depth
+        fixed = (
+            (Wt * gt)  # cb_gamma_tiles
+            + (Wt * gt if gamma_is_rm else 0)  # cb_gamma_sticks
+            + (2 * CB_RM_STAGE_DEPTH * Wt * bt if not is_tile else 0)  # stick staging
+            + scaler_bytes
+        )
+        per_tilerow = Wt * bt * mult + ft  # + one cb_row_stat page
+        return max(0, (l1_budget - fixed) // per_tilerow), mult
 
     # ---- cross-core split of the independent `row` axis: SIZE and COUNT ----
     (
@@ -224,15 +268,34 @@ def create_program_descriptor(
     )  # row_wise=True is mandatory
     max_rows_per_core = max(rows_per_core_g1, rows_per_core_g2)
 
-    if block_rows_l1_max >= 1:
+    # ---- regime selection (op_design.md section 4.2, extended by D4) -------
+    # Walk the depth candidates coarsest-first and take RESIDENT at the first
+    # depth whose whole-row working set fits.  Only if no depth fits do we drop
+    # to STREAM, which is the genuinely expensive fallback (x re-read in pass B
+    # => ~2x the DRAM bytes).  Still a pure function of
+    # (layout, dtypes, gamma format, Wt, budget) — device-independent, so the
+    # regime-pinned tests stay reproducible.
+    resident_depth = None
+    for depth in depth_candidates:
+        brmax, mult = _resident_fit(depth)
+        if brmax >= 1:
+            resident_depth, block_rows_l1_max, cb_block_mult = depth, brmax, mult
+            break
+
+    if resident_depth is not None:
         # RESIDENT: the whole row is resident; take the coarsest row block that
         # fits, i.e. the entire per-core assignment whenever it fits.
+        cb_x_depth = cb_out_depth = resident_depth
         block_rows = min(max_rows_per_core, block_rows_l1_max)
         wt_chunk = Wt
         num_w_chunks = 1
     else:
-        # STREAM: one tile-row's width does not fit -> chunk `width` (an L1
-        # fallback, not a parallelization).  x is re-read in pass B.
+        # STREAM: one tile-row's width does not fit at ANY depth -> chunk
+        # `width` (an L1 fallback, not a parallelization).  The chunk size
+        # adapts to L1, so keep the preferred (coarsest) depth here: overlap is
+        # affordable and the byte count is already paid.
+        cb_x_depth = cb_out_depth = depth_candidates[0]
+        cb_block_mult = cb_x_depth + 1 + (1 if has_gamma else 0) + cb_out_depth
         block_rows = 1
         per_chunk_tile_bytes = (
             bt * cb_block_mult
