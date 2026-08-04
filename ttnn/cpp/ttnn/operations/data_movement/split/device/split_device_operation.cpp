@@ -31,10 +31,6 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
         args.dim >= 0 && args.dim < static_cast<int>(input_tensor.padded_shape().rank()),
         "Dim being split must be from 0 to rank - 1");
     TT_FATAL(input_tensor.padded_shape()[0] == 1, "shape[0] must be 1 (batch 1 only)");
-    // Guards the % args.num_splits checks below. Note: launch() runs compute_output_specs first
-    // (which also divides by num_splits), so a 0 would fault there before this validate — unreachable
-    // in practice (composite rejects empty split_sizes; prim::split is not Python-bound).
-    TT_FATAL(args.num_splits > 0, "num_splits must be non-zero");
     // The logical check below is the real precondition for correct chunk widths. Once
     // logical[dim] % (num_splits × tile) == 0 holds, padded[dim] == logical[dim] for TILE, so the
     // two padded divisibility checks that follow are implied — kept for their targeted messages.
