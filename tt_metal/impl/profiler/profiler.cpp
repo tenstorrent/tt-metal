@@ -2861,7 +2861,12 @@ void DeviceProfiler::pollDebugDumpResults(
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
                     (is_eth && risc_type != tracy::RiscType::ERISC) ||
-                    (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    (!is_eth && risc_type == tracy::RiscType::ERISC) ||
+                    // WH/BH and Quasar RiscTypes occupy disjoint enum ranges. So iterate BRISC..ERISC on WH/BH
+                    // and QUASAR_DM0..QUASAR_NEO3_TRISC3 on Quasar, skipping whichever range belongs to the other arch.
+                    ((device_arch == tt::ARCH::QUASAR) !=
+                     (static_cast<uint8_t>(risc_type) >= static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) &&
+                      static_cast<uint8_t>(risc_type) <= static_cast<uint8_t>(tracy::RiscType::QUASAR_NEO3_TRISC3)))) {
                     continue;
                 }
 
@@ -2985,7 +2990,12 @@ void DeviceProfiler::pollDebugDumpResults(
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
                     (is_eth && risc_type != tracy::RiscType::ERISC) ||
-                    (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    (!is_eth && risc_type == tracy::RiscType::ERISC) ||
+                    // WH/BH and Quasar RiscTypes occupy disjoint enum ranges. So iterate BRISC..ERISC on WH/BH
+                    // and QUASAR_DM0..QUASAR_NEO3_TRISC3 on Quasar, skipping whichever range belongs to the other arch.
+                    ((device_arch == tt::ARCH::QUASAR) !=
+                     (static_cast<uint8_t>(risc_type) >= static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) &&
+                      static_cast<uint8_t>(risc_type) <= static_cast<uint8_t>(tracy::RiscType::QUASAR_NEO3_TRISC3)))) {
                     continue;
                 }
 
