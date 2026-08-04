@@ -34,7 +34,7 @@ namespace ckernel {
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
  * - Operand tile size is 32x32 (num_faces=4) or 16x32 (num_faces=2, a single face-row)
- * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
+ * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE (Quasar: 16-bit DEST only for now)
  * - Does only MAX pool on ROW dimension
  *
  * This function should NOT be used as a substitute for the native reduce_init API.
@@ -84,7 +84,7 @@ ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
  * - Operand tile size is 32x32 (num_faces=4) or 16x32 (num_faces=2, a single face-row)
- * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
+ * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE (Quasar: 16-bit DEST only for now)
  * - Does only MAX pool on ROW dimension
  *
  * This function should NOT be used as a substitute for the native reduce_tile API.
@@ -251,7 +251,7 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
  * - Operand tile size is 32x32
- * - Can work on both 16-bit or 32-bit DEST register modes based on clear_fp32_accumulation flag
+ * - Can work on both 16-bit or 32-bit DEST register modes based on clear_fp32_accumulation flag (Quasar: 16-bit DEST only for now)
  * - Does only MAX pool on ROW dimension
  *
  * This function should NOT be used as a substitute for the native reduce_uninit API.
