@@ -234,7 +234,10 @@ _PRODUCER = [sys.executable, "-m", "models.demos.common.prefill.runners.prefill_
 
 # gpt-oss-120b build + compile before the H2D descriptor gets exported. Bounded well above the
 # observed ~5–8 min so a slow warm cache doesn't spuriously fail the descriptor-wait.
-_RUNNER_READY_TIMEOUT_S = 900
+# Ready-timeout: steady state (populated tilized cache -> empty state_dict) is a couple minutes; the
+# first run has to convert bf16 -> tilized (~55s per layer for routed experts + smaller sidecars),
+# ~35 min end-to-end for 36 layers. Sized for the first-populate case; steady state is unaffected.
+_RUNNER_READY_TIMEOUT_S = 2700
 
 
 def _descriptor_path(service_id: str) -> Path:

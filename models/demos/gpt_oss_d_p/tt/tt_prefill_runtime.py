@@ -86,6 +86,10 @@ class TtPrefillRuntime:
         self.kv_cache_allocated = False
         self.compiled = False
         self.kv_cache = None
+        # Per-layer completion callback (fn(layer_idx)). None = no-op. The engine registers a channel
+        # bump via set_layer_ack_channel() after compile(); model.prefill_forward invokes this once per
+        # decoder layer (model.py:210) so the scheduler can pace on per-layer progress.
+        self._on_layer_complete = None
 
         self._build_model(state_dict)
         if config.owns_kv_cache:
@@ -256,12 +260,26 @@ class TtPrefillRuntime:
             get_last_token=get_last_token,
             skip_lm_head=skip_lm_head,
             indexed_rope=True,
+            on_layer_complete=self._on_layer_complete,
         )
         if skip_lm_head:
             if out is not None:
                 out.deallocate(True)
             return None
         return out  # logits [1,1,chunk_local,vocab_shard], SP-sharded on seq / TP-sharded on vocab
+
+    def set_layer_ack_channel(self, layer_ack_channel) -> None:
+        """Register the per-layer LayerAck channel (engine-created + owned). ``prefill_chunk`` bumps it
+        once per decoder layer (``inject(1)``) via the ``on_layer_complete`` callback threaded into
+        ``model.prefill_forward``; the scheduler reads the delta to pace migration / admission. The ack
+        carries no payload. Called by the common prefill runner in request mode after ``compile()``.
+        Mirrors ``minimax_m3/tt_prefill_runtime.py:328-337``."""
+        assert self.compiled, "Call compile() before set_layer_ack_channel()"
+
+        def on_layer_complete(layer_idx: int) -> None:
+            layer_ack_channel.inject(1)
+
+        self._on_layer_complete = on_layer_complete
 
     def gather_layer(self, slot_id: int, layer_idx: int, n_tokens: int, kv_caches=None):
         """Read one layer's device K/V cache back to NATURAL token order (un-rotating the block-cyclic
