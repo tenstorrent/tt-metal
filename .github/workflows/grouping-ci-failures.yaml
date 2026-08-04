@@ -2,8 +2,12 @@ name: (triage) Grouping CI Failures
 
 on:
   schedule:
-    # Run every hour at minute 0
-    - cron: '0 * * * *'
+    # Every four hours. Each run re-reads the whole three-day Slack window rather
+    # than only what is new, so most of an hourly run was spent re-downloading
+    # threads it had already stored. A wider gap costs no coverage: a thread is
+    # still re-examined on every run for three days after it appears. What it
+    # costs is latency, up to four hours before a failure reaches the database.
+    - cron: '0 */4 * * *'
   workflow_dispatch:
     inputs:
       start_date:
@@ -65,13 +69,13 @@ jobs:
         with:
           script: |
             // Scoped to this branch so a manual run on a test branch picks up
-            // its own state rather than the most recent hourly run on main.
+            // its own state rather than the most recent scheduled run on main.
             const branch = context.ref.replace('refs/heads/', '');
 
             // Asking for successful runs directly rather than filtering a page
-            // of completed ones: with hourly runs, a day of failures is enough
-            // to push the last success off the page, and not finding it would
-            // silently discard the retained clustering history.
+            // of completed ones: a long enough run of failures pushes the last
+            // success off the page, and not finding it would silently discard
+            // the retained clustering history.
             const runs = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
               owner: context.repo.owner,
               repo: context.repo.repo,
