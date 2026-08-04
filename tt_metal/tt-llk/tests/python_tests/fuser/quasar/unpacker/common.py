@@ -8,9 +8,10 @@ from helpers.llk_params import EltwiseBinaryReuseDestType
 
 
 def is_unary_unpacker(compute_node: FpuNode) -> bool:
+    from fuser.quasar.unpacker.tilize_a import UnpackerTilizeA
     from fuser.quasar.unpacker.unpack_a import UnpackerA
 
-    return isinstance(compute_node.unpacker, UnpackerA)
+    return isinstance(compute_node.unpacker, (UnpackerA, UnpackerTilizeA))
 
 
 def _emit_configure(
