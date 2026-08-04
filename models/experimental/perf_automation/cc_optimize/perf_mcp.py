@@ -2337,13 +2337,83 @@ def _run_full_pipeline_ms():
 _GATE_REPS = max(1, int(os.environ.get("PERF_MCP_GATE_REPS", "3")))
 
 _THERMAL_GATE = str(os.environ.get("PERF_MCP_THERMAL_GATE", "1")).lower() not in ("0", "false", "no")
-_THERMAL_MAX_START_C = float(os.environ.get("PERF_MCP_MAX_START_TEMP_C", "70"))
 _THERMAL_WAIT_S = float(os.environ.get("PERF_MCP_THERMAL_WAIT_S", "900"))
 _THERMAL_POLL_S = float(os.environ.get("PERF_MCP_THERMAL_POLL_S", "15"))
 _THERMAL_RETRIES = int(os.environ.get("PERF_MCP_THERMAL_RETRIES", "3"))
+_THERMAL_MARGIN_C = float(os.environ.get("PERF_MCP_THERMAL_MARGIN_C", "3"))
+
+# "failed to settle" is the arch-independent half: UMD emits it whenever the clock does not reach
+# what it asked for. The arbiter detail rides on TelemetryTag::AICLK_ARB_MAX, which UMD guards with
+# is_entry_available(), so it is present on Blackhole and absent on parts whose telemetry enum does
+# not carry it (wormhole_telemetry.hpp is a separate enum). Matching both means the general signal
+# still fires where the specific one does not.
 _CLAMP_MARKERS = ("AICLK failed to settle", "clamped by max-arbiter")
 
 _LAST_RUN_CLAMPED = False
+
+
+def _thermal_profile_path():
+    return state_dir() / "perf_mcp_thermal_profile.json"
+
+
+def _load_thermal_profile():
+    try:
+        doc = json.loads(_thermal_profile_path().read_text())
+        return doc if isinstance(doc, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _record_thermal_observation(start_temp_c, clamped):
+    """Remember the die temperature a reading STARTED at, and whether its clock held.
+
+    This is what makes the gate hardware-agnostic. The clamp point is a property of the board, not
+    of this tool: it was ~78C on the liquid-cooled p300c this was found on, and there is no reason
+    for that number to hold on another Blackhole, on Wormhole, or on the same silicon with different
+    cooling. So nothing is hardcoded -- the threshold is LEARNED from what this board actually did.
+    """
+    if start_temp_c is None:
+        return
+    doc = _load_thermal_profile()
+    key = "clamped_at" if clamped else "clean_at"
+    vals = [float(v) for v in (doc.get(key) or []) if isinstance(v, (int, float))]
+    vals.append(round(float(start_temp_c), 2))
+    doc[key] = sorted(vals)[-200:]
+    try:
+        p = _thermal_profile_path()
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(doc, indent=2))
+        os.replace(str(tmp), str(p))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _clamp_threshold_c():
+    """The die temperature above which THIS board has been seen to clamp, or None if unknown.
+
+    None means "no evidence yet, do not wait" -- the gate then measures, and the clamp check
+    teaches it. That bootstrap is deliberate: a fixed default would be wrong on any board whose
+    clamp point sits below it, and would silently pass clamped readings through, which is the exact
+    failure this gate exists to stop.
+
+    Once both kinds of observation exist the threshold sits between the hottest clean start and the
+    coolest clamped one; with only clamped starts it backs off by PERF_MCP_THERMAL_MARGIN_C.
+    """
+    env = os.environ.get("PERF_MCP_MAX_START_TEMP_C")
+    if env:
+        try:
+            return float(env)
+        except ValueError:
+            pass
+    doc = _load_thermal_profile()
+    clamped = [float(v) for v in (doc.get("clamped_at") or [])]
+    if not clamped:
+        return None
+    lo = min(clamped)
+    clean_below = [float(v) for v in (doc.get("clean_at") or []) if float(v) < lo]
+    if clean_below:
+        return round((lo + max(clean_below)) / 2.0, 2)
+    return round(lo - _THERMAL_MARGIN_C, 2)
 
 
 def _read_die_temp_c():
@@ -2387,13 +2457,14 @@ def _wait_for_thermal_headroom():
     """
     if not _THERMAL_GATE:
         return True, None
+    limit = _clamp_threshold_c()
     t0 = time.time()
     cur = _read_die_temp_c()
-    if cur is None or cur <= _THERMAL_MAX_START_C:
+    if cur is None or limit is None or cur <= limit:
         return True, cur
     print(
-        "  [thermal-gate] die at %.1fC, need <=%.1fC before measuring; waiting (up to %.0fs)"
-        % (cur, _THERMAL_MAX_START_C, _THERMAL_WAIT_S),
+        "  [thermal-gate] die at %.1fC, this board has clamped at/above %.1fC; waiting (up to %.0fs)"
+        % (cur, limit, _THERMAL_WAIT_S),
         file=sys.stderr,
         flush=True,
     )
@@ -2402,7 +2473,7 @@ def _wait_for_thermal_headroom():
         cur = _read_die_temp_c()
         if cur is None:
             return True, None
-        if cur <= _THERMAL_MAX_START_C:
+        if cur <= limit:
             print(
                 "  [thermal-gate] cooled to %.1fC after %.0fs" % (cur, time.time() - t0),
                 file=sys.stderr,
@@ -2439,12 +2510,15 @@ def _measure_full_pipeline_median():
     max_attempts = _GATE_REPS + max(0, _THERMAL_RETRIES)
     while len(vals) < _GATE_REPS and attempts < max_attempts:
         attempts += 1
-        _wait_for_thermal_headroom()
+        _ok, _start_c = _wait_for_thermal_headroom()
         globals()["_LAST_RUN_CLAMPED"] = False
         _ms, _m, _e, _p = _run_full_pipeline_ms()
         if _ms is None:
             err = _e or err
             continue
+        # Teach the board profile what this start temperature produced, so the threshold is derived
+        # from THIS hardware rather than the p300c the gate was written on.
+        _record_thermal_observation(_start_c, bool(_LAST_RUN_CLAMPED))
         if _THERMAL_GATE and _LAST_RUN_CLAMPED:
             discarded += 1
             print(
@@ -2458,9 +2532,11 @@ def _measure_full_pipeline_median():
         method, path = _m, _p
     if not vals:
         if discarded:
+            _lim = _clamp_threshold_c()
             err = (
                 "every reading was discarded: AICLK was clamped on all %d attempts (board too hot "
-                "to measure; die never fell below %.1fC)" % (discarded, _THERMAL_MAX_START_C)
+                "to measure; learned clamp threshold %s)"
+                % (discarded, ("%.1fC" % _lim) if _lim is not None else "not yet established")
             )
         return None, method, (err or "all measurement attempts failed"), path, None
     vals.sort()
