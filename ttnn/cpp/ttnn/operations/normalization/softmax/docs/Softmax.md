@@ -645,10 +645,7 @@ sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, t
 input_sharded = ttnn.to_memory_config(input_tensor, sharded_mem_config)
 
 # Mask must be interleaved with shape [1, 1, H, W]
-causal_mask = ttnn.typecast(
-    ttnn.rand((1, 1, 384, 768), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device),
-    ttnn.bfloat8_b,
-)
+causal_mask = ttnn.rand((1, 1, 384, 768), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
 # Specialized causal mask operation
 result = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
