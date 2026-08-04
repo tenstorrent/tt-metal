@@ -166,9 +166,21 @@ _L1 = ttnn.L1_MEMORY_CONFIG
 # the other ~28. The reshard is the tax, not the reduction. 8 is used because it is marginally the
 # fastest end to end (26.54 vs 27.50 ms/step at 2 cores).
 #
-# Feeding the sharded result straight to the next matmul, to dodge the second reshard, is SLOWER
-# (8.94 vs 5.32 ms per 26 norm+linear pairs): a DRAM-interleaved weight makes the matmul gather the
-# shards itself. Measured, closed.
+# THE SECOND RESHARD CANNOT BE DODGED, and both ways of trying are now measured.
+#
+# Feeding the sharded result straight to the DEFAULT matmul is slower -- 8.94 vs 5.32 ms per 26
+# norm+linear pairs -- and the reason is the AXIS. Width-sharding splits the matmul's CONTRACTION
+# dimension, so each core can only form a partial sum and the cross-core reduce is full-output-sized
+# ([32,6144] x 8). Interleaved, ttnn splits by OUTPUT COLUMNS instead: each core owns its columns
+# outright, reads the whole 6 KB activation, and there is nothing to reduce. The same axis that makes
+# the NORM fast (it reduces over width, so the cross-core step is 8 scalars) makes the matmul slow.
+#
+# `MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig` REQUIRES a width-sharded activation, so it
+# is the one config that wants what the norm already produces. It BUILDS here -- Block 1's wqkv is
+# per_core_N=24 tiles where Block 2's N=9216 overflowed L1 at 36 (STATUS.md) -- and it is still
+# slower: 125.4 us against 100.9, or 128.5 charging the output unshard, i.e. 0.72 ms/frame WORSE,
+# and not bit-exact (4.9e-04). No mystery: the default path already runs this matmul at ~198 GB/s,
+# so there is no bandwidth left for the DRAM-sharded machinery to win back. Closed both ways.
 #
 # THIS WAS REVERTED ONCE AND THE REVERT WAS WRONG. It was measured while wqkv and wo were still
 # bf16, where it read mean worst-sample 0.86% -> 0.92%. On the current weights it reads 0.86% ->
