@@ -45,6 +45,10 @@ that shipped scores **0.98347** — the *incumbent* is the one that fails the mo
 | [`ADVCHAL-V2-COUNTERFACTUALS.md`](ADVCHAL-V2-COUNTERFACTUALS.md) | **10 stage settings changed one at a time** — what each would have found, with a scoreboard |
 | [`ADVCHAL-V2-ADVISOR-VALUE.md`](ADVCHAL-V2-ADVISOR-VALUE.md) | **was the advisor necessary?** — detection, grid choice, hit rate, and what 7.4 h bought |
 | [`ADVCHAL-V2-PERF-REPORT-AUDIT.md`](ADVCHAL-V2-PERF-REPORT-AUDIT.md) | **the perf report the stage runs and throws away** — compute-vs-movement scorecard per cell |
+| [`ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md`](ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md) | **one shipped win, op by op** — original / advised / shipped, with shapes and the stage's own labels |
+| [`ADVCHAL-V2-PHI-OP-BY-OP.md`](ADVCHAL-V2-PHI-OP-BY-OP.md) | the same win as a before/after delta, plus the sharding view |
+| `phi_TERMINAL_BEFORE.txt`, `phi_TERMINAL_AFTER.txt` | real `tt-perf-report` terminal output, both sides |
+| `phi_BEFORE_rope_off.txt`, `phi_AFTER_rope_on.txt`, `trace_ttnn.py` | executed ttnn call sequences + the tracer |
 | [`ADVCHAL-V2-STAGE-ANALYSIS.md`](ADVCHAL-V2-STAGE-ANALYSIS.md) | the stage graded: what v2 fixed, 10 defects it kept |
 | [`ADVCHAL-V2-ADVISOR-INTERNALS.md`](ADVCHAL-V2-ADVISOR-INTERNALS.md) | why the advisor advises what it does, from tt-mlir source + decision traces |
 | [`ADVCHAL-V2-ORACLES.md`](ADVCHAL-V2-ORACLES.md) | every cell's correctness bar, and why they aren't comparable |
@@ -105,7 +109,7 @@ Per-cell narratives and every measurement: [`MEASUREMENTS`](ADVCHAL-V2-MEASUREME
 
 ---
 
-## 3. The twenty-one findings that matter
+## 3. The twenty-four findings that matter
 
 ### 3.1 The corpus's largest win was measured, then discarded — by the stage's own rules
 
@@ -601,6 +605,122 @@ entirely within TILE layouts, which is the whole space it legally has.
 
 → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E23
 
+### 3.22 What a shipped win actually is, op by op — movement, and a buffer type
+
+The one win with a clean before/after profile pair (phi FN's `rope_l1`), cross-checked on phi B:
+
+| | phi FN | phi B |
+|---|---|---|
+| profiled window | 725.2 → 654.0 µs (**−9.82 %**) | 699.8 → 624.0 µs (**−10.82 %**) |
+| **Compute** | 434.1 → 430.6 (**−3.5**) | 462.3 → 456.0 (**−6.4**) |
+| **TM** (tensor manipulation) | 212.1 → **146.0** (**−66.2**) | 224.4 → **154.9** (**−69.5**) |
+| DRAM roofline | **15.9 % (81 GB/s) → 17.6 % (90 GB/s)** | — |
+
+**93 % / 92 % of the win is movement reduction; compute is flat.** By op class, near-identical across the arms:
+`Permute` −38.95/−38.56 µs (**55 % / 51 %** of the change), `Concat` −14.02/−14.21 (20/19 %), `Slice`
+−8.44/−8.40 (12/11 %). Six `Permute` ops disappear entirely; `Concat` on 110 cores halves.
+
+**And it is not a sharding change.** By `Input 0 Memory`:
+
+| | BEFORE | AFTER |
+|---|---|---|
+| `DRAM_INTERLEAVED` | 587.2 µs, 81.0 %, **49 ops** | 433.7 µs, 66.3 %, **21 ops** |
+| `L1_INTERLEAVED` | — | **83.6 µs, 22 ops** (new bucket) |
+| `L1_WIDTH_SHARDED` / `L1_HEIGHT_SHARDED` | 79.9 / 58.0 µs | 79.9 / 56.7 — **unchanged** |
+
+**28 ops moved DRAM → L1 interleaved and no shard spec changed** (`DRAM Sharded` is `False` on every row of both
+files). A win from a *shard* advisor is a change of buffer type — consistent with `LayoutScore` ranking `isL1`
+**first** (§3.3).
+
+**Does the shipped result follow the advice?** Of the 27 ops the stage bucketed as `chain`: **4 follow it, 6 took
+the buffer type only** (L1 but not the advised sharding), **9 do not**, 1 matches the layout family but not the
+grid, and **7 are undecidable** because the op↔advice pairing is positional. And of the 2 ops the stage labels
+`agrees_with_shipped` — its term for *"we already do what the advice says, nothing to screen"* — **one does not
+actually agree**: `typecast`, advised `l1/height_sharded/1x1`, shipped 1 core DRAM-interleaved.
+
+**§3.24 gives the reason for every one of them**, and the reasons concentrate hard: nine of the twelve "no" ops
+are one rejected oracle call.
+
+→ [`PHI-BEFORE-ADVISED-AFTER`](ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md)
+
+### 3.23 The advisor validates plans the runtime refuses to run
+
+Those 6 "buffer only" rows look like a shortcut. They are not. I implemented the advised placement faithfully —
+slices `l1/interleaved`, then `neg`/`concat`/`multiply`/`add` on `l1/height_sharded` over 32 cores — and it
+**cannot run**:
+
+| variant | result |
+|---|---|
+| shard only the 96-wide ops (`(32,96)` = 3 tiles, tile-aligned) | `TT_FATAL: Cannot concat interleaved inputs into a sharded output. Either shard the inputs first…` |
+| also shard the 48-wide `neg`, as the advice requires | `TT_FATAL: Physical shard shape (32, 48) must be tile {32, 32} sized!` |
+| *(control)* shipped `l1/interleaved` | **runs — 0.768758 / 0.768047 ms** |
+
+Both reproduced twice, and they **chain**: a sharded `concat` output requires sharded inputs; the inputs are the
+48-wide halves; a 48-wide shard is not tile-aligned. Phi's own `_apply_rope` comment explains the width —
+*"`rotary_embedding` requires a width divisible by 64, whereas Phi-3.5's 96-wide heads split at 48"*. So
+`l1/interleaved` is the **only legal placement**.
+
+**But the advisor validated what it advised.** From its own decision trace:
+
+| op | evaluations | valid | is `height_sharded/32x1` among the valid? |
+|---|---|---|---|
+| `ttnn.neg` op10 | 296 | **296 — all of them** | **yes**, one of 112 valid height-sharded candidates |
+| `ttnn.concat` op11 | 512 | 256 | **yes** |
+
+**The op model accepts a `(32,48)` height shard; the runtime rejects it.** The advisor checks via
+`op_constraint_validation::validateOperation` against the op model on a mock device, and that check does not
+enforce the runtime's tile-sized-shard rule.
+
+That **tt-mlir ↔ tt-metal consistency gap** is a better explanation of the corpus's recurring pattern than
+anything else found here: the advisor's coarse direction is usually right and its exact geometry usually
+unreachable, because it is validated against a model more permissive than the machine.
+
+→ [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E24
+
+---
+
+### 3.24 Why each op did or didn't follow the advice — and it is mostly one decision
+
+I put a sourced reason against all 56 ops of phi FN's window. The distribution:
+
+| follows the advice? | ops | dominant reason |
+|---|---|---|
+| — no advice exists (`boundary` + `untraced`) | 25 | conversions live in `reshards[]`, not `ops[]` |
+| **no** | 12 | **the oracle veto (9 of 12)** |
+| **undecidable** | 7 | the op↔advice pairing is a positional guess |
+| **buffer only** | 6 | the advised sharding does not run (§3.23) |
+| **yes** | 4 | `l1/interleaved`, which specifies no grid |
+| **family only** | 2 | right space and layout family, wrong grid |
+
+**One oracle call explains twelve of the twenty-seven actionable ops.** The reconciliation groups disagreements
+into *chains* and measures the chain, not the op. Two chains — `dense:0` (`rms_norm`, `linear`,
+`nlp_create_qkv_heads_decode`, `embedding` ×2, **178.4 µs**) and `dense:11` (`linear` ×2, `add`, `rms_norm`,
+`slice_static` ×2, `multiply`, **196.1 µs**) — were screened together as `advisor_norm_cores=11`, **measured
+0.745905 ms against a 0.807152 ms incumbent (−7.6 %), and 0.700267 ms combined with the rope win (−13.3 %)**.
+Both are marked `verdict: rejected`. Not on time — on `oracle_pcc_bar: 0.999999` versus a measured
+`0.9999910667`. This is §3.4 seen from the op side: **the 12 unimproved ops are not a fact about the advice, they
+are a fact about one threshold.**
+
+**What `chain` means in the stage's own label.** `reconcile.py` assigns each profiled op one of five buckets,
+first match wins: `boundary` (a movement op — no advice exists), `untraced` (absent from the advisor's graph),
+`dram_resident` (advisor says DRAM, shipped is sharded), `agrees_with_shipped` (advised cores == shipped cores,
+*or* both sides DRAM-sharded), and **`chain`** — everything else, i.e. **the advisor wants it in L1 and the
+advised core count differs from the shipped one**. Consecutive `chain` ops are then grouped into a maximal
+L1-resident run, broken by any conversion or DRAM placement, and **that run is the unit that gets measured and
+shipped**. So `chain` = *"this op is part of a screenable candidate"*. Ids are `<layer_kind>:<index>`;
+`dense:b14`-style ids are boundary-derived chains — a lone conversion the advisor said not to do, promoted to a
+candidate on its own.
+
+**Two new defects in the stage's own script, both found by doing this:**
+
+| defect | evidence |
+|---|---|
+| `agrees_with_shipped` **never compares the memory space** — only core count, or the DS family. So an op advised into L1 and shipped in DRAM reads as agreement. | phi FN has 2 such rows and **1 is wrong** (`typecast`: advised `l1/…/1c`, shipped `1 core DRAM`). → C5c |
+| `pair_confidence: position` is recorded, documented as *"a guess"*, and then ignored downstream. **11 of 31 paired rows (35 %) are positional.** | It misled *this* analysis: 7 rows I had called findings are guesses. → C5e |
+
+→ [`PHI-BEFORE-ADVISED-AFTER`](ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md) for the full per-op table with the
+`why` column and its legend.
+
 ---
 
 ## 4. What makes a model advisor-compatible
@@ -743,5 +863,8 @@ What to change in the stage and the advisor: [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVE
 | The advisor has a "fewer-cores bias" | Its ordering prefers *more* cores, at level 6 of 7. The low values come from elsewhere — §3.3, open question |
 | qwen's unreachable linear layers are "~91 %" of its model time | **97 %** — recomputed from its own per-kind medians and layer counts |
 | "Re-measure an overlapping candidate at 4× replays" (my proposal) | **Refuted by experiment.** No separation, and the floor got 3–4× worse (§3.7, E8) |
+| "The advisor's rope advice is illegal" (my first claim) | **The reasoning was wrong** — my probe left the *slices* height-sharded, which the advisor wants interleaved. A faithful implementation does fail, but the finding is the validation gap (§3.23), not the illegality |
 | Implicit: that the wins generalise across batch | They do **not** — phi is batch-32-pinned by construction (E17), and nothing records it |
+| Row 46/54 `linear` "follows the advice" | **Downgraded to *family only*.** Both were already L1 width-sharded before the change, and the advised grid differs (88c vs 32c, 88c vs 12c). I had credited the advisor with the incumbent's own choice |
+| Seven rows read as "does not follow the advice" / "op removed" | **Downgraded to *undecidable*.** All seven are `pair_confidence: position` — the tool's own documented guess. I had been reading positional pairings as findings (§3.24) |
 | Implicit: that DS-matmul advice never wins | One *did* (gemma-4-12B `linear` 12→55c, kept), and 65 % of matmul cost was never screenable anyway (§3.12) |

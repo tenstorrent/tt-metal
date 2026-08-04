@@ -780,3 +780,63 @@ fresh — but the 96→11 narrowing could be an artefact of re-optimising.
   conversions *among TILE layouts*, which is the whole space available to it.
 - **E22's reason 4 is strengthened.** Not only can the advisor not rewrite the graph — it cannot legally place
   anything in row-major either. Both halves of the `retilize` problem are outside its reach.
+
+---
+
+## E24 — I implemented the advisor's own RoPE advice. It does not run, and the advisor validated it
+
+**Question.** phi FN shipped the advisor's L1 placement for the RoPE body but left the *sharding* half
+(`l1/height_sharded/32x1`) unimplemented. Was that a shortcut, and what does the advised sharding actually cost?
+
+**Setup.** A faithful implementation of the advice in `tt/functional_decoder.py`, behind `PHI_ROPE_SHARD`:
+slices `l1/interleaved` exactly as advised, then `neg` / `concat` / `multiply` / `add` height-sharded over 32
+cores with shard `(TILE_SIZE, width)` — matching the `l1/height_sharded, shard=(32,96), cores=32` the executed
+trace already shows arriving at the boundary. Two variants, because the ops have two widths.
+
+| variant | what it shards | result |
+|---|---|---|
+| `partial` | the **96-wide** ops (`concat` output, `multiply` ×2, `add`); shard `(32, 96)` = 3 tiles, tile-aligned | **`TT_FATAL: Cannot concat interleaved inputs into a sharded output. Either shard the inputs first or use an interleaved output memory config.`** |
+| `full` | also the **48-wide** `neg`, which the advice requires; shard `(32, 48)` | **`TT_FATAL: Physical shard shape (32, 48) must be tile {32, 32} sized!`** |
+| *(control)* `shipped`, `l1/interleaved` | — | **runs: 0.768758 / 0.768047 ms** |
+
+Both failures reproduced twice.
+
+### The two failures chain, and the chain closes
+
+To give `concat` a sharded output you must shard its inputs. Its inputs are the two 48-wide halves. A 48-wide
+shard is not tile-aligned. **There is no way to reach the advised placement for this rope body.** So the shipped
+`l1/interleaved` form is not a shortcut the cell took — it is the only legal option, and **the time cannot be
+measured because the configuration does not run.**
+
+Phi's own source says why the widths are awkward, in `_apply_rope`:
+
+> *`ttnn.experimental.rotary_embedding` requires a width divisible by 64, whereas Phi-3.5's 96-wide heads split
+> at 48. The explicit topology is the exact HF operation and has no host fallback.*
+
+### The finding is not the illegality — it is that the advisor validated it
+
+| op | evaluations | valid | is `height_sharded/32x1` among the valid? |
+|---|---|---|---|
+| `ttnn.neg` op10 | 296 | **296 — all valid** | **yes**, one of 112 valid height-sharded candidates |
+| `ttnn.concat` op11 | 512 | 256 | **yes** |
+
+The advisor checks candidates with `op_constraint_validation::validateOperation` against the **op model** on a
+mock device, and that check **does not enforce the runtime's tile-sized-shard rule**. So the plan is enumerated,
+validated, ranked first and emitted — and dies at launch.
+→ [`ADVISOR-INTERNALS`](ADVCHAL-V2-ADVISOR-INTERNALS.md) §4a, [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md) §D6.
+
+### My own trail on this one, recorded
+
+I first called the advice illegal on the basis of a probe that **did not implement it** — my probe left the
+slices height-sharded where the advisor wants them interleaved. That reasoning was wrong and I retracted it.
+With a faithful implementation the conclusion holds, but the substantive result is the validation gap, not the
+illegality per se.
+
+**Artefacts:** `exp-advisor-probe/as_advised_part.log`, `as_advised_part_2.log`, `as_advised_full.log`,
+controls `as_shipped.log` / `as_shipped_2.log`, `as_ctl.json`.
+
+### Scoreboard entry
+
+| what I expected | what happened |
+|---|---|
+| the advised sharding is implementable and either wins or loses on time | **it does not run at all**, at either width, and the advisor's own validation passed it 296/296 |

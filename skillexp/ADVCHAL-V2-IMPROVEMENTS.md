@@ -390,6 +390,51 @@ not the limiting resource. Corpus plus probes: **1 win in 7 measured matmul-wide
 without saying *why* misled this analysis once. **What is withdrawn:** the recommendation to screen those rows.
 → [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E20.
 
+### C5c. `agrees_with_shipped` must compare the memory space, not only the core count ⭐
+
+`reconcile.py:446-448` decides agreement with:
+
+```python
+same = (adv["cores"] is not None and adv["cores"] == dev["cores"]) or \
+       (dev["dram_sharded"] and "dram_sharded" in adv["program_config"])
+```
+
+**Neither branch looks at the buffer type.** So an op advised into **L1** and shipped in **DRAM** is labelled
+"nothing to screen, we already do what the advice says" as long as the core counts happen to coincide.
+
+**Measured hit rate: 1 of 2.** phi FN has exactly two `agrees_with_shipped` rows, and one of them is wrong —
+`typecast`, advised `l1/height_sharded/1x1 · 1c`, shipped `1 core · DRAM interleaved`. Advised cores `1` ==
+shipped cores `1`, so it agrees; the L1-vs-DRAM disagreement is invisible. The other row (`linear`, 48.0 µs)
+matches only through the DS branch, where the grid is 88 advised against 12 shipped.
+
+**Fix:** require the space to match as well, and record `agreed_on: space+grid | ds_family` (C5). One-line
+change in the skill's own script; no build.
+→ [`PHI-BEFORE-ADVISED-AFTER`](ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md), code `L`.
+
+### C5d. Fail the gate when a candidate profile parses to zero rows
+
+phi A's `rope_l1_rect32_perf.csv` is **empty** — the profile ran, the CSV was written, and nothing parsed out
+of it. Nothing in the stage noticed. A candidate whose profile yields 0 device rows is not a candidate that
+performed neutrally, it is a candidate with **no evidence at all**, and it must not be reportable.
+
+**Fix:** assert `len(rows) > 0` per profiled candidate in the gate, naming the file. Same class of hole as the
+signposted-window-with-no-device-rows problem that forced `incumbent_large`.
+
+### C5e. Do not let positional pairings read as findings ⭐
+
+`reconciliation_dense.json` carries `pair_confidence: name | position` and states in `limitations[0]` that *"a
+positional pair is a guess"*. **In phi FN, 11 of the 31 paired rows are positional** — 35 %. The field is
+recorded and then ignored by everything downstream: positional rows sit in the same buckets, get the same
+verdicts, and are counted in the same shares as name-paired ones.
+
+This bit *this* analysis: seven rows I had labelled "does not follow the advice" or "op removed" are positional
+guesses, and I have downgraded them to *undecidable*
+([`PHI-BEFORE-ADVISED-AFTER`](ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md) → Corrections).
+
+**Fix:** report `pct_paired_by_position` in the accounting block (the field name the tool already promises),
+and exclude positional rows from any *count* the stage presents as a finding — keep them for cost attribution,
+where a wrong name still lands in the right chain.
+
 ### C5a. Drop the "screen DS-matmul advice last" rule
 
 The rule's stated basis — *"it has not won a measurement in this corpus"* — is v1-derived and **v2 contradicts
@@ -476,6 +521,46 @@ search space", before per-op rulebooks run. So the surviving representative of a
 op rejects while a legal sibling was already discarded.
 
 - **File:** `lib/Dialect/TTNN/Analysis/LegalTensorLayoutAnalysis.cpp:128-225`.
+
+### D6. The op model accepts shard shapes the runtime refuses ⭐⭐ — a validation gap, not a bad score
+
+This is the one place where the advisor is not merely mis-*ranking* — it is emitting a plan that **cannot be
+executed at all**, and its own validation says the plan is fine.
+
+For phi's RoPE body the advisor advised `l1/height_sharded/32x1` on `neg` / `concat` / `multiply`. The heads are
+96 wide and split at 48, so the shards are `(32, 96)` and `(32, 48)`. From its own decision trace:
+
+| op | evaluations | valid | is `height_sharded/32x1` among the valid? |
+|---|---|---|---|
+| `ttnn.neg` op10 | 296 | **296 — all valid** | **yes**, one of 112 valid height-sharded candidates |
+| `ttnn.concat` op11 | 512 | 256 | **yes** |
+
+Implemented faithfully on device, both widths fail:
+
+- `TT_FATAL: Physical shard shape (32, 48) must be tile {32, 32} sized!`
+- `TT_FATAL: Cannot concat interleaved inputs into a sharded output. Either shard the inputs first or use an interleaved output memory config.`
+
+Both reproduced twice; the shipped `l1/interleaved` control runs at 0.768758 / 0.768047 ms.
+
+**Where the gap is.** `op_constraint_validation::validateOperation` runs against the op model on a mock device
+built from `SYSTEM_DESC_PATH`. **That path does not enforce the runtime's tile-sized-shard rule**
+(`shard_spec_validation.cpp`), so a 48-wide height shard passes validation and dies at launch.
+
+**Why it matters beyond phi.** Every consumer of `report.json` is entitled to assume the advice is at least
+runnable. A challenger that spends device time implementing advice, hits a `TT_FATAL`, and records a
+`hard_error` has burned a measurement to discover something the advisor could have known statically.
+
+**Fix, in the cheap-to-expensive order:**
+1. **(our approach, no build)** treat a `TT_FATAL` on advised geometry as an *advisor* defect in the report,
+   not just a rejected knob — it is currently indistinguishable from "this candidate was slower".
+2. **(tt-mlir, a build)** add the tile-alignment predicate to the shard-shape legality check so the layouts are
+   never enumerated. Note this composes with **D3**: the shape dedup runs *before* the per-op rulebooks, so an
+   illegal representative can survive while a legal sibling is discarded.
+3. **(tt-metal, out of scope — documented only)** the deeper fix is for the op model and the runtime to share
+   one shard-legality implementation instead of two. Not requested, not expected to ship.
+
+- **Evidence:** [`PHI-BEFORE-ADVISED-AFTER`](ADVCHAL-V2-PHI-BEFORE-ADVISED-AFTER.md) code `U`,
+  [`COUNTERFACTUALS`](ADVCHAL-V2-COUNTERFACTUALS.md) §E24.
 
 ### D4. Emit the advisable ladder in `report.json`
 

@@ -138,6 +138,41 @@ they measure.
 
 ---
 
+## 4a. The validation the candidate set is filtered against is not the runtime's
+
+Every enumerated layout is checked by `op_constraint_validation::validateOperation` against the **op model**,
+on a **mock device** built from `SYSTEM_DESC_PATH`. Nothing here executes (§1), so "valid" means "the op model
+accepts this", not "this runs".
+
+**Those two are not the same set.** phi's RoPE body, from the decision trace:
+
+| op | evaluations | valid | `height_sharded/32x1` valid? | runs on device? |
+|---|---|---|---|---|
+| `ttnn.neg` op10 | 296 | **296** | yes (1 of 112 valid HS candidates) | **no** |
+| `ttnn.concat` op11 | 512 | 256 | yes | **no** |
+
+The heads are 96 wide and split at 48, so the shards are `(32, 96)` and `(32, 48)`. On device:
+
+```
+TT_FATAL: Physical shard shape (32, 48) must be tile {32, 32} sized!
+TT_FATAL: Cannot concat interleaved inputs into a sharded output.
+          Either shard the inputs first or use an interleaved output memory config.
+```
+
+**The op model does not enforce the runtime's tile-sized-shard rule.** A 48-wide height shard is therefore
+enumerated, validated, scored, ranked first, and emitted as advice — and then cannot be run.
+
+Two consequences for reading any `report.json`:
+
+1. **`valid` in the decision trace is a weaker claim than it looks.** 296/296 valid does not mean 296 runnable.
+2. It interacts with the pruning in §4: `generateAllPossibleLayouts` dedups by shard shape keeping the smallest
+   grid **before** per-op rulebooks run, so the surviving representative of a shard shape can be exactly the
+   unrunnable one.
+
+This is a genuine consistency gap between tt-mlir's validation and tt-metal's runtime, and it is separate from
+the scoring problems in §2 — here the ranking is doing its job on a candidate that should never have been in
+the set. → [`IMPROVEMENTS`](ADVCHAL-V2-IMPROVEMENTS.md) §D6.
+
 ## 5. What the decision traces actually show
 
 Selection is a **beam search, width 8**, over the op chain — not an independent per-op argmax. Per-op
