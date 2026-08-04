@@ -206,6 +206,8 @@ class MiniMaxH3CausalConv3d(Module):
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
         self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        # Persistent zero block for the causal front-pad; see causal_pad_t.
+        self._causal_zeros: dict = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Slice the temporal tap if collapsed, pad both channel axes, then prepare.
@@ -294,7 +296,7 @@ class MiniMaxH3CausalConv3d(Module):
         if any(self.external_pad_h) or any(self.external_pad_w):
             x_BTHWC = self._halo_pad(x_BTHWC)
         if self.time_pad > 0:
-            x_BTHWC = causal_pad_t(x_BTHWC, self.time_pad, self.mesh_device)
+            x_BTHWC = causal_pad_t(x_BTHWC, self.time_pad, self.mesh_device, self._causal_zeros)
 
         out = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -312,10 +314,27 @@ class MiniMaxH3CausalConv3d(Module):
         return out
 
 
-def causal_pad_t(x_BTHWC: ttnn.Tensor, pad: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
-    """Prepend ``pad`` zero frames on T. Nothing is appended -- that is the causality."""
+def causal_pad_t(
+    x_BTHWC: ttnn.Tensor, pad: int, mesh_device: ttnn.MeshDevice, cache: dict | None = None
+) -> ttnn.Tensor:
+    """Prepend ``pad`` zero frames on T. Nothing is appended -- that is the causality.
+
+    ``cache`` holds the zero block across calls. Without it this allocates and **writes**
+    a fresh zero tensor on every convolution -- 34 MB at block 0, thirteen times per unit --
+    and `ttnn.zeros(device=...)` is a host-to-device write, which both costs PCIe time on
+    the critical path and makes the encoder impossible to capture into a trace
+    ("Writes are not supported during trace capture"). The block is constant, so one
+    allocation serves every call.
+    """
     B, _, H, W, C = x_BTHWC.shape
-    zeros = ttnn.zeros((B, pad, H, W, C), dtype=x_BTHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    key = (B, pad, H, W, C, x_BTHWC.get_dtype())
+    zeros = None if cache is None else cache.get(key)
+    if zeros is None:
+        zeros = ttnn.zeros(
+            (B, pad, H, W, C), dtype=x_BTHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+        )
+        if cache is not None:
+            cache[key] = zeros
     return ttnn.concat([zeros, x_BTHWC], dim=1)
 
 
