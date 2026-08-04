@@ -71,6 +71,15 @@ namespace dataflow_kernel_lib {
 // -----------------------------------------------------------------------------
 enum class DataReadySignal { Flag, Counter };
 
+// Whether send() must make the payload source safe to reuse before returning.
+//   * Guard (default): send() waits until the linked data+signal writes have departed, so the caller
+//     may immediately overwrite/reuse src_l1.
+//   * CallerManaged: skip that remote-only SENT fence. The caller guarantees src_l1 remains unchanged
+//     until a later NoC completion point (for example, an async write barrier at the CB reuse boundary).
+// This policy never weakens completion required for a real sender loopback, a rotating Flag cell reset,
+// or a Counter signal's multicast atomic acknowledgements.
+enum class SourceL1Guard { Guard, CallerManaged };
+
 // Sentinel for the CONSUMER_READY_SEM_ID template param: "no consumer-ready semaphore". The default
 // when PRE_HANDSHAKE is false (the receiver→sender readiness ack is not used), so the no-handshake
 // caller omits the arg entirely. A real CTA semaphore id is small and dense, so this reserved value is
@@ -189,12 +198,16 @@ public:
     explicit SenderPipe(const Noc& noc, const McastRect<NOC_ID>& dest, uint32_t consumer_ack_count = ACK_EQUALS_FANOUT);
 
     // ===== DATA channel (a block + a ready signal) =====
-    // send() is atomic and absorbs ALL FOUR guards (callers cannot reorder or skip them):
+    // By default send() is atomic and absorbs ALL FOUR guards:
     //   [if PRE_HANDSHAKE] wait(consumer_ready)  — gate the mcast on receivers having drained
     //   mcast data                                — object API auto-chunks a ready block > burst
     //   signal ready                              — data-before-signal, same VC; reset owned by receiver
     //   fence                                     — loopback ACKED, otherwise SENT; atomic-barrier on Counter
-    void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
+    // SOURCE_GUARD=CallerManaged skips only the remote-only SENT source-lifetime fence. The caller
+    // must keep src_l1 unchanged until a later NoC completion point. Loopback, rotating-Flag, and
+    // Counter correctness fences remain owned by the pipe.
+    template <SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
+    FORCE_INLINE void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
 
     // ===== CONTROL channel (a pure ready signal, no data block) =====
     // Broadcast a plain readiness signal (a doorbell). Always plain (EXCLUDE-source) — no data
@@ -203,15 +216,16 @@ public:
 
 private:
     // ---- data multicast via the Noc object ----
-    void send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests);
+    FORCE_INLINE void send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests);
 
     // ---- signal the receivers the data is ready ----
     // `loopback` matches the data mcast of the same send(): when send() included the sender's own core
     // as a receiver, the signal must reach it too. send_signal() carries no data, so it never loops back.
-    void signal_ready_(bool loopback, uint32_t mcast_dests);
+    FORCE_INLINE void signal_ready_(bool loopback, uint32_t mcast_dests);
 
     // ---- post-send fence ----
-    void fence_(bool loopback);
+    template <SourceL1Guard SOURCE_GUARD>
+    FORCE_INLINE void fence_(bool loopback);
 
     // ---- local L1 self-copy (degenerate self-only guard) via the Noc object ----
     void local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
@@ -242,11 +256,11 @@ private:
 //   * NUM_SENDERS            — how many sender coord pairs this receiver keeps (1 for a fixed sender,
 //                              SPAN for a rotating line where a different core sends each round).
 //
-// The sender coords are handed to the CONSTRUCTOR as an array and KEPT in the object — mirroring
-// SenderPipe, which is handed its McastRect and keeps it. The pipe never touches runtime args: the
-// arg-aware layer (McastArgs::receiver()) reads the RT block and builds the array; a by-hand caller
-// builds it from its own coords. receive(round) then acks/listens to the round-th stored sender (round
-// defaults to 0 — the only entry for a fixed receiver).
+// The sender coords are handed to the CONSTRUCTOR as a non-owning pointer and KEPT as a view in the
+// object. Their storage MUST outlive the pipe. McastArgs::receiver() points directly into the stable
+// kernel runtime-argument block; a by-hand caller keeps its own coord array alive while using the pipe.
+// receive(round) then acks/listens to the round-th sender (round defaults to 0 — the only entry for a
+// fixed receiver).
 template <
     uint32_t DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE = true,
@@ -262,10 +276,10 @@ class ReceiverPipe {
 
 public:
     // `sender_coords` — NUM_SENDERS (x,y) pairs laid out [x0, y0, x1, y1, ...], the sender(s) this
-    // receiver acks/listens to (virtual NoC coords). COPIED into the object at construction; the pipe
-    // never reads runtime args itself. McastArgs::receiver() fills this from the RT block; a by-hand
-    // caller passes its own.
-    explicit ReceiverPipe(const Noc& noc, const uint32_t (&sender_coords)[2 * NUM_SENDERS]);
+    // receiver acks/listens to (virtual NoC coords). Retained as a NON-OWNING view: storage must
+    // outlive the pipe. McastArgs::receiver() supplies a pointer into the stable RT-argument block;
+    // a by-hand caller supplies storage whose scope covers every pipe use.
+    explicit ReceiverPipe(const Noc& noc, const uint32_t* sender_coords);
 
     // receive(round): ack the round-th stored sender, wait data-ready, clear the flag (clear-before-ack).
     // A fixed receiver calls receive() (round 0); a rotating one passes the round to pick that round's
@@ -282,8 +296,8 @@ private:
     Noc noc_;
     Semaphore<> data_ready_;
     Semaphore<> consumer_ready_;
-    uint32_t coords_[2 * NUM_SENDERS];  // sender coord pairs [x0,y0,...], copied at construction
-    uint32_t round_ = 0;                // monotone round counter for DataReadySignal::Counter
+    const uint32_t* coords_;  // non-owning sender coord pairs [x0,y0,...]; storage outlives this pipe
+    uint32_t round_ = 0;      // monotone round counter for DataReadySignal::Counter
 };
 
 // =============================================================================
@@ -311,11 +325,10 @@ private:
 // call-site knob any more — the host computes each and rides it on the wire, and McastArgs feeds them
 // into the pipe template. So `sender(noc)` / `receiver(noc)` take nothing but the Noc, and McastArgs is
 // the ONLY place that touches runtime args: sender() reads the dest rect off RT and hands it to a
-// SenderPipe (which keeps it); receiver() reads the sender coord(s) off RT and hands them to a
-// ReceiverPipe (which keeps them). The two pipes are symmetric — each is constructed with its coords
-// and stores them; neither reads runtime args itself. The rotating vs fixed RT layout is the one thing
-// the caller still spells, as the SPAN template param (it sizes the RT block); SPAN > 0 alone selects
-// rotating.
+// SenderPipe (which keeps it); receiver() hands a stable view of the sender coord(s) in RT directly to
+// ReceiverPipe. Neither pipe fetches args by index in its hot methods. The rotating vs fixed RT layout
+// is the one thing the caller still spells, as the SPAN template param (it sizes the RT block); SPAN >
+// 0 alone selects rotating.
 
 // The one mcast-args decoder. Chainable in BOTH arg lists, exactly like TensorAccessorArgs:
 //   McastArgs<a.next_compile_time_args_offset(), a.next_runtime_args_offset()> picks up right after a
@@ -356,21 +369,11 @@ struct McastArgs {
             noc, rect<NOC_ID>(), num_active);
     }
 
-    // receiver(): read the sender coords off the RT block HERE (the arg-aware layer — the pipe never
-    // touches runtime args) and hand them to a ReceiverPipe that keeps them. FIXED: the one pair at
-    // RT_BASE+0/+1. ROTATING: SPAN pairs, one per round, past the rect. The call site then just calls
-    // receive() (fixed) / receive(round) (rotating) — no coords passed.
+    // receiver(): hand ReceiverPipe a non-owning view directly into the stable RT block. FIXED: the
+    // one pair starts at RT_BASE+0. ROTATING: SPAN pairs, one per round, start past the rect at
+    // RT_BASE+4. The call site then just calls receive() (fixed) / receive(round) (rotating).
     ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders> receiver(const Noc& noc) const {
-        uint32_t coords[2 * num_senders];
-        if constexpr (SPAN == 0) {
-            coords[0] = sender_x();
-            coords[1] = sender_y();
-        } else {
-            for (uint32_t i = 0; i < SPAN; ++i) {
-                coords[2 * i + 0] = sender_x(i);
-                coords[2 * i + 1] = sender_y(i);
-            }
-        }
+        const uint32_t* coords = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + (SPAN == 0 ? 0 : 4)));
         return ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders>(noc, coords);
     }
 
