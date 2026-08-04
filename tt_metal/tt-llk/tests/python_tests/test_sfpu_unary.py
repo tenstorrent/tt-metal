@@ -275,6 +275,12 @@ def test_eltwise_unary_sfpu_float(
 # Integer unary SFPU ops. Each has a dedicated integer kernel and runs through the
 # shared driver with the input unpacked straight to DST (dest_acc=Yes is required for
 # the 32-bit int path). Golden is exact (no PCC/tolerance).
+#
+# Int32 L1 stimuli/results are two's-complement here (twos_complement=True below), which
+# is both what ttnn feeds the device and what the packer writes back out of the
+# sign-magnitude DST. Ops whose result is always non-negative are insensitive to the
+# choice (the two encodings agree on non-negatives), but Neg emits negatives, so
+# decoding its result as sign-magnitude would turn -x into -(INT32_MAX - x + 1).
 _INT_UNARY_OPS = [
     MathOperation.LeftShift,
     MathOperation.RightShift,
@@ -333,6 +339,7 @@ def test_eltwise_unary_sfpu_int(
         fast_mode,
         input_dimensions,
         spec_A=_int_unary_stimuli_spec(mathop),
+        twos_complement=True,
     )
 
 
@@ -622,6 +629,7 @@ def eltwise_unary_sfpu(
     spec_A=None,
     custom_atol=None,
     custom_rtol=None,
+    twos_complement: bool = False,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -677,6 +685,7 @@ def eltwise_unary_sfpu(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
         # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)
