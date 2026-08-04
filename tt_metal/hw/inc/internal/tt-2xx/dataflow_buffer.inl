@@ -444,12 +444,13 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 //     - cache op: invalidate the L2 range on acquire (both producer and consumer); flush on release
 //       (producer only)
 //     - record the scoped-lock event
+template <bool is_write>
 inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t num_entries) {
     const auto& s = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
     const uint32_t stride = local_dfb_interface_.stride_size;
     const uint32_t entry = local_dfb_interface_.entry_size;
     // Snapshot the start pointer + this slot's wrap bounds so release replays the identical walk.
-    const ScopedLockRegion region{local_dfb_interface_.is_producer ? s.wr_ptr : s.rd_ptr, s.base_addr, s.limit};
+    const ScopedLockRegion region{is_write ? s.wr_ptr : s.rd_ptr, s.base_addr, s.limit};
     uint32_t addr = region.start;
     for (uint16_t k = 0; k < num_entries; ++k) {
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, addr, entry);
@@ -465,13 +466,14 @@ inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16
     return region;
 }
 
+template <bool is_write>
 inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region, uint16_t num_entries) {
     const uint32_t stride = local_dfb_interface_.stride_size;
     const uint32_t entry = local_dfb_interface_.entry_size;
-    const bool is_producer = local_dfb_interface_.is_producer;
     uint32_t addr = region.start;
     for (uint16_t k = 0; k < num_entries; ++k) {
-        if (is_producer) {
+        // Flush on release only for a write lock. A read lock never writes.
+        if constexpr (is_write) {
             // flush_l2 writes back + drops the matching L1 D$ line on all DM cores.
             flush_l2_cache_range(addr, entry);
         }
@@ -626,7 +628,9 @@ Noc::async_write(
 
 #else  // COMPILE_FOR_TRISC
 
+template <bool>
 inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t) { return {}; }
+template <bool>
 inline void DataflowBuffer::lock_release_impl(ScopedLockRegion, uint16_t) {}
 
 #endif  // !COMPILE_FOR_TRISC

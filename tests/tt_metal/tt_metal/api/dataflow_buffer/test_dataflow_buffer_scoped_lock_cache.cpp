@@ -71,7 +71,7 @@ std::vector<uint32_t> dfb_cache_expected(const DfbCacheParams& p) {
     return exp;
 }
 
-// Builds the DFB, runs the cache-op kernel under slow dispatch, and returns the per-slot read-back.
+// Builds the DFB, enqueues the cache-op kernel, and returns the per-slot read-back.
 std::vector<uint32_t> run_dfb_scoped_lock_cache_test(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const DfbCacheParams& p) {
     IDevice* device = mesh_device->get_devices()[0];
@@ -177,7 +177,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(
 
     // Pre-fill the ring's TL1 with OLD sentinels (first word of each slot); isolation + multi-all rely on
     // this baseline, the handshake variant doesn't (its producer writes the values itself via real
-    // dataflow). LaunchProgram's l1_barrier ensures these land before the kernel runs.
+    // dataflow).
     const uint32_t wpe = p.entry_size / sizeof(uint32_t);
     if (!p.handshake) {
         std::vector<uint32_t> prefill(p.num_entries * wpe, 0u);
@@ -187,7 +187,10 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(
         detail::WriteToDeviceL1(device, core, ring_base, prefill);
     }
 
-    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    distributed::MeshWorkload workload;
+    const distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
 
     // Kernels write their in-kernel verification read-back (via the non-cacheable alias so the result lands
     // in TL1) to the scratch region; the host reads it directly. Layout: handshake -> num_rounds words (one
@@ -213,7 +216,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(
 // Held entries are flushed to TL1 (read back NEW); non-held stay cache-resident (read back OLD).
 
 // Baseline: 1P/1C STRIDED (stride==1, contiguous), lock_n=4 -> held = {0..3}.
-TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerStrided1Sx1S) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushProducerStrided1Sx1S) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         1,
@@ -228,7 +231,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerStrided1Sx1S) {
 }
 
 // Same baseline but lock_n=1: only the head entry {0} is held/flushed.
-TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerStrided1Sx1S_LockOne) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushProducerStrided1Sx1S_LockOne) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         1,
@@ -243,7 +246,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerStrided1Sx1S_LockOne) {
 }
 
 // 2 producers (stride==2): only this producer's held {0,2,4,6} flush; interleaved neighbours {1,3,5,7} untouched.
-TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerStrided2Sx1S_SkipsNeighbours) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushProducerStrided2Sx1S_SkipsNeighbours) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         2,
@@ -258,7 +261,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerStrided2Sx1S_SkipsNeighbou
 }
 
 // ALL pattern (broadcast, stride==1) instead of STRIDED; held = {0..3}.
-TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerAll) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushProducerAll) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         1,
@@ -273,7 +276,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerAll) {
 }
 
 // Wrap: held window {0,2,0} crosses the ring end -> exercises the wrap-to-base branch (idempotent); {0,2}=NEW.
-TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerWrap) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushProducerWrap) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         2,
@@ -288,7 +291,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheFlushProducerWrap) {
 }
 
 // Consumer release must NOT flush -> every slot reads back OLD.
-TEST_F(MeshDeviceFixture, ScopedLockCacheFlushConsumerDoesNotFlush) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushConsumerDoesNotFlush) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         1,
@@ -306,7 +309,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheFlushConsumerDoesNotFlush) {
 // Held entries' stale L2 lines are discarded (re-read fetches NEW from TL1); non-held keep the stale OLD.
 
 // Baseline: 1P/1C STRIDED producer (stride==1), lock_n=4 -> held = {0..3}.
-TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateProducerStrided1Sx1S) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheInvalidateProducerStrided1Sx1S) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         1,
@@ -321,7 +324,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateProducerStrided1Sx1S) {
 }
 
 // 2 producers (stride==2): only held {0,2,4,6} invalidated; interleaved neighbours {1,3,5,7} keep stale OLD.
-TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateProducerStrided2Sx1S_SkipsNeighbours) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheInvalidateProducerStrided2Sx1S_SkipsNeighbours) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         2,
@@ -336,7 +339,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateProducerStrided2Sx1S_SkipsNei
 }
 
 // Consumer also invalidates on acquire (both roles) -> held {0,1,2,3}=NEW, rest OLD.
-TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateConsumer) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheInvalidateConsumer) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         1,
@@ -353,7 +356,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateConsumer) {
 // 1 producer + 4 ALL consumers sharing entries: producer seeds shared-L2=OLD/TL1=NEW + signals, then all 4
 // concurrently invalidate the SHARED held {0,1} on acquire and each must read held -> NEW (ALL redundant-invalidate
 // path).
-TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateMultiConsumerAll) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheInvalidateMultiConsumerAll) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         /*num_producers=*/1,
@@ -376,7 +379,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheInvalidateMultiConsumerAll) {
 
 // End-to-end over reserve/push <-> wait/pop: 4-entry ring x 12 rounds so slots wrap; the consumer's acquire-invalidate
 // discards its stale prior-round line.
-TEST_F(MeshDeviceFixture, ScopedLockCacheHandshakeDmToDmWrap) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheHandshakeDmToDmWrap) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         /*num_producers=*/1,
@@ -400,7 +403,7 @@ TEST_F(MeshDeviceFixture, ScopedLockCacheHandshakeDmToDmWrap) {
 
 // Same handshake, but the producer writes WRITE-AROUND (uncached alias) so the store lands in TL1 without updating
 // the consumer's cache (mimics a non-snooping Tensix producer) -> the consumer's acquire-invalidate is LOAD-BEARING.
-TEST_F(MeshDeviceFixture, ScopedLockCacheHandshakeNonSnoopingProducerWrap) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheHandshakeNonSnoopingProducerWrap) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{
         /*num_producers=*/1,

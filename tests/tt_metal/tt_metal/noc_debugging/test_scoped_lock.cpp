@@ -1245,7 +1245,7 @@ void run_dfb_mcast_xcore_locked_test(
 
 }  // namespace
 
-// Writing into an entry of the ring while holding its lock is -> no issue.
+// Writing into an entry of the ring while holding its lock -> no issue.
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteInOwnLockNoIssue) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
@@ -1253,11 +1253,24 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteInOwnLockNoIssue) 
             GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
         }
         run_dfb_scoped_lock_test(
-            this, mesh_device, /*target_entry_index=*/2, /*write_after_unlock=*/false, ExpectedDfbIssue::None);
+            this, mesh_device, /*target_entry_index=*/0, /*write_after_unlock=*/false, ExpectedDfbIssue::None);
     }
 }
 
-// Lock held (whole ring), but the write targets just PAST the ring -> no issue (outside the DFB extent).
+// The write-lock covers only entry 0, so writing a different (unlocked) entry of the DFB region ->
+// WRITE_TO_UNLOCKED_DFB.
+TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteUnlockedEntryIssue) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
+            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
+        }
+        run_dfb_scoped_lock_test(
+            this, mesh_device, /*target_entry_index=*/2, /*write_after_unlock=*/false, ExpectedDfbIssue::Unlocked);
+    }
+}
+
+// Lock held (one entry), but the write targets just PAST the ring -> no issue (outside the DFB region).
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBNoIssueSpatial) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());

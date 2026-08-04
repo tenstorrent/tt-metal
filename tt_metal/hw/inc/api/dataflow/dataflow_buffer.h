@@ -24,6 +24,8 @@
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "api/lock.h"
+#include "api/core_local_mem.h"
+#include <type_traits>
 
 #if __has_include("chlkc_descriptors.h")
 #include "chlkc_descriptors.h"
@@ -55,6 +57,38 @@ private:
 #endif
     }
 };
+
+// RAII scoped lock returned by DataflowBuffer::scoped_write_lock()/scoped_read_lock(). get_ptr() returns
+// the write pointer for a write-lock and the read pointer for a read-lock, wrapped in a CoreLocalMem object.
+// The CoreLocalMem object is mutable for a write-lock, const for a read-lock.
+template <bool IsWrite, typename ReleaseFunc>
+class DfbScopedLock {
+public:
+    inline __attribute__((always_inline)) DfbScopedLock(uint32_t pointer, ReleaseFunc release) :
+        pointer_(pointer), release_(release) {}
+    inline __attribute__((always_inline)) ~DfbScopedLock() { release_(); }
+
+    DfbScopedLock(const DfbScopedLock&) = delete;
+    DfbScopedLock(DfbScopedLock&&) = delete;
+    DfbScopedLock& operator=(const DfbScopedLock&) = delete;
+    DfbScopedLock& operator=(DfbScopedLock&&) = delete;
+
+    template <typename T = uint32_t>
+    [[nodiscard]] inline __attribute__((always_inline)) CoreLocalMem<std::conditional_t<IsWrite, T, const T>> get_ptr()
+        const {
+        return CoreLocalMem<std::conditional_t<IsWrite, T, const T>>(pointer_);
+    }
+
+private:
+    uint32_t pointer_;
+    ReleaseFunc release_;
+};
+
+template <bool IsWrite, typename ReleaseFunc>
+[[nodiscard]] inline __attribute__((always_inline)) DfbScopedLock<IsWrite, ReleaseFunc> make_dfb_scoped_lock(
+    uint32_t pointer, ReleaseFunc release) {
+    return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
+}
 
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
@@ -327,23 +361,21 @@ public:
     void evil_set_read_ptr(uint32_t addr);
 #endif
 
-    // 1. Flags any NOC write into the locked region as WRITE_TO_LOCKED_DFB:
-    //    - WH/BH: the entire ring is locked.
-    //    - Quasar: num_entries entries are locked, from the write pointer (producer) or read pointer (consumer).
-    // 2. On Quasar, runs L2 cache ops over the locked entries:
-    //    - Invalidate on acquire (both producer and consumer).
-    //    - Flush on release (producer only).
-#ifdef ARCH_QUASAR
-    [[nodiscard]] auto scoped_lock(uint16_t num_entries = 1) {
-        const ScopedLockRegion region = lock_acquire_impl(num_entries);
-        return Lock([this, region, num_entries]() { lock_release_impl(region, num_entries); });
+    // Lock num_entries entries starting at the write_ptr (scoped_write_lock) or read_ptr (scoped_read_lock).
+    // Both:
+    //   - Flag any NOC write into the locked entries as WRITE_TO_LOCKED_DFB.
+    //   - On Quasar, invalidate the L2 cache range on acquire.
+    // In addition, scoped_write_lock also flushes on release.
+    [[nodiscard]] auto scoped_write_lock(uint16_t num_entries = 1) {
+        const ScopedLockRegion region = lock_acquire_impl<true>(num_entries);
+        return make_dfb_scoped_lock<true>(
+            region.start, [this, region, num_entries]() { lock_release_impl<true>(region, num_entries); });
     }
-#else
-    [[nodiscard]] auto scoped_lock() {
-        const ScopedLockRegion region = lock_acquire_impl();
-        return Lock([this, region]() { lock_release_impl(region); });
+    [[nodiscard]] auto scoped_read_lock(uint16_t num_entries = 1) {
+        const ScopedLockRegion region = lock_acquire_impl<false>(num_entries);
+        return make_dfb_scoped_lock<false>(
+            region.start, [this, region, num_entries]() { lock_release_impl<false>(region, num_entries); });
     }
-#endif
 
 private:
     void reserve_back_impl(uint16_t num_entries);
@@ -358,17 +390,14 @@ private:
 #endif
 
     struct ScopedLockRegion {
-        uint32_t start;  // first locked address (WH/BH: ring base; Quasar: wr_ptr/rd_ptr at acquire)
-        uint32_t base;   // wrap base  (Quasar tc_slot; == start on WH/BH)
-        uint32_t limit;  // wrap limit (Quasar tc_slot; == fifo_limit on WH/BH)
+        uint32_t start;  // first locked address = the write/read pointer at acquire
+        uint32_t base;   // wrap base  (Quasar tc_slot base; WH/BH ring base)
+        uint32_t limit;  // wrap limit (Quasar tc_slot limit; WH/BH fifo_limit)
     };
-#ifdef ARCH_QUASAR
+    template <bool is_write>
     ScopedLockRegion lock_acquire_impl(uint16_t num_entries);
+    template <bool is_write>
     void lock_release_impl(ScopedLockRegion region, uint16_t num_entries);
-#else
-    ScopedLockRegion lock_acquire_impl();
-    void lock_release_impl(ScopedLockRegion region);
-#endif
 
 #ifdef ARCH_QUASAR
     template <bool is_producer>

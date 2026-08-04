@@ -188,8 +188,10 @@ T DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t element_offset) 
     return value;
 }
 
-inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl() { return {}; }
-inline void DataflowBuffer::lock_release_impl(ScopedLockRegion) {}
+template <bool>
+inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t) { return {}; }
+template <bool>
+inline void DataflowBuffer::lock_release_impl(ScopedLockRegion, uint16_t) {}
 
 #else
 
@@ -203,17 +205,35 @@ inline bool DataflowBuffer::pages_available_at_front(int32_t num_pages) const {
 
 inline void DataflowBuffer::write_barrier_impl(const Noc& noc) const { noc.async_write_barrier(); }
 
-// WH/BH: same behavior as CircularBuffer::scoped_lock: lock the entire ring
-inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl() {
+// WH/BH: lock num_entries entries from the write (is_write) or read pointer.
+template <bool is_write>
+inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t num_entries) {
     const uint32_t limit = local_dfb_interface_.fifo_limit;
     const uint32_t base = limit - local_dfb_interface_.fifo_size;
-    RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, base, limit - base);
-    return {base, base, limit};
+    const uint32_t stride = local_dfb_interface_.fifo_page_size;
+    const uint32_t pointer = is_write ? local_dfb_interface_.fifo_wr_ptr : local_dfb_interface_.fifo_rd_ptr;
+    uint32_t addr = pointer;
+    for (uint16_t k = 0; k < num_entries; ++k) {
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, addr, stride);
+        addr += stride;
+        if (addr >= limit) {
+            addr = base;
+        }
+    }
+    return {pointer, base, limit};
 }
 
-inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region) {
-    RECORD_SCOPED_LOCK_EVENT(
-        NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, region.start, region.limit - region.start);
+template <bool is_write>
+inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region, uint16_t num_entries) {
+    const uint32_t stride = local_dfb_interface_.fifo_page_size;
+    uint32_t addr = region.start;
+    for (uint16_t k = 0; k < num_entries; ++k) {
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, addr, stride);
+        addr += stride;
+        if (addr >= region.limit) {
+            addr = region.base;
+        }
+    }
 }
 
 #endif

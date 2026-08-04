@@ -27,7 +27,7 @@ void kernel_main() {
     for (uint32_t r = 0; r < num_rounds; ++r) {
         dfb.reserve_back(1);
         {
-            auto lk = dfb.scoped_lock(lock_n);
+            auto lk = dfb.scoped_write_lock(lock_n);
 #if defined(DFB_CACHE_NONSNOOP_PRODUCER)
             volatile uint32_t* entry = (volatile uint32_t*)(uintptr_t)(dfb.get_write_ptr() + MEM_L1_UNCACHED_BASE);
 #else

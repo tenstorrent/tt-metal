@@ -65,7 +65,7 @@ void kernel_main() {
         // destruction, so the producer must write the data INSIDE the lock. Release then flushes the
         // HELD entries (producer) L2->TL1; non-held stores stay cache-resident -> TL1 stays OLD.
         {
-            auto lk = dfb.scoped_lock(lock_n);
+            auto lk = dfb.scoped_write_lock(lock_n);
             for (uint32_t s = 0; s < num_entries; ++s) {
                 cached[s * wpe] = new_val + s;
             }
@@ -89,7 +89,7 @@ void kernel_main() {
             uncached[s * wpe] = new_val + s;  // TL1 = NEW; cache still OLD (uncached write not snooped)
         }
         {
-            auto lk = dfb.scoped_lock(lock_n);
+            auto lk = dfb.scoped_write_lock(lock_n);
         }  // acquire invalidates held entries' cache lines
         for (uint32_t s = 0; s < num_entries; ++s) {
             result_uncached[s] = cached[s * wpe];  // held -> NEW (invalidated->refetch), others -> OLD (hit)
