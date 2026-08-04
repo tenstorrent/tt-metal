@@ -1862,3 +1862,35 @@ Note the `4x8` mesh gives at most 8-way T-sharding through `ParallelFactor`, whi
 axis. `AudioTCParallelConfig` (time *and* channel) is what LTX uses to reach both axes, and
 `MiniMaxH3AudioDecoder` accepts only `ParallelFactor` — widening that is likely required to
 get past 8x.
+
+## Amendment 63 (2026-08-04) — T-parallel audio decode works at factor 4; factor 8 is silently wrong
+
+With the readback fixed (amendment 62) the sweep runs. 5 s clip, 4x8 mesh:
+
+| t_factor | mesh axis | s | vs 32-dev replicated | PSNR vs 1-device |
+|---|---|---|---|---|
+| 1 | 1 | 1.691 | 1.00x | inf |
+| **4** | 0 | **0.988** | 1.71x | **54.2 dB** |
+| 8 | 1 | 0.898 | 1.88x | **-6.3 dB** |
+
+**`t_factor=8` is faster and wrong.** -6.3 dB is not a precision wobble, it is a different
+signal; the correctness gate is the only reason this did not get reported as a 1.88x win.
+Factor 4 on the 4-wide axis is correct at 54.2 dB. Do not ship factor 8 without finding the
+bug -- likely the halo/T-gather at 8 shards of a 256-frame padded extent, since 207 frames
+pad to 256 and 256/8 = 32 is exactly one tile per shard.
+
+Against the true single-device baseline of 1.284 s, factor 4 is **1.30x -> 0.988 s**.
+
+**The scaling is poor and the reason is known.** 4x the devices buys 1.3x because the
+vocoder's conv1d falls back per-tap at the sharded shapes — the run logs
+
+    DRAM Auto slice could not find valid slice configuration ... height-slicing
+    depthwise conv1d unavailable at T_pad=1041, C=512, K=7; MAC fallback
+
+repeatedly. `_depthwise_tap_mac` (`audio_ops.py:236`) is 7 strided slices + 7 multiplies +
+6 adds per call in place of one conv. Fixing the slicer configuration at these shapes, or
+giving the fallback a better form, is what stands between 0.988 s and anything near 0.05 s —
+more parallelism on top of a per-tap fallback will not get there.
+
+**Audio decode stands at 0.988 s against 0.05 s.** Encoder and decoder targets are met
+(2.99 s and 1.0 s); this one is not.
