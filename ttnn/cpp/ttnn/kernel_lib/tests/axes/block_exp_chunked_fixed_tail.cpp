@@ -27,21 +27,16 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_out);
 
     using namespace compute_kernel_lib;
-    static_assert(BlockingSettings{8}.num_blocks(2, 9) == 4);
-    static_assert(BlockingSettings{8}.physical_tiles(2, 9) == 32);
-    static_assert(BlockingSettings{8}.last_block_size(2, 9) == 1);
-    static_assert(BlockingSettings{8, 18}.num_blocks(2, 9) == 4);
     constexpr auto tail_sync = synchronize_full_block ? BlockTailSync::FullBlock : BlockTailSync::ValidTiles;
-    constexpr auto blocking = BlockingSettings{block_size, tail_sync};
     if constexpr (Ht == 1) {
         eltwise_chain(
-            EltwiseShape::tiles(Wt, blocking),
+            EltwiseShape::tiles(Wt, block_size, tail_sync),
             CopyTile<input(cb_in, WaitPolicy::PerChunk, PopPolicy::PerChunk, OperandKind::Block), Dst::D0>{},
             Exp<>{},
             PackTile<output(cb_out, ReservePolicy::PerChunk, PushPolicy::PerChunk)>{});
     } else {
         eltwise_chain(
-            EltwiseShape::grid(Ht, Wt, blocking),
+            EltwiseShape::grid(Ht, Wt, block_size, tail_sync),
             CopyTile<input(cb_in, WaitPolicy::PerChunk, PopPolicy::PerChunk, OperandKind::Block), Dst::D0>{},
             Exp<>{},
             PackTile<output(cb_out, ReservePolicy::PerChunk, PushPolicy::PerChunk)>{});

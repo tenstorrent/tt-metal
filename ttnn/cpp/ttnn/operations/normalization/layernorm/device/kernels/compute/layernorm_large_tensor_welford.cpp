@@ -94,7 +94,8 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
 
     for (auto block : generic::blocks(Wt, blk)) {
-        const auto block_shape = ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
+        const auto block_shape =
+            ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
         // Keep pre-add in a separate CB to avoid the transpose_dest aliasing issue.
         ckl::add<
             ckl::input(cb_in, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
@@ -487,7 +488,7 @@ void kernel_main() {
 
         for (auto block : generic::blocks(Wt, blk)) {
             const auto block_shape =
-                ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
+                ckl::EltwiseShape::tiles(block.size(), block.full_block_size(), ckl::BlockTailSync::FullBlock);
             // Last block may only be partially-filled,
             // and only tiles that have data in them are
             // processed, but need to sync with reader on full blocks

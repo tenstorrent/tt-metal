@@ -84,7 +84,7 @@ namespace compute_kernel_lib {
 //  the leaf tags from there.)
 
 // =============================================================================
-// 1b. 2D shape — (Ht, Wt) tile grid for the 2D chain overload
+// 1a. 2D shape — (Ht, Wt) tile grid for the 2D chain overload
 // =============================================================================
 
 /// How a Chunked lifecycle synchronizes the partial tail of a blocked walk.
@@ -108,49 +108,6 @@ enum class EltwiseShapeKind : uint8_t {
 template <EltwiseShapeKind Kind>
 struct TypedEltwiseShape;
 
-/// Blocking contract for an elementwise walk.
-///
-/// `BlockingSettings(block_size)` takes the logical tile count from the accompanying
-/// `EltwiseShape`. Supplying `total_tiles` explicitly is checked against the accompanying shape.
-///
-/// The default `BlockTailSync::FullBlock` preserves fixed-block producer/consumer contracts:
-/// Chunked CB lifecycles synchronize `block_size` pages for every physical block, including a
-/// partial tail, while compute and pack execute only valid tiles. Pass
-/// `BlockTailSync::ValidTiles` when the producer and consumer exchange only the clamped logical
-/// tail. The ordinary numeric `EltwiseShape::tiles(n, block_size)` and
-/// `EltwiseShape::grid(H, W, block_size)` forms also use `ValidTiles`.
-///
-/// Blocking is row-wise: for a grid, each of the `Ht` rows independently walks `Wt` valid tiles.
-/// Padding is not inferred by inspecting a CB. Selecting `FullBlock` declares that every
-/// participating Chunked producer/consumer uses full physical blocks. A partial physical tail
-/// exists when `Wt % block_size != 0`. Use `EltwiseShape::tiles` for one contiguous sequence and
-/// `EltwiseShape::grid` when each logical row has an independent tail.
-///
-/// For a multi-row `ValidTiles` walk, size each participating Chunked CB ring to a multiple of
-/// `Wt` (or large enough for the complete walk). Its partial row tail intentionally breaks
-/// block-size alignment, so a ring sized only to a multiple of `block_size` could make a later
-/// full chunk straddle the physical ring boundary, which the underlying CB chunk API forbids.
-/// `FullBlock` retains block alignment and does not have that restriction.
-///
-/// In `FullBlock` mode the physical contract cannot be silently split, so `block_size` must fit
-/// the chain's DEST lane capacity. `ValidTiles` mode retains the numeric shape behavior and may
-/// clamp an oversized block to that capacity. A zero `total_tiles` is the sentinel for "infer from
-/// shape"; zero-sized shapes and zero block sizes are rejected by `eltwise_chain`.
-struct BlockingSettings {
-    uint32_t block_size;
-    uint32_t total_tiles;
-    BlockTailSync tail_sync;
-
-    explicit constexpr BlockingSettings(uint32_t block_size, BlockTailSync tail_sync = BlockTailSync::FullBlock);
-    constexpr BlockingSettings(
-        uint32_t block_size, uint32_t total_tiles, BlockTailSync tail_sync = BlockTailSync::FullBlock);
-
-    constexpr uint32_t total_tiles_or(uint32_t shape_total_tiles) const;
-    constexpr uint32_t num_blocks(uint32_t Ht, uint32_t Wt) const;
-    constexpr uint32_t physical_tiles(uint32_t Ht, uint32_t Wt) const;
-    constexpr uint32_t last_block_size(uint32_t Ht, uint32_t Wt) const;
-};
-
 /// Iteration shape for `eltwise_chain`. Carries the tile grid (Ht × Wt, both in tiles), the
 /// per-outer-iter `block_size`, and the tail synchronization policy. Ht=1 expresses the 1D case
 /// (no row axis, plain linear walk); the `Row`/`Col` indexing modes degenerate for 1D usage but
@@ -159,13 +116,11 @@ struct BlockingSettings {
 /// Factories cover the common construction paths:
 ///   - `EltwiseShape::tiles(n)`           — 1D, block_size = 1
 ///   - `EltwiseShape::tiles(n, blk)`      — 1D + block
-///   - `EltwiseShape::tiles(n, BlockingSettings{blk})`
-///                                       — 1D fixed-size physical blocks, extent inferred from n
-///   - `EltwiseShape::tiles(n, BlockingSettings{blk, BlockTailSync::ValidTiles})`
-///                                       — 1D explicitly clamped tail synchronization
+///   - `EltwiseShape::tiles(n, blk, BlockTailSync::FullBlock)`
+///                                       — 1D fixed-size physical blocks
 ///   - `EltwiseShape::grid(H, W)`         — 2D, block_size = 1
 ///   - `EltwiseShape::grid(H, W, blk)`    — 2D + block
-///   - `EltwiseShape::grid(H, W, BlockingSettings{blk})`
+///   - `EltwiseShape::grid(H, W, blk, BlockTailSync::FullBlock)`
 ///                                       — 2D row-blocked fixed-size physical blocks
 ///
 /// Construction from a tile count is `explicit`: a bare number is NOT accepted as a
@@ -179,18 +134,18 @@ struct EltwiseShape {
     uint32_t Wt;
     uint32_t block_size;
     BlockTailSync tail_sync;
-    uint32_t blocking_total_tiles;
 
-    constexpr EltwiseShape(uint32_t H, uint32_t W, uint32_t blk = 1);
+    constexpr EltwiseShape(
+        uint32_t H, uint32_t W, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles);
 
     // Explicit: bare numbers are forbidden at call sites. Use EltwiseShape::tiles(n) or
     // EltwiseShape::single() so the iteration shape is always written out.
     explicit constexpr EltwiseShape(uint32_t n_tiles);
 
-    static constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> tiles(uint32_t n, uint32_t blk = 1);
-    static constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> tiles(uint32_t n, BlockingSettings blocking);
-    static constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> grid(uint32_t H, uint32_t W, uint32_t blk = 1);
-    static constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> grid(uint32_t H, uint32_t W, BlockingSettings blocking);
+    static constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> tiles(
+        uint32_t n, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles);
+    static constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> grid(
+        uint32_t H, uint32_t W, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles);
 
     static constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> of(uint32_t r, uint32_t c);
     static constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> row(uint32_t c);
@@ -206,24 +161,26 @@ template <EltwiseShapeKind Kind>
 struct TypedEltwiseShape : EltwiseShape {
     static constexpr EltwiseShapeKind kind = Kind;
 
-    constexpr TypedEltwiseShape(uint32_t H, uint32_t W, uint32_t blk = 1) : EltwiseShape(H, W, blk) {}
+    constexpr TypedEltwiseShape(
+        uint32_t H, uint32_t W, uint32_t blk = 1, BlockTailSync tail_sync = BlockTailSync::ValidTiles) :
+        EltwiseShape(H, W, blk, tail_sync) {}
 };
 
 /// Who performs the chain's one-time setup — init + reconfig — the leading template arg to
 /// `eltwise_chain`. This is about *ownership*, NOT about whether inits are hoistable: which inits
 /// are hoistable is deduced from the chain's uniformity and is never a manual choice.
 ///
-///   eltwise_chain(shape, elts...);                       // default: SetupOwner::Chain
+///   eltwise_chain(shape, elts...);                       // default: InitReconfigOwner::Chain
 ///   // To hoist the setup out of your own loop: emit it ONCE before the loop yourself (e.g. the
 ///   // original raw *_init call), then hand ownership to the caller so the chain skips it:
 ///   <emit the chain's one-time setup once, before the loop>
-///   for (...) eltwise_chain<SetupOwner::Caller>(EltwiseShape::single(), elts...);
+///   for (...) eltwise_chain<InitReconfigOwner::Caller>(EltwiseShape::single(), elts...);
 ///
-/// SetupOwner::Caller is only valid when the chain's entire setup is boot-hoistable (uniform math
+/// InitReconfigOwner::Caller is only valid when the chain's entire setup is boot-hoistable (uniform math
 /// MOP + SFPU init AND homogeneous pack CBs) — i.e. there's a single "once, before the loop" the
 /// caller can own. eltwise_chain static_asserts this; a chain that must re-emit setup per tile
-/// (so the caller can't pre-do it once) is a compile error pointing you back to SetupOwner::Chain.
-enum class SetupOwner {
+/// (so the caller can't pre-do it once) is a compile error pointing you back to InitReconfigOwner::Chain.
+enum class InitReconfigOwner {
     Chain,   // this eltwise_chain call emits the one-time setup (init + reconfig)
     Caller,  // the caller emitted it once, outside the loop — the chain emits none of it here
 };
@@ -246,13 +203,13 @@ enum class SetupOwner {
 //
 // The knob covers ordinary, L1-accumulation, and DEST-accumulation walks. It does not suppress
 // caller-owned work outside eltwise_chain, including compute_kernel_hw_startup or setup emitted for
-// SetupOwner::Caller.
+// InitReconfigOwner::Caller.
 #ifndef CKL_ELTWISE_CHAIN_SKIP_COMPUTE
 #define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 0
 #endif
 
 // =============================================================================
-// 1c. Input and output CB synchronization policies
+// 1b. Input and output CB synchronization policies
 // =============================================================================
 
 /// When the chain waits for an input CB.
@@ -287,7 +244,7 @@ enum class OperandKind : uint8_t {
 };
 
 // =============================================================================
-// 1d. TileOffset — orthogonal tile-index addressing
+// 1c. TileOffset — orthogonal tile-index addressing
 // =============================================================================
 //
 // Composes with `OperandKind`: `tile_id = base + derived_from_kind(r, c)`, where
@@ -318,11 +275,11 @@ struct StridedTileRange {
 /// Whether the chain updates the data format for an operand.
 enum class DataFormatReconfig : bool { Disabled = false, Enabled = true };
 
-/// Whether a pack adds DEST to the output tile already in L1.
+/// Whether a pack accumulates into one output tile in L1.
 enum class L1Accumulation : uint8_t {
     Disabled,
-    Enabled,
-    SeedFirst,
+    Enabled,        // the first pack seeds the output; subsequent packs accumulate
+    AddToExisting,  // every pack, including the first, adds to the existing output
 };
 
 /// Scope of an FPU binary's persistent DEST accumulation.
@@ -340,7 +297,7 @@ enum class DestAccumulation : uint8_t {
 enum class PackRelu : bool { Disabled = false, Zero = true };
 
 // =============================================================================
-// 1e. Grouped operand configuration
+// 1d. Grouped operand configuration
 // =============================================================================
 //
 // `input(...)` and `output(...)` bind a buffer id to the compile-time properties of one operand.
@@ -437,8 +394,8 @@ constexpr uint32_t to_u32(Dst s) noexcept;
 /// For numeric shapes, the chain clamps `block_size` at runtime so
 /// `block_size * chain_lane_width` always fits DEST (`DEST_AUTO_LIMIT`): an oversized value can't
 /// overflow DEST, it only costs extra outer iterations. Streaming CB-reader chains consume one
-/// tile per iter, so block_size is clamped to 1 for them. A `BlockingSettings` shape in
-/// `FullBlock` mode instead describes a physical CB contract and must already fit; the chain
+/// tile per iter, so block_size is clamped to 1 for them. A shape using `FullBlock` mode instead
+/// describes a physical CB contract and must already fit; the chain
 /// asserts rather than changing it.
 
 // =============================================================================
@@ -526,7 +483,7 @@ using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bit
 //  are implementation detail — declared in eltwise_chain.inl, not on this public surface.)
 
 // =============================================================================
-// 9. Public API — eltwise_chain
+// 6. Public API — eltwise_chain
 // =============================================================================
 //
 // Caller-init contract (see the @file block): the caller owns engine-wide init
@@ -535,9 +492,8 @@ using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bit
 
 /// Run the chain over an (Ht, Wt) tile grid with optional per-outer-iter block size.
 /// `EltwiseShape` covers both walks: `tiles(n[, blk])` (1D, Ht=1),
-/// `tiles(n, BlockingSettings{blk})` for a fixed-block 1D CB contract, or
-/// `grid(H, W, BlockingSettings{blk})` for a row-blocked 2D contract. Pass
-/// `BlockTailSync::ValidTiles` in the settings to explicitly select clamped synchronization.
+/// `tiles(n, blk, BlockTailSync::FullBlock)` for a fixed-block 1D CB contract, or
+/// `grid(H, W, blk, BlockTailSync::FullBlock)` for a row-blocked 2D contract.
 /// A bare number is not accepted — write `EltwiseShape::tiles(n)` (or
 /// `EltwiseShape::single()` for one tile) so the iteration shape is always explicit.
 ///
@@ -549,7 +505,7 @@ using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bit
 /// Row / Col / Scalar pick the per-iter tile index; input policies that own a staged CB
 /// window take the upfront-block path; Streaming chains clamp block_size to 1.
 /// `BlockTailSync` affects only per-chunk synchronization counts. Row/Col need a non-streaming policy.
-template <SetupOwner SO = SetupOwner::Chain, EltwiseShapeKind Kind, class... Es>
+template <InitReconfigOwner Owner = InitReconfigOwner::Chain, EltwiseShapeKind Kind, class... Es>
 ALWI void eltwise_chain(TypedEltwiseShape<Kind> shape, Es... elts);
 
 }  // namespace compute_kernel_lib

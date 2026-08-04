@@ -110,14 +110,14 @@ void kernel_main() {
             PushPolicy::OneAtEnd,
             DataFormatReconfig::Disabled,
             PackRelu::Disabled,
-            L1Accumulation::SeedFirst)>;
+            L1Accumulation::Enabled)>;
         using CallerPack = PackTile<output(
             cb_acc,
             ReservePolicy::None,
             PushPolicy::None,
             DataFormatReconfig::Disabled,
             PackRelu::Disabled,
-            L1Accumulation::SeedFirst)>;
+            L1Accumulation::Enabled)>;
 
         if constexpr (caller_managed) {
             accumulator.reserve_back(1);
