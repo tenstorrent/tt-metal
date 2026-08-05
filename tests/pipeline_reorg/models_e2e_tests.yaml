@@ -208,6 +208,27 @@
 # ── Qwen ───────────────────────────────────────────────────────────
 
 - name: Qwen3-32B e2e tests
+  # TTTv2 substitution (wh_llmbox_perf / T3K only — the TTTv2 qwen3_32b demo is T3K-only: 64 attn / 8 KV
+  # heads need 8-way TP and the 32B weights don't fit < 8 devices). ci-token-matching -> token-accuracy,
+  # ci-eval-32 -> eval-32; both under the performance optimization, matching the TTTv1 leg's cases.
+  # One pytest process per case (matching the Qwen2.5-Coder-32B leg below): grouping demo configs in a
+  # single process on the 8-device Wormhole mesh has wedged an ETH core, so each case opens its own mesh.
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-32B HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen3-32B MESH_DEVICE=T3K
+    pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "token-accuracy and performance"
+    pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "eval-32 and performance"
+  model: qwen3-32b
+  model_family: Qwen
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Qwen3-32B e2e tests (Blackhole)
+  # The TTTv2 qwen3_32b demo is T3K-only, so the Blackhole (bh_quietbox_2) SKU keeps its TTTv1
+  # simple_text_demo leg until a Blackhole TTTv2 bring-up exists — no coverage dropped.
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
@@ -215,9 +236,6 @@
   model: qwen3-32b
   model_family: Qwen
   skus:
-    wh_llmbox_perf:
-      timeout: 15
-      tier: 2
     bh_quietbox_2:
       timeout: 15
       tier: 2
@@ -259,9 +277,9 @@
 
 - name: Qwen2.5-Coder-32B e2e tests
   cmd: |
-    export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
-    pytest --timeout 1500 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-Coder-32B-Instruct MESH_DEVICE=T3K
+    pytest --timeout 1500 models/common/tests/demos/qwen25_coder_32b/demo.py -k "token-accuracy and performance"
+    pytest --timeout 1800 models/common/tests/demos/qwen25_coder_32b/demo.py -k "eval-32 and performance"
   model: qwen2.5-coder-32b
   model_family: Qwen
   skus:
@@ -273,8 +291,8 @@
 
 - name: Qwen2.5-7B e2e tests
   cmd: |
-    export HF_MODEL=Qwen/Qwen2.5-7B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-7B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    export HF_MODEL=Qwen/Qwen2.5-7B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct MESH_DEVICE=N300
+    pytest --timeout 420 models/common/tests/demos/qwen25_7b/demo.py -k "token-accuracy and performance"
   model: qwen2.5-7b
   model_family: Qwen
   skus:
@@ -284,15 +302,22 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-# Qwen2.5-72B: disabled, ci-token-matching hanging on CI
+# Qwen2.5-72B e2e: still DISABLED. The original TTTv1 leg was disabled because ci-token-matching hung on
+# CI. The TTTv2 qwen25_72b demo below is the staged replacement (T3K parity-verified locally) but stays
+# commented out until that CI hang is understood. Re-enabling it needs two other edits: add qwen2.5-72b
+# back to the workflow_dispatch model list in .github/workflows/models-t3-e2e-tests.yaml, and raise
+# models.e2e_tier3.wh_llmbox_perf in .github/time_budget.yaml (this leg is +55 on a prior sum of 55).
 # - name: Qwen2.5-72B e2e tests
+#   # TTTv2 qwen25_72b demo is T3K-only (80 layers / 64 attn / 8 KV heads => 8-way TP; 72B weights need 8
+#   # devices). First CI run builds the TTTv2 LazyWeight cache (cold 72B weight conversion) before the demo.
 #   cmd: |
-#     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-72B-Instruct
-#     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+#     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-72B-Instruct MESH_DEVICE=T3K
+#     pytest --timeout 3600 models/common/tests/demos/qwen25_72b/demo.py -k "token-accuracy and performance"
 #   model: qwen2.5-72b
+#   model_family: Qwen
 #   skus:
 #     wh_llmbox_perf:
-#       timeout: 10
+#       timeout: 55
 #       tier: 3
 #   owner_id: U03HY7MK4BT # Mark O'Connor
 #   team: models
@@ -538,9 +563,9 @@
 
 - name: Mistral-7B e2e tests
   cmd: |
-    export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mistralai/Mistral-7B-Instruct-v0.3 MESH_DEVICE=N150
+    pytest --timeout 420 models/common/tests/demos/mistral_7b/demo.py -k "token-accuracy and performance"
+    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3 pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: mistral-7b
   model_family: Mistral
   skus:
@@ -883,6 +908,92 @@
   skus:
     bh_sc4-mgd:
       timeout: 80
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ── LTX-2.3 (Black Hole single galaxy, bh_sc1) ───────────────────
+- name: TT-DiT LTX-2.3 Pro T2V e2e tests
+  cmd: |
+    export NO_PROMPT=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 3300 models/tt_dit/tests/models/ltx/test_pipeline_ltx_one_stage.py::test_pipeline_one_stage -k "4x8sp1tp0nl2_ring_is_fsdp0"
+  model: ltx-2.3-pro-t2v
+  model_family: LTX
+  skus:
+    bh_sc1:
+      timeout: 60
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT LTX-2.3 Fast T2V e2e tests
+  cmd: |
+    export NO_PROMPT=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 3300 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"
+  model: ltx-2.3-fast-t2v
+  model_family: LTX
+  skus:
+    bh_sc1:
+      timeout: 60
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT LTX-2.3 Pro I2V e2e tests
+  cmd: |
+    export NO_PROMPT=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 3000 models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py::test_pipeline_two_stages_i2v_smoke -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
+  model: ltx-2.3-pro-i2v
+  model_family: LTX
+  skus:
+    bh_sc1:
+      timeout: 55
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT LTX-2.3 Fast I2V e2e tests
+  cmd: |
+    export NO_PROMPT=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Condition on a fixed image so distilled_i2v takes the single-i2v path and SKIPS the in-process
+    # t2v pre-gen -- on 4x8 that chain reloads the encoder over captured traces and wedges (the test
+    # documents this at test_pipeline_ltx_distilled.py: "t2v->i2v chain in one process ... wedges").
+    export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 3000 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled_i2v -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
+  model: ltx-2.3-fast-i2v
+  model_family: LTX
+  skus:
+    bh_sc1:
+      timeout: 55
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

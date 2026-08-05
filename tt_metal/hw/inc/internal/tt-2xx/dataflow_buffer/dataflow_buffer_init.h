@@ -74,6 +74,7 @@ struct dfb_init_entry_hdr_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];  // bytes 18–21 (DM only; 0 elsewhere)
     uint8_t broadcast_tc;         // DM pack byte 22 → iface.broadcast_tc (DM unpack only)
     uint8_t remapper_pair_index;  // TRISC byte 22; DM pack byte 23
+    uint8_t intra_shadow_tc_id;   // TRISC byte 23: intra-tensix ClientR shadow TC; 0xFF / unused on DM
     uint16_t num_entries;         // bytes 24–25
 };
 
@@ -88,7 +89,8 @@ struct dfb_init_entry_hdr_t {
 //   w2 = stride_size_precomp (u32): host pre-computed per hart type — DM=raw bytes, TRISC=tile units
 //   w3 [7:0]=stride_size_tiles  [15:8]=num_txn_ids  [23:16]=threshold  [31:24]=num_entries_per_txn_id
 //   w4 [7:0]=num_entries_per_txn_id_per_tc  [15:8]=producer_signal_bit  [23:16]=txn_ids[0]  [31:24]=txn_ids[1]
-//   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index  [31:24]=_pad (TRISC) / remapper (DM pack)
+//   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index
+//      [31:24]=intra_shadow_tc_id (TRISC) / remapper_pair_index (DM pack)
 //   w6 [15:0]=num_entries  [31:16]=_pad2
 
 // Shared unpack helper: TRISC blob w3–w6 (legacy SoA byte layout).
@@ -114,6 +116,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     h.txn_ids[3]                 = static_cast<uint8_t>(w5 >> 8);
     h.broadcast_tc               = 0;
     h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 16);
+    h.intra_shadow_tc_id = static_cast<uint8_t>(w5 >> 24);
     h.num_entries                = static_cast<uint16_t>(w6);
     return h;
 }
@@ -142,6 +145,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
     h.num_txn_ids                = static_cast<uint8_t>(w5 >> 8);
     h.broadcast_tc               = static_cast<uint8_t>(w5 >> 16);
     h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 24);
+    h.intra_shadow_tc_id = 0xFFu;  // intra-tensix never targets a DM hart
     h.num_entries                = static_cast<uint16_t>(w6);
     return h;
 }
@@ -622,11 +626,56 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
 
 #endif  // !COMPILE_FOR_TRISC
 
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+
+// Intra-tensix alias (HW workaround): route this Neo's ClientL tile counter to a sacrificial
+// ClientR shadow counter, so the T6 counter update copy lands there instead of aliasing into
+// overlay counters 0-15. Packer and unpacker both keep driving the ClientL counter; nothing reads
+// the shadow. ClientL and ClientR need not be adjacent — remapper maps any (id, cnt_sel) pair.
+//
+// This cannot be done by DM1 like every other remapper pair: the Tensix-only counter pool is
+// invisible to DM, and one Neo cannot see another Neo's counters. So each Neo's packer programs
+// its own pair.
+FORCE_INLINE void dfb_program_intra_tensix_alias(
+    uint32_t pair_idx, uint32_t client_tc_id, uint32_t shadow_tc_id, uint32_t neo_id) {
+    const uint32_t client_id = static_cast<uint32_t>(overlay::NEO_0) + neo_id;
+    const uint32_t clientR_val = (client_id & 0x7u) | ((shadow_tc_id & 0x1Fu) << 3);
+    const uint32_t clientL_val = (client_id & 0x7u) | ((client_tc_id & 0x1Fu) << 3) |
+                                 (0x1u << 8) |  // valid: ClientR slot 0 only
+                                 (0x1u << 12);  // clientl_is_producer=1; clientr_group=0, distribute=0
+
+    // Publish ClientR first, then ClientL (which carries the valid bits)
+    WRITE_REG32(REMAP_CLIENT_R_CONFIG_REG_ADDR32(pair_idx), clientR_val);
+    WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx), clientL_val);
+}
+
+// Clear ClientL valid for packer remapper pairs in [lo, hi). Called from trisc.cc after the kernel
+// so pairs from launch N cannot leak into launch N+1. lo==0xFF means nothing was programmed.
+FORCE_INLINE void dfb_clear_packer_remapper_window(uint8_t lo, uint8_t hi) {
+    if (lo == 0xFFu) {
+        return;
+    }
+    for (uint32_t i = lo; i < hi; i++) {
+        WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(i), 0u);
+    }
+    asm volatile("fence" ::: "memory");
+}
+
+#endif  // COMPILE_FOR_TRISC && UCK_CHLKC_PACK
+
+// Contiguous packer remapper pairs programmed this launch ([lo, hi); lo==0xFF if none).
+// Pack trisc.cc tears this range down after the kernel. DM/unpack ignore the return.
+struct DfbPackerRemapperRange {
+    uint8_t lo = 0xFFu;
+    uint8_t hi = 0;
+};
+
 // DM2-7 + TRISC: walk this hart's pre-computed sequential init blob; TC readiness is published
 // via store to dfb_publish_producer_ready and consumers poll in DataflowBuffer::DataflowBuffer().
-FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
+FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
+    DfbPackerRemapperRange packer_rmp{};
     if (num_dfbs == 0) {
-        return;
+        return packer_rmp;
     }
 
     const uint32_t start_time = rdcycle();
@@ -818,9 +867,29 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         // --- Producer-only: wait for remapper pair + TC HW init + publish ready ---
 #if !defined(COMPILE_FOR_TRISC) || defined(UCK_CHLKC_PACK)
         if (eh.flags & DFB_HART_FLAG_IS_PRODUCER) {
+            // A producer's remapper pair is programmed one of two ways; host sets at most one flag.
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+            // Intra-tensix: this packer owns the pair, so it programs rather than waits. Must happen
+            // before the TC reset/capacity writes below so the alias is live for the first update.
+            if (eh.flags & DFB_HART_FLAG_REMAPPER_SELF_PROG) {
+                const uint32_t spin_start = rdcycle();
+                dfb_program_intra_tensix_alias(
+                    eh.remapper_pair_index,
+                    dfb::get_counter_id(iface.tc_slots[0].packed_tile_counter),
+                    eh.intra_shadow_tc_id,
+                    neo_id);
+                // Contiguous [lo, hi) over this Neo's packer-owned pairs (host assigns ascending
+                // indices within the reserved block). Teardown clears exactly this window.
+                if (packer_rmp.lo == 0xFFu) {
+                    packer_rmp.lo = eh.remapper_pair_index;
+                }
+                packer_rmp.hi = static_cast<uint8_t>(eh.remapper_pair_index + 1u);
+                total_remapper_spin += rdcycle() - spin_start;
+            }
+#endif
             // Remapped producers: spin until DM1 has written this pair's ClientL config with
             // non-zero valid bits (bits [11:8]). No global remapper-enable wait is needed.
-            if (eh.flags & DFB_HART_FLAG_REMAPPER_EN) {
+            if (eh.flags & DFB_HART_FLAG_REMAPPER_WAIT_DM1) {
                 const uint32_t spin_start = rdcycle();
                 const uint32_t pair_idx = eh.remapper_pair_index;
                 WAYPOINT("RMSW");
@@ -908,4 +977,5 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         total_entry_hdr,                     // METRIC_H: entry_hdr (6 u32 bulk reads × N entries)
         total_tc_slots,                      // METRIC_I: tc_slots (base/limit/ptc reads + iface writes)
         total_sig_write);                    // METRIC_J: sig_write (uncached store to signal region)
+    return packer_rmp;
 }
