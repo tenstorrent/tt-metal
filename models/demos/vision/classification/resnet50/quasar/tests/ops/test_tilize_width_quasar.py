@@ -29,7 +29,29 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+def _datacopy_tile_mismatches(torch_in, tt_out):
+    """Per-tile pass-through check for the [#48552 DIAG] datacopy compute kernel.
+
+    Every tilize factory fills the input DFB with contiguous row-major data and consumes it as
+    tile-sized entries, so DFB entry j is RM chunk j (1024 elements) of the tensor. The datacopy
+    kernel moves entry j to output entry j without changing values, and the writer places output
+    entry j at tile j in row-major tile order. to_torch's untilize only permutes elements WITHIN a
+    tile, so the value multiset of output tile j must equal that of input chunk j -- true for any
+    face ordering, but broken by any stale, duplicated or dropped entry.
+
+    This holds for both the interleaved and the height-sharded paths: shard boundaries are whole
+    numbers of tile-rows, so per-shard entry order agrees with global tile order.
+
+    Returns the list of tile indices that do not match.
+    """
+    H, W = torch_in.shape[-2], torch_in.shape[-1]
+    expected = torch_in.reshape(-1, 32 * 32)
+    # (tile_row, 32, tile_col, 32) -> tile-major order, matching writer tile ids.
+    actual = tt_out.reshape(H // 32, 32, W // 32, 32).permute(0, 2, 1, 3).reshape(-1, 32 * 32)
+    matches = (torch.sort(expected, dim=1).values == torch.sort(actual, dim=1).values).all(dim=1)
+    return (~matches).nonzero().flatten().tolist()
 
 
 @pytest.mark.timeout(600)
@@ -61,11 +83,16 @@ def test_quasar_tilize_width(mesh_device, width_tiles, height_tiles):
     # below for that exact (sharded) path.
     tt_tiled = ttnn.experimental.quasar.tilize(tt_in)
 
-    tt_out = ttnn.to_torch(ttnn.from_device(tt_tiled)).float()
-    assert torch.isfinite(tt_out).all(), f"tilize w{width_tiles} h{height_tiles} produced NaN/Inf"
-    # to_torch untilizes back to row-major, so it should equal the input.
-    assert_with_pcc(torch_in.reshape(tt_out.shape), tt_out, pcc=0.999)
-    print(f"tilize width_tiles={width_tiles} height_tiles={height_tiles} PASSED (no 0x19)")
+    tt_out = ttnn.to_torch(ttnn.from_device(tt_tiled)).float().reshape(1, 1, H, W)
+    assert torch.isfinite(tt_out).all(), f"datacopy w{width_tiles} h{height_tiles} produced NaN/Inf"
+
+    bad = _datacopy_tile_mismatches(torch_in, tt_out)
+    total_tiles = height_tiles * width_tiles
+    assert not bad, (
+        f"w{width_tiles} h{height_tiles}: {len(bad)}/{total_tiles} tiles did not pass through; "
+        f"first mismatching tile indices: {bad[:8]}"
+    )
+    print(f"datacopy width_tiles={width_tiles} height_tiles={height_tiles} PASSED (no 0x19)")
 
 
 # Reproduce the conv-internal failing tilize IN ISOLATION (no conv reader, no matmul): a HEIGHT_SHARDED
@@ -93,7 +120,10 @@ _SHARDED_CASES = [
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("h_tiles, w_tiles, tid", _SHARDED_CASES, ids=[c[-1] for c in _SHARDED_CASES])
 def test_quasar_tilize_sharded(mesh_device, h_tiles, w_tiles, tid):
-    """HEIGHT_SHARDED RM [1,1,shard_h*2, C] -> quasar tilize -> PCC. Isolates the conv's internal tilize."""
+    """HEIGHT_SHARDED RM -> quasar tilize factory with [#48552 DIAG] copy_tile datacopy.
+
+    If h49 fails this pass-through check, the bug is DFB/credits/push-pop — not tilize LLK.
+    """
     device = mesh_device
     torch.manual_seed(0)
     num_cores = 2
@@ -117,10 +147,15 @@ def test_quasar_tilize_sharded(mesh_device, h_tiles, w_tiles, tid):
     tt_in = ttnn.from_torch(
         torch_in, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
     )
-    # quasar tilize op -> TilizeMultiCoreShardedProgramFactory (the exact failing path). A 0x19 aborts here;
-    # otherwise PCC vs the input (tilize is a pure layout change, values unchanged) exposes wrong tiles.
+    # Same TilizeMultiCoreShardedProgramFactory path; compute is copy_tile datacopy (see tilize.cpp DIAG).
     tt_tiled = ttnn.experimental.quasar.tilize(tt_in)
-    tt_out = ttnn.to_torch(ttnn.from_device(tt_tiled)).float()
-    assert torch.isfinite(tt_out).all(), f"{tid}: tilize produced NaN/Inf"
-    assert_with_pcc(torch_in.reshape(tt_out.shape), tt_out, pcc=0.999)
-    print(f"sharded tilize {tid} (h={h_tiles} w={w_tiles} cores={num_cores}) PASSED")
+    tt_out = ttnn.to_torch(ttnn.from_device(tt_tiled)).float().reshape(1, 1, nhw, C)
+    assert torch.isfinite(tt_out).all(), f"{tid}: datacopy produced NaN/Inf"
+
+    bad = _datacopy_tile_mismatches(torch_in, tt_out)
+    tiles_per_core = h_tiles * w_tiles
+    assert not bad, (
+        f"{tid}: {len(bad)}/{num_cores * tiles_per_core} tiles did not pass through "
+        f"({tiles_per_core} tiles/core); first mismatching tile indices: {bad[:8]}"
+    )
+    print(f"sharded datacopy {tid} (h={h_tiles} w={w_tiles} cores={num_cores}) PASSED")
