@@ -537,6 +537,34 @@ def interleaved_down_proj_prefill_config(m, k, n):
     return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
 
 
+def lm_head_decode_config(mesh_device, m, k, n):
+    """``(program_config, out_memory_config, compute_kernel_config)`` for decode
+    / last-token ``lm_head``, or all-``None`` for ttnn auto.
+
+    ``test_lm_head_matmul_sweep`` overall winner at M=32 K=5376 N=32768 (31B TP=8):
+    ``1d_c64_bw1`` + DRAM in0 + L1-interleaved out + HiFi4 bf16 (~1.08x vs auto).
+    Scoped to ``m_tiles==1`` and ``n <= 64K`` — the same regime as the prior
+    ``_get_lm_head_program_config`` guard (full-vocab tp=1 and multi-row-tile
+    prefill fall back to auto).
+    """
+    m_tiles = max(1, (m + TILE_SIZE - 1) // TILE_SIZE)
+    if m_tiles > 1 or n > 64 * 1024:
+        return None, None, None
+    grid = mesh_device.compute_with_storage_grid_size()
+    grid_size = (grid.x, grid.y)
+    cores = grid.x * grid.y
+    program_config = prefill_progcfg_1d(m, k, n, cores=cores, in0_block_w=1, grid_size=grid_size)
+    if program_config is None:
+        return None, None, None
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
+
+
 def matmul_rows(x):
     """Row count a matmul sees for ``x``: the product of all but the last dim.
 

@@ -181,6 +181,99 @@ def test_down_proj_prefill_progcfg_1d_matches_sweep_winner():
     assert interleaved_down_proj_prefill_config(2048, 2688, 5376) == (None, None, None)
 
 
+def test_lm_head_decode_config_matches_sweep_winner():
+    """31B decode lm_head @ TP=8 → 1d_c64_bw1 + L1 out + HiFi4 (test_lm_head_matmul_sweep)."""
+    import ttnn
+    from models.demos.gemma4.tt.dram_sharded import lm_head_decode_config
+
+    mesh = _FakeMeshDevice()
+    prog, out_mc, ckc = lm_head_decode_config(mesh, m=32, k=5376, n=32768)
+    assert prog is not None
+    assert prog.in0_block_w == 1
+    assert prog.per_core_M == 1
+    assert prog.per_core_N == 16  # 1024 N-tiles / 64 cores
+    grid = prog.compute_with_storage_grid_size
+    assert grid.x * grid.y == 64
+    assert out_mc == ttnn.L1_MEMORY_CONFIG
+    assert ckc.math_fidelity == ttnn.MathFidelity.HiFi4
+    assert lm_head_decode_config(mesh, m=128, k=5376, n=32768) == (None, None, None)
+
+
+class _FakeComputeGrid:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+
+class _FakeMeshDevice:
+    def __init__(self, gx=8, gy=8):
+        self._grid = _FakeComputeGrid(gx, gy)
+
+    def compute_with_storage_grid_size(self):
+        return self._grid
+
+
+class _FakeTensor:
+    def __init__(self, shape):
+        self.shape = shape
+
+
+class _FakeCclManager:
+    def __init__(self, mesh_device):
+        self.mesh_device = mesh_device
+
+
+def test_width_shard_spec_decode_matches_prefill_tile():
+    """Decode (height=32) and prefill (height=128) share one layout builder."""
+    import ttnn
+    from models.demos.gemma4.tt.rms_norm import (
+        _SHARDED_NORM_MAX_HEIGHT,
+        decode_width_shard_memcfg,
+        decode_width_shard_spec,
+        width_shard_input_memcfg,
+        width_shard_spec,
+    )
+
+    mesh = _FakeMeshDevice()
+    dim = 5376
+    decode_mem = decode_width_shard_memcfg(mesh, dim)
+    prefill_mem = width_shard_input_memcfg(mesh, dim, 128)
+    assert decode_mem is not None
+    assert prefill_mem is not None
+    assert decode_mem != prefill_mem  # different shard heights
+
+    decode_spec = decode_width_shard_spec(mesh, dim)
+    height128_spec = width_shard_spec(mesh, dim, 128)
+    assert decode_spec[0] == width_shard_spec(mesh, dim, ttnn.TILE_SIZE)[0]
+    assert height128_spec[1].block_h == 4  # 128 / 32
+    assert width_shard_input_memcfg(mesh, dim, _SHARDED_NORM_MAX_HEIGHT + 32) is None
+
+
+def test_prefill_l1_gather_memcfg_matches_norm_layout(monkeypatch):
+    """CCL all-gather layout must match RMSNorm._build_sharded_cfg for ISL<=1024."""
+    from models.demos.gemma4.tt.ccl import _decode_l1_gather_memcfg
+    from models.demos.gemma4.tt.rms_norm import RMSNorm, width_shard_input_memcfg
+
+    monkeypatch.delenv("GEMMA4_CCL_L1_GATHER", raising=False)
+    mesh = _FakeMeshDevice()
+    mgr = _FakeCclManager(mesh)
+    tensor = _FakeTensor([1, 1, 128, 5376])
+    norm_cfg = width_shard_input_memcfg(mesh, 5376, 128)
+    assert _decode_l1_gather_memcfg(tensor, mgr) == norm_cfg
+
+    monkeypatch.setenv("GEMMA4_CCL_L1_GATHER", "0")
+    assert _decode_l1_gather_memcfg(tensor, mgr) is None
+
+    # Long prefill stays on DRAM gather
+    monkeypatch.delenv("GEMMA4_CCL_L1_GATHER", raising=False)
+    assert _decode_l1_gather_memcfg(_FakeTensor([1, 1, 2048, 5376]), mgr) is None
+
+    # RMSNorm builder agrees at the same (dim, height)
+    norm = RMSNorm.__new__(RMSNorm)
+    norm.mesh_device = mesh
+    assert norm._build_sharded_cfg(5376, 128)[0] == norm_cfg
+
+
 def test_weight_cache_path_qualified_by_mesh(tmp_path, monkeypatch):
     """TP=4 on 1x4 vs 2x4 must not share tensorbin directories when mesh dirs are used."""
     import ttnn
