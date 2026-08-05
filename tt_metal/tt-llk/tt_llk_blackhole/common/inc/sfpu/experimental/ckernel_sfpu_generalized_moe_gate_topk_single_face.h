@@ -578,48 +578,49 @@ inline void _gmg_merge16_core()
  * @tparam store_lo: DEST column for the run's low half.
  * @tparam store_hi: DEST column for the run's high half.
  * @tparam idx_offset: per-block expert-id base (b*256) added to the run's indices to make them GLOBAL; 0 = none.
+ *         Must be < 2048 (SFPIADD's sign-extended 12-bit immediate); static_asserted.
  * @note Calls @ref _gmg_merge16_core, which resets the Dst RWC counter and enables SFPU index tracking, and
  *       reads the two input runs at columns {0,2} and {4,6}; clobbers LREG0-7 (and LREG14 via the core). When
- *       idx_offset != 0 it adds it to the idx (LO16) of the concat with a raw SFPIADD (idx + offset <= 511
- *       never carries into the score HI16). Produces a RUN, not a normalized output — @ref
+ *       idx_offset != 0 the id store comes from LREG2/LREG3, where the offset add lands — see the body for
+ *       why the add cannot write the LREG4/5 concat. Produces a RUN, not a normalized output — @ref
  *       _generalized_moe_gate_finalize_ungrouped is the normalizing terminal variant.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t store_lo, std::uint32_t store_hi, std::uint32_t idx_offset = 0>
 inline void _gmg_merge16_to_run()
 {
     _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + store_lo);
-    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + store_hi);
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + store_lo);
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + store_hi);
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + store_lo);
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + store_hi);
 
-    // Add the block's expert-id base offset (b*256) to the run's indices so they become GLOBAL ids.
+    // idx_offset turns the run's local ids into GLOBAL ones by adding the block's expert-id base
+    // (b*256). The add reads the idx|score concat in LREG4/LREG5 but writes LREG2/LREG3, because
+    // merge16_core leaves index tracking enabled: while it is, the data/index select mux is held on
+    // the index side "for all instructions, not just swaps" (erratum TEN-2932; WH and BH, fixed in
+    // Quasar), so a result written into LREG4-7 is replaced by the tracked index. Filling an upper
+    // LREG would mean toggling the control register off and back on around the add, which the erratum
+    // calls out as expensive; writing a lower LREG needs no toggle, and LREG2/LREG3 hold no live
+    // value once the sort has finished (the run is in LREG4/LREG5, its bias in LREG0/LREG1).
     //
-    // Done on the STORED ids in LREG0/LREG1, after the run is written, rather than on the idx|score
-    // concat still live in LREG4/5. merge16_core leaves LaneConfig.ENABLE_DEST_INDEX set, and erratum
-    // TEN-2932 (WH and BH, fixed in Quasar) corrupts any SFPU result written to LREG4-7 while it is;
-    // LREG0-3 are outside that window, so this needs no LaneConfig change. Clearing the bit around the
-    // adds instead, the way _gmg_merge4_top8 brackets its SFPSHFT2s, hangs Blackhole.
+    // Only the id (LO16) store reads the sum; the score half is stored from the untouched concat.
+    // Must use TTI, not sfpi l_reg[]: sfpi's SSA register model does not write back to the physical
+    // LREG the raw stores read.
+    constexpr std::uint32_t ids_lo = (idx_offset != 0) ? p_sfpu::LREG2 : p_sfpu::LREG4;
+    constexpr std::uint32_t ids_hi = (idx_offset != 0) ? p_sfpu::LREG3 : p_sfpu::LREG5;
     if constexpr (idx_offset != 0)
     {
         // SFPIADD's immediate is a sign-extended 12-bit field and TT_OP does not mask the payload, so
         // an offset of 2048 or more would subtract, and 4096 or more would run into the opcode byte.
+        // A local id is at most 255, so id + offset cannot carry out of the concat's low half.
         static_assert(idx_offset < 2048, "idx_offset must fit SFPIADD's sign-extended 12-bit immediate");
 
-        // The LO16 store below writes only the low half, so whatever the load leaves above bit 15 is
-        // discarded; a local id is at most 255, so id + offset cannot carry out of the low half either.
-        // Must use TTI, not sfpi l_reg[]: sfpi's SSA register model does not write back to the physical
-        // LREG the surrounding raw stores read.
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + store_lo);
-        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + store_hi);
-        TTI_SFPIADD(idx_offset, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_IMM);
-        TTI_SFPIADD(idx_offset, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_IMM);
+        TTI_SFPIADD(idx_offset, p_sfpu::LREG4, ids_lo, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_IMM);
+        TTI_SFPIADD(idx_offset, p_sfpu::LREG5, ids_hi, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_IMM);
         TTI_SFPNOP;
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + store_lo);
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + store_hi);
     }
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + store_lo);
+    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + store_hi);
+    TTI_SFPSTORE(ids_lo, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + store_lo);
+    TTI_SFPSTORE(ids_hi, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + store_hi);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + store_lo);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + store_hi);
 }
 
 /**

@@ -462,12 +462,6 @@ class TestConfig:
         # shares twelve basenames with tt_llk_<arch>/common/inc/sfpu, and those have to win.
         # Headers needing a metal SFPU kernel spell the prefix instead
         # (ckernel_sfpu_generalized_moe_gate_topk_single_face.h -> llk_sfpu/ckernel_sfpu_exp.h).
-        #
-        # That resolves the include but not the dependency direction: neither ckernel_sfpu_exp.h
-        # nor ckernel_sfpu_recip.h exists under tt_llk_<arch>/, so an LLK-lib header reaches up
-        # into the metal ckernel layer and cannot build in the standalone tt-llk repo. Fixing it
-        # means vendoring the two kernels into tt_llk_<arch>/common/inc/sfpu/, or dropping the
-        # dependency.
         hw_specific_includes = []
         if TestConfig.ARCH == ChipArchitecture.WORMHOLE:
             hw_specific_includes = [

@@ -1592,13 +1592,25 @@ def test_generalized_moe_gate_idx_offset():
         )
 
     base, shifted = _run(config(0), config(256))
-    slots = _run_slots(0, 2)
 
-    base_ids = [int(base[IDS][r, c]) for r, c in slots]
-    shifted_ids = [int(shifted[IDS][r, c]) for r, c in slots]
-    assert shifted_ids == [
-        i + 256 for i in base_ids
-    ], f"idx_offset did not shift the ids: {base_ids} -> {shifted_ids}"
+    # A merge is eight independent sorts side by side and the offset add is applied to all of them,
+    # so check every instance: an add that reaches only instance 0 is a live failure mode, the ids
+    # and the scores coming from different registers.
+    for instance in range(8):
+        slots = _run_slots(0, 2, instance)
+        base_ids = [int(base[IDS][r, c]) for r, c in slots]
+        shifted_ids = [int(shifted[IDS][r, c]) for r, c in slots]
+        assert shifted_ids == [
+            i + 256 for i in base_ids
+        ], f"idx_offset did not shift instance {instance}'s ids: {base_ids} -> {shifted_ids}"
+
+    # The ids the offset does not own must be untouched, which the region sweep below cannot see:
+    # the stores land in IDS either way, so only the cells outside the run tell a stray one apart.
+    run_rows = {r for r, _ in _run_slots(0, 2)}
+    rest = [r for r in range(16) if r not in run_rows]
+    assert torch.equal(
+        base[IDS][rest], shifted[IDS][rest]
+    ), "idx_offset wrote ids outside the run"
 
     for region in (SCORES, KEYS, INTERMEDIATE):
         assert torch.equal(
