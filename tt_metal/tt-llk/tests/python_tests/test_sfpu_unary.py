@@ -30,8 +30,7 @@ from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _UNARY_OPS_NOT_SWEPT,
     exclude_undefined,
-    for_op,
-    narrowest_range_format,
+    for_op_pipeline,
     sfpu_unary_ops,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -253,9 +252,11 @@ MATHOPS_INCLUDE_BFP4_B = [
 ]
 
 # Ops whose `#pragma GCC unroll X` loops miscompile to invalid assembly under coverage
-# instrumentation (tt-metal#33268 / tt-llk#883), so they are skipped only when
-# WITH_COVERAGE is set. The gelu/log-family entries at the end came from the standard
-# profile's own copy of this list; the two lists had the same cause and are now one.
+# instrumentation, so they are skipped only when WITH_COVERAGE is set:
+#   https://github.com/tenstorrent/tt-metal/issues/33268
+#   https://github.com/tenstorrent/tt-llk/issues/883
+# The gelu/log-family entries at the end came from the standard profile's own copy of
+# this list; the two lists had the same cause and are now one.
 COVERAGE_COMPILE_SKIP_OPS = [
     MathOperation.Acosh,
     MathOperation.Log,
@@ -469,12 +470,16 @@ def test_eltwise_unary_sfpu(
         # under coverage it is skipped wholesale; only the standard profile runs. Keep
         # both behaviours rather than widening or narrowing coverage runs here.
         if broad:
-            pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1435")
+            pytest.skip(
+                reason="Broad-profile ops are not run under coverage: "
+                "https://github.com/tenstorrent/tt-llk/issues/1435"
+            )
         if mathop in COVERAGE_COMPILE_SKIP_OPS:
             pytest.skip(
                 reason="`#pragma GCC unroll X` loops in these ops compile to invalid "
-                "assembly under coverage instrumentation "
-                "(tt-metal#33268 / tt-llk#883)"
+                "assembly under coverage instrumentation: "
+                "https://github.com/tenstorrent/tt-metal/issues/33268 , "
+                "https://github.com/tenstorrent/tt-llk/issues/883"
             )
 
     if mathop == MathOperation.ReluMin:
@@ -748,18 +753,21 @@ def eltwise_unary_sfpu(
     # Fall back to the op's own (signed) domain rather than generate_stimuli's
     # positive-only format default. Without this the float sweep feeds every op
     # uniform(0.1, 1.1), so the x<0 branch, the piecewise knees and the saturation
-    # tails are never reached — see SFPU_EDGE_CASE_COVERAGE.md finding #1. Every
-    # op reaching this driver is registered in _OP_DOMAIN_REGISTRY, so a KeyError
-    # here means a new op was added without a domain: register it rather than
-    # silently falling back to the positive-only default.
-    # The domain is bounded by the narrowest format in the pipeline, not just the
-    # input one — this sweep pairs every input format with every output format, so
-    # e.g. Float32->Float16 still has to stay inside Float16's range.
+    # tails are never reached (https://github.com/tenstorrent/tt-metal/issues/49739).
+    # Every op reaching this driver is
+    # registered in _OP_DOMAIN_REGISTRY, so a KeyError here means a new op was
+    # added without a domain: register it rather than silently falling back to the
+    # positive-only default.
+    # The domain has to satisfy the whole input->output pipeline, not just one end
+    # of it: this sweep pairs every input format with every output format, so
+    # Float32->Float16 has to stay inside Float16's range while Bfp8_b->Float16
+    # keeps the tighter interval Bfp8_b's block precision demands. for_op_pipeline
+    # resolves both and takes the tighter — see its docstring.
     if spec_A is None:
-        domain_format = narrowest_range_format(
-            formats.input_format, formats.output_format
+        spec_A = exclude_undefined(
+            mathop,
+            for_op_pipeline(mathop, formats.input_format, formats.output_format).spec_A,
         )
-        spec_A = exclude_undefined(mathop, for_op(mathop, domain_format).spec_A)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,

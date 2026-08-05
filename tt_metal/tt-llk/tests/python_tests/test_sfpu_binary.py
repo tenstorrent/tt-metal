@@ -116,9 +116,10 @@ def _face_spec(dist):
 # =============================================================================
 # Which ops take their domain from _OP_DOMAIN_REGISTRY
 #
-# Audit finding #2: this suite never imported sfpu_domains, so every op fell back to
-# generate_stimuli's positive-only uniform(0.1, 1.1) and the registered per-op domains --
-# including the undefined-range holes that are the interesting boundaries -- were dormant.
+# This suite never imported sfpu_domains, so every op fell back to generate_stimuli's
+# positive-only uniform(0.1, 1.1) and the registered per-op domains -- including the
+# undefined-range holes that are the interesting boundaries -- were dormant
+# (https://github.com/tenstorrent/tt-metal/issues/49739).
 #
 # The reroute is deliberately narrower than "every registered op", for two reasons:
 #
@@ -342,7 +343,7 @@ def sfpu_binary(
     #
     # Ops registered in _OP_DOMAIN_REGISTRY take their domain from there, which is what makes
     # the registered undefined-range holes (SfpuElwdiv divisor, SfpuXlogy B, SfpuElwpow A)
-    # reachable at all; see SFPU_EDGE_CASE_COVERAGE.md finding #2. Unlike the unary sweep,
+    # reachable at all — see _REGISTRY_DOMAIN_OPS above. Unlike the unary sweep,
     # most ops here are *not* registered, so a missing entry falls back to generate_stimuli's
     # format default rather than raising. That fallback is declared in
     # _UNREGISTERED_BINARY_OPS and checked, so it stays a deliberate list rather than an

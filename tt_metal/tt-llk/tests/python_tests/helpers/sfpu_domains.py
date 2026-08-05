@@ -792,6 +792,58 @@ def for_op(
     return result
 
 
+def _spec_span(spec: StimuliSpec) -> float:
+    """Total measure of the values *spec* is allowed to draw."""
+    if spec.intervals:
+        return sum(high - low for low, high in spec.intervals)
+    return spec.high - spec.low
+
+
+def _tighter_spec(a: StimuliSpec, b: StimuliSpec) -> StimuliSpec:
+    """Whichever of *a* / *b* draws from the smaller domain; ties keep *a*."""
+    if a == b:
+        return a
+    return a if _spec_span(a) <= _spec_span(b) else b
+
+
+def for_op_pipeline(
+    op: MathOperation,
+    input_format: DataFormat,
+    output_format: Optional[DataFormat] = None,
+    **kwargs,
+) -> OperandSpecs:
+    """Return safe input domains for *op* over a whole input->output pipeline.
+
+    Two different constraints pick two different formats, and resolving against
+    either one alone drops the other:
+
+    * **Range** is bounded by the narrowest exponent range anywhere in the
+      pipeline. exp over (-100, 16) is fine into a Float32 output and saturates
+      a Float16 one, so the *output* format has to be able to narrow the domain.
+    * **Precision** is a property of the *input* format alone. A block-float
+      input has already spent its relative precision by the time the op runs,
+      and a wider output cannot give it back. Resolving Bfp8_b -> Float16
+      against Float16 alone restores reciprocal's 1000:1 interval — the exact
+      spread _reciprocal_spec exists to avoid, which quantizes small block
+      elements to zero and sends the golden to inf.
+
+    So resolve against both formats and keep whichever spec is tighter per
+    operand. Both constraints only ever *narrow* a domain, so the tighter of the
+    two satisfies both. Ops with a format-independent registry entry resolve
+    identically either way and are unaffected.
+    """
+    by_input = for_op(op, input_format, **kwargs)
+    range_format = narrowest_range_format(input_format, output_format)
+    if range_format == input_format:
+        return by_input
+
+    by_range = for_op(op, range_format, **kwargs)
+    return OperandSpecs(
+        spec_A=_tighter_spec(by_input.spec_A, by_range.spec_A),
+        spec_B=_tighter_spec(by_input.spec_B, by_range.spec_B),
+    )
+
+
 def _validate_distribution_override(
     distribution: Union[DistributionKind, Callable],
     spec: StimuliSpec,
