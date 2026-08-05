@@ -46,6 +46,12 @@ struct GroupNormParams {
     GroupNormProgramConfig program_config;
     DeviceComputeKernelConfig compute_kernel_config;
     bool use_welford = false;
+    // When true (and negative_mask is not passed), the writer kernel synthesizes
+    // the per-group inverted {1.0, 0.0} negative-mask directly in L1 — same as
+    // the positive-mask synthesis path. Sharded only; the interleaved factories
+    // don't emit negative-mask code paths. Mutually exclusive with a caller-
+    // supplied negative_mask tensor.
+    bool synthesize_negative_mask = false;
 };
 
 struct GroupNormInputs {
