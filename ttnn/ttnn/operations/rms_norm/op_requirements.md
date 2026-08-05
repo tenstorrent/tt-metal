@@ -489,7 +489,7 @@ hangs. Three findings:
 
 ---
 
-### [ ] Refinement 4 — Prefill + sharded-geometry perf, and the block/depth knob surface
+### [x] Refinement 4 — Prefill + sharded-geometry perf, and the block/depth knob surface
 
 **Type**: perf
 
@@ -534,3 +534,58 @@ so re-run the poisoned-padding cells (acceptance + the 24 pad-poison loose cells
 specifically — they are the only tests that can catch a masked-reduce regression, and a
 padding leak on a wide row is a near-uniform scale error that PCC is largely blind to (the
 precision baseline's ratio-spread check is the second net).
+
+**Outcome** (`[x]` full): four levers landed, each measured separately and each left in the
+tree as a live knob; **both halves of the goal are met** and no supported shape is slower.
+Measured at the declared `_perf_case` config (bf16 / TILE / HiFi2 / `fp32_dest_acc_en=False`,
+blackhole p150b, 110-core 11×10 grid, CHIP_FREQ 1350 MHz == the reference clock; one
+fresh-cache profiled run per variant, medianed over 3 only where a number sat on the ~3 %
+noise band). **Prefill: `(1,1,8192,5120)` 753345 → 468093 ns (1.61×) and `(1,1,8192,7168)`
+1043918 → 643320 ns (1.62×)**, both now FASTER than their `achievable_ns` (738307 /
+1032281); the two narrow prefill rows (`W = 1024`, `2304`) were already at the DRAM roofline
+and are flat. **Sharded: all five pinned geometries improved — BLOCK `(1,1,8192,1024)` 64c
+102173 → 83316 ns (1.23×)**, and the four WIDTH geometries 1.07×–1.11×. Golden **5421 pass /
+1365 xfail / 0 fail** (identical to Refinement 3 — no SUPPORTED change), unit dir 463 passed /
+30 skipped, zero hangs.
+* **What the levers were.** Prefill was won by **Lamp L5**, the op's third compute regime
+  (descriptor **D14**): `X_RESIDENT` is now an explicit flag decoupled from
+  `NUM_W_CHUNKS == 1`, so one whole tile-row of x *and the whole row of gamma* stay resident
+  while only the derived CBs are chunked. Pass B re-reads nothing and gamma is read once per
+  core instead of once per pass-B chunk of every row-block — on `(1,1,8192,7168)` that is
+  470 MB → 285 MB at the same measured 443 GB/s. No second code path: the held CBs are
+  indexed at a `TileOffset::Set` base that folds away off this regime. The sharded
+  geometries were won by **Lamp L6b** (`rsqrt` scoped to `VectorMode::C`, **D15**, 1.14× on
+  the BLOCK shard alone), with **L6d** (`DestAccumulation::PerRow` on pass A's square,
+  **D12**) and a compact combine gather (**D13**) worth 1.02×–1.03× each. Item (a),
+  `AccumulateViaAdd`, was already landed by Refinement 1b and only verified.
+* **The bottleneck is not where the tile-op count said it was, and that is the main finding.**
+  Halving the member→root gather bytes moved the 64-core BLOCK shard only ~5 %, so the
+  combine is not byte-bound at these group sizes. What dominates is the ROOT's per-round
+  `transform_in_place`: one SFPU rsqrt per tile-row (32 on that shard) with a
+  `GROUP_SIZE`-wide fan-out of members blocked behind it — a per-tile SFPU cost invisible in
+  an op count. The per-RISC split in the profiler CSV (BR spanning the kernel while its own
+  NoC work is microseconds) is what showed it.
+* **L5 is not free when it costs CB depth, and that is measured both ways.** Holding a whole
+  tile-row can leave no L1 for the depth the cross-processor CBs spend on movement↔compute
+  overlap. `(1,1,32,7168)` at `GRID_W=1` (one core, depth 2→1) went 41779 → 50598 ns
+  (**0.83×**), while ROW_MAJOR `(1,1,32,4096)` — already depth 1 in *both* regimes, so no
+  sacrifice — went 52197 → 47144 ns (**1.11×**) at the same single row-block. So the gate is
+  on the **depth sacrifice**, not on L5, and only then on the row-block count.
+* **The block/depth knob surface was re-measured and is null at its shipped values.**
+  `CB_DEPTH_CANDIDATES = (2,1)` is within noise (D4's null still holds, and L5 has taken over
+  the residency band that knob targeted); `CB_RM_STAGE_DEPTH = 3` within noise;
+  `L1_SAFETY_FRACTION = 0.90` is +2.2 % on the BLOCK shard but was **declined** — Refinement
+  2's L1 finding is that a proportional margin cannot cover the arena's fixed base offset, and
+  a CB-OOM is an op-charged hard failure, not a slow path.
+* **What is left, quantified, and why it was not built.** Prefill is at the DRAM roofline with
+  near-minimal bytes; the only byte left is gamma's 50 MB of per-core redundancy, i.e. **Lamp
+  L2** (a scheme change). The sharded geometries are still 2–3× off `achievable_ns`, and after
+  L6b the residue is the combine ROUND COUNT — the 64-core BLOCK shard runs 4 rounds because
+  `cb_partials_gathered` (`GROUP_SIZE × BLOCK_ROWS` fp32 pages) caps `BLOCK_ROWS` at 10; the
+  lever is D11's recorded compact handoff in its real form (a partial packed to its 32 useful
+  floats, which needs a transpose) plus D11's hierarchical gather, both combine
+  data-format/topology changes. The prime-`Wt` cliff survives: L5 removes `Wt = 127`'s pass-B
+  re-read but not its 127 one-tile phases, so a ragged-tail chunk is still the lever. **Lamp
+  L6c** was costed rather than built: at master.md's ≈110–150 ns per reconfig and the measured
+  count, its ceiling is 1.2 % on the BLOCK shard and 0.5 % on prefill 7168, against a
+  silent-corruption risk on the mixed-dtype gamma paths.

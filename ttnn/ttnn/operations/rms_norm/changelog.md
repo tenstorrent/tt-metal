@@ -462,3 +462,138 @@
   numbers on 1 core as on 16, just 3× slower) and `test_interleaved_width_split_knob` widened
   to `GRID_W ∈ {0, 1, 2, 8, 16, 56}` so both topologies stay covered (`gw56` is wider than the
   11-core grid row, hence the PACKED `Mcast2D` single group).
+
+## Refinement 4 — Prefill + sharded-geometry perf, and the block/depth knob surface
+- Date: 2026-08-04
+- What was done: a **perf** refinement (no SUPPORTED change). Four levers landed, each
+  measured on device separately and each left in the tree as a live knob:
+  1. **Lamp L5 — the op's third compute regime, ROW_RESIDENT** (descriptor **D14**). `X_RESIDENT`
+     is now an EXPLICIT CT flag instead of `NUM_W_CHUNKS == 1`, and that decoupling *is* the
+     regime: one whole tile-row of x plus the whole row of gamma stay resident while only the
+     DERIVED CBs are chunked, so **pass B re-reads nothing**. No second code path — every
+     helper call still works on one `WT_CHUNK` and simply indexes the two held CBs at a
+     **tile offset** (`TileOffset::Set`, base `c * WT_CHUNK`, folded away to 0 off this path),
+     with one explicit `cb_pop_front` per row-block. New knob
+     `ROW_RESIDENT_MIN_ROWS_PER_CORE`; `x_hold_wt` is the single source of truth for the held
+     CBs' width. **This is the prefill lever.**
+  2. **Lamp L6b — `rsqrt` scoped to `VectorMode::C`** (**D15**, knob `RSQRT_COL_SCOPE`). The
+     one raw-LLK addition (`rsqrt_tile` hard-codes `VectorMode::RC` and exposes no seam;
+     justification at the function, precedent `sdpa/.../compute_common.hpp:251`).
+     **This is the sharded-geometry lever.**
+  3. **Lamp L6d — DEST-fold pass A's square** (**D12**, knob `DEST_ACC_SQUARE_MAX_WT = 8`).
+     `DestAccumulation::PerRow` folds the chunk's width tiles into DEST, so `cb_x_squared`
+     holds one tile per tile-row and the reduce's per-call width is 1. A *ceiling*, not a
+     floor: the fold accumulates serially where Refinement 1b's `AccumulateViaAdd` accumulates
+     pairwise, so bounding `WT_CHUNK` bounds the DEST depth. Gated on `PARTIAL_W == 0`.
+  4. **A compact combine gather** (**D13**, knob `GATHER_FACES = 2`). A `REDUCE_ROW` partial
+     does not fill its tile; only faces 0 and 2 are ever read back, so the member→root gather
+     — the combine's only per-`GROUP_SIZE` term — ships half the bytes.
+  Also re-measured the whole **block/depth knob surface** the refinement named
+  (`CB_DEPTH_CANDIDATES`, `L1_SAFETY_FRACTION`, `CB_RM_STAGE_DEPTH`): all three are **nulls at
+  their shipped values** (below).
+- Accuracy achieved: no precision change anywhere. ROW_RESIDENT measured at bf16 /
+  `fp32_dest_acc_en=False` (gate `rms ≤ 0.04`): rel RMS **0.0096** on `(1,1,8192,5120)`,
+  **0.0105** on `(1,1,8192,7168)`, **0.0093** on `(1,1,64,5120)` ROW_MAJOR, **0.0113** on
+  `(1,1,64,8192)` ROW_MAJOR — i.e. unchanged from Refinement 1b's numbers. The pad-poison and
+  precision-baseline suites are green, which is what covers the two levers that could have
+  moved precision (the DEST fold, and the fold's interaction with the partial-W mask).
+- Golden test progress: **5421 pass / 1365 xfail / 0 fail** on the 40320-cell cartesian —
+  byte-identical counts to Refinement 3, `supported_fail = 0`, `xpass_drift = 0`.
+  `test_regression.py` 15/15, `test_translated.py` 105/106 with the one failure bit-identical
+  at frobenius **0.112240** to the pre-existing bf8b pad-poison non-issue. Unit dir
+  **463 passed / 30 skipped**, zero hangs.
+- Measured perf (blackhole p150b, 110-core 11×10 grid, CHIP_FREQ 1350 MHz == the reference
+  clock so no scaling needed; bf16 / TILE / HiFi2 / `fp32_dest_acc_en=False` — the declared
+  `_perf_case` config; ONE fresh-cache profiled run per variant, repeated 3× and medianed only
+  where a number sat on the noise band):
+
+  | target | `achievable_ns` | before | after | speedup |
+  |---|---|---|---|---|
+  | `(1,1,8192,1024)` interleaved | 96744 | 105343 | 103693 | 1.02× |
+  | `(1,1,8192,2304)` interleaved | 211345 | 215681 | 221472 | 1.00× (noise) |
+  | **`(1,1,8192,5120)` interleaved** | 738307 | 753345 | **468093** | **1.61×** |
+  | **`(1,1,8192,7168)` interleaved** | 1032281 | 1043918 | **643320** | **1.62×** |
+  | `(1,1,32,1024)` WIDTH 8c | 4110 | 6055 | 5464 | 1.11× |
+  | `(1,1,32,2304)` WIDTH 9c | 4617 | 6942 | 6456 | 1.08× |
+  | `(1,1,32,5120)` WIDTH 32c | 5267 | 11911 | 11094 | 1.07× |
+  | `(1,1,32,7168)` WIDTH 28c | 5481 | 11541 | 10502 | 1.10× |
+  | **`(1,1,8192,1024)` BLOCK 64c** | 25640 | 102173 | **83316** | **1.23×** |
+
+  Per-lever attribution: L5 is the whole prefill win (5120 753345→468487, 7168
+  1043918→655687); L6b is most of the sharded win (BLOCK 94297→82474 = 1.14×, WIDTH
+  1.03–1.07×); L6d and the compact gather contribute 1.02–1.03× each. No supported shape is
+  slower: the config-spanning guard set is at or better than its recorded baseline everywhere
+  — TILE/interleaved RESIDENT 103693 (was 105343), width-split AUTO `(1,1,32,7168)` 12467
+  (D11: 12876), `(1024,1024)` 20817 (D11: 20960), one-core floor 2993 (D11: 3456),
+  ROW_MAJOR `(1,1,32,4096)` 47016 (**1.11×**, L5 wins there too), RM BAND WIDTH
+  `(1,1,224,3072)` 128113 (D10: 136856), RM BAND `(1,1,256,512)` 93965 (D10: 96479), BLOCK
+  band 11936 (D10: 12509).
+- Issues encountered: three, all diagnosed rather than guessed.
+  * **The byte model for the combine over-predicted, and that mis-aimed the first lever.**
+    Halving the member→root gather bytes moved the 64-core BLOCK shard only ~5%, so the
+    combine is *not* byte-bound at these group sizes. What actually dominated was the ROOT's
+    per-round `transform_in_place` — one SFPU rsqrt per tile-row (32 of them on that shard)
+    with a `GROUP_SIZE`-wide fan-out of members blocked behind it. A cost invisible in a
+    tile-op count; L6b is worth 1.14× there because of it.
+  * **Zeroing the whole gather CB at boot to define the unshipped faces is a RACE.** A
+    member's partial can land before the root's wipe, and every combine cell failed (pcc
+    0.87–0.99, rms 0.08–1.10). Zeroing exactly the UNSHIPPED faces is race-free by
+    construction — disjoint from everything any member writes — and is what ships. The same
+    experiment is what *established* which faces the datapath reads (leading-3 passes, and
+    {0,2} passes, so faces 1 and 3 are dead), which is also what makes L6b's `VectorMode::C`
+    provably safe rather than hopeful.
+  * **L5 is not free when it costs CB depth.** Holding a whole tile-row can leave no L1 for
+    the depth the cross-processor CBs spend on movement↔compute overlap. Measured both ways:
+    `(1,1,32,7168)` at `GRID_W=1` (one core, depth 2→1) went 41779 → 50598 ns (**0.83×**),
+    while ROW_MAJOR `(1,1,32,4096)` — already depth 1 in *both* regimes, so no sacrifice —
+    went 52197 → 47144 (**1.11×**) at the same single row-block. So the gate is on the
+    **depth sacrifice**, not on L5, and only then on the row-block count. Guarded, both
+    numbers recorded in D14.
+- Block/depth co-tune, all measured and all NULL at the shipped values (r4target set, one
+  fresh-cache run each): `CB_DEPTH_CANDIDATES = (2,1)` — within noise everywhere, so D4's
+  recorded null still holds, and L5 has now taken over the residency band that knob was
+  aimed at (a shape there goes ROW_RESIDENT instead of wanting depth 1). `CB_RM_STAGE_DEPTH
+  = 3` — within noise (and inert for this TILE-only target set by construction).
+  `L1_SAFETY_FRACTION = 0.90` — the one non-null: +2.2% on the BLOCK shard (82487 → 80713,
+  `BLOCK_ROWS` 10 → 11) and noise elsewhere. **Declined deliberately**: Refinement 2's L1
+  finding is that a proportional margin cannot cover the CB arena's fixed base offset, so
+  trading 2% for reduced launch headroom across 5000+ golden cells (a CB-OOM is an op-charged
+  hard failure, not a slow path) is the wrong side of that trade.
+- Remaining headroom (a FINDING, not a queued task):
+  * The **prefill profiles are at the DRAM roofline and the bytes are now near-minimal.**
+    `(1,1,8192,7168)` moves 117 MB (x) + 50 (gamma) + 117 (out) = 285 MB in 643 µs = 443
+    GB/s, the same aggregate bandwidth the pre-L5 build achieved while moving 470 MB. The
+    only byte left to remove is gamma's 50 MB of per-core redundancy, which is **Lamp L2**
+    (one injector per grid row multicasts gamma) — a scheme change, and `shared_input_reuse`
+    warns it only pays in the wide-W/many-core corner.
+  * The **sharded geometries are still 2–3× off their `achievable_ns`**, and after L6b the
+    remaining cost is the combine ROUND COUNT, not its bytes or its finalize: the 64-core
+    BLOCK shard runs 4 gather→root→mcast rounds because `BLOCK_ROWS` is capped at 10 by
+    `cb_partials_gathered` (`GROUP_SIZE × BLOCK_ROWS` fp32 pages). The lever is D11's
+    recorded (b) in its *real* form — a partial packed to its 32 useful floats rather than
+    merely face-trimmed, which needs a transpose so the root can sum a compact layout — plus
+    D11's (a) hierarchical gather. Both are combine data-format/topology changes.
+  * The **prime-`Wt` cliff survives**: D1 still forces `WT_CHUNK | Wt`, so `Wt = 127`
+    collapses to one tile per chunk. L5 removes that shape's pass-B re-read but not its 127
+    one-tile compute phases; a ragged-tail chunk (runtime `wt_c`) is still the lever.
+  * **Lamp L6c (eliding dtype reconfig) was costed, not built.** The chain already elides
+    compile-time when the previous element on the same side programmed the same CB; the
+    remaining candidates are the same-format-different-CB pairs in pass B. At master.md's
+    ≈110–150 ns per reconfig and the measured reconfig count (≈2 per chunk per block) the
+    ceiling is 1.2% on the BLOCK shard and 0.5% on prefill 7168 — against a silent-corruption
+    risk on the mixed-dtype gamma paths the op supports. Not a trade worth taking here.
+- Tests added: `test_rms_norm.py::test_rms_norm_row_resident_regime` (20 params) — the third
+  compute regime pinned by shape for both layouts and both gamma layouts, with and without
+  gamma, including two non-tile-aligned widths. `op_design.md` §4.2 makes regime pinning
+  mandatory precisely because the selector depends on a device-dependent L1 budget, and this
+  regime is the one with a genuinely different INDEXING scheme (every helper call reads the
+  held CBs at a tile offset, popped once per row-block), where an off-by-one is a wrong-tile
+  read rather than a hang. `test_rms_norm_perf.py::test_rms_norm_perf_r4target` (9 params) —
+  the refinement's own targets: the four interleaved prefill profiles plus the five
+  measured-fastest sharded geometries with their `_perf_case` `shard_shape` + `core_grid`
+  PINNED rather than auto-derived, since the geometry is what the reference latency was
+  measured on. One test function so a single space-free `-k r4target` selects the set (the
+  `--profile` Tracy wrapper loses the quoting of a multi-word `-k`).
+  `probes/read_perf_csv.py` — prints kernel ns + the per-RISC breakdown from the newest
+  profiler CSV, keyed by shape + placement; the BR-vs-TR2 split in it is what identified the
+  sharded geometries as finalize-bound rather than gather-bound.

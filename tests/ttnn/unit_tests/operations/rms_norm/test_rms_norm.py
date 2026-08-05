@@ -222,6 +222,14 @@ def test_rms_norm_gamma_formats(device, shape, dtype, layout, gamma_dtype, gamma
 # STREAM compute regime purely from (layout, dtype, gamma format, Wt). Both
 # must be exercised explicitly, for every layout and dtype, with and without
 # gamma -- otherwise a regime can pass on one device/config and fail on another.
+#
+# Refinement 4 added a THIRD regime (op_design.md Lamp L5, descriptor D14):
+# ROW_RESIDENT holds one whole tile-row of x + gamma while chunking only the
+# derived CBs, so pass B re-reads nothing.  It is selected by the same pure
+# function, so it needs the same pinning -- and it is the regime with a genuinely
+# different INDEXING scheme (every helper call reads the held CBs at a TILE
+# OFFSET), which is exactly the kind of thing a device-dependent L1 budget can
+# hide.  See test_rms_norm_row_resident_regime below for the pinned shapes.
 # ---------------------------------------------------------------------------
 
 
@@ -244,6 +252,46 @@ def test_rms_norm_gamma_formats(device, shape, dtype, layout, gamma_dtype, gamma
 def test_rms_norm_regimes(device, shape, regime, dtype, layout, with_gamma):
     expected, actual = _run(device, shape, dtype=dtype, layout=layout, with_gamma=with_gamma)
     assert_with_pcc(expected, actual, pcc=PCC[dtype])
+
+
+# ---------------------------------------------------------------------------
+# ROW_RESIDENT (Lamp L5 / descriptor D14) — the third compute regime.
+#
+# Verified on device to land in ROW_RESIDENT at bf16 on a 110-core blackhole:
+#   ROW_MAJOR : the path takes L5 at ANY row count (it is already depth 1 in
+#               both regimes, so L5 costs it no overlap) -- W=4096 gives
+#               WT_CHUNK=32 / 4 chunks, W=4000 gives 25 / 5 with a partial-W tail.
+#   TILE      : L5 sacrifices CB depth there, so the descriptor only takes it once
+#               a core owns >= 2 tile-rows -- hence Rt = 111 on a 110-core grid.
+#               W=3048 additionally pins the non-tile-aligned tail.
+# What these catch that nothing else does: the per-chunk TILE OFFSET into the
+# held cb_input_tiles / cb_gamma_tiles, and the once-per-row-block explicit pop
+# of both.  An off-by-one in either is a wrong-tile read, not a hang.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "shape, layout",
+    [
+        pytest.param((1, 1, 64, 4096), ttnn.ROW_MAJOR_LAYOUT, id="rr_rm_W4096"),
+        pytest.param((1, 1, 64, 4000), ttnn.ROW_MAJOR_LAYOUT, id="rr_rm_W4000_non_aligned"),
+        pytest.param((1, 1, 128, 6144), ttnn.ROW_MAJOR_LAYOUT, id="rr_rm_W6144_8chunks"),
+        pytest.param((1, 1, 3552, 3072), ttnn.TILE_LAYOUT, id="rr_tile_W3072_2rows_per_core"),
+        pytest.param((1, 1, 3552, 3048), ttnn.TILE_LAYOUT, id="rr_tile_W3048_non_aligned"),
+    ],
+)
+@pytest.mark.parametrize("with_gamma", [True, False], ids=["gamma", "no_gamma"])
+@pytest.mark.parametrize("gamma_layout", LAYOUTS, ids=["gamma_tile", "gamma_row_major"])
+def test_rms_norm_row_resident_regime(device, shape, layout, with_gamma, gamma_layout):
+    expected, actual = _run(
+        device,
+        shape,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        with_gamma=with_gamma,
+        gamma_layout=gamma_layout,
+    )
+    assert_with_pcc(expected, actual, pcc=PCC[ttnn.bfloat16])
 
 
 # ---------------------------------------------------------------------------

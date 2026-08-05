@@ -5,7 +5,7 @@
 //
 //   out = x * rsqrt( (1/W) * sum_w x^2 + eps ) * gamma
 //
-// One loop nest covers both regimes (op_design.md section 7).  Per row-block:
+// One loop nest covers ALL THREE regimes (op_design.md section 7).  Per row-block:
 //
 //   pass A   [RM] tilize            cb_input_sticks -> cb_input_tiles
 //            square                 cb_input_tiles  -> cb_x_squared
@@ -15,19 +15,36 @@
 //            mul<Row>               cb_normalized, cb_gamma_tiles -> cb_output_tiles
 //            [RM] untilize          cb_output_tiles -> cb_output_sticks
 //
-// RESIDENT (NUM_W_CHUNKS == 1): cb_input_tiles is HELD across pass A and pass B
-// (pass A pops nothing), so x is read from DRAM once.  STREAM: each pass pops
-// its chunk and the reader re-reads x for pass B.
+// The regimes differ ONLY in whether cb_input_tiles / cb_gamma_tiles are held
+// across both passes, and how wide they are (X_RESIDENT / X_HOLD_WT, from the
+// descriptor -- deviation D14):
+//   RESIDENT      X_RESIDENT, NUM_W_CHUNKS == 1.  The whole row is one chunk and
+//                 is held, so x is read from DRAM once.
+//   ROW_RESIDENT  X_RESIDENT, NUM_W_CHUNKS >  1.  One whole tile-row of x and the
+//                 whole row of gamma are held while the DERIVED CBs stay chunked,
+//                 so x is STILL read once: each helper call indexes the held CBs
+//                 at a TILE OFFSET (TileOffset::Set, base = c * WT_CHUNK) and they
+//                 are popped once per row-block rather than per chunk.
+//   STREAM        !X_RESIDENT.  Each pass pops its chunk and the reader re-reads x
+//                 (and gamma) for pass B -- the L1 fallback, ~2x the DRAM bytes.
 //
 // Every phase is a kernel_lib helper.  The only raw LLK is inside the
 // transform_in_place lambda (x1/W, +eps, rsqrt) — that helper's documented
 // calling convention, and the family explicitly routes multi-instruction
 // finalizers like rsqrt-with-eps here rather than to a chain
-// (streaming_reduce_helpers.hpp:75-78).
+// (streaming_reduce_helpers.hpp:75-78).  Refinement 4 adds ONE raw-LLK function
+// inside that same lambda, `rsqrt_tile_col`; its justification is at its
+// definition below (the rsqrt API exposes no VectorMode seam).
 //
-// Explicit cb_pop_front calls on cb_row_stat / cb_gamma_tiles / cb_scaler are
-// the sanctioned pattern for operands whose lifetime spans more calls than any
-// single PopPolicy can express (op_design.md section 6.1).
+// Pass A's square and pass B's two multiplies are spelled as `eltwise_chain`
+// rather than the `square` / `mul` convenience one-liners for one reason: the
+// convenience wrappers take no element constructor arguments, and the
+// ROW_RESIDENT regime needs to pass a runtime TILE OFFSET to the chain element.
+// Each is exactly what the corresponding convenience call expands to.
+//
+// Explicit cb_pop_front calls on cb_input_tiles / cb_row_stat / cb_gamma_tiles /
+// cb_scaler are the sanctioned pattern for operands whose lifetime spans more
+// calls than any single PopPolicy can express (op_design.md section 6.1).
 
 #include <cstdint>
 
@@ -43,6 +60,36 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 namespace ckl = compute_kernel_lib;
+
+// Lamp L6b: the finalize's rsqrt, scoped to the tile's COLUMN faces.
+//
+// RAW-LLK SUBSTITUTION, with the reason.  `rsqrt_tile` hard-codes
+// `VectorMode::RC` (api/compute/eltwise_unary/rsqrt.h:45) and exposes no
+// VectorMode seam -- neither a template parameter nor a runtime argument -- so
+// there is no helper that can express "rsqrt only the half of the tile that is
+// read".  cb_row_stat is a REDUCE_ROW result whose only consumer is pass B's
+// mul<BroadcastDim::Col>, i.e. column 0; in the 2x2-faces-of-16x16 tile layout
+// that column lives in faces 0 and 2, which is exactly `VectorMode::C`
+// (llk_math_eltwise_sfpu_common.h walks faces 0 and 2 for C).  Halving the
+// datums the SFPU's 8-iteration rsqrt walks is the whole lever.
+//
+// This is the same macro `rsqrt_tile` itself expands to, with one argument
+// changed, and it follows an established in-tree pattern for exactly this
+// (sdpa/.../compute_common.hpp:251-256 `recip_tile_first_column`).  It stays
+// inside the transform_in_place lambda, which is already this kernel's one
+// sanctioned raw-LLK site.
+#ifdef TRISC_MATH
+template <bool legacy_compat = false, bool FAST_APPROX = false>
+ALWI void rsqrt_tile_col(uint32_t idst) {
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_rsqrt,
+        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, FAST_APPROX, legacy_compat),
+        idst,
+        VectorMode::C);
+}
+#endif
 
 namespace {
 constexpr uint32_t cb_input_sticks = 0;
@@ -89,6 +136,18 @@ void kernel_main() {
     // (DestAccumulation::PerRow) rather than packing WT_CHUNK x^2 tiles out to L1
     // for the reduce to read back; WT_CHUNK is the unfolded (Phase-0) path.
     constexpr uint32_t X_SQUARED_WT = get_compile_time_arg_val(14);
+    // Refinement 4 / Lamp L5 (descriptor D14).  X_RESIDENT is now an EXPLICIT flag
+    // rather than `NUM_W_CHUNKS == 1`, which is what decouples "x is held across
+    // both passes" from "the width is one chunk" and gives the op its third regime:
+    //   RESIDENT      X_RESIDENT=1, NUM_W_CHUNKS==1   whole row in one chunk
+    //   ROW_RESIDENT  X_RESIDENT=1, NUM_W_CHUNKS>1    x + gamma held for the whole
+    //                                                 tile-row, only the DERIVED CBs
+    //                                                 chunked -> x read ONCE
+    //   STREAM        X_RESIDENT=0, NUM_W_CHUNKS>1    x re-read in pass B
+    constexpr uint32_t X_RES = get_compile_time_arg_val(15);
+    // Refinement 4 / Lamp L6b (descriptor D15): scope the finalize's rsqrt to the
+    // tile's column faces (see rsqrt_tile_col above).  1 = scoped, 0 = whole tile.
+    constexpr uint32_t RSQRT_COL = get_compile_time_arg_val(16);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // tile-rows owned by this core
     // Only the core holding the row's LAST width tile applies the partial-W
@@ -105,8 +164,19 @@ void kernel_main() {
     constexpr bool RM = (IS_TILE == 0);
     constexpr bool HAS_G = (HAS_GAMMA != 0);
     constexpr bool G_RM = (GAMMA_IS_RM != 0);
-    // X_RESIDENT == GAMMA_RESIDENT == (NUM_W_CHUNKS == 1): one source of truth.
-    constexpr bool X_RESIDENT = (NUM_W_CHUNKS == 1);
+    // X_RESIDENT == GAMMA_RESIDENT, from the descriptor's regime decision (D14).
+    constexpr bool X_RESIDENT = (X_RES != 0);
+    static_assert(NUM_W_CHUNKS > 1 || X_RESIDENT, "rms_norm: a one-chunk width is resident by definition");
+    // Lamp L5's regime: resident x/gamma, chunked derived CBs.  The two held CBs
+    // then span the WHOLE tile-row while every helper call still works on one
+    // WT_CHUNK, so each call indexes them at a TILE OFFSET (TileOffset::Set) and
+    // neither is popped until the row-block is done.
+    constexpr bool ROW_RESIDENT = X_RESIDENT && (NUM_W_CHUNKS > 1);
+    static_assert(!ROW_RESIDENT || BLOCK_ROWS == 1, "rms_norm: ROW_RESIDENT holds ONE tile-row of x");
+    // Width tiles the HELD CBs (cb_input_tiles, cb_gamma_tiles) span.  Equals
+    // WT_CHUNK in both Phase-0 regimes, so this is byte-identical off the L5 path.
+    constexpr uint32_t X_HOLD_WT = X_RESIDENT ? (WT_CHUNK * NUM_W_CHUNKS) : WT_CHUNK;
+    constexpr auto XOFF = ROW_RESIDENT ? ckl::TileOffset::Set : ckl::TileOffset::Unset;
 
     // srcA at boot is whichever CB the first helper unpacks from.
     constexpr uint32_t CB_A = RM ? cb_input_sticks : cb_input_tiles;
@@ -184,6 +254,38 @@ void kernel_main() {
         ckl::PackRelu::Disabled,
         ckl::L1Accumulation::Disabled,
         ckl::DestAccumulation::PerRow);
+    constexpr auto SQ_OUT = SQ_FOLD ? SQ_OUT_FOLDED : ckl::output(cb_x_squared);
+
+    // ---- the operand specs, ONE definition each ---------------------------
+    // Every one carries XOFF, so the L5 regime differs from Phase 0 only in the
+    // (compile-time-elided) `+ base` on the tile index -- there is no second
+    // code path.  base is 0 whenever XOFF is Unset, and `tile_base_value<Unset>`
+    // folds the whole term away.
+    constexpr auto X_IN_A = ckl::input(
+        cb_input_tiles,
+        ckl::WaitPolicy::Upfront,
+        PASS_A_POP,
+        ckl::OperandKind::Block,
+        ckl::DataFormatReconfig::Enabled,
+        XOFF);
+    // Pass B's x: held CBs are popped ONCE per row-block below (an explicit pop is
+    // the sanctioned pattern for a lifetime no single PopPolicy can express), so
+    // that a chunk's `AtEnd` cannot pop the base tiles the next chunk still needs.
+    constexpr auto PASS_B_X_POP = ROW_RESIDENT ? ckl::PopPolicy::None : ckl::PopPolicy::AtEnd;
+    constexpr auto X_IN_B = ckl::input(
+        cb_input_tiles,
+        ckl::WaitPolicy::Upfront,
+        PASS_B_X_POP,
+        ckl::OperandKind::Block,
+        ckl::DataFormatReconfig::Enabled,
+        XOFF);
+    constexpr auto G_IN = ckl::input(
+        cb_gamma_tiles,
+        ckl::WaitPolicy::Upfront,
+        ckl::PopPolicy::None,
+        ckl::OperandKind::Row,
+        ckl::DataFormatReconfig::Enabled,
+        XOFF);
     constexpr uint32_t NORM_OUT = HAS_G ? cb_normalized : cb_output_tiles;
     constexpr bool CROSS_CORE = (COMBINE != 0);
     // Pass B's Col operand: the multicast landing CB when the stat was combined
@@ -197,12 +299,22 @@ void kernel_main() {
         mul_unary_tile(dst, INV_W_BITS);  // x (1/W): the LOGICAL width (R1)
         add_unary_tile(dst, EPS_BITS);
         rsqrt_tile_init();
-        rsqrt_tile(dst);
+        // The scaled/eps-shifted value is now in every lane; only the lanes pass B
+        // reads back need the rsqrt (L6b).  The init is vector-mode-agnostic.
+        if constexpr (RSQRT_COL != 0) {
+            MATH((rsqrt_tile_col(dst)));
+        } else {
+            rsqrt_tile(dst);
+        }
     };
 
     // ---- gamma: resident for the whole core's assignment (RESIDENT) -------
+    // ROW_RESIDENT holds the whole tile-row of gamma too, so it tilizes every
+    // chunk the reader staged; NUM_W_CHUNKS == 1 makes this the Phase-0 single call.
     if constexpr (HAS_G && X_RESIDENT && G_RM) {
-        ckl::tilize<WT_CHUNK, cb_gamma_sticks, cb_gamma_tiles>(1);
+        for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
+            ckl::tilize<WT_CHUNK, cb_gamma_sticks, cb_gamma_tiles>(1);
+        }
     }
 
     const uint32_t num_blocks = (num_rows + BLOCK_ROWS - 1) / BLOCK_ROWS;
@@ -212,18 +324,25 @@ void kernel_main() {
 
         // ================= pass A: sum(x^2) over the whole width ===========
         for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
+            // Tile offset of this chunk inside the HELD CBs.  0 (and elided) unless
+            // ROW_RESIDENT, where cb_input_tiles / cb_gamma_tiles span the whole row.
+            const uint32_t hold_base = ROW_RESIDENT ? (c * WT_CHUNK) : 0;
             if constexpr (RM) {
                 ckl::tilize<WT_CHUNK, cb_input_sticks, cb_input_tiles>(rows);
             }
-            if constexpr (SQ_FOLD) {
-                ckl::square<
-                    ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, PASS_A_POP, ckl::OperandKind::Block),
-                    SQ_OUT_FOLDED>(ckl::EltwiseShape::grid(rows, WT_CHUNK));
-            } else {
-                ckl::square<
-                    ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, PASS_A_POP, ckl::OperandKind::Block),
-                    ckl::output(cb_x_squared)>(ckl::EltwiseShape::grid(rows, WT_CHUNK));
-            }
+            // x^2, either packed to cb_x_squared per width tile or folded into DEST
+            // (D12).  `square` cannot carry the tile base, so the chain is spelled
+            // out; it is exactly what square<> expands to.
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::grid(rows, WT_CHUNK),
+                ckl::BinaryFpu<
+                    X_IN_A,
+                    X_IN_A,
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::None,
+                    ckl::Dst::D0,
+                    SQ_OUT.dest_accumulation>{hold_base, hold_base},
+                ckl::PackTile<SQ_OUT>{});
 
             ckl::accumulate_reduce_block<
                 ckernel::PoolType::SUM,
@@ -269,6 +388,10 @@ void kernel_main() {
 
         // ================= pass B: scale ===================================
         for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
+            const uint32_t hold_base = ROW_RESIDENT ? (c * WT_CHUNK) : 0;
+            // ROW_RESIDENT never re-stages either held operand: pass A already put
+            // the whole tile-row of x tiles (and of gamma) in L1.  This is the
+            // pass-B re-read that Lamp L5 exists to delete.
             if constexpr (RM && !X_RESIDENT) {
                 ckl::tilize<WT_CHUNK, cb_input_sticks, cb_input_tiles>(rows);
             }
@@ -280,20 +403,27 @@ void kernel_main() {
             // broadcasts back ACROSS columns (BroadcastDim::Col) and must be
             // operand B. OperandKind::Col indexes it by row only, and it is not
             // popped -- every width chunk of this block re-reads it.
-            ckl::mul<
-                ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::input(CB_STAT_B, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
-                ckl::output(NORM_OUT),
-                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(rows, WT_CHUNK));
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::grid(rows, WT_CHUNK),
+                ckl::BinaryFpu<
+                    X_IN_B,
+                    ckl::input(CB_STAT_B, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::Col>{hold_base},
+                ckl::PackTile<ckl::output(NORM_OUT)>{});
 
             if constexpr (HAS_G) {
                 // gamma is row-shaped (1 x W, valid in row 0) -> broadcasts DOWN
                 // rows (BroadcastDim::Row), indexed by column (OperandKind::Row).
-                ckl::mul<
-                    ckl::input(cb_normalized, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                    ckl::input(cb_gamma_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row),
-                    ckl::output(cb_output_tiles),
-                    ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(rows, WT_CHUNK));
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(rows, WT_CHUNK),
+                    ckl::BinaryFpu<
+                        ckl::input(
+                            cb_normalized, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                        G_IN,
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::Row>{0u, hold_base},
+                    ckl::PackTile<ckl::output(cb_output_tiles)>{});
             }
 
             if constexpr (RM) {
@@ -305,6 +435,13 @@ void kernel_main() {
             }
         }
 
+        // The held CBs' lifetime is the whole row-block, which no PopPolicy on a
+        // per-chunk call can express (an `AtEnd` would drop the base tiles the next
+        // chunk still indexes), so ROW_RESIDENT pops x here -- the same sanctioned
+        // pattern as cb_row_stat / cb_gamma_tiles / cb_scaler.
+        if constexpr (ROW_RESIDENT) {
+            cb_pop_front(cb_input_tiles, rows * X_HOLD_WT);
+        }
         cb_pop_front(CB_STAT_B, rows);
     }
 
@@ -312,6 +449,6 @@ void kernel_main() {
     // the reader pushed into cb_scaler (datapath- and PARTIAL_W-dependent).
     cb_pop_front(cb_scaler, SCALER_TILES);
     if constexpr (HAS_G && X_RESIDENT) {
-        cb_pop_front(cb_gamma_tiles, WT_CHUNK);
+        cb_pop_front(cb_gamma_tiles, X_HOLD_WT);
     }
 }

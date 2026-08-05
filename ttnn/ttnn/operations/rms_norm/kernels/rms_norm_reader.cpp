@@ -11,8 +11,13 @@
 //
 // Loop nest mirrors the compute kernel exactly (op_design.md section 7):
 //     for blk in blocks: for pass in {A} or {A,B}: for c in chunks
-// Pass B is re-read ONLY in the STREAM regime (X_RESIDENT == false); in the
-// RESIDENT regime cb_input_tiles is held across both passes, so x is read once.
+// Pass B is re-read ONLY in the STREAM regime (X_RESIDENT == false).  Both
+// resident regimes hold cb_input_tiles across the two passes, so x is read once:
+// RESIDENT because the row IS one chunk, ROW_RESIDENT (Lamp L5 / descriptor D14)
+// because the whole tile-row is held while only the derived CBs are chunked.
+// gamma follows X_RESIDENT the same way -- staged once per core for every chunk of
+// the row, instead of re-read per pass-B chunk of every row-block, which on a
+// prefill profile is as many DRAM bytes as x itself.
 //
 // Helper-usage notes
 // ------------------
@@ -99,7 +104,12 @@ void kernel_main() {
     // PARTIAL_W != 0; on the BAND scheme it is a band that does not fill its tile
     // columns, and there it REPLACES the reduce mask entirely.
     constexpr uint32_t STAGE_ZERO = get_compile_time_arg_val(17);
-    constexpr auto x_args = TensorAccessorArgs<18>();
+    // Refinement 4 / Lamp L5 (descriptor D14): x (and gamma) are held across both
+    // passes.  Now an EXPLICIT flag rather than `NUM_W_CHUNKS == 1`, so the op has a
+    // third regime -- ROW_RESIDENT: resident x/gamma with the DERIVED CBs chunked,
+    // which means ONE pass over x here instead of two.
+    constexpr uint32_t X_RES = get_compile_time_arg_val(18);
+    constexpr auto x_args = TensorAccessorArgs<19>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr bool NATIVE_X = (NATIVE_IN != 0);
@@ -110,8 +120,11 @@ void kernel_main() {
         !BAND_X || PARTIAL_W == 0, "rms_norm: the BAND scheme masks pad lanes by zero-staging, not by scaler");
     constexpr bool HAS_G = (HAS_GAMMA != 0);
     constexpr bool G_RM = (GAMMA_IS_RM != 0);
-    // X_RESIDENT == GAMMA_RESIDENT == (NUM_W_CHUNKS == 1): one source of truth.
-    constexpr bool X_RESIDENT = (NUM_W_CHUNKS == 1);
+    // X_RESIDENT == GAMMA_RESIDENT, from the descriptor's regime decision (D14).
+    constexpr bool X_RESIDENT = (X_RES != 0);
+    static_assert(NUM_W_CHUNKS > 1 || X_RESIDENT, "rms_norm: a one-chunk width is resident by definition");
+    // The whole point of the L5 regime: x is staged ONCE per row-block, however many
+    // width chunks the derived CBs are cut into.
     constexpr uint32_t NUM_PASSES = X_RESIDENT ? 1 : 2;
 
     // Bytes of one full width chunk of a row-major stick, and of the last one
@@ -253,8 +266,14 @@ void kernel_main() {
         }
     };
 
+    // Resident gamma is staged ONCE per core, for every chunk the row is cut into
+    // (NUM_W_CHUNKS == 1 in the Phase-0 RESIDENT regime, so this is the same single
+    // call there).  In STREAM it is re-staged per pass-B chunk of every row-block
+    // instead -- which for a prefill profile is as many DRAM bytes as x itself.
     if constexpr (X_RESIDENT) {
-        stage_gamma_chunk(0);
+        for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
+            stage_gamma_chunk(c);
+        }
     }
 
     // ---- native x: publish the resident shard, once ------------------------

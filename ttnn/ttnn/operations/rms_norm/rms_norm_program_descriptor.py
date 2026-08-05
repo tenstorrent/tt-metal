@@ -30,6 +30,17 @@ Knob map (all tunable parameters, none inlined):
                             smallest WT_CHUNK at which the reduce runs on
                             ReduceAlgorithm::AccumulateViaAdd instead of
                             ReduceTile (see D7)
+    DEST_ACC_SQUARE_MAX_WT  largest WT_CHUNK at which pass A's square folds the
+                            width tiles into DEST instead of packing every x^2
+                            tile out to cb_x_squared (Lamp L6d; see D12)
+    GATHER_FACES            faces per fp32 partial tile the cross-core combine's
+                            GATHER ships member -> root (see D13)
+    ROW_RESIDENT_MIN_ROWS_PER_CORE
+                            tile-rows a core must own before the ROW_RESIDENT
+                            regime is taken at a SHALLOWER depth than STREAM
+                            would use (Lamp L5; see D14)
+    RSQRT_COL_SCOPE         scope the finalize's rsqrt to the tile faces pass B
+                            actually reads back (Lamp L6b; see D15)
 
   derived buffer depths
     CB_X_DEPTH / CB_OUT_DEPTH   the depth the regime search settled on; forced
@@ -50,8 +61,14 @@ Knob map (all tunable parameters, none inlined):
     BLOCK_ROWS   tile-rows per compute block = min(per-core assignment,
                  the coarsest chunk that fits the L1 budget)
     WT_CHUNK     width tiles per compute block = Wt in the RESIDENT regime;
-                 the coarsest DIVISOR of Wt that fits L1 in STREAM
-    NUM_W_CHUNKS = Wt // WT_CHUNK      (X_RESIDENT == GAMMA_RESIDENT == (== 1))
+                 the coarsest DIVISOR of Wt that fits L1 in ROW_RESIDENT / STREAM
+    NUM_W_CHUNKS = Wt // WT_CHUNK
+    X_RESIDENT   whether cb_input_tiles / cb_gamma_tiles are HELD across pass A
+                 and pass B.  Since Refinement 4 this is DECOUPLED from
+                 NUM_W_CHUNKS == 1 (that decoupling is the third regime -- D14)
+    x_hold_wt    width tiles the two held CBs span: wt_per_core when X_RESIDENT,
+                 else WT_CHUNK.  ONE source of truth for both CB sizes and the
+                 kernels' final pops
 
 Deviations from op_design.md section 1.4 (advisory: CB sizing / knob selection;
 the scheme, topology, work split and helper mapping are unchanged):
@@ -379,6 +396,136 @@ the scheme, topology, work split and helper mapping are unchanged):
       32 floats carried in a 4096-byte tile) -- are both changes to the combine's
       topology / data format, not knob turns, so they are recorded here rather
       than half-built.
+  D12 Refinement 4 (perf), Lamp L6d.  Pass A's `square` folds the chunk's width
+      tiles straight into DEST (DestAccumulation::PerRow) instead of packing every
+      x^2 tile out to cb_x_squared for the reduce to read back, once
+      WT_CHUNK <= DEST_ACC_SQUARE_MAX_WT.  cb_x_squared then holds ONE tile per
+      tile-row (`x_squared_wt`) and the reduce's per-call width is 1, so the pass
+      loses WT_CHUNK-1 packs and the matching unpacks per tile-row.
+
+      A CEILING, not a floor, and that is the whole subtlety: the fold accumulates
+      SERIALLY over the chunk's width tiles inside a DEST register that is 16-bit at
+      fp32_dest_acc_en=False, where the reduce's own AccumulateViaAdd datapath
+      accumulates PAIRWISE (Refinement 1b).  Bounding WT_CHUNK bounds that depth; the
+      cross-chunk carry still goes through the fp32 cb_row_stat either way.  The
+      shipped 8 covers every sharded `_perf_case` geometry (WT_CHUNK 4..8) and leaves
+      the prefill profiles (32..80) on the packed path.
+
+      Gated on PARTIAL_W == 0: the fold folds the row's last width tile INCLUDING its
+      pad lanes before the reduce runs, so the reduce's partial scaler / 0-1 mask can
+      no longer reach them.  The BAND scheme keeps the fold because it passes
+      kernel_partial_w == 0 and zeroes its staging ring, so its pad lanes are an
+      exact 0 (D10).
+
+      MEASURED alone (blackhole p150b, bf16 / HiFi2 / fp32_dest_acc_en=False):
+      (1,1,8192,1024) BLOCK-sharded 64c 102173 -> 98989 ns (1.03x), the four pinned
+      WIDTH-shard geometries 1.02x-1.03x.  Small, because those geometries turned out
+      NOT to be compute-throughput-bound the way the tile-op count suggested -- see
+      D15 for what actually dominated them.
+  D13 Refinement 4 (perf).  GATHER_FACES: the cross-core combine's member -> root
+      GATHER ships only the leading / column-carrying faces of each fp32 partial
+      tile, not the whole tile.  The gather is the combine's only per-GROUP_SIZE
+      term (every member ships into ONE root, while the stat multicast back carries
+      BLOCK_ROWS tiles TOTAL however big the group is), so it is where a byte lever
+      has a fan-in multiplier on it.
+
+      A partial is a REDUCE_ROW result and does not fill its tile.  MEASURED, because
+      guessing which faces matter is exactly what went wrong first: shipping the
+      leading 3 faces of 4 passes the whole sharded suite, and so does shipping only
+      faces 0 and 2 (the pair that can hold a column vector) -- so faces 1 and 3 are
+      never read back, and the shipped value 2 halves the gather.
+
+      TWO findings worth keeping:
+        * ZEROING THE WHOLE GATHER CB AT BOOT TO DEFINE THE UNSHIPPED FACES IS A
+          RACE.  A member's partial can land before the root's wipe, and it did:
+          every combine cell failed at pcc 0.87-0.99 with rms 0.08-1.10.  Zeroing
+          exactly the UNSHIPPED faces is race-free by construction -- that region is
+          disjoint from everything any member ever writes -- and it is what ships, so
+          no undefined L1 reaches the root's elementwise sum or the rsqrt.
+        * THE BYTE MODEL OVER-PREDICTED.  Halving the gather moved the 64-core BLOCK
+          shard only ~5% (98989 -> 94301 ns), which is what said the combine is not
+          byte-bound at these group sizes and sent the search to D15.
+  D14 Refinement 4 (perf), Lamp L5 -- the op's THIRD compute regime, ROW_RESIDENT.
+      X_RESIDENT is now an EXPLICIT flag instead of `num_w_chunks == 1`, and that
+      decoupling IS the regime:
+
+        RESIDENT      X_RESIDENT, NUM_W_CHUNKS == 1   whole row in one chunk
+        ROW_RESIDENT  X_RESIDENT, NUM_W_CHUNKS >  1   ONE whole tile-row of x and
+                                                      the whole row of gamma held,
+                                                      only the DERIVED CBs chunked
+        STREAM        !X_RESIDENT                     x re-read in pass B
+
+      WHY IT IS THE PREFILL LEVER.  STREAM pays TWICE over: x is read once per pass
+      (R10), and gamma -- chunked and not held -- is re-read for every pass-B chunk of
+      every row-block, which on a prefill profile is as many DRAM bytes as x itself.
+      On (1,1,8192,7168) that is 117 MB (x, pass A) + 117 (x, pass B) + 118 (gamma) +
+      117 (out) = 470 MB, measured at 1043918 ns == 450 GB/s aggregate, i.e. already
+      at the part's DRAM roofline: the only thing left to improve was the byte count.
+      ROW_RESIDENT moves 117 + 50 + 117 = 285 MB.
+
+      HOW, with no second code path.  Every helper call still works on one WT_CHUNK;
+      the two held CBs are simply indexed at a TILE OFFSET (`TileOffset::Set`,
+      eltwise_chain.hpp:311 -- base = c * WT_CHUNK, folded away to 0 when the offset
+      mode is Unset) and popped ONCE per row-block by an explicit cb_pop_front, the
+      same sanctioned pattern cb_row_stat / cb_scaler already use.  `x_hold_wt` is
+      the one source of truth for their width.  BLOCK_ROWS is 1 here, which is why a
+      flat `Set` base suffices rather than a `Strided` range.
+
+      MEASURED (blackhole p150b, 110-core grid, bf16 / TILE / HiFi2 /
+      fp32_dest_acc_en=False -- the `_perf_case` config; one fresh-cache profiled run
+      per variant; test_rms_norm_perf.py::test_rms_norm_perf_r4target):
+
+        shape              STREAM      ROW_RESIDENT   speedup   WT_CHUNK
+        (1,1,8192,5120)    753345 ns     468487 ns     1.61x     80 -> 32 (2->5 chunks)
+        (1,1,8192,7168)   1043918 ns     655687 ns     1.59x     56 -> 56 (4 chunks)
+
+      GATED ON THE DEPTH SACRIFICE, not on L5.  Holding a whole tile-row of x can
+      leave no L1 for the depth the two cross-processor CBs were spending on
+      movement<->compute overlap.  At the SAME depth L5 is pure profit; only when it
+      forces a shallower one does it cost anything, and then only when the core has a
+      single row-block -- nothing left to overlap.  Both halves are measured:
+      (1,1,32,7168) at GRID_W=1 (one core, depth 2 -> 1) went 41779 -> 50598 ns
+      (0.83x) and is now correctly declined, while ROW_MAJOR (1,1,32,4096) -- already
+      depth 1 in BOTH regimes, so no sacrifice -- takes L5 even at one row-block and
+      goes 52197 -> 47144 ns (1.11x).  Hence ROW_RESIDENT_MIN_ROWS_PER_CORE, applied
+      only to the depth-sacrificing case.
+
+      Not reachable with a cross-core width split active: that plan is SCHEME_SHARD_W,
+      which never enters the chunked branches (the writer static_asserts
+      NUM_W_CHUNKS == 1 for a combine, and the descriptor asserts it too).
+
+      WHAT IT DOES NOT FIX: the prime-`Wt` cliff.  D1 still forces WT_CHUNK | Wt, so
+      Wt = 127 collapses to one tile per chunk; L5 removes that shape's pass-B
+      RE-READ but not its 127 one-tile compute phases.  A ragged-tail chunk (runtime
+      wt_c) is still the lever there.
+  D15 Refinement 4 (perf), Lamp L6b.  The finalize's rsqrt is scoped to the tile
+      faces pass B reads back (RSQRT_COL_SCOPE).  cb_row_stat is a REDUCE_ROW result
+      whose ONLY consumer is mul<BroadcastDim::Col>, i.e. tile column 0, which in the
+      2x2-faces-of-16x16 layout lives in faces 0 and 2 == `VectorMode::C` -- the same
+      two faces D13 independently established are the only ones the gather has to
+      ship.  So the SFPU's 8-iteration rsqrt walks half the datums and the other half
+      keeps the (never-read) pre-rsqrt value.
+
+      This is the one raw-LLK addition: `rsqrt_tile` hard-codes VectorMode::RC and
+      exposes no seam (see the substitution note at the head of rms_norm_compute.cpp).
+
+      MEASURED (same config, A/B on RSQRT_COL_SCOPE):
+
+        shape                          RC (whole)   C (scoped)   speedup
+        (1,1,8192,1024) BLOCK 64c        94297 ns     82474 ns    1.14x
+        (1,1,32,1024)   WIDTH  8c         5863 ns      5470 ns    1.07x
+        (1,1,32,2304)   WIDTH  9c         6759 ns      6350 ns    1.06x
+        (1,1,32,5120)   WIDTH 32c        11460 ns     11042 ns    1.04x
+        (1,1,32,7168)   WIDTH 28c        10897 ns     10581 ns    1.03x
+        prefill (interleaved)                      within noise
+
+      THIS is what the sharded geometries were actually spending their time on, and
+      it is the finding D12/D13 were looking for: the combine's ROOT runs one
+      transform_in_place per tile-row per round (32 of them on the 64-core BLOCK
+      shard) and every member waits on it, so the finalize sits on the critical path
+      with a GROUP_SIZE-wide fan-out of waiters behind it.  A per-tile SFPU cost that
+      is invisible in a tile-op count dominated the geometry.
+
   D9  Refinement 2's placement layer.  The three SCHEME_* values, the zero-copy
       (shard-backed) cb_input_tiles / cb_output_tiles, the cross-core width
       combine's four CBs and L1_CB_ARENA_BASE_RESERVE are all documented at
@@ -529,6 +676,39 @@ DEST_ACC_SQUARE_MAX_WT = 8
 # The A/B handle for the gather-byte lever; the stat MULTICAST back is deliberately
 # left whole-tile (it has no fan-in multiplier on it).
 GATHER_FACES = 2
+
+# Smallest number of tile-rows a core must own before the ROW_RESIDENT regime
+# (Lamp L5, D14) is taken at a SHALLOWER CB depth than STREAM would have used.
+#
+# L5 trades DRAM BYTES (x read once instead of twice, and gamma once per core
+# instead of once per pass-B chunk of every row-block) for L1: holding a whole
+# tile-row of x can leave no room for the depth the two cross-processor CBs were
+# spending on movement<->compute overlap.  At the SAME depth L5 is pure profit and
+# this knob does not apply; only the depth-sacrificing case is gated, and there the
+# sacrifice only bites when the core has ONE row-block -- nothing to overlap with.
+#
+# MEASURED (blackhole p150b, 110-core grid, bf16 / HiFi2 / fp32_dest_acc_en=False
+# except the RM row, which is the perf probe's HiFi4 config; one fresh-cache
+# profiled run per variant; see D14):
+#
+#   shape                        depth   rows/core   STREAM       ROW_RESIDENT
+#   (1,1,8192,5120)  TILE         2->1       3        753345 ns    466594 ns  1.61x
+#   (1,1,8192,7168)  TILE         2->1       3       1043918 ns    645578 ns  1.62x
+#   (1,1,32,7168)    TILE GRID_W=1 2->1      1         41779 ns     50598 ns  0.83x
+#   (1,1,32,4096)    ROW_MAJOR    1->1       1         52197 ns     47226 ns  1.11x
+#
+# The last two are the whole reason the gate is on the depth SACRIFICE rather than
+# on L5: the ROW_MAJOR path is already depth 1 in both regimes, so it gives up
+# nothing and wins on bytes even at one row-block.
+# 0 would take L5 whenever it fits; a very large value disables it on the TILE path.
+ROW_RESIDENT_MIN_ROWS_PER_CORE = 2
+
+# Scope the finalize's rsqrt to the faces pass B reads back (op_design.md Lamp L6b,
+# descriptor D15).  cb_row_stat is a REDUCE_ROW result and its only consumer is a
+# mul<BroadcastDim::Col>, so only tile column 0 -- faces 0 and 2 -- is ever read;
+# `VectorMode::C` makes the SFPU's 8-iteration rsqrt walk half the datums.
+#   1  scoped (shipped)      0  whole tile (VectorMode::RC, Refinement 3's behaviour)
+RSQRT_COL_SCOPE = 1
 
 
 # ---------------------------------------------------------------------------
@@ -1411,7 +1591,8 @@ def create_program_descriptor(
     scaler_bytes = st * scaler_pages
 
     def _solve_blocking(plan):
-        """(block_rows, wt_chunk, num_w_chunks, cb_x_depth, cb_out_depth) or None.
+        """(block_rows, wt_chunk, num_w_chunks, cb_x_depth, cb_out_depth, x_resident)
+        or None.
 
         None => this plan's per-core block does not fit L1 at all, and the caller
         must fall back to SCHEME_ROWS (which can chunk `width`).
@@ -1457,7 +1638,7 @@ def create_program_descriptor(
             if brmax >= 1:
                 # RESIDENT: the whole per-core row slice is resident; take the
                 # coarsest row block that fits, i.e. the entire assignment when it does.
-                return min(max_rows, brmax), wt_core, 1, depth, depth
+                return min(max_rows, brmax), wt_core, 1, depth, depth, True
 
         if plan.band:
             # The BAND scheme has no fallback: its width is shard-derived (so not
@@ -1465,13 +1646,63 @@ def create_program_descriptor(
             # (the page is a row SEGMENT).  Take the finest block -- ONE tile-row --
             # and let metal's own CB-region check be the arbiter rather than
             # pre-refusing on a proportional safety margin.
-            return 1, wt_core, 1, depth_candidates[0], depth_candidates[0]
+            return 1, wt_core, 1, depth_candidates[0], depth_candidates[0], True
         if plan.scheme != SCHEME_ROWS:
             return None  # a shard-derived width cannot be chunked -> caller falls back
 
-        # STREAM: one tile-row's width does not fit at ANY depth -> chunk `width`
-        # (an L1 fallback, not a parallelization).  The chunk size adapts to L1,
-        # so keep the preferred (coarsest) depth: overlap is affordable and the
+        # ---- the width has to be chunked.  Which of the two chunked regimes? ----
+        # ROW_RESIDENT (Lamp L5, D14) first: hold ONE tile-row of x and the whole row
+        # of gamma resident and chunk only the DERIVED CBs, so pass B re-reads
+        # NOTHING.  That is strictly fewer DRAM bytes than STREAM at the same chunk
+        # count, so it is preferred whenever it fits, and it only fails to fit when a
+        # single tile-row of x + gamma is itself too big for the budget -- which is
+        # exactly when STREAM's chunked-x is the only option left.
+        def _row_resident_chunk(depth_x, depth_out):
+            """Coarsest admissible WT_CHUNK for the L5 regime, or 0 if it cannot fit."""
+            held = depth_x * wt_core * bt  # cb_input_tiles: a WHOLE tile-row of x
+            if has_gamma:
+                held += wt_core * gt  # cb_gamma_tiles: the whole row, read once
+            fixed = held + scaler_bytes + f32_pages * ft  # block_rows == 1
+            # Per width tile of a CHUNK: cb_x_squared + cb_normalized + cb_output_tiles,
+            # plus the ROW_MAJOR staging rings (gamma's stick ring is chunked too).
+            per_chunk_tile = (
+                bt * (1 + (1 if has_gamma else 0) + depth_out)
+                + (gt if (has_gamma and gamma_is_rm) else 0)
+                + (2 * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)  # D2
+            )
+            room = (budget - fixed) // per_chunk_tile
+            if room < 1:
+                return 0
+            # A DIVISOR of wt_core (D1), and strictly finer than the whole row -- a
+            # single chunk would have been the RESIDENT regime above.
+            wtc = _largest_divisor_at_most(wt_core, min(room, wt_core - 1) if wt_core > 1 else 1)
+            return wtc if (wtc >= 1 and wt_core % wtc == 0 and wtc < wt_core) else 0
+
+        # Walk the depth knob coarsest-first as everywhere else, but fall back to
+        # depth 1 for THIS regime even when the knob does not list it: ROW_RESIDENT
+        # at depth 1 still moves strictly fewer DRAM bytes than STREAM at any depth
+        # (x once instead of twice, gamma once per core instead of once per row-block
+        # per chunk), and unlike D4's Rt = 1 case the row is many chunks, so the
+        # reader still overlaps compute WITHIN a row-block.
+        # L5 is FREE at the depth STREAM would have used anyway -- it only ever
+        # removes reads.  It costs something only when the whole-row hold forces a
+        # SHALLOWER depth than STREAM's, because then the cross-processor CBs lose
+        # their movement<->compute overlap; and that only bites when a core has a
+        # single row-block, i.e. nothing left to overlap with.  Hence the guard is on
+        # the DEPTH SACRIFICE, not on L5 itself: the ROW_MAJOR path is already depth 1
+        # in both regimes (a sequential tilize/untilize pair buys nothing from depth),
+        # so it sacrifices nothing and always takes L5.
+        stream_depth = depth_candidates[0]
+        for depth in tuple(dict.fromkeys(depth_candidates + (1,))):
+            if depth < stream_depth and max_rows < ROW_RESIDENT_MIN_ROWS_PER_CORE:
+                continue
+            wtc = _row_resident_chunk(depth, depth)
+            if wtc:
+                return 1, wtc, wt_core // wtc, depth, depth, True
+
+        # STREAM: not even ONE tile-row of x fits -> chunk x itself and re-read it in
+        # pass B (an L1 fallback, not a parallelization).  The chunk size adapts to
+        # L1, so keep the preferred (coarsest) depth: overlap is affordable and the
         # byte count is already paid.
         depth = depth_candidates[0]
         mult = _cb_block_mult(depth, depth, has_gamma)
@@ -1483,7 +1714,7 @@ def create_program_descriptor(
         fixed_stream = scaler_bytes + f32_pages * ft  # block_rows == 1 here
         wt_chunk_l1_max = max(1, (budget - fixed_stream) // per_chunk_tile_bytes)
         wtc = _largest_divisor_at_most(wt_core, wt_chunk_l1_max)  # D1
-        return 1, wtc, wt_core // wtc, depth, depth
+        return 1, wtc, wt_core // wtc, depth, depth, False
 
     solved = _solve_blocking(plan)
     if solved is None:
@@ -1504,15 +1735,25 @@ def create_program_descriptor(
         )
         solved = _solve_blocking(plan)
         assert solved is not None, "rms_norm: no admissible blocking even on SCHEME_ROWS"
-    block_rows, wt_chunk, num_w_chunks, cb_x_depth, cb_out_depth = solved
+    block_rows, wt_chunk, num_w_chunks, cb_x_depth, cb_out_depth, x_resident = solved
     all_cores = plan.all_cores
     assignment = plan.assignment
     wt_per_core = plan.wt_per_core
     combine = plan.combine
 
-    # X_RESIDENT == GAMMA_RESIDENT == (NUM_W_CHUNKS == 1) is derived in the
-    # kernels from the NUM_W_CHUNKS CT arg -- one source of truth, so it is
-    # deliberately NOT passed as a second flag.
+    # X_RESIDENT == GAMMA_RESIDENT, and since Refinement 4 (D14) it is DECOUPLED
+    # from `num_w_chunks == 1` -- that decoupling IS the L5 regime.  It is passed to
+    # all three kernels as one explicit flag; `x_hold_wt` below is the single source
+    # of truth for how wide the two HELD CBs are, and every dependent reads it.
+    assert x_resident or num_w_chunks > 1, "rms_norm: a one-chunk width is resident by definition"
+    assert not (combine and num_w_chunks > 1), "rms_norm: a width-split core takes its slice in one chunk"
+    row_resident = x_resident and num_w_chunks > 1
+    assert not row_resident or block_rows == 1, "rms_norm: ROW_RESIDENT holds ONE tile-row of x"
+    # Width tiles cb_input_tiles / cb_gamma_tiles span.  Equals wt_chunk in both
+    # Phase-0 regimes (where wt_chunk == wt_per_core if resident), so every
+    # non-L5 build stays byte-identical.
+    x_hold_wt = wt_per_core if x_resident else wt_chunk
+    assert x_hold_wt == wt_chunk * num_w_chunks if x_resident else x_hold_wt == wt_chunk
 
     # ---- reduce datapath (D7, refined by D8) ------------------------------
     # The crossover is measured against THIS CORE'S WHOLE reduce dim
@@ -1566,7 +1807,10 @@ def create_program_descriptor(
         assert sw_t == wt_chunk, f"rms_norm: native x CB row stride {sw_t} != WT_CHUNK {wt_chunk}"
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT_TILES, input_tensor))
     else:
-        cbs.append(_cb(CB_INPUT_TILES, bt, cb_x_depth * block_rows * wt_chunk, input_tensor.dtype, all_cores))
+        # x_hold_wt (== wt_chunk off the L5 path): under ROW_RESIDENT cb_input_tiles
+        # spans the WHOLE tile-row, which is what lets pass B index back into it
+        # instead of the reader fetching x a second time.
+        cbs.append(_cb(CB_INPUT_TILES, bt, cb_x_depth * block_rows * x_hold_wt, input_tensor.dtype, all_cores))
     # x_squared_wt == 1 under the DEST fold (D12), else wt_chunk -- one source.
     cbs.append(_cb(CB_X_SQUARED, bt, block_rows * x_squared_wt, input_tensor.dtype, all_cores))
     cbs.append(_cb(CB_SCALER, st, scaler_pages, ttnn.bfloat16, all_cores))
@@ -1575,8 +1819,10 @@ def create_program_descriptor(
     cbs.append(_cb(CB_ROW_STAT, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
     if has_gamma:
         if gamma_is_rm:
+            # The stick staging stays CHUNKED even under ROW_RESIDENT -- the tilize
+            # consumes it a chunk at a time into the whole-row cb_gamma_tiles.
             cbs.append(_cb(CB_GAMMA_STICKS, gt, wt_chunk, gamma.dtype, all_cores))
-        cbs.append(_cb(CB_GAMMA_TILES, gt, wt_chunk, gamma.dtype, all_cores))
+        cbs.append(_cb(CB_GAMMA_TILES, gt, x_hold_wt, gamma.dtype, all_cores))
         cbs.append(_cb(CB_NORMALIZED, bt, block_rows * wt_chunk, input_tensor.dtype, all_cores))
     if plan.native_out:
         osh_t, osw_t = _shard_tile_extent(output_tensor)
@@ -1635,11 +1881,12 @@ def create_program_descriptor(
         1 if plan.band else 0,  # 15 BAND: stage x from THIS core's own RM shard
         plan.shard_row_bytes,  # 16 L1 stick stride inside that shard (0 if !BAND)
         1 if stage_zero else 0,  # 17 zero the RM staging ring at boot
+        1 if x_resident else 0,  # 18 X_RESIDENT: x/gamma held across both passes (D14)
     ]
     # The kernel reads its accessor args at TensorAccessorArgs<N>() -- N must equal
     # the scalar CT-arg count above.  Assert it here so adding a scalar arg fails
     # in Python instead of mis-parsing on device.
-    assert len(reader_ct_args) == 18, "rms_norm_reader.cpp expects TensorAccessorArgs<18>()"
+    assert len(reader_ct_args) == 19, "rms_norm_reader.cpp expects TensorAccessorArgs<19>()"
     assert reader_ct_args[READER_CT_BAND] == (1 if plan.band else 0), "READER_CT_BAND index drifted"
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
@@ -1694,6 +1941,8 @@ def create_program_descriptor(
         1 if combine else 0,  # 12 COMBINE: partial sum -> gather -> mcast-back
         plan.group_size,  # 13 cores per width group (GRID_W)
         x_squared_wt,  # 14 reduce's per-call width == cb_x_squared's row stride (D12)
+        1 if x_resident else 0,  # 15 X_RESIDENT: x/gamma held across both passes (D14)
+        RSQRT_COL_SCOPE,  # 16 scope the finalize's rsqrt to the read faces (D15)
     ]
     assert x_squared_wt in (1, wt_chunk), "rms_norm: x_squared_wt must be 1 (DEST fold) or WT_CHUNK"
 
