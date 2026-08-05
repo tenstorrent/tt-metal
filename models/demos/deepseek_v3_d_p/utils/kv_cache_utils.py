@@ -883,12 +883,19 @@ def init_kvpe_cache(
     """
     # hack in num_users * num_layers into batch size, so each user's layers are contiguous in memory
     num_layers = num_kvpe_cache_layers
+    assert tp_axis is None or tp_axis != sp_axis, (
+        f"tp_axis ({tp_axis}) must differ from sp_axis ({sp_axis}): the same physical axis cannot carry both "
+        f"shardings, and dividing by its extent twice would under-allocate the cache"
+    )
     tp_factor = mesh_shape[tp_axis] if tp_axis is not None else 1
-    sequence_factor = mesh_shape[0] * mesh_shape[1] if full_mesh else mesh_shape[sp_axis] * tp_factor
-    assert (
-        seq_len % sequence_factor == 0
-    ), f"seq_len ({seq_len}) must divide across sequence_factor ({sequence_factor})"
-    seq_len_local = seq_len // sequence_factor
+    stripes = mesh_shape[0] * mesh_shape[1] if full_mesh else mesh_shape[sp_axis] * tp_factor
+    # Floor division would silently allocate fewer than seq_len rows in total, so the cache would be smaller
+    # than the global capacity it declares and the block-cyclic writes would run off the end of the last stripe.
+    assert seq_len % stripes == 0, (
+        f"seq_len ({seq_len}) must be divisible by the shard extent ({stripes}); a partial stripe would "
+        f"under-allocate the cache"
+    )
+    seq_len_local = seq_len // stripes
 
     num_dram_banks = get_num_dram_banks(mesh_device)
     core_ranges = [

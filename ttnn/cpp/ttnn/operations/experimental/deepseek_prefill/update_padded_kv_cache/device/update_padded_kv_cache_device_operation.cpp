@@ -26,6 +26,18 @@ using namespace tt::constants;
 
 namespace {
 
+// Mesh extent along a shard axis (0 = rows, 1 = cols). Both the SP factor and the TP factor are this
+// lookup; validate_runtime_args already rejects a non-2D mesh, so there are only the two axes.
+uint32_t mesh_axis_extent(const ttnn::distributed::MeshDeviceView& mesh_view, uint32_t axis) {
+    return (axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+}
+
+// TP dedup factor: the extent of the TP axis, or 1 when the cache is TP-replicated (tp_axis unset).
+// Every site that needs it goes through here so validation and the program factory cannot disagree.
+uint32_t tp_dedup_factor(const ttnn::distributed::MeshDeviceView& mesh_view, const std::optional<uint32_t>& tp_axis) {
+    return tp_axis.has_value() ? mesh_axis_extent(mesh_view, *tp_axis) : 1;
+}
+
 // Reader kernel is reused from the kv_cache fill path — purely (src_addr, num_tiles, src_start) rt-args.
 // Writer is a forked variant that derives `start_id` on-device from the per-request `slot_idx` and
 // `kv_actual_global` plus the structural common rt-args (`my_sp_coord`/`sp_factor`/`layer_idx` etc.).
@@ -230,8 +242,7 @@ void validate_runtime_args(
         // tp_factor is 1 unless the cache is TP-deduped (TP is rejected in complete-mesh mode, so the
         // two never stack).
         const uint32_t sp_factor = ttnn::ccl::get_topological_dimension(cache, args.cluster_axis);
-        const uint32_t tp_factor =
-            args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
+        const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
 
         const uint32_t input_seq = tensor_args.input.padded_shape()[-2];
         if (tp_factor > 1) {
@@ -332,8 +343,7 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     // The input is TP-replicated, so only input_seq/tp rows are WRITTEN per chip: the block-cyclic invariant
     // is on that written chunk. tp_factor==1 reduces this to the original cache_seq % input_seq == 0.
     const auto& mesh_view = cache.device()->get_view();
-    const uint32_t tp_factor =
-        args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
+    const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
     const uint32_t written_seq = input_seq / tp_factor;
     TT_FATAL(
         (input_seq / TILE_HEIGHT) % tp_factor == 0,
@@ -498,8 +508,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
 
     // KV dedup: linearize sp and tp into ONE block-cyclic axis of size sp*tp (linear = sp_coord*tp + tp_coord).
     // The writer's offset math then needs no change. tp_axis==nullopt => tp_factor=1 collapses all of this.
-    const uint32_t tp_factor =
-        args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
+    const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
     const uint32_t tp_coord = args.tp_axis.has_value()
                                   ? ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.tp_axis)
                                   : 0;

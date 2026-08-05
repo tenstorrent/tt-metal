@@ -392,6 +392,26 @@ def _record_indexer_k_cache_pcc(
     assert idx_min >= INDEXER_K_PCC_THRESHOLD, f"Indexer-K cache min PCC {idx_min:.6f} < {INDEXER_K_PCC_THRESHOLD}"
 
 
+def _to_tp_stripe_major(bc, sp, tp, local, head_dim, seq_len_cache):
+    """Re-lay one layer's block-cyclic [seq, D] host rows as [tp, seq/tp, D] for a TP-deduped cache.
+
+    The device holds chip L = s*tp + t (linear SP-outer/TP-inner order), while the host tensor is sharded
+    SP on dim 2 and TP on dim 1, so the tp index has to become the leading axis: split seq into
+    [sp, tp, local], move tp to the front, then flatten sp back into the seq dim. Inverse of the
+    ConcatMesh2dToTensor(dims=(2, 1)) readback used to gather the cache."""
+    return bc.reshape(sp, tp, local, head_dim).permute(1, 0, 2, 3).reshape(tp, seq_len_cache // tp, head_dim)
+
+
+def _cache_shard_dims(sp_axis, tp_axis, tp_shard_kv):
+    """mesh_mapper dims for a preloaded host cache: SP always shards the seq dim (2); TP either shards
+    dim 1 (a distinct 1/tp slice per column, TP-deduped) or stays None (replicated across TP)."""
+    dims = [None, None]
+    dims[sp_axis] = 2
+    if tp_shard_kv:
+        dims[tp_axis] = 1
+    return dims
+
+
 def _preload_kvpe_prefix_from_trace(
     tt_kvpe_cache,
     trace_dir,
@@ -448,15 +468,10 @@ def _preload_kvpe_prefix_from_trace(
         bc = blockcyclic_cache_host(kv_prior, stripes, CHUNK, seq_len_cache, kvpe_dim)[0, 0]  # [seq, D]
         if tp_shard_kv:
             # linear chip order L=s*tp+t -> [tp, seq/tp]: reshape [sp,tp,local], move tp to front, flatten sp.
-            cache_host[i] = (
-                bc.reshape(sp, tp, local, kvpe_dim).permute(1, 0, 2, 3).reshape(tp, seq_len_cache // tp, kvpe_dim)
-            )
+            cache_host[i] = _to_tp_stripe_major(bc, sp, tp, local, kvpe_dim, seq_len_cache)
         else:
             cache_host[i, 0] = bc
-    cache_shard_dims = [None, None]
-    cache_shard_dims[sp_axis] = 2  # SP-shard the cache seq dim
-    if tp_shard_kv:
-        cache_shard_dims[tp_axis] = 1  # ...and TP-shard dim 1 (distinct 1/tp slice per column), not replicate
+    cache_shard_dims = _cache_shard_dims(sp_axis, tp_axis, tp_shard_kv)
     cache_host_tt = ttnn.from_torch(
         cache_host,
         dtype=host_dtype,
@@ -524,17 +539,10 @@ def _preload_indexer_k_prefix_from_trace(
         slot = full_indexer_rank(config, i)
         bc = blockcyclic_cache_host(idx_prior, stripes, CHUNK, seq_len_cache, index_head_dim)[0, 0]  # [seq, D]
         if tp_shard_kv:
-            cache_host[slot] = (
-                bc.reshape(sp, tp, local, index_head_dim)
-                .permute(1, 0, 2, 3)
-                .reshape(tp, seq_len_cache // tp, index_head_dim)
-            )
+            cache_host[slot] = _to_tp_stripe_major(bc, sp, tp, local, index_head_dim, seq_len_cache)
         else:
             cache_host[slot, 0] = bc
-    cache_shard_dims = [None, None]
-    cache_shard_dims[sp_axis] = 2  # SP-shard the cache seq dim
-    if tp_shard_kv:
-        cache_shard_dims[tp_axis] = 1  # ...and TP-shard dim 1 (distinct 1/tp slice per column), not replicate
+    cache_shard_dims = _cache_shard_dims(sp_axis, tp_axis, tp_shard_kv)
     cache_host_tt = ttnn.from_torch(
         cache_host,
         dtype=ttnn.bfloat8_b,

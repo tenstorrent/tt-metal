@@ -1548,7 +1548,7 @@ class ttMLA:
             cache_layer_idx=cache_layer_idx,
             kv_actual_isl=kv_actual_isl,
             actual_end=actual_end,
-            tp_axis=self.tp_axis if self.tp_shard_kv else None,  # KV dedup: write only this chip's 1/tp window
+            tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
         )
         # The write above is clamped to the chunk's real tokens, so on the last chunk KV is populated to
         # ceil32(actual_end), not the padded window. The gather needs only that prefix — top-k indices never
@@ -1642,7 +1642,7 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
             actual_end=actual_end,
             metadata=metadata,
-            tp_axis=self.tp_axis if self.tp_shard_kv else None,  # KV dedup: write only this chip's 1/tp window
+            tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
         )
         ttnn.deallocate(tt_kvpe)
 
@@ -1654,6 +1654,13 @@ class ttMLA:
     # never reaches these). The full forward above shares the dense/sparse Q/KV stem and epilogue;
     # only sparse-specific gather/attention helpers live below.
     # ----------------------------------------------------------------------------------------
+
+    @property
+    def tp_shard_kv_axis(self) -> Optional[int]:
+        """The tp_axis to hand the cache-write ops, or None when the cache is TP-replicated. Every
+        update_padded_kv_cache call site takes it from here so the axis and the enabling flag cannot drift
+        apart (passing tp_axis with tp_shard_kv off would write a 1/tp window into a replicated cache)."""
+        return self.tp_axis if self.tp_shard_kv else None
 
     @property
     def _needs_head_to_seq_reshard(self) -> bool:
