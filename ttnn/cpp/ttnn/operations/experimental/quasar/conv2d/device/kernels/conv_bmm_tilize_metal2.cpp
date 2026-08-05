@@ -734,6 +734,20 @@ void kernel_main() {
                                     (uint32_t)in0_index,
                                     (uint32_t)in1_index));
                             }
+                            // [#48552 DIAG - remove after] UNPACK-side disambiguator (llk-debugger deliverable 5).
+                            // NEW text => proves the JIT recompiled. On TRISC0 (UNPACK). If "UNPK i0=2 idx=0" prints
+                            // (unpacker delivered SrcA/SrcB for the stalling MVMUL) yet MATH still hangs at MMK i0=2
+                            // idx=0 => the fault is the DEST FPU-dvalid (a) and the per-subblock clear is
+                            // ineffective/misplaced. If the last UNPK is i0=1 idx=2 (unpacker stalled ENTERING
+                            // subblock 2) => it's SrcA/SrcB unpack re-arm (b), fix belongs in the unpack handshake.
+                            if (in0_block_h_i == 0 && in0_subblock_i <= 2) {
+                                UNPACK(DPRINT(
+                                    "UNPK i0={} idx={} in0={} in1={}\n",
+                                    (uint32_t)in0_subblock_i,
+                                    (uint32_t)inner_dim_idx,
+                                    (uint32_t)in0_index,
+                                    (uint32_t)in1_index));
+                            }
                             matmul_block(
                                 mm_in0_cb_id,
                                 in1_cb_id,
