@@ -4476,3 +4476,80 @@ something small.* Both of these captures failed loudly the first time, which was
 mode that costs you is the one where the report generates fine from a truncated buffer. Raising
 `--op-support-count` until the report succeeds **and** the op count stops growing is the check; 1680 →
 6449 is what that check is worth.
+
+---
+
+## Amendment 104 (2026-08-05) — PERF CAMPAIGN opened. Baseline fixed, and the VAE decode stage attributed
+
+New scope by user directive 2026-08-05: best possible perf for `t2va` and `fl2va`, in this order — VAE
+decode readback and device-side stitch via all-gather, then audio decode, then vision-encoder TP/SP.
+Correctness is green first (amendments 97-102), which is the precondition `tt-dit-performance` sets.
+
+Branch `kevinmi/minimax-h3-perf`, cut from `ecf10f5f836`. Every iteration lands as a commit plus a
+journal entry, per the skill.
+
+### Baseline, fixed for the campaign
+
+Fully warm, LTX's method, 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, 2 links, 1344x768, 124 frames
+@ 24 fps, 49 forwards. `ecf10f5f836`.
+
+| stage | t2va | share of total |
+|---|---|---|
+| Denoise | 67.0 s | **92 %** |
+| VAE decode | 4.0 s | 5.5 % |
+| Audio decode | 1.7 s | 2.3 % |
+| Encoder (cache) | 0.0 s | — |
+| **Total (compute)** | **72.7 s** | |
+
+**The three stages named in the directive are together ~8 % of end-to-end time.** The denoise is 92 %.
+That is not an argument against doing them — they are real stage-level wins and the VAE decode has a
+known 1.7x sitting in it — but any claim about *end-to-end* speedup has to be scaled by that share, and
+a 1.7x on the VAE decode is a 4 % e2e win. Recorded up front so no later measurement gets
+oversold.
+
+### VAE decode, attributed (`MINIMAX_H3_VAE_PROFILE=1`)
+
+The attribution mode synchronizes after each forward, which serializes device and readback and defeats
+the pipelining, so its total reads 4.19 s against the pipelined 4.0 s. The *attribution* is the product:
+
+| component | time | % | note |
+|---|---|---|---|
+| device | 1.07 s | 25.5 % | 153 ms/wave — the floor, and it agrees with amendment 103's 189 ms/unit Tracy figure |
+| **readback** | **1.37 s** | **32.8 %** | 196 ms/wave, **2.51 GB** moved |
+| **host stitch** | **0.88 s** | **21.1 %** | the reference cross-fade, on host, in fp32 |
+| unpatchify | 0.30 s | 7.1 % | |
+| residual | 0.47 s | 11.1 % | |
+| host_prep | 0.08 s | 2.0 % | |
+| upload / tiling | 0.01 / 0.00 s | 0.3 % | |
+
+**The two costs the directive names are exactly the top two non-device rows, and together they are
+54 % of the stage.** 7 waves x 28 units, readback per wave min 192 / median 196 / max 203 ms — tight,
+so no slow-first-wave artifact.
+
+### Iteration 1 hypothesis, grounded in those two rows
+
+The 2.51 GB read back is *overlapping* tiles: 28 tiles of 256x256 per wave against a 768x1344 canvas.
+Blending on device first and reading back the assembled canvas moves **~0.77 GB instead of 2.51 GB**
+(3.3x less) and deletes the 0.88 s host stitch. Amendment 84 already measured the all-gather itself at
+**4-8 ms against a 91-231 ms readback**, so the collective is nearly free. Projected: readback
+1.37 -> ~0.42 s, stitch 0.88 -> ~0.05 s, stage 4.19 -> ~2.4 s, i.e. **~1.7x on the stage and ~4 % on
+e2e**.
+
+The vehicle exists and is parked: `models/vae/minimax_h3/stitch_device_minimax_h3.py` plus its test,
+uncommitted since amendment 89, validated at **PCC 100.0000 %** against the host original at production
+geometry. Its docstring already records the two things that make it correct rather than merely
+plausible: the reference `stitch_tiles` is **sequential and asymmetric** (an interior tile's corner is
+`b*L + (1-b)*(a*A + (1-a)*T)` with `L` the *unblended* left tile and the diagonal tile absent), and a
+separable-ramp reformulation was measured to differ on **11.1 % of pixels by up to 4.66** — an O(1)
+error over a ninth of every frame, which the artifact rubric says surfaces as seams. So it mirrors the
+reference order tile by tile, and blends in **fp32** because the host path it replaces does.
+
+**Two traps to clear before trusting any number, both already paid for once:**
+
+1. **Amendment 84** — the two-axis all-gather's batch permutation. Gathering `cluster_axis=0` then `1`
+   does **not** preserve `ShardTensorToMesh(dim=0)` order. This must be pinned explicitly before the
+   gathered tensor is indexed as a tile grid.
+2. **Amendment 86** — `fast_device_to_host(concat_dims=[0, 0])` returned `[24..31, 0, 0, ...]` and looked
+   **39 % faster because it was not moving the data**. Nothing in the per-shard numerics suite caught
+   it; the e2e CLIP gate did, 37.37 -> 19.58. So the correctness gate for this iteration is the **e2e
+   CLIP number**, not a per-shard PCC, and it runs *before* the measurement.
