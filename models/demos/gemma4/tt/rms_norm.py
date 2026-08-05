@@ -30,11 +30,35 @@ def decode_width_shard_spec(mesh_device, dim):
     hands the norm a shard spec differing in core count or block width silently
     costs a re-shard instead of saving one.
     """
-    if dim % ttnn.TILE_SIZE != 0:
+    spec = width_shard_spec(mesh_device, dim, ttnn.TILE_SIZE)
+    if spec is None:
+        return None
+    memcfg, program_config = spec
+    tiles = dim // ttnn.TILE_SIZE
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_cores = None
+    for gy in range(1, grid.y + 1):
+        for gx in range(1, grid.x + 1):
+            n = gx * gy
+            if tiles % n == 0 and (num_cores is None or n > num_cores):
+                num_cores = n
+    return (memcfg, program_config, num_cores)
+
+
+def width_shard_spec(mesh_device, dim, height):
+    """``(input_memcfg, program_config)`` for width-sharded RMSNorm at ``(height, dim)``.
+
+    Shared by ``RMSNorm._build_sharded_cfg`` and ``ccl._norm_l1_gather_memcfg`` so
+    an all-gather can write the exact layout the following norm expects.
+    ``height`` must be tile-aligned and ``<= _SHARDED_NORM_MAX_HEIGHT``.
+    """
+    if height <= 0 or height > _SHARDED_NORM_MAX_HEIGHT:
+        return None
+    if dim % ttnn.TILE_SIZE != 0 or height % ttnn.TILE_SIZE != 0:
         return None
     tiles = dim // ttnn.TILE_SIZE
     grid = mesh_device.compute_with_storage_grid_size()
-    best = None  # (num_cores, gx, gy) — largest core count whose count divides tiles
+    best = None  # (num_cores, gx, gy)
     for gy in range(1, grid.y + 1):
         for gx in range(1, grid.x + 1):
             n = gx * gy
@@ -48,7 +72,7 @@ def decode_width_shard_spec(mesh_device, dim):
     while subblock_w > 1 and block_w % subblock_w != 0:
         subblock_w -= 1
     input_memcfg = ttnn.create_sharded_memory_config(
-        shape=(ttnn.TILE_SIZE, dim // num_cores),
+        shape=(height, dim // num_cores),
         core_grid=ttnn.CoreGrid(x=gx, y=gy),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -57,11 +81,17 @@ def decode_width_shard_spec(mesh_device, dim):
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[gx, gy],
         subblock_w=subblock_w,
-        block_h=1,
+        block_h=height // ttnn.TILE_SIZE,
         block_w=block_w,
         inplace=False,
     )
-    return (input_memcfg, program_config, num_cores)
+    return (input_memcfg, program_config)
+
+
+def width_shard_input_memcfg(mesh_device, dim, height):
+    """Input memory config half of :func:`width_shard_spec`."""
+    spec = width_shard_spec(mesh_device, dim, height)
+    return spec[0] if spec else None
 
 
 def decode_width_shard_memcfg(mesh_device, dim):
@@ -118,48 +148,10 @@ class RMSNorm(nn.Module):
     def _build_sharded_cfg(self, dim, height):
         """Width-sharded input memcfg + LayerNorm program config, or None.
 
-        For decode (``height == TILE_SIZE``), delegates to
-        :func:`decode_width_shard_spec` so producers (``ccl.ccl_allreduce``) can
-        emit byte-for-byte the same layout and skip the reshard entirely. For
-        prefill (``height > TILE_SIZE``), builds a height-aware config up to
-        ``_SHARDED_NORM_MAX_HEIGHT``.
+        Delegates to :func:`width_shard_spec` so producers (``ccl.ccl_allreduce``)
+        can emit byte-for-byte the same layout and skip the reshard entirely.
         """
-        if height == ttnn.TILE_SIZE:
-            spec = decode_width_shard_spec(self.mesh_device, dim)
-            return (spec[0], spec[1]) if spec else None
-
-        if dim % ttnn.TILE_SIZE != 0:
-            return None
-        tiles = dim // ttnn.TILE_SIZE
-        grid = self.mesh_device.compute_with_storage_grid_size()
-        best = None  # (num_cores, gx, gy)
-        for gy in range(1, grid.y + 1):
-            for gx in range(1, grid.x + 1):
-                n = gx * gy
-                if tiles % n == 0 and (best is None or n > best[0]):
-                    best = (n, gx, gy)
-        if best is None or best[0] == 1:
-            return None
-        num_cores, gx, gy = best
-        block_w = tiles // num_cores
-        subblock_w = 4
-        while subblock_w > 1 and block_w % subblock_w != 0:
-            subblock_w -= 1
-        input_memcfg = ttnn.create_sharded_memory_config(
-            shape=(height, dim // num_cores),
-            core_grid=ttnn.CoreGrid(x=gx, y=gy),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[gx, gy],
-            subblock_w=subblock_w,
-            block_h=height // ttnn.TILE_SIZE,
-            block_w=block_w,
-            inplace=False,
-        )
-        return (input_memcfg, program_config)
+        return width_shard_spec(self.mesh_device, dim, height)
 
     def _forward_sharded(self, x, already_sharded=False, return_sharded=False):
         """Width-sharded RMSNorm: [I2S ->] sharded rms_norm [-> S2I].
