@@ -557,7 +557,9 @@ DETERMINISM_REPS = 3
 
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
 # subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build (PR #49840).
-K3_CHUNKED_RT_PERF_NS = 0  # UNMEASURED -- 0 empties the band; commit the logged measurement.
+# Measured 2026-08-05 on bh_sc1_high_power (run 31010521345): 12.073 ms. Reads 4.4% above the Tracy
+# path's 11_562_468 as expected -- Tracy averages collectives across chips, this takes the max.
+K3_CHUNKED_RT_PERF_NS = 12_073_303
 K3_CHUNKED_RT_PERF_MARGIN = 0.03
 
 
