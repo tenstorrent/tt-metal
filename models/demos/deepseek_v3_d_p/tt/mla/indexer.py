@@ -418,6 +418,12 @@ class TtIndexer:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
+    @property
+    def tp_shard_kv_axis(self):
+        """The tp_axis to hand the index-cache write, or None when that cache is TP-replicated. Mirrors
+        ttMLA.tp_shard_kv_axis so the axis and its enabling flag cannot drift apart."""
+        return self.tp_axis if self.tp_shard_kv else None
+
     # Inlined TP/SP collectives — the indexer owns its own copy so it depends on tt_ccl, not on ttMLA
     # (the dense MLA forward keeps its own equivalents; both go through the same tt_ccl handles).
     def _tp_rs_ag(self, t, rs_only=False):
@@ -630,7 +636,7 @@ class TtIndexer:
             num_layers=self._index_cache_layers,
             kv_actual_global=start_pos,
             cluster_axis=self.sp_axis,
-            tp_axis=self.tp_axis if self.tp_shard_kv else None,  # KV dedup: write only this chip's 1/tp window
+            tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
         )
         ttnn.deallocate(k)
 

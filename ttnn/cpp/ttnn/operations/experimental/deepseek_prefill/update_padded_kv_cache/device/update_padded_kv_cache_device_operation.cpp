@@ -22,6 +22,18 @@ using namespace tt::constants;
 
 namespace {
 
+// Mesh extent along a shard axis (0 = rows, 1 = cols). Both the SP factor and the TP factor are this
+// lookup; validate_runtime_args already rejects a non-2D mesh, so there are only the two axes.
+uint32_t mesh_axis_extent(const ttnn::distributed::MeshDeviceView& mesh_view, uint32_t axis) {
+    return (axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+}
+
+// TP dedup factor: the extent of the TP axis, or 1 when the cache is TP-replicated (tp_axis unset).
+// Every site that needs it goes through here so validation and the program factory cannot disagree.
+uint32_t tp_dedup_factor(const ttnn::distributed::MeshDeviceView& mesh_view, const std::optional<uint32_t>& tp_axis) {
+    return tp_axis.has_value() ? mesh_axis_extent(mesh_view, *tp_axis) : 1;
+}
+
 // Reader kernel is reused from the kv_cache fill path — purely (src_addr, num_tiles, src_start) rt-args.
 // Writer is a forked variant that derives `start_id` on-device from the per-request `slot_idx` and
 // `kv_actual_global` plus the structural common rt-args (`my_sp_coord`/`sp_factor`/`layer_idx` etc.).
@@ -129,9 +141,8 @@ void validate_runtime_args(
         // This chunk is written at a per-chip offset derived from kv_actual_global; the prior valid KV
         // plus this chunk must fit the global cache capacity (sp_factor*tp_factor slabs of cache_seq
         // tokens each), else the write spills past the cache. sp/tp_factor = mesh extents.
-        const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-        const uint32_t tp_factor =
-            args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
+        const uint32_t sp_factor = mesh_axis_extent(mesh_view, args.cluster_axis);
+        const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
 
         const uint32_t input_seq = tensor_args.input.padded_shape()[-2];
         if (tp_factor > 1) {
@@ -208,8 +219,7 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     // The input is TP-replicated, so only input_seq/tp rows are WRITTEN per chip: the block-cyclic invariant
     // is on that written chunk. tp_factor==1 reduces this to the original cache_seq % input_seq == 0.
     const auto& mesh_view = cache.device()->get_view();
-    const uint32_t tp_factor =
-        args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
+    const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
     const uint32_t written_seq = input_seq / tp_factor;
     TT_FATAL(
         (input_seq / TILE_HEIGHT) % tp_factor == 0,
@@ -336,15 +346,14 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // Per-chip kernel inputs: kernel does the update_idxt + start_id math itself from these.
     // sp_factor is the mesh extent along the cluster axis (validated 2D in validate_runtime_args).
     const auto& mesh_view = device->get_view();
-    const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t sp_factor = mesh_axis_extent(mesh_view, args.cluster_axis);
     const uint32_t sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
     // On the metadata path slot_idx and kv_actual_global are not host values — the writer kernel reads
     // element [0] of each per-element tensor and divides kv_actual_global by TILE_HEIGHT on-device.
 
     // KV dedup: linearize sp and tp into ONE block-cyclic axis of size sp*tp (linear = sp_coord*tp + tp_coord).
     // The writer's offset math then needs no change. tp_axis==nullopt => tp_factor=1 collapses all of this.
-    const uint32_t tp_factor =
-        args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
+    const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
     const uint32_t tp_coord = args.tp_axis.has_value()
                                   ? ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.tp_axis)
                                   : 0;

@@ -691,6 +691,12 @@ ttnn::Tensor launch_indexer_score(
         "(got sp_axis={}, chunk_local={})",
         block_cyclic_sp_axis.has_value(),
         block_cyclic_chunk_local.has_value());
+    // Same requirement as sparse_sdpa: key_stripe_split is only ever set inside the block-cyclic branch
+    // below, so a tp_sharded request without a layout would leave it at 1 and score the TP-striped cache as
+    // contiguous -- wrong logits, silently. Reject it here instead.
+    TT_FATAL(
+        !block_cyclic_tp_sharded || block_cyclic_sp_axis.has_value(),
+        "indexer_score: block_cyclic_tp_sharded requires block_cyclic_sp_axis / block_cyclic_chunk_local");
     // seq_shard_axes[1] (2D TP sub-shard) only means anything with a block-cyclic layout; reject a stray one.
     TT_FATAL(
         !seq_subshard_axis.has_value() || block_cyclic_sp_axis.has_value(),
