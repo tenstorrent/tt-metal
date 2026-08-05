@@ -204,15 +204,19 @@ def apply_rope(tensor, cos_cache, sin_cache, token_index=None, memory_config=Non
     orig_shape = tensor.shape
     result = ttnn.experimental.rotary_embedding(tensor, cos_cache, sin_cache, token_index, memory_config=memory_config)
 
-    # In decode mode (token_index provided), dim 2 gets padded to 32.
-    # Reshape to indicate logical vs padded size, then slice back.
+    # In decode mode (token_index provided), dim 2 gets padded to 32. The
+    # (logical, padded) reshape restores the logical extent as METADATA — the
+    # trailing rows are ordinary tile padding, so no device copy is needed. The
+    # follow-up ``result[:, :, :orig_shape[2]]`` this used to do was a
+    # full-extent (identity) slice on the already-corrected logical shape, yet
+    # still launched a real SliceDeviceOperation: 2 per layer x 60 layers =
+    # 120 ops / ~0.43 ms per decode step on 31B.
     if token_index is not None and result.shape[2] != orig_shape[2]:
         result = ttnn.reshape(
             result,
             (orig_shape[0], orig_shape[1], orig_shape[2], orig_shape[3]),
             (orig_shape[0], orig_shape[1], 32, orig_shape[3]),
         )
-        result = result[:, :, : orig_shape[2]]
 
     return result
 
@@ -581,10 +585,16 @@ def concat_heads(
         out_sh.deallocate(True)
         # Drop the batch padding (B is padded to 32 by the op) so downstream sees
         # [1, 1, batch, hidden_local] just like the old transpose+concat path.
+        # The padding is trailing tile padding, so a (logical, padded) reshape
+        # expresses the trim as metadata; the old ``out[:, :, :batch, :]`` slice
+        # launched a real SliceDeviceOperation per layer (60 ops / ~0.22 ms per
+        # decode step on 31B) to produce a bit-identical tensor.
         if out.shape[2] != batch:
-            out_padded = out
-            out = out_padded[:, :, :batch, :]
-            out_padded.deallocate(True)
+            out = ttnn.reshape(
+                out,
+                (out.shape[0], out.shape[1], batch, out.shape[3]),
+                (out.shape[0], out.shape[1], out.shape[2], out.shape[3]),
+            )
         return out
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
