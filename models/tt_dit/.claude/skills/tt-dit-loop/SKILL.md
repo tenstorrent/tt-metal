@@ -1,5 +1,5 @@
 ---
-name: tt-dit-campaign
+name: tt-dit-loop
 description: >-
   Run a long-lived models/tt_dit campaign — many rounds, across many sessions,
   unattended — for either bringup or performance. Use when the work will not
@@ -7,17 +7,22 @@ description: >-
   target", "resume the campaign", "what's the state of X", "pick this back up",
   or any request to drive a model from where it is now to a stated goal without
   supervision. Owns the outer loop only: fixed baseline, round lifecycle,
-  checkpoint, ledgers, stop gates, and recovery after an interrupt or device
-  hang. The work inside a round is delegated — tt-dit-add-model for correctness,
+  checkpoint, ledgers, stop gates, recovery after an interrupt or device hang.
+  Work inside a round is delegated — tt-dit-add-model for correctness,
   tt-dit-benchmark-profile for measurement, tt-dit-performance for lever choice,
   tt-dit-kernel-research for missing ops. A single-phase question ("profile this
-  layer", "why is this PCC low", "does a fused op exist") belongs to those skills
-  directly, not here. Not for one-shot tasks that finish in a single session.
+  layer", "why is this PCC low", "does a fused op exist") goes to those directly.
+  Not for one-shot tasks, and not the built-in `loop` skill — that reruns a
+  prompt on a timer; this drives a model to a measured target.
 ---
 
-# TT-DiT Campaign Loop
+# TT-DiT Loop
 
-The campaign, **not the session, is the durable unit.** It must be fully
+> Not the built-in `loop` skill. That one reruns a prompt on an interval. This
+> one runs measured rounds against a fixed baseline and stops when a gate fires.
+
+Runs a **campaign** — the multi-round unit of work. The campaign, **not the
+session, is the durable unit.** It must be fully
 recoverable from the run root — checkpoint, ledgers, artifacts — with no
 conversation history.
 

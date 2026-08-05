@@ -2,7 +2,7 @@
 
 The entry format for recording that a measurement contradicted what you
 believed. Used by every skill; the campaign loop that owns *when* to write them
-and where they accumulate is `../tt-dit-campaign/`.
+and where they accumulate is `../tt-dit-loop/`.
 
 ## Every recorded measurement carries
 
@@ -55,7 +55,7 @@ fixing the original.
 ## Where they live
 
 In a campaign, amendments accumulate in `ledgers/amendments.md` and only the
-latest appears in `CAMPAIGN.md` — see `../tt-dit-campaign/ledgers.md`. Outside a
+latest appears in `CAMPAIGN.md` — see `../tt-dit-loop/ledgers.md`. Outside a
 campaign, append them to whatever state file the work already keeps.
 
 Either way: **append-only, and never summarised away.** A predecessor journal
