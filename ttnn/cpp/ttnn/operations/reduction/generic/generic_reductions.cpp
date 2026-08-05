@@ -298,7 +298,7 @@ static Tensor reduce_impl(
                 sub_core_grids,
                 /*negate=*/false,
                 /*use_row_major_support=*/true,
-                /*fast_and_approximate_mode=*/fast_and_approximate_mode,
+                /*fast_and_approximate_mode=*/false,
                 output_layout);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
@@ -677,7 +677,6 @@ Tensor sum(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool fast_and_approximate_mode,
     const std::optional<Layout>& output_layout) {
     return operations::reduction::convert_output_layout(
         operations::reduction::reduce<reduction_common::ReduceType::Sum>(
@@ -689,7 +688,7 @@ Tensor sum(
             scalar,
             correction,
             sub_core_grids,
-            fast_and_approximate_mode,
+            /*fast_and_approximate_mode=*/false,
             output_layout),
         output_layout);
 }

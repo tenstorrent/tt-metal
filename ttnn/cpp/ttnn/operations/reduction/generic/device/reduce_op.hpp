@@ -26,7 +26,8 @@ Tensor reduce(
     bool negate = false,
     // When true, eligible sum/mean reduces take ROW_MAJOR input directly; otherwise the op tilizes.
     bool use_row_major_support = false,
-    // False (default) keeps fp32 sum/mean on the accurate SFPU path; true selects the FPU.
+    // When false (default), fp32 mean runs on the accurate SFPU path (full fp32); true selects the FPU. Ignored for
+    // non-fp32/non-AVG.
     bool fast_and_approximate_mode = false,
     // Requested layout of the result; std::nullopt means "whatever the selected path emits":
     // ROW_MAJOR on the dense RM paths, TILE on the tilized ones.
