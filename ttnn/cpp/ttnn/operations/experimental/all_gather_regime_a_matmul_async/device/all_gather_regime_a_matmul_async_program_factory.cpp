@@ -437,6 +437,11 @@ struct FusedGatherContext {
     // error -- its forwarder RISC simply never exits.
     std::vector<uint8_t> mux_channels_fwd;
     std::vector<uint8_t> mux_channels_bwd;
+    // Payload bytes per fabric packet on the direct-L1 path, derived from the fabric's own max payload.
+    uint32_t dl1_packet_bytes = 0;
+    // Kept for the observability log: both are derived, so they are worth being able to see.
+    uint32_t mux_depth = 0;
+    size_t mux_channel_bytes = 0;
     // Round-robin dealing counters over a direction's links (direct-L1 only; the staged path keys the link
     // off bank_id instead).
     uint32_t next_link_fwd = 0;
@@ -542,11 +547,15 @@ enum FusedGatherArg : uint32_t {
     kFgDl1SendFwd = 40,  // drives the forward mux
     kFgDl1SendBwd = 41,  // drives the backward mux (both, for a LINE origin)
     kFgDl1RecvSem = 42,  // GLOBAL semaphore address for this core's single arrival; patched on replay
-    kFgNumReleaseRanges = 43,
+    // Payload bytes per fabric packet. A RUNTIME arg rather than a compile-time one on purpose: every CT arg
+    // added here displaces the TensorAccessorArgs indices below it, which builds cleanly and then fails all
+    // 40 tests on PCC (this branch has done exactly that once).
+    kFgDl1PacketBytes = 43,
+    kFgNumReleaseRanges = 44,
     // Followed by kFgNumReleaseRanges 6-word records {sx, sy, ex, ey, dests_fwd, dests_bwd} in VIRTUAL
     // coords: the multicast rectangles master 0 releases. Per-range rather than one bounding box because
     // the bank-adjacent placement is deliberately not a filled rectangle.
-    kFusedArgCount = 44,  // + 6*num_release_ranges + 2*num_masters words, then the mux client block(s)
+    kFusedArgCount = 45,  // + 6*num_release_ranges + 2*num_masters words, then the mux client block(s)
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
@@ -567,8 +576,14 @@ FusedGatherContext build_fused_gather_context(
     const std::vector<CoreCoord>& master_ring_cores,
     const CoreRangeSet& all_cores,
     IDevice* device,
-    // Direct-L1 client counts (0/0 on the staged path). These decide the mux channel counts, so they have
-    // to be known BEFORE the muxes are created -- which is why the direct-L1 plan is built first.
+    // Direct-L1: whether the path is active, and its client counts. These decide the mux channel counts, so
+    // they have to be known BEFORE the muxes are created -- which is why the direct-L1 plan is built first.
+    //
+    // `dl1` is passed EXPLICITLY rather than inferred from the counts being non-zero. Inferring it breaks the
+    // one case where direct-L1 is active with zero clients -- ABLATE_NOGATHER, which deletes the fabric on
+    // purpose -- and the breakage is that the muxes get sized the STAGED way (num_links x channels_per_mux)
+    // while nothing registers with them.
+    bool dl1,
     uint32_t dl1_clients_fwd,
     uint32_t dl1_clients_bwd) {
     FusedGatherContext ctx;
@@ -639,7 +654,6 @@ FusedGatherContext build_fused_gather_context(
     // Split each direction's masters across num_links muxes. Must divide evenly: an uneven split would
     // leave one mux short of the close() count it waits for, i.e. a hang with no diagnostic.
     ctx.num_links = attrs.num_links;
-    const bool dl1 = (dl1_clients_fwd + dl1_clients_bwd) > 0u;
     const uint32_t masters_per_direction = ctx.num_masters / 2u;
     if (!dl1) {
         TT_FATAL(
@@ -684,6 +698,32 @@ FusedGatherContext build_fused_gather_context(
 
     const size_t mux_base_l1 = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
+    // ---- Packet size: take it from the FABRIC, not from a literal ----
+    // The mux slot holds header THEN payload (the v2 sender writes the payload at
+    // slot + sizeof(PACKET_HEADER_TYPE)), so the usable payload is the channel buffer minus the header. The
+    // fabric already publishes both numbers, and its channel buffer is exactly header + max_payload.
+    //
+    // kMuxChannelBufferBytes (4096) is BELOW the fabric's 4352-byte max payload, so hardcoding it capped
+    // direct-L1 at ONE bf16 tile per packet -- half a packet's worth of payload per header, per mux slot
+    // handoff, per credit. Using the fabric's own size fits two 2 KiB tiles instead. Staged path keeps the
+    // 4096 literal: it is proven at that size and its per-master payloads are large anyway.
+    const size_t fab_channel_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t fab_max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    // Whole bf16 tiles only: slot 0 is a tile-granular buffer and a partial trailing tile would need its own
+    // odd-sized transfer for no benefit.
+    const uint32_t dl1_packet_bytes =
+        dl1 ? static_cast<uint32_t>(std::max<size_t>(1u, fab_max_payload / plan::kTileBytesBf16) * plan::kTileBytesBf16)
+            : plan::kTileBytesBf16;
+    const size_t mux_channel_bytes = dl1 ? fab_channel_bytes : kMuxChannelBufferBytes;
+    TT_FATAL(
+        !dl1 || dl1_packet_bytes + tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() <= mux_channel_bytes,
+        "direct-L1 packet ({} B) plus header ({} B) does not fit the mux channel buffer ({} B)",
+        dl1_packet_bytes,
+        tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
+        mux_channel_bytes);
+    ctx.dl1_packet_bytes = dl1_packet_bytes;
+    ctx.mux_channel_bytes = mux_channel_bytes;
+
     // ---- Mux channel DEPTH, sized to what actually fits ----
     // Direct-L1 turns every consumer core into a client, so one mux can carry tens of channels instead of the
     // staged path's 4, and its L1 map (dominated by channels * depth * packet) stops fitting: measured
@@ -691,6 +731,7 @@ FusedGatherContext build_fused_gather_context(
     // the packet size -- the design spec says to optimise for the default 4 KiB packet, and depth is the term
     // that only costs pipelining. FabricMuxV2Config's own map check is the backstop if this estimate drifts.
     uint32_t mux_depth = kMuxBuffersPerChannel;
+    // (published to ctx at the end of the sizing block below, for the observability log)
     {
         uint32_t max_ch = 0;
         for (const auto c : ctx.mux_channels_fwd) {
@@ -718,13 +759,14 @@ FusedGatherContext build_fused_gather_context(
             constexpr size_t kSharedOverheadBytes = 16u * 1024u;
             const size_t budget = device->l1_size_per_core() - mux_base_l1;
             while (mux_depth > 1u &&
-                   max_ch * (static_cast<size_t>(mux_depth) * kMuxChannelBufferBytes + kPerChannelOverheadBytes) +
+                   max_ch * (static_cast<size_t>(mux_depth) * mux_channel_bytes + kPerChannelOverheadBytes) +
                            kSharedOverheadBytes >
                        budget) {
                 mux_depth /= 2u;
             }
         }
     }
+    ctx.mux_depth = mux_depth;
 
     // The mux cores must not collide with the matmul's compute cores. The matmul occupies the low part of
     // the grid (banks x ring groups), so take mux cores from the TOP row downward.
@@ -743,7 +785,7 @@ FusedGatherContext build_fused_gather_context(
         for (uint32_t L = 0; L < channels.size(); ++L) {
             const CoreCoord mux_logical = mux_core_for(slot_base + L);
             cfgs_out.push_back(std::make_unique<tt::tt_fabric::FabricMuxV2Config>(
-                channels[L], static_cast<uint8_t>(mux_depth), kMuxChannelBufferBytes, mux_base_l1));
+                channels[L], static_cast<uint8_t>(mux_depth), mux_channel_bytes, mux_base_l1));
             tt::tt_fabric::add_fabric_mux_v2_to_program(
                 program,
                 *cfgs_out.back(),
@@ -929,17 +971,6 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             "direct per-consumer scatter would send each tile over the fabric Ns times. Unset "
             "TT_AGMM_DIRECT_L1 to use the DRAM-staged path, which handles Ns>1.",
             cfg.n_slices);
-        // `nowait` works on this path (the kernel gates its arrival wait on ABLATE_NOWAIT, so the delta
-        // against the real number is the pure dependency stall). `nogather` does NOT: with the payload and
-        // credit removed the direct-L1 senders open and immediately close their mux channels, and that
-        // HANGS rather than measuring anything -- reproduced twice. Refuse it here instead of shipping an
-        // ablation that wedges the board; the staged path's nogather is still available for the byte floor.
-        TT_FATAL(
-            ablate != "nogather",
-            "TT_AGMM_ABLATE=nogather is not supported with TT_AGMM_DIRECT_L1: with no payload and no credit "
-            "the direct-L1 senders open and immediately close their mux channels, which hangs. Use "
-            "TT_AGMM_ABLATE=nowait for the dependency-stall split, or drop TT_AGMM_DIRECT_L1 for the staged "
-            "path's nogather floor.");
         wdefs["DIRECT_L1"] = "1";
     }
     // extra COMPUTE defines beyond fusion; currently only the reduction strategy (RSCATTER).
@@ -1206,6 +1237,25 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             ttnn::ccl::get_linearized_index_from_physical_coord(
                 in0, mesh_coordinate, operation_attributes.cluster_axis),
             operation_attributes.topology_is_ring);
+        // ABLATE_NOGATHER: strip the fabric out of the plan rather than out of the kernel. Clearing the send
+        // flags here means the client counts below come out 0, so NO mux is deployed, no client block is
+        // appended to the writer args, and the kernel's existing `send_fwd || send_bwd` guard skips the
+        // senders -- no ablation #ifdef in the kernel at all.
+        //
+        // Removing the sends from the KERNEL while leaving the muxes deployed is what hung: mux v2
+        // self-terminates by counting close() calls against its compile-time channel count, so a client that
+        // never opens or closes leaves the forwarder RISC spinning. Deleting the mux is the only way to
+        // ablate its traffic. `nogather` implies `nowait` (set together above), so the cores that would have
+        // received a stripe do not wait for one.
+        //
+        // What this leaves running is the intended floor: the origin cores' local shard reads, the on-chip
+        // ring, and the matmul -- everything except cross-device traffic.
+        if (ablate == "nogather") {
+            for (auto& d : dl1_plan) {
+                d.send_fwd = false;
+                d.send_bwd = false;
+            }
+        }
         for (const auto& d : dl1_plan) {
             dl1_clients_fwd += d.send_fwd ? 1u : 0u;
             dl1_clients_bwd += d.send_bwd ? 1u : 0u;
@@ -1220,8 +1270,37 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         master_ring_cores,
         all_cores,
         device,
+        direct_l1,
         dl1_clients_fwd,
         dl1_clients_bwd);
+
+    // OBSERVABILITY ONLY: the direct-L1 fabric shape. Reported because every one of these numbers is derived
+    // rather than configured -- packet size from the fabric's max payload, client counts from the stream plan,
+    // channel depth from what fits L1 -- so "it silently did something else" is otherwise indistinguishable
+    // from "this knob does not matter". Packet size in particular: measured at 2048 vs 4096 the makespan moved
+    // 0.5 us, and that conclusion is only meaningful if 4096 was really in use.
+    if (direct_l1 && std::getenv("TT_REGIME_A_LOG_CFG") != nullptr) {
+        log_info(
+            tt::LogOp,
+            "regime_a_direct_l1 packet={}B clients=({},{}) muxes=({},{}) max_ch={} depth={} channel={}B",
+            fused_gather.dl1_packet_bytes,
+            dl1_clients_fwd,
+            dl1_clients_bwd,
+            fused_gather.mux_channels_fwd.size(),
+            fused_gather.mux_channels_bwd.size(),
+            [&] {
+                uint32_t m = 0;
+                for (const auto c : fused_gather.mux_channels_fwd) {
+                    m = std::max<uint32_t>(m, c);
+                }
+                for (const auto c : fused_gather.mux_channels_bwd) {
+                    m = std::max<uint32_t>(m, c);
+                }
+                return m;
+            }(),
+            fused_gather.mux_depth,
+            fused_gather.mux_channel_bytes);
+    }
 
     // ---- On-chip gather barrier geometry ----
     // A master core's fwd_recv count only proves ITS OWN M slice arrived: the gather splits M by bank_id,
@@ -1775,6 +1854,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back((direct_l1 && dl1_plan[i].send_fwd) ? 1u : 0u);
             wa.push_back((direct_l1 && dl1_plan[i].send_bwd) ? 1u : 0u);
             wa.push_back(direct_l1 ? operation_attributes.gather_semaphores[0].address() : 0u);
+            wa.push_back(fused_gather.dl1_packet_bytes);
             wa.push_back(static_cast<uint32_t>(fused_gather.release_ranges.size()));
             for (const auto& rr : fused_gather.release_ranges) {
                 wa.push_back(rr.sx);

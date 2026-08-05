@@ -381,6 +381,7 @@ void kernel_main() {
         const uint32_t dl1_send_fwd = get_arg_val<uint32_t>(fa++);
         const uint32_t dl1_send_bwd = get_arg_val<uint32_t>(fa++);
         const uint32_t dl1_recv_sem_addr = get_arg_val<uint32_t>(fa++);
+        const uint32_t dl1_packet_bytes = get_arg_val<uint32_t>(fa++);
         const uint32_t num_release_ranges = get_arg_val<uint32_t>(fa++);
         const std::size_t release_base = fa;  // 6 words per range: sx, sy, ex, ey, dests_fwd, dests_bwd
         fa += 6u * num_release_ranges;
@@ -505,6 +506,7 @@ void kernel_main() {
         // divergent L1 allocator state across devices is the first thing to suspect.
         {
             constexpr uint32_t slot0_tiles = W * in0_blk;
+            constexpr uint32_t slot0_bytes = slot0_tiles * tile_bytes;
             volatile tt_l1_ptr uint32_t* dl1_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dl1_recv_sem_addr);
             if (!dl1_active) {
                 // This ring position lies entirely past the last source rank (tp * rank_span < 8 * W * kb):
@@ -574,15 +576,21 @@ void kernel_main() {
                     }
                     auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(fa);
                     sender.open();
-                    for (uint32_t t0 = 0; t0 < slot0_tiles; t0 += kDl1Batch) {
-                        const uint32_t nb = ((slot0_tiles - t0) < kDl1Batch) ? (slot0_tiles - t0) : kDl1Batch;
-                        for (uint32_t j = 0; j < nb; ++j) {
-                            const uint32_t off = (t0 + j) * tile_bytes;
+                    // Slot 0 is CONTIGUOUS in L1, so the transfer is bounded only by the fabric packet, not
+                    // by the tile. dl1_packet_bytes is as many whole bf16 tiles as one packet holds (the host
+                    // derives it from the fabric's own max payload), which halves the packet count -- and with
+                    // it the headers, mux slot handoffs and NoC transactions -- versus sending tile by tile.
+                    // The last packet is short whenever slot0_bytes is not a whole multiple.
+                    for (uint32_t off0 = 0; off0 < slot0_bytes; off0 += kDl1Batch * dl1_packet_bytes) {
+                        uint32_t j = 0;
+                        for (uint32_t off = off0; off < slot0_bytes && j < kDl1Batch; off += dl1_packet_bytes, ++j) {
+                            const uint32_t n =
+                                ((slot0_bytes - off) < dl1_packet_bytes) ? (slot0_bytes - off) : dl1_packet_bytes;
                             tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
                                 &sender,
                                 hdr[j],
                                 base0 + off,
-                                tile_bytes,
+                                n,
                                 tt::tt_fabric::NocUnicastCommandHeader{
                                     safe_get_noc_addr(my_x[0], my_y[0], base0 + off, 0)},
                                 /*num_hops=*/1);

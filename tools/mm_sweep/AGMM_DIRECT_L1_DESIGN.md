@@ -187,13 +187,21 @@ T_ag and T_mm are read out of the SAME Phase-0 process (it is literally `all_gat
 matmul, two device ops per call), so they are at identical shapes and config by construction rather than by
 being configured to match.
 
-Phase 2 decomposes cleanly:
+Phase 2 decomposes cleanly. `nogather` (no cross-device traffic at all: local shard reads + the on-chip ring
++ the matmul) gives the floor directly, so none of these three terms is inferred:
 
-    79.0  matmul on the mesh
-    22.7  gather traffic the matmul contends with even when nothing waits on it   (nowait 101.7 - 79.0)
-    19.0  pure dependency stall                                                   (full 120.7 - nowait 101.7)
+    76.0  floor -- TT_AGMM_ABLATE=nogather
+    25.7  the fabric traffic itself      (nowait 101.7 - floor 76.0)
+    19.0  pure dependency stall          (full 120.7 - nowait 101.7)
     ----
    120.7
+
+The floor is 3 us BELOW the 79.0 us mesh matmul, which is the byte-count win showing up as a measurement
+rather than an argument: the direct-L1 program reads roughly a quarter of the in0 bytes a full-K matmul does
+(only the origin cores read, and only their own stripe).
+
+Note also that the fused path's 25.7 us of gather cost is well under the 36.6 us standalone all-gather, so
+overlap IS already recovering ~11 us of it. It is partial overlap, not none.
 
 ### Against the prediction
 
@@ -208,15 +216,41 @@ tuning. It was not independently confirmed with a DRAM byte counter.
 What direct-L1 did deliver: -22.7 us against Phase 1, and the fused path went from +28.3 us WORSE than the
 unfused composition to +5.6 us worse than it. It is still 39% above the gate.
 
-### What is left, in priority order
+### The 25.7 us is fabric-bandwidth-bound -- ruled out, not guessed
 
-1. **The ring's zero-overlap bound, 19.0 us.** Unchanged and exactly as analysed above: `makespan >=
-   T_ready_max + G*delta`, so `fused >= T_gather + T_matmul`. Per-wave rings (one ring per arrival wave
-   instead of one ring over the whole gathered K) is the fix, giving `T_ready_max + T_mm/tp`. Still not in
-   this change.
-2. **The 22.7 us of contention.** Now the larger term. Direct-L1 moved the activation off DRAM but not off
-   the NoC, and every consumer core is a fabric client, so ingress is spread over the whole grid rather
-   than concentrated where it can be scheduled around in1.
+Two things were measured to close this off, because "the fabric costs 25.7 us" has very different
+consequences depending on whether it is per-transaction overhead or bandwidth:
+
+- **Packet size is not it.** The mux slot holds header THEN payload, and `kMuxChannelBufferBytes` was
+  hardcoded to 4096 -- BELOW the fabric's own 4352-byte max payload -- so direct-L1 was capped at ONE 2 KiB
+  bf16 tile per packet. Deriving the sizes from the fabric instead (`get_tt_fabric_max_payload_size_bytes`,
+  `get_tt_fabric_channel_buffer_size_bytes`) fits two tiles, halving packet count, headers, mux slot
+  handoffs and NoC transactions. **Measured: 120.7 -> 120.2 us, and nowait 101.7 -> 101.3.** Nothing.
+  Verified in effect, not assumed -- `TT_REGIME_A_LOG_CFG=1` prints `packet=4096B ... channel=4400B`.
+- **More links are not available.** `num_links=3` and `4` both fail with *"Requested link index 2 is out of
+  bounds. 2 ethernet channels available"*: **2 links is the hardware maximum on this axis**, and the
+  measurements already use it.
+
+1.92 MB of egress in 25.7 us is ~75 GB/s over those 2 links. So the fabric is saturated, the byte count is
+already the irreducible `(tp-1)/tp` of the activation, and **25.7 us is a floor** that neither packing nor
+parallelism can lower.
+
+### What is left
+
+1. **Get the egress off the writer's critical path.** The one lever the above does NOT rule out. The sender
+   currently does `open -> payload -> credit -> write_barrier -> atomic_barrier -> close` and only THEN
+   enters the on-chip ring, so every sending core blocks on its own 32 KB draining before it does any ring
+   or compute work. The barrier is needed before `close()`, but `close()` does not have to happen there:
+   slot 0 is the send source and is never overwritten, so the drain can be deferred to the end of the
+   kernel and overlap with the ring and the matmul. This attacks the 25.7 us without moving fewer bytes,
+   which is why it is now first.
+2. **The ring's zero-overlap bound, 19.0 us.** Unchanged and exactly as analysed above: `makespan >=
+   T_ready_max + G*delta`. Per-wave rings (one ring per arrival wave instead of one ring over the whole
+   gathered K) is the fix, giving `T_ready_max + T_mm/tp`.
+
+Arithmetic worth keeping in view: floor 76.0 + a 25.7 us fabric floor = 101.7, still above the 86.9 us gate.
+So removing the 19.0 us stall alone does NOT reach the gate -- item 1 (making the fabric cost concurrent
+rather than additive) is what decides whether the gate is reachable at all for this shape at 2 links.
 
 ## Scope limits of the implementation
 
@@ -247,9 +281,11 @@ fallback would let a Phase-1 measurement be reported as a Phase-2 one.
 - **Mux channel DEPTH is sized down to fit L1** (8 -> 4 -> 2 -> 1 buffers/channel) rather than the packet
   size, since the spec asks to optimise for the default 4 KiB packet. Without this, 48 channels x 8 buffers
   x 4 KiB = 1.5 MB against a 1.5 MB worker L1.
-- **`TT_AGMM_ABLATE=nogather` refused on this path.** With payload and credit removed the senders open and
-  immediately close their mux channels, which HANGS (reproduced twice) rather than measuring a floor.
-  `nowait` does work and is hooked into the direct-L1 arrival wait.
+- **Both ablations work.** `nowait` is hooked into the direct-L1 arrival wait. `nogather` ablates the fabric
+  on the HOST -- it clears the send flags in the stream plan, so the client counts come out 0 and no mux is
+  deployed at all. Removing the sends from the KERNEL while leaving the muxes deployed is what hung
+  (reproduced twice): mux v2 self-terminates by counting `close()` calls, so a client that never opens or
+  closes leaves the forwarder RISC spinning. Deleting the mux is the only way to ablate its traffic.
 
 Test status with `TT_AGMM_DIRECT_L1=1`, at the suite's `NUM_LINKS = 2`: **32/40 pass and the other 8 are
 `Ns>1` refusals -- zero correctness failures and zero hangs.** The staged path is 40/40, at 1 and 2 links
