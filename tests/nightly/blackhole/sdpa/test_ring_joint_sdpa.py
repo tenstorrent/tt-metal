@@ -5705,7 +5705,7 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 
 
 # === TEST 9: CHUNKED-PREFILL ring_mla PERF CHECK ===
-# Profiles the kimi 50k+5k galaxy chunk (final, most compute-bound chunk of the kimi50k chunked
+# Profiles each ring_mla model's 50k+5k chunk (final, most compute-bound chunk of its chunked
 # prefill): natively on Galaxy (sp=8, tp=4) and simulated on the 4-device QuietBox (sp=4, tp=1).
 # Symmetric +/- band, same as the ring joint perf check.
 if MESH_CONFIG.is_galaxy:
@@ -5713,12 +5713,18 @@ if MESH_CONFIG.is_galaxy:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 8-device ring (Galaxy, sp=8 tp=4, 100 SDPA cores)
         ("kimi50k", 32, 640, 8, 68.5),
+        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. UNMEASURED -- 0.0 empties the
+        # band, so the case fails and logs the math_util to commit; expect ~60 (68.5 * 1.5/1.6894).
+        ("kimi_k3", 32, 640, 8, 0.0),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
         ("kimi50k", 32, 640, 4, 66.05),
+        # Kimi-K3, UNMEASURED as above. No estimate here: K3's pinned 24 heads sit against
+        # kimi50k's 14 (CHUNKED_PREFILL_HEADS_PER_RING) and the H_loc data point is Galaxy-only.
+        ("kimi_k3", 32, 640, 4, 0.0),
     ]
 
 
