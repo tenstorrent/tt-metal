@@ -206,14 +206,23 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
     if os.environ.get("HY_TT_QWEN", "0") == "1":
         from models.demos.hf_eager.hunyuanvideo_1_5.tt import qwen_encoder as _qe
 
-        # Qwen2.5-VL mllm text encode on device, on its own submesh (its 7B weights
-        # can't co-reside with the resident DiT).
+        # Prefer a dedicated Qwen submesh (carved on spare chips at sp<=3). When none
+        # exists (sp=4 fills every mesh row), text-encode stays on CPU by default --
+        # for a ONE-SHOT video that's actually faster (A/B: host 5:59 vs shared-mesh
+        # device 6:58, the 7B weight-load + first-compile + FSDP-gather outweigh the
+        # one-time CPU encode). Opt in with HY_TT_QWEN_SHARED=1 to run Qwen on the DiT's
+        # OWN full mesh (TP=4 + FSDP across the other axis, weights co-resident, no
+        # overlapping context) -- worthwhile only for a SERVED / multi-prompt setup
+        # where the load+compile amortize.
         qwen_dev = _qe.HY_QWEN_SUBMESH
+        if qwen_dev is None and os.environ.get("HY_TT_QWEN_SHARED", "0") == "1":
+            qwen_dev = device
         if qwen_dev is not None:
+            _pl = "separate submesh" if _qe.HY_QWEN_SUBMESH is not None else "shared DiT mesh (TP=4+FSDP)"
             pipe.text_encoder = _qe.TTQwenTextEncoderAdapter(pipe.text_encoder, qwen_dev)
-            print(f"[{label}] Qwen text-encode: ON DEVICE (ttnn) on {list(qwen_dev.get_device_ids())}", flush=True)
+            print(f"[{label}] Qwen text-encode: ON DEVICE ({_pl}) on {list(qwen_dev.get_device_ids())}", flush=True)
         else:
-            print(f"[{label}] HY_TT_QWEN set but no Qwen submesh carved; text-encode stays on CPU", flush=True)
+            print(f"[{label}] no Qwen submesh at this mesh; text-encode on CPU (HY_TT_QWEN_SHARED=1 to reuse the DiT mesh)", flush=True)
 
     _prompt = os.environ.get("HY_PROMPT", "A cat walks on the grass, realistic")
     _neg = os.environ.get("HY_NEG_PROMPT") or None

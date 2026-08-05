@@ -176,6 +176,15 @@ denoise-dominated 5:59. (No image encoder / VAE-encode runs in t2v at all.) At *
 device there — but the smaller DiT (denoise 6:21) makes that config slower overall
 (10:38 e2e).
 
+**On-device text-encode at sp=4 (opt-in, `HY_TT_QWEN_SHARED=1`).** Qwen *can* run on the
+DiT's own 32-chip mesh (TP=4 + FSDP across the other axis, weights co-resident, no
+overlapping context) instead of CPU. It's correct (verified, identical output) but
+**slower for a one-shot video — 6:58 vs 5:59** — because the 7B weight-load +
+first-compile + per-layer FSDP all-gathers cost more than the one-time CPU encode they
+replace (denoise itself is unchanged at ~2:50). So host is the default at sp=4; the
+shared-mesh path only pays off in a **served / multi-prompt** deployment where the load
+and compile amortize across many generations.
+
 ## PCC validation
 
 ### End-to-end PCC (2-layer reference weights, single forward)

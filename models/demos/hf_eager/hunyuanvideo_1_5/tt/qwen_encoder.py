@@ -71,12 +71,31 @@ def _eager_attn_fp32_forward(self, x, *, attention_bias, pos_embeds):
 
 
 def build_tt_qwen_encoder(text_encoder, device) -> Qwen25VlTextEncoder:
-    """Build the tt_dit Qwen text-tower encoder from a torch `Qwen2_5_VLTextModel`,
-    tensor-parallel across `device` (a 1xN submesh)."""
+    """Build the tt_dit Qwen text-tower encoder from a torch `Qwen2_5_VLTextModel`.
+
+    Mesh layout:
+      * dedicated 1xN submesh -> tensor-parallel across all N (mesh_axis=1).
+      * the DiT's full 2D parent (e.g. (4,8) at sp=4, where no submesh can be carved)
+        -> tensor-parallel on the axis that divides the KV heads (TP<=kv_heads) and
+        FSDP-shard the weights across the OTHER axis. This reuses ALL of the DiT's
+        chips with NO separate/overlapping mesh context (which deadlocks ttnn) and no
+        weight reload -- text-encode runs once, sequentially, before the denoise trace.
+    """
     cfg = text_encoder.config
     rope_params = getattr(cfg, "rope_parameters", None) or getattr(cfg, "rope_scaling", None) or {}
     rope_theta = getattr(cfg, "rope_theta", None) or rope_params.get("rope_theta")
-    tp = device.get_num_devices()
+    _shp = tuple(device.shape)
+    _kv = cfg.num_key_value_heads
+    if len(_shp) == 2 and _shp[0] > 1 and _shp[1] > 1:
+        # 2D parent: TP on a heads-compatible axis, FSDP-shard weights across the other.
+        if _shp[0] <= _kv and _kv % _shp[0] == 0:
+            tp, tp_axis, is_fsdp = _shp[0], 0, True
+        elif _shp[1] <= _kv and _kv % _shp[1] == 0:
+            tp, tp_axis, is_fsdp = _shp[1], 1, True
+        else:
+            tp, tp_axis, is_fsdp = _kv, 1, True  # fallback (assumes axis-1 >= kv_heads)
+    else:
+        tp, tp_axis, is_fsdp = device.get_num_devices(), 1, False
     model = Qwen25VlTextEncoder(
         vocab_size=cfg.vocab_size,
         hidden_size=cfg.hidden_size,
@@ -89,8 +108,9 @@ def build_tt_qwen_encoder(text_encoder, device) -> Qwen25VlTextEncoder:
         rope_theta=rope_theta,
         mrope_section=rope_params["mrope_section"],
         device=device,
-        parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp, mesh_axis=1)),
+        parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp, mesh_axis=tp_axis)),
         ccl_manager=CCLManager(device, num_links=1, topology=ttnn.Topology.Linear) if tp > 1 else None,
+        is_fsdp=is_fsdp,
     )
     model.load_torch_state_dict(text_encoder.state_dict())
     # Fidelity fix: use fp32 eager attention instead of the bf16 flash SDPA. The
