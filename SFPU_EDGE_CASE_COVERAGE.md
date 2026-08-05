@@ -1,8 +1,26 @@
 # SFPU LLK Edge-Case Test-Coverage Audit
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
-**Date:** 2026-07-23
-**Scope:** All SFPU LLK kernels in `tt-metal/tt_metal/tt-llk`, audited through the tt-llk Python test infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the same SFPU kernel set (BH adds only `topk_xl`), so this audit treats them together and notes arch-specific test gaps inline.
+**Audited:** 2026-07-23 · **Revised:** 2026-08-05 (revision 2)
+**Scope:** All SFPU LLK kernels in `tt-metal/tt_metal/tt-llk`, audited through the tt-llk Python test infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the same SFPU kernel set (BH adds only `topk_xl`), so this audit treats them together and notes arch-specific test gaps inline. Quasar has its own suite under `quasar/` and is out of scope for the per-op tables.
+
+> ### Revision 2 — what has changed since the audit was taken
+>
+> The audit body below is **as observed on 2026-07-23** and remains the reference for
+> per-op edge cases. Two things have moved since, and §0 records both. Read §0 before
+> acting on any row.
+>
+> 1. **Finding #1 is FIXED** on branch `ldjurovic/sfpu_edge_cases_1`. The unary float
+>    sweep no longer runs positive-only. Every `Excluded (float-sweep: No)` /
+>    "`ALL_MATHOPS` positive-only" note in §1–§3 is therefore **stale in that specific
+>    respect** — those 31 ops now run their registered signed domain. The *boundary* and
+>    *special-value* gaps in the same rows are unchanged.
+> 2. **The test files were restructured** by
+>    [#50602 *Unify SFPU test dispatch*](https://github.com/tenstorrent/tt-metal/pull/50602):
+>    `test_sfpu_binary_bcast.py` and `test_ttnn_where.py` no longer exist. Citations to
+>    them in §4 and §6 resolve to `test_sfpu_binary.py` and `test_sfpu_ternary.py`.
+>
+> Findings **#2, #3 and #4 are unchanged** and are the load-bearing gaps for the next phase.
 
 ---
 
@@ -21,11 +39,69 @@ For every SFPU kernel/operation we list its plausible **edge cases** (domain bou
 
 ---
 
+## 0. Status of the four systemic findings (revision 2, 2026-08-05)
+
+| # | Systemic finding | Status | Where |
+|---|---|---|---|
+| 1 | Unary float sweep is positive-only (`ALL_MATHOPS`, no `spec_A`) | ✅ **fixed** — sweep now defaults to the op's registered signed domain, bounded by the narrowest format in the pipeline | branch `ldjurovic/sfpu_edge_cases_1`; plan §3 |
+| 2 | Binary / ternary / scalar suites never import `sfpu_domains.py` | ⬜ **open** — and now quantified: the registry holds **115 ops**, of which the two unary lists consume 94. The 21 leftovers include `SfpuElwadd/sub/mul/div/pow/rsub`, `SfpuXlogy` and all three shift ops: **registered domains, including their undefined-range holes, that no test reads** | plan §4 (Phase 1) |
+| 3 | IEEE specials injected for exactly one op family (`isinf`/`isnan`/…) | ⬜ **open** — plus a newly documented constraint: bf16→fp32 dest unpack **destroys `-inf`/`NaN`**, so specials cannot be swept over the full `formats × dest_acc` product ([test_sfpu_unary.py:568](tt_metal/tt-llk/tests/python_tests/test_sfpu_unary.py#L568)) | plan §7a |
+| 4 | Integer sign/extreme edges structurally excluded (`_get_integer_bounds` returns `min+1`) | ⬜ **open** — and worse than recorded: `StimuliSpec.custom` **silently clamps** `INT32_MIN` to `INT32_MIN+1` rather than erroring, so integer extremes must be delivered as a raw override tensor, not a spec | plan §6c |
+
+### Fallout of fixing finding #1 — three defects it had been masking
+
+Widening the unary domain did not just add coverage; it exposed three bugs that benign
+`uniform(0.1, 1.1)` stimuli could not distinguish from correct behaviour. All three are fixed
+on the same branch, and all three are **shared infrastructure** — the later phases inherit them:
+
+- **`UnarySFPUGolden` did not quantize Bfp8_b inputs.** It inlined a partial copy of
+  `quantize_input_to_unpack_format` covering Bfp2_b/Bfp4_b/MX but skipping Bfp8_b, so for
+  Bfp8_b inputs *the golden ran on values the hardware never saw*. Smooth ops absorbed the
+  discrepancy inside tolerance; `floor`/`ceil`/`trunc`/`frac` turn a sub-ULP quantization step
+  across an integer into a full 1.0 error. 16 failures each → 320/320 clean.
+- **`passed_test` did not treat Bfp8_b as a block format.** Bfp4_b/Bfp2_b were routed to
+  `_bfp_block_aware_compare`; Bfp8_b fell through to a flat `isclose` despite being equally a
+  block format (7 magnitude bits, exponent shared across 16 elements). It now accepts a result
+  satisfying **either** the lattice criterion or the tolerance criterion, because with 7
+  mantissa bits a lattice step can be *tighter* than the SFPU's own approximation error, so
+  neither check is a superset of the other.
+- **Three registry domains were range-correct but accuracy-wrong** — `exp` (high 80), `exp2`
+  (high 100) and `reciprocal` ([0.1, 100] for block floats). They had never executed, because
+  `DOMAIN_MATHOPS` (their only previous consumer) is disjoint from `ALL_MATHOPS`. Recalibrated
+  to 16 / 23 / a format-sensitive 10:1 ratio respectively.
+
+One genuine kernel accuracy limit survived and is recorded as an xfail rather than tolerated:
+**approximate `exp` overshoots the golden by a systematic ~5.7% (peak 6.75%) once its argument
+passes ~8**, against a 5% rtol. Nothing had measured this before, because the sweep never fed
+`exp` an argument above 1.1. The one-directional bias is a suspicious shape for approximation
+noise and may be worth a look on the kernel side.
+
+**Post-fix state:** `test_sfpu_unary.py` on Wormhole — 5108 passed, 334 skipped, 6 xfailed.
+**Blackhole is unverified.**
+
+### Gaps introduced or newly visible since the audit
+
+- **Float comparison ops have no LLK-level correctness test at all.** `SfpuElwLt/Gt/Le/Ge` are
+  commented out of `test_sfpu_binary_float` — "the generated operands produce near-ties that
+  diverge from the total-order golden … validated at the ttnn level". The near-tie that makes
+  a random sweep unusable *is* the edge worth driving deliberately. `Excluded`.
+- **`Eq`/`Ne` moved to `test_sfpu_binary_eq_ne`** with crafted paired stimuli, which is the
+  right pattern and the template the comparison ops should follow.
+- **Bfp8_b is skipped for `SfpuElwpow`/`SfpuXlogy`** because "coarse quantization pushes small
+  operands to values that produce -inf/NaN". The skip reason *is* an edge-case observation:
+  the block-float path reaches the pole and nothing asserts what happens there.
+- **`generic_moe_gate_topk` now has a harness in progress** (`test_sfpu_generic_moe_gate_topk.py`
+  + `sources/sfpu_generic_moe_gate_topk_test.cpp`), moving it off the untested list in §6.
+
+---
+
 ## Executive summary — the coverage model and its systemic gaps
+
+*(As observed 2026-07-23. See §0 for current status of each finding.)*
 
 The SFPU test infra is a **random-sweep-within-safe-domains** system. It is excellent at *value-level correctness on benign inputs* across a large format × dest_acc × approx_mode matrix, but by construction it **avoids** the edges this issue is about. Four systemic findings dominate the table below:
 
-1. **The unary "float sweep" (`test_eltwise_unary_sfpu_float`, the `ALL_MATHOPS` list) uses positive-only stimuli.** It passes **no `spec_A`**, so `generate_stimuli` falls back to `default_spec_for_format` = `uniform(0.1, 1.1)` for fp32/fp16/bf16 (and a positive `[0, ~2.9]` face for bfp). *Verified* at [test_sfpu_unary.py:628](tt_metal/tt-llk/tests/python_tests/test_sfpu_unary.py#L628) → [generator.py:257](tt_metal/tt-llk/tests/python_tests/helpers/stimuli_generator/generator.py#L257). Consequence: every op on `ALL_MATHOPS` (exp, log, sqrt, rsqrt, square, tanh, silu, gelu, gelu_tanh, sin, cos, abs, neg, celu, elu, hardsigmoid, floor/ceil/trunc/frac, relu_max, threshold, atanh, asinh, acosh, …) is **never fed a negative input** and never exercises its `x<0` branch, clip knee, saturation tail, or argument-reduction path in that sweep. The per-op signed domains in `sfpu_domains.py` are consumed **only** by the separate `test_eltwise_unary_sfpu_domain` (`DOMAIN_MATHOPS`) driver.
+1. **The unary "float sweep" (`test_eltwise_unary_sfpu_float`, the `ALL_MATHOPS` list) uses positive-only stimuli.** *(FIXED — see §0.)* It passes **no `spec_A`**, so `generate_stimuli` falls back to `default_spec_for_format` = `uniform(0.1, 1.1)` for fp32/fp16/bf16 (and a positive `[0, ~2.9]` face for bfp). *Verified* at [test_sfpu_unary.py:628](tt_metal/tt-llk/tests/python_tests/test_sfpu_unary.py#L628) → [generator.py:257](tt_metal/tt-llk/tests/python_tests/helpers/stimuli_generator/generator.py#L257). Consequence: every op on `ALL_MATHOPS` (exp, log, sqrt, rsqrt, square, tanh, silu, gelu, gelu_tanh, sin, cos, abs, neg, celu, elu, hardsigmoid, floor/ceil/trunc/frac, relu_max, threshold, atanh, asinh, acosh, …) is **never fed a negative input** and never exercises its `x<0` branch, clip knee, saturation tail, or argument-reduction path in that sweep. The per-op signed domains in `sfpu_domains.py` are consumed **only** by the separate `test_eltwise_unary_sfpu_domain` (`DOMAIN_MATHOPS`) driver.
 
 2. **The binary/ternary/scalar suites don't import `sfpu_domains.py` at all.** `test_sfpu_binary.py`, `test_sfpu_binary_bcast.py`, `test_sfpu_ternary.py`, `test_sfpu_binop_scalar.py` fall back to `default_spec_for_format` = positive `uniform(0.1, 1.1)` (floats) / non-negative half-range (ints). So div-by-zero, `pow` base≤0, `xlogy` y≤0, negative operands, ties, and all IEEE specials are avoided by the *default positive domain* — the registry's per-op holes are dormant for these tests.
 
@@ -54,6 +130,17 @@ The SFPU test infra is a **random-sweep-within-safe-domains** system. It is exce
 
 ## 1. Unary — transcendental, trigonometric & special functions
 
+
+> **Revision 2 override for §1–§3.** The `test_eltwise_unary_sfpu_float` half of the framing
+> note below no longer describes the code. That driver now defaults `spec_A` to
+> `exclude_undefined(mathop, for_op(mathop, narrowest_range_format(in, out)).spec_A)`
+> ([test_sfpu_unary.py:657](tt_metal/tt-llk/tests/python_tests/test_sfpu_unary.py#L657)), i.e.
+> **the same registry domains the `_domain` driver uses** — so the two drivers now differ only
+> in op list, format coverage (`_domain` is Float16_b + Float32 only) and the fast/approx-mode
+> product. Wherever a row below reads "`ALL_MATHOPS` positive-only `[0.1, 1.1]`", substitute
+> the op's registered signed domain, and read the row's verdict as applying to the
+> **boundary/special-value** part of the gap only. The two lists are still disjoint
+> (`ALL_MATHOPS` 31, `DOMAIN_MATHOPS` 63) and merging them remains open work.
 
 **Framing note (applies to every row).** Two nightly-gated drivers in `test_sfpu_unary.py` cover this group, and they sweep very different domains:
 
@@ -158,6 +245,12 @@ Neither driver injects NaN/±inf/denormals/format-extremes for this group (only 
 
 ## 2. Unary — activation, piecewise & rounding
 
+
+> **Revision 2 override:** the cross-cutting finding below is **fixed** — see the note at the
+> head of §1 and §0. `Floor`, `Ceil`, `Trunc`, `Frac` and `Tanhshrink` had no registry entry at
+> all and gained signed `[-10, 10]` / `[-5, 5]` domains as part of that fix, chosen so the sweep
+> lands *near* several integer knees / the tanh saturation point. Landing *on* the knees is
+> still open (plan §5c).
 
 **Cross-cutting finding (applies to every `ALL_MATHOPS` op below).** `test_eltwise_unary_sfpu_float` calls `eltwise_unary_sfpu(...)` with **no `spec_A`**, so stimuli come from `default_spec_for_format` (`helpers/stimuli_generator/generator.py:257`) = `uniform(low=0.1, high=1.1)` for Float32/Float16/Float16_b, and the Bfp8_b/Bfp4_b face defaults (`_default_bfp8b_face`/`_default_bfp4b_face`, lines 207–220) which are also **non-negative** (`[0, ~2.9]`). The signed per-op ranges in `_OP_DOMAIN_REGISTRY` are consumed **only** by `test_eltwise_unary_sfpu_domain` (`DOMAIN_MATHOPS`, Float16_b+Float32 only). Consequence: for `ALL_MATHOPS` ops the entire float sweep sees only positive inputs, so any `x<0` branch/knee is never exercised. No special values (+inf/-inf/NaN/-0.0) are injected for any op in this group (only `ISINF_ISNAN_MATHOPS` get them, none of which are here). dest_acc No/Yes are both swept everywhere (covers the bf16-dest fp16b-rounding path).
 
@@ -286,6 +379,21 @@ Neither driver injects NaN/±inf/denormals/format-extremes for this group (only 
 ## 4. Binary (float) SFPU & shift ops
 
 
+> **Revision 2 override for §4–§5.** `test_sfpu_binary_bcast.py` was **deleted** by #50602 and
+> folded into `test_sfpu_binary.py` (`test_sfpu_binary_bcast`, plus a `broadcast_type=` argument
+> on the shared `sfpu_binary()` driver) — read every citation to it as pointing there. The
+> cross-cutting finding itself is **unchanged and still open**. Two mechanics changed that matter
+> for closing it:
+> - `sfpu_binary()` has **no `spec_B`**. Both operands are read out of `buffer_A` (tile0 = in0,
+>   tile1 = in1), so per-operand stimuli go through `_paired_two_tile_spec(a_face, b_face)`
+>   ([test_sfpu_binary.py:80](tt_metal/tt-llk/tests/python_tests/test_sfpu_binary.py#L80)) or a raw
+>   `src_A_override` tensor. `_mask_stimuli_spec` / `_isclose_stimuli_spec` / `_eq_ne_stimuli_spec`
+>   are the working examples.
+> - The shift edge test now covers **three** ops (`SfpuElwLogicalRightShift` added) via
+>   `_SHIFT_EDGE_OPS`, and its Blackhole exclusion is an inline `pytest.skip` in the test body
+>   citing `docs/SFPU_INT32_SHIFT.md` — BH's shift kernels are unmigrated TTI microcode, so this
+>   is a kernel port, not a one-line unskip.
+
 **Cross-cutting finding (applies to every row below):** `test_sfpu_binary.py` / `test_sfpu_binary_bcast.py` do **not** import `sfpu_domains.py`; the `_OP_DOMAIN_REGISTRY` and `_SFPU_UNDEFINED_RANGES` entries (incl. `SfpuElwdiv` divisor hole `(-1e-6,1e-6)`, `SfpuXlogy` B `(-inf,1e-6)`, `SfpuElwpow` A `(-inf,1e-6)`) are consumed **only** by `test_sfpu_unary.py`. For the binary tests the stimuli come from `generate_stimuli(spec_A=None)` → `default_spec_for_format` = **uniform [0.1, 1.1]** for all float formats (positive, small, bounded away from 0), and **uniform [0, iinfo.max//2−1]** for Int32 / [0, 2³²−2] for UInt32. So most float edges are avoided *by the default positive domain*, not by the registry. `Excluded` below = deliberately kept out of range by that default domain (behaviour at the boundary is not verified); the registry entry, where present, is cited but is dormant for these tests.
 
 | Kernel / Op | What it does | Edge case | Tested? | Evidence / gap notes |
@@ -413,6 +521,17 @@ Neither driver injects NaN/±inf/denormals/format-extremes for this group (only 
 
 
 ## 6. Ternary, scalar-binop, reduce, top-k & other/untested kernels
+
+> **Revision 2 override for §6.** `test_ttnn_where.py` and `sources/ttnn_where_test.cpp` were
+> **deleted** by #50602; the `where` tests now live in `test_sfpu_ternary.py` as `test_ttnn_where`
+> and `test_ttnn_where_mcw`. Read every `test_ttnn_where.py::…` citation as pointing there. The
+> verdicts are unchanged. Two additions:
+> - `_run_sfpu_ternary` accepts **no stimulus parameters at all** — the `uniform(-1, 1)` /
+>   `uniform(1, 2)` specs are hard-coded ([test_sfpu_ternary.py:47](tt_metal/tt-llk/tests/python_tests/test_sfpu_ternary.py#L47)).
+>   Adding `spec_A`/`spec_B`/`spec_C` is a prerequisite for every ternary row marked `No` below.
+> - `generic_moe_gate_topk` has a harness in progress (`test_sfpu_generic_moe_gate_topk.py`),
+>   so its "No (untested)" row is being closed. The other ten untested kernels were re-checked
+>   on 2026-08-05 and still have no `MathOperation` enum entry.
 
 | Kernel / Op | What it does | Edge case | Tested? | Evidence / gap notes |
 |---|---|---|---|---|
