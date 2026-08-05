@@ -268,6 +268,36 @@ class TtPrefillRuntime:
             return None
         return out  # logits [1,1,chunk_local,vocab_shard], SP-sharded on seq / TP-sharded on vocab
 
+    def build_kv_chunk_table(self, kv_caches, path: str) -> str:
+        """Build + serialize the GPT-OSS KV chunk address table (the migration worker's SET_TABLE
+        input). Describes both K and V per global head as separate configs; layer / position / slot
+        keys match the on-device write layout so the worker can migrate on ``on_layer_complete``
+        pacing. Delegates to ``tt/runners/kv_chunk_table.py``. Single-rank only."""
+        from models.demos.gpt_oss_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+
+        kv = self._resolve_kv(kv_caches)
+        return build_and_serialize_kv_chunk_table(
+            mesh_device=self.mesh_device,
+            kv_cache=kv,
+            seq_len=self.config.max_seq_len,
+            num_layers=self.config.num_layers,
+            mesh_shape=self.config.mesh_shape,
+            sp_axis=self.config.sp_axis,
+            num_users=self.config.num_users,
+            chunk_size=self.config.chunk_size,
+            num_kv_heads=self.hf_config.num_key_value_heads,
+            head_dim=self.hf_config.head_dim,
+            path=path,
+        )
+
+    def kv_migration_base_address(self, kv_caches) -> int:
+        """Base DRAM address the engine's device-map delivery uses to compute per-chip physical
+        addresses. GPT-OSS is GQA k+v (two separate tensors); pick ``k`` as the migratable base — its
+        buffer starts every chip's KV region, and V's addresses are derived from the same NoC arithmetic
+        expressed by their own config entries in ``build_kv_chunk_table``."""
+        kv = self._resolve_kv(kv_caches)
+        return int(kv.k.buffer_address())
+
     def set_layer_ack_channel(self, layer_ack_channel) -> None:
         """Register the per-layer LayerAck channel (engine-created + owned). ``prefill_chunk`` bumps it
         once per decoder layer (``inject(1)``) via the ``on_layer_complete`` callback threaded into
