@@ -25,6 +25,27 @@ import torch
 import ttnn
 
 
+def accurate_compute_config(device):
+    """High-fidelity compute config for the vocoder's convolutions.
+
+    TTNN defaults to `MathFidelity.LoFi` with `fp32_dest_acc_en=False`. That is the
+    right trade for most models, but HiFT is ~40 convolutions deep with a residual
+    accumulating through all of them, and the errors compound: the full vocoder
+    scored **PCC 0.98954** at the defaults, just under the 0.99 gate, with a
+    provably correct graph.
+
+    HiFi4 plus fp32 destination accumulation is the standard lever for exactly
+    this -- depth-accumulated bfloat16 drift, not a wrong computation.
+    """
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
 def fold_weight_norm(weight_v: torch.Tensor, weight_g: torch.Tensor, dim: int = 0) -> torch.Tensor:
     """w = g * v / ||v||, with the norm taken over every axis except `dim`."""
     norm_dims = [d for d in range(weight_v.dim()) if d != dim]
@@ -66,6 +87,7 @@ class TtConv1d:
         groups: int = 1,
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
+        high_fidelity: bool = True,
     ):
         assert weight.dim() == 3, f"expected [out_ch, in_ch/groups, k], got {tuple(weight.shape)}"
         self.device = device
@@ -80,6 +102,7 @@ class TtConv1d:
             # conv bias wants a 4-D [1, 1, 1, out_ch] row
             self.bias = ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         self.conv_config = ttnn.Conv1dConfig(weights_dtype=weights_dtype, deallocate_activation=False)
+        self.compute_config = accurate_compute_config(device) if high_fidelity else None
 
     @classmethod
     def from_module(cls, device, module: torch.nn.Module, **kw):
@@ -112,9 +135,16 @@ class TtConv1d:
             dilation=self.dilation,
             groups=self.groups,
             conv_config=self.conv_config,
+            compute_config=self.compute_config,
             dtype=self.dtype,
             return_output_dim=True,
         )
+        # ttnn.conv1d returns the flattened conv layout, not [N, L, C]. Restoring
+        # the documented shape here rather than at each call site is what makes
+        # `ttnn.permute(x, (0, 2, 1))` and the residual adds downstream legal --
+        # otherwise the rank mismatch only surfaces at the first permute, far from
+        # the conv that produced it.
+        out = ttnn.reshape(out, (batch_size, out_length, self.out_channels))
         return out, out_length
 
     @staticmethod

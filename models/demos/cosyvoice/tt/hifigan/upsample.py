@@ -24,7 +24,7 @@ import torch
 
 import ttnn
 
-from .conv import extract_conv_weights
+from .conv import accurate_compute_config, extract_conv_weights
 
 
 class TtConvTranspose1d:
@@ -44,6 +44,7 @@ class TtConvTranspose1d:
         groups: int = 1,
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
+        high_fidelity: bool = True,
     ):
         # torch ConvTranspose1d weight is [in_ch, out_ch/groups, k]; TTNN's
         # conv_transpose2d wants (C, O/G, K_H, K_W), so the extra H axis is 1.
@@ -58,6 +59,7 @@ class TtConvTranspose1d:
         self.bias = None
         if bias is not None:
             self.bias = ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.compute_config = accurate_compute_config(device) if high_fidelity else None
 
     @classmethod
     def from_module(cls, device, module: torch.nn.Module, **kw):
@@ -94,6 +96,7 @@ class TtConvTranspose1d:
             padding=(0, self.padding),
             dilation=(1, self.dilation),
             groups=self.groups,
+            compute_config=self.compute_config,
             dtype=self.dtype,
         )
         if isinstance(out, (tuple, list)):
