@@ -59,31 +59,21 @@ jobs:
           # This runner's proxy isn't inherited by the isolated buildx builder
           # (see docker-run/action.yml's forward_civ2_proxy_env_vars).
           #
-          # Deliberately NOT setting NO_PROXY here (previously "tenstorrent.net").
-          # That suffix matches harbor.ci.tenstorrent.net, which made BuildKit
-          # bypass the proxy and dial Harbor's ingress VIP directly - a path
-          # that silently blackholes (dial tcp ...: i/o timeout, no RST/ICMP,
-          # confirmed via live packet capture) due to a NetworkPolicy/DNAT
-          # ordering issue on the runner's cluster (infra-side; the egress
-          # ipBlock rule for Harbor's VIP has apparently never actually
-          # worked. Every path that reaches Harbor successfully today, e.g.
-          # the runner's own dockerd, goes via the proxy instead, since
-          # dockerd's own NO_PROXY entry for Harbor is a malformed pattern
-          # that never matches and so never takes the broken direct route).
-          # Routing everything through the proxy, same as dockerd already
-          # does, is what actually works - see run 31018713433, job
-          # 92352981018 for the failure this avoids.
+          # Do not set NO_PROXY here. A previous value of "tenstorrent.net"
+          # matched harbor.ci.tenstorrent.net. That made the builder skip
+          # the proxy and connect to Harbor directly, which times out.
+          # Root cause: MINFRA-1408. Routing through the proxy works, the
+          # same way the runner's own docker daemon already reaches Harbor.
+          # See run 31018713433, job 92352981018 for the failure this avoids.
           echo "PROXY_HTTP=${HTTP_PROXY:-${http_proxy:-}}" >> "$GITHUB_ENV"
           echo "PROXY_HTTPS=${HTTPS_PROXY:-${https_proxy:-}}" >> "$GITHUB_ENV"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
-          # network=host: shares the runner's own network namespace instead
-          # of the docker-container driver's default bridge. Doesn't fix the
-          # Harbor timeout above (that's a proxy-routing issue, not a bridge
-          # NAT-hop issue - confirmed by reproducing the same failure with
-          # this in place), but it's a reasonable simplification with one
-          # fewer layer of network indirection, so left in.
+          # network=host: builder uses the runner's own network namespace
+          # instead of the docker-container driver's default bridge. Does
+          # not fix the Harbor timeout above. Confirmed by reproducing the
+          # same failure with this option set. Kept as a small simplification.
           driver-opts: |
             network=host
             env.HTTP_PROXY=${{ env.PROXY_HTTP }}
@@ -137,15 +127,13 @@ jobs:
           HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
           PROXY_HTTP: ${{ env.PROXY_HTTP }}
           PROXY_HTTPS: ${{ env.PROXY_HTTPS }}
-          PROXY_NO_PROXY: ${{ env.PROXY_NO_PROXY }}
         run: |
           set -euo pipefail
           TARGET="${{ inputs.image }}"
-          # Derived from docker-bake.hcl's "${TARGET}" contexts instead of a
-          # hardcoded list, so a new tool (e.g. curl/oras) is picked up
-          # automatically instead of silently falling back to an unproxied
-          # local build - see .github/scripts/get-target-tools.sh and its
-          # existing use in build-docker-artifact.yaml.
+          # Tool list comes from docker-bake.hcl via get-target-tools.sh
+          # instead of a hardcoded list. A new tool (e.g. curl, oras) is
+          # picked up automatically. build-docker-artifact.yaml already
+          # uses this script.
           TOOLS=($(.github/scripts/get-target-tools.sh "$TARGET"))
           SET=""
           for tool in "${TOOLS[@]}"; do
@@ -159,13 +147,12 @@ jobs:
           SET+="${TARGET}.args.UBUNTU_VERSION=${UBUNTU_VERSION}"$'\n'
           SET+="${TARGET}.args.PYTHON_VERSION=${PYTHON_VERSION}"$'\n'
           SET+="${TARGET}.args.GIT_REF=${{ github.ref_name || 'main' }}"$'\n'
-          # RUN steps (apt-get, curl, uv pip) need the proxy too - BuildKit
-          # auto-propagates these build-arg names into every RUN with no ARG
+          # RUN steps (apt-get, curl, uv pip) need the proxy too. BuildKit
+          # sets these build args in every RUN automatically, no ARG
           # declaration needed.
           if [ -n "$PROXY_HTTP" ]; then
             SET+="${TARGET}.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
             SET+="${TARGET}.args.HTTPS_PROXY=${PROXY_HTTPS}"$'\n'
-            SET+="${TARGET}.args.NO_PROXY=${PROXY_NO_PROXY}"$'\n'
           fi
           {
             echo "set<<EOF"
