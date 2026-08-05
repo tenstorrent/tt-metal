@@ -117,6 +117,29 @@ _WO_PRG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     per_core_M=1, per_core_N=(DIM // TILE) // (_WO_GRID[0] * _WO_GRID[1]),
     fuse_batch=True, fused_activation=None, mcast_in0=True)
 
+# sdpa_decode's program config. The shipped call passed none, and the default spends almost all its
+# time on setup rather than on the cache: at pos=312 it reads 1.22 MB (a 6.6 us floor) in 68.6 us, and a
+# 31x bigger cache costs only 21% more time -- ~62 us of the 68.6 is FIXED. So it was never a bandwidth
+# problem, and k_chunk/grid reach it:
+#
+#     default            68.6 us          k=512 8x2   42.2 us  1.63x  <- this
+#     k=256 8x2  38.7 us (1.77x)          k=512 8x1   40.2 us  1.72x
+#
+# THE FASTER ONES ARE NOT SAFE, and only a position sweep shows it. Bit-exact vs the default at 11
+# positions from 64 to 1000, spanning the k_chunk boundary at 511/512/513:
+#
+#     k=512 8x2   11/11 exact   0 worse than default vs fp32   0.673 ms/frame   <- ships
+#     k=512 8x1    6/11         0 worse                        0.706 ms/frame
+#     k=256 8x2    3/11         3 WORSE than default vs fp32   0.825 ms/frame
+#
+# k=256 looks fine at pos=312 and degrades at 480, 511 and 700. The decode gate pins ONE position per
+# case, so it would not have caught that -- ship a config only if it is exact at every position.
+#
+# DECODE ONLY: prefill computes attention with explicit matmuls in _attend, not sdpa.
+_SDPA_PRG = ttnn.SDPAProgramConfig(
+    q_chunk_size=TILE, k_chunk_size=512,
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 2))
+
 # NOTES.md [gpt-06] -- WEIGHT PRECISION -- load-bearing for CORRECTNESS, not...
 WEIGHT_DTYPE = ttnn.bfloat16          # w2 -- bf16 for ACCURACY (6.16), not for the hang (6.13)
 FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # FF1 and FF3
@@ -319,7 +342,7 @@ class TtVoxtralGPT:
             update_idxs_tensor=pos_t)
         o = ttnn.transformer.scaled_dot_product_attention_decode(
             qh, cache[0], cache[1], cur_pos_tensor=pos_t, scale=SCALE,
-            compute_kernel_config=COMPUTE_CONFIG)
+            compute_kernel_config=COMPUTE_CONFIG, program_config=_SDPA_PRG)
         # No memory_config move here: sdpa_decode already emits o as interleaved DRAM, which is what
         # the wo matmul wants. Routing it to L1 instead is NOT the win it looks like -- 0.999x, and
         # the reason is worth reading before trying it: NOTES.md [gpt-03].

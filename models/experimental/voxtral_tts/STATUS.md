@@ -1881,6 +1881,73 @@ not the size of the gain.
 **If it is ever wanted anyway**, tracing ONE block avoids the cross-block capture-order constraint for
 about half the gain, and the probes (`probe_trace_b1.py`, `probe_trace_b2.py`) are current and ready.
 
+### 6.27 — the overhead map, and what it found: sdpa_decode was 90% setup
+
+§6.24's floor method applied to EVERY decode op, not just the matmuls: measure isolated, compute a DRAM
+byte floor, rank by absolute overhead. That map answered "is there overhead left" precisely.
+
+**The matmuls are finished.** wqkv, w3 and w2 now measure FASTER than a 194 GB/s floor (−1.7, −7.5,
+−11.2 µs), which also says that ceiling is slightly conservative — w2 implies 202 GB/s. w1 is +3.0 and
+wo +6.4 after §6.25. Nothing there.
+
+**Everything left is small ops**, and the isolated overheads are large in relative terms:
+
+| op | floor µs | actual | overhead | ×26 |
+|---|---|---|---|---|
+| **sdpa_decode** (pos=312) | 6.6 | 68.1 | **+61.6** | **1.60 ms** |
+| ffn norm ×3 | 0.1 | 53.3 | +53.2 | 1.38 ms |
+| multiply(g, w3) | 0 | 29.7 | +29.7 | 0.77 ms |
+| add residual ×2 | 0 | 28.9 / 26.7 | +55.6 | 1.45 ms |
+| the other 9 small ops | ~0.2 | ~185 | ~+185 | ~4.8 ms |
+
+**But the reachable total is far smaller than that sums to.** Isolated ops sum to 29.930 ms against a
+shipped step of 23.803 — 6 ms is already overlapped away — and the byte floor is 20.309 ms. So **at most
+3.494 ms/frame, 15% of the step, is reachable**, and an op's isolated overhead is an upper bound on
+that op rather than a promise.
+
+**SHIPPED — `SDPAProgramConfig` on sdpa_decode, +0.673 ms/frame isolated, bit-exact.** The shipped call
+passed no program config. Diagnosing the 10× gap first mattered: a **31× larger cache costs 21% more
+time** (pos 32→1000, 0.12→3.91 MB, 68.4→82.5 µs), so ~62 of the 68.6 µs is FIXED setup, not the read.
+
+| | µs | vs default |
+|---|---|---|
+| default | 68.6 | 1.000x |
+| **k_chunk=512, grid=8x2 ← ships** | **42.2** | **1.625x** |
+| k_chunk=256, grid=8x2 | 38.7 | 1.772x |
+| k_chunk=32, any grid | 48–65 | **1.0e+00 rel — genuinely broken** |
+
+**⚠ ONLY A POSITION SWEEP MAKES THIS SAFE.** Verified at 11 positions from 64 to 1000, spanning the
+chunk boundary at 511/512/513, against both the default and a torch fp64 reference:
+
+| config | bit-exact at | worse than default vs fp32 | ms/frame |
+|---|---|---|---|
+| **k=512 8x2** | **11/11** | 0 | 0.673 |
+| k=512 8x1 | 6/11 | 0 | 0.706 |
+| k=256 8x2 | 3/11 | **3** | 0.825 |
+
+**`k=256` looks fine at pos=312 and is worse than the default at 480, 511 and 700.** The decode gate
+pins ONE position per case, so it would have passed and degraded long utterances silently. Any
+position-dependent config needs a position sweep, not a gate run.
+
+Verified: 122/122 tests, decode gate byte-identical on all six columns, long-form WER 0 of 298, 15/15
+`[END_AUDIO]`, voice identity PASS. Pipeline **−0.33 ms/frame** against +0.673 isolated — about half
+shows up, since sdpa partly overlaps neighbouring work.
+
+**REJECTED — folding the residual adds into their matmul as a bias.** In decode M=1, so the residual is
+a `[1,3072]` row vector, exactly a bias. It works, and it is worth almost nothing:
+
+| form | µs | vs 2-op | numerics |
+|---|---|---|---|
+| w2: `add(x, linear(u, w2))` ships | 285.4 | — | — |
+| w2: `linear(u, w2, bias=x)` | 285.2 | 1.001x | **bit-exact, no gain** |
+| wo: `add(x, linear(...))` ships | 79.4 | — | — |
+| wo: `linear(a, wo, bias=x, prog_cfg)` | 75.4 | 1.054x | 3.0e-03 rel, not bit-exact |
+| wo: `linear(a, wo, bias=x)` no prog_cfg | 86.5 | 0.918x | bit-exact but SLOWER |
+
+**w2's add is already entirely free** — hidden behind a 285 µs matmul. Only wo's is visible, worth 4.0 µs
+(0.104 ms/frame), and only in the form that loses bit-exactness. Not taken. This is also the clearest
+demonstration of why the isolated map overstates: the same op costs 28.9 µs alone and 0 µs in place.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
