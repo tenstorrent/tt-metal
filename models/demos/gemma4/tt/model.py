@@ -506,6 +506,9 @@ class Gemma4Model:
                 ):
                     sliding_blocks_per_seq = attn_cfg.sliding_window // paged_attention_config.block_size
                     max_num_blocks_override = sliding_blocks_per_seq * max_local_batch_size
+                max_num_blocks_override = self._cp_block_pool_override(
+                    max_num_blocks_override, paged_attention_config, bounded_sliding_kv_cache
+                )
                 kv_cache = init_kv_cache(
                     mesh_device=mesh_device,
                     config=attn_cfg,
@@ -1140,6 +1143,46 @@ class Gemma4Model:
         """Commit stashed bounded ring K/V after lm_head (or batched-hidden return)."""
         if getattr(self, "bounded_sliding_kv_cache", False):
             flush_deferred_bounded_fills(self.layers)
+
+    def _cp_block_pool_override(self, current_override, paged_attention_config, bounded_sliding_kv_cache):
+        """Shrink the paged block pool to this rank's share under context parallelism.
+
+        Each CP rank computes the K/V for the tokens it owns, so that slice *is* the
+        part of the cache it should hold. Keeping the cache sharded along the CP axis
+        means the fill needs no gather and no per-device write offset: a rank's pool
+        is its shard, so local block indices suffice (which is why the page table can
+        stay a replicated identity — see ``_identity_page_table``). Per-chunk offsets
+        are already carried by ``chunk_page_table``, which does not vary by rank.
+
+        The win is capacity and write bandwidth, both 1/cp: at long context the KV
+        cache is what bounds how much context fits per device.
+
+        The global position of a token is implied by (rank, local block, offset) —
+        that permutation has to be undone when the cache is handed to the decode
+        side; see ``export_paged_kv_cache_natural_order``.
+
+        Refuses the bounded-sliding combination rather than silently mis-sizing it: a
+        bounded pool holds one sliding window, and how a global window maps onto
+        per-rank shards is a separate design question.
+        """
+        from models.demos.gemma4.tt.ccl import cp_degree
+
+        cp = cp_degree(self.mesh_config)
+        if cp <= 1 or paged_attention_config is None:
+            return current_override
+        if bounded_sliding_kv_cache:
+            raise NotImplementedError(
+                "bounded_sliding_kv_cache with context parallelism is not supported: the bounded pool "
+                "holds one global sliding window, and its mapping onto per-rank sequence shards is "
+                "undefined here. Run with GEMMA4_DISABLE_CP=1, or use an unbounded cache."
+            )
+        base_blocks = current_override if current_override is not None else paged_attention_config.max_num_blocks
+        if base_blocks % cp != 0:
+            raise ValueError(
+                f"paged block pool {base_blocks} is not divisible by the CP degree {cp}; "
+                f"each rank must own a whole number of blocks"
+            )
+        return base_blocks // cp
 
     def _cp_gather_prefill_sequence(self, hidden_states):
         """Gather a CP-sharded prefill sequence back to full length.
