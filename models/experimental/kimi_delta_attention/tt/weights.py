@@ -46,7 +46,7 @@ def _cache_stem(
     geometry = (
         f"{cache_name_prefix}.{name}.h{config.hidden_size}.n{config.num_heads}"
         f".k{config.head_k_dim}.v{config.head_v_dim}.c{config.conv_kernel_size}"
-        f".fg{int(config.use_full_rank_gate)}"
+        f".fg{int(config.use_full_rank_gate)}.bounded{int(config.gate_lower_bound is not None)}"
     )
     return f"{geometry}.mesh{mesh_shape[0]}x{mesh_shape[1]}.axis{tensor_parallel_axis}"
 
