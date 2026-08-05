@@ -551,7 +551,10 @@ class Model:
             batch_dim = out.shape[-2]
             if batch_dim < 32:
                 out = ttnn.pad(out, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            # EXPERIMENT ONLY (#52176) — do not merge. Drop the in-trace plus_one increments;
+            # positions come from the host re-stage every step, so values stay correct. Tests
+            # whether ttnn.plus_one inside the traced decode is what corrupts on Blackhole.
+            # self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             return out
 
         return out, None
