@@ -29,9 +29,14 @@ everything the wider domain exposes.**
 | 0e | **Comparison:** `passed_test` treated Bfp8_b as a scalar format, not a block one; now accepts either the lattice or the tolerance criterion | ✅ `14f2133`, `a7c0312` |
 | 0f | **Recalibrate** the three registry domains that had never executed and were bounded for range rather than accuracy: `exp` 80→16, `exp2` 100→23, `reciprocal` format-sensitive | ✅ `8841e51` |
 | 0g | **Record** the residual genuine accuracy limit as an xfail instead of loosening a tolerance | ✅ `507e229` |
-| 0h | Merge `ALL_MATHOPS` into `DOMAIN_MATHOPS` and delete the split | ⬜ **not done** |
-| 0i | Verify on **Blackhole** | ⬜ **not done** |
-| 0j | Propagate the recalibrated domains to the Quasar unary suite (it mirrors them inline) | ⬜ **not done** |
+| **0h** | **Verify on Blackhole.** Every number below is a Wormhole measurement, and 0e/0f are calibrated against *measured WH error* — neither is arch-independent. If BH needs different bounds, the registry entries become arch-sensitive. | ⬜ **not done — gates the next phase** |
+| **0i** | **Merge `ALL_MATHOPS` into `DOMAIN_MATHOPS`**, collapsing the two unary drivers into one. Both now read the same registry, so two lists (31 + 63) and two nightly tests are duplication — and a new op added to the wrong list silently gets the wrong format coverage. Not a concatenation: the lists differ on formats (`_domain` is Float16_b + Float32 only) and on the fast/approx-mode product. | ⬜ **not done** |
+| **0j** | **Propagate the recalibrated domains to Quasar.** `quasar/test_eltwise_unary_sfpu_quasar.py` mirrors registry specs *inline in comments* rather than importing them, so 0f's new bounds never reached it. Already drifted. | ⬜ **not done** |
+
+**Definition of done:** 0h green (or BH-specific bounds landed and justified), 0i merged, 0j
+either imported or covered by an assertion that the two agree. Out of scope by definition:
+binary/ternary/scalar (Phase 1) and any deliberate edge-value injection (Phases 2–4) — Phase 0
+only widens the *random domain*, so it lands *near* knees, never *on* them.
 
 ## Detail on 0d–0g — three defects finding #1 had been masking
 

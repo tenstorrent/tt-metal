@@ -86,7 +86,7 @@ Two audit findings are **unchanged** and still the load-bearing ones:
 
 ---
 
-## 3. Phase 0 — run the unary sweep over each op's real domain ✅ **DONE** (`ldjurovic/sfpu_edge_cases_1`)
+## 3. Phase 0 — run the unary sweep over each op's real domain 🟡 **7 of 10 DONE** (`ldjurovic/sfpu_edge_cases_1`)
 
 **Revision 1 scoped this as "≈0 new lines: stop the positive-only default".** That was the
 right target and the wrong cost estimate. Rerouting `spec_A` is 5 lines; making the reroute
@@ -97,7 +97,7 @@ inaccurate one — the inputs are too benign to separate them. Widening the doma
 all three at once.
 
 So **Phase 0 is now defined as: reroute the unary sweep onto the registry, and fix
-everything the wider domain exposes.** Seven parts:
+everything the wider domain exposes.** Ten parts — 0a–0g done, **0h–0j still open (§3.2)**:
 
 | | Part | Commit |
 |---|---|---|
@@ -109,7 +109,7 @@ everything the wider domain exposes.** Seven parts:
 | 0f | **Recalibrate three registry bounds** that were chosen for representable range and had never actually been executed: `exp` high 80 → 16 (relative condition number equals the argument, so error grows linearly with x; at 80 the largest outputs land 11–13% off against a 5% rtol), `exp2` → 23 (= 16/ln2), `reciprocal` → format-sensitive (a 1000:1 ratio inside a 16-element block quantizes the smallest elements to zero → golden `inf`; hold block-float inputs to 10:1) | `8841e51` |
 | 0g | **Record the residual real accuracy limit as an xfail** rather than loosening a tolerance or shrinking the domain away from where an approximation is most worth testing: approximate `exp` overshoots by a systematic ~5.7% (peak 6.75%) above an argument of ~8. Added via `request.node.add_marker` so the case still runs and reports XPASS if the kernel tightens; `strict=False`, matching the INT32_MIN shift xfail convention | `507e229` |
 
-**Result:** `test_sfpu_unary.py` on Wormhole — **5108 passed, 334 skipped, 6 xfailed**.
+**Result of 0a–0g:** `test_sfpu_unary.py` on Wormhole — **5108 passed, 334 skipped, 6 xfailed**.
 31 ops gained their negative branch, piecewise knees and saturation tails; 31 previously
 dead registry entries became live.
 
@@ -118,20 +118,33 @@ for the same three-way fallout each time: *golden* correctness at the new values
 correctness in the new regime, and *genuine* kernel accuracy limits that were simply never
 measured. Revision 1 gave this one line (§7 "golden readiness"); it is closer to half the work.
 
-### What Phase 0 did *not* do (carried forward)
+### 3.1 Done (on `ldjurovic/sfpu_edge_cases_1`)
 
-- **`ALL_MATHOPS` / `DOMAIN_MATHOPS` are still two disjoint lists** (31 + 63). Both drivers
-  now read the registry, so `test_eltwise_unary_sfpu_domain` is largely redundant with
-  `test_eltwise_unary_sfpu_float` — but the merge revision 1 promised (and the net-negative
-  line count it promised with it) has not happened. The two still differ on format coverage
-  (domain driver is Float16_b + Float32 only) and on the fast/approx-mode product, so the
-  merge is a real refactor, not a list concatenation.
-- **Verification is Wormhole-only.** Every number above is a WH measurement. Blackhole is
-  unrun, and BH is exactly where the recalibrated `exp`/`reciprocal` bounds and the Bfp8_b
-  compare are most likely to land differently.
-- **Quasar is untouched.** `quasar/test_eltwise_unary_sfpu_quasar.py` mirrors registry specs
-  inline in comments rather than importing them, so the recalibrated bounds did not reach it.
-- **Nothing outside unary moved** — that is Phase 1.
+0a–0g above. Five commits, ~150 lines, all verified on **Wormhole**.
+
+### 3.2 ⬜ Left to do in Phase 0
+
+Phase 0 is **not closeable** on the branch as it stands. Three items remain, and the first
+two are blockers for declaring the phase done rather than nice-to-haves:
+
+| | Item | Why it is still Phase 0, not a follow-up | Est. |
+|---|---|---|---|
+| **0h** | **Verify on Blackhole.** Every number in §3 is a Wormhole measurement. Run `test_sfpu_unary.py` on BH and triage. | 0f recalibrated `exp`/`exp2`/`reciprocal` against *measured WH error*, and 0e's Bfp8_b either-criterion compare is tuned to *measured WH approximation error*. Neither number is arch-independent. If BH needs different bounds, the registry entries become arch-sensitive — which changes the shape of 0f, not just its constants. Two of the branch's own commit messages already say verification was still running. | 1 run + triage |
+| **0i** | **Merge `ALL_MATHOPS` into `DOMAIN_MATHOPS`** and delete the split, collapsing `test_eltwise_unary_sfpu_float` and `test_eltwise_unary_sfpu_domain` into one driver. | This was the deliverable that made revision 1's Phase 0 *net-negative* code. Both drivers now read the same registry, so keeping two lists (31 + 63) and two nightly tests is pure duplication — and a new op added to the wrong list silently gets the wrong format coverage. Not a list concatenation: the two differ on formats (`_domain` is Float16_b + Float32 only) and on the fast/approx-mode product, so the merged driver has to keep both products without exploding the matrix. | ~1 day, real refactor |
+| **0j** | **Propagate the recalibrated domains to Quasar.** `quasar/test_eltwise_unary_sfpu_quasar.py` mirrors registry specs *inline in comments* ("mirrors sfpu_domains' Clamp spec") instead of importing them, so 0f's new `exp`/`exp2`/`reciprocal` bounds never reached it. | The mirror is already drifted as of this branch. Either import `for_op()` there or add a test that asserts the two agree — otherwise every later phase that touches a domain widens the drift silently. | ~half day |
+
+**Explicitly out of Phase 0** (so the boundary is unambiguous):
+
+- Rerouting binary / ternary / scalar onto the registry → **Phase 1** (§4). Phase 0 is
+  unary-only by definition.
+- Injecting boundary probes, IEEE specials or integer extremes → **Phases 2–4**. Phase 0
+  only widens the *random domain*; it lands *near* knees, never *on* them.
+- The approximate-`exp` accuracy bug itself. 0g records it as an xfail; whether the kernel
+  gets fixed is a kernel-side question tracked separately, and the xfail is `strict=False`
+  so a fix surfaces as XPASS.
+
+**Definition of done for Phase 0:** 0h green (or BH-specific bounds landed and justified),
+0i merged, 0j either imported or covered by an agreement assertion.
 
 ---
 
@@ -420,7 +433,10 @@ still untested: none of `welfords`, `dropout`, `quant`, `cumsum`, `reshuffle_row
 
 | Phase | What | New/changed LOC | Ops covered | Status |
 |-------|------|-----------------|-------------|--------|
-| 0 | Unary reroute + Bfp8_b golden/compare + domain recalibration + accuracy xfail | ~150 across 5 commits | 31 unary ops gain negative branch / knees / tails | ✅ done (WH) |
+| 0a–0g | Unary reroute + Bfp8_b golden/compare + domain recalibration + accuracy xfail | ~150 across 5 commits | 31 unary ops gain negative branch / knees / tails | ✅ done (WH only) |
+| **0h** | **Blackhole verification run + triage** (0f/0e constants are WH measurements) | 0 + fallout | same 31 | ⬜ **open — gates Phase 1** |
+| **0i** | **Merge `ALL_MATHOPS` into `DOMAIN_MATHOPS`**, collapse the two unary drivers into one | **net negative** | same 31, deduplicated | ⬜ **open** |
+| **0j** | **Propagate recalibrated domains to Quasar** (`quasar/…_quasar.py` mirrors them inline) | ~10 | Quasar unary | ⬜ **open** |
 | 1 | Reroute binary / ternary / scalar onto the registry; add ternary + scalar spec params | ~40 + fallout | 10 binary ops with dormant domains, all ternary, all scalar | ⬜ |
 | 2 | Edge metadata (`boundary_probes` + specials + `_OP_EDGE_POINTS`) | ~60 | all | ⬜ |
 | 3 | `edge_spec()` + `_build_edge_pair_src` generalization (no compare change needed) | ~40 | all | ⬜ |
@@ -437,9 +453,11 @@ that phases 1–5 no longer have to pay for.
 
 ## 11. Suggested sequencing
 
-1. ~~**Phase 0**~~ — landed on `ldjurovic/sfpu_edge_cases_1`. **Before building on it:** run it
-   on **Blackhole**, and decide whether the `ALL_MATHOPS`/`DOMAIN_MATHOPS` merge belongs to
-   this PR or a follow-up.
+1. **Finish Phase 0** — 0a–0g are on `ldjurovic/sfpu_edge_cases_1`; **0h (Blackhole run), 0i
+   (`ALL_MATHOPS`/`DOMAIN_MATHOPS` merge) and 0j (Quasar propagation) are open** — see §3.2.
+   0h in particular gates everything downstream: if BH needs different domain bounds, 0f's
+   constants become arch-sensitive and every later phase inherits that. Do not start Phase 1
+   before 0h has run.
 2. **Phase 1** next, not Phase 2. It is the same reroute on three more drivers, it converts 10
    dormant registry entries into coverage, and — critically — the ternary/scalar spec
    parameters it adds are a hard prerequisite for Phases 3–4. Expect Phase-0-shaped fallout.

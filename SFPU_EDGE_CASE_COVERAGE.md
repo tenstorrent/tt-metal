@@ -43,7 +43,7 @@ For every SFPU kernel/operation we list its plausible **edge cases** (domain bou
 
 | # | Systemic finding | Status | Where |
 |---|---|---|---|
-| 1 | Unary float sweep is positive-only (`ALL_MATHOPS`, no `spec_A`) | ✅ **fixed** — sweep now defaults to the op's registered signed domain, bounded by the narrowest format in the pipeline | branch `ldjurovic/sfpu_edge_cases_1`; plan §3 |
+| 1 | Unary float sweep is positive-only (`ALL_MATHOPS`, no `spec_A`) | ✅ **fixed** — sweep now defaults to the op's registered signed domain, bounded by the narrowest format in the pipeline. Phase 0 is **not closed**, though: Blackhole is unverified, the `ALL_MATHOPS`/`DOMAIN_MATHOPS` split is not yet merged away, and the Quasar mirror of these domains has drifted (plan §3.2) | branch `ldjurovic/sfpu_edge_cases_1`; plan §3 |
 | 2 | Binary / ternary / scalar suites never import `sfpu_domains.py` | ⬜ **open** — and now quantified: the registry holds **115 ops**, of which the two unary lists consume 94. The 21 leftovers include `SfpuElwadd/sub/mul/div/pow/rsub`, `SfpuXlogy` and all three shift ops: **registered domains, including their undefined-range holes, that no test reads** | plan §4 (Phase 1) |
 | 3 | IEEE specials injected for exactly one op family (`isinf`/`isnan`/…) | ⬜ **open** — plus a newly documented constraint: bf16→fp32 dest unpack **destroys `-inf`/`NaN`**, so specials cannot be swept over the full `formats × dest_acc` product ([test_sfpu_unary.py:568](tt_metal/tt-llk/tests/python_tests/test_sfpu_unary.py#L568)) | plan §7a |
 | 4 | Integer sign/extreme edges structurally excluded (`_get_integer_bounds` returns `min+1`) | ⬜ **open** — and worse than recorded: `StimuliSpec.custom` **silently clamps** `INT32_MIN` to `INT32_MIN+1` rather than erroring, so integer extremes must be delivered as a raw override tensor, not a spec | plan §6c |
@@ -77,7 +77,15 @@ passes ~8**, against a 5% rtol. Nothing had measured this before, because the sw
 noise and may be worth a look on the kernel side.
 
 **Post-fix state:** `test_sfpu_unary.py` on Wormhole — 5108 passed, 334 skipped, 6 xfailed.
-**Blackhole is unverified.**
+
+**Still open inside Phase 0** (plan §3.2): **Blackhole verification** — 0e's Bfp8_b
+either-criterion compare and 0f's recalibrated bounds are both tuned against *measured
+Wormhole error*, so neither is arch-independent; **the `ALL_MATHOPS` / `DOMAIN_MATHOPS`
+merge** — both drivers now read the same registry, so the two disjoint lists (31 + 63) and
+two nightly tests are duplication, and an op added to the wrong list silently gets the wrong
+format coverage; **Quasar propagation** — `quasar/test_eltwise_unary_sfpu_quasar.py` mirrors
+these domains inline in comments instead of importing them, so the recalibrated bounds never
+reached it.
 
 ### Gaps introduced or newly visible since the audit
 
