@@ -317,6 +317,28 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
                 flush=True,
             )
 
+    # Optional: run the i2v SigLIP image-encoder on device (HY_TT_SIGLIP=1). The 27-layer
+    # vision transformer runs on a spare 1x1 submesh (patch-embed + post-LN stay on host);
+    # the adapter PCC-self-checks vs the host encoder on first call (see tt/siglip_encoder.py,
+    # validated by tests/pcc/test_siglip.py at PCC ~0.995). Like on-device Qwen this needs a
+    # SPARE chip: at sp=8xtp=4 the DiT fills all 32 chips (no free submesh -> a co-resident
+    # carve deadlocks against the resident DiT), so we require the same spare-submesh signal
+    # the fixture exposes and otherwise fall back to host.
+    if _i2v and os.environ.get("HY_TT_SIGLIP", "0") == "1":
+        from models.demos.hf_eager.hunyuanvideo_1_5.tt import qwen_encoder as _qe
+        from models.demos.hf_eager.hunyuanvideo_1_5.tt import siglip_encoder as _se
+
+        _spare = _qe.HY_QWEN_SUBMESH
+        if _spare is not None and os.environ.get("HY_TT_QWEN", "0") != "1":
+            pipe.image_encoder = _se.TTSiglipImageEncoderAdapter(pipe.image_encoder, _spare)
+            print(f"[{label}] SigLIP image-encode: ON DEVICE (ttnn, spare submesh)", flush=True)
+        else:
+            print(
+                f"[{label}] HY_TT_SIGLIP: no spare chips at this mesh (DiT fills it / Qwen holds the "
+                f"submesh); SigLIP stays on host. Validated standalone via tests/pcc/test_siglip.py.",
+                flush=True,
+            )
+
     _prompt = os.environ.get("HY_PROMPT", "A cat walks on the grass, realistic")
     _neg = os.environ.get("HY_NEG_PROMPT") or None
     _pkw = {"negative_prompt": _neg} if _neg is not None else {}
