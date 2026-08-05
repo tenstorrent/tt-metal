@@ -121,6 +121,25 @@ struct BinaryStimulus {
     std::vector<uint32_t> packed_golden;
 };
 
+static std::vector<bfloat16> apply_col_broadcast_to_tiled_input(const std::vector<bfloat16>& input) {
+    constexpr size_t face_width = 16;
+    constexpr size_t face_size = face_width * face_width;
+    constexpr size_t faces_per_tile = 4;
+    constexpr size_t tile_size = faces_per_tile * face_size;
+    TT_FATAL(input.size() % tile_size == 0, "COL broadcast requires complete 32x32 tiles");
+
+    std::vector<bfloat16> broadcast_input(input.size());
+    for (size_t i = 0; i < input.size(); ++i) {
+        const size_t tile_base = (i / tile_size) * tile_size;
+        const size_t index_in_tile = i % tile_size;
+        const size_t face = index_in_tile / face_size;
+        const size_t row_in_face = (index_in_tile % face_size) / face_width;
+        const size_t left_face = face & ~size_t{1};
+        broadcast_input[i] = input[tile_base + left_face * face_size + row_in_face * face_width];
+    }
+    return broadcast_input;
+}
+
 static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& test_config, bool is_quasar) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     BinaryStimulus s;
@@ -137,12 +156,9 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
     auto input0 = unpack_vector<bfloat16, uint32_t>(s.packed_input0);
     auto input1 = unpack_vector<bfloat16, uint32_t>(s.packed_input1);
     auto input2 = unpack_vector<bfloat16, uint32_t>(s.packed_input2);
-    if (test_config.col_broadcast) {
-        std::fill(input0.begin(), input0.end(), bfloat16(0.5f));
-        s.packed_input0 = pack_vector<uint32_t, bfloat16>(input0);
-    }
+    const auto golden_input0 = test_config.col_broadcast ? apply_col_broadcast_to_tiled_input(input0) : input0;
 
-    std::vector<float> temp_golden(input0.size());
+    std::vector<float> temp_golden(golden_input0.size());
     uint16_t srca_fid_mask = 0xFFFF;
     uint16_t srcb_fid_mask = 0xFFFF;
     if (!is_quasar) {
@@ -150,8 +166,8 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
     }
 
     std::transform(
-        input0.begin(),
-        input0.end(),
+        golden_input0.begin(),
+        golden_input0.end(),
         input1.begin(),
         temp_golden.begin(),
         [&](const bfloat16& lhs, const bfloat16& rhs) {
@@ -174,7 +190,7 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
             TT_THROW("Unsupported binary_op={}", test_config.binary_op);
         });
 
-    std::vector<bfloat16> golden(input0.size());
+    std::vector<bfloat16> golden(golden_input0.size());
     std::transform(
         input2.begin(), input2.end(), temp_golden.begin(), golden.begin(), [&](const bfloat16& lhs, const float& rhs) {
             if (test_config.acc_to_dest || test_config.binary_op == "add_with_dest_reuse") {
