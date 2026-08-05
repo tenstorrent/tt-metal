@@ -23,6 +23,7 @@ namespace dfb {
 enum AccessPattern : uint8_t {
     STRIDED,
     ALL,
+    BLOCKED,
     UNKNOWN,
 };
 
@@ -177,7 +178,7 @@ constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_SELF_PROG = (1u << 4);
 constexpr uint8_t DFB_HART_FLAG_TRISC_MASK   = 0x0Fu;  // bits 3:0 = tensix_trisc_mask (which TRISC(s) run DFB ops)
 
-// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 28B header, followed by
+// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 32B header, followed by
 // uint8_t packed_tile_counter[num_tcs] padded to the next 4B boundary.
 // This keeps base_addr and limit for the same slot adjacent (8B apart, same cache line).
 // Total TC section = num_tcs*9B rounded up to 4B.
@@ -188,14 +189,14 @@ struct dfb_blob_tc_pair_t {
 static_assert(sizeof(dfb_blob_tc_pair_t) == 8, "dfb_blob_tc_pair_t must be 8B");
 
 // Per-(hart, DFB) init entry in this hart's sequential blob.
-// Fixed 28B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
+// Fixed 32B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
 // uint8_t packed_tile_counter[num_tcs] padded to 4B.
-// Total entry size = 28 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
+// Total entry size = 32 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
 struct dfb_hart_init_entry_t {
     uint8_t  logical_dfb_id;
     uint8_t  num_tcs;
     uint8_t  flags;                          // DFB_HART_FLAG_* bits above; bits3:0 = tensix_trisc_mask
-    uint8_t _reserved0;                      // kept zeroed for 28B layout stability
+    uint8_t _reserved0;                      // kept zeroed for layout stability
     uint32_t entry_size;                     // raw bytes; device applies >> cb_addr_shift
     // Host precomputes the ready-to-copy stride_size per hart type:
     //   DM harts:    stride_size_precomp = entry_size_raw * stride_in_entries  (raw bytes)
@@ -214,13 +215,16 @@ struct dfb_hart_init_entry_t {
                                              // reclaims this byte for remapper_pair_index.
     uint16_t num_entries;                    // bytes 24-25; ring entry count (main update_size path)
     uint16_t capacity;  // bytes 26-27; producer: TC capacity; consumer: 0
+    uint8_t  dm_block_size;                  // byte 28: DM BLOCKED block size (>=1; 1 when the ring is
+                                             // not BLOCKED). TRISC unused.
+    uint8_t  _pad3[3];                       // bytes 29-31: pad header to 32B → 4B-aligned TC arrays follow
 } __attribute__((packed));
-static_assert(sizeof(dfb_hart_init_entry_t) == 28, "dfb_hart_init_entry_t must be 28B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
 static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");
 static_assert(offsetof(dfb_hart_init_entry_t, num_entries) == 24, "num_entries must stay at bytes 24-25");
 
 // DM only: bytes [12,24) of the init entry header mirror LocalDFBInterface bytes [8,20)
-// (num_tcs_to_rr through _tc_align_pad). Host writes this 12B span in DTCM order; device
+// (num_tcs_to_rr through block_size). Host writes this 12B span in DTCM order; device
 // unpacks w3–w5 in dfb_unpack_entry_header_dm and stores via dfb_write_dm_iface_scalars_from_hdr.
 // Byte 13 carries producer_signal_bit for init decode (device sets tc_idx=0 after scalar write).
 constexpr uint32_t DFB_INIT_ENTRY_DM_SCALAR_PACK_BYTE_OFF = 12u;
@@ -390,7 +394,7 @@ inline uint32_t dm0_isr_blob_byte_size(uint32_t producer_txn_id_mask, uint32_t c
 static_assert(sizeof(dfb_global_header_t) == 96, "dfb_global_header_t size changed — check field alignment");
 static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
-static_assert(sizeof(dfb_hart_init_entry_t) == 28, "dfb_hart_init_entry_t must be 28B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
 
 namespace dfb {
 

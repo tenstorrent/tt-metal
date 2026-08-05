@@ -133,14 +133,17 @@ struct KernelSpec {
         // for multi-threaded kernels; at num_threads == 1 all patterns are equivalent.)
         //   STRIDED: a kernel thread accesses every N-th entry (where N = num_threads)
         //   ALL:     each kernel thread accesses every DFB entry
-        //   BLOCKED: a kernel thread accesses blocks of N entries, in strides of N blocks
-        //            (NOT YET SUPPORTED — currently rejected at runtime)
+        //   BLOCKED: a kernel thread accesses a contiguous block of block_size entries, then
+        //            strides by block_size * num_threads to its next block
         enum class AccessPattern { STRIDED, ALL, BLOCKED };
 
         DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
         std::string accessor_name;   // DFB accessor name (used in the kernel source code)
         EndpointType endpoint_type;  // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
+        uint32_t block_size = 0;   // number of DFB entries per block
+                                   // only meaningful when access_pattern == BLOCKED;
+                                   // set to 0 otherwise.
     };
     Group<DFBBinding> dfb_bindings;
 
@@ -252,6 +255,19 @@ inline DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string accessor_nam
         .access_pattern = DFBAccessPattern::STRIDED};
 }
 
+// Creates a DFB producer binding with a BLOCKED access pattern.
+// block_size is the number of contiguous entries a thread accesses before striding
+// by block_size * num_threads; it must be > 0.
+inline DFBBinding BlockedProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name, uint32_t block_size) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .access_pattern = DFBAccessPattern::BLOCKED,
+        .block_size = block_size,
+    };
+}
+
 // Creates a DFB consumer binding (with a default-STRIDED access pattern)
 // Use this for single-threaded kernels, where the access pattern doesn't matter.
 // For multi-threaded kernels (Quasar), prefer the explicit access pattern
@@ -286,17 +302,17 @@ inline DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_
     };
 }
 
-// Creates a DFB consumer binding with a BLOCKED access pattern
-// Uncomment when BLOCKED support is added (currently TT_FATALs)
-/*
-inline DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+// Creates a DFB consumer binding with a BLOCKED access pattern.
+// block_size is the number of contiguous entries a thread accesses before striding
+// by block_size * num_threads; it must be > 0.
+inline DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name, uint32_t block_size) {
     return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
         .endpoint_type = DFBEndpointType::CONSUMER,
         .access_pattern = DFBAccessPattern::BLOCKED,
+        .block_size = block_size,
     };
 }
-*/
 
 }  // namespace tt::tt_metal::experimental
