@@ -131,6 +131,28 @@ _PATTERNS = [f"{_SUBFOLDER}/*"]
 FUSED_IMAGE = (448, 448)
 KEYFRAME_IMAGE = (1344, 768)
 
+# `MINIMAX_H3_RUN_REF=0` skips the golden: no reference forward, no comparison, just our
+# implementation, asserting only shapes and finiteness. Default is on, so a plain `pytest` run is a
+# parity test exactly as before.
+#
+# It is NOT a speed-up worth reaching for. Measured: the fused case runs 136.9s with the golden and
+# 134.2s without, and the tower case 18.6s against 17.3s. The reference forward is memory-bandwidth
+# bound at roughly 2s; what dominates is `load_torch_state_dict` pushing ~32B of weights onto the mesh,
+# which happens either way because our encoder takes its weights and config from the checkpoint.
+#
+# What it is for: exercising the device path when the golden is unavailable or untrusted (a different
+# transformers version, say), keeping the CPU forward out of a `python -m tracy` capture, and
+# smoke-testing plumbing changes. A green run under it proves nothing about accuracy, and in particular
+# says nothing about the fused shortfall documented above.
+RUN_REF = os.environ.get("MINIMAX_H3_RUN_REF", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def _no_golden(label, *tensors):
+    """Checks available without a reference: real shapes out, no NaN or Inf."""
+    for name, t in tensors:
+        assert torch.isfinite(t).all(), f"{label} {name} contains NaN or Inf"
+        logger.info(f"  no golden (MINIMAX_H3_RUN_REF=0); {name} {tuple(t.shape)} mean |x| {t.abs().mean():.4f}")
+
 
 def _test_image(size, seed: int = 0):
     """A deterministically textured image.
@@ -225,24 +247,38 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
     vc = reference.visual.config
     assert vc.hidden_size // vc.num_heads == 72, "the padding path is not being exercised"
 
-    with torch.no_grad():
-        ref_out = reference.visual(pixel_values, grid_thw=grid, return_dict=True)
-    assert len(ref_out.deepstack_features) == len(vc.deepstack_visual_indexes)
+    ref_out = None
+    if RUN_REF:
+        with torch.no_grad():
+            ref_out = reference.visual(pixel_values, grid_thw=grid, return_dict=True)
+        assert len(ref_out.deepstack_features) == len(vc.deepstack_visual_indexes)
 
     tower = _tower(reference.visual, submesh)
+    print("Prepare Vision Rope")
     cos, sin = tower.prepare_rope(grid)
+    print("Tower Forward")
     tokens, deepstack = tower.forward(
         bf16_tensor(pixel_values.float(), device=submesh),
         pos_embeds=bf16_tensor(tower.prepare_pos_embeds(grid), device=submesh),
         rope=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
         cu_seqlens=vision_cu_seqlens(grid),
     )
+    print("Tower Done")
+    got_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])
+    got_deepstack = [tensor.to_torch(f, mesh_axes=[None, None]) for f in deepstack]
 
     logger.info(f"minimax-h3 vision tower [real] {size[0]}x{size[1]} grid={grid[0].tolist()}:")
-    assert_quality(ref_out.pooler_output.float(), tensor.to_torch(tokens, mesh_axes=[None, None]), pcc=0.99)
-    for i, (feature, golden) in enumerate(zip(deepstack, ref_out.deepstack_features)):
+    if not RUN_REF:
+        assert len(got_deepstack) == len(vc.deepstack_visual_indexes)
+        _no_golden(
+            "tower", ("merged tokens", got_tokens), *((f"deepstack {i}", f) for i, f in enumerate(got_deepstack))
+        )
+        return
+
+    assert_quality(ref_out.pooler_output.float(), got_tokens, pcc=0.99)
+    for i, (feature, golden) in enumerate(zip(got_deepstack, ref_out.deepstack_features)):
         logger.info(f"  deepstack {i} (vision layer {vc.deepstack_visual_indexes[i]}):")
-        assert_quality(golden.float(), tensor.to_torch(feature, mesh_axes=[None, None]), pcc=0.99)
+        assert_quality(golden.float(), feature, pcc=0.99)
 
 
 # `ref2va` presentations. Grids rather than image counts, because the interesting axis is how many
@@ -315,17 +351,22 @@ def test_vision_tower_ref2va_real_weights(conditioner, mesh_device, submesh_shap
     assert pixel_values.shape[0] == cu_seqlens[-1] == int((grid[:, 0] * grid[:, 1] * grid[:, 2]).sum())
     assert len(cu_seqlens) - 1 == int(grid[:, 0].sum()), "one block per frame"
 
-    with torch.no_grad():
-        ref_out = reference.visual(pixel_values, grid_thw=grid, return_dict=True)
+    ref_out = None
+    if RUN_REF:
+        with torch.no_grad():
+            ref_out = reference.visual(pixel_values, grid_thw=grid, return_dict=True)
 
     tower = _tower(reference.visual, submesh)
+    print("Prepare Vision Rope")
     cos, sin = tower.prepare_rope(grid)
+    print("Tower Forward")
     tokens, deepstack = tower.forward(
         bf16_tensor(pixel_values.float(), device=submesh),
         pos_embeds=bf16_tensor(tower.prepare_pos_embeds(grid), device=submesh),
         rope=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
         cu_seqlens=cu_seqlens,
     )
+    print("Tower Done")
 
     def rel(golden, actual):
         g, a = golden.float(), actual.float()[: golden.shape[0]]
@@ -337,6 +378,14 @@ def test_vision_tower_ref2va_real_weights(conditioner, mesh_device, submesh_shap
         f"tokens={int((grid[:, 0] * grid[:, 1] * grid[:, 2]).sum()) // merge**2}"
     )
     got_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])
+    if not RUN_REF:
+        _no_golden(
+            f"tower {preset}",
+            ("merged tokens", got_tokens),
+            *((f"deepstack {i}", tensor.to_torch(f, mesh_axes=[None, None])) for i, f in enumerate(deepstack)),
+        )
+        return
+
     logger.info(f"  merged tokens: mean relative error {rel(ref_out.pooler_output, got_tokens):.2f}%")
     assert_quality(ref_out.pooler_output.float(), got_tokens, pcc=0.99)
     for i, (feature, golden) in enumerate(zip(deepstack, ref_out.deepstack_features)):
@@ -396,33 +445,38 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
     seq_len = ids.shape[1]
 
     # --- golden: the reference runs its own tower and builds its own position ids ---
-    captured: dict[int, torch.Tensor] = {}
-    handle = reference.language_model.layers[TAP].register_forward_hook(
-        lambda m, i_, o: captured.__setitem__(TAP, (o[0] if isinstance(o, tuple) else o).detach())
-    )
-    with torch.no_grad():
-        reference(
-            input_ids=ids,
-            attention_mask=torch.ones_like(ids),
-            mm_token_type_ids=type_ids,
-            pixel_values=pixel_values,
-            image_grid_thw=grid,
-            use_cache=False,
-        )
-    handle.remove()
-    golden = captured[TAP].float()
     cfg = reference.language_model.config
-    assert golden.shape == (1, seq_len, cfg.hidden_size)
+    golden = None
+    if RUN_REF:
+        captured: dict[int, torch.Tensor] = {}
+        handle = reference.language_model.layers[TAP].register_forward_hook(
+            lambda m, i_, o: captured.__setitem__(TAP, (o[0] if isinstance(o, tuple) else o).detach())
+        )
+        with torch.no_grad():
+            reference(
+                input_ids=ids,
+                attention_mask=torch.ones_like(ids),
+                mm_token_type_ids=type_ids,
+                pixel_values=pixel_values,
+                image_grid_thw=grid,
+                use_cache=False,
+            )
+        handle.remove()
+        golden = captured[TAP].float()
+        assert golden.shape == (1, seq_len, cfg.hidden_size)
 
     # --- port ---
     tower = _tower(reference.visual, submesh)
+    print("Prepare Vision Rope")
     vis_cos, vis_sin = tower.prepare_rope(grid)
+    print("Tower Forward")
     merged, deepstack = tower.forward(
         bf16_tensor(pixel_values.float(), device=submesh),
         pos_embeds=bf16_tensor(tower.prepare_pos_embeds(grid), device=submesh),
         rope=(bf16_tensor(vis_cos, device=submesh), bf16_tensor(vis_sin, device=submesh)),
         cu_seqlens=vision_cu_seqlens(grid),
     )
+    print("Tower Done")
 
     rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
     head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
@@ -447,6 +501,7 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
 
     # A vision run makes the three M-RoPE axes diverge, so the interleaved layout is load-bearing here.
     assert rope_params.get("mrope_interleaved") is True, "this checkpoint is expected to be interleaved"
+    print("Create Rope Tensors")
     position_ids = mrope_position_ids(
         type_ids, image_grid_thw=grid, spatial_merge_size=reference.visual.config.spatial_merge_size
     )
@@ -463,6 +518,7 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
     runs = vision_token_runs(ids, image_pad)
     assert runs == [(len(label) + 1, num_image_tokens)], f"unexpected vision layout: {runs}"
 
+    print("Encoder Forward")
     out = encoder.forward(
         ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh),
         attention_mask=None,
@@ -471,6 +527,7 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
         vision_runs=runs,
         deepstack_embeds=deepstack,
     )[0]
+    print("Encoder Done")
     actual = tensor.to_torch(out, mesh_axes=[None, None, None])
 
     logger.info(
@@ -478,6 +535,9 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
         f"seq={seq_len} ({num_image_tokens} image tokens):"
     )
     assert actual.shape[-2:] == (seq_len, cfg.hidden_size)
+    if not RUN_REF:
+        _no_golden("fused fl2va", ("tap", actual))
+        return
     assert_quality(golden, actual, pcc=0.99)
 
 
@@ -562,32 +622,37 @@ def test_fused_conditioner_ref2va_real_weights(conditioner, mesh_device, submesh
     total_tokens = sum(per_ref_tokens)
 
     # --- golden ---
-    captured: dict[int, torch.Tensor] = {}
-    handle = reference.language_model.layers[TAP].register_forward_hook(
-        lambda m, i_, o: captured.__setitem__(TAP, (o[0] if isinstance(o, tuple) else o).detach())
-    )
-    with torch.no_grad():
-        reference(
-            input_ids=ids,
-            attention_mask=torch.ones_like(ids),
-            mm_token_type_ids=type_ids,
-            pixel_values=pixel_values,
-            image_grid_thw=grid,
-            use_cache=False,
-        )
-    handle.remove()
-    golden = captured[TAP].float()
     cfg = reference.language_model.config
+    golden = None
+    if RUN_REF:
+        captured: dict[int, torch.Tensor] = {}
+        handle = reference.language_model.layers[TAP].register_forward_hook(
+            lambda m, i_, o: captured.__setitem__(TAP, (o[0] if isinstance(o, tuple) else o).detach())
+        )
+        with torch.no_grad():
+            reference(
+                input_ids=ids,
+                attention_mask=torch.ones_like(ids),
+                mm_token_type_ids=type_ids,
+                pixel_values=pixel_values,
+                image_grid_thw=grid,
+                use_cache=False,
+            )
+        handle.remove()
+        golden = captured[TAP].float()
 
     # --- port ---
     tower = _tower(reference.visual, submesh)
+    print("Prepare Vision Rope")
     vis_cos, vis_sin = tower.prepare_rope(grid)
+    print("Tower Forward")
     merged, deepstack = tower.forward(
         bf16_tensor(pixel_values.float(), device=submesh),
         pos_embeds=bf16_tensor(tower.prepare_pos_embeds(grid), device=submesh),
         rope=(bf16_tensor(vis_cos, device=submesh), bf16_tensor(vis_sin, device=submesh)),
         cu_seqlens=vision_cu_seqlens(grid),
     )
+    print("Tower Done")
 
     rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
     head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
@@ -610,6 +675,7 @@ def test_fused_conditioner_ref2va_real_weights(conditioner, mesh_device, submesh
     )
     encoder.load_torch_state_dict(reference.language_model.state_dict())
 
+    print("Create Rope Tensors")
     position_ids = mrope_position_ids(type_ids, image_grid_thw=grid, spatial_merge_size=merge)
     cos, sin = create_rope_tensors(
         1,
@@ -627,6 +693,7 @@ def test_fused_conditioner_ref2va_real_weights(conditioner, mesh_device, submesh
     assert len(runs) == len(rows), "one run per reference"
     assert sum(length for _, length in runs) == total_tokens == merged.shape[-2]
 
+    print("Encoder Forward")
     out = encoder.forward(
         ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh),
         attention_mask=None,
@@ -635,6 +702,7 @@ def test_fused_conditioner_ref2va_real_weights(conditioner, mesh_device, submesh
         vision_runs=runs,
         deepstack_embeds=deepstack,
     )[0]
+    print("Encoder Done")
     actual = tensor.to_torch(out, mesh_axes=[None, None, None])
 
     vision_rows = torch.zeros(seq_len, dtype=torch.bool)
@@ -646,6 +714,10 @@ def test_fused_conditioner_ref2va_real_weights(conditioner, mesh_device, submesh
         f"minimax-h3 fused conditioner [real, ref2va] {preset}: grid={grid.tolist()} "
         f"seq={seq_len} runs={runs} tokens={total_tokens}"
     )
+    if not RUN_REF:
+        assert actual.shape[-2:] == (seq_len, cfg.hidden_size)
+        _no_golden(f"fused ref2va {preset}", ("tap", actual))
+        return
     logger.info(
         f"  mean relative error: all {rel(golden[0], actual[0][:seq_len]):.2f}%  "
         f"vision rows {rel(golden[0][vision_rows], actual[0][:seq_len][vision_rows]):.2f}%  "

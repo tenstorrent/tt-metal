@@ -54,6 +54,19 @@ _PATTERNS = [
     f"{_SUBFOLDER}/model.safetensors.index.json",
 ]
 
+# `MINIMAX_H3_RUN_REF=0` skips the golden: no reference forward, no comparison, just our
+# implementation, asserting only shapes and finiteness. Default is on, so a plain `pytest` run is a
+# parity test exactly as before.
+#
+# It is NOT a speed-up worth reaching for. The reference forward is memory-bandwidth bound at roughly
+# 2s; what dominates these tests is `load_torch_state_dict` pushing ~32B of weights onto the mesh, which
+# happens either way because our encoder takes its weights and config from the checkpoint.
+#
+# What it is for: exercising the device path when the golden is unavailable or untrusted (a different
+# transformers version, say), keeping the CPU forward out of a `python -m tracy` capture, and
+# smoke-testing plumbing changes. A green run under it proves nothing about accuracy.
+RUN_REF = os.environ.get("MINIMAX_H3_RUN_REF", "1").strip().lower() not in {"0", "false", "no"}
+
 
 def _conditioner_dir() -> str:
     """The directory holding the Qwen3-VL conditioner.
@@ -197,17 +210,21 @@ def test_minimax_h3_text_conditioner(
     # --- golden: the raw output of decoder layer TAP ---
     # A forward hook is used rather than `output_hidden_states=True` so what is captured is
     # unambiguously the layer output, with no final norm applied anywhere.
-    captured: dict[int, torch.Tensor] = {}
-    handle = lm.layers[TAP].register_forward_hook(
-        lambda m, i_, o: captured.__setitem__(TAP, (o[0] if isinstance(o, tuple) else o).detach())
-    )
-    with torch.no_grad():
-        out = lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
-    handle.remove()
-    golden = captured[TAP].float()
+    golden, out = None, None
+    if RUN_REF:
+        captured: dict[int, torch.Tensor] = {}
+        handle = lm.layers[TAP].register_forward_hook(
+            lambda m, i_, o: captured.__setitem__(TAP, (o[0] if isinstance(o, tuple) else o).detach())
+        )
+        with torch.no_grad():
+            out = lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
+        handle.remove()
+        golden = captured[TAP].float()
 
-    # MiniMax-H3 feeds this straight into `transformer.context_embedder`, whose `text_dim` is 5120.
-    assert golden.shape == (1, seq_len, cfg.hidden_size)
+        # MiniMax-H3 feeds this straight into `transformer.context_embedder`, whose `text_dim` is 5120.
+        assert golden.shape == (1, seq_len, cfg.hidden_size)
+    else:
+        logger.warning("MINIMAX_H3_RUN_REF=0: golden skipped, running our implementation only")
 
     enc = Qwen3VlTextEncoder(
         vocab_size=cfg.vocab_size,
@@ -232,18 +249,28 @@ def test_minimax_h3_text_conditioner(
     )
     enc.load_torch_state_dict(lm.state_dict())
 
+    print("Create Rope Tensors")
     cos, sin = create_rope_tensors(1, seq_len, None, head_dim, rope_theta, mrope_section)
     tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
+    print("Encoder Forward")
     tt_caps = enc.forward(
         tt_ids,
         attention_mask=None,
         pos_embeds=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
     )
+    print("Encoder Done")
 
     assert len(tt_caps) == 1, f"expected a single tap at layer {TAP}, got {len(tt_caps)}"
     actual = tensor.to_torch(tt_caps[0], mesh_axes=[None, None, None])
 
     logger.info(f"minimax-h3 conditioner TP={tp_factor} axis={tp_axis} layer {TAP} of {cfg.num_hidden_layers}:")
+    assert actual.shape[-2:] == (seq_len, cfg.hidden_size)
+    if not RUN_REF:
+        # No golden to compare against, so check only what can be checked without one.
+        assert torch.isfinite(actual).all(), "our output contains NaN or Inf"
+        logger.info(f"  no golden (MINIMAX_H3_RUN_REF=0); ours mean |x| {actual.abs().mean():.4f}")
+        return
+
     # The measured margin on the released weights is wide: PCC 99.9993%, RMSE/sigma 0.4%.
     assert_quality(golden, actual, pcc=0.99)
 
