@@ -207,13 +207,30 @@ def test_text_encoder_lora_fusion_pcc(mesh_device, te_lora_path):
     TtLoRAWeightsManager._load_lora_weights_te_compat(ref_pipeline, te_lora_path)
     ref_pipeline.fuse_lora(components=components, lora_scale=1.0)
 
+    reference_weights = {}
     for component in components:
         # After fuse_lora the reference pipeline keeps the PEFT wrapper attached,
         # so its state dict has ...base_layer.weight names plus lora_A/lora_B
         # adapter tensors. The TT pipeline fuses and unloads to plain weight
         # names, so normalize the reference keys to match before comparing.
         ref_sd = _get_lora_impacted_weights(getattr(ref_pipeline, component).state_dict())
+        reference_weights[component] = ref_sd
         fused_sd = getattr(tt_pipeline.torch_pipeline, component).state_dict()
         for name, ref_tensor in ref_sd.items():
             assert name in fused_sd, f"{component}: missing fused weight {name}"
             assert_with_pcc(ref_tensor, fused_sd[name], pcc=0.999)
+
+    # Idempotency: fusing again must be a no-op. The text-encoder fuse strips the torch
+    # adapters after merging, so there is no adapter left to detect a second merge — only
+    # the manager's own fused flag prevents the delta being applied twice. A regression
+    # here is silent, which is why it is asserted against the same reference weights.
+    tt_pipeline.fuse_lora(lora_scale=1.0)
+    assert (
+        tt_pipeline.get_lora_status()["text_encoder"] is True
+    ), "text-encoder LoRA lost its fused status after a repeat fuse_lora()"
+
+    for component in components:
+        refused_sd = getattr(tt_pipeline.torch_pipeline, component).state_dict()
+        for name, ref_tensor in reference_weights[component].items():
+            assert name in refused_sd, f"{component}: fused weight {name} vanished after a repeat fuse_lora()"
+            assert_with_pcc(ref_tensor, refused_sd[name], pcc=0.999)
