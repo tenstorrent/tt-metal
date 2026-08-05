@@ -181,6 +181,79 @@ def test_down_proj_prefill_progcfg_1d_matches_sweep_winner():
     assert interleaved_down_proj_prefill_config(2048, 2688, 5376) == (None, None, None)
 
 
+def test_o_proj_prefill_config_l1_in0_block_sharded_out(monkeypatch):
+    """31B attention o_proj @ TP=8 → 2d_8x8_bw4 + L1 block-sharded out + HiFi2.
+
+    M=128 K=1024 (num_local_heads*head_dim) N=5376 (hidden). The block-sharded
+    output needs 8 shard columns for Nt=168, so the program-config grid must be the
+    full ``prefill_grid_default()`` width — not the 7 columns ``_best_prefill_cols``
+    prefers — or the matmul TT_FATALs on a shard grid wider than its compute grid.
+    """
+    import ttnn
+    from models.demos.gemma4.tt import dram_sharded
+    from models.demos.gemma4.tt.dram_sharded import interleaved_o_proj_prefill_config, prefill_grid_default
+
+    monkeypatch.setattr(dram_sharded, "_OPROJ_TUNED", True)
+    prog, out_mc, ckc = interleaved_o_proj_prefill_config(128, 1024, 5376)
+    assert prog is not None
+    grid_x, grid_y = prefill_grid_default()
+    assert prog.compute_with_storage_grid_size.x == grid_x
+    assert prog.compute_with_storage_grid_size.y == grid_y
+    assert prog.in0_block_w == 4  # Kt=32 / 8 cols
+    assert prog.per_core_M == 1
+    assert prog.per_core_N == 21  # 168 N-tiles / 8 cols
+    assert ckc.math_fidelity == ttnn.MathFidelity.HiFi2
+
+    # Output is L1 block-sharded, one per_core_M x per_core_N block per core.
+    assert out_mc.is_sharded()
+    assert out_mc.buffer_type == ttnn.BufferType.L1
+    assert out_mc.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    assert tuple(out_mc.shard_spec.shape) == (32, 672)
+    box = out_mc.shard_spec.grid.bounding_box().grid_size()
+    assert (box.x, box.y) == (8, 4)  # 168 col-tiles / 8, 4 row-tiles / 4
+    assert box.x <= grid_x and box.y <= grid_y
+
+    # Decode (M<=32) and long context keep shipped auto.
+    assert interleaved_o_proj_prefill_config(32, 1024, 5376) == (None, None, None)
+    assert interleaved_o_proj_prefill_config(2048, 1024, 5376) == (None, None, None)
+
+
+def test_o_proj_tuned_path_is_opt_in(monkeypatch):
+    """Default is shipped auto: the interleave-back before CCL costs more than the
+    tuned matmul saves (test_o_proj_wired_config_vs_auto: 0.56x auto)."""
+    import os
+
+    from models.demos.gemma4.tt import dram_sharded
+
+    if os.environ.get("GEMMA4_OPROJ_TUNED", "0") == "0":
+        assert dram_sharded._OPROJ_TUNED is False
+    # Deliberately re-assert the disabled behavior even when the env opted in, so
+    # this test states the contract rather than the ambient environment.
+    monkeypatch.setattr(dram_sharded, "_OPROJ_TUNED", False)
+    assert dram_sharded.interleaved_o_proj_prefill_config(128, 1024, 5376) == (None, None, None)
+
+
+def test_o_proj_input_memcfg_prefers_l1_in_tuned_band(monkeypatch):
+    """concat_heads lands in L1 exactly when the tuned o_proj config will read it."""
+    import ttnn
+    from models.demos.gemma4.tt import dram_sharded
+    from models.demos.gemma4.tt.attention.operations import o_proj_input_memcfg
+
+    monkeypatch.setattr(dram_sharded, "_OPROJ_TUNED", True)
+    monkeypatch.delenv("GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES", raising=False)
+    # SDPA output [1, num_local_heads=4, seq, head_dim=256] → concat K=1024.
+    assert o_proj_input_memcfg(_FakeTensor([1, 4, 128, 256]), 5376) == ttnn.L1_MEMORY_CONFIG
+    # Decode-height and past-cutoff rows fall back to the caller's default.
+    assert o_proj_input_memcfg(_FakeTensor([1, 4, 32, 256]), 5376, ttnn.DRAM_MEMORY_CONFIG) == ttnn.DRAM_MEMORY_CONFIG
+    assert o_proj_input_memcfg(_FakeTensor([1, 4, 2048, 256]), 5376, ttnn.DRAM_MEMORY_CONFIG) == (
+        ttnn.DRAM_MEMORY_CONFIG
+    )
+    # Batched prefill counts B*S rows, not S.
+    assert o_proj_input_memcfg(_FakeTensor([8, 4, 512, 256]), 5376, ttnn.DRAM_MEMORY_CONFIG) == (
+        ttnn.DRAM_MEMORY_CONFIG
+    )
+
+
 def test_lm_head_decode_config_matches_sweep_winner():
     """31B decode lm_head @ TP=8 → 1d_c64_bw1 + L1 out + HiFi4 (test_lm_head_matmul_sweep)."""
     import ttnn
