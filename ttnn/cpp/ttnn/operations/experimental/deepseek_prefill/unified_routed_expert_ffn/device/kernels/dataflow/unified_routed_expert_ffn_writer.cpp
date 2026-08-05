@@ -117,7 +117,10 @@ void kernel_main() {
     constexpr bool down_k_tail_skip = get_compile_time_arg_val(24) != 0;
     // See the reader: under WEIGHTS_ND_SHARDED a whole K-row `up` slice is one
     // request. SHARD_GRID_N is the shard grid's N extent (= GRID_X).
-    constexpr uint32_t SHARD_GRID_N = get_compile_time_arg_val(25);
+    // ceil(N_tiles / per_core_N), not GRID_X; see the reader for the full rationale and
+    // why gate/up and down need separate extents.
+    constexpr uint32_t SHARD_GRID_N_GU = get_compile_time_arg_val(25);
+    constexpr uint32_t SHARD_GRID_N_D = get_compile_time_arg_val(33);
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     // Full compile-time M-subblock count of cb_out (the down matmul copies the
@@ -137,8 +140,9 @@ void kernel_main() {
     // out, then start (direct-write), then up (UP_SPLIT). The accessors are
     // constructed unconditionally; start_acc is used only when direct_write,
     // up_acc only when writer_split_up.
-    // 7 DOWN_SPLIT compile args (26..32) precede the accessor stream.
-    constexpr uint32_t out_accessor_offset = 33;
+    // 7 DOWN_SPLIT compile args (26..32) plus the down shard extent (33) precede the
+    // accessor stream.
+    constexpr uint32_t out_accessor_offset = 34;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -241,7 +245,7 @@ void kernel_main() {
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                             const uint32_t krow = kb * in0_block_w_gu + k;
                             const uint64_t src =
-                                up_acc.get_shard_noc_addr(krow * SHARD_GRID_N + my_nt_gu, 0, noc_up.get_noc_id());
+                                up_acc.get_shard_noc_addr(krow * SHARD_GRID_N_GU + my_nt_gu, 0, noc_up.get_noc_id());
                             noc_async_read(src, l1_w_up, up_slice_bytes, noc_up.get_noc_id());
                             l1_w_up += up_slice_bytes;
                         }
@@ -309,8 +313,8 @@ void kernel_main() {
                         for (uint32_t k = down_split_k; k < in0_block_w_d; ++k) {
                             const uint32_t krow = kb * in0_block_w_d + k;
                             if (krow < K_down_tiles) {
-                                const uint64_t src =
-                                    down_acc.get_shard_noc_addr(krow * SHARD_GRID_N + my_nt_d, 0, noc_up.get_noc_id());
+                                const uint64_t src = down_acc.get_shard_noc_addr(
+                                    krow * SHARD_GRID_N_D + my_nt_d, 0, noc_up.get_noc_id());
                                 noc_async_read(src, l1_w, down_slice_bytes, noc_up.get_noc_id());
                             } else if constexpr (!down_k_tail_skip) {
                                 volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);

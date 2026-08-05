@@ -1397,3 +1397,64 @@ entirely recovers (14a), and the fabric concern that retired UP_WRITER_MCAST sti
 shipping it: NoC-1 worker multicasts collide with fabric CCL ops, and the perf test runs without
 fabric so it would measure green regardless. Worth doing only if ~15 us at low ISL justifies
 carrying a fabric-unsafe path.
+
+## 17. FIXED: SHARD_GRID_N was GRID_X, not the real shard-grid extent
+
+### 17a. The bug
+
+The kernels address a DRAM ND-sharded weight tensor by forming the linear ROUND_ROBIN_1D
+shard id as `krow * SHARD_GRID_N + my_nt`, and `SHARD_GRID_N` was passed as `GRID_X` (11).
+The real extent is the number of shards along N, `ceil(N_tiles / per_core_N)`. Since
+`per_core_N = ceil(N_tiles / GRID_X)`, that round trip returns to GRID_X only when the
+division is tight.
+
+It is tight for every shipped shape — gate/up n=64 gives per_core_N=6, extent 11; down
+n=224 gives 21 and 11; glm's down n=192 gives 18 and 11 — which is why this never showed
+up. It is WRONG for **55 of the first 299 tile counts**. `krow=0` always works (the term
+vanishes), so the first K-row reads correctly and every later one reads a different
+shard, silently, with the id still in range.
+
+Only the ND-sharded path is affected; interleaved computes `row * N_tiles_full + col` and
+never consults the shard grid.
+
+### 17b. The fix
+
+Derive both extents host-side and pass them as separate compile-time args, because gate/up
+and down need different values in general (they coincide at 11 for the shipped models by
+arithmetic accident):
+
+```
+shard_grid_n_gu = ceil(N_gate_tiles_full / per_core_N_gu)
+shard_grid_n_d  = ceil(N_down_tiles_full / per_core_N_d)
+```
+
+Reader arg 31 becomes the gate/up extent, 32 the down extent (down_split_k moves to 33,
+`x_accessor_offset` 33 -> 34); writer arg 25 becomes the gate/up extent, 33 the down extent
+(`out_accessor_offset` 33 -> 34). Plus a `check_extent` TT_FATAL asserting each extent
+actually tiles N at its per_core_N, so a future mismatch is loud instead of silent. The
+pre-existing `check_shard_width` FATAL already guarantees the tensor's shard width equals
+per_core_N, so the derived extent is consistent with the tensor by construction.
+
+**Nothing about ISL is involved.** `GRID_X` is set once and never reassigned, and per_core_N
+depends only on the weight tensor's N-tile count. ISL only touches M (per_core_M, chunk
+count — the runtime-adaptive part); the shard grid lives entirely on N.
+
+### 17c. Proof it was a real wrong-answer bug
+
+New test `test_single_routed_expert_shard_extent.py` at emb=512 (16 tiles) / hidden=384
+(12 tiles), which mismatches on BOTH tensors: gate/up per_core_N=2 extent **6**, down
+per_core_N=2 extent **8**, neither 11.
+
+| build | w_interleaved | w_ndshard |
+|---|---|---|
+| extent forced to GRID_X (pre-fix) | PASS | **PCC -0.001229 / 0.000113** |
+| real extent (fixed) | PASS | **PCC 0.980913 / 0.980838** |
+
+Random output on the ND-shard path, correct on interleaved — exactly the predicted
+signature. The interleaved cases stay in the test as the control: a regression in the
+shard-id arithmetic must fail ND-shard while interleaved still passes.
+
+Method note: the control initially "passed" because `mv` restores a file with its ORIGINAL
+mtime, so ninja skipped recompiling and the test ran against the previous binary. Identical
+PCC to six decimals plus a 2.1s vs 5.6s runtime gave it away. `touch` the file after any
+`mv`-based restore, and treat a suspiciously fast run as evidence of a stale build.

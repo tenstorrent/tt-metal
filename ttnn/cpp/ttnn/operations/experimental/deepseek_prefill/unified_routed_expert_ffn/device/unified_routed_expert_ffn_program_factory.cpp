@@ -163,6 +163,17 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
 
     const uint32_t per_core_N_gu = (N_gate_tiles_full + GRID_X - 1) / GRID_X;
     const uint32_t per_core_N_d = (N_down_tiles_full + GRID_X - 1) / GRID_X;
+    // Shard-grid N extent: how many per_core_N-wide slices tile N, i.e. the number of
+    // shards per K-row. The kernels form the linear ROUND_ROBIN_1D shard id as
+    // `krow * extent + my_nt`, so this MUST be the real extent and NOT GRID_X. Because
+    // per_core_N = ceil(N / GRID_X), the round trip ceil(N / per_core_N) returns to
+    // GRID_X only when that division is tight: it is 11 for every shipped shape, but
+    // e.g. N = 12 tiles gives per_core_N = 2 and extent = 6, where GRID_X = 11 would
+    // index the WRONG shard on every K-row after the first — silently, since the id
+    // stays in range. gate/up and down need SEPARATE extents in general (they coincide
+    // at 11 for the shipped models only by arithmetic accident).
+    const uint32_t shard_grid_n_gu = (N_gate_tiles_full + per_core_N_gu - 1) / per_core_N_gu;
+    const uint32_t shard_grid_n_d = (N_down_tiles_full + per_core_N_d - 1) / per_core_N_d;
     const uint32_t N_gate_tiles_padded = per_core_N_gu * GRID_X;
     const uint32_t K_down_tiles_padded = N_gate_tiles_padded;  // down K = gate N
 
@@ -426,6 +437,21 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         check_shard_width(t.gate_proj, per_core_N_gu, "gate_proj");
         check_shard_width(t.up_proj, per_core_N_gu, "up_proj");
         check_shard_width(t.down_proj, per_core_N_d, "down_proj");
+        // The kernels index shards as `krow * extent + my_nt`, so the extent must cover
+        // N exactly: every core's slice must be reachable and no phantom column may be
+        // addressable. This also documents that extent == GRID_X is a coincidence of the
+        // shipped dims, not an invariant — the kernels are told the real extent.
+        const auto check_extent = [](uint32_t extent, uint32_t n_tiles, uint32_t per_core_n, const char* name) {
+            TT_FATAL(
+                extent * per_core_n >= n_tiles && (extent - 1) * per_core_n < n_tiles,
+                "{}: shard-grid N extent {} does not tile N ({} tiles) at per_core_N {}",
+                name,
+                extent,
+                n_tiles,
+                per_core_n);
+        };
+        check_extent(shard_grid_n_gu, N_gate_tiles_full, per_core_N_gu, "gate_proj/up_proj");
+        check_extent(shard_grid_n_d, N_down_tiles_full, per_core_N_d, "down_proj");
     }
 
     auto* x_buffer = t.x.buffer();
@@ -726,7 +752,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // sharded specialisation, and `if constexpr` in a non-template context still
         // type-checks the discarded branch, so the interleaved build would fail to
         // compile. A define removes the branch from the translation unit outright.
-        GRID_X,
+        shard_grid_n_gu,
+        shard_grid_n_d,
         // DOWN_SPLIT: K-rows of each down block the READER reads; the writer reads
         // [down_split_k, in0_block_w_d) on NoC 1. Equals in0_block_w_d when the
         // split is off, so the reader keeps every row.
@@ -811,7 +838,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // the writer's `up` read can skip zero-filling them. Must match the
         // reader's identically-derived constexpr.
         static_cast<uint32_t>((K_down_tiles_padded - K_down_tiles) < in0_block_w_d),  // 24 down_k_tail_skip
-        GRID_X,                                                                       // 25
+        shard_grid_n_gu,                                                              // 25
         // DOWN_SPLIT down-weight read: the writer reads the UPPER K-rows of each
         // down block on NoC 1 while the reader reads the lower rows on NoC 0.
         // Measured: the down read is ~30 us of a 146 us isl-128 op and was the
@@ -824,6 +851,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         d_in1_block_num_tiles,                    // 30
         down_split_k,                             // 31 rows the READER keeps
         static_cast<uint32_t>(kEnableSplitDown),  // 32 writer_split_down
+        shard_grid_n_d,                           // 33 down shard-grid N extent
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start (direct-write), then up (UP_SPLIT), then down (DOWN_SPLIT).
