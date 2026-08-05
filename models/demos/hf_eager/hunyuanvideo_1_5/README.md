@@ -148,13 +148,25 @@ a single tile.
 | 32-chip, sp=4, tile-sharded VAE | 2:49 | ~2:00 | 5:59 |
 | **32-chip, sp=8×tp=4, + persist-RS + SDPA-cfg** | 1:51 | ~2:00 | **5:09** ✅ |
 
-**sp=8×tp=4 with tile-sharded VAE is the fastest full-video config: 5:13 e2e (3.6× vs the
-~19 min 8-chip baseline).** The denoise is **attention-bound at 121f** (seq ~49k), and
-sequence-parallel directly divides the O(seq²) attention — so rebalancing sp=4→8 (tp=8→4,
-`HY_MESH=8,4`) cut per-step denoise **3.24→2.15 s/it (−34%)**, dropping denoise 2:49→1:55.
-Verified lossless: PCC(sp4, sp8) = 0.9971 on a matched forward (bf16 reduction-order noise
-only). Both DiT and VAE weights stay resident; output is crisp and coherent. *(sp=2×tp=16
-and any tp=16 are geometrically impossible on the 8×4 Galaxy — no 16-wide axis.)*
+**sp=8×tp=4 + tile-sharded VAE is the fastest full-video config: 5:09 e2e (3.7× vs the
+~19 min 8-chip baseline).** The denoise is **attention/CCL-bound at 121f** (seq ~49k), a
+different regime than the dispatch-bound `device_ms` fusion work above — so it took
+different levers, applied in order:
+
+1. **sp=8×tp=4 rebalance** (`HY_MESH=8,4`, native (8,4) Galaxy orientation, tp=4 divides
+   16 heads). Sequence-parallel divides the O(seq²) attention directly, so doubling SP
+   cut per-step denoise **3.24 → 2.15 s/it** (−34%), e2e 5:59 → 5:13. Zero code.
+2. **Two block levers** (`_stubs/hunyuan_video15_transformer_block.py`): the row-parallel
+   **reduce-scatter uses its persistent ping-pong buffer** in the bf16 fast path (skips the
+   barrier-semaphore overhead on the 4 all-reduces/block), and **SDPA gets its own compute
+   config with `fp32_dest_acc_en=False`** (the fp32 dest-accum halved SFPU/packer throughput
+   in the softmax core). → **2.02 s/it**, e2e 5:13 → 5:09.
+
+Net denoise **2:49 → 1:51 (−34%)**, e2e 5:59 → 5:09. Quality-preserving throughout —
+frame-PCC on matched forwards ≥ 0.99 (sp8-vs-sp4 0.9971; + block levers 0.9938), output
+crisp. Both DiT and VAE weights stay resident. *(sp=2×tp=16 and any tp=16 are
+geometrically impossible on the 8×4 Galaxy — no 16-wide axis; and CCL Ring/num_links>2
+need a torus fabric the FABRIC_1D config doesn't provide.)*
 
 At 121 frames the VAE tiles must be **128 px, not 192 px** — the high frame count (T=31)
 makes each tile's decode ~8× larger and 192 px fragments DRAM; 128 px fits with margin and
