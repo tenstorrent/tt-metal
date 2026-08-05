@@ -45,7 +45,7 @@ import ttnn
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
 from models.demos.gemma4.tt.moe import MoEBlock
-from models.demos.gemma4.tt.rms_norm import RMSNorm
+from models.demos.gemma4.tt.rms_norm import RMSNorm, decode_width_shard_memcfg
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
@@ -234,6 +234,38 @@ class Gemma4DecoderLayer:
         Returns:
             hidden_states: [1, 1, seq_len, hidden_size] on device
         """
+        # Decode: keep the residual stream width-sharded in L1 across the layer.
+        #
+        # The stream is [1,1,32,hidden] (344 KB at hidden=5376), and every norm
+        # width-shards it, normalizes, and unshards again. Holding it sharded end
+        # to end drops 2 InterleavedToSharded (input_layernorm,
+        # pre_feedforward_layernorm -- their inputs arrive sharded) and 2
+        # ShardedToInterleaved (post_attention_layernorm,
+        # post_feedforward_layernorm -- their consumers are the residual adds),
+        # and lets both adds run sharded: 11.0 -> 6.4 us each, bit-exact
+        # (ops_list/tools/sweeps/l1_stream.py).
+        #
+        # The two norms whose consumer is a MATMUL keep their S2I. A sharded
+        # matmul in0 is faster but NOT bit-exact (measured maxabs=12.0 -- it
+        # changes the blocking), and that is exactly the class of change that
+        # corrupted generation once already.
+        #
+        # Excluded, for the same reason, from models that feed the stream itself
+        # into a matmul:
+        #   * MoE -- self.moe(residual_for_router, ...) puts the raw stream into
+        #     the router matmul.
+        #   * per-layer input embeddings (E2B/E4B) -- ttnn.linear(hidden_states,
+        #     per_layer_input_gate) below does the same.
+        # Dense models without PLI (31B, 12B) get the full win.
+        stream_memcfg = None
+        if is_decode and not self.enable_moe_block and not self.hidden_size_per_layer_input:
+            stream_memcfg = decode_width_shard_memcfg(self.mesh_device, hidden_states.shape[-1])
+            if stream_memcfg is not None and not hidden_states.is_sharded():
+                # Layer 0 only: the embedding output arrives interleaved. Later
+                # layers receive the previous layer's already-sharded output.
+                hidden_states = ttnn.to_memory_config(hidden_states, stream_memcfg)
+        shard_stream = stream_memcfg is not None and hidden_states.is_sharded()
+
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         residual = hidden_states
         normed = self.input_layernorm.forward(hidden_states)
@@ -266,12 +298,12 @@ class Gemma4DecoderLayer:
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
         else:
-            attn_output = self.post_attention_layernorm.forward(attn_output)
+            attn_output = self.post_attention_layernorm.forward(attn_output, return_sharded=shard_stream)
             if not is_decode and batch_size > 1:
                 residual = ttnn.reshape(
                     residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
                 )
-            hidden_states = ttnn.add(residual, attn_output)
+            hidden_states = ttnn.add(residual, attn_output, memory_config=stream_memcfg if shard_stream else None)
             residual.deallocate(True)
             attn_output.deallocate(True)
 
@@ -307,8 +339,8 @@ class Gemma4DecoderLayer:
             hidden_states = mlp_output
 
         # post_feedforward_layernorm -> residual add
-        hidden_states = self.post_feedforward_layernorm.forward(hidden_states)
-        combined = ttnn.add(residual, hidden_states)
+        hidden_states = self.post_feedforward_layernorm.forward(hidden_states, return_sharded=shard_stream)
+        combined = ttnn.add(residual, hidden_states, memory_config=stream_memcfg if shard_stream else None)
         residual.deallocate(True)
         hidden_states.deallocate(True)
 

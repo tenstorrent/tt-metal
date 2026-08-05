@@ -161,14 +161,23 @@ class RMSNorm(nn.Module):
         )
         return (input_memcfg, program_config)
 
-    def _forward_sharded(self, x, already_sharded=False):
-        """Width-sharded RMSNorm: [I2S ->] sharded rms_norm -> S2I.
+    def _forward_sharded(self, x, already_sharded=False, return_sharded=False):
+        """Width-sharded RMSNorm: [I2S ->] sharded rms_norm [-> S2I].
 
         ``already_sharded`` means the producer handed us this exact layout (see
         :func:`decode_width_shard_spec`), so the interleaved->sharded reshard is
-        skipped. The norm itself is unchanged, so the result is bit-identical --
-        verified with ``torch.equal`` in ops_list/tools/sweeps/l1_stream.py
-        (17.7 -> 10.8 us for the norm + its reshards)."""
+        skipped. ``return_sharded`` means the CONSUMER wants that layout too, so
+        the trailing sharded->interleaved is skipped as well.
+
+        The norm itself is identical in all four combinations -- only the reshards
+        around it change -- so every variant is bit-exact. Verified with
+        ``torch.equal`` in ops_list/tools/sweeps/l1_stream.py (17.7 -> 10.8 us for
+        the norm plus its reshards).
+
+        Callers must only pass ``return_sharded=True`` when the consumer really
+        does accept a width-sharded L1 tensor. A MATMUL does not: handing one a
+        sharded in0 changes its blocking and measured maxabs=12.0 vs the
+        interleaved result, so the norms feeding QKV / MLP keep their S2I."""
         if already_sharded:
             x_sh = x
         else:
@@ -181,11 +190,16 @@ class RMSNorm(nn.Module):
         )
         if not already_sharded:
             x_sh.deallocate(True)
+        if return_sharded:
+            return out
         out_interleaved = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         out.deallocate(True)
         return out_interleaved
 
-    def forward(self, x):
+    def forward(self, x, return_sharded=False):
+        """``return_sharded=True`` asks for the output left width-sharded in L1,
+        which only the width-sharded fast path can honour; every other path
+        ignores it and returns interleaved as before. See ``_forward_sharded``."""
         if self.is_distributed:
             activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
             shard_height, shard_width = x.memory_config().shard_spec.shape
@@ -248,9 +262,9 @@ class RMSNorm(nn.Module):
                     # too large for the L1-gather path and always take I2S here.
                     if x.is_sharded():
                         if padded_height <= ttnn.TILE_SIZE and x.memory_config() == self._sharded_cfg[0]:
-                            return self._forward_sharded(x, already_sharded=True)
+                            return self._forward_sharded(x, already_sharded=True, return_sharded=return_sharded)
                     else:
-                        return self._forward_sharded(x)
+                        return self._forward_sharded(x, return_sharded=return_sharded)
 
             if self.with_scale:
                 tt_output = ttnn.rms_norm(
