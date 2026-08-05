@@ -21,6 +21,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -75,7 +76,6 @@ def generate_unpack_tilize_combinations(
     """
     combinations = []
 
-    perf_dimensions = [32, 32]
     dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
 
     for fmt in formats_list:
@@ -103,17 +103,23 @@ def generate_unpack_tilize_combinations(
                 continue
             for dest_acc in dest_acc_modes:
                 for dest_sync in dest_sync_modes:
-                    for unpacker_sel in (UnpackerEngine.UnpA,):
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                dest_sync,
-                                unpacker_sel,
-                                runtime(perf_dimensions),
-                                runtime((32, 32)),
+                    for unpacker_sel in unpacker_engines:
+                        if (
+                            dest_acc == DestAccumulation.Yes
+                            and unpacker_sel == UnpackerEngine.UnpB
+                        ):
+                            continue
+                        for dimensions in generate_perf_input_dimensions(dest_acc):
+                            combinations.append(
+                                (
+                                    fmt,
+                                    dest_acc,
+                                    dest_sync,
+                                    unpacker_sel,
+                                    runtime(dimensions),
+                                    runtime((32, 32)),
+                                )
                             )
-                        )
             continue
 
         for dest_acc in dest_acc_modes:

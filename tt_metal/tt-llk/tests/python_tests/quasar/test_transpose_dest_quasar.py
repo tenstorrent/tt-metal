@@ -23,6 +23,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -105,10 +106,7 @@ def generate_qsr_transpose_dest_combinations(
     }
 
     dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-    transpose_faces_modes = (
-        (Transpose.No,) if is_perf else (Transpose.No, Transpose.Yes)
-    )
-    perf_dimensions = [32, 32]
+    transpose_faces_modes = (Transpose.No, Transpose.Yes)
 
     combinations = []
     for fmt in formats_list:
@@ -122,15 +120,16 @@ def generate_qsr_transpose_dest_combinations(
                 for dest_sync in dest_sync_modes:
                     for math_transpose_faces in transpose_faces_modes:
                         if is_perf:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    math_transpose_faces,
-                                    runtime(perf_dimensions),
+                            for dimensions in generate_perf_input_dimensions(dest_acc):
+                                combinations.append(
+                                    (
+                                        fmt,
+                                        dest_acc,
+                                        dest_sync,
+                                        math_transpose_faces,
+                                        runtime(dimensions),
+                                    )
                                 )
-                            )
                             continue
                         for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
                             combinations.append(
@@ -144,14 +143,6 @@ def generate_qsr_transpose_dest_combinations(
                             )
 
     return combinations
-
-
-def transpose_dest_implied_math_formats(*, is_perf=False):
-    return (
-        [ImpliedMathFormat.Yes]
-        if is_perf
-        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-    )
 
 
 TRANSPOSE_DEST_FORMATS = input_output_formats(
@@ -178,7 +169,7 @@ PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
     formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
         TRANSPOSE_DEST_FORMATS
     ),
-    implied_math_format=lambda: transpose_dest_implied_math_formats(is_perf=False),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
