@@ -38,13 +38,26 @@ from ....utils.test import ring_params_req_exact_devices
 
 # The production working point, identical to the correctness gate's.
 HEIGHT, WIDTH = 768, 1344
-NUM_FRAMES = 124
 NUM_INFERENCE_STEPS = 50
 SEED = 0
 
+# Frame counts for the three target durations at 24 fps, under the model's 17n+5 alignment rule:
+# `align_num_frames(round(duration * MINIMAX_H3_FPS))` gives 124 / 243 / 362, i.e. n = 7 / 14 / 21.
+# 124 is the original single working point and stays the default-looking first case.
+DURATIONS = [
+    pytest.param(124, id="5s"),
+    pytest.param(243, id="10s"),
+    pytest.param(362, id="15s"),
+]
+
+# Dialogue-heavy on purpose: t2va generates a soundtrack, so a prompt with a spoken line exercises the
+# audio path rather than leaving it to ambience.
 PROMPT = (
-    "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "
-    "The low sun throws long blue shadows behind it, and loose snow lifts from each footfall."
+    "Jerry, George, Elaine and Kramer are crowded into a red vinyl booth at a bright New York diner, "
+    "coffee cups and menus on the table. George leans in and says, 'These video generation models can "
+    "conjure a whole city out of nothing, and they still can't count fingers. The machine watched every "
+    "movie ever made and concluded people have, what, nine? Eleven on a good day?' Elaine laughs into "
+    "her coffee, Jerry shrugs with both palms up, and Kramer bursts through the door behind them."
 )
 
 WEIGHTS_ENV = "MINIMAX_H3_DIFFUSERS_DIR"
@@ -64,8 +77,9 @@ MESH_4X8 = [
 
 
 @pytest.mark.timeout(7200)
+@pytest.mark.parametrize("num_frames", DURATIONS)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
-def test_t2va_warm_latency(mesh_device, reset_seeds):
+def test_t2va_warm_latency(mesh_device, reset_seeds, num_frames):
     base = os.environ.get(WEIGHTS_ENV, DEFAULT_WEIGHTS)
     missing = [p for p in ("transformer", "text_encoder", "vae", "audio_vae") if not os.path.isdir(f"{base}/{p}")]
     if missing:
@@ -80,11 +94,11 @@ def test_t2va_warm_latency(mesh_device, reset_seeds):
 
     # Warm every program and buffer this shape touches. Not timed: this is the warm-window method,
     # not the measurement.
-    pipeline.warmup(num_frames=NUM_FRAMES, height=HEIGHT, width=WIDTH, num_inference_steps=NUM_INFERENCE_STEPS)
+    pipeline.warmup(num_frames=num_frames, height=HEIGHT, width=WIDTH, num_inference_steps=NUM_INFERENCE_STEPS)
 
     output = pipeline(
         PROMPT,
-        num_frames=NUM_FRAMES,
+        num_frames=num_frames,
         height=HEIGHT,
         width=WIDTH,
         num_inference_steps=NUM_INFERENCE_STEPS,
@@ -94,7 +108,7 @@ def test_t2va_warm_latency(mesh_device, reset_seeds):
     rows = pipeline.last_timings
     total = sum(seconds for _, seconds in rows)
     num_forwards = NUM_INFERENCE_STEPS - 1
-    aligned_frames = align_num_frames(NUM_FRAMES)
+    aligned_frames = align_num_frames(num_frames)
 
     logger.info(
         f"MEASUREMENT t2va fully warm | mesh 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, 2 links "

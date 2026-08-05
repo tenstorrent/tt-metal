@@ -379,6 +379,16 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
 
     run_vbench = os.environ.get("RUN_VBENCH", "1") in ("1", "true", "True")
     run_clip = os.environ.get("RUN_CLIP", "1") in ("1", "true", "True")
+
+    # `MINIMAX_H3_PROMPT` overrides the gated prompt for a manual showcase run, which is where the
+    # constant's own note says a showcase prompt belongs. The tier-6 thresholds are calibrated
+    # *against that constant*, so an override forces CLIP and VBench off rather than reporting a
+    # failure that says nothing about the model -- `imaging_quality` alone has swung 0.6896 -> 0.4884
+    # between two correct-looking scenes. Tiers 4 and 5 are prompt-independent and still run.
+    prompt = os.environ.get("MINIMAX_H3_PROMPT") or PROMPT
+    if prompt is not PROMPT:
+        logger.info("MINIMAX_H3_PROMPT override in use; disabling the prompt-calibrated tier-6 gates")
+        run_vbench = run_clip = False
     # A missing dependency must report SKIPPED, never a silent pass: a quality gate that no-ops
     # reads green, which is worse than not having it. VBench is checked as an *interpreter* rather
     # than an import, because it deliberately does not live in this environment (see `_run_vbench`);
@@ -388,7 +398,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
 
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir)
     output = pipeline(
-        PROMPT,
+        prompt,
         num_frames=NUM_FRAMES,
         height=HEIGHT,
         width=WIDTH,
@@ -462,7 +472,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
 
     # ---- tier 6: generative quality ----
     if run_clip:
-        alignment = _clip_prompt_alignment(frames, PROMPT)
+        alignment = _clip_prompt_alignment(frames, prompt)
         logger.info(
             f"CLIP prompt alignment: mean={alignment['mean']:.2f} "
             f"min={alignment['min']:.2f} max={alignment['max']:.2f} (bar {CLIP_THRESHOLD})"
@@ -475,7 +485,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
 
     if run_vbench:
         assert "mp4" in paths, "RUN_VBENCH=1 needs the muxed mp4, which ffmpeg did not produce"
-        scores = _run_vbench(paths["mp4"], PROMPT, VBENCH_THRESHOLDS.keys())
+        scores = _run_vbench(paths["mp4"], prompt, VBENCH_THRESHOLDS.keys())
         for dimension, bar in VBENCH_THRESHOLDS.items():
             # A requested dimension with no returned score is an *ungated* dimension, not a pass.
             assert dimension in scores, f"VBench returned no score for {dimension}"

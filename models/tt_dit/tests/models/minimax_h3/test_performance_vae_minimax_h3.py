@@ -57,9 +57,21 @@ HOP_LENGTH = 800
 WORK_UNITS = {
     "768P_5s": {"tiles": 28, "encode_clips": 8, "decode_chunks": 7},
     "768P_10s": {"tiles": 28, "encode_clips": 15, "decode_chunks": 14},
+    "768P_15s": {"tiles": 28, "encode_clips": 22, "decode_chunks": 21},
     "1440P_5s": {"tiles": 104, "encode_clips": 8, "decode_chunks": 7},
     "1440P_10s": {"tiles": 104, "encode_clips": 15, "decode_chunks": 14},
+    "1440P_15s": {"tiles": 104, "encode_clips": 22, "decode_chunks": 21},
 }
+# 15 s is 362 frames (107 latent) -> n=21 under the 17n+5 -> 5n+2 rule, so 22 encode clips and 21 decode
+# chunks. Cross-checked against the reference helpers rather than derived by hand:
+# `align_num_frames(round(dur * MINIMAX_H3_FPS))` gives 124 / 243 / 362 frames for 5 / 10 / 15 s, i.e.
+# n = 7 / 14 / 21, which reproduces the 5 s and 10 s rows above.
+
+# The audio VAE runs at sampling_rate / hop_length = 32000 / 800 = 40 latent frames per second. The 5 s
+# baseline below predates this and uses 207 frames rather than the exact 200, so durations scale that
+# constant instead of recomputing it -- keeping the 5 s number comparable to the recorded baseline.
+AUDIO_LATENT_FRAMES_5S = 207
+AUDIO_DURATIONS_S = (5.0, 10.0, 15.0)
 
 # Seconds per invocation. Generous: a regression bar, not a tuned target.
 EXPECTED_METRICS = {
@@ -322,6 +334,57 @@ def test_audio_baselines_and_roundtrip(mesh_device):
     logger.info(f"ROUNDTRIP audio PSNR: {psnr:.2f} dB")
     assert psnr >= 20.0, f"audio roundtrip PSNR {psnr:.2f} dB < 20 dB"
     _report(measurements)
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
+def test_audio_decoder_durations(mesh_device):
+    """End-to-end audio decode time at 5 / 10 / 15 s.
+
+    Separate from ``test_audio_baselines_and_roundtrip`` on purpose: that gate pays for a CPU
+    reference encode->decode to check quality, which is not worth repeating per duration. The
+    decoder takes ``(B, latent_channels, T)``, so latents can be synthesised directly at each
+    length -- no encode needed, and timing does not depend on the values.
+
+    Unlike the *visual* decoder there is no tiling here: the audio decoder consumes the whole
+    clip in one call, so these are measured end-to-end times rather than a per-unit time to be
+    multiplied. Stereo is carried as batch 2, matching the roundtrip gate.
+    """
+    from loguru import logger
+
+    weights_dir = _weights_dir("audio_vae")
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+    config = _config(weights_dir)
+    torch.manual_seed(3)
+
+    decoder = MiniMaxH3AudioDecoder(
+        latent_channels=config["latent_channels"],
+        latent_dim=config["latent_dim"],
+        decoder_dim=config["decoder_dim"],
+        decoder_rates=tuple(config["decoder_rates"]),
+        decoder_kernel_sizes=tuple(config["decoder_kernel_sizes"]),
+        resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
+        resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
+        mesh_device=mesh_device,
+    )
+    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
+    from diffusers import AutoencoderKLMiniMaxH3Audio
+    from safetensors.torch import load_file
+
+    reference = AutoencoderKLMiniMaxH3Audio(**config).eval()
+    reference.load_state_dict(load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors")))
+    decoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
+
+    for duration in AUDIO_DURATIONS_S:
+        frames = int(round(AUDIO_LATENT_FRAMES_5S * duration / 5.0))
+        latents = torch.randn(2, config["latent_channels"], frames) * 0.1
+        seconds = _time_it(lambda: decoder(latents), iterations=1, mesh_device=mesh_device)
+        samples = frames * HOP_LENGTH
+        logger.info(
+            f"PERF audio_decode_{duration:.0f}s: {seconds:.3f} s  "
+            f"({frames} latent frames -> {samples} samples, {samples / config['sampling_rate']:.2f} s audio, "
+            f"{samples / config['sampling_rate'] / seconds:.2f}x realtime)"
+        )
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
