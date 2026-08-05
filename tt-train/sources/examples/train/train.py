@@ -121,7 +121,7 @@ class TrainingConfig(BaseTrainingConfig):
 
         # 0 = no epoch cap; max_steps controls the run. (A real epoch is one pass over the
         # corpus's tokens; the epoch bound scales by that, not by overlapping window count.)
-        self.num_epochs = int(tc.get("num_epochs", 0))
+        self.num_epochs = self.epochs = int(tc.get("num_epochs", 0))
         # Legacy field name kept alive for callers that still read it.
         self.model_save_interval = self.save_every
 
@@ -826,7 +826,7 @@ def main() -> None:
     if args.max_steps is not None:
         training_cfg.max_steps = args.max_steps
     if args.epochs is not None:
-        training_cfg.num_epochs = args.epochs
+        training_cfg.num_epochs = training_cfg.epochs = args.epochs
     if args.max_grad_norm is not None:
         training_cfg.use_clip_grad_norm = True
         training_cfg.clip_grad_norm_max_norm = args.max_grad_norm
