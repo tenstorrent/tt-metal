@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
 from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator as Generator
 from models.demos.utils.device_sku import get_current_device_sku_name
@@ -70,7 +71,7 @@ def create_tt_model(
     dummy_weights: bool = False,
     enable_program_trace: bool = False,
 ):
-    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
+    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs, is_gemma3_host_weight
     from models.tt_transformers.tt.model import Transformer
 
     tt_model_args = ModelArgs(
@@ -116,9 +117,25 @@ def create_tt_model(
                 # Turn off fp32_dest_acc_en to not trigger L1 OOM
                 tt_model_args._force_sdpa_prefill_hifi4_fp16()
 
-    # Avoid loading state_dict for every DP model
-    if not state_dict:
-        state_dict = tt_model_args.load_state_dict()
+    # Warm ttnn cache => skip the HF from_pretrained host load and build from .tensorbin. Text and
+    # vision share one cache dir and gemma3's load_state_dict returns the full multimodal dict, so
+    # both paths use the shared hybrid helper with the SAME host-weight set (the text Transformer
+    # consumes none of the 5 vision host keys, but they must be captured to the sidecar for the
+    # vision path). None=decide, placeholder=skip/DP-reuse, populated=reuse. (#45400 follow-up)
+    cache_dir = tt_model_args.weight_cache_path(dtype)
+    cache_identity = dict(
+        model_name=tt_model_args.model_name,
+        n_layers=tt_model_args.n_layers,
+        mesh_shape=tuple(tt_model_args.mesh_device.shape),
+    )
+    loaded_real_weights = False
+    if state_dict is None:
+        if not tt_model_args.dummy_weights and weight_cache_is_complete(cache_dir, **cache_identity):
+            logger.info("Warm ttnn weight cache detected -- building state_dict from cache (no HF load).")
+            state_dict = build_cached_state_dict(cache_dir)
+        else:
+            state_dict = tt_model_args.load_state_dict()
+            loaded_real_weights = bool(state_dict) and not tt_model_args.dummy_weights
 
     model = Transformer(
         args=tt_model_args,
@@ -130,6 +147,9 @@ def create_tt_model(
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
+
+    if loaded_real_weights and num_layers is None:
+        mark_weight_cache_complete(cache_dir, state_dict, is_host_weight=is_gemma3_host_weight, **cache_identity)
 
     return tt_model_args, model, tt_kv_cache, state_dict
 
