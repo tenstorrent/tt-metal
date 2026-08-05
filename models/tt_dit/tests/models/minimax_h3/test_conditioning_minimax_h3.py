@@ -20,7 +20,12 @@ import torch
 from PIL import Image
 
 from ....pipelines.minimax_h3 import conditioning as c
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_KEYFRAME_NOISE_AUG, patchify_video_latents
+from ....pipelines.minimax_h3.packing import (
+    MINIMAX_H3_KEYFRAME_NOISE_AUG,
+    build_packed_sequence,
+    patchify_video_latents,
+)
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import draw_request_latents
 from ....pipelines.minimax_h3.scheduler import MiniMaxH3Scheduler
 
 LATENT_CHANNELS = 24
@@ -196,3 +201,107 @@ def test_noise_augmentation_has_no_second_implementation():
 
 def test_noise_aug_level_is_the_released_default():
     assert MINIMAX_H3_KEYFRAME_NOISE_AUG == 0.999
+
+
+# ---------------------------------------------------------------------------
+# The pipeline's request-draw order, at the production working point
+# ---------------------------------------------------------------------------
+
+# 1344x768 / 124 frames: 37 latent frames over a 48x84 latent grid, 207 audio latents. The same shape
+# every fl2va and t2va gate runs at, so a t2va bit-identity claim here is about the shape that ships.
+PROD_LATENT_FRAMES = 37
+PROD_LATENT_H, PROD_LATENT_W = 48, 84
+PROD_AUDIO_LATENTS = 207
+PROD_AUDIO_CHANNELS = 32
+PROD_ROWS_PER_FRAME = (PROD_LATENT_H // 2) * (PROD_LATENT_W // 2)  # 1008
+
+
+def _draw(num_keyframes: int, seed: int = 0):
+    return draw_request_latents(
+        torch.Generator().manual_seed(seed),
+        condition_latent_shapes=((1, PROD_LATENT_H, PROD_LATENT_W),) * num_keyframes,
+        latent_channels=LATENT_CHANNELS,
+        num_latent_frames=PROD_LATENT_FRAMES,
+        latent_height=PROD_LATENT_H,
+        latent_width=PROD_LATENT_W,
+        num_audio_latents=PROD_AUDIO_LATENTS,
+        audio_latent_channels=PROD_AUDIO_CHANNELS,
+        patch_size=PATCH,
+    )
+
+
+def test_t2va_draws_are_unchanged_by_the_keyframe_argument():
+    """With no keyframes, `draw_request_latents` reproduces the pre-fl2va t2va stream bit-for-bit.
+
+    This is the t2va no-regression proof and it costs no device time. The pipeline used to draw video
+    then audio inline off one generator; adding a conditioning draw ahead of them would shift both
+    streams, so the empty case must consume the generator exactly as before.
+    """
+    condition_noise, video_rows, audio_rows = _draw(0)
+    assert condition_noise is None, "t2va must draw no conditioning noise at all"
+
+    # Exactly what the pipeline did before `draw_request_latents` existed.
+    generator = torch.Generator().manual_seed(0)
+    expected_video = patchify_video_latents(
+        torch.randn(
+            (1, LATENT_CHANNELS, PROD_LATENT_FRAMES, PROD_LATENT_H, PROD_LATENT_W),
+            generator=generator,
+            dtype=torch.float32,
+        ),
+        PATCH,
+    )
+    expected_audio = torch.randn(
+        (PROD_AUDIO_LATENTS * 2, PROD_AUDIO_CHANNELS), generator=generator, dtype=torch.float32
+    )
+
+    assert torch.equal(video_rows, expected_video), "t2va video draw moved"
+    assert torch.equal(audio_rows, expected_audio), "t2va audio draw moved"
+
+
+@pytest.mark.parametrize("num_keyframes", [1, 2], ids=["first", "first_and_last"])
+def test_conditioning_noise_is_drawn_before_video_and_audio(num_keyframes):
+    """The conditioning noise is the first draw, and it displaces everything behind it.
+
+    Two claims, because only the pair pins the order. The conditioning noise must equal what a fresh
+    generator produces first (so nothing is drawn ahead of it), and the video and audio rows must
+    *differ* from the no-keyframe case (so it really was consumed from the same stream).
+    """
+    condition_noise, video_rows, audio_rows = _draw(num_keyframes)
+    _, t2va_video, t2va_audio = _draw(0)
+
+    assert condition_noise is not None
+    assert condition_noise.shape == (num_keyframes * PROD_ROWS_PER_FRAME, LATENT_CHANNELS * PATCH[1] * PATCH[2])
+    expected_noise = c.keyframe_condition_noise(
+        ((1, PROD_LATENT_H, PROD_LATENT_W),) * num_keyframes,
+        LATENT_CHANNELS,
+        PATCH,
+        torch.Generator().manual_seed(0),
+    )
+    assert torch.equal(condition_noise, expected_noise), "conditioning noise is not the first draw"
+
+    # fl2va at a given seed does NOT reproduce t2va at that seed. Expected, and asserted so nobody
+    # reads it as a regression later.
+    assert not torch.equal(video_rows, t2va_video), "the conditioning draw did not advance the stream"
+    assert not torch.equal(audio_rows, t2va_audio)
+
+
+def test_keyframe_rows_per_anchor_match_the_layout():
+    """One anchor contributes exactly `rows_per_frame` conditioning rows, and the layout agrees.
+
+    The pipeline raises if these disagree; this pins the arithmetic on both sides at the production
+    canvas so that check can never be the first place a mismatch is noticed.
+    """
+    text_tags = torch.ones(39, dtype=torch.long)
+    for anchors in (("first",), ("last",), ("first", "last")):
+        layout = build_packed_sequence(
+            text_tags, PROD_LATENT_FRAMES, PROD_LATENT_H, PROD_LATENT_W, PROD_AUDIO_LATENTS, PATCH, anchors
+        )
+        assert layout.num_condition_video_rows == len(anchors) * PROD_ROWS_PER_FRAME
+        assert layout.num_condition_audio_rows == 0, "fl2va conditions video only; audio conditioning is ref2va"
+        # The conditioning rows are the LEADING entries of video_indices and contiguous right after
+        # the text rows -- which is what lets the pipeline prepend them and slice them off again.
+        expected = torch.arange(39, 39 + layout.num_condition_video_rows)
+        assert torch.equal(layout.video_indices[: layout.num_condition_video_rows], expected)
+
+        condition_noise, _, _ = _draw(len(anchors))
+        assert condition_noise.shape[0] == layout.num_condition_video_rows

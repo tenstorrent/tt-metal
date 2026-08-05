@@ -14,7 +14,6 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from .adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 
@@ -61,14 +60,12 @@ class MiniMaxH3AdaLayerNormOut(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         fsdp_mesh_axis: int | None = None,
-        precomputed_adaln: bool = False,
     ) -> None:
         super().__init__()
 
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
         self.hidden_local = hidden_size // self.tp_factor
-        self.precomputed_adaln = precomputed_adaln
 
         self.norm = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -78,18 +75,14 @@ class MiniMaxH3AdaLayerNormOut(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
         )
-        self.linear = (
-            None
-            if precomputed_adaln
-            else ColParallelLinear(
-                time_embed_dim,
-                NUM_OUT_MODULATION_PARAMS * hidden_size,
-                bias=True,
-                mesh_device=mesh_device,
-                mesh_axis=self.tp_mesh_axis,
-                fsdp_mesh_axis=fsdp_mesh_axis,
-                ccl_manager=ccl_manager,
-            )
+        self.linear = ColParallelLinear(
+            time_embed_dim,
+            NUM_OUT_MODULATION_PARAMS * hidden_size,
+            bias=True,
+            mesh_device=mesh_device,
+            mesh_axis=self.tp_mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -102,12 +95,6 @@ class MiniMaxH3AdaLayerNormOut(Module):
             t = t.permute(1, 0, 2, *range(3, t.ndim))
             return t.reshape(-1, *trailing)
 
-        if self.precomputed_adaln:
-            # Dropped on purpose; the host-built table replaces this projection.
-            state.pop("linear.weight", None)
-            state.pop("linear.bias", None)
-            return
-
         for key in ("weight", "bias"):
             value = state.get(f"linear.{key}")
             if value is None:
@@ -117,23 +104,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
             else:
                 state[f"linear.{key}"] = reorder(value)
 
-    def forward(
-        self,
-        hidden: ttnn.Tensor,
-        temb: ttnn.Tensor | None,
-        timestep_indices: ttnn.Tensor,
-        modulation_tables: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-    ) -> ttnn.Tensor:
-        if modulation_tables is not None:
-            # Precomputed tables already carry the `1 +` on scale, so this applies them directly.
-            shift_table, scale_table = modulation_tables
-
-            def gather_row(table: ttnn.Tensor) -> ttnn.Tensor:
-                return ttnn.unsqueeze(ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT), 0)
-
-            return ttnn.add(ttnn.mul(self.norm(hidden), gather_row(scale_table)), gather_row(shift_table))
-        if self.precomputed_adaln:
-            raise ValueError("norm_out was built with precomputed_adaln but forward got no modulation_tables")
+    def forward(self, hidden: ttnn.Tensor, temb: ttnn.Tensor, timestep_indices: ttnn.Tensor) -> ttnn.Tensor:
         activated = ttnn.silu(temb)
         if activated.dtype != ttnn.bfloat16:
             activated = ttnn.typecast(activated, ttnn.bfloat16)
@@ -167,9 +138,15 @@ class MiniMaxH3Transformer3DModel(Module):
     The reference builds the packed sequence with `index_copy` at caller-supplied row indices. A
     general scatter across an already-fractured sequence-parallel tensor would need cross-device
     movement, so the assembly happens *before* fracturing instead: each modality is projected while
-    replicated on SP, the three streams are concatenated into the full packed sequence in natural
-    order `[text | audio | video]`, the tail is zero-padded up to a multiple of `sp_factor * TILE`,
-    and `ttnn.mesh_partition` then fractures that global sequence across the SP axis.
+    replicated on SP, the streams are concatenated into the full packed sequence in natural order
+    `[text | condition | audio | target video]`, the tail is zero-padded up to a multiple of
+    `sp_factor * TILE`, and `ttnn.mesh_partition` then fractures that global sequence across the SP
+    axis.
+
+    The condition stream is the `fl2va` keyframe anchors and is absent for `t2va`, which passes
+    `condition_1BKC=None` and gets the three-stream `[text | audio | video]` assembly unchanged. Its
+    position between text and audio is not a choice: `packing.build_packed_sequence` puts the
+    conditioning rows there, and the caller's rope/AdaLN metadata is built in that layout's order.
 
     Because the sequence is assembled globally, the caller's per-row metadata (`rope_cos`, `rope_sin`,
     `adaln_indices`, `timestep_indices`) is simply built for the padded global sequence in that same
@@ -178,11 +155,12 @@ class MiniMaxH3Transformer3DModel(Module):
     back in its own order, matching what the reference returns.
 
     Per-modality row counts are unconstrained. A concat in `TILE_LAYOUT` can only cut on a tile
-    boundary, so when all three lengths are multiples of `TILE_SIZE` the assembly happens there
-    directly; otherwise the three streams are converted to ROW_MAJOR, concatenated at row
-    granularity, and the assembled sequence -- whose padded length *is* tile aligned -- is converted
-    back once. Production t2va needs the second path: at 1344x768 / 124 frames the video rows are
-    37296 (= 16 mod 32) and the audio rows 414 (= 30 mod 32).
+    boundary, so when every stream's length is a multiple of `TILE_SIZE` the assembly happens there
+    directly; otherwise the streams are converted to ROW_MAJOR, concatenated at row granularity, and
+    the assembled sequence -- whose padded length *is* tile aligned -- is converted back once.
+    Production t2va needs the second path: at 1344x768 / 124 frames the video rows are 37296
+    (= 16 mod 32) and the audio rows 414 (= 30 mod 32). So does fl2va, whose condition rows are
+    1008 per anchor (= 16 mod 32).
 
     Padding
     -------
@@ -231,14 +209,9 @@ class MiniMaxH3Transformer3DModel(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
-        # Off by default: the reference path builds and loads every AdaLN projection. When on, the
-        # caller must supply a `MiniMaxH3AdalnCache` per forward -- see `adaln_cache_minimax_h3` --
-        # and the 26 GB of `adaln_proj` weights (6.50 GB/device at TP=4) never reach the device.
-        precomputed_adaln: bool = False,
     ) -> None:
         super().__init__()
 
-        self.precomputed_adaln = precomputed_adaln
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
@@ -281,17 +254,11 @@ class MiniMaxH3Transformer3DModel(Module):
             dtype=ttnn.float32,
             mesh_device=mesh_device,
         )
-        # With precomputed AdaLN nothing consumes `temb`, so the embedder is neither built nor
-        # loaded; `time_proj` is kept because it is parameter-free and cheap to leave in place.
-        self.time_embedder = (
-            None
-            if precomputed_adaln
-            else MiniMaxH3TimestepEmbedding(
-                in_channels=freq_dim,
-                hidden_dim=time_embed_hidden_dim,
-                out_dim=time_embed_dim,
-                mesh_device=mesh_device,
-            )
+        self.time_embedder = MiniMaxH3TimestepEmbedding(
+            in_channels=freq_dim,
+            hidden_dim=time_embed_hidden_dim,
+            out_dim=time_embed_dim,
+            mesh_device=mesh_device,
         )
 
         # 3. Text stream refiner. It runs before the packed sequence is fractured, so its text stream
@@ -327,7 +294,6 @@ class MiniMaxH3Transformer3DModel(Module):
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
-                    precomputed_adaln=precomputed_adaln,
                 )
                 for _ in range(num_layers)
             ]
@@ -343,7 +309,6 @@ class MiniMaxH3Transformer3DModel(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             fsdp_mesh_axis=fsdp_mesh_axis,
-            precomputed_adaln=precomputed_adaln,
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
@@ -354,38 +319,44 @@ class MiniMaxH3Transformer3DModel(Module):
         video_1BVC: ttnn.Tensor,
         audio_1BAC: ttnn.Tensor,
         prompt_1BLP: ttnn.Tensor,
+        condition_1BKC: ttnn.Tensor | None = None,
         timestep: ttnn.Tensor,
         adaln_indices: ttnn.Tensor,
         timestep_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
-        adaln_cache: MiniMaxH3AdalnCache | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
-        video_1BVC: [1, 1, V, in_channels * prod(patch_size)], replicated on SP and TP
+        video_1BVC: [1, 1, V, in_channels * prod(patch_size)], replicated on SP and TP. The *target*
+            rows only --- fl2va's conditioning rows go in `condition_1BKC`, not prepended here.
         audio_1BAC: [1, 1, A, audio_in_channels], replicated on SP and TP
         prompt_1BLP: [1, 1, L, text_dim], replicated on SP and TP
+        condition_1BKC: [1, 1, K, in_channels * prod(patch_size)] or None. fl2va's noise-augmented
+            keyframe anchor rows, in packed order, same width as `video_1BVC`. `None` for t2va.
         timestep: [1, 1, num_timesteps, 1] float32, replicated. Unscaled, in [0, 1].
         adaln_indices: [1, 1, 1, S_padded_local] integers, `timestep_indices * 3 + token_tags`, built
-            for the padded global sequence `[text | audio | video | pad]` and sharded on SP
+            for the padded global sequence `[text | condition | audio | video | pad]` and sharded on SP
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
 
-        V, A and L are arbitrary; only their sum is padded, to a multiple of `sp_factor * TILE`. The
-        true packed length `L + A + V` is derived here, so the caller passes no lengths.
+        V, A, L and K are arbitrary; only their sum is padded, to a multiple of `sp_factor * TILE`. The
+        true packed length `L + K + A + V` is derived here, so the caller passes no lengths.
 
         Returns `(video_velocity, audio_velocity)`, each replicated, in that modality's row order.
+
+        `video_velocity` holds the **target rows only**, `V` of them, and deliberately not the
+        conditioning rows the reference's `video_indices` would also cover. The caller discards
+        conditioning-row velocity --- the loop re-imposes the anchors by only ever writing rows from
+        `num_condition_video_rows` on --- and the two blocks are not contiguous in the packed layout,
+        so returning both would cost a second slice plus a concat every step for a value nobody reads.
+        No detection power is lost: attention is full, so every target row attends to the conditioning
+        rows as keys and values and a wrong conditioning rope or AdaLN tag shows up in this output.
         """
         v_len = video_1BVC.shape[2]
         a_len = audio_1BAC.shape[2]
         l_len = prompt_1BLP.shape[2]
-        if (adaln_cache is not None) != self.precomputed_adaln:
-            raise ValueError(
-                "adaln_cache and precomputed_adaln must agree: "
-                f"cache={'given' if adaln_cache is not None else 'None'}, precomputed_adaln={self.precomputed_adaln}"
-            )
-
-        seq_len = l_len + a_len + v_len
+        c_len = 0 if condition_1BKC is None else condition_1BKC.shape[2]
+        seq_len = l_len + c_len + a_len + v_len
         tile = ttnn.TILE_SIZE
         # A tile-layout concat can only cut on a tile boundary, so it needs every modality's row
         # count to be a multiple of TILE. Production t2va satisfies none of that: at 1344x768 /
@@ -395,14 +366,21 @@ class MiniMaxH3Transformer3DModel(Module):
         # accepts any lengths. The tile path is kept for the aligned case rather than deleted:
         # it is strictly cheaper, and keeping it means this change cannot move a shape that
         # already worked.
-        tile_aligned = not (v_len % tile or a_len % tile or l_len % tile)
+        tile_aligned = not (v_len % tile or a_len % tile or l_len % tile or c_len % tile)
 
         # 1. Project each modality and refine the text stream, all still replicated on SP, then
         # assemble the full packed sequence in natural order.
         video_embeds = self.proj_in(video_1BVC)
         audio_embeds = self.audio_proj_in(audio_1BAC)
         text_embeds = self.token_refiner(self.context_embedder(prompt_1BLP))
-        streams = [text_embeds, audio_embeds, video_embeds]
+        streams = [text_embeds]
+        if condition_1BKC is not None:
+            # Same weight as the target rows: conditioning rows are video rows that happen to be
+            # pinned, and the reference projects them with the same `proj_in`. A per-row GEMM against a
+            # shared weight is row-independent, so projecting the two blocks separately is bit-identical
+            # to projecting them concatenated -- which is what lets them be placed apart here.
+            streams.append(self.proj_in(condition_1BKC))
+        streams += [audio_embeds, video_embeds]
 
         # 2. Zero-pad the tail up to a multiple of sp_factor * TILE, then fracture across SP.
         # Ring attention masks the pad rows via logical_n = seq_len, so no attention mask is
@@ -429,10 +407,8 @@ class MiniMaxH3Transformer3DModel(Module):
             hidden = ttnn.to_layout(hidden, ttnn.TILE_LAYOUT)
         hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        # 3. One timestep embedding per distinct noise level, shared by every AdaLN projection. With
-        # precomputed modulation there is nothing to project, so this is skipped entirely -- the
-        # tables already hold what every block would have computed for this step.
-        temb = None if self.precomputed_adaln else self.time_embedder(self.time_proj(timestep))
+        # 3. One timestep embedding per distinct noise level, shared by every AdaLN projection.
+        temb = self.time_embedder(self.time_proj(timestep))
 
         # 4. Integer index tensors for the two gathers. ttnn.embedding wants [batch, seq] uint32.
         def as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
@@ -443,7 +419,7 @@ class MiniMaxH3Transformer3DModel(Module):
         timestep_idx = as_indices(timestep_indices)
 
         # 5. The block stack. `logical_n` is the *true* length, so ring attention ignores the pad tail.
-        for layer, block in enumerate(self.transformer_blocks):
+        for block in self.transformer_blocks:
             hidden = block(
                 hidden,
                 N=seq_len,
@@ -451,18 +427,12 @@ class MiniMaxH3Transformer3DModel(Module):
                 adaln_indices=adaln_idx,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
-                modulation_tables=adaln_cache.block_tables(layer) if adaln_cache is not None else None,
             )
 
         # 6. Output norm, then the two heads. Both heads are narrow (96 and 32), so projecting while
         # still SP-fractured and gathering afterwards moves far less data than gathering the 5376-wide
         # packed sequence would.
-        hidden = self.norm_out(
-            hidden,
-            temb,
-            timestep_idx,
-            modulation_tables=adaln_cache.final_tables() if adaln_cache is not None else None,
-        )
+        hidden = self.norm_out(hidden, temb, timestep_idx)
         if self.tp_factor > 1:
             hidden = self.ccl_manager.all_gather_persistent_buffer(hidden, dim=3, mesh_axis=self.tp_mesh_axis)
 
@@ -474,6 +444,8 @@ class MiniMaxH3Transformer3DModel(Module):
 
         # 7. Select each modality's rows out of the reassembled global sequence. The reference runs both
         # heads over every row and selects afterwards, which is what this does.
-        video_out = ttnn.slice(video_all, [0, 0, l_len + a_len, 0], [1, 1, seq_len, video_all.shape[-1]])
-        audio_out = ttnn.slice(audio_all, [0, 0, l_len, 0], [1, 1, l_len + a_len, audio_all.shape[-1]])
+        audio_start = l_len + c_len
+        video_start = audio_start + a_len
+        video_out = ttnn.slice(video_all, [0, 0, video_start, 0], [1, 1, seq_len, video_all.shape[-1]])
+        audio_out = ttnn.slice(audio_all, [0, 0, audio_start, 0], [1, 1, video_start, audio_all.shape[-1]])
         return video_out, audio_out

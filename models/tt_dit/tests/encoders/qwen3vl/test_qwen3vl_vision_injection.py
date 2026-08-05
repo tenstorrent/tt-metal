@@ -279,21 +279,27 @@ def test_vision_scatter_only_touches_the_vision_rows(mesh_device, submesh_shape)
 # being measured at a toy hidden size.
 HIDDEN_REAL = 5120
 
-# `(seq, runs, id)` -- row geometries chosen for where they sit relative to TILE_SIZE = 32.
+# The two row geometries `fl2va` actually presents, and nothing else. A keyframe is put onto the target
+# canvas before the processor sees it, so 1344x768 -> grid [1, 48, 84] -> 1008 `<|image_pad|>` slots, and
+# the presentation is `"<Picture i>: "` (5 tokens) + the vision block + the prompt. One anchor is
+# seq 1054 with one run; `first`+`last` is seq 2067 with two.
 #
-# Every case above this point fits its runs INSIDE one tile row-block: SEQ is 64 and the runs are
-# (8,16), (0,8), (56,8), (4,8)+(20,12), none of which spans row 32. The reduced fused-conditioner test
-# is narrower still at seq_len 19 -- a single row-block. So the branch's whole green record for
-# `_scatter_rows` was collected without a run ever crossing a tile boundary, while the released-weights
-# case crosses 6 and production crosses 31.
+# Both cross tile boundaries -- 31 and 63 of them. Every case above this point fits its runs INSIDE one
+# 32-row tile block (SEQ 64 with (8,16), (0,8), (56,8), (4,8)+(20,12)), and the reduced
+# fused-conditioner test is a single block at seq_len 19, so the whole prior green record for
+# `_scatter_rows` was collected without the hazard ever being exercised.
 #
 # STATE.md amendment 75 is why this is worth its own gate rather than an assumption: TILE row
 # granularity is 32, an unaligned cut there *asserted* in the DiT's packed-sequence path, and the fix
 # was to assemble in ROW_MAJOR and convert once. `_scatter_rows` slices a TILE_LAYOUT tensor at
 # arbitrary row offsets, so it is the same hazard in a different module.
+#
+# The width is the real 5120 too. An earlier draft of this gate also carried a `seq=19` control and the
+# 448x448 released-weights geometry; both are invented shapes (448x448 is not a canvas
+# `resolve_canvas_size` produces) and were removed per the production-shapes-only rule. What the
+# control established during bringup is recorded in the `add` docstring below rather than re-run
+# forever.
 _TILE_RUNS = [
-    pytest.param(19, [(5, 6)], HIDDEN, id="reduced_control_one_tile"),
-    pytest.param(206, [(5, 196)], HIDDEN, id="released_448sq_crosses_6"),
     pytest.param(1054, [(5, 1008)], HIDDEN_REAL, id="production_keyframe_crosses_31"),
     pytest.param(2067, [(5, 1008), (1018, 1008)], HIDDEN_REAL, id="production_two_keyframes"),
 ]
@@ -315,9 +321,9 @@ def test_scatter_rows_is_exact_across_tile_boundaries(mesh_device, submesh_shape
     """
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     total = sum(length for _, length in runs)
-    assert (
-        all(start % ttnn.TILE_SIZE or length % ttnn.TILE_SIZE for start, length in runs) or seq == 19
-    ), "every production run should be unaligned on at least one end, or this gates nothing"
+    assert all(
+        start % ttnn.TILE_SIZE or length % ttnn.TILE_SIZE for start, length in runs
+    ), "every run should be unaligned on at least one end, or this gates nothing"
 
     torch.manual_seed(0)
     # Pre-rounded through bf16: the device holds exactly these values, so any difference on readback is
@@ -354,14 +360,13 @@ def test_scatter_rows_add_is_exact_across_tile_boundaries(mesh_device, submesh_s
     perturbing them.
 
     The written rows are compared at the bf16 floor instead, because they are not a data movement:
-    `ttnn.add` and torch do not round a bf16 sum identically. Measured here -- the `seq=19`
-    single-tile control disagrees just as much as the 2067-row production case (max abs 3.125e-2 on
-    values of magnitude ~4, i.e. exactly one bf16 ulp, on ~11 % of elements), which is what settles
-    that this is a rounding-mode difference and not a tile-boundary effect. Two earlier bars were both
-    wrong for the same reason and are recorded so nobody re-derives them: a 2**-8 relative tolerance
-    (that is *half* a bf16 ulp -- 7 stored mantissa bits put the spacing at 2**-7 relative), and
-    bit-exactness against a bf16-rounded golden (which assumes both sides round the same way). The
-    trap STATE.md amendment 76 names, twice.
+    `ttnn.add` and torch do not round a bf16 sum identically. Two earlier bars were both wrong for the
+    same reason and are recorded so nobody re-derives them: a 2**-8 relative tolerance (that is *half* a
+    bf16 ulp -- 7 stored mantissa bits put the spacing at 2**-7 relative), and bit-exactness against a
+    bf16-rounded golden (which assumes both sides round the same way). The trap STATE.md amendment 76
+    names, twice. What established it as a rounding-mode difference rather than a tile-boundary effect
+    was a single-tile `seq=19` control failing exactly as hard as the 2067-row case -- a tile-boundary
+    defect cannot do that. That control was a bringup diagnostic at an invented shape and is not kept.
 
     A ~50 % differing fraction is expected for a rounding-mode difference, so unlike the rope-table
     gate there is no bound on *how many* entries differ. The systematic-bias check below is what
