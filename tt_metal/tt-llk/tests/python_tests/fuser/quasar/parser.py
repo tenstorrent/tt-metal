@@ -37,6 +37,7 @@ from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
 from .fpu.reduce import ReduceFpu
+from .fpu.transpose_dest import TransposeDestFpu
 from .fpu.unary_broadcast import UnaryBroadcastFpu
 from .packer.matmul import MatmulPacker
 from .packer.packer import Packer
@@ -46,6 +47,7 @@ from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
 from .unpacker.tilize_a import UnpackerTilizeA
+from .unpacker.transpose_dest import TransposeDestUnpacker
 from .unpacker.unary_broadcast import UnaryBroadcastUnpacker
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
@@ -189,6 +191,10 @@ UNPACKER_MAP = {
         lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
         [_no_transpose],
     ),
+    "TransposeDestUnpacker": (
+        lambda s: TransposeDestUnpacker(),
+        None,
+    ),
     "UnaryBroadcastUnpacker": (
         lambda s: UnaryBroadcastUnpacker(),
         [_broadcast_required, _no_transpose, _no_unpack_to_dest],
@@ -235,6 +241,16 @@ FPU_MAP = {
             _no_broadcast,
             _reduce_params,
             _forced_unpacker("ReduceUnpacker"),
+        ],
+    ),
+    "TransposeDest": (
+        lambda s: TransposeDestFpu(),
+        [
+            _no_reuse_dest,
+            _no_broadcast,
+            _no_transpose,
+            _forced_unpacker("TransposeDestUnpacker"),
+            _only_32x32_tile,
         ],
     ),
     "UnaryBroadcast": (
@@ -284,6 +300,7 @@ OUTPUT_DIMS = {
     "Datacopy": _src_a_dims,
     "Matmul": _matmul_dims,
     "Reduce": _src_a_dims,
+    "TransposeDest": _src_a_dims,
     "UnaryBroadcast": _src_b_dims,
 }
 
@@ -355,4 +372,11 @@ class OperationSchema(OperationSchemaBase):
     pack: List[PackEntrySchema] = Field(..., min_length=1)
 
     def _arch_validate(self):
-        pass
+        if (
+            self.math
+            and isinstance(self.math[0], FpuMathSchema)
+            and self.math[0].operation == "TransposeDest"
+        ):
+            raise ValueError(
+                "TransposeDest cannot be the first math operation: Dst must already contain data"
+            )
