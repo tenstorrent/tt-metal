@@ -4810,3 +4810,91 @@ appeared in a TT_FATAL under a mis-parameterized run (amendment 107's own second
 that is the whole reason it became the suspect. Twenty minutes of isolating it at the smallest scope
 exonerated it and cut the search space by two orders of magnitude — which is cheaper than any fix
 attempt would have been.
+
+---
+
+## Amendment 109 (2026-08-05) — audio decode's 10.5 % RMSE is NOT fp32 op precision. The declared dtype contract is satisfied, and the per-op error is bf16-scale
+
+User directive 2026-08-05: make audio decode match the diffusers reference exactly, fp32 where the
+reference uses fp32. Audited the whole chain and then measured the ops, because the existing bar was set
+from an *inference* rather than a measurement.
+
+### The measured state of the gate
+
+`test_audio_vae_minimax_h3.py`, released weights, against the diffusers reference:
+
+| | PCC | RMSE/sigma |
+|---|---|---|
+| decode only | 99.5451 % | **10.5 %** |
+| round trip | 99.6671 % | 9.3 % |
+
+`AUDIO_RELATIVE_RMSE = 0.12` and a PSNR floor of 28 dB. The comment justifying that 12 % bar concludes:
+*"What remains is accumulation: ~0.17 % per anti-aliased activation over 126 of them plus ~130
+convolutions lands at ~10 % RMSE."*
+
+### The dtype contract is satisfied — audited, not assumed
+
+Every layer of the declaration is fp32, and the reference is fp32:
+
+| | |
+|---|---|
+| `MiniMaxH3AudioDecoder` | `dtype: ttnn.DataType = ttnn.float32` |
+| `Conv1dViaConv3d`, `ConvTranspose1dViaConv3d` | default `ttnn.float32`; the vocoder threads `dtype=dtype` to every conv, Snake and filter |
+| `Conv2dViaConv3d` | defaults to **bf16** — but the audio path does not use it |
+| conv weights | `get_conv3d_config` sets `weights_dtype=ttnn.float32` when the dtype is fp32, and `prepare_conv3d_weights` is fed an fp32 tensor |
+| conv3d call | `dtype=self.dtype` passed explicitly |
+| compute kernel | `HiFi4` + `fp32_dest_acc_en=True` + `packer_l1_acc=True` |
+| `_persistent_zeros`, halo ping-pong buffer | dtype passed explicitly from the tensor |
+
+`vocoder_ltx`'s module docstring already states the contract: *"fp32 mandatory: bf16 accumulation
+degrades spectral metrics through the 108-conv chain."*
+
+### And in fp32 the ops are fp32-grade. Measured
+
+`ttnn` elementwise, `(1, 2048, 512)`, against torch on the same round-tripped input:
+
+| op | fp32 rel_rmse | bf16 rel_rmse |
+|---|---|---|
+| `sin` | **3.11e-08** | 1.39e-03 |
+| `reciprocal` | **1.13e-08** | 8.40e-04 |
+| `multiply(x, x)` | **0.00** | 2.01e-03 |
+| `add(x, 1)` | **0.00** | 1.70e-03 |
+
+Snake is `multiply`/`sin`/`multiply`/`reciprocal`/`add` with **no `compute_kernel_config`**, so it takes
+ttnn defaults — and those defaults are fine at fp32. `ttnn.sin` is not approximating: 3e-8 is fp32
+resolution.
+
+### So the accumulation explanation does not hold up
+
+**The cited 0.17 % per activation is a bf16 signature, not an fp32 one.** The bf16 column above is
+1.4-2.0e-3, i.e. 0.14-0.20 % — the same number. An fp32 chain of ~256 ops at 3e-8 each accumulates to
+~5e-7 even added linearly, which is four orders of magnitude below the 10.5 % observed. So either
+
+1. some tensor in the chain is silently bf16 despite every declaration above, or
+2. the difference is **algorithmic**, not numerical — a filter tap, a padding extent or a resampling
+   phase that differs from the reference by a small constant factor.
+
+Option 2 is consistent with the shape of the numbers: PCC **0.9999998** with RMSE **0.17 %** on a single
+`Activation1d` is what a small scale or offset difference looks like, not what noise looks like. Noise
+degrades PCC; a scale factor does not.
+
+**What changes:** the `AUDIO_RELATIVE_RMSE = 0.12` bar rests on the accumulation argument, and that
+argument is now unsupported. The bar is not obviously wrong — 10.5 % is what the stack produces — but its
+*justification* is, so it must not be cited as evidence that the stack is as good as fp32 allows.
+
+### Next step, and it is now a sharper question
+
+The bisection by depth I proposed for the T-parallel bug serves this too, with a better question. Not
+"which stage diverges" but **"which stage's error first exceeds fp32 scale (~1e-6)"**, and at each stage
+also **assert the tensor's dtype is fp32**. One instrumented decode answers both:
+
+- if a stage shows a dtype flip, that is cause 1 and it is a one-line fix;
+- if every dtype is fp32 and one stage jumps from ~1e-7 to ~1e-3, that stage's *algorithm* differs from
+  the reference — most likely a resample filter, since those are where taps and phases live.
+
+**Method note.** *An error at the resolution of a precision you did not ask for is evidence about
+precision, wherever the declarations say otherwise.* The 0.17 % figure was in the tree, correctly
+measured, and read as "accumulation" — but 0.17 % is 2**-9.2, and nothing in an fp32 chain produces
+2**-9.2. Measuring the same ops at both dtypes took one script and turned an accepted explanation into a
+falsified one. The corollary: a bar set from an inference inherits that inference's error, so the
+justification needs auditing whenever the bar is used as evidence.
