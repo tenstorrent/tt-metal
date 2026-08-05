@@ -859,6 +859,28 @@ void kernel_main() {
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
             const bool need_q_read = (q_per_core > 1) || !q_pushed;
 
+            // Read Q once per q_iter into cb_q_in (subblock-wise if enabled) via the joint/spatial
+            // source dispatch. Shared by the sparse pre-loop hoist and the dense/sliding in-loop
+            // first_k_for_q push below.
+            auto push_q = [&]() {
+                const auto read_q = [&](const auto& q_gen) {
+                    if constexpr (use_q_subblock_push) {
+                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                            const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+                            const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                            Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                            read_block(
+                                q_gen, q_sub_slice, q_end_seq_tile, cb_q_in, q_tile_bytes, false, q_barrier_threshold);
+                        }
+                    } else {
+                        read_block(q_gen, q_slice, q_end_seq_tile, cb_q_in, q_tile_bytes, false, q_barrier_threshold);
+                    }
+                };
+                read_q_from_source<has_joint_q, joint_tensor_args_offset>(
+                    is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
+                q_pushed = true;
+            };
+
             ring_joint::SlidingQWorkPlan sliding_q_plan;
             if constexpr (has_sliding_window) {
                 sliding_q_plan = ring_joint::build_sliding_q_work_plan(
@@ -880,10 +902,18 @@ void kernel_main() {
             // Q must be pushed on the first K chunk actually PROCESSED for this Q chunk — not a
             // hardcoded k_chunk == 0. When spatial k_chunk 0 is beyond logical_n it is skipped, so
             // anchoring Q to k_chunk == 0 would never push Q while compute still waits on it
-            // (q_per_core > 1) -> deadlock. This also covers the sparse-frames per-k_chunk skip
-            // below (skipped chunks `continue` before the push, so Q lands on the first attended
-            // chunk). Reads Q exactly once per q_iter, so no extra work.
+            // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
             bool first_k_for_q = true;
+            // Sparse-frames: an ACTIVE ring iter can have EVERY k_chunk shard-aggregate-skipped (no
+            // q_frame in this shard attends any of this iter's k-frames), so the in-loop first_k_for_q
+            // push never fires — yet compute's zero-work fast path still pops cb_q_in. Push Q up front
+            // here so cb_q_in stays balanced (restores the pre-merge hoist); suppress the in-loop push.
+            if constexpr (sparse_frames_enabled == 1) {
+                if (need_q_read) {
+                    push_q();
+                }
+                first_k_for_q = false;
+            }
             for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
                 const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
                 const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
@@ -1101,36 +1131,10 @@ void kernel_main() {
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
+                // Under sparse-frames this is suppressed (first_k_for_q pre-set false); Q was hoisted
+                // above so all-skipped active iters still push Q.
                 if (first_k_for_q && need_q_read) {
-                    const auto read_q = [&](const auto& q_gen) {
-                        if constexpr (use_q_subblock_push) {
-                            for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
-                                const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
-                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
-                                read_block(
-                                    q_gen,
-                                    q_sub_slice,
-                                    q_end_seq_tile,
-                                    cb_q_in,
-                                    q_tile_bytes,
-                                    false /*transpose*/,
-                                    q_barrier_threshold);
-                            }
-                        } else {
-                            read_block(
-                                q_gen,
-                                q_slice,
-                                q_end_seq_tile,
-                                cb_q_in,
-                                q_tile_bytes,
-                                false /*transpose*/,
-                                q_barrier_threshold);
-                        }
-                    };
-                    read_q_from_source<has_joint_q, joint_tensor_args_offset>(
-                        is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
-                    q_pushed = true;
+                    push_q();
                 }
                 first_k_for_q = false;
 
