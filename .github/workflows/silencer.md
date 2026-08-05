@@ -14,9 +14,15 @@ description: |
   maintainer's approval before CI runs anyway). Never merges its own PRs.
 
 on:
-  # Scan on a daily cadence (warnings live in *successful* runs too, so we do not
-  # wait for failures the way ci-doctor does), plus on demand.
-  schedule: daily
+  # Scan twice a day (warnings live in *successful* runs too, so we do not wait
+  # for failures the way ci-doctor does), plus on demand. Two explicit cron
+  # entries ~12h apart instead of a fuzzy shorthand — gh-aw has no "twice-daily"
+  # shorthand, only "daily" (which scatters to a single time to avoid load
+  # spikes; ours landed at 20:34 UTC) or raw cron. The second entry mirrors
+  # that same :34-past-the-hour offset rather than a round time.
+  schedule:
+    - cron: "34 8 * * *"
+    - cron: "34 20 * * *"
   workflow_dispatch:
     inputs:
       run_id:
