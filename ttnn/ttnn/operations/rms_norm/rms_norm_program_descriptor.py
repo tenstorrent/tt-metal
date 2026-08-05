@@ -459,6 +459,28 @@ the scheme, topology, work split and helper mapping are unchanged):
           waste -- 256 kB/core at block_rows 32.
       The measured justification lives at the kernel sites; the L1 arithmetic is at
       `_solve_blocking`'s f32 page terms.
+  D28 Perf 3 (perf) -- THE COMBINE'S SLOT TREE, at WIDE GROUPS ONLY.  The flat combine
+      has exactly ONE gatherer: the other group_size - 1 members all write into the
+      root's L1 and the root folds every page itself, so BOTH per-group_size terms land
+      on one core while the rest of the group idles.  The tree interposes one level:
+      contiguous runs of COMBINE_TREE_F0 (= 4, measured) slots are folded IN PARALLEL by
+      f1 = ceil(group_size / f0) different cores, which forward only their RAW sums (no
+      finalize -- only the last level rsqrts), and the root folds f1 of those.  Root fold
+      and root ingress both drop from group_size to max(f0, f1); the price is ONE extra
+      NoC hop per round.  Two levels, full stop -- 3 and 4 levels lost at 6 of 7 cells in
+      the isolated bench.  What it changes here: CB_PARTIALS_GATHERED becomes the level-0
+      ring (f0 pages, on every core), plus a new CB_GATHER_L1 (f1 pages, the root's) and
+      CB_NODE_OUT; ONE ARRIVAL SEMAPHORE PER LEVEL (a level-1 sender can legally arrive
+      before one of the root's own level-0 members, so a single cumulative counter would
+      satisfy the level-0 wait with a slot that has not landed); and ONE extra runtime
+      arg, the level-0 parent's virtual coords (level 1's parent is slot 0, which IS the
+      multicast sender, so the mcast helper already carries it).  L1 goes DOWN -- 32 -> 14
+      fp32 pages at group_size 32 -- so it never competes with the block_rows solve.
+      The multicast is untouched (f0 * f1 >= group_size makes slot 0 the unique last-level
+      gatherer).  GATED on `_combine_tree_arity`, which is a threshold on the DERIVED
+      quantity the mechanism is about -- the fold tiles the tree deletes from the root's
+      critical path -- and is blind to shape, dtype and placement; the whole-op A/B that
+      brackets it (deleted 17 = 0.972x, deleted 18 = 1.028x) is at the constants.
   D14 Refinement 4 (perf), Lamp L5 -- the op's THIRD compute regime, ROW_RESIDENT.
       X_RESIDENT is now an EXPLICIT flag instead of `num_w_chunks == 1`, and that
       decoupling IS the regime:
@@ -777,6 +799,82 @@ GATHER_FACES = 2
 # partial while the writer is still shipping block blk's).
 CB_COMBINE_FLAT_DEPTH = 2
 
+# ---------------------------------------------------------------------------------------
+# THE COMBINE'S SLOT TREE (Perf 3, descriptor D28) -- two knobs, both MEASURED.
+# ---------------------------------------------------------------------------------------
+# The FLAT combine has exactly ONE gatherer per group: every one of the other
+# GROUP_SIZE - 1 members writes into the root's L1 and the root folds all GATHER_SLOTS
+# pages itself.  Both of those terms are linear in GROUP_SIZE and both land on ONE core.
+# The tree interposes a level of intermediate gatherers: level 0 folds contiguous runs of
+# COMBINE_TREE_F0 slots on f1 = ceil(GROUP_SIZE / f0) different cores IN PARALLEL, and only
+# those f1 raw sums travel to the root, which folds f1 of them.  So the root's ingress
+# fan-in and its fold both drop from GROUP_SIZE to max(f0, f1), at the price of ONE extra
+# NoC hop per round.
+#
+# COMBINE_TREE_F0 -- the level-0 fan-in.  4 is MEASURED, not chosen (isolated bench
+# perf_experiments/slot_tree_gather, blackhole p150b 1350 MHz, one fresh-cache profiled run
+# per variant, whole-combine device ns):
+#     GROUP_SIZE 32  flat 5424   f0=4 (4x8) 3744 = 1.45x   f0=8 (8x4) 3929 = 1.38x
+#                                f0=2 (2x16) 4061 = 1.34x  f0=6 (6x6) 3940 = 1.38x
+#     GROUP_SIZE 28  flat 5007   f0=4 (4x7) 3576 = 1.40x   f0=7 (7x4) 3970 = 1.26x
+#                                f0=2 (2x14) 3882 = 1.29x
+# TWO LEVELS, full stop: THREE and FOUR levels were measured at 7 cells and lost at 6 of
+# them (GROUP_SIZE 32: 3 levels 3870-3991 vs 2 levels 3744; 4 levels 4461).  A deeper tree
+# buys another fold division but pays another hop, and the hop is the expensive half.  So
+# this file has no depth knob -- adding one would be re-proposing a refuted shape.
+#
+# COMBINE_TREE_MIN_DELETED_FOLD_TILES -- the crossover, and it is a threshold on the
+# DERIVED quantity the mechanism is about, not on a shape/dtype/placement:
+#
+#     deleted = rows_per_round * (GROUP_SIZE - f0 - f1)
+#
+# i.e. the number of root fold-tiles the tree takes off the per-round critical path (the
+# root folds f1 instead of GROUP_SIZE, and one of the f1 is its own level-0 result), against
+# the ONE extra hop it pays for them.  `rows_per_round` is IDENTICALLY 1 in this op since
+# D27 -- a sender's whole row-block travels as one compact tile -- so the term is written
+# out at the call site and multiplies by one.  It is kept in the expression because it is
+# the physical quantity: if a future layout ever ships more than one page per sender per
+# round, the threshold moves with it automatically.
+#
+# 18 is BRACKETED ON THE REAL OP, not inherited from the isolated bench, and the two
+# bracketing points are ADJACENT.  A/B on the WHOLE OP, one fresh-cache profiled run per
+# cell, same build, tree forced OFF (this constant = 10**9) vs forced ON (= 0), at the
+# `_perf_case` config -- the numbers are `DEVICE KERNEL DURATION` for the whole op, so a
+# combine-only speedup shows up diluted by the ~3.5 us launch/dispatch floor:
+#     GROUP_SIZE  8  deleted  2  (1,1,32,1024)  8c   3729 -> 4307   0.866x  REGRESSION
+#     GROUP_SIZE  9  deleted  2  (1,1,32,2304)  9c   4481 -> 5040   0.889x  REGRESSION
+#     GROUP_SIZE  8  deleted  2  (1,1,8192,1024) 64c BLOCK 24181 -> 25244  0.958x  REGRESSION
+#     GROUP_SIZE 28  deleted 17  (1,1,32,7168) 28c   5717 -> 5881   0.972x  REGRESSION
+#     GROUP_SIZE 30  deleted 18  (1,1,32,4800) 30c   5130 -> 4991   1.028x  WIN
+#     GROUP_SIZE 32  deleted 20  (1,1,32,5120) 32c   5376 -> 5004   1.074x  WIN
+# So the crossover is between deleted 17 and deleted 18 and there is nothing to
+# extrapolate: 18 is the smallest MEASURED win and 17 is a measured loss.  (The GROUP_SIZE
+# 30 cell is also the RAGGED-run proof: 30 % f0 == 2, so its last level-0 run holds 2 of 4
+# slots and that gatherer boot-zeroes its own tail -- and it still wins.)
+#
+# WHY THE ISOLATED BENCH SAW 1.40x-1.45x AND THE OP SEES 1.03x-1.07x, stated plainly
+# because the gap is the interesting part: (a) the bench's FLAT baseline still paid the
+# gather's per-face boot zeroing, ~56 API calls at these group sizes, and Perf 3 / D26 has
+# since DELETED that from the op -- so most of what the bench credited to the tree was
+# already banked on the flat path; and (b) the combine is only ~1.5-2 us of a 5-5.4 us op
+# that sits on a ~3.5 us one-core launch/dispatch floor, so even a 1.4x on the combine is
+# worth a few hundred ns of wall, not 1.4x of it.  Both effects are arithmetic, not noise.
+#
+# It is NOT a smooth function of `deleted` alone -- above GROUP_SIZE 16 a SECOND mechanism
+# starts dominating (the flat root's GROUP_SIZE - 1 remote writes serialise into one core's
+# L1 ingress, which the tree caps at max(f0, f1)) -- so 18 is where the ingress term starts
+# paying rather than a pure fold-cost crossover.  To re-check it, force the constant to 0
+# and re-run the pinned WIDTH targets; the isolated bench's own `*_compact` cells agree on
+# the sign at every point they overlap (GROUP_SIZE 8: 0.76x, 16: 0.94x, 32: 1.25x).
+#
+# `f1 >= 2` is a SEPARATE and independent gate, and it is why GROUP_SIZE <= 4 can never
+# take the tree: the only legal tree at GROUP_SIZE 4 with f0 = 4 has f1 == 1, i.e. a level
+# that gathers a single member -- it deletes ZERO fold tiles and pays a pure hop (measured
+# 0.78x / 0.85x / 1.02x).  It falls out of `deleted >= 17` too; it is spelled separately
+# because it is an EXPRESSIBILITY floor (a one-member level is not a fold), not a cost one.
+COMBINE_TREE_F0 = 4
+COMBINE_TREE_MIN_DELETED_FOLD_TILES = 18
+
 # Smallest number of tile-rows a core must own before the ROW_RESIDENT regime
 # (Lamp L5, D14) is taken at a SHALLOWER CB depth than STREAM would have used.
 #
@@ -905,6 +1003,53 @@ CB_ROW_FINAL = 13  # fp32: the un-permuted per-row 1/rms, compute -> compute (pa
 CB_BANK = 14  # bf16: the one-hot permutation bank E_r, reader -> compute (never popped)
 CB_COMPACT_HANDOFF = 15  # fp32: this core's COMPACT partial, compute -> writer (gather src)
 CB_MCAST_IN = 16  # fp32: multicast landing of the COMPACT stat, writer -> compute
+# --- Perf 3 / D28: the two CBs the SLOT TREE adds (allocated only when it is taken) --
+# CB_PARTIALS_GATHERED becomes the LEVEL-0 ring (f0 rounded up to even pages) on the tree
+# path -- same index, same producer/consumer roles, just a shorter ring on more cores.
+CB_GATHER_L1 = 17  # fp32: the ROOT's level-1 landing ring (f1 rounded up to even pages)
+CB_NODE_OUT = 18  # fp32: an interior gatherer's RAW folded sum, compute -> writer
+
+
+def _combine_tree_arity(group_size: int, rows_per_round: int):
+    """(f0, f1) for the combine's two-level slot tree, or None to keep the FLAT root.
+
+    THE ONE PLACE THE TREE IS DECIDED (Perf 3 / D28).  Gated purely on the derived
+    quantities the mechanism is about -- the level-1 fan-in `f1` and the root fold-tiles
+    the tree deletes per round -- so it is blind to shape, dtype, layout and placement.
+    Both constants carry their measured brackets at their definitions above.
+    """
+    f0 = COMBINE_TREE_F0
+    f1 = _div_up(group_size, f0)
+    # EXPRESSIBILITY: a level that gathers one member is not a fold, it is a hop.
+    if f1 < 2:
+        return None
+    # COST: the fold-tiles taken off the root's critical path, against the one extra hop.
+    if rows_per_round * (group_size - f0 - f1) < COMBINE_TREE_MIN_DELETED_FOLD_TILES:
+        return None
+    return f0, f1
+
+
+def _combine_fixed_pages(plan, compact: bool, tree) -> int:
+    """fp32 pages of the combine's BLOCK_ROWS-INDEPENDENT CBs, per core.
+
+    ONE definition, read by the L1 blocking solve AND by the CB table below, because the
+    solve must agree page-for-page with the allocation or BLOCK_ROWS is solved against a
+    budget that does not exist.
+    """
+    if not plan.combine:
+        return 0
+    if tree is None:
+        # cb_partials_gathered: one page per sender, GROUP_SIZE rounded UP TO EVEN (D22).
+        pages = plan.group_size + plan.group_size % 2
+    else:
+        f0, f1 = tree
+        # The level-0 ring shrinks to f0 slots and the level-1 ring holds f1; both are
+        # rounded UP TO EVEN so every fold is a pairwise DEST walk.  Plus cb_node_out.
+        pages = (f0 + f0 % 2) + (f1 + f1 % 2) + CB_COMBINE_FLAT_DEPTH
+    pages += CB_COMBINE_FLAT_DEPTH  # cb_stat_handoff
+    if compact:
+        pages += 2 * CB_COMBINE_FLAT_DEPTH  # cb_compact_handoff + cb_mcast_in
+    return pages
 
 
 # ---------------------------------------------------------------------------
@@ -1804,9 +1949,9 @@ def create_program_descriptor(
         #   per tile-row : cb_row_stat (LOCAL path only -- D27 stops allocating it on
         #                  the combine path, where D22 already left it dead),
         #                  cb_sum_handoff, cb_row_final, and the bf16 cb_bank.
-        #   fixed        : cb_partials_gathered (GATHER_SLOTS pages, one per sender)
-        #                  + cb_stat_handoff, and on the COMPACT path also
-        #                  cb_compact_handoff / cb_mcast_in.
+        #   fixed        : the gather rings + cb_stat_handoff, and on the COMPACT path also
+        #                  cb_compact_handoff / cb_mcast_in -- all of it in
+        #                  `_combine_fixed_pages`, which the CB table below also reads.
         #
         # `compact` is the D27 carve-out: at block_rows == 1 the permutation is the IDENTITY
         # and the kernels elide it, so the bank and the two permute CBs are not allocated
@@ -1815,19 +1960,23 @@ def create_program_descriptor(
         # The dependency is not circular: the compact terms are strictly LARGER, so if they
         # admit a block of 2 or more the compact path is the one that will be built, and
         # otherwise block_rows is 1 and the identity terms are the ones to check.
+        # Perf 3 / D28: the slot tree's rings are a pure function of group_size (the
+        # per-round page count it keys on is identically 1 under D27's compact transport),
+        # so it is resolved here and the solve prices the rings it will actually build --
+        # STRICTLY FEWER pages than the flat ring at every group the tree is taken on
+        # (group_size 32: 4 + 8 + 2 vs 32), which only ever gives the block solve more room.
+        # No circularity: the tree decision does not read block_rows.
+        combine_tree = _combine_tree_arity(plan.group_size, 1) if plan.combine else None
+
         def _f32_terms(compact):
             per_row = (CB_ROW_STAT_DEPTH + CB_ROW_STAT_DEPTH) if plan.combine else CB_ROW_STAT_DEPTH
-            fixed_pages = 0
+            fixed_pages = _combine_fixed_pages(plan, compact, combine_tree)
             bank = 0
-            if plan.combine:
-                # cb_partials_gathered (one page per sender) + cb_stat_handoff.
-                fixed_pages = (plan.group_size + plan.group_size % 2) + CB_COMBINE_FLAT_DEPTH
-                if compact:
-                    fixed_pages += 2 * CB_COMBINE_FLAT_DEPTH  # compact_handoff + mcast_in
-                    # cb_bank: ONE bf16 one-hot page per tile-row of a block (page r selects
-                    # column r).  bf16 because the one-hot is EXACT there -- half the L1 of
-                    # an fp32 bank, measured-identical result and measured-identical ns.
-                    bank = st
+            if plan.combine and compact:
+                # cb_bank: ONE bf16 one-hot page per tile-row of a block (page r selects
+                # column r).  bf16 because the one-hot is EXACT there -- half the L1 of
+                # an fp32 bank, measured-identical result and measured-identical ns.
+                bank = st
             return per_row * ft + bank, fixed_pages * ft
 
         def _resident_fit(depth, compact):
@@ -1980,6 +2129,13 @@ def create_program_descriptor(
     # itself is NOT carved out: both paths ship one whole tile into a GATHER_SLOTS ring.
     compact_combine = combine and block_rows > 1
     assert block_rows <= TILE_DIM or not combine, "rms_norm: a compact combine block is at most 32 tile-rows"
+    # Perf 3 / D28 -- THE SLOT TREE, resolved ONCE here (and identically inside the L1
+    # solve, which has to price the rings it will build).  `rows_per_round` is 1 because
+    # D27 makes a sender's whole row-block travel as ONE compact page, whatever block_rows
+    # is; it is passed rather than folded away so the threshold stays a statement about the
+    # physical quantity.  See _combine_tree_arity and the two constants it reads.
+    combine_tree = _combine_tree_arity(plan.group_size, 1) if combine else None
+    tree_f0, tree_f1 = combine_tree if combine_tree else (0, 0)
     # Width tiles cb_input_tiles / cb_gamma_tiles span.  Equals wt_chunk in both
     # Phase-0 regimes (where wt_chunk == wt_per_core if resident), so every
     # non-L5 build stays byte-identical.
@@ -2150,24 +2306,43 @@ def create_program_descriptor(
         # for block blk+1 packs into it while block blk's pages are still in flight.
         cbs.append(_cb(CB_SUM_HANDOFF, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
         # Perf 2 (D22): the gather lands GATHER_SLOTS -- group_size ROUNDED UP TO EVEN --
-        # slots per tile-row, not group_size.  The root's fused fold walks a row's
-        # partials PAIRWISE in one DEST window (two halves, slot p and slot p + GP/2), so
-        # an odd group needs one pad slot to pair against.  The pad is boot-zeroed by the
-        # writer and no member ever writes it (my_slot < group_size <= GP - 1), so it adds
-        # an exact +0.0 to the row total.
+        # slots, not group_size.  The root's fused fold walks the window PAIRWISE in one DEST
+        # window (slot p against slot p + GP/2), so an odd group needs one pad slot to pair
+        # against.  The pad is boot-zeroed by the writer and no member ever writes it
+        # (my_slot < group_size <= GP - 1), so it adds an exact +0.0 to the total.  Cost is
+        # ZERO at even group_size (8, 28, 32) and one 4 kB page at odd -- (1,1,32,2304)
+        # WIDTH 9c.  Both kernels re-derive GP from GROUP_SIZE, so this needs no CT arg.
         #
-        # Cost is ZERO at even group_size (every live even profile: 8, 28, 32, and the
-        # focus shape's 8) and `block_rows` fp32 pages at odd group_size -- one 4 kB page
-        # at the op's only odd profile, (1,1,32,2304) WIDTH 9c with block_rows == 1.
-        # Both kernels re-derive GP from GROUP_SIZE identically, so this needs no CT arg.
+        # The pad-free alternative -- consume an ODD window by seeding DEST with a
+        # `copy_tile` -- was BUILT AND MEASURED during D28's integration and LOST: 4442 ->
+        # 4610 ns (0.964x) on that 9c target and only 1.005x where it was the sole change.
+        # The `copy_tile_init` + `add_tiles_init` pair inside the DEST window costs about what
+        # the 314 ns boot zero it deletes costs.  See combine_fold in rms_norm_compute.cpp.
         #
         # Perf 3 / D27 -- THE COMPACT LAYOUT'S PAGE COUNTS.  The gather ring is ONE page
         # per sender, FLAT IN BLOCK_ROWS, because a sender's whole block now travels as
         # one tile whose columns are its BLOCK_ROWS stats.  That is the L1 lever: at
         # group_size 8 / block_rows 32 the flat ring was 256 pages == 1152 kB (an L1
         # OOM, measured), and it is now 8 pages == 32 kB.
-        gather_slots = plan.group_size + plan.group_size % 2
-        cbs.append(_cb(CB_PARTIALS_GATHERED, ft, gather_slots, ttnn.float32, all_cores))
+        #
+        # Perf 3 / D28 -- THE SLOT TREE'S RINGS.  When the tree is taken this same CB
+        # becomes the LEVEL-0 ring: f0 slots instead of group_size, declared on every core
+        # (as before -- that is how a sender computes its gatherer's landing address
+        # locally), and now written by f1 different gatherers in parallel rather than one.
+        # The root additionally owns a level-1 ring of f1 slots, and every level-0 gatherer
+        # a one-page cb_node_out for the RAW sum it forwards.  Every ring is rounded UP TO
+        # EVEN for D22's pairwise DEST walk, and a ragged run's missing slots are the same
+        # boot-zeroed exact +0.0 the odd-group pad slot already is.
+        #
+        # L1: at group_size 32 the combine's rings go 32 -> 4 + 8 + 2 = 14 pages
+        # (128 -> 56 kB/core), so the tree HANDS L1 BACK -- it never competes with the
+        # block_rows solve.
+        if combine_tree is None:
+            cbs.append(_cb(CB_PARTIALS_GATHERED, ft, plan.group_size + plan.group_size % 2, ttnn.float32, all_cores))
+        else:
+            cbs.append(_cb(CB_PARTIALS_GATHERED, ft, tree_f0 + tree_f0 % 2, ttnn.float32, all_cores))
+            cbs.append(_cb(CB_GATHER_L1, ft, tree_f1 + tree_f1 % 2, ttnn.float32, all_cores))
+            cbs.append(_cb(CB_NODE_OUT, ft, CB_COMBINE_FLAT_DEPTH, ttnn.float32, all_cores))
         # ONE tile per round -- the multicast source, whichever path is built -- so
         # CB_COMBINE_FLAT_DEPTH pages, not block_rows.
         cbs.append(_cb(CB_STAT_HANDOFF, ft, CB_COMBINE_FLAT_DEPTH, ttnn.float32, all_cores))
@@ -2274,8 +2449,13 @@ def create_program_descriptor(
         # 15 faces per partial tile the IDENTITY-path gather ships (D13, scoped by D27 to
         # the block_rows == 1 branch -- the compact branch always ships whole tiles).
         GATHER_FACES,
+        # 16/17 the SLOT TREE's arity (D28).  TREE_F0 == 0 means "keep the flat root", and
+        # the writer `if constexpr`s the entire tree body away there -- so every build the
+        # tree does not select emits the same kernel it did before Perf 3 / D28.
+        tree_f0,
+        tree_f1,
     ]
-    assert len(writer_ct_args) == 16, "rms_norm_writer.cpp expects McastArgs<16, 10>()"
+    assert len(writer_ct_args) == 18, "rms_norm_writer.cpp expects McastArgs<18, 12>()"
     assert (
         writer_ct_args[WRITER_CT_OUT_SHARD_ROW_BYTES] == plan.out_shard_row_bytes
     ), "WRITER_CT_OUT_SHARD_ROW_BYTES index drifted"
@@ -2301,8 +2481,34 @@ def create_program_descriptor(
         x_squared_wt,  # 14 reduce's per-call width == cb_x_squared's row stride (D12)
         1 if x_resident else 0,  # 15 X_RESIDENT: x/gamma held across both passes (D14)
         1 if plan.native_in else 0,  # 16 NATIVE_IN: cb_input_tiles aliases the resident shard (D25)
+        tree_f0,  # 17 SLOT TREE level-0 fan-in, 0 == flat root (D28)
+        tree_f1,  # 18 SLOT TREE level-1 fan-in (== ceil(group_size / f0))
     ]
     assert x_squared_wt in (1, wt_chunk), "rms_norm: x_squared_wt must be 1 (DEST fold) or WT_CHUNK"
+
+    # ---- the SLOT TREE's ONE extra runtime fact: my level-0 gatherer's coords -------
+    # A two-level tree needs exactly ONE parent lookup per core.  Level 1's parent is slot
+    # 0, which IS the multicast sender, so the mcast helper's own runtime args already carry
+    # it (`mc.sender_x/y()`); only the level-0 parent -- slot (my_slot // f0) * f0 -- is new.
+    # It is resolved from the ASSIGNMENT (the single source of truth for who holds which
+    # slot) rather than from grid arithmetic, so a packed / ragged / bounding-box group
+    # cannot drift.  Groups are keyed the way each planner builds them: Mcast1D is always
+    # PerRow here (one group per grid row, slot == relative x), Mcast2D is the single
+    # row-major-packed group.
+    tree_parent = {}
+    if combine_tree is not None:
+        per_row_groups = isinstance(plan.mcast, ttnn.Mcast1D)
+        slot_core = {}
+        for w in assignment:
+            if w.row_count:
+                slot_core[(w.core.y if per_row_groups else 0, w.slot)] = w.core
+        for w in assignment:
+            if not w.row_count:
+                continue
+            key = w.core.y if per_row_groups else 0
+            parent = slot_core[(key, (w.slot // tree_f0) * tree_f0)]
+            v = device.worker_core_from_logical_core(ttnn.CoreCoord(parent.x, parent.y))
+            tree_parent[(w.core.x, w.core.y)] = [v.x, v.y]
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
@@ -2324,9 +2530,12 @@ def create_program_descriptor(
         writer_rt[core.x][core.y] = (
             [out_addr, w.row_start, w.row_count, w.w_start, 1 if w.is_root else 0, w.slot]
             + band_rt
+            # 10/11 the level-0 gatherer's VIRTUAL coords (D28).  Zeros off the tree path
+            # and on an INACTIVE core -- neither reads them.
+            + tree_parent.get((core.x, core.y), [0, 0])
             + (list(plan.mcast.runtime_args(core)) if combine else [])
         )
-        compute_rt[core.x][core.y] = [w.row_count, owns_last_w, 1 if w.is_root else 0]
+        compute_rt[core.x][core.y] = [w.row_count, owns_last_w, 1 if w.is_root else 0, w.slot]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
@@ -2353,10 +2562,21 @@ def create_program_descriptor(
     # The mcast helper owns its two handshake semaphores; the partial-gather needs
     # one more (the root's arrival counter), taken from the next free id so the
     # two families can never collide.
+    #
+    # Perf 3 / D28: the slot tree needs ONE ARRIVAL SEMAPHORE PER LEVEL, and that is not
+    # negotiable.  A level-1 sender only has to finish its OWN level-0 chunk first, which is
+    # a DIFFERENT chunk from the root's, so it can legally arrive before one of the root's
+    # own level-0 members -- and a single cumulative counter would let that early level-1
+    # inc satisfy the root's level-0 wait_min and fold a slot that has not landed.  Ids are
+    # consecutive from gather_sem_id (the first free id after the mcast helper's two), so
+    # the three families still cannot collide.
     semaphores = []
     if combine:
         semaphores = list(plan.mcast.owned_semaphores())
-        semaphores.append(ttnn.SemaphoreDescriptor(id=plan.gather_sem_id, core_ranges=all_cores, initial_value=0))
+        for lvl in range(1 if combine_tree is None else 2):
+            semaphores.append(
+                ttnn.SemaphoreDescriptor(id=plan.gather_sem_id + lvl, core_ranges=all_cores, initial_value=0)
+            )
 
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],

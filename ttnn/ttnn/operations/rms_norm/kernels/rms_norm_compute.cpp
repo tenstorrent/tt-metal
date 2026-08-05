@@ -281,7 +281,101 @@ constexpr uint32_t cb_row_final = 13;
 constexpr uint32_t cb_bank = 14;
 constexpr uint32_t cb_compact_handoff = 15;
 constexpr uint32_t cb_mcast_in = 16;
+// Perf 3 / D28 -- the SLOT TREE's two extra CBs (allocated only when it is taken).
+// cb_partials_gathered above becomes the LEVEL-0 ring there.
+constexpr uint32_t cb_gather_l1 = 17;
+constexpr uint32_t cb_node_out = 18;
 }  // namespace
+
+// =======================================================================================
+// ONE FOLD, the D22 fused chain, with WHICH ring / WHETHER TO FINALIZE lifted to template
+// parameters (Perf 3 / D28).
+// =======================================================================================
+// This is the code that used to sit inline in the root's combine branch, moved out
+// UNCHANGED so the slot tree's three call sites are one implementation:
+//     flat root            <GATHER_SLOTS, FINALIZE=true >  gather ring -> cb_stat_handoff
+//     tree level 0         <TREE_SL0,     FINALIZE=false>  level-0 ring -> cb_node_out
+//     tree level 1 (root)  <TREE_SL1,     FINALIZE=true >  level-1 ring -> cb_stat_handoff
+// Everything stays a template parameter (rather than a runtime argument) so the pairwise
+// walk keeps its compile-time trip count and the FLAT instantiation is the same code it was
+// before D28.
+//
+// THE ONE THING AN INTERIOR NODE MUST NOT DO IS FINALIZE.  It packs the RAW sum and forwards
+// it; only the LAST level (slot 0, the multicast root -- unique because f0 * f1 >=
+// GROUP_SIZE) applies `*(1/W) + eps` and the rsqrt.  A finalize at an interior node would
+// rsqrt a partial sum, and it would do it to a value the next level then adds to.
+//
+// AND THE TWO CALLS THAT ARE NOT OPTIONAL AT ANY FOLD SITE, new ones included:
+// `reconfig_data_format` + `pack_reconfig_data_format`.  The preceding stage leaves the
+// unpacker on the permute's (bf16 bank, fp32 handoff) pair or on pass A's cb_x_squared /
+// cb_scaler (bf16), while every gather ring and every handoff here is fp32.  Without them
+// the fold unpacks fp32 L1 through a bf16 srcA/srcB, the accumulated sum reads as ~0, and
+// the finalize turns that into rsqrt(eps) -- a uniform ~1/sqrt(eps) SCALE error that HOLDS
+// pcc at 0.9997 and shows up only in rel-RMS (measured 994 against a 0.04 bound during
+// integration).  That is exactly why this op's regression nets bound rms and not just pcc.
+template <
+    uint32_t CB_IN,
+    uint32_t SLOTS,
+    uint32_t CB_OUT,
+    bool FINALIZE,
+    bool COMPACT_SCOPE,
+    bool WIDE_SCOPE,
+    uint32_t IW_BITS,
+    uint32_t EP_BITS>
+ALWI void combine_fold() {
+    // AN EVEN WINDOW, AND IT IS CHEAPER THAN THE ALTERNATIVE -- MEASURED.  The pairwise walk
+    // halves the window, so D22 rounds every ring up to an even slot count and the writer
+    // boot-zeroes the one slot no sender writes (an exact +0.0).  The identity operand is not
+    // strictly necessary: seeding DEST with a `copy_tile` (a ONE-operand accumulate) consumes
+    // an ODD window with no pad at all, which deletes the whole `writer_gather_zero` stage.
+    // That was BUILT AND MEASURED during D28's integration and it LOST, on both sides:
+    //     (1,1,32,2304) WIDTH 9c  (odd GROUP_SIZE, flat root)  4442 -> 4610 ns   0.964x
+    //     (1,1,32,7168) WIDTH 28c (odd f1, slot tree)          5873 -> 5841 ns   1.005x
+    // i.e. the `copy_tile_init` + `add_tiles_init` pair inside the DEST window costs about
+    // what the 314 ns boot zero it replaces costs, and MORE at the geometry where the pad was
+    // the only thing being deleted.  So the even pad stays, and the reason is a number.
+    constexpr uint32_t HALF = SLOTS / 2;
+    static_assert(SLOTS % 2 == 0 && HALF >= 1, "rms_norm: the pairwise DEST walk needs an even, non-empty window");
+    // The round's window is waited/popped ONCE: the pairwise walk addresses two tiles of
+    // the same CB at a stride, which a per-tile wait cannot express.  Legal exactly as it
+    // stands -- the writer publishes the round atomically (`cb_push_back(CB_IN, SLOTS)`)
+    // and the CB is sized to that same window, which is also what keeps a remote sender's
+    // locally-computed landing address equal to the gatherer's.
+    cb_wait_front(CB_IN, SLOTS);
+    reconfig_data_format(CB_IN, CB_IN);
+    pack_reconfig_data_format(CB_OUT);
+    add_tiles_init(CB_IN, CB_IN, /*acc_to_dest=*/true);
+    if constexpr (FINALIZE) {
+        // MANDATORY, not decorative: rms_stat_rsqrt_body reads sfpi::vConstIntPrgm0 /
+        // vConstFloatPrgm1..2, which sfpu::rsqrt_init programs -- persistent SFPU PROGRAM
+        // registers, which is what makes hoisting it out of a per-tile loop legal.
+        rsqrt_tile_init();
+    }
+    tile_regs_acquire();
+    for (uint32_t p = 0; p < HALF; ++p) {
+        add_tiles(CB_IN, CB_IN, p, HALF + p, 0);
+    }
+    if constexpr (FINALIZE) {
+        // The scope FOLLOWS the layout (see the note at stat_scale_col_full): at
+        // BLOCK_ROWS == 1 the stat is a column-0 vector and D17's narrow <2,4> C walk is
+        // right (and 1.39x cheaper); above it the stats span columns and the wide scope is
+        // a CORRECTNESS requirement.  Two spellings, one predicate -- and it is the SAME
+        // predicate on the tree path, because the tree changes WHO folds, never the layout
+        // of what is folded.
+        if constexpr (COMPACT_SCOPE) {
+            compact_finalize_payload<IW_BITS, EP_BITS, WIDE_SCOPE>(0);
+        } else {
+            stat_finalize_payload<IW_BITS, EP_BITS>(0);
+        }
+    }
+    tile_regs_commit();
+    cb_reserve_back(CB_OUT, 1);
+    tile_regs_wait();
+    pack_tile(0, CB_OUT);
+    tile_regs_release();
+    cb_push_back(CB_OUT, 1);
+    cb_pop_front(CB_IN, SLOTS);
+}
 
 void kernel_main() {
     // ---- compile-time knobs (all from rms_norm_program_descriptor.py) -----
@@ -321,12 +415,21 @@ void kernel_main() {
     // Perf 2 (descriptor D25): is cb_input_tiles the ZERO-COPY resident shard?  That is the
     // precondition for the combine pipeline below -- see its justification at PIPE_A.
     constexpr uint32_t NATIVE_IN = get_compile_time_arg_val(16);
+    // Perf 3 (descriptor D28): the SLOT TREE's arity.  TREE_F0 == 0 means "keep the flat
+    // root" and every tree body below is `if constexpr`-ed away, so a build the descriptor
+    // did not select the tree for emits the same kernel it did before D28.
+    constexpr uint32_t TREE_F0 = get_compile_time_arg_val(17);
+    constexpr uint32_t TREE_F1 = get_compile_time_arg_val(18);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // tile-rows owned by this core
     // Only the core holding the row's LAST width tile applies the partial-W
     // scaler/mask; 1 on the whole-row schemes.
     const uint32_t owns_last_w = get_arg_val<uint32_t>(1);
     const uint32_t is_root = get_arg_val<uint32_t>(2);  // group root: sums + finalizes
+    // D28: this core's slot within its width group -- the ONLY thing that decides which
+    // tree levels it folds at (level 0 iff my_slot % f0 == 0; level 1 iff my_slot == 0,
+    // which is `is_root`).  Unread off the tree path.
+    const uint32_t my_slot = get_arg_val<uint32_t>(3);
 
     // An INACTIVE core (see the reader): no shard, no work, and its reader pushed
     // nothing -- return before any CB or LLK state is touched.
@@ -552,15 +655,17 @@ void kernel_main() {
     constexpr auto PASS_B_OUT_GAMMA =
         ckl::output(cb_output_tiles, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk);
     constexpr bool CROSS_CORE = (COMBINE != 0);
-    // Perf 2 (descriptor D22): the gather's slots per tile-row -- GROUP_SIZE rounded UP TO
-    // EVEN -- and the half-stride the root's fused pairwise fold walks.  DERIVED, never
+    // Perf 2 (descriptor D22): the gather's slots -- GROUP_SIZE rounded UP TO EVEN, so the
+    // root's fused pairwise fold always has a partner to halve against.  DERIVED, never
     // passed: a pure function of GROUP_SIZE that the writer derives identically, so the
     // landing layout has one definition per kernel and no CT arg can drift between them.
     // Equal to GROUP_SIZE at every even group (8 / 28 / 32, including the focus shape's 8);
     // the one extra slot at odd GROUP_SIZE is boot-zeroed by the writer and pairs against
-    // the odd contributor as an exact +0.0.  See the fused chain below.
+    // the odd contributor as an exact +0.0.  The pad-free alternative (a `copy_tile` DEST
+    // seed) was built and MEASURED SLOWER -- see the note at combine_fold.
+    // (The half-stride itself now lives inside `combine_fold`, which derives it from the
+    // window it is folding -- one definition for the flat root and both tree levels.)
     constexpr uint32_t GATHER_SLOTS = GROUP_SIZE + GROUP_SIZE % 2;
-    constexpr uint32_t GATHER_HALF = GATHER_SLOTS / 2;
     // Perf 3 (descriptor D27) -- the COMPACT partial's two derived knobs.
     //
     // COMPACT_FIN_WIDE: which VectorMode the compact finalize needs.  A compact stat tile
@@ -603,6 +708,29 @@ void kernel_main() {
     // permute pair and by the finalize's lane scope.
     constexpr bool COMPACT = CROSS_CORE && (BLOCK_ROWS > 1);
     constexpr bool COMPACT_FIN_WIDE = (BLOCK_ROWS > 16);
+    // ---- THE SLOT TREE's derived geometry (Perf 3 / D28) -----------------------------
+    // TWO LEVELS of contiguous slot runs: level 0 folds runs of TREE_F0 slots on TREE_F1 =
+    // ceil(GROUP_SIZE / F0) cores IN PARALLEL and forwards the RAW sums; level 1 folds those
+    // TREE_F1 sums on slot 0 (the multicast root, unique because F0 * F1 >= GROUP_SIZE) and
+    // finalizes.  So the root's fold drops from GROUP_SIZE tiles to TREE_F1, its L1 ingress
+    // fan-in from GROUP_SIZE - 1 remote writes to TREE_F1 - 1, and every other core's fold
+    // goes from nothing to TREE_F0 -- the work leaves the one core it was serialised on.
+    //
+    // ORTHOGONAL TO D27's COMPACT/IDENTITY split, and that is not an accident: what the tree
+    // changes is WHICH CORE folds WHICH slots, never the LAYOUT of a page.  An interior
+    // node's raw sum has exactly the shape of the compact (or column-shaped) partials it
+    // summed, so the finalize's lane scope is decided by BLOCK_ROWS exactly as before and
+    // the un-permute below is untouched.
+    //
+    // Every ring is rounded UP TO EVEN (D22's own trick) so every fold is a pairwise DEST
+    // walk; a ragged run's missing slots and the evenness slot are boot-zeroed WHOLE by the
+    // writer and pair against a real contributor as an exact +0.0 -- which is what makes one
+    // code path cover odd, ragged and non-factorising group sizes with no guard.
+    constexpr bool TREE = CROSS_CORE && (TREE_F0 != 0);
+    constexpr uint32_t TREE_SL0 = TREE_F0 + TREE_F0 % 2;
+    constexpr uint32_t TREE_SL1 = TREE_F1 + TREE_F1 % 2;
+    static_assert(!TREE || TREE_F0 * TREE_F1 >= GROUP_SIZE, "rms_norm: the slot tree must cover GROUP_SIZE");
+    static_assert(!TREE || TREE_F1 >= 2, "rms_norm: a slot-tree level that gathers one member is a hop, not a fold");
     // COMBINE_DEST_BATCH: DEST lanes the un-permute drives per window.  MEASURED optimum
     // (isolated bench perf_experiments/compact_partial_transpose_r3, `compute_recv_unpack`
     // ns at the op's pinned config): at BLOCK_ROWS 8, batch 1/2/4/8 = 1130/682/539/599 ns
@@ -867,6 +995,51 @@ void kernel_main() {
             // in cb_compact_handoff, which is what the writer ships to the group root.  The
             // `compute_partial_handoff` zone that used to sit here is retired with the copy
             // it measured.
+            // ======== THE SLOT TREE's interior fold (Perf 3, descriptor D28) ==========
+            // A core folds the level-0 run it gathers -- a run of TREE_F0 slots, one of
+            // TREE_F1 runs, all folded IN PARALLEL on TREE_F1 different cores -- and packs
+            // the RAW sum, WITHOUT finalizing, for the writer to forward to the root.  The
+            // root then folds only TREE_F1 pages instead of GROUP_SIZE (below).
+            //
+            // WHY THIS IS WORTH A NoC HOP, and where it stops being worth one: the flat root
+            // is the ONE core that pays both per-GROUP_SIZE terms -- GROUP_SIZE - 1 remote
+            // writes serialising into its L1 ingress, and a GROUP_SIZE-tile fold -- while
+            // every other core in the group idles.  The tree caps both at max(f0, f1) and
+            // spends the idle cores.  MEASURED (isolated bench
+            // perf_experiments/slot_tree_gather, blackhole p150b 1350 MHz, whole-combine
+            // device ns, one fresh-cache profiled run per variant, at the op's pinned
+            // config; f0 = 4 is itself measured -- see COMBINE_TREE_F0):
+            //     GROUP_SIZE 32, 1 page/sender/round   flat 5424 -> 3744   1.45x
+            //     GROUP_SIZE 28, 1 page/sender/round   flat 5007 -> 3576   1.40x
+            //     GROUP_SIZE 32, 4 rounds              flat 13788 -> 11036 1.25x
+            //     GROUP_SIZE 16, 4 rounds              flat 9741 -> 10410  0.94x  REGRESSION
+            //     GROUP_SIZE  8, 4 rounds              flat 7007 -> 9174   0.76x  REGRESSION
+            // The descriptor's ONE predicate (`_combine_tree_arity`) is what keeps the op off
+            // the last two, and it is a threshold on the deleted fold-tiles, not on a shape.
+            //
+            // MORE ACCURATE, not less -- the same mechanism D22 recorded against D16: a
+            // deeper pairwise DEST tree shortens the error chain.  Measured rel-RMS
+            // 0.00213 (tree) vs 0.00250 (flat) at GROUP_SIZE 32 and 0.00292 vs 0.00336 at
+            // GROUP_SIZE 28, at IDENTICAL pcc-or-better.  Nothing here reads or changes
+            // fp32_dest_acc_en / math_fidelity / math_approx_mode / a dtype.
+            if constexpr (TREE) {
+                if (my_slot % TREE_F0 == 0) {
+                    MaybeDeviceZoneScope("compute_tree_fold_l0");
+                    // FINALIZE=false is the load-bearing half: an interior node must forward
+                    // the RAW sum.  A finalize here would rsqrt a partial sum -- and then the
+                    // root would ADD rsqrt'd values together.
+                    combine_fold<
+                        cb_partials_gathered,
+                        TREE_SL0,
+                        cb_node_out,
+                        /*FINALIZE=*/false,
+                        COMPACT,
+                        COMPACT_FIN_WIDE,
+                        INV_W_BITS,
+                        EPS_BITS>();
+                }
+            }
+
             if (is_root != 0) {
                 // Sum the group's GROUP_SIZE partials ELEMENTWISE and finalize the whole
                 // BLOCK, in ONE DEST WINDOW.  Each landing page is a COMPACT partial whose
@@ -948,6 +1121,12 @@ void kernel_main() {
                 // pad slot (D27 shrank it from GATHER_SLOTS * BLOCK_ROWS pages to one),
                 // which pairs against the odd contributor and adds an exact +0.0.  So there
                 // is no odd/even code path and no GROUP_SIZE guard.
+                //
+                // D28 lifts the whole chain into `combine_fold` (definition above, with the
+                // two mandatory reconfigs and the finalize-scope predicate) so the tree's
+                // interior fold and this one are ONE implementation.  What the tree changes
+                // here is only WHICH RING the root reads and HOW MANY pages are in it: the
+                // level-1 ring of TREE_SL1 forwarded sums instead of GATHER_SLOTS partials.
                 MaybeDeviceZoneScope("compute_root_fused");
 #if defined(RMS_ABLATE_ROOT_SUM) || defined(RMS_ABLATE_ROOT_FINALIZE)
                 // ABLATION (temporary, /perf-measure): payload removed, every CB handshake
@@ -956,55 +1135,35 @@ void kernel_main() {
                 // RMS_ABLATE_ROOT_SUM at the head of this file (and, on the writer,
                 // RMS_ABLATE_GATHER_ZERO) and diff the profiled zones against the
                 // unablated run; the difference is that stage's WALL contribution, which is
-                // what makes the cumulative peel additive.
-                cb_wait_front(cb_partials_gathered, GATHER_SLOTS);
+                // what makes the cumulative peel additive.  D28: the ROOT's window is the
+                // level-1 ring when the tree is built, and `compute_tree_fold_l0` above
+                // peels with the same pair of switches.
+                cb_wait_front(TREE ? cb_gather_l1 : cb_partials_gathered, TREE ? TREE_SL1 : GATHER_SLOTS);
                 cb_reserve_back(cb_stat_handoff, 1);
                 cb_push_back(cb_stat_handoff, 1);
-                cb_pop_front(cb_partials_gathered, GATHER_SLOTS);
+                cb_pop_front(TREE ? cb_gather_l1 : cb_partials_gathered, TREE ? TREE_SL1 : GATHER_SLOTS);
 #else
-                // The round's gather window is waited/popped ONCE: the pairwise walk
-                // addresses two tiles of the same CB at a stride, which a per-tile wait
-                // cannot express.  Legal exactly as it stands -- the writer publishes the
-                // round atomically (`cb_push_back(cb_partials_gathered, GATHER_SLOTS)`) and
-                // the CB is sized to that same window.  Under D27 the window is GATHER_SLOTS
-                // regardless of `rows`, so a RAGGED last block needs no special case and
-                // both kernels derive an IDENTICAL window -- which is what keeps a remote
-                // sender's locally-computed landing address equal to the root's.
-                cb_wait_front(cb_partials_gathered, GATHER_SLOTS);
-                // The DATA-FORMAT RECONFIG the eltwise_chain helpers emit for us has to be
-                // written out by hand here, and it is NOT optional: the preceding stage left
-                // the unpacker on the permute's (bf16 bank, fp32 handoff) pair or on pass
-                // A's cb_x_squared / cb_scaler (bf16), while the gather and the handoff are
-                // fp32.  Without these two calls the fold unpacks fp32 L1 through a bf16
-                // srcA/srcB and the accumulated sum reads as ~0, which the finalize then
-                // turns into rsqrt(eps) -- a uniform ~1/sqrt(eps) scale error that keeps pcc
-                // at 0.9997 and shows up only in rel-RMS (measured 994 against a 0.04 bound
-                // during integration).  That is exactly why the op's regression nets bound
-                // rms and not just pcc.
-                reconfig_data_format(cb_partials_gathered, cb_partials_gathered);
-                pack_reconfig_data_format(cb_stat_handoff);
-                add_tiles_init(cb_partials_gathered, cb_partials_gathered, /*acc_to_dest=*/true);
-                rsqrt_tile_init();
-                tile_regs_acquire();
-                for (uint32_t p = 0; p < GATHER_HALF; ++p) {
-                    add_tiles(cb_partials_gathered, cb_partials_gathered, p, GATHER_HALF + p, 0);
-                }
-                // The scope FOLLOWS the layout, which is the whole point: at BLOCK_ROWS == 1
-                // the permute is the identity and the stat is a column-0 vector, so D17's
-                // narrow <2,4> C is right (and 1.39x cheaper); above it the stats span
-                // columns and the wide scope is mandatory.  Two spellings, one predicate.
-                if constexpr (COMPACT) {
-                    compact_finalize_payload<INV_W_BITS, EPS_BITS, COMPACT_FIN_WIDE>(0);
+                if constexpr (TREE) {
+                    combine_fold<
+                        cb_gather_l1,
+                        TREE_SL1,
+                        cb_stat_handoff,
+                        /*FINALIZE=*/true,
+                        COMPACT,
+                        COMPACT_FIN_WIDE,
+                        INV_W_BITS,
+                        EPS_BITS>();
                 } else {
-                    stat_finalize_payload<INV_W_BITS, EPS_BITS>(0);
+                    combine_fold<
+                        cb_partials_gathered,
+                        GATHER_SLOTS,
+                        cb_stat_handoff,
+                        /*FINALIZE=*/true,
+                        COMPACT,
+                        COMPACT_FIN_WIDE,
+                        INV_W_BITS,
+                        EPS_BITS>();
                 }
-                tile_regs_commit();
-                cb_reserve_back(cb_stat_handoff, 1);
-                tile_regs_wait();
-                pack_tile(0, cb_stat_handoff);
-                tile_regs_release();
-                cb_push_back(cb_stat_handoff, 1);
-                cb_pop_front(cb_partials_gathered, GATHER_SLOTS);
 #endif
             }
 
