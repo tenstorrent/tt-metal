@@ -311,9 +311,24 @@ def _cp_gather_torch(tensor, mesh_device, mesh_config):
     return torch.cat(rows, dim=-2)
 
 
-def _identity_page_table(mesh_device, paged_config):
-    """Single-user page table mapping virtual block i to physical block i."""
-    page_table = torch.arange(paged_config.max_num_blocks, dtype=torch.int32).reshape(1, paged_config.max_num_blocks)
+def _identity_page_table(mesh_device, paged_config, mesh_config=None):
+    """Single-user page table mapping virtual block i to physical block i.
+
+    Under context parallelism the block pool is sharded along the CP axis (see
+    ``Gemma4Model._cp_block_pool_override``), so each rank owns ``max_num_blocks/cp``
+    blocks and addresses them locally, starting at 0. The table therefore just gets
+    narrower — it stays a replicated identity, because the per-rank difference is
+    carried by *which* tokens a rank holds, not by where it writes them.
+
+    The width also bounds the fill: paged_fill_cache requires the input length to be
+    <= ``page_table.shape[1] * block_size``, which here is exactly the local
+    sequence length.
+    """
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    cp = cp_degree(mesh_config) if mesh_config is not None else 1
+    num_blocks = paged_config.max_num_blocks // cp
+    page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
     return ttnn.from_torch(
         page_table,
         device=mesh_device,
@@ -633,7 +648,7 @@ def _build_prefill_model(mesh_device, model_path, chunk):
     )
     logger.info(f"Model ready in {time.time() - t0:.1f}s")
 
-    return model_args, model, kv_cache, _identity_page_table(mesh_device, paged_config)
+    return model_args, model, kv_cache, _identity_page_table(mesh_device, paged_config, _mesh_config(mesh_device))
 
 
 def _prefill_body_forward(model, page_table_tt, kv_cache, get_last_token):
@@ -927,3 +942,87 @@ def test_prefill_layers_vs_cpu_reference(mesh_device, traced, reset_seeds, reque
         f"argmax next token disagrees with the CPU reference: device {int(tt_top.indices[0])} "
         f"vs reference {int(ref_top.indices[0])}"
     )
+
+
+# ── Test 5: the KV cache actually holds the whole sequence ─────────────────────
+
+
+@parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
+def test_prefill_kv_cache_covers_sequence(mesh_device, reset_seeds, request):
+    """The paged KV cache holds every prefilled token, in the right place.
+
+    Nothing else reads the cache during CP prefill — the CP attention path uses the
+    in-memory K/V — so a broken fill is invisible to every other test here. It was
+    broken: the write destination is ``page_table[local_block]``, and the page table
+    was uploaded replicated, so all four CP ranks resolved virtual block 0 to the
+    same physical block and each wrote its own 1024 tokens at global positions
+    0..1023. Three quarters of the cache stayed zero and the four shards were
+    identical.
+
+    The fix shards the block pool along the CP axis, so a rank's pool *is* its shard
+    and local addressing is correct by construction. This test is the reader that
+    proves it, via ``export_paged_kv_cache_natural_order`` — which is also the
+    function a disaggregated decode target would use to ingest the cache.
+
+    Checks, on a full-attention layer (unbounded pool, so cache position == token
+    position) at 4k:
+      1. every real prompt token has a non-zero cache row — catches the zero tail
+      2. the CP shards differ from one another — catches the replicated-write bug,
+         which produced cp identical copies
+    """
+    from models.demos.gemma4.tt.attention.kv_cache import export_paged_kv_cache_natural_order
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    chunk = 4096
+    _guard_chunk(request, chunk)
+    _guard_cp_rope_alignment(mesh_device, chunk)
+
+    model_path = _model_path()
+    mesh_config = _mesh_config(mesh_device)
+    cp = cp_degree(mesh_config)
+    model_args, model, kv_cache, page_table_tt = _build_prefill_model(mesh_device, model_path, chunk)
+
+    tokens, _tokenizer, prompt_len = _prompt_tokens(model_path, chunk)
+    host_input = _host_tensor(
+        mesh_device, tokens, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_config=mesh_config, seq_dim=-1
+    )
+    forward = _prefill_body_forward(model, page_table_tt, kv_cache, get_last_token=-1)
+    with _lm_head_deferred(model):
+        _run_graph(mesh_device, forward, traced=False, host_input=host_input)
+
+    # A full-attention layer: its pool is unbounded, so cache row == token position.
+    # Sliding layers under a bounded pool wrap, which is a different contract.
+    layer_idx = next(i for i, lyr in enumerate(model.layers) if not lyr.self_attn.config.is_sliding)
+    k_cache, _v_cache = model.layers[layer_idx].self_attn.kv_cache
+    k_nat = export_paged_kv_cache_natural_order(k_cache, mesh_device, mesh_config, PAGE_BLOCK_SIZE)
+    logger.info(f"[kv_cache] layer {layer_idx} exported {tuple(k_nat.shape)} (tp, tokens, kv_heads, head_dim), CP={cp}")
+
+    assert k_nat.shape[1] >= prompt_len, (
+        f"exported cache covers only {k_nat.shape[1]} tokens but the prompt is {prompt_len}; "
+        f"the pool is too small or the CP shards were not concatenated"
+    )
+
+    # 1. Coverage: no real token may have an all-zero cache row. Before the fix,
+    # everything past tokens_per_rank was untouched zeros.
+    col0 = k_nat[0, :prompt_len]  # [tokens, kv_local, head_dim]
+    per_token_absmax = col0.abs().amax(dim=(-1, -2))
+    zero_tokens = int((per_token_absmax == 0).sum())
+    first_zero = int((per_token_absmax == 0).nonzero()[0]) if zero_tokens else -1
+    logger.info(f"[kv_cache] zero-valued token rows within the prompt: {zero_tokens} (first at {first_zero})")
+    assert zero_tokens == 0, (
+        f"{zero_tokens} of {prompt_len} prompt tokens have an all-zero KV row (first at index {first_zero}) — "
+        f"the fill did not cover the whole sequence"
+    )
+
+    # 2. Distinctness: with a replicated page table every rank wrote the same tokens,
+    # so the shards were byte-identical. They must differ now.
+    if cp > 1:
+        tokens_per_rank = k_nat.shape[1] // cp
+        shard0 = k_nat[0, :tokens_per_rank]
+        for r in range(1, cp):
+            other = k_nat[0, r * tokens_per_rank : (r + 1) * tokens_per_rank]
+            assert not torch.equal(shard0, other), (
+                f"CP shard {r} is identical to shard 0 — every rank wrote the same tokens, "
+                f"which is the replicated-page-table bug"
+            )
+        logger.info(f"[kv_cache] all {cp} CP shards differ, as expected")
