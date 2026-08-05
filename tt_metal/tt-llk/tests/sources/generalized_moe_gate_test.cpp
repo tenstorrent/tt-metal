@@ -2,182 +2,452 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Experimental generalized_moe_gate end-to-end LLK test (Blackhole + Wormhole B0).
-//
-// Mirrors the single-block (<=256 experts) non-sigmoid compute-kernel flow of the
-// ttnn generalized_moe_gate op (unified_kernels/generalized_moe_gate.hpp, num_blocks==1),
-// expanded from the Compute API (api/compute/experimental/generalized_moe_gate.h) down to
-// the raw _llk_* / SFPU-functor layer so it runs inside the tt-llk harness.
-//
-// Three fused phases in one kernel:
-//   1. Eltwise value+bias (FPU ELWADD, COPY mode) -> bias-corrected scores in DEST.
-//   2. In-place single-face (16x16) dest transposes (step0/step1[/step1_hi]/step2).
-//   3. Single-face bitonic top-2 / top-4-group / top-8-expert selection (SFPU), then normalize.
-//
-// GMG_UNGROUPED_TOP8 (compile-time, injected by the Python driver): 1 = ungrouped global
-// top-k, 0 = grouped DeepSeek. Both are covered.
-//
-// Input is a single 32x32 tile (face 0 = the 256 experts): logits (bf16, buffer_A),
-// bias (bf16 transposed, buffer_B), and expert indices (uint16, arange transposed, buffer_C).
-// Output DEST tile 0 = normalized top-8 scores, DEST tile 1 = their expert indices.
+/* generalized_moe_gate LLK test. GATE mirrors the call sequence in
+   api/compute/experimental/generalized_moe_gate.h; BINARY drives its FPU front-end alone; MOVE and
+   RUN work on a DEST image the test writes itself, one FPU MOP or SFPU op at a time or as the
+   multi-block combine tail, so a contract can be checked without standing up the rest of the gate. */
 
 #include <cstdint>
 
 #include "ckernel.h"
 #include "llk_defs.h"
-#include "tensor_shape.h"
-
-using namespace ckernel;
+#include "params.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
+constexpr int MODE_GATE   = 0; // Full gate, grouped or ungrouped.
+constexpr int MODE_BINARY = 1; // The FPU binary front-end on its own.
+constexpr int MODE_MOVE   = 2; // One transpose-dest / copy4rows MOP on a known DEST image.
+constexpr int MODE_RUN    = 3; // SFPU run merges and placements on a known DEST image.
 
-// 32x32 bf16 tile with 4 faces; the gate operates on face 0.
-static constexpr std::uint32_t NUM_FACES = 4;
+constexpr int MOVE_STEP0     = 0;
+constexpr int MOVE_STEP1     = 1;
+constexpr int MOVE_STEP1_HI  = 2;
+constexpr int MOVE_STEP2     = 3;
+constexpr int MOVE_COPY4ROWS = 4;
 
-// uint16 device DataFormat underlying value (indices are copied bit-exact); derived from the
-// named enum rather than hardcoded, matching the other index-carrying test sources (topk_test.cpp).
-static constexpr std::uint32_t UINT16_FORMAT = ckernel::to_underlying(DataFormat::UInt16);
+constexpr int RUN_MERGE4_TOP8       = 0;
+constexpr int RUN_COPY_TOPK_RUN     = 1;
+constexpr int RUN_PLACE_FIELD       = 2;
+constexpr int RUN_MERGE16           = 3;
+constexpr int RUN_COMBINE           = 4; // Combine tail, arriving run placed from intermediate.
+constexpr int RUN_COMBINE_RELOCATED = 5; // Combine tail, arriving run relocated within DEST.
+constexpr int RUN_COMBINE_FINALIZE  = 6; // Combine tail through finalize + step2: the >256 output.
+
+// buffer_A is the DEST image, buffer_B the binary's SrcB operand; every mode packs all four back out.
+constexpr std::uint32_t NUM_DEST_TILES = 4;
+
+// One DEST tile per region, in the order the SFPU's scores/indices/bias/intermediate offsets walk them.
+constexpr std::uint32_t SCORES_TILE = 0;
+constexpr std::uint32_t IDS_TILE    = 1;
+constexpr std::uint32_t KEYS_TILE   = 2;
+
+// The id tile is uint16 both in L1 and in DEST, so it is unpacked under its own format.
+constexpr std::uint32_t ID_FORMAT = ckernel::to_underlying(DataFormat::UInt16);
 
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common.h"
-#include "params.h"
+
+// generalized_moe_gate_init's non-sigmoid branch inits this unpack with ckernel::Transpose::Both,
+// which sets Haloize on SEC0 only: SrcA (the payload) is transposed within the face and the faces
+// are unpacked 0,2,1,3, while SrcB (the bias) arrives untransposed. So the gate scores payload.T
+// against an untransposed bias, and since the id tile is unpacked separately with no transpose, the
+// expert an id names is a transposed position. Driving Transpose::None here would leave the
+// id-to-score association -- the thing most likely to break -- untested.
+//
+// BINARY stays at Transpose::None: it is here to pin the FPU mop's arithmetic across all four faces,
+// and a transposed SrcA would only make its golden restate what the unpacker did.
+constexpr auto GATE_UNPACK_TRANSPOSE = (GMG_MODE == MODE_GATE) ? ckernel::Transpose::Both : ckernel::Transpose::None;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
+    const auto tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
 
-    // compute_kernel_hw_startup
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, NUM_FACES, NUM_FACES);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
 
-    // copy_tile(input_indices_cb, 0, 1): unpack the uint16 index tile into SrcA (bit-exact).
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
-        0 /* transpose_of_faces */, 0 /* within_face */, tensor_shape, UINT16_FORMAT, UINT16_FORMAT);
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(L1_ADDRESS(params.buffer_C[0]), UINT16_FORMAT, UINT16_FORMAT);
+    // Each section feeds one DEST half. Under DstSync::Half the second lands at
+    // get_dest_buffer_base() == DEST_REGISTER_HALF_SIZE, which is the only way to reach the upper
+    // half at all — see the section loop on the math thread.
+    for (std::uint32_t section = 0; section < GMG_SECTIONS; ++section)
+    {
+        if constexpr (GMG_MODE == MODE_GATE || GMG_MODE == MODE_BINARY)
+        {
+            // GATE uses the raw tile for the ids, mirroring the op's copy_tile before
+            // generalized_moe_gate_init. BINARY takes two: buffer_A[1] seeds the score region so RELOAD
+            // has a known SrcA to read back, buffer_A[2] the key region so ACC_TO_DEST accumulates onto
+            // something the test picked rather than onto whatever DEST held.
+            _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* to_from_int8 */>(
+                ID_FORMAT, ID_FORMAT, params.TILE_SIZE_UNPACK_A);
+            _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, ID_FORMAT, ID_FORMAT);
+            _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_A[1]), ID_FORMAT, ID_FORMAT);
+            if constexpr (GMG_MODE == MODE_BINARY)
+            {
+                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    L1_ADDRESS(params.buffer_A[2]), ID_FORMAT, ID_FORMAT);
+            }
 
-    // generalized_moe_gate_init (non-sigmoid): unpack A (logits) and B (bias) with Transpose::Both,
-    // matching the Compute API (llk_unpack_AB_init<NONE>(icb0, icb1, Transpose::Both)). This is why the
-    // bias tile is uploaded transposed (the unpacker's within-face transpose undoes it).
-    _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::Both);
+            _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* to_from_int8 */>(
+                formats.unpack_A_src, formats.unpack_A_dst, params.TILE_SIZE_UNPACK_A);
 
-    // generalized_moe_gate (non-sigmoid): copy-add -> stream logits (SrcA) and bias (SrcB).
-    _llk_unpack_AB_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]));
+            if constexpr (GMG_MODE == MODE_GATE && GMG_SIGMOID)
+            {
+                // transpose_wh_tile: the 32x32 transpose is the unpacker's, both flags set.
+                //
+                // acc_to_dest is true on the init and false on the call, which is the asymmetry
+                // transpose_init/transpose_tile ship and neither value is arbitrary. The init ignores
+                // it outright: the transpose_of_faces branch of the mop config never reads it. The
+                // call does not -- acc_to_dest picks which unpacker's base address register receives
+                // the L1 address, SEC0 (SrcA) when false and SEC1 (SrcB) when true. This mop issues
+                // UNPACR on SrcA, so a true here would leave it unpacking whatever SEC0 last pointed
+                // at, which is the id tile above.
+                _llk_unpack_A_init_<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    1 /* transpose_of_faces */, 1 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
 
-    // Set srcb dummy valid for the transpose-dest / SFPU phases.
-    _llk_unpack_set_srcb_dummy_valid_();
+                // The RELOAD binary takes SrcA back from DEST, so the unpacker only feeds SrcB and
+                // hands SrcA's bank over. This DEST_TO_SRCA reuse is the configuration the op ships
+                // and the reason RELOAD needs the SRCA_VLD stall it carries.
+                _llk_unpack_A_init_<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA, unpack_to_dest>(
+                    0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+                _llk_unpack_A_<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA, unpack_to_dest>(
+                    L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src, formats.unpack_A_dst);
+            }
+            else
+            {
+                _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, GATE_UNPACK_TRANSPOSE);
+                _llk_unpack_AB_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]));
+            }
+        }
+        else
+        {
+            // RUN starts from a DEST image the test builds, so every tile comes in raw under the
+            // uint16 config.
+            _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* to_from_int8 */>(
+                ID_FORMAT, ID_FORMAT, params.TILE_SIZE_UNPACK_A);
+            _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, ID_FORMAT, ID_FORMAT);
+            for (std::uint32_t tile = 0; tile < NUM_DEST_TILES; ++tile)
+            {
+                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    L1_ADDRESS(params.buffer_A[tile]), ID_FORMAT, ID_FORMAT);
+            }
+        }
+
+        // The binary's mop end op (SETRWC CLR_AB) clears the SrcB valid, so this has to follow the
+        // unpacks above.
+        if constexpr (GMG_MODE != MODE_BINARY)
+        {
+            _llk_unpack_set_srcb_dummy_valid_();
+        }
+    }
 }
 
 #endif
 
 #ifdef LLK_TRISC_MATH
 
+#include "ckernel_sfpu.h"
+#include "llk_lib_math_wrappers.h"
+
+using namespace ckernel;
+
+#define DST_SYNC_MODE  dest_sync
+#define DST_ACCUM_MODE is_fp32_dest_acc_en
+#include "experimental/llk_sfpu/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
+#include "llk_sfpu/ckernel_sfpu_sigmoid.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#undef DST_SYNC_MODE
+#undef DST_ACCUM_MODE
+
 #include "experimental/llk_math_generalized_moe_gate_eltwise_binary.h"
 #include "experimental/llk_math_generalized_moe_gate_transpose_dest_single_face.h"
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu_params.h"
-#include "params.h"
-#include "sfpu/experimental/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 
-static constexpr bool APPROX   = false;
-static constexpr bool IS_32BIT = false; // gate is bf16-only (topk/transpose static_assert !is_32bit)
+// step2 ends on a SETRWC CLR_AB and is the only op here that does. The paths that skip it have to
+// hand the Src banks back themselves, or the next kernel launched on this core stalls on its first
+// UNPACR. BINARY is exempt: it issues no dummy valid, and the binary's own mop end op clears.
+constexpr bool STEP2_RUNS = (GMG_MODE == MODE_GATE && !(GMG_PRODUCE_RUN && !GMG_GROUPED)) || (GMG_MODE == MODE_MOVE && GMG_SUB_OP == MOVE_STEP2) ||
+                            (GMG_MODE == MODE_RUN && GMG_SUB_OP == RUN_COMBINE_FINALIZE);
+
+// The sigmoid front-end leaves its result in DEST, so the binary after it has to be RELOAD; that is
+// the only combination the op ever instantiates RELOAD in.
+constexpr GeneralizedMoeGateEltwiseBinaryMode BINARY_MODE =
+    (GMG_RELOAD || GMG_SIGMOID) ? GeneralizedMoeGateEltwiseBinaryMode::RELOAD : GeneralizedMoeGateEltwiseBinaryMode::COPY;
+
+// One SFPU call on DEST tile 0; each gate functor walks its own region offsets from there.
+#define GMG_SFPU_CALL(FN, TEMPLATES, ...) SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0, VectorMode::RC_custom, ##__VA_ARGS__)
+
+static inline void run_gate()
+{
+    GMG_SFPU_CALL(generalized_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
+
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_<false>();
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_<is_fp32_dest_acc_en, false>();
+
+    if constexpr (GMG_GROUPED)
+    {
+        GMG_SFPU_CALL(generalized_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_<false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, false>();
+        GMG_SFPU_CALL(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
+    }
+    else
+    {
+        // Groups 4-7 are parked in rows 8-11 while the low half is merged, because step1_hi with
+        // d2b_dst=0 writes its run over rows 0-7. Each copy4rows takes its own SrcB window so a
+        // later MOVB2D cannot read the previous copy's leftover.
+        _llk_math_generalized_moe_gate_copy4rows_init_<4, 8, false, 16>();
+        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
+
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<0, 0, false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, false>();
+        GMG_SFPU_CALL(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0, 0, 2));
+
+        _llk_math_generalized_moe_gate_copy4rows_init_<0, 12, false, 20>();
+        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
+        _llk_math_generalized_moe_gate_copy4rows_init_<8, 4, false, 24>();
+        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
+
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<4, 0, false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, false>();
+        GMG_SFPU_CALL(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0, 4, 6));
+
+        _llk_math_generalized_moe_gate_copy4rows_init_<12, 0, false, 28>();
+        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
+
+        if constexpr (GMG_PRODUCE_RUN)
+        {
+            GMG_SFPU_CALL(generalized_moe_gate_merge16_to_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TO_LO, GMG_TO_HI, GMG_IDX_OFFSET));
+        }
+        else
+        {
+            GMG_SFPU_CALL(generalized_moe_gate_finalize_ungrouped, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
+        }
+    }
+
+    // produce_run leaves the run in the SFPU layout for a later combine to consume, so the output
+    // transpose is the one step the run-producing path skips.
+    if constexpr (!(GMG_PRODUCE_RUN && !GMG_GROUPED))
+    {
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false>();
+    }
+}
+
+static inline void run_move()
+{
+    if constexpr (GMG_SUB_OP == MOVE_STEP0)
+    {
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_<false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_<is_fp32_dest_acc_en, false>();
+    }
+    else if constexpr (GMG_SUB_OP == MOVE_STEP1)
+    {
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_<false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, false>();
+    }
+    else if constexpr (GMG_SUB_OP == MOVE_STEP1_HI)
+    {
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<GMG_D2B_DST, GMG_B2D_BASE, false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, false>();
+    }
+    else if constexpr (GMG_SUB_OP == MOVE_STEP2)
+    {
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false>();
+    }
+    else
+    {
+        _llk_math_generalized_moe_gate_copy4rows_init_<GMG_ROW_SRC, GMG_ROW_DST, false, GMG_SRCB>();
+        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
+        if constexpr (GMG_SECOND_COPY)
+        {
+            _llk_math_generalized_moe_gate_copy4rows_init_<GMG_ROW_SRC_2, GMG_ROW_DST_2, false, GMG_SRCB_2>();
+            _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
+        }
+    }
+}
+
+static inline void run_placement()
+{
+    if constexpr (GMG_PRE_COPY4ROWS)
+    {
+        // An FPU MOP leaves the Dst RWC advanced by +64 per tile. The SFPU ops below each reset it
+        // on entry; without a MOP in front of them that reset is never needed and never tested.
+        _llk_math_generalized_moe_gate_copy4rows_init_<GMG_ROW_SRC, GMG_ROW_DST, false, GMG_SRCB>();
+        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
+    }
+
+    if constexpr (GMG_SUB_OP == RUN_MERGE4_TOP8)
+    {
+        GMG_SFPU_CALL(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, GMG_READ_BASE, GMG_TO_LO, GMG_TO_HI));
+    }
+    else if constexpr (GMG_SUB_OP == RUN_COPY_TOPK_RUN)
+    {
+        GMG_SFPU_CALL(generalized_moe_gate_copy_topk_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_FROM_LO, GMG_FROM_HI, GMG_TO_LO, GMG_TO_HI));
+    }
+    else if constexpr (GMG_SUB_OP == RUN_PLACE_FIELD)
+    {
+        GMG_SFPU_CALL(
+            generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, GMG_FIELD, GMG_FROM_LO, GMG_FROM_HI, GMG_TO_LO, GMG_TO_HI));
+    }
+    else if constexpr (GMG_SUB_OP == RUN_MERGE16)
+    {
+        GMG_SFPU_CALL(generalized_moe_gate_merge16_to_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TO_LO, GMG_TO_HI, GMG_IDX_OFFSET));
+    }
+    else if constexpr (GMG_SUB_OP == RUN_COMBINE_FINALIZE)
+    {
+        // generalized_moe_gate_combine_finalize, whole. The arriving run is placed at {4,6}, then
+        // the pair at {0,2}+{4,6} is sorted, normalized and transposed to the output layout. Note
+        // finalize does its own merge, so unlike the RUN_COMBINE tail there is no merge16 here.
+        GMG_SFPU_CALL(generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, 0, 0, 2, 4, 6));
+        GMG_SFPU_CALL(generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, 1, 4, 6, 4, 6));
+        GMG_SFPU_CALL(generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, 2, 8, 10, 4, 6));
+        GMG_SFPU_CALL(generalized_moe_gate_finalize_ungrouped, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false>();
+    }
+    else if constexpr (GMG_SUB_OP == RUN_COMBINE_RELOCATED)
+    {
+        // The same combine, but the arriving run is already in DEST at {8,10} and reaches the merge
+        // slot by relocation instead. Whether a relocated run is still a run the merge accepts is
+        // the run format's contract, and copy_topk_run's own test only checks that cells moved.
+        GMG_SFPU_CALL(generalized_moe_gate_copy_topk_run, (APPROX_MODE, is_fp32_dest_acc_en, 8, 10, 4, 6));
+        GMG_SFPU_CALL(generalized_moe_gate_merge16_to_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TO_LO, GMG_TO_HI, GMG_IDX_OFFSET));
+    }
+    else
+    {
+        // The multi-block combine tail. One block's run is already resident at {0,2}; the other
+        // arrives one field at a time through the intermediate region, then the two merge.
+        //
+        // The placement lands at {4,6} and the merge reads {0,2}+{4,6} because merge16 hardcodes
+        // those four offsets, so neither is a free parameter. The three source pairs are spread
+        // over the intermediate region only because a test kernel cannot re-unpack between fields
+        // the way the op's copy_tile does; place_field's own test sweeps the source offsets.
+        GMG_SFPU_CALL(generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, 0, 0, 2, 4, 6));
+        GMG_SFPU_CALL(generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, 1, 4, 6, 4, 6));
+        GMG_SFPU_CALL(generalized_moe_gate_place_field_from_interm, (APPROX_MODE, is_fp32_dest_acc_en, 2, 8, 10, 4, 6));
+        GMG_SFPU_CALL(generalized_moe_gate_merge16_to_run, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TO_LO, GMG_TO_HI, GMG_IDX_OFFSET));
+    }
+}
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t eps   = params.GMG_EPS;
-    const std::uint32_t scale = params.GMG_SCALE;
-
-    // compute_kernel_hw_startup
-    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    // The harness bypasses compute_kernel_hw_startup's one-time SFPU config, so run the
-    // idempotent once-init before any SFPU op.
-    _llk_math_eltwise_unary_sfpu_init_once_();
+    // Two sections walk both DEST halves under DstSync::Half. Only the second reaches a non-zero
+    // get_dest_buffer_base(), which every set_dst_write_addr in the op adds to its tile offset.
+    for (std::uint32_t section = 0; section < GMG_SECTIONS; ++section)
+    {
+        _llk_math_wait_for_dest_available_<dest_sync>();
 
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
+        {
+            _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* to_from_int8 */>(ID_FORMAT);
+            _llk_math_eltwise_unary_datacopy_init_wrapper_<
+                DataCopyType::A2D,
+                is_fp32_dest_acc_en,
+                BroadcastType::NONE,
+                false /* is_int_fpu_en */,
+                PackMode::Default>(params.num_faces, ID_FORMAT);
 
-    // copy_tile(input_indices_cb, 0, 1): datacopy the uint16 index tile to DEST tile 1.
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(NUM_FACES, UINT16_FORMAT);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE>(1 /* dst_index */, UINT16_FORMAT, UINT16_FORMAT);
+            const auto copy_to_dest_tile = [](const std::uint32_t tile, const std::uint32_t format = ID_FORMAT)
+            {
+                _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                    tile, format, format);
+            };
 
-    // ---- generalized_moe_gate_init (non-sigmoid) ----
-    _llk_math_generalized_moe_gate_eltwise_binary_init_<EltwiseBinaryType::ELWADD, GeneralizedMoeGateEltwiseBinaryMode::COPY, MATH_FIDELITY>(
-        NUM_FACES, 0 /* acc_to_dest */);
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_<IS_32BIT>();
-    // topk init (SFPU): the metal wrapper resets the Dst RWC counter then calls the (no-op)
-    // lib init; replicate both here since the harness has no wrapper layer.
-    math::reset_counters(p_setrwc::SET_ABD_F);
-    ckernel::sfpu::_init_generalized_moe_gate_topk<APPROX, is_fp32_dest_acc_en>();
+            // Each datacopy consumes one unpacked operand, so these have to match the unpacker's order:
+            // the id tile (GATE), the score then key regions (BINARY), the whole image (MOVE, RUN).
+            if constexpr (GMG_MODE == MODE_GATE)
+            {
+                copy_to_dest_tile(IDS_TILE);
+            }
+            else if constexpr (GMG_MODE == MODE_BINARY)
+            {
+                copy_to_dest_tile(SCORES_TILE); // RELOAD's SrcA
+                copy_to_dest_tile(KEYS_TILE);   // ACC_TO_DEST's accumulator base
+            }
+            else
+            {
+                for (std::uint32_t tile = 0; tile < NUM_DEST_TILES; ++tile)
+                {
+                    copy_to_dest_tile(tile);
+                }
+            }
+            _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* to_from_int8 */>(formats.math);
 
-    // ---- generalized_moe_gate (non-sigmoid) ----
-    // Copy-add (FPU): bias-corrected scores.
-    _llk_math_generalized_moe_gate_eltwise_binary_<EltwiseBinaryType::ELWADD, DST_SYNC, is_fp32_dest_acc_en, MATH_FIDELITY>(NUM_FACES, 0 /* dst_index */);
+            if constexpr (GMG_MODE == MODE_GATE && GMG_SIGMOID)
+            {
+                // The op's enable_sigmoid front-end: transpose_wh_tile then sigmoid_tile leave the
+                // activated score in the score region, which the RELOAD binary below reads back through
+                // MOVD2A instead of taking SrcA from the unpacker. The transpose itself is the
+                // unpacker's; math only datacopies what it produced.
+                _llk_math_eltwise_unary_datacopy_init_wrapper_<
+                    DataCopyType::A2D,
+                    is_fp32_dest_acc_en,
+                    BroadcastType::NONE,
+                    false /* is_int_fpu_en */,
+                    PackMode::Default>(params.num_faces, formats.math);
+                copy_to_dest_tile(SCORES_TILE, formats.math);
 
-    // Sum top2 (SFPU).
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_generalized_moe_gate_sum_top2<APPROX, is_fp32_dest_acc_en>, 0 /* dst_index */, VectorMode::RC_custom);
+                SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (false /* fast_and_approx */));
+                SFPU_UNARY_CALL(
+                    dest_sync,
+                    is_fp32_dest_acc_en,
+                    calculate_sigmoid,
+                    (false /* fast_and_approx */, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+                    0,
+                    VectorMode::RC_custom);
+            }
+        }
 
-    // Transpose dest step 0 (FPU) — puts each group g at DEST row g.
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_<IS_32BIT>();
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_<is_fp32_dest_acc_en, IS_32BIT>();
+        if constexpr (GMG_MODE == MODE_GATE || GMG_MODE == MODE_BINARY)
+        {
+            _llk_math_generalized_moe_gate_eltwise_binary_init_<ELTWISE_BINARY_OP, BINARY_MODE, MATH_FIDELITY>(params.num_faces, ACC_TO_DEST);
+            _llk_math_generalized_moe_gate_eltwise_binary_<ELTWISE_BINARY_OP, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>(
+                params.num_faces, 0 /* dst_index */);
+        }
 
-#if GMG_UNGROUPED_TOP8
-    // TRUE GLOBAL TOP-8 over all 256 experts (ungrouped).
-    // Save groups 4-7 (rows 4-7) -> rows 8-11.
-    _llk_math_generalized_moe_gate_copy4rows_init_<4, 8, IS_32BIT, 16>();
-    _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, IS_32BIT>();
-    // topA = top8(groups 0-3): step1_hi<d2b_dst=0> -> run rows 0-7 -> merge -> topA at {0,2}.
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<0, 0, IS_32BIT>();
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, IS_32BIT>();
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_gmg_merge4_top8<is_fp32_dest_acc_en, 0, 0, 2>, 0 /* dst_index */, VectorMode::RC_custom);
-    // Park topA (rows 0-3) -> rows 12-15; restore groups 4-7 (rows 8-11) -> rows 4-7.
-    _llk_math_generalized_moe_gate_copy4rows_init_<0, 12, IS_32BIT, 20>();
-    _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, IS_32BIT>();
-    _llk_math_generalized_moe_gate_copy4rows_init_<8, 4, IS_32BIT, 24>();
-    _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, IS_32BIT>();
-    // topB = top8(groups 4-7): step1_hi<d2b_dst=4> -> run rows 0-7 -> merge -> topB at {4,6}.
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<4, 0, IS_32BIT>();
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, IS_32BIT>();
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_gmg_merge4_top8<is_fp32_dest_acc_en, 0, 4, 6>, 0 /* dst_index */, VectorMode::RC_custom);
-    // Restore topA (rows 12-15) -> rows 0-3; now topA@{0,2}, topB@{4,6}.
-    _llk_math_generalized_moe_gate_copy4rows_init_<12, 0, IS_32BIT, 28>();
-    _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, IS_32BIT>();
-    // Single <=256 block: full bitonic sort of topA{0,2}+topB{4,6} -> global top-8, keep top-topk + normalize.
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::_generalized_moe_gate_finalize_ungrouped<APPROX, is_fp32_dest_acc_en, GMG_TOPK, false>,
-        0 /* dst_index */,
-        VectorMode::RC_custom,
-        eps,
-        scale);
-#else
-    // Grouped DeepSeek gate: sort_top4 selects top-4 groups, step1 lays them out, top8 merges.
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::_generalized_moe_gate_sort_top4_groups<APPROX, is_fp32_dest_acc_en>, 0 /* dst_index */, VectorMode::RC_custom);
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_<IS_32BIT>();
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, IS_32BIT>();
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::_generalized_moe_gate_top8<APPROX, is_fp32_dest_acc_en>, 0 /* dst_index */, VectorMode::RC_custom, eps, scale);
-#endif // GMG_UNGROUPED_TOP8
+        if constexpr (GMG_MODE != MODE_BINARY)
+        {
+            _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_<false>();
+            SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
+        }
 
-    // Transpose dest step 2 (FPU) — final output layout.
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<IS_32BIT>();
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, IS_32BIT>();
+        if constexpr (GMG_MODE == MODE_GATE)
+        {
+            run_gate();
+        }
+        else if constexpr (GMG_MODE == MODE_MOVE)
+        {
+            run_move();
+        }
+        else if constexpr (GMG_MODE == MODE_RUN)
+        {
+            run_placement();
+        }
 
-    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+        if constexpr (GMG_MODE != MODE_BINARY && !STEP2_RUNS)
+        {
+            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+        }
+
+        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif
@@ -186,34 +456,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    const FormatConfig& formats = params.formats;
-#endif
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
-
-    const std::uint32_t tile_size = tensor_shape.total_tensor_size();
-    const std::uint32_t num_faces = tensor_shape.total_num_faces();
-    const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
-    const bool narrow_tile        = tensor_shape.num_faces_c_dim == 1;
-
-    // compute_kernel_hw_startup
+    // Every DEST tile is packed as uint16: the test compares bit patterns, so nothing may be
+    // reformatted on the way out. Small ids are bf16 denormals and a float pack path would flush them.
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
+        ID_FORMAT, ID_FORMAT, params.TILE_SIZE_PACK, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(ID_FORMAT, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
 
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
-        formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
-
-    _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
-
-    _llk_packer_wait_for_math_done_();
-    // DEST tile 0 = normalized scores, DEST tile 1 = expert indices.
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(1 /* dst_index */, L1_ADDRESS(params.buffer_Res[1]));
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    // Section s packs to buffer_Res[4s..4s+3], so the two DEST halves come back separately and can
+    // be compared against each other.
+    for (std::uint32_t section = 0; section < GMG_SECTIONS; ++section)
+    {
+        _llk_packer_wait_for_math_done_();
+        for (std::uint32_t tile = 0; tile < NUM_DEST_TILES; ++tile)
+        {
+            LLK_ASSERT(
+                (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[section * NUM_DEST_TILES + tile]));
+        }
+        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif

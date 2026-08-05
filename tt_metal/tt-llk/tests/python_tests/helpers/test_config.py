@@ -455,22 +455,27 @@ class TestConfig:
         StimuliConfig.WITH_COVERAGE = with_coverage
         TestConfig.SPEED_OF_LIGHT = speed_of_light
 
+        # llk_api is on the path, but its llk_sfpu subdirectory deliberately is not: llk_sfpu
+        # shares twelve basenames with tt_llk_<arch>/common/inc/sfpu, and those have to win.
+        # Headers needing a metal SFPU kernel spell the prefix instead
+        # (ckernel_sfpu_generalized_moe_gate_topk_single_face.h -> llk_sfpu/ckernel_sfpu_exp.h).
+        #
+        # That resolves the include but not the dependency direction: neither ckernel_sfpu_exp.h
+        # nor ckernel_sfpu_recip.h exists under tt_llk_<arch>/, so an LLK-lib header reaches up
+        # into the metal ckernel layer and cannot build in the standalone tt-llk repo. Fixing it
+        # means vendoring the two kernels into tt_llk_<arch>/common/inc/sfpu/, or dropping the
+        # dependency.
         hw_specific_includes = []
         if TestConfig.ARCH == ChipArchitecture.WORMHOLE:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-1xx/wormhole",
                 "-I../../hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines",
                 "-I../../hw/ckernels/wormhole_b0/metal/llk_api",
-                # Experimental SFPU lib headers (e.g. generalized_moe_gate topk) include
-                # metal-layer SFPU primitives (ckernel_sfpu_exp.h / ckernel_sfpu_recip.h)
-                # by bare name; those live only in the metal llk_sfpu dir.
-                "-I../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.BLACKHOLE:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-1xx/blackhole",
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
-                "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [
