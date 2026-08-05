@@ -815,40 +815,13 @@ Result conv2d_L1(
         }
     }
 
-    // [#48552] WEIGHTS-DFB budget guard (mirrors the ACT-CB kDfbRingUnitCap above, ~line 626).
-    // A HEIGHT_SHARDED conv keeps the WHOLE per-core output width (full N) of weights in one CB, because HS has
-    // num_cores_c=1 so per_core_out_matrix_width_ntile == full N; the weights CB is sized
-    // per_core_out_matrix_width_ntile * act_block_w_ntiles tiles (conv2d_op_program_factory_common.cpp:187,
-    // then *kernel_size / *2 for fully-buffered / double-buffered -- only larger). The fused compute kernel
-    // conv_bmm_tilize_metal2.cpp has NO weight-width blocking, so for large N that ring extent
-    // (num_pages * page_size, in 16-byte units) exceeds the uint16_t DFB ring limit (65536 units = 1 MB). On the
-    // craq-sim emulator this over-allocation is NOT hard-FATAL'd -> only the lower N/2 weight columns are
-    // delivered and the conv silently comes out N-HALVED (512->1024 = 512 tiles = 65536 units; 1024->2048 =
-    // 2048 tiles). HS cannot shrink per_core_N (num_cores_c is fixed at 1); the fix is BLOCK_SHARDED
-    // (num_cores_c>1 => per_core_N = N/num_cores_c fits) or a larger grid. FATAL loudly here instead of returning
-    // wrong data. Uses the base per_core_N * K product (a lower bound: the factory's *kernel_size/*2 multipliers
-    // only push it higher), so this never false-FATALs a conv that actually fits.
-    if (arch_is_quasar && height_sharded_conv && !mm_conv) {
-        const DataType resolved_weights_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
-        const uint32_t weight_units_per_tile =
-            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(resolved_weights_dtype)) / 16u;
-        const uint64_t per_core_weight_ring_units =
-            static_cast<uint64_t>(opt_conv_op_parallel_config.per_core_out_matrix_width_ntile) *
-            opt_conv_op_block_config.act_block_w_ntiles * weight_units_per_tile;
-        constexpr uint64_t kDfbWeightsRingUnitCap = 65535u;  // strictly below the 65536 uint16_t DFB ring limit
-        TT_FATAL(
-            per_core_weight_ring_units <= kDfbWeightsRingUnitCap,
-            "Quasar HEIGHT_SHARDED conv per-core weights buffer is {} DFB units (> {} = ~1 MB): out_channels={} "
-            "needs per_core_N={} tiles x K={} tiles of weights resident on a single core (HS has num_cores_c=1), "
-            "which overflows the uint16_t weights DFB ring and silently HALVES the output width on the emulator. "
-            "Use BLOCK_SHARDED (num_cores_c>1 so per_core_N = N/num_cores_c fits) or a larger core grid.",
-            per_core_weight_ring_units,
-            kDfbWeightsRingUnitCap,
-            out_channels,
-            opt_conv_op_parallel_config.per_core_out_matrix_width_ntile,
-            opt_conv_op_block_config.act_block_w_ntiles);
-    }
-
+    // [#48552] NOTE: an earlier HEIGHT_SHARDED per-core weights-buffer guard (FATAL if
+    // per_core_N * act_block_w * tile > 65535 16-byte units) was REMOVED here. Its 65535-unit (uint16, 1 MB)
+    // threshold was the OLD compute-DFB ring limit; main f6b15a/6079b5f widened ring_size to uint32, so the real
+    // ceiling is the ~4 MB L1 bank, already enforced by dataflow_buffer.cpp:812 (ring_bytes <= unreserved_l1_size).
+    // The stale 1 MB guard false-FATAL'd valid HEIGHT_SHARDED convs whose weights fit the uint32 ring (e.g. layer3
+    // 256->256 3x3 = 576 tiles ~1.15 MB, which runs fine), blocking the layer3 HS workaround. Genuine bank
+    // overflows (e.g. layer4 512->512 3x3 = 4.6 MB) still FATAL at dataflow_buffer.cpp:812.
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
 
