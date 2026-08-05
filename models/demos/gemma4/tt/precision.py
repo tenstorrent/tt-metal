@@ -16,6 +16,8 @@ are added there rather than in code.
 import json
 import os
 
+from loguru import logger
+
 import ttnn
 
 _PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "precision_overrides.json")
@@ -32,6 +34,58 @@ _DTYPE_BY_NAME = {
     "fp32": ttnn.float32,
     "float32": ttnn.float32,
 }
+
+
+def _model_key_candidates(model_path, hf_config=None):
+    """Table-key candidates for the active checkpoint, best first.
+
+    The basename alone is not enough. ``HF_MODEL`` is commonly a lowercased HF
+    id (``google/gemma-4-31b-it`` — what the Tracy profile docstrings tell you
+    to export) or a hashed snapshot dir under ``~/.cache/huggingface/hub/.../
+    snapshots/<sha>``. Both miss the canonical ``gemma-4-31B-it`` key, and a
+    miss silently downgrades every module to bf16. So fall back to identifying
+    the variant from the config, the same way ``tests/test_factory.py``
+    resolves its PCC-threshold keys.
+    """
+    candidates = [os.path.basename(str(model_path).rstrip("/"))]
+
+    config = hf_config
+    if config is None:
+        try:
+            from transformers import AutoConfig
+
+            config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        except Exception:
+            # Config inference is best-effort; the basename may still match.
+            return tuple(dict.fromkeys(candidates))
+
+    text_config = getattr(config, "text_config", config)
+    hidden = getattr(text_config, "hidden_size", None)
+    is_moe = bool(getattr(text_config, "enable_moe_block", False))
+    if is_moe:
+        candidates.append("gemma-4-26B-A4B-it")
+    elif hidden == 5376:
+        candidates.append("gemma-4-31B-it")
+    elif hidden == 3840:
+        candidates.append("gemma-4-12B-it")
+    return tuple(dict.fromkeys(candidates))
+
+
+def _lookup_model_entry(table, candidates):
+    """First (key, entry) in ``candidates`` present in ``table``, case-insensitively.
+
+    Returns ``(None, None)`` when nothing matches. Case folding matters because
+    HF ids lowercase the variant (``gemma-4-31b-it``) while the table keys use
+    the checkpoint's own casing (``gemma-4-31B-it``).
+    """
+    by_lower = {k.lower(): (k, v) for k, v in table.items()}
+    for candidate in candidates:
+        if candidate in table:
+            return candidate, table[candidate]
+        hit = by_lower.get(candidate.lower())
+        if hit:
+            return hit
+    return None, None
 
 
 def dtype_to_str(dtype):
@@ -64,13 +118,15 @@ class Gemma4Precision:
         return f"Gemma4Precision({self._overrides!r})"
 
     @classmethod
-    def load(cls, model_path, mesh_shape):
+    def load(cls, model_path, mesh_shape, hf_config=None):
         """Resolve overrides for the given (model, mesh).
 
-        model_path: full path to the HF checkpoint; we key on the basename.
+        model_path: full path to the HF checkpoint, or an HF id; the basename is
+            the first key candidate. ``hf_config`` (when passed) supplies the
+            canonical-variant fallback for paths the basename can't identify —
+            see ``_model_key_candidates``.
         mesh_shape: (rows, cols) tuple, formatted as "RxC" for the JSON key.
         """
-        model_key = os.path.basename(str(model_path).rstrip("/"))
         mesh_key = f"{mesh_shape[0]}x{mesh_shape[1]}"
 
         try:
@@ -79,8 +135,20 @@ class Gemma4Precision:
         except FileNotFoundError:
             return cls({})
 
-        model_entry = table.get(model_key)
+        candidates = _model_key_candidates(model_path, hf_config)
+        model_key, model_entry = _lookup_model_entry(table, candidates)
         if not model_entry:
+            # A silent miss here downgrades every module to the caller's default
+            # dtype (bf16), which looks like a 1.4x perf regression with no error
+            # — so say so loudly. Only warn when the table actually has entries
+            # to match against (an empty/absent table is a valid "no overrides").
+            if any(k for k in table if not k.startswith("_")):
+                logger.warning(
+                    "Gemma4 precision: no precision_overrides.json entry for any of {} "
+                    "(table has {}); every module falls back to the caller's default dtype.",
+                    list(candidates),
+                    sorted(k for k in table if not k.startswith("_")),
+                )
             return cls({})
 
         # Mesh-specific override wins over "default"
@@ -95,4 +163,10 @@ class Gemma4Precision:
                     f"unknown dtype; expected one of {sorted(_DTYPE_BY_NAME)}"
                 )
             resolved[k] = _DTYPE_BY_NAME[v]
+        logger.info(
+            "Gemma4 precision: resolved {}[{}] -> {}",
+            model_key,
+            mesh_key,
+            {k: v for k, v in raw.items() if k in KNOWN_MODULES},
+        )
         return cls(resolved)
