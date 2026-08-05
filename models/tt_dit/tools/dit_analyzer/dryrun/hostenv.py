@@ -12,10 +12,13 @@ faithful than it looks.
 
 from __future__ import annotations
 
+import importlib.abc
+import importlib.machinery
+import importlib.util
 import os
 import sys
 import types
-from typing import List, Optional, Sequence
+from typing import Any, List, Optional, Sequence
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), *[".."] * 5))
 
@@ -45,6 +48,11 @@ def ensure_host_env() -> types.ModuleType:
     _ensure_module("loguru", _make_loguru)
     _ensure_module("safetensors", _make_safetensors)
     _ensure_module("typing_extensions", _make_typing_extensions)
+    # diffusers is a *reference* dependency: tt_dit models import it for
+    # from_pretrained / torch-reference comparison, never for the shim's shape
+    # analysis. Stub any `diffusers.*` import so a model that imports it at module
+    # level (e.g. the SD3.5 VAE) still dry-runs dependency-free.
+    _install_stub_package("diffusers", "diffusers: stubbed (reference-only; not used by shape analysis)")
     return _TORCH
 
 
@@ -117,6 +125,63 @@ def _ensure_module(name: str, make) -> None:
     make()
 
 
+class _AnyStub:
+    """A permissive placeholder: callable, subscriptable, any attribute is itself.
+
+    Enough for a model to *import* a reference library and reference its symbols in
+    annotations / unused branches; anything actually invoked on it during a dry run
+    would surface as a normal error rather than a wrong result.
+    """
+
+    def __init__(self, name: str = "stub"):
+        self._name = name
+
+    def __call__(self, *a: Any, **k: Any) -> "_AnyStub":
+        return self
+
+    def __getattr__(self, name: str) -> "_AnyStub":
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return _AnyStub("%s.%s" % (self._name, name))
+
+    def __getitem__(self, _key: Any) -> "_AnyStub":
+        return self
+
+
+class _StubModule(types.ModuleType):
+    def __getattr__(self, name: str) -> _AnyStub:
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return _AnyStub("%s.%s" % (self.__name__, name))
+
+
+class _StubFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Resolve every ``<prefix>`` / ``<prefix>.*`` import to a permissive stub module."""
+
+    def __init__(self, prefix: str):
+        self.prefix = prefix
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == self.prefix or fullname.startswith(self.prefix + "."):
+            return importlib.machinery.ModuleSpec(fullname, self, is_package=True)
+        return None
+
+    def create_module(self, spec):
+        mod = _StubModule(spec.name)
+        mod.__path__ = []  # a package, so submodule imports keep resolving through us
+        return mod
+
+    def exec_module(self, module) -> None:
+        pass
+
+
+def _install_stub_package(prefix: str, note: str) -> None:
+    if prefix in sys.modules or importlib.util.find_spec(prefix) is not None:
+        return  # the real package is importable -- prefer it
+    sys.meta_path.insert(0, _StubFinder(prefix))
+    SUBSTITUTIONS.append(note)
+
+
 def _make_loguru() -> None:
     class _Logger:
         def __getattr__(self, _name):
@@ -180,6 +245,7 @@ def _install_annotation_hook() -> None:
     reaches this.
     """
     import __future__  # noqa: PLC0415
+
     import importlib.abc  # noqa: PLC0415
     import importlib.machinery  # noqa: PLC0415
 

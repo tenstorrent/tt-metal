@@ -68,15 +68,10 @@ def test_sd35_vae_resnet_is_clean():
     no findings -- both vae_all_gathers are load-bearing. The conv/group_norm
     *shapes* are the shim's belief until on-device conformance (phase 11).
 
-    Unlike the DiT block targets, `models/vae/vae_sd35.py` imports `diffusers` at
-    module load, so this target is not dependency-free; skip when it is absent
-    rather than fail (the LTX/SD3.5 tests carry the shim coverage regardless).
+    `models/vae/vae_sd35.py` imports `diffusers` at module load (for its
+    from_pretrained reference path), but hostenv stubs `diffusers` -- it is not
+    used by the shim's shape analysis -- so this dry-runs dependency-free.
     """
-    import importlib.util
-
-    if importlib.util.find_spec("diffusers") is None:
-        print("  (skipped: diffusers not installed -- sd35 VAE target needs it)")
-        return
     proc = _dryrun("dryrun", "sd35_vae_resnet", "--preset", "bh_2x4", "--analyze")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "unregistered ops: none" in proc.stdout, proc.stdout

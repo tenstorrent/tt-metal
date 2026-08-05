@@ -251,11 +251,22 @@ def _noop(*a, **k) -> Any:
 
 
 class _NullCtx:
+    """A no-op usable both as a context manager and as a decorator.
+
+    ``torch.no_grad()`` / ``inference_mode()`` are used both ways in tt_dit
+    (``with torch.no_grad():`` and ``@torch.no_grad()`` on a method, e.g.
+    ``VAEDecoderAdapter.decode``); the decorator form calls the returned object,
+    so it must pass the wrapped function through unchanged.
+    """
+
     def __enter__(self):
         return self
 
     def __exit__(self, *a):
         return False
+
+    def __call__(self, fn=None, *a, **k):
+        return fn if callable(fn) else self
 
 
 def install() -> types.ModuleType:
