@@ -3,23 +3,65 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ..utils.matmul import get_fabric_agmm_config, get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
-# Fidelity per weight dtype. Quantized dtypes (e.g. bfloat8_b) are deliberately absent: callers
-# look up with .get(dtype, HiFi2). This compute_config is a dead default for any op handed an
-# explicit compute_kernel_config (every LTX matmul is), so the fallback only has to construct.
 MATH_FIDELITY = {
     ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
+
+# `TT_DIT_LINEAR_PRECISION` raises the precision of every linear in tt_dit. Unset (the default) keeps
+# the long-standing config exactly; this exists so an A/B is one env var rather than a rebuild, and
+# because the file is shared by every model here, so the default must not move without evidence.
+#
+#   unset / "default"  HiFi2 for bf16, fp32 DEST accumulate, packer L1 accumulate.
+#   "hifi4"            math_fidelity=HiFi4. More passes over the mantissa per tile.
+#   "no_packer_l1"     packer_l1_acc=False, so block partials round-trip through DEST rather than
+#                      accumulating in L1 at the output dtype.
+#   "max"              both of the above.
+#
+# What prompted it: STATE.md amendment 101. The MiniMax-H3 fl2va conditioner reproduces 4 of the
+# reference's 7 massive-activation rows at production shape and content, and the ~9 % per-row error that
+# decides which near-threshold rows blow up is attributable here. Note `fp32_dest_acc_en` is *already*
+# on, so the "bf16 acc" the comment below refers to is the packer's L1 accumulation at the output dtype,
+# not the DEST register.
+_PRECISION = os.environ.get("TT_DIT_LINEAR_PRECISION", "default").strip().lower()
+_VALID_PRECISION = ("default", "hifi4", "no_packer_l1", "max")
+if _PRECISION not in _VALID_PRECISION:
+    msg = f"TT_DIT_LINEAR_PRECISION must be one of {_VALID_PRECISION}, got {_PRECISION!r}"
+    raise ValueError(msg)
+
+
+def linear_compute_config(mesh_device, dtype):
+    """The compute kernel config every linear in tt_dit uses.
+
+    NOTE: the default is the special config which attains good correctness --
+    HiFi2 + packer_l1_acc + bf16 acc in a fused linear (matmul + bias) with unfused non-approx
+    activation. `TT_DIT_LINEAR_PRECISION` overrides it; see the note on that constant.
+    """
+    math_fidelity = MATH_FIDELITY[dtype]
+    packer_l1_acc = True
+    if _PRECISION in ("hifi4", "max"):
+        math_fidelity = ttnn.MathFidelity.HiFi4
+    if _PRECISION in ("no_packer_l1", "max"):
+        packer_l1_acc = False
+    return ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=packer_l1_acc,
+    )
+
 
 # Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
 # mapped to the values the matmul fused-activation path expects. Each value is
@@ -34,37 +76,6 @@ _FUSED_GELU_VARIANTS = {
     "gelu_fast": (ttnn.UnaryOpType.GELU, True),
     "gelu_tanh": ttnn.UnaryOpType.GELU_TANH,
 }
-
-
-def maybe_cast_activation(x: ttnn.Tensor, activation_dtype) -> ttnn.Tensor:
-    """Cast an activation that is about to cross the fabric, if a quant config asked for it.
-
-    Must be applied BEFORE the collective, never after: the win is in the bytes the gather moves,
-    and the gather's page size is the tile size of the gathered dtype (bfloat8_b tiles are 1088 B
-    vs bfloat16's 2048 B). A cast placed after the gather buys nothing and costs a full pass.
-
-    The op-level constraint that makes this legal: the AG-matmul validates the activation and the
-    weight dtypes independently, so a bf8 activation composes with the bf16-weight carve-out the
-    fused addcmul epilogue requires.
-    """
-    if activation_dtype is None or x.get_dtype() == activation_dtype:
-        return x
-    return ttnn.typecast(x, activation_dtype)
-
-
-def resolve_output_dtype(dtype, x: ttnn.Tensor):
-    """Pin a block-float-fed matmul's output back to bf16 unless the caller asked for something else.
-
-    Called only by a linear whose quant config opted in (``pin_output_bf16``), so no other
-    model's default output dtype (``output_dtype.value_or(in0.dtype())``) changes. Keyed on the input's
-    dtype so it covers an input that arrived block-float from upstream (e.g. the gate projection fed
-    the shared bf8 activation), not just one this linear cast itself; without the pin a bf8 activation
-    would push downstream into the residual stream and ``DistributedRMSNorm``, which rejects anything
-    but bf16.
-    """
-    if dtype is None and x.get_dtype() in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-        return ttnn.bfloat16
-    return dtype
 
 
 class Linear(Module):
@@ -98,17 +109,7 @@ class Linear(Module):
             self.activation_fn = None
         self.mesh_device = mesh_device
 
-        """
-        NOTE: This is the special config which attains good correctness
-        HiFi2 + packer_l1_acc + bf16 acc in a fused linear (matmul + bias) with unfused non-approx activation
-        """
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self.compute_config = linear_compute_config(mesh_device, dtype)
 
         self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device, dtype=dtype)
         self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device, dtype=dtype) if bias else None
@@ -174,9 +175,6 @@ class ColParallelLinear(Module):
         fsdp_mesh_axis=None,
         ccl_manager=None,
         chunks=None,
-        chunk_sizes=None,
-        activation_dtype=None,
-        pin_output_bf16=False,
     ):
         super().__init__()
 
@@ -199,31 +197,12 @@ class ColParallelLinear(Module):
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
         self.chunks = chunks
-        # Per-chunk output widths in ELEMENTS (global, pre-TP-shard); None => uniform N/chunks.
-        self.chunk_sizes = chunk_sizes
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
             assert self.ccl_manager is not None
 
-        # Optional cast of the *input* activation, set by a quant config. This is the only Linear
-        # variant that honours it, because it is the only one whose input crosses the fabric: at
-        # TP>1 the input is the payload of the fused all-gather, and the gather's page size follows
-        # the dtype of the gathered tensor. Casting a RowParallel/replicated Linear's input would
-        # buy matmul-internal precision only while paying a full typecast pass — and RowParallel's
-        # input is the 4x-wide FFN intermediate, so that trade is strictly negative.
-        self.activation_dtype = activation_dtype
-        # Pin a bf8/bf4-fed output back to bf16 (see resolve_output_dtype). Set by the quant config on
-        # the linears on its path; off elsewhere so no other model's default output dtype changes.
-        self.pin_output_bf16 = pin_output_bf16
-
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self.compute_config = linear_compute_config(mesh_device, dtype)
 
         self.weight = Parameter(
             total_shape=[self.in_features, self.out_features],
@@ -267,49 +246,6 @@ class ColParallelLinear(Module):
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
-    def _forward_fabric_agmm(self, x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype) -> ttnn.Tensor:
-        """Optimized fabric-bound TP all-gather-matmul via strided_all_gather_minimal_matmul_async.
-
-        The matmul runs on ``fabric_cfg.mm_core_grid`` (lower rows); the strided all-gather workers
-        run on the rows starting at ``fabric_cfg.ag_core_grid_offset`` (disjoint region). Returns the
-        single (chunks==1) matmul output; the op's first output is the gathered-K scratch.
-        """
-        mesh_axis = parallel_config.tensor_parallel.mesh_axis
-        matmul_config = ttnn.MinimalMatmulConfig(
-            M_block_size=fabric_cfg.M_block_size,
-            K_block_size=fabric_cfg.K_block_size,
-            N_block_size=fabric_cfg.N_block_size,
-            subblock_h=fabric_cfg.subblock_h,
-            subblock_w=fabric_cfg.subblock_w,
-            compute_with_storage_grid_size=fabric_cfg.mm_core_grid,
-        )
-        ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(x.shape, 3, mesh_axis, dtype=x.get_dtype())
-        ag_global_semaphores = self.ccl_manager.get_strided_ag_mm_semaphore(mesh_axis, fabric_cfg.num_workers_per_link)
-        dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-        outputs = ttnn.experimental.strided_all_gather_minimal_matmul_async(
-            x,
-            weight,
-            persistent_output_buffer=ag_persistent_buffer,
-            dim=3,
-            multi_device_global_semaphore=ag_global_semaphores,
-            strided_all_gather_core_grid_offset=fabric_cfg.ag_core_grid_offset,
-            num_links=self.ccl_manager.num_links,
-            memory_config_ag=dram,
-            topology=self.ccl_manager.topology,
-            cluster_axis=mesh_axis,
-            bias=self.bias.data if self.bias is not None else None,
-            fused_activation=self.fused_activation_fn,
-            config=matmul_config,
-            memory_config_mm=dram,
-            compute_kernel_config=compute_kernel_config or self.compute_config,
-            num_workers_per_link=fabric_cfg.num_workers_per_link,
-            num_buffers_per_channel=fabric_cfg.num_buffers_per_channel,
-            read_local_slice_from_input=True,
-            chunks=1,
-        )
-        # Op returns [all_gather_output, matmul_chunk_0]; take the single matmul chunk.
-        return _apply_activation_fn(outputs[1], self.activation_fn)
-
     def forward(
         self,
         x: ttnn.Tensor,
@@ -341,11 +277,6 @@ class ColParallelLinear(Module):
             if self.chunks is not None and self.chunks > 1:
                 msg = "fused addcmul is not supported alongside chunked output"
                 raise ValueError(msg)
-
-        x = maybe_cast_activation(x, self.activation_dtype)
-        if self.pin_output_bf16:
-            dtype = resolve_output_dtype(dtype, x)
-
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
@@ -359,12 +290,6 @@ class ColParallelLinear(Module):
         if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
-
-            # Fabric-bound path: known shapes route to the optimized strided all-gather-matmul op
-            fabric_cfg = get_fabric_agmm_config(K, N, (self.chunks or 1), full_grid)
-            if fabric_cfg is not None and self.chunks in (None, 1) and not self.fuse_swiglu:
-                return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype)
-
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
 
@@ -391,10 +316,6 @@ class ColParallelLinear(Module):
                 num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
-                # Op's N is per-device, so pass per-device widths (each global width is % TP == 0).
-                chunk_sizes=(
-                    [w // parallel_config.tensor_parallel.factor for w in self.chunk_sizes] if self.chunk_sizes else []
-                ),
                 dtype=dtype,
                 fuse_swiglu=self.fuse_swiglu,
                 scalar=addcmul_scalar if addcmul_a is not None else None,
@@ -469,13 +390,7 @@ class RowParallelLinear(Module):
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
 
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self.compute_config = linear_compute_config(mesh_device, dtype)
 
         ndev = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
 
@@ -606,7 +521,6 @@ class RowParallelLinear(Module):
             addcmul_input_tensor1=addcmul_a,
             addcmul_input_tensor2=addcmul_b,
             dtype=dtype,
-            mm_progress_counters=self.ccl_manager.get_mm_progress_counters_buffer(),
         )
         if needs_reshape:
             output = ttnn.squeeze(output, 0)

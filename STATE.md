@@ -4281,3 +4281,103 @@ whether conditioning worked at all (amendment 100).
 to verify against rather than a diffuse PCC shortfall: does raising the accumulation width recover rows
 63, 102 and 128? That is a bounded experiment on a shared file, and it should be scoped as its own task
 because it moves every tt_dit model.
+
+---
+
+## Amendment 102 (2026-08-05) — `layers/linear.py` math fidelity recovers 2 of the 3 massive rows, costs nothing measurable, and changes the e2e output not at all. And the vertical "seam" is 0.12 % of full scale
+
+Three questions, all measured. `TT_DIT_LINEAR_PRECISION` added to `layers/linear.py` (default = the
+existing config exactly, so nothing moves without evidence), gating `math_fidelity` and
+`packer_l1_acc`. Note `fp32_dest_acc_en` was **already on**, so the "bf16 acc" the old comment referred
+to was the packer's L1 accumulation at the output dtype, not the DEST register.
+
+### 1. Does raising the accumulation recover rows 63, 102, 128? Partly — 2 of 3
+
+| | default | `hifi4` | `max` |
+|---|---|---|---|
+| fused conditioner PCC | 70.8949 % | **85.8171 %** | 85.8171 % |
+| ordinary vision row, median error | 9.15 % | **8.25 %** | 8.25 % |
+| massive rows (reference has 7) | 5 — missing **63, 102, 128** | **7** — missing only **63**, spurious 156 | 7, identical |
+
+**`max` is bit-identical to `hifi4`, so `packer_l1_acc` has exactly zero effect here.** The lever is
+math fidelity alone, and one A/B settled that rather than leaving both knobs suspect.
+
+Rows **102 and 128 come back**. Row 63 does not, and row 156 appears spuriously. So the
+massive-activation mismatch is *partly* math fidelity and not entirely — consistent with amendment
+101's reading that these are threshold-like and our residual per-row error still decides marginal
+cases.
+
+### 2. Where the gain is — and is not
+
+**The vision tower is unchanged by HiFi4**: 99.6116 % → 99.6055 % at 1344x768 (99.4873 % → 99.6592 %
+at 768x768, i.e. noise either way). Its ~8.9 % RMSE/sigma survives, so the tower's error is **not**
+math fidelity — it is bf16 activation storage, the padded 72→96 head_dim, or the LayerNorms, and it is
+a separate lever from this one.
+
+All 15 points of fused-conditioner gain are therefore in the **50-layer decoder**, where accumulation
+depth actually compounds. That is a satisfying check on the mechanism: a 27-block tower barely notices,
+a 50-layer stack does.
+
+### 3. It costs nothing measurable, and it changes the video not at all
+
+Fully warm, LTX's method, same shape and warm window as amendment 98:
+
+| | default | `hifi4` |
+|---|---|---|
+| per forward | 1183.2 ms | **1184.2 ms** |
+| Denoise | 58.0 s | 58.0 s |
+| Total (compute) | 63.9 s | **63.9 s** |
+
+Within noise. At this shape the matmuls are evidently not math-throughput-bound, so the extra mantissa
+passes are hidden. **The default is nevertheless left alone**, because `linear.py` is shared by every
+tt_dit model and one model's measurement is not evidence about LTX, Wan or Ideogram-4 — precisely the
+borrowed-pattern mistake amendments 84 and 86 paid for. Flipping it globally deserves its own task with
+a per-model measurement.
+
+And the output is equivalent: fl2va e2e under `hifi4` reads anchors **0.9971 / 0.9947** (default
+0.9971 / 0.9946), the fractal discriminator **0.9964 / 0.4108 / 0.2676** (default 0.9964 / 0.4108 /
+0.2704), CLIP **37.11** (37.00), seams 1.035 / 0.742 (1.034 / 0.742). Frame-to-frame between the two
+modes: PSNR 40-48 dB, PCC 0.9985-0.9998. So the conditioner's 15-point PCC gain is **invisible
+downstream**, which is the third independent confirmation of amendment 95's propagation result.
+
+### The vertical tile seam: real, systematic, and 0.12 % of full scale
+
+Chasing "no artifacts" turned up a genuine signal the existing gate cannot see. Measuring the
+**one-pixel** gradient at each decode tile boundary against its own neighbourhood, averaged over 13
+frames:
+
+| | ratio at the 6 vertical boundaries | 3 horizontal | control (non-boundary columns) |
+|---|---|---|---|
+| t2va | 1.214 - 1.524 | 0.843 - 1.026 | **0.978** (max 1.037) |
+| fl2va first+last | 1.148 - 1.447 | 0.855 - 1.016 | **1.011** (max 1.079) |
+
+Every vertical boundary is elevated, no horizontal one is, the control sits at 1.0, and **t2va shows it
+too** — so it is a pre-existing property of the tiled VAE decode, not anything fl2va introduced.
+`check_spatial_seams` reads 1.03 on the same frames because it compares *block-mean* activity and
+cannot resolve a one-pixel discontinuity. Both numbers are right; they measure different things.
+
+**And it is invisible.** The actual luma step across the worst boundary (x=704) is **+0.31 of 255, i.e.
+0.122 % of full scale**, against a neighbourhood per-pixel gradient of 0.26 — a ratio of 1.2 on a step
+three tenths of one grey level. Inspected at 8x nearest-neighbour zoom on a smooth region where a
+one-pixel seam would be eight pixels wide: nothing visible. The asymmetry is content, not a bug: this
+scene is a horizontal snow field, so vertical-direction gradients are large everywhere (5.4 at the
+horizon row) and swamp any y-seam, while horizontal gradients are small (1.1-1.8) and expose the
+x-seam.
+
+Mechanism, for the record: linear cross-fading two independently decoded tiles is C0-continuous but
+leaves a derivative discontinuity at the ends of the blend region. The stitch geometry was verified
+correct rather than assumed — row starts/lengths/overlaps `[0,160,336,512]/256/[96,80,80]` and column
+`[0,176,352,528,704,896,1088]/256/[80,80,80,80,64,64]` both reconstruct exactly, `start[i+1] = start[i]
++ 256 - overlap[i]` throughout, contributions summing to 768 and 1344 with no gap or double count.
+
+`check_tile_boundary_gradient` now gates it, with a **built-in control** on non-boundary columns —
+without one the statistic tracks ordinary image structure and its boundary numbers mean nothing. Bar
+3.0 against a known-good 1.2-1.5: this exists to catch the seam becoming *visible*, a several-fold
+change, not to police a floor that is already sub-perceptual.
+
+**The method note.** *A quality gate has a resolution, and "passes" only means "no defect coarser than
+that".* `check_spatial_seams` was doing its job correctly and still could not see a one-pixel seam;
+finding it needed a statistic matched to the defect's width, plus a control to prove the statistic was
+not measuring the image. The corollary that kept this honest: having found a real, systematic,
+reproducible signal, the next question is not "how do I remove it" but "how large is it in units a
+viewer perceives" — 0.12 % of full scale, and the answer was to gate it, not chase it.
