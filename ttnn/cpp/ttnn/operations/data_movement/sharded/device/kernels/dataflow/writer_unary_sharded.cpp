@@ -2,10 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: A Metal 2.0 fork of this kernel lives beside it as writer_unary_sharded_metal2.cpp. Ops whose
-// program factory has been ported to the Metal 2.0 host API bind that file; ops still on the legacy
-// host API bind this one. Keep the two in sync until the last legacy consumer is ported, at which
-// point this copy can be deleted.
+// KEEP IN SYNC WITH: writer_unary_sharded_metal2.cpp (this directory)
+//
+// That file is the Metal 2.0 fork of this kernel: identical dataflow logic, with the resource
+// plumbing expressed as named bindings (dfb::/args::) instead of positional compile-time and runtime
+// args. Ops whose program factory has been ported to the Metal 2.0 host API bind the fork; ops still
+// on the legacy host API bind this file. A behavioural change to either one must be mirrored in the
+// other.
+//
+// The duplication is temporary. Once the last legacy consumer is ported, delete this file and rename
+// the fork over it.
+//
+// Tracking issue (why the duplication exists, the consumer list, and the sunset plan):
+// https://github.com/tenstorrent/tt-metal/issues/52228
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
