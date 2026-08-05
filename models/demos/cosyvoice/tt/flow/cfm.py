@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -93,7 +94,69 @@ class TtConditionalCFM:
         ttnn.deallocate(zeros)
         return out
 
-    def solve_euler(self, x, mu, spks, cond, t_span=None):
+    def _capture(self, x, mu2, spks2, cond2, t0):
+        """Trace one estimator evaluation and replay it for every Euler step.
+
+        The solver calls the *same graph* ten times -- only `x` and `t` change,
+        while `mu`, `spks` and `cond` are fixed for the utterance. That makes it a
+        better trace candidate than the AR decoder, which at least has a growing
+        cache to work around: here there is no state at all between steps.
+
+        The CFG split and the Euler update stay outside the trace. They are a
+        handful of elementwise ops on `[1, T, 80]`, and keeping them out means the
+        traced region is exactly the 16 resnet + 64 transformer blocks that cost
+        something.
+
+        **This does not work yet, and `use_trace` defaults to False because of it.**
+        Capture fails with `!trace_id_.has_value()` raised from
+        `write_shard_to_device` -- a host->device write during capture. The cause is
+        `TtConv1d`/`TtConvTranspose1d`: both build their weight with
+        `ttnn.from_torch(..., layout=ROW_MAJOR)` and **no `device=`**, so the weight
+        is a *host* tensor that `ttnn.conv1d` uploads on every call. The estimator
+        has ~37 convolutions, so a capture can never be clean until those weights
+        are device-resident.
+
+        That is worth fixing for more than tracing: it is a per-call upload the flow
+        decoder and the vocoder have both been paying on every convolution. It is
+        the next lever, and it is why the flow's 0.352 RTF share is still untouched.
+        """
+        b, t_len, ch = x.shape
+        self._x_buf = ttnn.concat([x, x], dim=0)
+        self._t_buf = ttnn.from_torch(
+            torch.full((2, 1, 1), t0, dtype=torch.float32),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        self._d_buf = ttnn.from_torch(
+            torch.zeros(2, t_len, ch), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
+
+        def body():
+            d = self.estimator(self._x_buf, mu2, self._t_buf, spks=spks2, cond=cond2, batch=2)
+            ttnn.copy(d, self._d_buf)
+            ttnn.deallocate(d)
+
+        for _ in range(2):  # warm the program cache before recording
+            body()
+        ttnn.synchronize_device(self.device)
+        self._trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        try:
+            body()
+        finally:
+            ttnn.end_trace_capture(self.device, self._trace_id, cq_id=0)
+
+    def _release(self):
+        if getattr(self, "_trace_id", None) is not None:
+            ttnn.release_trace(self.device, self._trace_id)
+            self._trace_id = None
+        for name in ("_x_buf", "_t_buf", "_d_buf"):
+            t = getattr(self, name, None)
+            if t is not None:
+                ttnn.deallocate(t)
+                setattr(self, name, None)
+
+    def solve_euler(self, x, mu, spks, cond, t_span=None, use_trace=False):
         """x/mu/cond `[1, T, 80]`, spks `[1, 1, 80]` -> `[1, T, 80]`.
 
         `mu`, `spks` and `cond` do not change across steps, so their CFG pairs are
@@ -120,14 +183,44 @@ class TtConditionalCFM:
             for t, _ in schedule
         ]
 
-        for (_, dt), t_dev in zip(schedule, ts):
-            x2 = self._cfg_pair(x, zero_second_row=False)
-            d = self.estimator(x2, mu2, t_dev, spks=spks2, cond=cond2, batch=2)
-            ttnn.deallocate(x2)
+        traced = False
+        if use_trace:
+            try:
+                self._capture(x, mu2, spks2, cond2, schedule[0][0])
+                traced = True
+            except Exception as e:  # noqa: BLE001
+                # Needs the device opened with a `trace_region_size`. Tracing is an
+                # optimisation, so fall back loudly rather than failing the solve.
+                logger.warning(f"CFM trace capture unavailable, running untraced: {e}")
+                self._release()
+
+        for (t_val, dt), t_dev in zip(schedule, ts):
+            if traced:
+                # Refresh the two inputs that change, then replay. Both CFG rows
+                # evaluate the same `x`, so one concat feeds the buffer.
+                pair = ttnn.concat([x, x], dim=0)
+                ttnn.copy(pair, self._x_buf)
+                ttnn.deallocate(pair)
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        torch.full((2, 1, 1), t_val, dtype=torch.float32),
+                        dtype=self.dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                    ),
+                    self._t_buf,
+                )
+                ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=False)
+                ttnn.synchronize_device(self.device)
+                d = self._d_buf
+            else:
+                x2 = self._cfg_pair(x, zero_second_row=False)
+                d = self.estimator(x2, mu2, t_dev, spks=spks2, cond=cond2, batch=2)
+                ttnn.deallocate(x2)
 
             cond_part = ttnn.slice(d, [0, 0, 0], [1, t_len, 80])
             uncond_part = ttnn.slice(d, [1, 0, 0], [2, t_len, 80])
-            ttnn.deallocate(d)
+            if not traced:
+                ttnn.deallocate(d)
             guided = ttnn.subtract(
                 ttnn.multiply(cond_part, 1.0 + self.cfg_rate), ttnn.multiply(uncond_part, self.cfg_rate)
             )
@@ -140,6 +233,9 @@ class TtConditionalCFM:
             ttnn.deallocate(step)
             ttnn.deallocate(x)
             x = nxt
+
+        if traced:
+            self._release()
 
         for t_dev in ts:
             ttnn.deallocate(t_dev)
