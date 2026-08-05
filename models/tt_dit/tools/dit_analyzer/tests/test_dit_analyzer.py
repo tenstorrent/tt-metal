@@ -303,6 +303,47 @@ def test_mesh_partition_scatters_a_replicated_tensor_onto_a_mesh_axis():
         assert st.regions[dev].bounds(2) == (1024 * t, 1024 * t + 1024), dev  # 2048 / 2 rows
 
 
+def test_halo_exchange_overlaps_shards_and_feeds_a_valid_conv3d():
+    """Spatial halo + conv3d, the MiniMax-H3 VAE encoder shape.
+
+    The halo grows the sharded H axis by pad_left+pad_right with *overlapping*
+    per-device regions (device i holds [i*S, pad_left+(i+1)*S+pad_right]); the following
+    valid conv3d then convs each device's halo'd shard back to a clean output shard, so
+    the sharded result matches the unsharded one and the halo is a *necessary* collective.
+    """
+    b = GraphBuilder("vae", MESH)
+    x = b.input("x", [1, 5, 64, 32, 8], shard={SP: 2})  # H (dim 2) sharded over SP (size 2)
+    padded = b.neighbor_pad(x, dims=[2], pad_left=[1], pad_right=[1], axes=[SP], label="halo")
+    y = b.conv3d(padded, out_channels=16, kernel=(1, 3, 3), stride=(1, 1, 1), label="conv")
+    graph = b.finish([y])
+    fwd = run_forward(graph)
+    s = 64 // 2  # per-device H shard
+    for dev in MESH.devices():
+        i = MESH.index_in_group(dev, SP)
+        assert fwd.final[padded.id].regions[dev].bounds(2) == (i * s, 1 + (i + 1) * s + 1), dev  # overlap
+    assert graph.symbol(y.id).shape == (1, 5, 64, 30, 16)  # valid conv: H 66->64, W 32->30
+    conv = fwd.final[y.id]
+    assert conv.dist.shard[SP] == 2 and conv.dist.shard[TP] is None  # spatial sharding preserved
+    for dev in MESH.devices():
+        i = MESH.index_in_group(dev, SP)
+        assert conv.regions[dev].bounds(2) == (i * 32, i * 32 + 32), dev  # clean output shard
+    report = analyze_graph(graph)
+    assert not any(f.rule == "dead_collective" for f in report.findings)  # the halo is consumed
+
+
+def test_reduce_sum_over_a_sharded_axis_is_a_partial_sum():
+    """MiniMax-H3 group-norm stats: summing the sharded spatial axis leaves each device a
+    partial sum on that mesh axis (all-reduced afterwards), not a finished reduction."""
+    b = GraphBuilder("gn", MESH)
+    x = b.input("x", [1, 1, 64, 8], shard={SP: 2})  # dim 2 sharded over SP
+    s = b.reduce_sum(x, dim=2, keepdim=True, label="sum")
+    graph = b.finish([s])
+    st = run_forward(graph).final[s.id]
+    assert graph.symbol(s.id).shape == (1, 1, 1, 8)
+    assert st.dist.shard[SP] is None  # the reduced axis is no longer sharded
+    assert st.dist.partial[SP] is True  # ... its local reduction is a partial sum
+
+
 def test_embedding_with_sharded_indices_carries_both_shardings():
     """AdaLN table gather (MiniMax-H3): SP-fractured indices x TP-fractured table ->
     output fractured on *both* the sequence (from the indices) and hidden (from the table)."""

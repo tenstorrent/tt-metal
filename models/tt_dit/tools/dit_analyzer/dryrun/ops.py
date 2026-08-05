@@ -306,9 +306,14 @@ def chunk(x: Tensor, count: int, dim: int = 0, **k) -> List[Tensor]:
 def concat(tensors: Sequence[Tensor], dim: int = 0, **k) -> Tensor:
     ts = [t for t in tensors if isinstance(t, Tensor)]
     dim = dim % len(ts[0].logical)
-    logical = list(ts[0].logical)
+    # The non-concat dims and dist come from the *richest* operand, not ts[0]: a
+    # per-device auxiliary built from `x.shape` (which is local) -- e.g. the causal
+    # zero-frames prepended by MiniMax-H3's conv3d -- is replicated at local scale and
+    # must not shrink a sharded operand's global shape when it is concatenated first.
+    primary = max(ts, key=lambda t: (len(t.logical), sum(t.logical)))
+    logical = list(primary.logical)
     logical[dim] = sum(t.logical[dim] for t in ts)
-    return recorder.emit("concat", ts, logical, ts[0].dist, attrs={"axis": dim}, base="concat")
+    return recorder.emit("concat", ts, logical, primary.dist, attrs={"axis": dim}, base="concat")
 
 
 def permute(x: Tensor, dims, **k) -> Tensor:
@@ -386,6 +391,38 @@ def mesh_partition(input_tensor=None, dim=None, *a, **k) -> Tensor:
     d = (dim if dim is not None else k.get("dim", 0)) % len(x.logical)
     return recorder.emit(
         "mesh_partition", [x], x.logical, x.dist.with_shard(m, d), attrs={"dim": d}, mesh_axis=m, base="partition"
+    )
+
+
+def neighbor_pad_async(
+    tensor=None, dims=None, pad_left=None, pad_right=None, padding_mode="replicate", axes=None, *a, **k
+):
+    """Halo exchange: each device gains ``pad_left``/``pad_right`` border rows from
+    its neighbours along each sharded spatial axis (global edges pad ``padding_mode``).
+
+    Grows each padded dim's logical by ``pad_left+pad_right`` -- the same-conv padding
+    extent -- so the following **valid** conv3d re-produces the global result cleanly
+    re-sharded. A collective: the borders cross device boundaries (MiniMax-H3 VAE
+    causal conv3d, ``CCLManager.neighbor_pad``)."""
+    x = tensor if isinstance(tensor, Tensor) else _t(tensor, "tensor", a, k)
+    dims = [d % len(x.logical) for d in dims]
+    logical = list(x.logical)
+    for d, pl, pr in zip(dims, pad_left, pad_right):
+        logical[d] += int(pl) + int(pr)
+    return recorder.emit(
+        "neighbor_pad",
+        [x],
+        logical,
+        x.dist,
+        attrs={
+            "dims": dims,
+            "pad_left": [int(p) for p in pad_left],
+            "pad_right": [int(p) for p in pad_right],
+            "axes": [int(a2) for a2 in axes],
+            "mode": padding_mode,
+        },
+        mesh_axis=(int(axes[0]) if axes else None),
+        base="halo",
     )
 
 
@@ -588,6 +625,59 @@ def conv2d(input_tensor=None, weight_tensor=None, bias_tensor=None, **k):
         base="conv",
     )
     return out, (out_h, out_w), (w, bias)
+
+
+def conv3d(
+    input_tensor=None, weight_tensor=None, bias_tensor=None, output_channels=None, kernel_size=None, stride=None, **k
+):
+    """[B,T,H,W,Cin] -> [B,Tout,Hout,Wout,Cout], **valid** conv.
+
+    The MiniMax-H3 causal conv3d applies all padding beforehand (reflect edges,
+    the spatial halo, the causal temporal front-pad) and calls conv3d with
+    ``padding=(0,0,0)``, so the arithmetic is valid-conv on the already-padded
+    extent. Spatial sharding is preserved: each device valid-convs its halo'd shard
+    straight into its output shard, so the sharded result matches the unsharded one.
+    """
+    x = _t(input_tensor, "input_tensor", kwargs=k, index=0)
+    kt, kh, kw = kernel_size
+    st, sh, sw = stride
+    pt, ph, pw = k.get("padding") or (0, 0, 0)
+    b, t, h, w_in = x.logical[0], x.logical[1], x.logical[2], x.logical[3]
+
+    def o(n, kk, ss, pp):
+        return (n + 2 * pp - kk) // ss + 1
+
+    out_shape = [b, o(t, kt, st, pt), o(h, kh, sh, ph), o(w_in, kw, sw, pw), output_channels or x.logical[4]]
+    ins = [x] + [t2 for t2 in (weight_tensor, bias_tensor) if isinstance(t2, Tensor)]
+    return recorder.emit(
+        "conv3d", ins, out_shape, x.dist, attrs={"kernel": [kt, kh, kw], "stride": [st, sh, sw]}, base="conv3d"
+    )
+
+
+def reduce_sum(input_tensor=None, dim=None, keepdim=False, **k) -> Tensor:
+    """``ttnn.sum`` over ``dim``. If ``dim`` is sharded, the per-device reduction is a
+    **partial sum** on that mesh axis -- MiniMax-H3's group norm sums the local spatial
+    extent, then all-gathers and re-sums the small stats tensor."""
+    x = _t(input_tensor, "input_tensor", kwargs=k, index=0)
+    d = (dim if dim is not None else -1) % len(x.logical)
+    logical = list(x.logical)
+    if keepdim:
+        logical[d] = 1
+    else:
+        logical.pop(d)
+    shard, partial = [], list(x.dist.partial)
+    for m, a in enumerate(x.dist.shard):
+        if a is None:
+            shard.append(None)
+            continue
+        aa = a % len(x.logical)
+        if aa == d:  # reduced axis: gone, and its local reduction is a partial sum
+            shard.append(None)
+            partial[m] = True
+        else:
+            shard.append(aa if (keepdim or aa < d) else aa - 1)
+    dist = Dist(tuple(shard), tuple(partial))
+    return recorder.emit("reduce_sum", [x], logical, dist, attrs={"dim": d, "keepdim": bool(keepdim)}, base="sum")
 
 
 def softmax(input_tensor=None, dim=-1, **k) -> Tensor:
@@ -837,6 +927,7 @@ TENSOR_OPS = {
     "conv2d": conv2d,
     "group_norm": group_norm,
     "softmax": softmax,
+    "sum": reduce_sum,
     "embedding": embedding,
     "slice": slice_op,
     "mesh_partition": mesh_partition,
@@ -890,6 +981,8 @@ EXPERIMENTAL_OPS = {
     "nlp_concat_heads": concatenate_heads,
     "rotary_embedding_llama": rotary_embedding_llama,
     "alt_complex_rotate90": _unary("alt_complex_rotate90"),
+    "conv3d": conv3d,
+    "neighbor_pad_async": neighbor_pad_async,
 }
 
 TRANSFORMER_OPS = {

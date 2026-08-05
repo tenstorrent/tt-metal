@@ -490,9 +490,27 @@ generator (phase 8) already emits both halves for a new such op.
   (merge_heads). No new op. **No findings from the decoder itself:** it is
   replicated-only (0 collectives even on a 2-device mesh) — the VAE's parallelism
   lives in the `data_parallel` / `hw_parallel` wrappers, which is where collective
-  findings would surface. Not yet scouted: the conv-based VAE **encoder**
-  (`conv_minimax_h3.py`) and the **audio VAE** — the likely home of genuinely new ops
-  (conv3d, spatial halo exchange).
+  findings would surface.
+- **MiniMax-H3 conv VAE encoder — the halo frontier** (`MiniMaxH3Encoder3d`,
+  H/W-sharded). The first genuinely-*new* semantics in the H3 effort, now implemented:
+  - **`neighbor_pad_async` (halo exchange)** — a new spatial collective. Each device
+    gains `pad_left`/`pad_right` border rows from its neighbours along each sharded
+    axis. Modelled in the grown frame (logical dim += pad_left+pad_right): device `i`
+    holds `[i*S, pad_left+(i+1)*S+pad_right]`, so adjacent devices *overlap* by the
+    halo width; backward demand maps each device's border to the neighbour that owns
+    it. Registered `is_collective`, so a dead/duplicate halo is flaggable.
+  - **`conv3d`** — valid 3-D conv (padding pre-applied by the halo/reflect/causal
+    pads); spatial-parallel, each device convs its halo'd shard into a clean output
+    shard, so the sharded result matches the unsharded one.
+  - Plus `reduce_sum` (partial sum over a sharded axis — group-norm stats), `rsqrt`,
+    and a **`concat` fix** (pick the richest operand as primary, so a per-device
+    auxiliary built from `x.shape` — e.g. the causal zero-frames — can't shrink a
+    sharded operand). With these the encoder dry-runs through **two full conv+halo
+    blocks (~160 nodes)**, validating the halo/conv3d semantics on real model code.
+  - **Still open:** a layout-tracking gap in the resnet/downsample path (an op yields
+    `TILE` where a later conv asserts `ROW_MAJOR`) blocks the *full* encoder dry-run.
+    Orthogonal to the halo; part of the longer conv-VAE tail. The **audio VAE** is
+    unscouted.
 - **Grouped-query attention** — `nlp_create_qkv_heads` now branches on its call
   shape: `num_kv_heads == 0` (LTX / Ideogram / Wan, `out, _, _ = …`) is the plain
   single-tensor head split; `num_kv_heads > 0` (Qwen3-VL / Gemma / **MiniMax-H3**,

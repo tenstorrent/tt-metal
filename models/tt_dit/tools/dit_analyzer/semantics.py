@@ -538,6 +538,161 @@ register(
 )
 
 
+def _conv3d_apply(c: ApplyCtx) -> None:
+    """[B,T,H,W,Cin] -> [B,Tout,Hout,Wout,Cout], **valid** conv (padding pre-applied).
+
+    Spatial-parallel, not channel-parallel: the input's H/W sharding is preserved and
+    each device valid-convs its halo'd shard into its own output shard, so nothing is a
+    partial sum and the sharded result equals the unsharded one (MiniMax-H3 VAE encoder).
+    """
+    from .state import device_region
+
+    x = c.in_state(0)
+    ys = c.out_sym(0)
+    regions = {d: device_region(c.mesh, ys, x.dist, d) for d in c.mesh.devices()}
+    c.define(0, x.dist, regions, derive_value_id("conv3d", c.value_of_inputs(), c.node.attrs), c.tainted_inputs())
+
+
+def _conv3d_demand(c: DemandCtx) -> None:
+    # Contracts the full channels and a spatial neighbourhood (the halo supplied it):
+    # demand whatever each device holds of every input.
+    for i in range(len(c.node.inputs)):
+        c.need_all_local(i)
+
+
+register(
+    OpSpec(
+        "conv3d",
+        COMPUTE,
+        _conv3d_apply,
+        _conv3d_demand,
+        doc="3-D convolution (NTHWC), valid: spatial-parallel, each device convs its halo'd shard.",
+    ),
+    aliases=("ttnn.experimental.conv3d",),
+)
+
+
+def _neighbor_pad_apply(c: ApplyCtx) -> None:
+    """Halo exchange: each device's shard grows by ``pad_left``/``pad_right`` border rows
+    from its neighbours along each sharded spatial axis.
+
+    Modelled in the grown frame (logical dim += pad_left+pad_right, the same-conv extent):
+    device ``i`` along a padded axis holds ``[i*S, pad_left + (i+1)*S + pad_right]``, so
+    adjacent devices overlap by ``pad_left+pad_right`` -- the interior halo duplication.
+    """
+    x = c.in_state(0)
+    xs, ys = c.in_sym(0), c.out_sym(0)
+    dims = [_axis(d, ys.ndim) for d in c.node.attrs["dims"]]
+    pls, prs, axes = c.node.attrs["pad_left"], c.node.attrs["pad_right"], c.node.attrs["axes"]
+    regions = {}
+    for dev in c.mesh.devices():
+        if x.regions[dev].is_empty:
+            regions[dev] = RegionSet.empty(ys.ndim)
+            continue
+        box = Box.full(ys.shape)
+        for a in range(ys.ndim):  # non-padded axes keep the device's own bounds
+            if a not in dims:
+                b = x.regions[dev].bounds(a)
+                if b is not None:
+                    box = box.replace_axis(a, *b)
+        for dim, pl, pr, ax in zip(dims, pls, prs, axes):  # padded axes: shard + halo
+            s = xs.shape[dim] // c.mesh.size(ax)
+            i = c.mesh.index_in_group(dev, ax)
+            box = box.replace_axis(dim, max(0, i * s), min(ys.shape[dim], pl + (i + 1) * s + pr))
+        regions[dev] = RegionSet.of(box)
+    c.define(0, x.dist, regions, derive_value_id("neighbor_pad", c.value_of_inputs(), c.node.attrs), x.tainted)
+
+
+def _neighbor_pad_demand(c: DemandCtx) -> None:
+    """The demanded halo rows map back to the neighbours that own them.
+
+    Per padded axis, the demanded grown-frame ``[lo, hi]`` maps to input rows
+    ``[lo-pad_left, hi-pad_left]``; each device along the axis that owns part of that
+    range is asked for its slice, so a device's border demand lands on its neighbour.
+    """
+    xid = c.node.inputs[0]
+    xs = c.sym(xid)
+    dem = c.demand_out(0)
+    dims = [_axis(d, xs.ndim) for d in c.node.attrs["dims"]]
+    pls, prs, axes = c.node.attrs["pad_left"], c.node.attrs["pad_right"], c.node.attrs["axes"]
+    for dev in c.mesh.devices():
+        want = dem[dev]
+        if want.is_empty:
+            continue
+        base = Box.full(xs.shape)  # other axes: demand clamped to the input extent
+        for a in range(xs.ndim):
+            b = want.bounds(a)
+            if b is not None:
+                base = base.replace_axis(a, min(b[0], xs.shape[a]), min(b[1], xs.shape[a]))
+        for dim, pl, pr, ax in zip(dims, pls, prs, axes):
+            b = want.bounds(dim)
+            if b is None:
+                continue
+            s = xs.shape[dim] // c.mesh.size(ax)
+            in_lo, in_hi = max(0, b[0] - pl), min(xs.shape[dim], b[1] - pl)
+            if in_lo >= in_hi:
+                continue
+            for peer in c.mesh.group_of(dev, ax):
+                j = c.mesh.index_in_group(peer, ax)
+                lo, hi = max(in_lo, j * s), min(in_hi, (j + 1) * s)
+                if lo < hi:
+                    c.need(xid, peer, RegionSet.of(base.replace_axis(dim, lo, hi)))
+
+
+register(
+    OpSpec(
+        "neighbor_pad",
+        COMM,
+        _neighbor_pad_apply,
+        _neighbor_pad_demand,
+        preserves_value=True,
+        is_collective=True,
+        doc="Spatial halo exchange: each device gains neighbour border rows on the sharded axes.",
+    ),
+    aliases=("ttnn.experimental.neighbor_pad_async", "neighbor_pad_async"),
+)
+
+
+def _reduce_sum_apply(c: ApplyCtx) -> None:
+    """``sum`` over one axis. Reducing a sharded axis leaves each device a **partial
+    sum** on that mesh axis (MiniMax-H3 group-norm stats, all-reduced afterwards)."""
+    from .state import device_region
+
+    x = c.in_state(0)
+    xs, ys = c.in_sym(0), c.out_sym(0)
+    dim = _axis(int(c.node.attrs["dim"]), xs.ndim)
+    keepdim = bool(c.node.attrs.get("keepdim", False))
+    shard, partial = [], list(x.dist.partial)
+    for m, a in enumerate(x.dist.shard):
+        if a is None:
+            shard.append(None)
+        elif _axis(a, xs.ndim) == dim:
+            shard.append(None)
+            partial[m] = True
+        else:
+            aa = _axis(a, xs.ndim)
+            shard.append(aa if (keepdim or aa < dim) else aa - 1)
+    dist = Dist(tuple(shard), tuple(partial))
+    regions = {d: device_region(c.mesh, ys, dist, d) for d in c.mesh.devices()}
+    c.define(0, dist, regions, derive_value_id("reduce_sum", c.value_of_inputs(), c.node.attrs), c.tainted_inputs())
+
+
+def _reduce_sum_demand(c: DemandCtx) -> None:
+    c.need_all_local(0)  # needs the whole reduced axis (its shard) on each device
+
+
+register(
+    OpSpec(
+        "reduce_sum",
+        COMPUTE,
+        _reduce_sum_apply,
+        _reduce_sum_demand,
+        doc="Sum over one axis; reducing a sharded axis yields a partial sum on that mesh axis.",
+    ),
+    aliases=("ttnn.sum", "sum"),
+)
+
+
 def _embedding_apply(c: ApplyCtx) -> None:
     """[.., S] x [V, H] -> [.., S, H], hidden-parallel like a col-parallel matmul.
 
@@ -965,6 +1120,7 @@ GENERIC_OPS: Dict[str, Tuple[str, str, Optional[str]]] = {
     "tanh": ("pointwise", "unary", "tanh"),
     "sqrt": ("pointwise", "unary", "sqrt"),
     "reciprocal": ("pointwise", "unary", "reciprocal"),
+    "rsqrt": ("pointwise", "unary", "rsqrt"),
     "neg": ("pointwise", "unary", "neg"),
     "clamp": ("pointwise", "unary", "clamp"),
     "cos": ("pointwise", "unary", "cos"),

@@ -160,6 +160,50 @@ class GraphBuilder:
         self._node("mesh_partition", [x], [y], {"dim": dim}, mesh_axis=mesh_axis, label=label)
         return y
 
+    def neighbor_pad(
+        self,
+        x: Value,
+        dims: Sequence[int],
+        pad_left: Sequence[int],
+        pad_right: Sequence[int],
+        axes: Sequence[int],
+        label: Optional[str] = None,
+    ) -> Value:
+        """Spatial halo: grow each padded dim by pad_left+pad_right; each device gains
+        its neighbours' border rows along the matching mesh axis."""
+        shape = list(x.shape)
+        for d, pl, pr in zip(dims, pad_left, pad_right):
+            shape[d] += pl + pr
+        y = self._symbol(label or "halo", shape, x.symbol.dtype)
+        attrs = {"dims": list(dims), "pad_left": list(pad_left), "pad_right": list(pad_right), "axes": list(axes)}
+        self._node("neighbor_pad", [x], [y], attrs, mesh_axis=axes[0], label=label)
+        return y
+
+    def conv3d(
+        self, x: Value, out_channels: int, kernel: Sequence[int], stride: Sequence[int], label: Optional[str] = None
+    ) -> Value:
+        """Valid 3-D conv (NTHWC): each device convs its (halo'd) spatial shard."""
+        b, t, h, w, _ = x.shape
+
+        def o(n, k, s):
+            return (n - k) // s + 1
+
+        shape = [b, o(t, kernel[0], stride[0]), o(h, kernel[1], stride[1]), o(w, kernel[2], stride[2]), out_channels]
+        y = self._symbol(label or "conv3d", shape, x.symbol.dtype)
+        self._node("conv3d", [x], [y], {"kernel": list(kernel), "stride": list(stride)}, label=label)
+        return y
+
+    def reduce_sum(self, x: Value, dim: int, keepdim: bool = True, label: Optional[str] = None) -> Value:
+        """Sum over one axis (keepdim); a sharded axis becomes a partial sum."""
+        shape = list(x.shape)
+        if keepdim:
+            shape[dim] = 1
+        else:
+            shape.pop(dim)
+        y = self._symbol(label or "sum", shape, x.symbol.dtype)
+        self._node("reduce_sum", [x], [y], {"dim": dim, "keepdim": keepdim}, label=label)
+        return y
+
     def all_reduce(self, x: Value, mesh_axis: int, label: Optional[str] = None, loc: Optional[str] = None) -> Value:
         y = self._symbol(label or "reduced", x.shape, x.symbol.dtype)
         self._node("all_reduce", [x], [y], {}, mesh_axis=mesh_axis, label=label, loc=loc)
