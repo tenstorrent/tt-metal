@@ -174,6 +174,22 @@ class SamplingGenerator:
             self.reset_prompt_tokens(prompt_tokens)
         self.reset_output_state()
 
+    def _reset_sampling_params_if_changed(self, formatted_params):
+        """EXPERIMENT ONLY (#52176) — do not merge.
+
+        ``reset_sampling_params`` -> ``tt_sampling.reset_params`` allocates fresh device
+        tensors (k/p/temp, index and vocab-mask tensors) on every call. Decode calls it once
+        per token, so a captured sampling trace keeps reading the buffers it was captured
+        against while the live ones are reallocated underneath it. Skip the reallocation when
+        the params are identical to the ones already on device, which is the case for the whole
+        greedy decode loop.
+        """
+        key = repr(formatted_params)
+        if getattr(self, "_last_applied_params_key", None) == key:
+            return
+        self.reset_sampling_params(formatted_params)
+        self._last_applied_params_key = key
+
     def apply_decode_state(
         self,
         sampling_params_chunks: list,
@@ -200,7 +216,7 @@ class SamplingGenerator:
 
         if chunks_per_model == 1:
             formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
-            self.reset_sampling_params(formatted_params)
+            self._reset_sampling_params_if_changed(formatted_params)
         else:
             # Row-sharded case: format each chunk to max_batch_size, concatenate.
             # After (0, None) sharding each row gets its own chunk of max_batch_size entries.
@@ -214,7 +230,7 @@ class SamplingGenerator:
                 else:
                     concat_fields[field] = sum((v if isinstance(v, list) else [v] for v in lists), [])
             formatted_params = SamplingParams(**concat_fields)
-            self.reset_sampling_params(formatted_params)
+            self._reset_sampling_params_if_changed(formatted_params)
 
         if reset_batch:
             self.reset_prompt_tokens(prompt_tokens)
@@ -224,6 +240,8 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
+        # Any direct call reallocates the device param tensors, so drop the skip-cache key.
+        self._last_applied_params_key = None
         old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
