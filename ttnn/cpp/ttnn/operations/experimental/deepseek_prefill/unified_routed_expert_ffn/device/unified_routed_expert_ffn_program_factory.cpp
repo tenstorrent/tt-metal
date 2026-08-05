@@ -21,6 +21,10 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+// Effective M-grid constant shared with the kernels (pure integer arithmetic, so
+// it is valid in host and device translation units alike). The host's row mapping
+// and the kernels' chunk picker MUST agree on it.
+#include "kernels/adaptive_chunk.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
@@ -125,15 +129,49 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         MAX_GRID_Y,
         grid_size.x,
         grid_size.y);
+    // ---------------------------- ROW_SPLIT ------------------------------
+    // The M-parallel grid is HALF the physical rows. Physical row gy and row
+    // gy + EFF_GRID_Y form a PAIR that works on the SAME token rows
+    // (my_mt = gy % EFF_GRID_Y): the lower half computes the gate matmul, the
+    // upper half the up matmul, and the up half ships its partials to its
+    // partner for the SwiGLU multiply.
+    //
+    // Why: at a low token count most physical rows compute PADDING. At isl-128
+    // the count is 4 tile-rows, so with 8 M-rows only 4 carry tokens and the
+    // other 4 do phantom work; every core still ran BOTH matmuls (§14e: 4074
+    // per-core tile-MACs). Pairing the rows instead gives each core ONE matmul
+    // over the same 4 real token rows — half the gate/up work, with no core idle
+    // and no cross-core reduction (unlike a split of K, which SwiGLU's
+    // nonlinearity would force to materialise before the activation).
+    //
+    // This is UNCONDITIONAL, not gated on the count, because the host cannot see
+    // the count: the dispatch buffer is allocated to the maximum (the perf sweep
+    // uses 5120 tokens for every case) and the true count is read device-side at
+    // kernel entry. It costs nothing when the rows are busy, because trading an
+    // M-row for a weight-half is work-NEUTRAL: per_core_M is capped at
+    // per_core_M_max either way, so a larger count spends extra CHUNKS rather
+    // than a larger per_core_M, and each chunk halves its own gate/up work. The
+    // price is the fixed ~23 us/chunk orchestration (§14b) paid on twice as many
+    // chunks, which shows up only at isl >= 1024 (~7-9%); isl <= 512 is neutral
+    // or better and isl <= 128 is the ~2x this exists for.
+    constexpr uint32_t kRowSplit = 2;
+    const uint32_t EFF_GRID_Y = GRID_Y / kRowSplit;
+    TT_FATAL(
+        EFF_GRID_Y * kRowSplit == GRID_Y && EFF_GRID_Y == adaptive_chunk::kGridY,
+        "ROW_SPLIT: physical GRID_Y ({}) must be {}x the effective M-grid, and the effective grid must equal "
+        "adaptive_chunk::kGridY ({}) — the kernels derive their row mapping from that constant",
+        GRID_Y,
+        kRowSplit,
+        adaptive_chunk::kGridY);
     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
     // below may shrink per_core_M / in0_block_w_gu (and hence chunk_M_tiles) to
-    // fit the device's per-core L1 on large models.
-    const uint32_t per_core_M_max = chunk_M_tiles / GRID_Y;
+    // fit the device's per-core L1 on large models. Divides the EFFECTIVE M-grid.
+    const uint32_t per_core_M_max = chunk_M_tiles / EFF_GRID_Y;
     TT_FATAL(
-        per_core_M_max * GRID_Y == chunk_M_tiles && per_core_M_max >= 1,
-        "chunk_M_tiles ({}) must be a positive multiple of GRID_Y ({})",
+        per_core_M_max * EFF_GRID_Y == chunk_M_tiles && per_core_M_max >= 1,
+        "chunk_M_tiles ({}) must be a positive multiple of the effective M-grid ({})",
         chunk_M_tiles,
-        GRID_Y);
+        EFF_GRID_Y);
     // Effective (CB-sized) per_core_M. The L1 guard below may reduce it to fit L1.
     uint32_t per_core_M = per_core_M_max;
     // M_tiles_full is NOT required to divide chunk_M_tiles. The kernels run
@@ -252,7 +290,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t partials_d_tile_size = tt::tile_size(partials_d_df);
 
     // ---------------------- adaptive L1-budget sizing ---------------------
-    // Per-core CB footprint scales with per_core_M (= chunk_M_tiles / GRID_Y)
+    // Per-core CB footprint scales with per_core_M (= chunk_M_tiles / EFF_GRID_Y)
     // and in0_block_w_gu (the gate/up K-block width). A fixed chunk_M_tiles=64
     // / in0_block_w_gu=16 fit the DeepSeek-V3 / MiniMax-M2.7 dims with headroom
     // but overflow L1 on larger models (MiniMax-M3: emb 6144 / hidden 3072, 2x
@@ -364,7 +402,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             GRID_Y);
         per_core_M = fit_M;
         in0_block_w_gu = fit_w;
-        chunk_M_tiles = per_core_M * GRID_Y;
+        chunk_M_tiles = per_core_M * EFF_GRID_Y;
     }
 
     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
@@ -412,15 +450,24 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // ---------------- weight memory layout ----------------
     // Weights are either DRAM-interleaved (page = tile, so a core's per_core_N-wide
     // slice of a K-row is per_core_N separate requests landing in per_core_N
-    // different banks) or DRAM ND-sharded with a one-tile-row-tall shard, where that
-    // whole slice IS one shard: contiguous in a single bank, so ONE request. With
-    // ROUND_ROBIN_1D distribution, shard id = k * shard_grid_N + gx, so consecutive
-    // K-rows rotate banks — which is what actually buys bandwidth (a core pinned to
-    // one bank saturates near 30 GB/s regardless of request size).
+    // different banks) or DRAM ND-sharded, where a shard is per_core_N tiles wide and
+    // some number of tile-rows tall, so that whole rectangle IS one shard: contiguous
+    // in a single bank, hence ONE request. With ROUND_ROBIN_1D distribution, shard id
+    // = (k / krows) * shard_grid_N + gx, so a core's successive requests step by
+    // shard_grid_N and keep rotating banks — which is what actually buys bandwidth (a
+    // core pinned to one bank saturates near 30 GB/s regardless of request size).
     //
-    // Validation already checked the shard is TILE_HEIGHT tall and that all three
-    // weights agree; here we only need the shard WIDTH to equal this core's N slice,
-    // because the reader reads exactly one shard per K-row into the CB.
+    // Validation already checked the height is a whole number of tile-rows and that
+    // all three weights agree on interleaved-vs-sharded. Here we need three more
+    // things, because the reader reads whole shards straight into the weight CB:
+    //   * WIDTH equal to this core's N slice, so a shard is exactly one K-row slice.
+    //   * gate/up HEIGHT equal (they share the reader/writer's block loop) and
+    //     dividing the K-block width, so a block is a whole number of requests and no
+    //     request straddles two shards. Tiles are row-major within a shard, so a
+    //     krows*per_core_N contiguous read lands in the k-major order the CB expects.
+    //   * down HEIGHT of exactly one tile-row: its block width is per_core_N_gu and
+    //     the two RISCs split that range at down_split_k, an arbitrary boundary that a
+    //     taller shard would not respect.
     uint32_t gu_shard_krows = 1;  // gate/up ND-shard height in tile-rows
     const auto& gate_mem = t.gate_proj.memory_config();
     const bool weights_nd_sharded = gate_mem.created_with_nd_shard_spec();
@@ -450,7 +497,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             "gate/up shard height {} tile-rows must divide in0_block_w_gu {}",
             gu_shard_krows,
             in0_block_w_gu);
-        TT_FATAL(shard_krows(t.down_proj) == 1, "down_proj shard height must be 1 tile-row");
+        TT_FATAL(
+            shard_krows(t.down_proj) == 1,
+            "down_proj ND shard height must be 1 tile-row (the down K-block is split across two RISCs at "
+            "down_split_k, which a taller shard would straddle), got {}",
+            shard_krows(t.down_proj));
         check_shard_width(t.gate_proj, per_core_N_gu, "gate_proj");
         check_shard_width(t.up_proj, per_core_N_gu, "up_proj");
         check_shard_width(t.down_proj, per_core_N_d, "down_proj");
@@ -1059,7 +1110,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const auto& core = cores[idx];
         const uint32_t gy = idx / GRID_X;
         const uint32_t gx = idx % GRID_X;
-        const uint32_t my_mt = gy;
+        // ROW_SPLIT row mapping: physical rows gy and gy + EFF_GRID_Y are a PAIR
+        // covering the SAME token rows, so my_mt wraps at the effective grid.
+        // `half` picks which of the two weight matmuls this core owns (0 = gate,
+        // 1 = up) and which 4-row band its weight multicast covers.
+        const uint32_t my_mt = gy % EFF_GRID_Y;
+        const uint32_t half = gy / EFF_GRID_Y;
         const uint32_t my_nt_gu = gx;
         const uint32_t my_nt_d = gx;
 
@@ -1079,12 +1135,19 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // op) while cores off both lines sat ~99% idle.
         //
         // So stagger the two sender sets across the grid with no core in both:
-        //   weight sender for column gx -> row  gx % GRID_Y
+        //   weight sender for column gx -> row  half * EFF_GRID_Y + gx % EFF_GRID_Y
         //   x      sender for row    gy -> column (gy + 1) % GRID_X
-        // A core is in both sets only if gx == (gx % GRID_Y + 1) % GRID_X, which
-        // has no solution for the 11x8 grid (checked for all gx below), so the
-        // heaviest core now owns one stream instead of two.
-        const uint32_t in1_sender_row = gx % GRID_Y;
+        // Under ROW_SPLIT the weight sender is staggered WITHIN its own half, so
+        // each half has its own sender for every column: the lower half's sender
+        // reads gate, the upper half's reads up, and each multicasts only down its
+        // own 4-row band. That keeps the total DRAM read identical (each weight
+        // slice is still read exactly once) and the stream count identical too —
+        // 22 senders on one NoC each, where before there were 11 senders using two
+        // NoCs each via UP_SPLIT.
+        // A core is in both sets only if gx == (in1_sender_row + 1) % GRID_X, which
+        // has no solution for the 11x8 grid (checked for all cores below), so the
+        // heaviest core still owns one stream instead of two.
+        const uint32_t in1_sender_row = half * EFF_GRID_Y + (gx % EFF_GRID_Y);
         const uint32_t in0_sender_col = (gy + 1) % GRID_X;
         TT_FATAL(
             !(gy == in1_sender_row && gx == in0_sender_col),
@@ -1094,15 +1157,25 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
 
         const bool is_in1_sender = (gy == in1_sender_row);
         const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, in1_sender_row});
-        // Multicast rectangle spans the WHOLE column including the sender: the
-        // non-loopback multicast drops the sender's own copy (it already holds the
-        // block), so num_dests is GRID_Y-1. A rectangle must be contiguous, and
-        // the sender is no longer at an edge row, so "everything but the sender"
-        // is not expressible as one rectangle — covering the full column and
-        // relying on non-loopback is.
-        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
-        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, GRID_Y - 1});
-        const uint32_t in1_num_receivers = GRID_Y - 1;
+        // Multicast rectangle spans this core's WHOLE half-column including the
+        // sender: the non-loopback multicast drops the sender's own copy (it
+        // already holds the block), so num_dests is EFF_GRID_Y-1. A rectangle must
+        // be contiguous, and the sender is no longer at an edge row, so
+        // "everything but the sender" is not expressible as one rectangle —
+        // covering the full half-column and relying on non-loopback is.
+        //
+        // The band is [half * EFF_GRID_Y, half * EFF_GRID_Y + EFF_GRID_Y), which is
+        // contiguous BY CONSTRUCTION — that is why the halves must be adjacent row
+        // bands and not, say, interleaved rows. Pairing row gy with gy+1 would make
+        // each token row's gate/up pair adjacent but would scatter each weight
+        // half across alternating rows, which no rectangle can cover; the weight
+        // multicast is 19.7 us (§14a) and would degrade to one transfer per row,
+        // so the weight side wins the choice.
+        const uint32_t band_first_row = half * EFF_GRID_Y;
+        const uint32_t band_last_row = band_first_row + EFF_GRID_Y - 1;
+        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, band_first_row});
+        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, band_last_row});
+        const uint32_t in1_num_receivers = EFF_GRID_Y - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
         const uint32_t in1_mcast_nx_end = last_recv_noc.x;

@@ -1590,13 +1590,9 @@ With the compute floor at 84.7 us = 86% of 98.8, the remainder is a compute-side
 
 Two candidates, in cost order:
 
-1. **Multi-row ND shards.** `RD_GATE` measures **7.32 us** for 16 requests x 14 blocks, so
-   request-issue cost alone exceeds the gap (x10 = 73 us). Heights of 2 and 4 tile-rows FAIL
-   PCC: a contiguous read of k_rows*per_core_n tiles from one shard does not land in the
-   k-major order the CB expects, so shard-internal tile order is not shard-local row-major as
-   assumed. Reverted to the validated 1-row layout. Resolve the actual ND-shard tile layout
-   and this is the cheapest remaining win. (The FULL-K-block height is separately a dead end:
-   it pins the core to one bank, ~245 vs ~370 GB/s.)
+1. ~~**Multi-row ND shards.**~~ **MEASURED AND REJECTED — see 21.** The premise was wrong:
+   `RD_GATE`'s 7.32 us is bandwidth-bound, not request-issue-bound, so cutting the request
+   count buys nothing and costs bank coverage.
 2. **Split-K across the idle M-rows** (14d) — the only idea measured to have multiple-x
    headroom, and a genuine restructure.
 
@@ -1678,3 +1674,229 @@ so K_down_padded = 65, padding = 1 < 5 -> tail-skip stays ENABLED, on top of -16
 `row` descriptor tops out at 12 columns for 2xharvested).
 
 Reverted: kMaxGridX = 11, FFN_GRID_X = 11.
+
+## 21. MEASURED AND REJECTED: multi-row ND shards (2026-08-05)
+
+Section 19d listed this as the cheapest remaining win, on the premise that `RD_GATE`'s
+**7.32 us** (16 requests x 14 blocks) was per-request ISSUE cost, so folding k_rows K-rows
+into one shard would divide it. It does divide the request count. It buys nothing.
+
+Measured per-op device time, x_rm + w_ndshard, gate/up shard height 1 / 2 / 4 tile-rows
+(down stays at 1 — its K-block is split across two RISCs at `down_split_k`, an arbitrary
+boundary a taller shard would straddle, and the op TT_FATALs if it is not 1):
+
+| case          | k_rows=1 | k_rows=2         | k_rows=4             |
+|---------------|----------|------------------|----------------------|
+| kimi isl-128  | 100.7 us | 99.4 us (-1.4%)  | 115.6 us (**+14.8%**) |
+| glm isl-128   |  87.9 us | 89.4 us (+1.7%)  | 102.0 us (**+16.0%**) |
+| kimi isl-2048 | 586.9 us | 593.4 us (+1.1%) | 586.7 us (-0.0%)     |
+| glm isl-2048  | 511.8 us | 511.4 us (-0.1%) | 512.4 us (+0.1%)     |
+
+**Mechanism — request count sets DRAM BANK COVERAGE.** Shards are ROUND_ROBIN_1D, so a
+core's shard ids inside one K-block step by `shard_grid_n = 11`, and 11 mod 8 banks = 3.
+So the number of requests per block decides how many of the 8 banks the block touches:
+
+| k_rows | requests / 16-row block | distinct banks touched |
+|--------|-------------------------|------------------------|
+| 1      | 16                      | 8 (each twice)         |
+| 2      |  8                       | 8 (each once)          |
+| 4      |  4                       | **4**                  |
+
+k_rows 2 keeps full coverage, hence the wash; k_rows 4 halves it, hence ~+15%. This is the
+SAME effect as the full-K-block height (one shard => one bank => ~245 vs ~370 GB/s), just
+reached earlier — the earlier note's "any k_rows keeps the bank rotating" was wrong,
+because rotation is worthless if there are too few steps to cover the banks.
+
+**So the gate/up weight read is BANDWIDTH-bound, not issue-bound.** That retires the whole
+family: no shard-height change can help, and the 73 us the section-19d arithmetic promised
+was never there. Split-K across the idle M-rows (14d) is now the only remaining
+multiple-x idea.
+
+**Correction to the earlier record.** Sections 19d and the model-side comment both said
+heights 2 and 4 FAILED PCC, and concluded that shard-internal tile order is not row-major.
+That was wrong on both counts. Tiles ARE row-major within an ND shard (`page_offset =
+(kr * N_tiles_in_shard + n) * tile_size`), so the grouped read's arithmetic was correct all
+along — 18/18 functional cases pass at both 2 and 4. The observed failure was this op's own
+`TT_FATAL(shard_krows(down_proj) == 1)`: `dram_nd_shard_spec` is one helper used for all
+three weight tensors, so the height knob had applied to `down_proj` too. It was diagnosed
+from a `-q` summary line reading `1 failed` without reading the error, and a TT_FATAL is
+indistinguishable from a PCC failure at that grep. **Read the actual error before assigning
+a root cause to a mechanism.**
+
+Kept, since it is cheap and now proven correct at 2 and 4: the `k_rows` parameter on
+`dram_nd_shard_spec`, the `GU_SHARD_KROWS` / `DS_SHARD_KROWS` knob (default **1**), the
+kernels' grouped-read loops, and the op's divisibility TT_FATALs. Validation now accepts any
+multiple of TILE_HEIGHT (`is_dram_nd_sharded_by_tile_rows`) instead of exactly one row.
+
+## 22. ROW_SPLIT: pair the M-rows, one weight matmul each (2026-08-05, IN PROGRESS)
+
+Replaces the "split-K across idle M-rows" idea of 14d, which was the wrong shape for this
+op: **the op never splits K and does not need to.** The decomposition is X = N, Y = M, K
+always in-core, for BOTH matmuls — down gets its full K because the phase-4 activated mcast
+(sender gx==kb) hands every core in the M-row all 66 hidden tiles. There is no cross-core
+partial reduction anywhere today, and SwiGLU's nonlinearity would force a split of K to
+materialise one before the activation.
+
+**The lever instead:** at a low count most physical rows compute PADDING (isl-128: count is 4
+tile-rows, 4 of 8 rows phantom) while every core runs BOTH matmuls (4074 per-core tile-MACs,
+14e). Pair physical row gy with row gy + EFF_GRID_Y: both cover the SAME token rows
+(my_mt = gy % EFF_GRID_Y), the lower half computes gate, the upper half up, and the up half
+ships its partials to its partner for the multiply.
+
+| | today | ROW_SPLIT |
+|---|---|---|
+| gate *or* up | 2688 | **1344** |
+| down (stage 2, N split 22 ways) | 1386 | **726** |
+| total per-core tile-MACs | 4074 | **2070** (1.97x) |
+
+Predicted isl-128 ~70 us vs 100.7 measured; budget 10x128 + 2x2048 ~= 1.81 ms from 2.15.
+
+### 22a. Why UNCONDITIONAL, and what it costs at long ISL
+
+The host CANNOT gate this on the count: the dispatch buffer is allocated to the maximum
+(`_ISL_ALLOCATED_TOKENS = 5120` for EVERY perf case, so m_tiles is always 160) and the true
+count is read device-side at entry. A compile-time gate would never fire. A device-selected
+mode would need both role sets and both mcast rectangles live — much bigger and riskier.
+
+Unconditional is fine because the M-for-N trade is work-NEUTRAL when the rows are busy:
+per_core_M is capped at per_core_M_max either way, so a larger count spends extra CHUNKS, and
+each chunk halves its own gate/up work. The price is the fixed ~23 us/chunk orchestration
+(14b) paid on twice as many chunks:
+
+| isl | chunks now | chunks split | net |
+|---|---|---|---|
+| 128 | 1 | 1 | **~2x** |
+| 256 / 512 | 1 | 1 | ~neutral |
+| 1024 | 1 | 2 | -7% |
+| 2048 | 2 | 4 | -9% |
+
+### 22b. Two structural constraints the code settled
+
+1. **The halves must be adjacent row BANDS, not interleaved rows.** Interleaving (gate on row
+   2j, up on 2j+1) makes each token row's pair adjacent, which the phase-4 mcast would like,
+   but scatters each weight half across alternating rows — and no rectangle covers that, so
+   the 19.7 us weight mcast would degrade to one transfer per row. The weight side wins; the
+   phase-4 mcast pays with two rectangles instead (1.1 us -> ~2.2 us).
+2. **my_mt = gy % EFF_GRID_Y makes both halves read the same x rows**, leaving the ENTIRE x
+   multicast path untouched at the cost of reading x twice (+2.9 us measured, 14a). Much
+   cheaper than a two-rectangle x mcast with a 2*GRID_X-1 ready count.
+
+### 22c. STAGE 0 — mapping only (DONE, verification pending)
+
+Deliberately changes nothing but the row mapping, so both halves still compute gate AND up
+for the same rows and write IDENTICAL output. **Expected to PCC-pass and to be SLOWER**
+(each half reads the full gate+up for its band, so weight DRAM roughly doubles, and chunks
+double). Its whole job is to prove the row mapping, half-band mcast, x path and chunk math
+before the matmul split touches anything.
+
+* `kernels/adaptive_chunk.hpp:30` — kGridY 8 -> **4**. This is the single source of truth all
+  three kernels derive per_core_M / num_chunks from.
+* `unified_routed_expert_ffn.cpp` — kMaxChunkMTiles 32 -> **16**, keeping per_core_M_max = 4
+  and the L1 footprint unchanged.
+* factory — `EFF_GRID_Y = GRID_Y / 2` with a TT_FATAL tying it to adaptive_chunk::kGridY so
+  host and kernels cannot drift; `chunk_M_tiles = per_core_M * EFF_GRID_Y`;
+  `per_core_M_max = chunk_M_tiles / EFF_GRID_Y`.
+* factory per-core loop — `my_mt = gy % EFF_GRID_Y`, `half = gy / EFF_GRID_Y`; weight sender
+  staggered WITHIN its half (`half*EFF_GRID_Y + gx % EFF_GRID_Y`); mcast band = the half's 4
+  contiguous rows; `in1_num_receivers = EFF_GRID_Y - 1`. Reader and writer read the same
+  locals, so they cannot disagree. Sender-collision TT_FATAL still holds (checked
+  analytically for all 88 cores).
+
+### 22d. STAGE 1 — the actual win (~1.49x). SPEC, NOT YET BUILT
+
+Not independently testable: PCC only returns green when all four pieces are in. Piece 3 is
+the cross-RISC/cross-core handshake class that has produced four counter bugs in this op, so
+build it with the rule from 19: **any cross-RISC handshake or CB-slot index must key on a
+counter advancing exactly once per event it guards, and only isl >= 2048 exposes a mistake.**
+
+1. **Two compute kernels, not one.** CreateKernel twice — CoreRange rows [0, EFF_GRID_Y) with
+   `GATE_HALF=1` and rows [EFF_GRID_Y, GRID_Y) with `GATE_HALF=0` — so the single-matmul
+   choice is `if constexpr` and each half compiles only its own matmul (no TRISC code-size or
+   branch cost). In `fused_swiglu.cpp` the K-loop at :430-492 runs two matmul_block sequences
+   per subblock sharing one x block; keep exactly one. Preserves out_subblock_w = 6 and
+   in1_num_subblocks = 1, the property 14f flagged as mattering most.
+2. **Per-half weight tensor.** The half-0 sender reads gate, the half-1 sender reads up.
+   RETIRE UP_SPLIT (the writer's NoC-1 `up` read): each sender now reads ONE tensor, and the
+   stream count is unchanged at 22 (22 senders x 1 NoC vs 11 x 2). DOWN_SPLIT stays.
+3. **The join.** up is NEVER materialised — `fused_swiglu.cpp:560` documents that the multiply
+   reads `cb_partials_up` (bf16) directly against `cb_gate_intermed`. So the up core's writer
+   NoC-writes its partials (per_core_M x per_core_N_gu = 6 tiles = 12 KB at per_core_M 1) into
+   the partner gate core's `cb_partials_up`, and the GATE core's reader does the cb_push_back.
+   The multiply phase then needs **zero** changes. Needs a new sem pair
+   (`gu_join_ready` / `gu_join_valid`) following the existing in1 ready/valid shape — the
+   receiver must reserve L1 BEFORE the sender writes — plus each core's partner NoC coords
+   (gx, gy +- EFF_GRID_Y) as RT args. The gate core must NOT locally push partials_up
+   (`:507`), and the up core must skip the silu copy, the multiply and phase 4.
+4. **Half-1 cores skip phase 4.** Down stays on the gate half only for stage 1, so the down
+   weight sender and its mcast stay inside half 0 — which the stage-0 band already gives.
+
+### 22e. STAGE 2 — down across both halves (1.49x -> 1.97x)
+
+`my_nt_d = half * GRID_X + gx`, `per_core_N_d = ceil(N_down_tiles / (2 * GRID_X))` = 11;
+activated mcast issued to BOTH half rectangles (see 22b.1); down weight mcast split into two
+half-column senders. **down_k_tail_skip is SAFE**: it keys on
+`per_core_N_gu * GRID_X - K_down_tiles` = 66 - 64 = 2 < in0_block_w_d = 6, and per_core_N_gu
+is UNCHANGED at 6. That is exactly why this design beats the alternative of halving
+per_core_N_gu to 3, which moves down's K blocking and lands one step from the tail-skip cliff
+that cost +54% at 8x12 (section 20).
+
+### 22c-CORRECTION: Stage 0 HANGS (2026-08-05)
+
+The prediction above — "expected to PCC-pass and to be SLOWER" — is WRONG. Stage 0 as
+committed deadlocks: `TT_THROW: Device 0: Timeout (10000 ms) waiting for physical cores to
+finish` listing ALL 88 worker cores. So it is not a partial/some-cores hang; nothing
+completes. Do NOT treat the stage-0 diff as a validated base for stage 1.
+
+The reasoning error was assuming "both halves redundantly compute the same thing" makes the
+change semantically inert. It does not: the mapping edit also changed multicast SPANS and
+semaphore COUNTS (`in1_num_receivers` 7 -> 3, band 8 rows -> 4), and any wait whose expected
+count no longer matches the number of incrementers hangs regardless of what the cores compute.
+
+Candidates to check first, in order (all unverified — the hang was not triaged live):
+1. Every wait that still expects a GRID_Y-sized population while the band now holds
+   EFF_GRID_Y cores, or vice versa. Grep every semaphore wait for a count derived from a grid
+   dimension and confirm which population actually increments it.
+2. The phase-4 activated mcast: its M-row NoC table is built for the core's own PHYSICAL row
+   and `act_ready_sem` waits GRID_X-1. Consistent per physical row in principle, but both
+   halves now run phase 4 over the same token rows, so both write the same output — check
+   whether the down-weight sender and its band still agree.
+3. UP_SPLIT's `up_go`/`up_done` reader<->writer handshake: gated on `is_in1_sender`, and the
+   number of senders doubled. Per-core it should still pair, but verify the writer's
+   `is_up_sender` and the reader's `is_in1_sender` are the same predicate for every core.
+
+**Next session: triage the hang LIVE before editing anything** —
+`python tt-metal/tools/triage/triage.py --run=dump_callstacks --run=dump_running_operations`
+while the process is still up. Which function each core is parked in (cb_wait_front vs
+noc_semaphore_wait) distinguishes candidate 1 from 2/3 immediately, and guessing from source
+has already cost one wrong prediction here.
+
+**22c-CORRECTION-2: the stage-0 "hang" is CONFOUNDED, not established.** The run that produced
+the 88-core timeout started at 16:08:35 while still blocked on `CHIP_IN_USE_2_PCIe` held by an
+ORPHANED Tracy worker (PID 928514, left over from the timed-out x_tile-glm_51-isl-4096 perf
+case). That orphan was not killed until ~16:38 — half an hour AFTER the 16:09:44 timeout. The
+same log also shows `Device 0 init: failed to initialize FW`, which is the signature of two
+processes contending for one chip, not of a kernel deadlock.
+
+So stage 0 is UNTESTED, not broken. Before triaging anything: confirm no stale holder
+(`pgrep -af tracy`, check the lock holder's cmdline), `tt-smi -r 0` (single device — cards 1-7
+belong to another workload on this host), then re-run the stage-0 PCC check clean. Only if it
+hangs THEN is the ranked candidate list in 22c-CORRECTION worth working through.
+
+The reasoning correction in 22c-CORRECTION still stands on its own merits regardless of
+whether stage 0 hangs: redundant arithmetic is NOT redundant synchronization, because the
+mapping edit also moved multicast spans and semaphore counts (in1_num_receivers 7 -> 3,
+band 8 -> 4 rows). That remains the first thing to check if a real hang shows up.
+
+**22c-RESOLVED: stage 0 is CORRECT.** Re-run on a clean device (no stale holder, `tt-smi -r 0`):
+**18/18 PCC pass in 37 s** on the x_rm + w_ndshard isl sweep. The 88-core timeout was entirely
+the orphaned Tracy worker contending for the chip; there was never a deadlock. The ranked
+candidate list in 22c-CORRECTION was chasing a phantom — do not spend time on it.
+
+So the ROW_SPLIT row mapping, the half-band weight multicast (in1_num_receivers 3, 4-row
+band), the untouched x path (my_mt = gy % EFF_GRID_Y) and the halved-kGridY chunk math are all
+validated. **Stage 1 (22d) is unblocked.**
+
+Process lesson, third instance this session: two of the three wrong calls here came from
+reading an indirect signal (a `-q` summary line; a timeout log) as a conclusion. The cheap
+check that would have caught both: confirm no other process holds the chip BEFORE trusting any
+hang, and read the actual error text BEFORE naming a mechanism.

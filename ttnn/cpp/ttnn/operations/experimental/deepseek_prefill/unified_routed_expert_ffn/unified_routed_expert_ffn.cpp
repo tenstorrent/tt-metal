@@ -55,7 +55,12 @@ ttnn::Tensor unified_routed_expert_ffn(
     // the smaller chunk costs extra chunk passes. Net win across the prefill
     // range. Keep this a POWER OF TWO * kGridY: per_core_M_for_chunk() quantizes
     // tail chunks to divisors of per_core_M_max.
-    constexpr uint32_t kMaxChunkMTiles = 32;  // per_core_M_max = 4 (see above)
+    //
+    // ROW_SPLIT halves the EFFECTIVE M-grid (adaptive_chunk::kGridY = 4, not the 8
+    // physical rows), so a chunk spans per_core_M * 4 tile-rows and this constant
+    // must halve with it to keep per_core_M_max at 4 and the L1 footprint
+    // unchanged. Keep it a POWER OF TWO * adaptive_chunk::kGridY.
+    constexpr uint32_t kMaxChunkMTiles = 16;  // per_core_M_max = 4 (see above)
     // This expert's M in tiles. Defaults to x's allocated M; a caller passing a
     // shared x buffer (wider than one region) supplies the per-expert value.
     const uint32_t M_tiles_full = input_m_tiles.value_or(x.padded_shape()[-2] / 32);

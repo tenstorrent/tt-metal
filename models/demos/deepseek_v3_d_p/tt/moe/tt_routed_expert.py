@@ -12,6 +12,7 @@ Unlike TtSharedExpert, this module:
 - Each device holds weights for `experts_per_chip` local experts
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +24,13 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
+
+# Height, in tile-rows, of the gate/up DRAM ND shards (see dram_nd_shard_spec for the
+# measurements). Must divide the FFN's in0_block_w_gu (16); the op TT_FATALs otherwise.
+# 1 is the right value -- 2 measured as a wash and 4 as a ~15% regression at isl-128,
+# because fewer requests per K-block means fewer DRAM banks touched. The env override
+# is only for re-measuring that trade-off on other shapes or a different bank count.
+GU_SHARD_KROWS = int(os.environ.get("DS_SHARD_KROWS", "1"))
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
@@ -47,24 +55,42 @@ class TtRoutedExpert(LightweightModule):
         return True
 
     @staticmethod
-    def dram_nd_shard_spec(mesh_device, n_dim: int) -> "ttnn.NdShardSpec":
-        """DRAM ND shard spec that lets UnifiedRoutedExpertFfn fetch a whole K-row
-        weight slice in ONE NoC request instead of one per tile.
+    def dram_nd_shard_spec(mesh_device, n_dim: int, k_rows: int = 1) -> "ttnn.NdShardSpec":
+        """DRAM ND shard spec that lets UnifiedRoutedExpertFfn fetch a whole
+        (k_rows x per_core_N) weight slice in ONE NoC request instead of one per tile.
 
-        The shard is a single tile-row tall and per_core_N tiles wide, i.e. exactly the
-        slice one FFN core consumes for one K-row. Two properties matter:
+        The shard is k_rows tile-rows tall and per_core_N tiles wide, i.e. exactly the
+        slice one FFN core consumes for k_rows consecutive K-rows. Two properties matter:
 
         * WIDTH: matching per_core_N is what makes the slice a single shard, hence one
           contiguous request. per_core_N = ceil(n_tiles / FFN_GRID_X) mirrors the op's
           own N split; the op validates the width and fails loudly if they diverge.
-        * HEIGHT of exactly one tile-row: shards are distributed ROUND_ROBIN_1D, so
-          shard id = k * shard_grid_n + gx and consecutive K-rows land in DIFFERENT DRAM
-          banks. That rotation is the whole point — measured on a P150, a core pinned to
-          one bank saturates near 30 GB/s no matter how big the request (13/27/55 KB all
-          gave ~245 GB/s aggregate), while the same bytes with the bank rotating reach
-          ~370 GB/s. A taller shard would be one request per K-BLOCK but would pin the
-          core to a bank, which measured no faster than plain interleaved. It would also
-          couple this spec to the op's in0_block_w, which its L1 guard can lower.
+        * HEIGHT trades request count against DRAM bank COVERAGE, and coverage wins, so
+          leave it at 1. Shards are distributed ROUND_ROBIN_1D, so shard id =
+          (k / k_rows) * shard_grid_n + gx: a core's requests within one K-block step by
+          shard_grid_n = 11, and 11 mod 8 banks = 3, so the NUMBER of requests per block
+          decides how many of the 8 banks that block touches. At in0_block_w = 16 rows,
+          k_rows 1 issues 16 requests covering all 8 banks twice, k_rows 2 issues 8
+          covering all 8 once, and k_rows 4 issues only 4 -- half the banks, so about half
+          the bandwidth. Measured (x_rm, per-op device time, isl-128): k_rows 2 is a wash
+          (-1.4% kimi, +1.7% glm, i.e. inside run-to-run noise) while k_rows 4 costs
+          +14.8% / +16.0%; at isl-2048 all three land within 1% because the per-block
+          fixed cost has amortized away. So this read is bandwidth-bound, NOT
+          request-issue-bound: cutting the request count buys nothing and starts to hurt
+          the moment it cuts bank coverage. That is the same effect as a shard as tall as
+          the whole K-block, which is just its endpoint -- one shard, hence one bank, per
+          block. A bank-pinned core saturates near 30 GB/s regardless of request size
+          (13/27/55 KB all land at ~245 GB/s aggregate) versus ~370 GB/s rotating. The
+          k_rows knob is kept because it is cheap and now proven correct at 2 and 4, but
+          it is not a lever worth pulling.
+
+        The op requires k_rows to divide in0_block_w (its K-block width), so each request
+        lies inside one shard and each block is a whole number of requests; that also
+        makes k_rows divide K in tile-rows, since in0_block_w already does. Tiles within a
+        shard are row-major, so a k_rows*per_core_N contiguous read lands in exactly the
+        k-major order the weight CB expects. Note any k_rows > 1 COUPLES this spec to
+        in0_block_w, which the op's L1 guard may lower for a large model -- another reason
+        the default of 1 (which divides everything) is the one to ship.
 
         n_tiles need not be a multiple of per_core_N: the last shard is partially valid
         and those columns are dropped by the op's existing N-bounds guards.
@@ -76,16 +102,8 @@ class TtRoutedExpert(LightweightModule):
         n_tiles = n_dim // ttnn.TILE_SIZE
         per_core_n = (n_tiles + FFN_GRID_X - 1) // FFN_GRID_X
         dram_grid = mesh_device.dram_grid_size()
-        # Height stays ONE tile-row. A partial height (2 or 4 rows) would cut the request
-        # count -- RD_GATE measures 7.32 us for 16 requests x 14 blocks, so issue cost is
-        # real -- while consecutive groups still rotate banks. It was tried and FAILED PCC:
-        # a contiguous read of k_rows*per_core_n tiles from one shard does not land in the
-        # k-major order the CB expects, so the shard's internal tile order is not
-        # shard-local row-major as assumed. Needs the actual ND-shard tile layout confirmed
-        # before retrying; the full-K-block height is separately a dead end (pins the core
-        # to one bank, ~245 vs ~370 GB/s).
         return ttnn.NdShardSpec(
-            shard_shape=ttnn.Shape([ttnn.TILE_SIZE, per_core_n * ttnn.TILE_SIZE]),
+            shard_shape=ttnn.Shape([k_rows * ttnn.TILE_SIZE, per_core_n * ttnn.TILE_SIZE]),
             grid=ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid.x - 1, dram_grid.y - 1))]
             ),
@@ -204,19 +222,28 @@ class TtRoutedExpert(LightweightModule):
                 # 4D weight and ND-sharded tensors reject that view. It also keeps the
                 # on-disk cache layout-independent — the cached tensor stays interleaved,
                 # so switching layouts needs no cache rebuild.
+                #
+                # gate/up are read in K-blocks of in0_block_w_gu=16 tile-rows, so a taller
+                # shard folds several rows into one request; down is read in narrower
+                # blocks (in0_block_w_d = per_core_N_gu) that the op splits across two
+                # RISCs, so it stays at one tile-row and the op enforces that.
                 if dram_sharded:
                     gate_tt = ttnn.to_memory_config(
                         gate_tt,
                         ttnn.MemoryConfig(
                             buffer_type=ttnn.BufferType.DRAM,
-                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(mesh_device, gate_tt.shape[-1]),
+                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(
+                                mesh_device, gate_tt.shape[-1], k_rows=GU_SHARD_KROWS
+                            ),
                         ),
                     )
                     up_tt = ttnn.to_memory_config(
                         up_tt,
                         ttnn.MemoryConfig(
                             buffer_type=ttnn.BufferType.DRAM,
-                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(mesh_device, up_tt.shape[-1]),
+                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(
+                                mesh_device, up_tt.shape[-1], k_rows=GU_SHARD_KROWS
+                            ),
                         ),
                     )
                     down_tt = ttnn.to_memory_config(

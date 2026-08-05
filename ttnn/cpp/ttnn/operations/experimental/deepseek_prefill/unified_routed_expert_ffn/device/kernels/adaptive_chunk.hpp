@@ -27,7 +27,13 @@
 // is valid in BRISC, NCRISC, and TRISC translation units alike.
 namespace adaptive_chunk {
 
-constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGridY tile-rows
+// M-row cores; a chunk spans per_core_M * kGridY tile-rows.
+//
+// This is the EFFECTIVE M-grid, which is HALF the physical grid rows (8): the op
+// runs ROW_SPLIT, pairing physical row gy with row gy + kGridY so that one
+// computes the gate matmul and the other the up matmul for the SAME token rows
+// (my_mt = gy % kGridY). See the ROW_SPLIT block in the program factory.
+constexpr uint32_t kGridY = 4;
 
 // Chunk layout for `count_tiles` tile-rows, given the CB-sized maximum chunk
 // `max_chunk` (= per_core_M_max * kGridY): a run of FULL chunks of max_chunk,
