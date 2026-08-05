@@ -523,7 +523,16 @@ generator (phase 8) already emits both halves for a new such op.
     outside the shard it holds. This makes the `participant_shrink` accounting trustworthy
     on 2-D-haloed sites; the confidence tier stays MEDIUM/likely (participant_shrink is an
     opportunity requiring a code change, not a provable dead collective).
-  - **Still open:** the **audio VAE** is unscouted.
+- **MiniMax-H3 audio VAE decoder** (`cglagovich/minimax-h3`, the shared LTX **BigVGAN
+  vocoder** `vocoder_ltx.py`) — dry-runs **fully clean, 3783 nodes, 0 unregistered**.
+  Most of it is `conv3d` with `(k,1,1)` kernels (already covered — a payoff from the
+  video work), so it needed only: **`ttnn.conv1d`** (depthwise 1-D conv on a `(B,L,1,C)`
+  tensor; a `conv2d` with `W=1`, returns ttnn's `(out, out_length, (weight, bias))`
+  tuple — the missing tuple was what tripped the vocoder's 3-way unpack) and
+  **`snake_beta`** (the BigVGAN activation, a pointwise unary). Both generic — `conv1d`
+  benefits LTX audio too (shared vocoder). Single-device in this test, so no collective
+  findings; the T-parallel path (`AudioTParallelConfig`, `_all_gather_t` / `_partition_t`)
+  is where those would surface.
 - **Grouped-query attention** — `nlp_create_qkv_heads` now branches on its call
   shape: `num_kv_heads == 0` (LTX / Ideogram / Wan, `out, _, _ = …`) is the plain
   single-tensor head split; `num_kv_heads > 0` (Qwen3-VL / Gemma / **MiniMax-H3**,

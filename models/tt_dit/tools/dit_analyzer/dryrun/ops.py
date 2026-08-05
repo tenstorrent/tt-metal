@@ -629,6 +629,35 @@ def conv2d(input_tensor=None, weight_tensor=None, bias_tensor=None, **k):
     return out, (out_h, out_w), (w, bias)
 
 
+def conv1d(input_tensor=None, weight_tensor=None, bias_tensor=None, **k):
+    """1-D conv on a ``(B, L, 1, C)`` tensor -- the audio vocoder's dilated / depthwise
+    stacks (MiniMax-H3 / LTX BigVGAN). Structurally a ``conv2d`` with ``W = 1``, so it
+    emits a conv2d node and reuses that spec; returns ttnn's ``(out, out_length,
+    (weight, bias))`` tuple (``return_output_dim=True, return_weights_and_bias=True``)."""
+    x = _t(input_tensor, "input_tensor", kwargs=k, index=0)
+    w = weight_tensor if isinstance(weight_tensor, Tensor) else _t(weight_tensor, "weight_tensor", kwargs=k, index=1)
+    bias = bias_tensor if isinstance(bias_tensor, Tensor) else None
+    b, length = int(k["batch_size"]), int(k["input_length"])
+    kk, stride = int(k["kernel_size"]), int(k.get("stride", 1))
+    pad, dil = int(k.get("padding", 0)), int(k.get("dilation", 1))
+    out_c = int(k["out_channels"])
+    out_len = (length + 2 * pad - dil * (kk - 1) - 1) // stride + 1
+    channel_axis = len(x.logical) - 1  # NHWC-shaped (H = length, W = 1)
+    out_dist = Dist(
+        tuple(channel_axis if (a is not None and a % len(w.logical) == 0) else None for a in w.dist.shard),
+        (False,) * len(w.dist.shard),
+    )
+    out = recorder.emit(
+        "conv2d",
+        [x, w, *([bias] if isinstance(bias, Tensor) else [])],
+        [b, out_len, 1, out_c],
+        out_dist,
+        attrs={"kernel": [kk, 1], "stride": [stride, 1], "padding": [pad, 0], "dilation": dil},
+        base="conv1d",
+    )
+    return out, out_len, (w, bias)
+
+
 def conv3d(
     input_tensor=None, weight_tensor=None, bias_tensor=None, output_channels=None, kernel_size=None, stride=None, **k
 ):
@@ -927,6 +956,7 @@ TENSOR_OPS = {
     "matmul": matmul,
     "linear": matmul,
     "conv2d": conv2d,
+    "conv1d": conv1d,
     "group_norm": group_norm,
     "softmax": softmax,
     "sum": reduce_sum,

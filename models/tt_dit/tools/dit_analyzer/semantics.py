@@ -1141,6 +1141,7 @@ GENERIC_OPS: Dict[str, Tuple[str, str, Optional[str]]] = {
     "clamp": ("pointwise", "unary", "clamp"),
     "cos": ("pointwise", "unary", "cos"),
     "sin": ("pointwise", "unary", "sin"),
+    "snake_beta": ("pointwise", "unary", "snake_beta"),  # BigVGAN vocoder activation
     "add": ("pointwise", "binary", "add"),
     "sub": ("pointwise", "binary", "sub"),
     "subtract": ("pointwise", "binary", "sub"),  # fn normalised to sub

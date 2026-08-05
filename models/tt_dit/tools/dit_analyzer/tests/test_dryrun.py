@@ -492,6 +492,32 @@ def test_vae_decoder_op_aliases_dispatch_to_existing_families():
     assert "ok" in proc.stdout, proc.stdout
 
 
+def test_conv1d_returns_the_ttnn_tuple_and_length_arithmetic():
+    """The audio vocoder's ``ttnn.conv1d`` (BigVGAN dilated / depthwise stacks) runs on a
+    ``(B, L, 1, C)`` tensor and returns ttnn's ``(out, out_length, (weight, bias))`` tuple;
+    the length shrinks by the dilated kernel. A single tensor (the unregistered fallback)
+    is what tripped the vocoder's 3-way unpack before this was registered."""
+    snippet = (
+        "from dit_analyzer.dryrun import install, recorder, start;"
+        "from dit_analyzer.ir import Dist;"
+        "from dit_analyzer.dryrun.context import CTX;"
+        "md = install((1, 1), 'blackhole');"
+        "start(md, axis_names=('x', 'y'), name='t', topology='Linear');"
+        "import ttnn;"
+        "x = recorder.entry([1, 100, 1, 32], Dist.replicated(CTX.mesh), base='x');"
+        "w = recorder.entry([32, 1, 7], Dist.replicated(CTX.mesh), base='w');"
+        "out, out_len, (wt, bt) = ttnn.conv1d(input_tensor=x, weight_tensor=w, batch_size=1,"
+        "  input_length=100, in_channels=32, out_channels=32, kernel_size=7, stride=1,"
+        "  padding=0, dilation=1, groups=32);"
+        "assert list(out.logical) == [1, 94, 1, 32], out.logical;"  # 100 - (7-1) - 1 + 1
+        "assert out_len == 94, out_len;"
+        "print('ok')"
+    )
+    proc = _python("-c", snippet)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ok" in proc.stdout, proc.stdout
+
+
 def test_fused_swiglu_preprocessing_runs_on_meta_and_preserves_shape():
     # the roadmap's "run the real _prepare_torch_state on meta tensors": the
     # swiglu reorder is a pure reshape/permute, so it runs with no bytes and is
