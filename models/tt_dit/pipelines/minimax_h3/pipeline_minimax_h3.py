@@ -53,6 +53,7 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
+from ...models.transformers.minimax_h3.adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
@@ -61,6 +62,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch
+from .adaln_precompute import precompute_adaln_table, request_step_timesteps
 from .packing import (
     MINIMAX_H3_AUDIO_CHANNELS,
     MINIMAX_H3_FPS,
@@ -83,6 +85,12 @@ from .scheduler import MiniMaxH3Scheduler
 # ImageNet statistics; the video VAE emits normalized RGB and the pipeline reverts it.
 MINIMAX_H3_PIXEL_MEAN = (0.485, 0.456, 0.406)
 MINIMAX_H3_PIXEL_STD = (0.229, 0.224, 0.225)
+
+# AdaLN precompute, **on by default in the pipeline**. `MINIMAX_H3_PRECOMPUTE_ADALN=0` opts out and
+# restores the reference path, which builds and loads every projection. The model itself still defaults
+# to the reference path -- only the pipeline opts in -- so a caller constructing the transformer
+# directly is unaffected.
+PRECOMPUTE_ADALN_ENV = "MINIMAX_H3_PRECOMPUTE_ADALN"
 
 # Read from the two scheduler_config.json files, which hold nothing else.
 VIDEO_SHIFT = 12.0
@@ -161,7 +169,14 @@ class MiniMaxH3Pipeline:
         self._transformer = None
         self._vae = None
         self._audio_decoder = None
+        self._adaln_cache = None
+        self._adaln_cache_steps: int | None = None
         self._resident: str | None = None
+        # On by default: every `adaln_proj` is projected on host into a table for this exact schedule
+        # and the 26 GB of projection weights (6.50 GB/device at TP=4) never reach the device. Set
+        # `MINIMAX_H3_PRECOMPUTE_ADALN=0` to fall back to the projected path.
+        # See `models/transformers/minimax_h3/adaln_cache_minimax_h3.py`.
+        self.precompute_adaln = os.environ.get(PRECOMPUTE_ADALN_ENV, "1") == "1"
         # The last call's (label, seconds) rows, as LTXPipeline exposes them, so a test can assert on
         # or report the breakdown without re-timing anything.
         self.last_timings: list[tuple[str, float]] = []
@@ -201,20 +216,37 @@ class MiniMaxH3Pipeline:
         return {k: v for k, v in json.loads(path.read_text()).items() if not k.startswith("_")}
 
     def _read_safetensors(self, subfolder: str) -> dict[str, torch.Tensor]:
-        """A partition's weights, sharded or single-file. `transformer` and `vae` are sharded here."""
+        """A partition's weights, sharded or single-file. `transformer` and `vae` are sharded here.
+
+        With AdaLN precompute on, the keys the table replaces are dropped per shard as it is read, so
+        they are never accumulated into the returned state. The shard still has to be read to get at
+        the keys beside them -- avoiding that entirely would need per-key `safe_open` access -- but the
+        26 GB never reaches the state dict, the device, or the weight cache.
+        """
         from safetensors.torch import load_file
+
+        drop = self.precompute_adaln and subfolder == "transformer"
+
+        def keep(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+            if not drop:
+                return state
+            return {
+                k: v
+                for k, v in state.items()
+                if ".adaln_proj." not in k and not k.startswith("time_embedder.") and "norm_out.linear" not in k
+            }
 
         directory = self.weights_dir / subfolder
         index = directory / "diffusion_pytorch_model.safetensors.index.json"
         state: dict[str, torch.Tensor] = {}
         if index.is_file():
             for shard in sorted(set(json.loads(index.read_text())["weight_map"].values())):
-                state.update(load_file(str(directory / shard)))
+                state.update(keep(load_file(str(directory / shard))))
         else:
             single = directory / "diffusion_pytorch_model.safetensors"
             if not single.is_file():
                 raise FileNotFoundError(f"no safetensors (sharded or single) under {directory}")
-            state.update(load_file(str(single)))
+            state.update(keep(load_file(str(single))))
         return state
 
     # ------------------------------------------------------------------ residency
@@ -360,6 +392,7 @@ class MiniMaxH3Pipeline:
             mesh_device=self.mesh_device,
             ccl_manager=self.ccl_manager,
             parallel_config=self.dit_parallel_config,
+            precomputed_adaln=self.precompute_adaln,
         )
 
         # Cache-aware: on a hit this reads pre-sharded device tensors instead of 62 GB of
@@ -370,7 +403,9 @@ class MiniMaxH3Pipeline:
         cache.load_model(
             model,
             model_name=MODEL_NAME,
-            subfolder="transformer",
+            # A precomputed model has a different tensor set, so it cannot share the reference
+            # path's cache entry -- a stale hit would try to load projections the model no longer has.
+            subfolder="transformer_precomputed_adaln" if self.precompute_adaln else "transformer",
             parallel_config=self.dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
@@ -378,6 +413,75 @@ class MiniMaxH3Pipeline:
         )
         self._transformer = model
         return model
+
+    def _adaln_cache_path(self, num_inference_steps: int) -> Path:
+        """Disk location for a built table.
+
+        The key must cover **everything the rows depend on**, because a stale hit is silent: it
+        modulates every block slightly wrong at every step, in the same direction, and nothing
+        downstream can notice. That is the schedule (step count and both per-modality shifts), the
+        conditioning floor, the model geometry, and the checkpoint itself.
+        """
+        cache_dir = Path(os.environ.get("TT_DIT_CACHE_DIR") or Path.home() / ".cache/tt-dit") / "minimax-h3-adaln"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        key = "|".join(
+            str(part)
+            for part in (
+                self.weights_dir.resolve(),
+                num_inference_steps,
+                VIDEO_SHIFT,
+                AUDIO_SHIFT,
+                MINIMAX_H3_KEYFRAME_NOISE_AUG,
+                self.transformer_config["num_layers"],
+                self.transformer_config["hidden_size"],
+                self.transformer_config["freq_dim"],
+            )
+        )
+        return cache_dir / f"{hashlib.sha256(key.encode()).hexdigest()[:32]}.adaln.pt"
+
+    def _prepare_adaln_cache(self, num_inference_steps: int):
+        """Host-build (or load) the modulation table for this schedule and upload it.
+
+        A prepare, so it belongs outside every timed row: the build reads the checkpoint's AdaLN
+        weights on host and is paid once per (checkpoint, schedule).
+        """
+        if self._adaln_cache is not None and self._adaln_cache_steps == num_inference_steps:
+            return self._adaln_cache
+
+        video = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
+        audio = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
+        video.set_timesteps(num_inference_steps)
+        audio.set_timesteps(num_inference_steps)
+        step_timesteps = request_step_timesteps(video.sigmas, audio.sigmas, MINIMAX_H3_KEYFRAME_NOISE_AUG)
+
+        path = self._adaln_cache_path(num_inference_steps)
+        if path.is_file():
+            logger.info(f"AdaLN table from cache: {path}")
+            table = torch.load(path, weights_only=False)
+        else:
+            logger.info(f"building the AdaLN table on host for {len(step_timesteps)} forwards (reads the checkpoint)")
+            t0 = time.time()
+            table = precompute_adaln_table(
+                self.weights_dir / "transformer",
+                step_timesteps,
+                num_layers=self.transformer_config["num_layers"],
+                hidden_size=self.transformer_config["hidden_size"],
+                freq_dim=self.transformer_config["freq_dim"],
+            )
+            logger.info(f"AdaLN table built in {time.time() - t0:.1f}s ({table.nbytes() / 1e9:.3f} GB); caching")
+            torch.save(table, path)
+
+        self._adaln_cache = MiniMaxH3AdalnCache(
+            table,
+            mesh_device=self.mesh_device,
+            parallel_config=self.dit_parallel_config,
+            num_layers=self.transformer_config["num_layers"],
+            hidden_size=self.transformer_config["hidden_size"],
+        )
+        self._adaln_cache.assert_covers(len(step_timesteps))
+        self._adaln_cache_steps = num_inference_steps
+        self._adaln_table = table
+        return self._adaln_cache
 
     @property
     def patch_size(self) -> tuple[int, int, int]:
@@ -617,11 +721,13 @@ class MiniMaxH3Pipeline:
         scheduler.set_timesteps(num_inference_steps)
         audio_scheduler.set_timesteps(num_inference_steps)
 
-        # 6. Denoise. The weight load is a prepare, so it sits outside the timed row.
+        # 6. Denoise. The weight load is a prepare, so it sits outside the timed row -- and so is the
+        # AdaLN table build, which is paid once per (checkpoint, schedule).
         transformer = self._prepare_transformer()
+        adaln_cache = self._prepare_adaln_cache(num_inference_steps) if self.precompute_adaln else None
         t0 = time.time()
         video_rows, audio_rows = self._denoise(
-            transformer, layout, prompt_embeds, video_rows, audio_rows, scheduler, audio_scheduler
+            transformer, layout, prompt_embeds, video_rows, audio_rows, scheduler, audio_scheduler, adaln_cache
         )
         t_denoise = time.time() - t0
         timings.append(("Denoise", t_denoise))
@@ -688,7 +794,9 @@ class MiniMaxH3Pipeline:
         )
         logger.info(f"warmup (t2va) done in {time.time() - t0:.1f}s")
 
-    def _denoise(self, transformer, layout, prompt_embeds, video_rows, audio_rows, scheduler, audio_scheduler):
+    def _denoise(
+        self, transformer, layout, prompt_embeds, video_rows, audio_rows, scheduler, audio_scheduler, adaln_cache=None
+    ):
         alignment = self.sp_factor * ttnn.TILE_SIZE
         padded_len = ((layout.sequence_length + alignment - 1) // alignment) * alignment
         logger.info(
@@ -719,8 +827,21 @@ class MiniMaxH3Pipeline:
             # Replicated, fp32 so the sinusoid is computed in fp32, and shaped [1, 1, T, 1] so it
             # broadcasts against the frequency factor.
             tt_timestep = from_torch(unique.reshape(1, 1, -1, 1), device=self.mesh_device, dtype=ttnn.float32)
-            tt_adaln = self._row_indices(adaln_indices(layout.token_tags, row_index), padded_len)
-            tt_tsi = self._row_indices(row_index, padded_len)
+            step_row_index = row_index
+            if adaln_cache is not None:
+                # `build_row_timesteps` numbers levels in its own order; the table numbers them in
+                # `step_timesteps(step)` order. Match by **value** rather than assuming the two agree:
+                # the level count varies per step (the conditioning floor collides with the video level
+                # early in the schedule and separates later), so positional correspondence is not
+                # guaranteed. Rows are then absolute, which is what the resident table is indexed by.
+                levels = self._adaln_table.step_timesteps(i)
+                position = torch.tensor(
+                    [int((levels == value).nonzero()[0, 0]) for value in unique], dtype=row_index.dtype
+                )
+                step_row_index = adaln_cache.step_offset(i) + position[row_index]
+
+            tt_adaln = self._row_indices(adaln_indices(layout.token_tags, step_row_index), padded_len)
+            tt_tsi = self._row_indices(step_row_index, padded_len)
 
             video_velocity, audio_velocity = transformer(
                 video_1BVC=tt_video,
@@ -731,6 +852,7 @@ class MiniMaxH3Pipeline:
                 timestep_indices=tt_tsi,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
+                adaln_cache=adaln_cache,
             )
 
             # Replicated after the model's SP gather: read one replica.
