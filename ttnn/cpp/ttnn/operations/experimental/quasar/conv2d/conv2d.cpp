@@ -1411,8 +1411,17 @@ public:
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
 
-        // Force Conv2d_L1 to always output tiled layout to reduce CB Memory usage.
-        conv_config_l1.output_layout = Layout::TILE;
+        // [#48552] Output ROW_MAJOR, not TILE. A TILE height-sharded slice output needs a tile-aligned
+        // per-core height, so a non-tile-aligned per-core output (e.g. a 14x28 slice on 2 cores = 196
+        // rows/core) is padded 196->224 PER CORE, and that per-core padding leaks into the tensor's logical
+        // height (2*224 = 448 vs the true 2*196 = 392). slice_write then rejects it ("Slice volume 392*C
+        // must match sharded input volume 448*C") and cannot express uniform per-core padding anyway.
+        // ROW_MAJOR sharding has no tile-alignment constraint, so the slice output is [196, C] x 2 = logical
+        // 392 with NO per-core padding, which slice_write's RM height-sharded path handles. The DRAM output
+        // tensor is RM to match (see dram_output_tensor in conv2d_DRAM); the DRAM result is resharded to the
+        // caller's target config afterwards, so this internal layout is not user-visible.
+        // (TILE was originally forced here to reduce CB memory; per-slice outputs are small, so RM is fine.)
+        conv_config_l1.output_layout = Layout::ROW_MAJOR;
 
         auto conv2d_result = conv2d_L1(
             sliced_input_tensor,
@@ -1565,12 +1574,16 @@ Result conv2d_DRAM(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
 
+    // [#48552] The DRAM accumulator is ROW_MAJOR (not conv_config.output_layout). run_sliced_op derives its
+    // output_layout from this tensor's layout, and each per-slice conv output is RM to match (see run_L1_op):
+    // that keeps the sliced output un-padded (logical == real) so slice_write can write it. The DRAM result is
+    // resharded to the caller's target config after slicing, so RM here is internal-only.
     ttnn::Tensor dram_output_tensor = ttnn::create_device_tensor(
         tt::tt_metal::TensorSpec(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
             tt::tt_metal::TensorLayout(
                 output_dtype,
-                tt::tt_metal::PageConfig(conv_config.output_layout),
+                tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
                 MemoryConfig{
                     TensorMemoryLayout::INTERLEAVED,
                     BufferType::DRAM,
