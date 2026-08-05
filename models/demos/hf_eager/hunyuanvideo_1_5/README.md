@@ -161,14 +161,20 @@ tile-shard flags default off.
 
 | stage | placement | detail |
 |---|---|---|
-| Text encode (Qwen 2.5-VL) | **host (CPU)** | one-time; at sp=4 the DiT fills all 4 mesh rows, so no Qwen submesh can be carved (`HY_TT_QWEN=1` falls back to CPU) |
-| DiT denoise (50 steps) | **on device** | all 32 chips, sp=4 × tp=8 |
-| VAE decode | **on device** | tile-sharded across all 32 chips, reusing the full mesh after denoise |
+| Qwen 2.5-VL text-encode | **host (CPU)** | one-time; at sp=4 the DiT fills all 4 mesh rows, so no Qwen submesh can be carved (`HY_TT_QWEN=1` falls back to CPU) |
+| byT5 text-encode | **host (CPU)** | one-time; no TT adapter (its DiT-side projection `s_byt5` *is* on device) |
+| Latent init + scheduler step | **host (CPU)** | stock diffusers: noise init once + flow-match latent update per step (cheap elementwise) |
+| **DiT denoise** (50 steps) | **on device** | all 32 chips, sp=4 × tp=8 — the heavy per-step compute |
+| **VAE decode** | **on device** | tile-sharded across all 32 chips, reusing the full mesh after denoise |
+| Frame post-proc → mp4/gif | **host (CPU)** | one-time save |
 
-So the 5:59 is **host text-encode + on-device DiT + on-device VAE**. Text-encode runs once
-(not per-step), so keeping it on CPU costs little. At **sp=2** (16-chip) a spare mesh row
-*does* leave room to carve a Qwen submesh, so text-encode runs on device there — but the
-smaller DiT (denoise 6:21) makes that config slower overall (10:38 e2e).
+So only the two heavy compute stages — **DiT and VAE** — run on device; both text encoders
+(Qwen + byT5) and the scheduler/latent/post-proc torch ops run on host. All of the host
+work is one-time or a cheap per-step elementwise update, so it barely dents the
+denoise-dominated 5:59. (No image encoder / VAE-encode runs in t2v at all.) At **sp=2**
+(16-chip) a spare mesh row *does* leave room to carve a Qwen submesh, so Qwen runs on
+device there — but the smaller DiT (denoise 6:21) makes that config slower overall
+(10:38 e2e).
 
 ## PCC validation
 
