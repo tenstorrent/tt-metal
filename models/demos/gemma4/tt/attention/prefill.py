@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4.tt.ccl import ccl_cp_allgather
+from models.demos.gemma4.tt.ccl import ccl_cp_allgather, cp_degree
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
@@ -31,6 +31,7 @@ from .operations import (
     prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
 )
+from .ring_prefill import ring_prefill_attention, write_chunk_to_ring_cache
 from .weights import AttentionWeights
 
 TILE_HEIGHT = 32
@@ -306,6 +307,10 @@ def _prefill_forward_single(
     chunk_page_table=None,
     sliding_tail_in=None,
     cp_attn_mask=None,
+    ring_kv_cache=None,
+    ring_max_seq_len=None,
+    ring_layer_idx=0,
+    ring_num_layers=1,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
 
@@ -554,6 +559,63 @@ def _prefill_forward_single(
     # mask arrives as a CP-sharded tensor so each rank's absolute query offset is
     # carried as DATA. That matters because the SDPA op takes its position offset as
     # a Python scalar, which cannot vary per device within one mesh-wide program.
+    # Multi-chunk CP: the ring cache holds each rank's own tokens for every chunk, so
+    # it must be written from the PRE-gather (local) K/V, before use_cp_attention
+    # replaces them with the gathered copies below. Chunk 0 writes too — chunk 1 reads
+    # it as history — but attends via the mask path, since the chunked ring mode needs
+    # a complete predecessor Q group and chunk 0 has none.
+    cp = cp_degree(mesh_config)
+    use_ring = ring_kv_cache is not None and cp > 1
+    if use_ring:
+        write_chunk_to_ring_cache(
+            ring_kv_cache[0],
+            ring_kv_cache[1],
+            tt_k,
+            tt_v,
+            mesh_config,
+            kv_actual_global=chunk_offset,
+            layer_idx=ring_layer_idx,
+            num_layers=ring_num_layers,
+        )
+    # Chunks after the first read history through the ring; the local shard alone holds
+    # a strided subset of the prefix.
+    use_ring_attention = use_ring and chunk_offset > 0
+    if use_ring_attention:
+        cp_ring_ckc = ttnn.init_device_compute_kernel_config(
+            tt_q.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        num_local_kv_heads_ring = tt_k.shape[1]
+        tt_sdpa = ring_prefill_attention(
+            tt_q,
+            ring_kv_cache[0],
+            ring_kv_cache[1],
+            mesh_device=tt_q.device(),
+            mesh_config=mesh_config,
+            ccl_manager=ccl_manager,
+            num_local_kv_heads=num_local_kv_heads_ring,
+            head_dim=config.head_dim,
+            max_seq_len=ring_max_seq_len,
+            logical_n=chunk_offset + seq_len * cp,
+            kv_actual_global=chunk_offset,
+            sliding_window=sliding_window,
+            scale=1.0,
+            compute_kernel_config=cp_ring_ckc,
+            layer_idx=ring_layer_idx,
+            num_layers=ring_num_layers,
+        )
+        tt_q.deallocate(True)
+        if shared_kv is None and not keep_kv:
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+        tt_out = concat_heads(tt_sdpa, is_decode_mode=False)
+        tt_out = apply_output_projection(tt_out, weights)
+        tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
+        return tt_out, ((tt_k, tt_v) if keep_kv else None), None
+
     use_cp_attention = cp_attn_mask is not None and not sliding_chunked and not need_cross_chunk
     if use_cp_attention:
         # This branch uses the NON-chunked SDPA, which silently returns wrong
@@ -857,6 +919,10 @@ def prefill_forward(
     chunk_page_table=None,
     sliding_tail_in=None,
     cp_attn_mask=None,
+    ring_kv_cache=None,
+    ring_max_seq_len=None,
+    ring_layer_idx=0,
+    ring_num_layers=1,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -896,6 +962,10 @@ def prefill_forward(
             chunk_page_table=chunk_page_table,
             sliding_tail_in=sliding_tail_in,
             cp_attn_mask=cp_attn_mask,
+            ring_kv_cache=ring_kv_cache,
+            ring_max_seq_len=ring_max_seq_len,
+            ring_layer_idx=ring_layer_idx,
+            ring_num_layers=ring_num_layers,
         )
 
     tp = mesh_config.tp if mesh_config else 1

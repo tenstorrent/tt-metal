@@ -69,6 +69,7 @@ class Gemma4DecoderLayer:
         experts_dtype=None,
         router_dtype=None,
         bounded_sliding_kv_cache: bool = False,
+        ring_prefill_chunk_size=None,
         transformation_mats=None,  # Legacy — ignored (HF-style RoPE needs no transformation mats)
     ):
         # Per-module dtype overrides default to the model-wide ``dtype`` so
@@ -138,6 +139,7 @@ class Gemma4DecoderLayer:
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
             weight_dtype=attention_dtype,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+            ring_prefill_chunk_size=ring_prefill_chunk_size,
         )
 
         # Shared/dense MLP (HF key: "mlp")
