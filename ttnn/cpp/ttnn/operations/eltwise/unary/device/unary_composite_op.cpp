@@ -314,7 +314,10 @@ Tensor tril(const Tensor& input_a, std::int32_t diag, const std::optional<Memory
         Layout::TILE,
         input_a.device(),
         output_mem_config.value_or(input_a.memory_config()));
-    return ttnn::multiply(input_a, index_l, std::nullopt, output_mem_config);
+    // IEEE-754: `0 * inf = NaN`, so multiplying by the 0/1 mask corrupts masked-out
+    // infinities/NaNs. `where` selects the value (1/0 mask acts as predicate) instead,
+    // giving a true zero in the masked region (issue #52038).
+    return ttnn::where(index_l, input_a, 0.0f, output_mem_config.value_or(input_a.memory_config()));
 }
 
 // triu : select upper triangular region of input matrix
@@ -327,7 +330,8 @@ Tensor triu(const Tensor& input_a, std::int32_t diag, const std::optional<Memory
         Layout::TILE,
         input_a.device(),
         output_mem_config.value_or(input_a.memory_config()));
-    return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
+    // Same as tril: select instead of multiply so masked-out inf/NaN becomes 0, not NaN.
+    return ttnn::where(index_u, input_a, 0.0f, output_mem_config.value_or(input_a.memory_config()));
 }
 
 // polygamma ψ^(n)(x): implemented via a fused SFPU kernel using a finite-sum + tail approximation.
