@@ -3790,7 +3790,19 @@ def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tupl
         and not a.get("measurement_failed")
         and a.get("measured_ms") is not None
     )
-    kinds = {(a.get("kernel_kind") or "").lower() for a in matches}
+    # SAME FILTER AS `tries` ABOVE, for the same reason. went_deeper cuts the knob allowance from
+    # _MAX_KNOB_RETRIES to 1 because "a second knob search is not worth it after a structural or
+    # kernel rung EXISTS" -- but a row with measured_ms=None is not a rung that exists, it is a rung
+    # that was skipped, and this model's ledger carries 50 of them (41 deliberate "EXCLUDED BY
+    # OPERATOR" entries). Counting those spent the second-variant allowance on ops that had never
+    # been measured at all: the decode QKV matmul got ONE grid attempt, and since a first attempt is
+    # what tells you which direction to move, the informed second attempt -- worth -1.31% device_ms
+    # when finally recorded out-of-process -- was refused as a closed rung.
+    kinds = {
+        (a.get("kernel_kind") or "").lower()
+        for a in matches
+        if not a.get("measurement_failed") and a.get("measured_ms") is not None
+    }
     went_deeper = bool(kinds & (_STRUCTURAL_RUNGS | {"tt-lang", "cpp", "tp-fracture"}))
     if rung in _KNOB_RUNG_NAMES:
         allowed = 1 if went_deeper else _MAX_KNOB_RETRIES
