@@ -6,23 +6,36 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include <algorithm>
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descriptor(
+namespace {
+
+const DFBSpecName WHS_SRC0_DFB{"whs_src0"};  // c_0 (borrowed from input)
+const DFBSpecName WHS_OUT_DFB{"whs_out"};    // c_16 (borrowed from output)
+const TensorParamName WHS_INPUT{"whs_input"};
+const TensorParamName WHS_OUTPUT{"whs_output"};
+const KernelSpecName WHS_READER{"whs_reader"};
+const KernelSpecName WHS_COMPUTE{"whs_compute"};
+const KernelSpecName WHS_WRITER{"whs_writer"};
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::create_program_artifacts(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
-
-    ProgramDescriptor desc;
 
     tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
@@ -46,73 +59,85 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descrip
     auto& all_cores = shard_spec.grid;
     uint32_t num_tiles_per_shard = shard_spec.numel() / tile_hw;
 
-    // Sharded CBs: total_size depends on num_tiles_per_shard which can vary across
-    // cache hits; .buffer triggers UpdateDynamicCircularBufferAddress. total_size
-    // is not in the program hash so the framework re-applies the combined update
-    // via apply_descriptor_runtime_args.
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_tiles = num_tiles_per_shard;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * src0_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = src0_cb_data_format,
-            .page_size = src0_single_tile_size,
-        }}},
-        .buffer = input_tensor.buffer(),
-    });
+    // ---- ProgramSpec ----
+    ProgramSpec spec;
+    spec.name = "transpose_wh_sharded";
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    uint32_t num_output_tiles = num_tiles_per_shard;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_output_tiles * dst_single_tile_size,
-        .core_ranges = total_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = dst_cb_data_format,
-            .page_size = dst_single_tile_size,
-        }}},
-        .buffer = output_tensor.buffer(),
-    });
-
-    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    std::vector<uint32_t> compute_compile_time_args = {src0_cb_index, output_cb_index};
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = total_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = total_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (src0_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_sharded.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = total_cores;
-    compute_desc.compile_time_args = std::move(compute_compile_time_args);
-    compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = WHS_INPUT, .spec = input_tensor.tensor_spec()},
+        TensorParameter{.unique_id = WHS_OUTPUT, .spec = output_tensor.tensor_spec()},
     };
 
+    // Sharded CBs become borrowed-memory DFBs: they draw their backing L1 address from the
+    // corresponding tensor_arg at runtime (the Metal 2.0 form of the legacy .buffer =
+    // UpdateDynamicCircularBufferAddress re-application on cache hit).
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WHS_SRC0_DFB,
+        .entry_size = src0_single_tile_size,
+        .num_entries = num_tiles_per_shard,
+        .data_format_metadata = src0_cb_data_format,
+        .borrowed_from = WHS_INPUT,
+    });
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = WHS_OUT_DFB,
+        .entry_size = dst_single_tile_size,
+        .num_entries = num_tiles_per_shard,
+        .data_format_metadata = dst_cb_data_format,
+        .borrowed_from = WHS_OUTPUT,
+    });
+
+    ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    if (src0_cb_data_format == tt::DataFormat::Float32) {
+        compute_cfg.unpack_modes.emplace(WHS_SRC0_DFB, UnpackMode::UnpackToDest);
+    }
+
+    // Borrowed donor kernels: each is forked beside its own legacy original (eltwise/unary and
+    // data_movement/sharded respectively), since the legacy sources still serve many other ops.
+    KernelSpec reader{
+        .unique_id = WHS_READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+            "reader_unary_sharded_metal2.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = WHS_SRC0_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+
+    KernelSpec writer{
+        .unique_id = WHS_WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+            "writer_unary_sharded_metal2.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = WHS_OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
+
+    KernelSpec compute{
+        .unique_id = WHS_COMPUTE,
+        // Lent kernel: transpose_wh_sharded.cpp is cross-op shared with legacy peers
+        // (create_qkv_heads, create_qkv_heads_from_separate_tensors,
+        // split_query_key_value_and_split_heads_sharded), so the legacy source must stay
+        // non-Metal-2.0 for them; this factory binds the Metal 2.0 fork beside it.
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/"
+            "transpose_wh_sharded_metal2.cpp",
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = WHS_SRC0_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = WHS_OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .runtime_arg_schema = {.runtime_arg_names = {"NHtWt", "HtWt", "N", "Ht", "Wt"}},
+        .hw_config = ComputeHardwareConfig{compute_cfg},
+    };
+
+    spec.kernels = {reader, writer, compute};
+    spec.work_units = {
+        WorkUnitSpec{.name = "main", .kernels = {WHS_READER, WHS_WRITER, WHS_COMPUTE}, .target_nodes = total_cores}};
+
+    // ---- work distribution ----
     auto padded_shape = input_tensor.padded_shape();
     auto shard_shape = shard_spec.shape;
 
@@ -134,34 +159,41 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descrip
     std::vector<CoreCoord> cores =
         grid_to_cores_with_noop(bbox.end_coord.x, bbox.end_coord.y, num_cores_x, num_cores_y, row_major);
 
-    // Active shard cores get the real arg values; the trailing no-op cores keep the
-    // default-constructed slots (matching legacy std::fill behavior on cores.size()).
-    const std::vector<uint32_t> reader_rt = {num_blocks};
-    const std::vector<uint32_t> compute_rt = {num_blocks, HtWt_tile_size, num_hw_blocks_per_shard, Ht_per_shard, Wts};
-    const std::vector<uint32_t> writer_rt = {num_blocks};
-
     const uint32_t num_active = all_cores.num_cores();
-    reader_desc.runtime_args.reserve(cores.size());
-    compute_desc.runtime_args.reserve(cores.size());
-    writer_desc.runtime_args.reserve(cores.size());
+
+    // ---- ProgramRunArgs ----
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run{.kernel = WHS_READER};
+    KernelRunArgs compute_run{.kernel = WHS_COMPUTE};
+    KernelRunArgs writer_run{.kernel = WHS_WRITER};
+
     for (uint32_t i = 0; i < cores.size(); ++i) {
+        const auto& core = cores[i];
         if (i < num_active) {
-            reader_desc.runtime_args.emplace_back(cores[i], reader_rt);
-            compute_desc.runtime_args.emplace_back(cores[i], compute_rt);
-            writer_desc.runtime_args.emplace_back(cores[i], writer_rt);
+            AddRuntimeArgsForNode(reader_run.runtime_arg_values, core, {{"num_tiles", num_blocks}});
+            AddRuntimeArgsForNode(
+                compute_run.runtime_arg_values,
+                core,
+                {{"NHtWt", num_blocks},
+                 {"HtWt", HtWt_tile_size},
+                 {"N", num_hw_blocks_per_shard},
+                 {"Ht", Ht_per_shard},
+                 {"Wt", Wts}});
+            AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"num_units", num_blocks}});
         } else {
-            // No-op core: matches legacy std::vector<uint32_t>(1)/(5) zero-initialized rows.
-            reader_desc.runtime_args.emplace_back(cores[i], std::vector<uint32_t>(1));
-            compute_desc.runtime_args.emplace_back(cores[i], std::vector<uint32_t>(5));
-            writer_desc.runtime_args.emplace_back(cores[i], std::vector<uint32_t>(1));
+            // No-op tail core: zero-filled, matching legacy std::vector<uint32_t>(N) rows.
+            AddRuntimeArgsForNode(reader_run.runtime_arg_values, core, {{"num_tiles", 0u}});
+            AddRuntimeArgsForNode(
+                compute_run.runtime_arg_values, core, {{"NHtWt", 0u}, {"HtWt", 0u}, {"N", 0u}, {"Ht", 0u}, {"Wt", 0u}});
+            AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"num_units", 0u}});
         }
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    run_args.kernel_run_args = {reader_run, writer_run, compute_run};
+    run_args.tensor_args.emplace(WHS_INPUT, TensorArgument{input_tensor.mesh_tensor()});
+    run_args.tensor_args.emplace(WHS_OUTPUT, TensorArgument{output_tensor.mesh_tensor()});
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

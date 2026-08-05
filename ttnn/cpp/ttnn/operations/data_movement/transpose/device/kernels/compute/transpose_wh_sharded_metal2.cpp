@@ -1,33 +1,30 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// transpose_wh_sharded_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
-// the consumers still on the legacy API. Until the last of them migrates and
-// this file is retired, changes here likely belong in the fork too.
+//
+// Metal 2.0 fork of transpose_wh_sharded.cpp (cross-op shared with legacy create_qkv_heads{,_from_separate_tensors} /
+// split_query_key_value_and_split_heads_sharded). The legacy source stays in place, non-Metal-2.0, for its cross-op
+// consumers; only the transpose Metal 2.0 factory binds this fork. Sunset when those consumers migrate.
 
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/transpose.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t NHtWt = get_arg_val<uint32_t>(0);
-    uint32_t HtWt = get_arg_val<uint32_t>(1);
-    uint32_t N = get_arg_val<uint32_t>(2);
-    uint32_t Ht = get_arg_val<uint32_t>(3);
-    uint32_t Wt = get_arg_val<uint32_t>(4);
+    uint32_t NHtWt = get_arg(args::NHtWt);
+    uint32_t HtWt = get_arg(args::HtWt);
+    uint32_t N = get_arg(args::N);
+    uint32_t Ht = get_arg(args::Ht);
+    uint32_t Wt = get_arg(args::Wt);
 
-    constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    transpose_init(dfb::in);
 
-    compute_kernel_hw_startup(cb_id_in, cb_id_out);
-    transpose_init(cb_id_in);
-
-    DataflowBuffer dfb_in(cb_id_in);
-    DataflowBuffer dfb_out(cb_id_out);
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
 
     // transpose a row-major block:
     // - uses reader_unary_transpose_wh
@@ -43,10 +40,10 @@ void kernel_main() {
         for (uint32_t w = 0; w < Wt; ++w) {
             for (uint32_t h = 0; h < Ht; ++h) {
                 tile_regs_acquire();
-                transpose_tile(cb_id_in, tile_idx, 0);
+                transpose_tile(dfb::in, tile_idx, 0);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(0, cb_id_out);
+                pack_tile(0, dfb::out);
                 tile_regs_release();
                 tile_idx += Wt;
             }

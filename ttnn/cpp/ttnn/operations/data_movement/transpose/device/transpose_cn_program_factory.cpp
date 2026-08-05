@@ -7,16 +7,29 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
+namespace {
+
+// Spec resource names, prefixed per-factory: these live in an anonymous namespace, and the
+// transpose factories share a unity-build translation unit, so unprefixed names would collide.
+const DFBSpecName CN_SRC0_DFB{"cn_src0"};
+const TensorParamName CN_INPUT{"cn_input"};
+const TensorParamName CN_OUTPUT{"cn_output"};
+const KernelSpecName CN_READER{"cn_reader"};
+const KernelSpecName CN_WRITER{"cn_writer"};
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_program_artifacts(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
     auto input_shape = input_tensor.padded_shape();
@@ -24,8 +37,6 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
-
-    ProgramDescriptor desc;
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t page_shape[2] = {TILE_WIDTH, TILE_HEIGHT};
@@ -49,59 +60,63 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t src0_cb_index = 0;
     uint32_t num_input_pages = 2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_pages * stick_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = cb_data_format,
-            .page_size = stick_size,
-        }}},
+
+    // ---- ProgramSpec ----
+    ProgramSpec spec;
+    spec.name = "transpose_cn";
+
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = CN_INPUT, .spec = input_tensor.tensor_spec()},
+        TensorParameter{.unique_id = CN_OUTPUT, .spec = output_tensor.tensor_spec()},
+    };
+
+    // Source DFB (legacy c_0): one entry per stick/tile, double-buffered.
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = CN_SRC0_DFB,
+        .entry_size = stick_size,
+        .num_entries = num_input_pages,
+        .data_format_metadata = cb_data_format,
     });
 
-    KernelDescriptor::Defines reader_defines;
-    std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(src0_cb_index), src0_buffer->aligned_page_size(), stick_size};
-    std::vector<uint32_t> reader_common_runtime_args;
-    TensorAccessorArgs(*src0_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(reader_compile_time_args, reader_common_runtime_args);
-    KernelDescriptor::Defines writer_defines;
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(src0_cb_index), dst_buffer->aligned_page_size(), stick_size};
-    std::vector<uint32_t> writer_common_runtime_args;
-    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(writer_compile_time_args, writer_common_runtime_args);
-
+    KernelSpec::CompilerOptions::Defines rm_defines;
     if (row_major) {
-        reader_defines.emplace_back("CN_RM", "1");
-        writer_defines.emplace_back("CN_RM", "1");
+        rm_defines.emplace("CN_RM", "1");
     }
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "reader_unary_transpose_cn_interleaved_start_id.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.defines = std::move(reader_defines);
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
+    KernelSpec reader{
+        .unique_id = CN_READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+            "reader_unary_transpose_cn_interleaved_start_id.cpp",
+        .compiler_options = {.defines = rm_defines},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = CN_SRC0_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = CN_INPUT, .accessor_name = "src"}},
+        .compile_time_args = {{"page_size", src0_buffer->aligned_page_size()}, {"read_size", stick_size}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"N", "C", "HtWt", "batch_step", "channel_step", "num_pages", "start_id", "hw", "n"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "writer_unary_transpose_cn_interleaved_start_id.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.defines = std::move(writer_defines);
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
+    KernelSpec writer{
+        .unique_id = CN_WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+            "writer_unary_transpose_cn_interleaved_start_id.cpp",
+        .compiler_options = {.defines = rm_defines},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = CN_SRC0_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = CN_OUTPUT, .accessor_name = "dst"}},
+        .compile_time_args = {{"page_size", dst_buffer->aligned_page_size()}, {"write_size", stick_size}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
 
-    // Set runtime arguments for each core
+    spec.kernels = {reader, writer};
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {CN_READER, CN_WRITER}, .target_nodes = all_cores}};
+
+    // ---- ProgramRunArgs ----
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t Wt = W / page_shape[1];
     uint32_t Ht = H / page_shape[0];
@@ -111,9 +126,11 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     uint32_t batch_step = CHtWt - HtWt;
     uint32_t channel_step = NCHtWt - HtWt;
 
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run{.kernel = CN_READER};
+    KernelRunArgs writer_run{.kernel = CN_WRITER};
+
     auto cores = corerange_to_cores(all_cores, std::nullopt);
-    reader_desc.runtime_args.reserve(num_cores);
-    writer_desc.runtime_args.reserve(num_cores);
     uint32_t num_pages_read = 0;
     for (const auto& core : cores) {
         uint32_t num_pages_per_core;
@@ -130,17 +147,29 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
         uint32_t n = curr_c % N;
         uint32_t start_tile = num_pages_read + (curr_c * batch_step) - (curr_c / N * channel_step);
 
-        reader_desc.emplace_runtime_args(
-            core, {src0_buffer, N, C, HtWt, batch_step, channel_step, num_pages_per_core, start_tile, hw, n});
-        writer_desc.emplace_runtime_args(core, {dst_buffer, num_pages_per_core, num_pages_read});
+        AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
+            core,
+            {{"N", N},
+             {"C", C},
+             {"HtWt", HtWt},
+             {"batch_step", batch_step},
+             {"channel_step", channel_step},
+             {"num_pages", num_pages_per_core},
+             {"start_id", start_tile},
+             {"hw", hw},
+             {"n", n}});
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values, core, {{"num_pages", num_pages_per_core}, {"start_id", num_pages_read}});
 
         num_pages_read += num_pages_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    run_args.kernel_run_args = {reader_run, writer_run};
+    run_args.tensor_args.emplace(CN_INPUT, TensorArgument{input_tensor.mesh_tensor()});
+    run_args.tensor_args.emplace(CN_OUTPUT, TensorArgument{output_tensor.mesh_tensor()});
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim
