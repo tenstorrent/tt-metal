@@ -84,7 +84,10 @@ class TtRoutedExpert(LightweightModule):
         n_tiles need not be a multiple of per_core_N: the last shard is partially valid
         and those columns are dropped by the op's existing N-bounds guards.
         """
-        FFN_GRID_X = 11  # UnifiedRoutedExpertFfn's N-parallel grid width
+        # UnifiedRoutedExpertFfn's N-parallel grid width. Must match the op's GRID_X or the
+        # op's check_shard_width TT_FATAL fires (per_core_N is derived from it on both sides),
+        # which is exactly what caught a GRID_X=12 experiment where only this side was 11.
+        FFN_GRID_X = 11
         n_tiles = n_dim // ttnn.TILE_SIZE
         per_core_n = (n_tiles + FFN_GRID_X - 1) // FFN_GRID_X
         dram_grid = mesh_device.dram_grid_size()
