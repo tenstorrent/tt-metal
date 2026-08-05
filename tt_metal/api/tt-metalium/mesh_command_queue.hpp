@@ -92,8 +92,11 @@ public:
         const MeshCoordinateRange& device_range,
         bool blocking,
         std::optional<BufferRegion> region = std::nullopt) = 0;
-    virtual void enqueue_write_mesh_buffer(
-        const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) = 0;
+    virtual void enqueue_write_mesh_buffer(const MeshBuffer& buffer, const void* host_data, bool blocking) = 0;
+    [[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
+    void enqueue_write_mesh_buffer(const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
+        enqueue_write_mesh_buffer(*buffer, host_data, blocking);
+    }
     // If PinnedMemory is attached to a HostBuffer used within the enqueue_write, the contents of the memory must not be
     // modified until the enqueue_write has completed on the device. This may be checked by any of
     // * calling lock() on the PinnedMemory
@@ -101,7 +104,12 @@ public:
     // * calling finish() on the MeshCommandQueue
     // * calling enqueue_record_event_to_host() and then waiting for the event to complete on the host.
     virtual void enqueue_write(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
+        const MeshBuffer& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
+    [[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
+    void enqueue_write(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
+        enqueue_write(*mesh_buffer, host_buffer, blocking);
+    }
     // If PinnedMemory is set on a ShardDataTransfer, the contents of the memory must not be modified until the
     // enqueue_write has completed on the device. This may be checked by any of
     // * calling lock() on the PinnedMemory
@@ -109,9 +117,16 @@ public:
     // * calling finish() on the MeshCommandQueue
     // * calling enqueue_record_event_to_host() and then waiting for the event to complete on the host.
     virtual void enqueue_write_shards(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const MeshBuffer& mesh_buffer,
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         bool blocking) = 0;
+    [[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
+    void enqueue_write_shards(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+        bool blocking) {
+        enqueue_write_shards(*mesh_buffer, shard_data_transfers, blocking);
+    }
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -120,6 +135,9 @@ public:
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
     [[deprecated("Use enqueue_write_shards with distributed::ShardDataTransfer instead.")]]
+    void enqueue_write_shards(
+        const MeshBuffer& mesh_buffer, const std::vector<ShardDataTransfer>& shard_data_transfers, bool blocking);
+    [[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
     void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
@@ -131,18 +149,36 @@ public:
 #endif
 
     // MeshBuffer Read APIs
-    virtual void enqueue_read_mesh_buffer(
-        void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) = 0;
+    virtual void enqueue_read_mesh_buffer(void* host_data, const MeshBuffer& buffer, bool blocking) = 0;
+    [[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
+    void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
+        enqueue_read_mesh_buffer(host_data, *buffer, blocking);
+    }
     virtual void enqueue_read_shards(
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const MeshBuffer& mesh_buffer,
         bool blocking) = 0;
+    [[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
+    void enqueue_read_shards(
+        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        bool blocking) {
+        enqueue_read_shards(shard_data_transfers, *mesh_buffer, blocking);
+    }
     // TODO: does "enqueue" make sense anymore? Return the object by value instead.
     virtual void enqueue_read(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const MeshBuffer& mesh_buffer,
         DistributedHostBuffer& host_buffer,
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) = 0;
+    [[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
+    void enqueue_read(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        DistributedHostBuffer& host_buffer,
+        const std::optional<std::unordered_set<MeshCoordinate>>& shards,
+        bool blocking) {
+        enqueue_read(*mesh_buffer, host_buffer, shards, blocking);
+    }
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -151,6 +187,9 @@ public:
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
     [[deprecated("Use enqueue_read_shards with distributed::ShardDataTransfer instead.")]]
+    void enqueue_read_shards(
+        const std::vector<ShardDataTransfer>& shard_data_transfers, const MeshBuffer& mesh_buffer, bool blocking);
+    [[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
     void enqueue_read_shards(
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,

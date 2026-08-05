@@ -38,7 +38,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 template <typename DType>
 void WriteShard(
     MeshCommandQueue& mesh_cq,
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const MeshBuffer& mesh_buffer,
     std::vector<DType>& src,
     const MeshCoordinate& coord,
     bool blocking = false) {
@@ -47,10 +47,21 @@ void WriteShard(
 }
 
 template <typename DType>
+[[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
+void WriteShard(
+    MeshCommandQueue& mesh_cq,
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    std::vector<DType>& src,
+    const MeshCoordinate& coord,
+    bool blocking = false) {
+    WriteShard(mesh_cq, *mesh_buffer, src, coord, blocking);
+}
+
+template <typename DType>
 void ReadShard(
     MeshCommandQueue& mesh_cq,
     std::vector<DType>& dst,
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const MeshBuffer& mesh_buffer,
     const MeshCoordinate& coord,
     bool blocking = true) {
     // TODO: #26591 - `is_local` Handling should be done under `MeshCommandQueue`.
@@ -61,21 +72,30 @@ void ReadShard(
         return;
     }
 
-    auto* shard = mesh_buffer->get_device_buffer(coord);
+    auto* shard = mesh_buffer.get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
     std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(dst.data())};
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
 }
 
 template <typename DType>
-void EnqueueWriteMeshBuffer(
+[[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
+void ReadShard(
     MeshCommandQueue& mesh_cq,
-    std::shared_ptr<MeshBuffer>& mesh_buffer,
-    const std::vector<DType>& src,
-    bool blocking = false) {
-    TT_FATAL(src.size() * sizeof(DType) >= mesh_buffer->size(),
+    std::vector<DType>& dst,
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const MeshCoordinate& coord,
+    bool blocking = true) {
+    ReadShard(mesh_cq, dst, *mesh_buffer, coord, blocking);
+}
+
+template <typename DType>
+void EnqueueWriteMeshBuffer(
+    MeshCommandQueue& mesh_cq, const MeshBuffer& mesh_buffer, const std::vector<DType>& src, bool blocking = false) {
+    TT_FATAL(
+        src.size() * sizeof(DType) >= mesh_buffer.size(),
         "Source vector is too small for mesh buffer: mesh buffer size={} bytes, source size={} * {} bytes",
-        mesh_buffer->size(),
+        mesh_buffer.size(),
         src.size(),
         sizeof(DType));
 
@@ -83,19 +103,36 @@ void EnqueueWriteMeshBuffer(
 }
 
 template <typename DType>
+[[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
+void EnqueueWriteMeshBuffer(
+    MeshCommandQueue& mesh_cq,
+    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const std::vector<DType>& src,
+    bool blocking = false) {
+    EnqueueWriteMeshBuffer(mesh_cq, *mesh_buffer, src, blocking);
+}
+
+template <typename DType>
+void EnqueueReadMeshBuffer(
+    MeshCommandQueue& mesh_cq, std::vector<DType>& dst, const MeshBuffer& mesh_buffer, bool blocking = true) {
+    // This API supports reading MeshBuffers sharded across devices
+    // and a Unit-MeshBuffer with a replicated layout.
+    if (mesh_buffer.global_layout() == MeshBufferLayout::SHARDED) {
+        dst.resize(mesh_buffer.global_shard_spec().global_size / sizeof(DType));
+    } else {
+        dst.resize(mesh_buffer.size() / sizeof(DType));
+    }
+    mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
+}
+
+template <typename DType>
+[[deprecated("Pass MeshBuffer by reference instead of shared_ptr.")]]
 void EnqueueReadMeshBuffer(
     MeshCommandQueue& mesh_cq,
     std::vector<DType>& dst,
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     bool blocking = true) {
-    // This API supports reading MeshBuffers sharded across devices
-    // and a Unit-MeshBuffer with a replicated layout.
-    if (mesh_buffer->global_layout() == MeshBufferLayout::SHARDED) {
-        dst.resize(mesh_buffer->global_shard_spec().global_size / sizeof(DType));
-    } else {
-        dst.resize(mesh_buffer->size() / sizeof(DType));
-    }
-    mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
+    EnqueueReadMeshBuffer(mesh_cq, dst, *mesh_buffer, blocking);
 }
 
 // Make the current thread block until the event is recorded by the associated MeshCommandQueue.
