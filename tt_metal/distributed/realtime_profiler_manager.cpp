@@ -1260,6 +1260,7 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
         uint64_t device_time;  // Device wall clock cycles
     };
     std::vector<SyncSample> samples;
+    samples.reserve(num_samples);
 
     // Discard pre-existing pages before sync (their PCIe-mapped bytes can be undefined on a fresh MeshDevice);
     // discard_pending_pages rebases bytes_acked and notifies the device.

@@ -135,7 +135,7 @@
 # --- stress (continuous gate) ---
 - id: bh-fabric-stability-stress
   name: fabric stability nightly tests
-  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability_short_running.yaml
+  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml --filter 'name.*_short'
   skus:
     bh_loudbox:
       timeout: 15

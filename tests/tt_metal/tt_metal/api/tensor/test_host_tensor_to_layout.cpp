@@ -80,6 +80,7 @@ std::string dtype_to_str(DataType dtype) {
         case DataType::UINT32: return "UINT32";
         case DataType::UINT16: return "UINT16";
         case DataType::UINT8: return "UINT8";
+        case DataType::INT8: return "INT8";
         default: return "UNKNOWN";
     }
 }
@@ -126,6 +127,7 @@ TEST_P(HostTensorToLayoutMatrix, MatchesFreshConstruction) {
         case DataType::UINT32: check_matches_fresh_construction.operator()<uint32_t>(); break;
         case DataType::UINT16: check_matches_fresh_construction.operator()<uint16_t>(); break;
         case DataType::UINT8: check_matches_fresh_construction.operator()<uint8_t>(); break;
+        case DataType::INT8: check_matches_fresh_construction.operator()<int8_t>(); break;
         default: FAIL() << "Unhandled dtype in matrix: " << dtype_to_str(dtype);
     }
 }
@@ -142,6 +144,7 @@ INSTANTIATE_TEST_SUITE_P(
             DataType::FLOAT32,
             DataType::BFLOAT16,
             DataType::INT32,
+            DataType::INT8,
             DataType::UINT32,
             DataType::UINT16,
             DataType::UINT8)),
