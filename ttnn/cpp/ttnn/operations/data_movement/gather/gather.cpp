@@ -205,6 +205,8 @@ Tensor gather(
     // irregularly-sharded tensor is still validated rather than silently swallowed by a shortcut.
     namespace gather_ns = ttnn::operations::data_movement::gather;
     const auto selector = gather_ns::parse_implementation(implementation);
+    const bool controls_ok =
+        gather_ns::supported_execution_controls(input_tensor, memory_config, optional_output_tensor);
     bool use_codegen = false;
     switch (selector) {
         case gather_ns::ImplementationSelector::kNative: use_codegen = false; break;
@@ -213,11 +215,15 @@ Tensor gather(
                 gather_ns::supported_by_codegen(input_tensor, dim, input_index_tensor),
                 "gather: implementation=\"codegen\" requested but supported_by_codegen() rejected this input (TILE "
                 "layout, bfloat16, non-sharded input/index only)");
+            TT_FATAL(
+                controls_ok,
+                "gather: implementation=\"codegen\" does not support a sharded output memory config or a sharded "
+                "preallocated output tensor");
             use_codegen = true;
             break;
         case gather_ns::ImplementationSelector::kAuto:
         default:
-            use_codegen = gather_ns::supported_by_codegen(input_tensor, dim, input_index_tensor) &&
+            use_codegen = controls_ok && gather_ns::supported_by_codegen(input_tensor, dim, input_index_tensor) &&
                           !gather_ns::is_demoted(input_tensor, dim, input_index_tensor);
             break;
     }
@@ -275,17 +281,6 @@ Tensor gather(
     const bool index_tensor_is_rank_le_4d = index_tensor_rank <= 4;
 
     const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
-
-    // supported_by_codegen() has no memory_config parameter (only the free function knows the
-    // caller's requested output placement): every codegen kernel sizes its output CB/transfer from
-    // the output tensor's own aligned tile page size, which is only well-defined for a non-sharded
-    // DRAM/L1-interleaved buffer -- no manifest case or sweep vector exercises a sharded output.
-    if (use_codegen && memory_config_value.is_sharded()) {
-        TT_FATAL(
-            selector != gather_ns::ImplementationSelector::kCodegen,
-            "gather: implementation=\"codegen\" does not support a sharded output memory config");
-        use_codegen = false;
-    }
 
     Tensor padded_index_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
         input_index_tensor, normalized_dim, input_index_tensor_is_dim_last_idx, index_tensor_is_rank_le_4d, true);

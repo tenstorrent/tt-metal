@@ -39,10 +39,13 @@ GatherCodegenDeviceOperation::program_factory_t GatherCodegenDeviceOperation::se
 void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Belt-and-suspenders behind the free function's early gate (call_parity.routing): the scope
-    // predicate, never is_demoted (perf-only, auto-branch-only).
+    // predicate, never is_demoted (perf-only, auto-branch-only). The gathered axis is -1 here
+    // whatever the caller's dim was: pre_gather_transform_tensor has already transposed it last, so
+    // this prim -- like ttnn::prim::gather -- is dim-agnostic. attributes.dim is the caller's
+    // normalized dim against the caller's rank, which no longer indexes these 4D tensors.
     TT_FATAL(
         ttnn::operations::data_movement::gather::supported_by_codegen(
-            tensor_args.input_tensor, attributes.dim, tensor_args.input_index_tensor),
+            tensor_args.input_tensor, /*dim=*/-1, tensor_args.input_index_tensor),
         "gather_codegen: input/index tensors are not supported by the codegen prim (see "
         "supported_by_codegen() -- TILE layout, bfloat16, non-sharded input/index only)");
 

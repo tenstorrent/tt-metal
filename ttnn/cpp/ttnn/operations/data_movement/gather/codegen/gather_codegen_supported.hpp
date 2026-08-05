@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -25,10 +26,20 @@ ImplementationSelector parse_implementation(std::string_view implementation);
 // already-last-dim tensor), so `dim` is not consulted for correctness here.
 bool supported_by_codegen(const Tensor& input_tensor, int8_t dim, const Tensor& input_index_tensor);
 
+// The half of the call contract supported_by_codegen() cannot see: the caller-controlled output
+// placement, which is not an attribute of the codegen prim and so has no place in its validation
+// step. False means the codegen factories cannot honour what the caller asked for — `auto` must
+// route to native and forced `codegen` must fail rather than silently override the placement.
+// Not a perf question, so it is kept out of is_demoted() too.
+bool supported_execution_controls(
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor);
+
 // Perf gate consulted only when ImplementationSelector::kAuto and supported_by_codegen() is true:
 // true means fall back to native despite codegen support. Evaluated at the same pre-transform
-// point as supported_by_codegen() (same tensors/dim), matching the case_id vectors the ungeneralized
-// demotion list below was measured against.
+// point as supported_by_codegen() (same tensors/dim), matching the case_id vectors the demotions
+// were measured against.
 bool is_demoted(const Tensor& input_tensor, int8_t dim, const Tensor& input_index_tensor);
 
 }  // namespace ttnn::operations::data_movement::gather

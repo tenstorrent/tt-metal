@@ -34,6 +34,11 @@ GatherGeometry compute_gather_geometry(const Tensor& input_tensor, const Tensor&
 bool gather_interleaved_fits_l1(
     const Tensor& input_tensor, const Tensor& input_index_tensor, uint32_t Wt_input, uint32_t Wt_index);
 
+// Whether the SHALLOWEST plan any gather factory can be built with fits per-core L1. Every other
+// plan scales down to this one (streaming's input CB bottoms out at two pages), so a call this
+// rejects has no feasible codegen dispatch at all and the routing gate must send it to native.
+bool gather_min_plan_fits_l1(const Tensor& input_tensor, const Tensor& input_index_tensor);
+
 // Depth of the streaming factory's input CB, in input tile pages. The streaming reader rescans the
 // whole index tile once per resident block of input tiles, so its scalar cost per output tile is
 // ceil(Wt_input / depth) * TILE_HW: a block deep enough to hold the entire row costs the single scan

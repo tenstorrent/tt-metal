@@ -5,6 +5,7 @@
 #include "gather_codegen_program_factory.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -36,9 +37,12 @@ constexpr const char* kReaderStreaming =
 constexpr const char* kWriterStreaming =
     "ttnn/cpp/ttnn/operations/data_movement/gather/codegen/kernels/gather_writer_streaming.cpp";
 
-// ops/gather/gather.py's `_WT_ROWBUF_FLOOR`: below this many input tiles per row the row-buffered
-// kernel is always admitted regardless of its exact L1 footprint (legacy, well-exercised floor).
-constexpr uint32_t kWtRowbufFloor = 60;
+// The device's real per-core CB ceiling, standing in for the Python builders' fixed USABLE_L1.
+uint64_t gather_usable_l1(const Tensor& input_tensor) {
+    auto* device = input_tensor.device();
+    return static_cast<uint64_t>(device->l1_size_per_core()) -
+           device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+}
 
 CoreRangeSet gather_core_grid(IDevice* device, const std::optional<CoreRangeSet>& sub_core_grids) {
     if (sub_core_grids.has_value()) {
@@ -110,12 +114,6 @@ GatherGeometry compute_gather_geometry(const Tensor& input_tensor, const Tensor&
 
 bool gather_interleaved_fits_l1(
     const Tensor& input_tensor, const Tensor& input_index_tensor, uint32_t Wt_input, uint32_t Wt_index) {
-    if (Wt_input <= kWtRowbufFloor) {
-        return true;
-    }
-    auto* device = input_tensor.device();
-    const uint64_t usable_l1 = static_cast<uint64_t>(device->l1_size_per_core()) -
-                               device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     // Output dtype always equals input dtype (compute_output_specs) and this predicate is only ever
     // consulted for the non-sharded DRAM-interleaved scope supported_by_codegen() admits, so the
     // output tile's aligned page size equals the input tensor's.
@@ -124,13 +122,29 @@ bool gather_interleaved_fits_l1(
     const uint64_t output_page = input_page;
     const uint64_t footprint =
         static_cast<uint64_t>(Wt_input) * input_page + index_page + std::max<uint64_t>(4, Wt_index) * output_page;
-    return footprint <= usable_l1;
+    // ops/gather/gather.py::_interleaved_fits_l1 additionally short-circuits
+    // Wt_input <= _WT_ROWBUF_FLOOR (60) to true. That short-circuit is deliberately not carried
+    // over: the gathered axis is the one axis whose index extent is NOT bounded by the input
+    // extent, so a narrow row with a very wide index clears the floor while its
+    // max(4, Wt_index)-deep output CB does not fit, and the row-buffered plan would fail CB
+    // allocation instead of reaching the streaming one. Below the floor with a proportionate index
+    // the footprint always fits, so selection is unchanged wherever the floor was reachable.
+    return footprint <= gather_usable_l1(input_tensor);
+}
+
+bool gather_min_plan_fits_l1(const Tensor& input_tensor, const Tensor& input_index_tensor) {
+    // Smallest plan any of the three factories can be built with: the streaming factory's floor of
+    // two input pages (gather_streaming_chunk_tiles' minimum), one index page and one output page.
+    // Below this there is no depth left to scale down to, so the routing gate must send the call to
+    // native instead of failing during program creation.
+    const uint64_t input_page = input_tensor.buffer()->aligned_page_size();
+    const uint64_t index_page = input_index_tensor.buffer()->aligned_page_size();
+    const uint64_t output_page = input_page;
+    return 2 * input_page + index_page + output_page <= gather_usable_l1(input_tensor);
 }
 
 uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& input_index_tensor, uint32_t Wt_input) {
-    auto* device = input_tensor.device();
-    const uint64_t usable_l1 = static_cast<uint64_t>(device->l1_size_per_core()) -
-                               device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t usable_l1 = gather_usable_l1(input_tensor);
     const uint64_t input_page = input_tensor.buffer()->aligned_page_size();
     const uint64_t index_page = input_index_tensor.buffer()->aligned_page_size();
     // Output dtype always equals input dtype, same as gather_interleaved_fits_l1's reasoning.
