@@ -156,7 +156,7 @@ on:
         required: false
         default: true
         type: boolean
-        description: "Run ops unit tests"
+        description: "Run ops sanity tests"
       run-umd-sanity-tests:
         required: false
         default: true
@@ -187,10 +187,15 @@ on:
         default: false
         type: boolean
         description: "Enable LLK asserts"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
   push:
     branches: ["main"]
   schedule:
-    # Scheduled (cron) runs fire the Blackhole + sim suite (Wormhole excluded).
+    # Scheduled (cron) runs fire the Blackhole suite (Wormhole + Sim excluded).
     - cron: "0 */4 * * *"
 
 permissions:
@@ -305,7 +310,6 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   t3000-sanity-tests:
-
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && contains(needs.generate-sku-matrix.outputs.sanity-skus, 'wh_') && toJSON(inputs.run-t3000-apc-fast-tests) != 'false' }}
     needs: [build-artifact, generate-sku-matrix]
     secrets: inherit

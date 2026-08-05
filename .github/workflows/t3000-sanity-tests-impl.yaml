@@ -1,8 +1,5 @@
 name: "[internal] T3000 sanity tests impl"
 
-# Runs the T3000 (llmbox) sanity bucket. Reads
-# tests/pipeline_reorg/t3000_sanity_tests.yaml and budgets under <team>.sanity.wh_llmbox.
-
 on:
   workflow_call:
     inputs:
