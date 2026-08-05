@@ -326,8 +326,6 @@ enum class BinaryOp : std::uint8_t
     MAX             = 17,
     MIN             = 18,
     FMOD            = 19,
-    LOGADDEXP       = 20,
-    LOGADDEXP2      = 21,
     REMAINDER       = 20,
     BITWISE_AND     = 21,
     BITWISE_OR      = 22,
@@ -353,6 +351,8 @@ enum class BinaryOp : std::uint8_t
     REMAINDER_INT32  = 40,
     REMAINDER_UINT32 = 41,
     FMOD_INT32       = 42,
+    LOGADDEXP        = 43,
+    LOGADDEXP2       = 44,
 };
 
 enum class PackMode : std::uint8_t
