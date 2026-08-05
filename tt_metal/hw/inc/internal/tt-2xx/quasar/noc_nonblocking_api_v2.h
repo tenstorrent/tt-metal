@@ -77,10 +77,10 @@ constexpr uint32_t NOC_V2_MAX_BYTES_IN_PACKET = 8 * 1024;
 // ATT is a transport choice inside V2, not a third public NOC API. These small
 // helpers are the only place where V2's register programming differs.
 #if defined(NOC_ATT_ENABLED)
-struct NocV2AttDestination {
-    uint64_t address;
-    uint32_t multicast_extent;
-    uint32_t num_destinations;
+struct NocV2AttMulticastDestination {
+    uint64_t start_address;
+    uint32_t extent;
+    uint32_t count;
 };
 
 inline __attribute__((always_inline)) uint64_t noc_v2_local_operand(uint32_t address, uint32_t size = 1) {
@@ -90,12 +90,8 @@ inline __attribute__((always_inline)) uint64_t noc_v2_local_operand(uint32_t add
     return active_att::embed_local_address(address);
 }
 
-inline __attribute__((always_inline)) NocV2AttDestination
-noc_v2_att_destination(uint64_t encoded_address, bool multicast) {
-    if (!multicast) {
-        return {encoded_address, 0, 1};
-    }
-
+inline __attribute__((always_inline)) NocV2AttMulticastDestination
+noc_v2_decode_att_multicast_destination(uint64_t encoded_address) {
     // get_noc_multicast_addr remains an opaque software descriptor. Decode its
     // logical rectangle here, then give the NIU the ATT address of the rectangle
     // start plus width/height in DEST_COORD, as required by Quasar RTL.
@@ -120,28 +116,34 @@ inline __attribute__((always_inline)) void noc_v2_program_cmdbuf_source(uint32_t
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, address);
 }
 
-inline __attribute__((always_inline)) NocV2AttDestination
+inline __attribute__((always_inline)) uint32_t
 noc_v2_program_cmdbuf_destination(uint32_t cmd_buf, uint64_t address, bool multicast) {
-    const auto destination = noc_v2_att_destination(address, multicast);
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, destination.address);
-    if (multicast) {
+    if (!multicast) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, destination.multicast_extent);
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, address);
+        return 1;
     }
-    return destination;
+
+    const auto destination = noc_v2_decode_att_multicast_destination(address);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, destination.start_address);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, destination.extent);
+    return destination.count;
 }
 
-inline __attribute__((always_inline)) NocV2AttDestination
-noc_v2_program_scmdbuf_destination(uint64_t address, bool multicast) {
-    const auto destination = noc_v2_att_destination(address, multicast);
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, destination.address);
-    if (multicast) {
-        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, destination.multicast_extent);
+inline __attribute__((always_inline)) uint32_t noc_v2_program_scmdbuf_destination(uint64_t address, bool multicast) {
+    if (!multicast) {
+        __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, address);
+        return 1;
     }
-    return destination;
+
+    const auto destination = noc_v2_decode_att_multicast_destination(address);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, destination.start_address);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, destination.extent);
+    return destination.count;
 }
 #endif
 
@@ -634,8 +636,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
         cmd_buf,
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8,
         noc_v2_local_operand(src_addr, len_bytes));
-    const auto destination = noc_v2_program_cmdbuf_destination(cmd_buf, dest_addr, mcast);
-    ASSERT(!mcast || destination.num_destinations == num_dests);
+    const uint32_t destination_count = noc_v2_program_cmdbuf_destination(cmd_buf, dest_addr, mcast);
+    ASSERT(!mcast || destination_count == num_dests);
 #else
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
@@ -698,8 +700,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
         cmd_buf,
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8,
         noc_v2_local_operand(src_addr, len_bytes));
-    const auto destination = noc_v2_program_cmdbuf_destination(cmd_buf, dest_addr, mcast);
-    ASSERT(!mcast || destination.num_destinations == num_dests);
+    const uint32_t destination_count = noc_v2_program_cmdbuf_destination(cmd_buf, dest_addr, mcast);
+    ASSERT(!mcast || destination_count == num_dests);
 #else
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
@@ -885,8 +887,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
     uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
 #if defined(NOC_ATT_ENABLED)
-    const auto destination = noc_v2_program_scmdbuf_destination(dest_addr, mcast);
-    ASSERT(!mcast || destination.num_destinations == num_dests);
+    const uint32_t destination_count = noc_v2_program_scmdbuf_destination(dest_addr, mcast);
+    ASSERT(!mcast || destination_count == num_dests);
 #else
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)dest_addr);
@@ -980,8 +982,8 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_MCAST_RESP_VC);
 #if defined(NOC_ATT_ENABLED)
-    const auto destination = noc_v2_program_scmdbuf_destination(addr, true);
-    ASSERT(destination.num_destinations == num_dests);
+    const uint32_t destination_count = noc_v2_program_scmdbuf_destination(addr, true);
+    ASSERT(destination_count == num_dests);
 #else
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)(addr & 0xFFFFFFFF));
