@@ -35,7 +35,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("width_tiles", [4, 8, 16], ids=["w4", "w8", "w16"])
-@pytest.mark.parametrize("height_tiles", [1, 4], ids=["h1", "h4"])
+@pytest.mark.parametrize("height_tiles", [1, 4, 49], ids=["h1", "h4", "h49"])
 def test_quasar_tilize_width(mesh_device, width_tiles, height_tiles):
     device = mesh_device
     torch.manual_seed(0)
@@ -54,7 +54,12 @@ def test_quasar_tilize_width(mesh_device, width_tiles, height_tiles):
     )
 
     # PRIMARY SIGNAL: this completes without a 0x19 / ERROR_TRISC1 (a fault aborts the process here).
-    tt_tiled = ttnn.tilize(tt_in)
+    # Use the quasar tilize op explicitly: plain ttnn.tilize dispatches the GENERIC TilizeDeviceOperation,
+    # whose factory builds a legacy DataMovementKernel that Quasar rejects ("DataMovementKernel is not
+    # supported on Quasar"). NOTE: this DRAM-interleaved input routes to the quasar block/default factory,
+    # NOT the TilizeMultiCoreShardedProgramFactory that the failing conv uses -- see test_quasar_tilize_sharded
+    # below for that exact (sharded) path.
+    tt_tiled = ttnn.experimental.quasar.tilize(tt_in)
 
     tt_out = ttnn.to_torch(ttnn.from_device(tt_tiled)).float()
     assert torch.isfinite(tt_out).all(), f"tilize w{width_tiles} h{height_tiles} produced NaN/Inf"

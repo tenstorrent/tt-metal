@@ -12,7 +12,6 @@
  */
 #include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/debug/dprint.h"  // [#48552 DIAG - remove after] per-block tilize probe
 
 // JIT generates chlkc_descriptors.h (not per-variable files), included via chlkc_list.h.
 // The arrays are available in scope but guarded by TRISC type:
@@ -189,23 +188,6 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         }
 
         out_dfb.reserve_back(block_width_tiles);
-
-#if defined(ARCH_QUASAR)
-        // [#48552 DIAG - remove after] Per-block INPUT probe: this block's row-major input read pointer + its
-        // first two bf16 words. If in_rd does NOT advance by one input tile-row per block, or in0/in1 stop
-        // tracking the resident shard after block 0, the reader / borrowed-DFB read-pointer stepping is the
-        // bug (not the tilize compute). If in_rd/in0/in1 are correct every block but the op's PCC is still
-        // ~0.16, the fault is the tilize COMPUTE (unpack-tilize/pack). Prints on every compute TRISC; read one.
-        {
-            const uint32_t _in_rd = in_dfb.get_read_ptr();
-            DPRINT(
-                "[TLZB] blk={} in_rd={} in0={} in1={}\n",
-                block,
-                _in_rd,
-                (uint32_t)(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(_in_rd)[0]),
-                (uint32_t)(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(_in_rd)[1]));
-        }
-#endif
 
         if constexpr (use_fast) {
 #ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
