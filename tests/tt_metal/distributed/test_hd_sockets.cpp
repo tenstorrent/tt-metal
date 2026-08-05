@@ -519,15 +519,19 @@ TEST_F(L2CpuSocketFixture, DramBankTableMatchesAllocatorAndSocDescriptor) {
             << "bank " << bank_id << " base_addr must equal the allocator's bank offset";
         EXPECT_EQ(entry.bank_size, soc_desc.dram_view_size) << "bank " << bank_id;
 
-        // The binding reports TRANSLATED coords on virtualized-DRAM SKUs and
-        // NOC0 elsewhere; either way it must name a real DRAM view for this bank.
+        // On virtualized-DRAM SKUs the binding reports the TRANSLATED coord
+        // verbatim, so it must equal the soc descriptor's DRAM view for this
+        // bank exactly. Other architectures route through hal.noc_coordinate(),
+        // so the strict form is only asserted where the identity is known to
+        // hold -- and the X280 consumer is Blackhole-only regardless.
         const CoreCoord preferred =
             soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/0);
-        EXPECT_TRUE(
-            (entry.noc_x == static_cast<uint32_t>(preferred.x) && entry.noc_y == static_cast<uint32_t>(preferred.y)) ||
-            entry.noc_y != 0)
-            << "bank " << bank_id << " resolved to (" << entry.noc_x << ", " << entry.noc_y
-            << ") which does not correspond to its DRAM view at (" << preferred.x << ", " << preferred.y << ")";
+        if (is_blackhole()) {
+            EXPECT_EQ(entry.noc_x, static_cast<uint32_t>(preferred.x))
+                << "bank " << bank_id << " noc_x: table says " << entry.noc_x << ", DRAM view is at " << preferred.x;
+            EXPECT_EQ(entry.noc_y, static_cast<uint32_t>(preferred.y))
+                << "bank " << bank_id << " noc_y: table says " << entry.noc_y << ", DRAM view is at " << preferred.y;
+        }
     }
 }
 
