@@ -123,7 +123,12 @@ jobs:
         run: |
           set -euo pipefail
           TARGET="${{ inputs.image }}"
-          TOOLS=(ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd sfpi openmpi curl oras)
+          # Derived from docker-bake.hcl's "${TARGET}" contexts instead of a
+          # hardcoded list, so a new tool (e.g. curl/oras) is picked up
+          # automatically instead of silently falling back to an unproxied
+          # local build - see .github/scripts/get-target-tools.sh and its
+          # existing use in build-docker-artifact.yaml.
+          TOOLS=($(.github/scripts/get-target-tools.sh "$TARGET"))
           SET=""
           for tool in "${TOOLS[@]}"; do
             tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
