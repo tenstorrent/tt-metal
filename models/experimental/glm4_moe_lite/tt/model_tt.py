@@ -181,6 +181,85 @@ _mtp_total = 0
 _mtp_accepted = 0
 
 
+_ARGMAX_HAS_MULTICORE: bool | None = None
+
+
+def _argmax_mc(tensor, *, dim: int, keepdim: bool = False):
+    """`ttnn.argmax` with `use_multicore=True` where that parameter exists.
+
+    It does not exist on older tt-metal (e.g. the v0.75.0-dev tree tt-blaze pins, whose argmax
+    takes dim / keepdim / sub_core_grids), and passing it there raises TypeError from the
+    decorator before any device work. Probed once and remembered, so the model runs on both
+    without paying an exception per decode step.
+    """
+    global _ARGMAX_HAS_MULTICORE
+    if _ARGMAX_HAS_MULTICORE is None:
+        try:
+            out = ttnn.argmax(tensor, dim=dim, keepdim=keepdim, use_multicore=True)
+            _ARGMAX_HAS_MULTICORE = True
+            return out
+        except TypeError:
+            _ARGMAX_HAS_MULTICORE = False
+            logger.info("ttnn.argmax has no use_multicore on this tt-metal; using the plain form")
+    if _ARGMAX_HAS_MULTICORE:
+        return ttnn.argmax(tensor, dim=dim, keepdim=keepdim, use_multicore=True)
+    return ttnn.argmax(tensor, dim=dim, keepdim=keepdim)
+
+
+def _match_rope_buffer_shape(device, buf, want_shape, mem_config):
+    """Return *buf*, or a replacement whose logical shape is exactly *want_shape*.
+
+    `from_torch(..., mesh_mapper=Replicate)` is the natural way to make these persistent RoPE
+    buffers, but on some tt-metal versions a replicated mesh tensor reports the CONCATENATED
+    shape -- Shape([1,1,32,64]) on a 32-device mesh -- while the device ops that feed it
+    (`transpose` -> `interleaved_to_sharded`) report the per-device Shape([1,1,1,64]).
+    `ttnn.copy` then refuses the pair:
+
+        copy_device_operation.cpp: out_tensor.logical_shape() == input_tensor_a.logical_shape()
+
+    and there is no way out from the consumer side: `ttnn.reshape` fails on volume (2048 vs 64)
+    and `ttnn.assign` hits the same validation. `allocate_tensor_on_device` with an explicit
+    spec gives per-device semantics on both versions.
+
+    Only used when the shapes actually disagree, so where `from_torch` already matches -- our
+    own tt-metal -- this is a no-op and the buffer is byte-identical to before.
+    """
+    if list(buf.shape) == list(want_shape):
+        return buf
+
+    logger.info(
+        "RoPE buffer shape {} != expected {}; reallocating with an explicit spec so ttnn.copy "
+        "accepts it (older mesh-tensor shape semantics)",
+        list(buf.shape),
+        list(want_shape),
+    )
+    shape = ttnn.Shape(list(want_shape))
+    try:  # newer signature takes a MemoryConfig
+        spec = ttnn.TensorSpec(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, mem_config)
+    except TypeError:  # older signature takes the pieces
+        spec = ttnn.TensorSpec(
+            shape,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            mem_config.memory_layout,
+            mem_config.shard_spec,
+            mem_config.buffer_type,
+        )
+    replacement = ttnn.allocate_tensor_on_device(spec, device)
+    # allocate_tensor_on_device does not zero, and these are read by RoPE, so seed them from a
+    # tensor built the same way their per-step source is -- guaranteeing a matching shape.
+    zeros = ttnn.from_torch(
+        torch.zeros(tuple(want_shape), dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if _is_mesh_device(device) else None,
+    )
+    ttnn.copy(ttnn.interleaved_to_sharded(zeros, mem_config), replacement)
+    ttnn.deallocate(buf, force=False)
+    return replacement
+
+
 @dataclass
 class Glm4MoeLiteDenseOnlyTT:
     """Correctness-first TT runner for GLM-4.7-Flash (dense-only bring-up).
@@ -1671,7 +1750,7 @@ class Glm4MoeLiteDenseOnlyTT:
                     local_max_tt, next_ids_tt = max_out
                     ttnn.deallocate(local_max_tt, force=False)
                 else:
-                    next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False, use_multicore=True)
+                    next_ids_tt = _argmax_mc(logits_rm_tight, dim=3, keepdim=False)
                 ttnn.deallocate(logits_rm_tight, force=False)
 
                 next_ids_torch = _tt_to_torch_for_vllm_output(tensor=next_ids_tt, device=self.device)
@@ -1715,7 +1794,7 @@ class Glm4MoeLiteDenseOnlyTT:
                     local_max_tt, local_argmax_tt = max_out
                 else:
                     local_max_tt = max_out
-                    local_argmax_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+                    local_argmax_tt = _argmax_mc(logits_rm_view, dim=3, keepdim=False)
 
                 local_argmax_torch = _mesh_to_torch_selected(tensor=local_argmax_tt, device_ids=selected_device_ids)
                 local_max_torch = _mesh_to_torch_selected(tensor=local_max_tt, device_ids=selected_device_ids)
@@ -1957,7 +2036,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 local_max_tt, local_argmax_tt = max_out
             else:
                 local_max_tt = max_out
-                local_argmax_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+                local_argmax_tt = _argmax_mc(logits_rm_view, dim=3, keepdim=False)
 
             mesh_rows, mesh_cols = int(self.device.shape[0]), int(self.device.shape[1])
             tp_axis = self.lm_head_tp_axis
@@ -2004,7 +2083,7 @@ class Glm4MoeLiteDenseOnlyTT:
             if isinstance(max_out, tuple):
                 _, next_ids_tt = max_out
             else:
-                next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False, use_multicore=True)
+                next_ids_tt = _argmax_mc(logits_rm_tight, dim=3, keepdim=False)
             draft_token_ids = (
                 _tt_to_torch_for_vllm_output(tensor=next_ids_tt, device=self.device)
                 .reshape(-1)
@@ -2199,6 +2278,13 @@ class Glm4MoeLiteDenseOnlyTT:
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=state.rope_sharded_mem_config,
                 mesh_mapper=mapper,
+            )
+            _want = (1, batch, 1, rope_dim)
+            state.cos_batch_tt = _match_rope_buffer_shape(
+                self.device, state.cos_batch_tt, _want, state.rope_sharded_mem_config
+            )
+            state.sin_batch_tt = _match_rope_buffer_shape(
+                self.device, state.sin_batch_tt, _want, state.rope_sharded_mem_config
             )
             trans_mat_mem_config = ttnn.create_sharded_memory_config(
                 shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
@@ -2928,7 +3014,7 @@ class Glm4MoeLiteDenseOnlyTT:
         vocab = int(self.hparams.vocab_size)
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
             logits_rm_warm_view = ttnn.slice(logits_rm_warm, [0, 0, 0, 0], [1, 1, batch, vocab])
-            next_ids_warm = ttnn.argmax(logits_rm_warm_view, dim=3, keepdim=False, use_multicore=True)
+            next_ids_warm = _argmax_mc(logits_rm_warm_view, dim=3, keepdim=False)
             ttnn.deallocate(next_ids_warm, force=False)
         else:
             vocab_per_shard = int(self.lm_head_vocab_per_shard)
@@ -2940,7 +3026,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 ttnn.deallocate(local_argmax_warm, force=False)
             else:
                 local_max_warm = max_out_warm
-                local_argmax_warm = ttnn.argmax(logits_rm_warm_view, dim=3, keepdim=False, use_multicore=True)
+                local_argmax_warm = _argmax_mc(logits_rm_warm_view, dim=3, keepdim=False)
                 ttnn.deallocate(local_max_warm, force=False)
                 ttnn.deallocate(local_argmax_warm, force=False)
         ttnn.deallocate(logits_rm_warm, force=False)
@@ -2965,7 +3051,7 @@ class Glm4MoeLiteDenseOnlyTT:
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
             top1_values_tt = None
             logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab])
-            top1_indices_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+            top1_indices_tt = _argmax_mc(logits_rm_view, dim=3, keepdim=False)
         else:
             vocab_per_shard = int(self.lm_head_vocab_per_shard)
             logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab_per_shard])
@@ -2974,7 +3060,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 top1_values_tt, top1_indices_tt = max_out
             else:
                 top1_values_tt = max_out
-                top1_indices_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+                top1_indices_tt = _argmax_mc(logits_rm_view, dim=3, keepdim=False)
         if _pf_trace is not None:
             self.prefetcher.stop_prefetch(_pf_trace)
         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
@@ -3014,12 +3100,12 @@ class Glm4MoeLiteDenseOnlyTT:
                         ttnn.deallocate(mtp_max_out_warm[0], force=False)
                         ttnn.deallocate(mtp_max_out_warm[1], force=False)
                     else:
-                        mtp_argmax_warm = ttnn.argmax(mtp_logits_rm_warm_view, dim=3, keepdim=False, use_multicore=True)
+                        mtp_argmax_warm = _argmax_mc(mtp_logits_rm_warm_view, dim=3, keepdim=False)
                         ttnn.deallocate(mtp_max_out_warm, force=False)
                         ttnn.deallocate(mtp_argmax_warm, force=False)
                 else:
                     mtp_logits_rm_warm_view = ttnn.slice(mtp_logits_rm_warm, [0, 0, 0, 0], [1, 1, batch, vocab])
-                    mtp_argmax_warm = ttnn.argmax(mtp_logits_rm_warm_view, dim=3, keepdim=False, use_multicore=True)
+                    mtp_argmax_warm = _argmax_mc(mtp_logits_rm_warm_view, dim=3, keepdim=False)
                     ttnn.deallocate(mtp_argmax_warm, force=False)
                 ttnn.deallocate(mtp_logits_rm_warm, force=False)
                 ttnn.synchronize_device(self.device)
@@ -3043,15 +3129,11 @@ class Glm4MoeLiteDenseOnlyTT:
                         state.mtp_top1_values_tt, state.mtp_top1_indices_tt = mtp_max_out
                     else:
                         state.mtp_top1_values_tt = mtp_max_out
-                        state.mtp_top1_indices_tt = ttnn.argmax(
-                            mtp_logits_rm_view, dim=3, keepdim=False, use_multicore=True
-                        )
+                        state.mtp_top1_indices_tt = _argmax_mc(mtp_logits_rm_view, dim=3, keepdim=False)
                 else:
                     mtp_logits_rm_view = ttnn.slice(mtp_logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab])
                     state.mtp_top1_values_tt = None
-                    state.mtp_top1_indices_tt = ttnn.argmax(
-                        mtp_logits_rm_view, dim=3, keepdim=False, use_multicore=True
-                    )
+                    state.mtp_top1_indices_tt = _argmax_mc(mtp_logits_rm_view, dim=3, keepdim=False)
                 ttnn.end_trace_capture(self.device, mtp_trace_id, cq_id=0)
                 ttnn.synchronize_device(self.device)
                 state.mtp_trace_id = mtp_trace_id

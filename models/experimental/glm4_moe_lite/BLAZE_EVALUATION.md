@@ -124,18 +124,30 @@ per-op advantage does **not** reach the step. This is the most direct evidence i
 that those per-op deltas are off the critical path, and it agrees with the arithmetic: they sum
 to 31.5% of a step whose entire weight-bandwidth budget is 11.7%.
 
-**2. No blaze op has been substituted into the model yet**, so no blaze-attributable step
-improvement has been measured at all. The model is still at **33.2 ms/token** — exactly the
-pre-blaze baseline.
+**2. Traced decode now runs in blaze's tree, and the trees are close.** The `ttnn.copy`
+divergence is fixed (see F13), so the model can be measured traced in the same process as blaze
+ops. Reaching a running decode there costs three default-on optimizations, so the honest
+comparison holds the config fixed across both trees:
 
-What was achieved toward it: GLM-4.7-Flash now **runs end to end inside blaze's tt-metal tree**
-— eager decode, correct output ("Canberra"), 559.7 ms/token. That is the process where blaze ops
-and the model can coexist. But eager is dispatch-bound and ~17x slower than traced, so a ~1.6 ms
-kernel win is invisible there; the measurement has to be traced. Traced in blaze's tree is
-blocked by one remaining divergence: a `ttnn.copy` whose destination is `Shape([1,1,32,64])`
-against a `[1,1,1,64]` source. Reproducing the obvious allocation path in isolation copies
-**fine** on that ttnn, so the 32-row destination comes from a different site in the
-trace-capture path than the one inspected — that is where to resume.
+| config | our tt-metal | blaze's tt-metal (v0.75.0-dev) |
+|---|---:|---:|
+| full default flags | **33.2** | cannot run — needs our ttnn extensions |
+| `FUSE_DOWN_ROUTING_SCALE=0`, `FUSED_COLLECTIVE_EPILOGUE=0`, `FUSED_ROUTER=0` | **34.1** | **34.8** |
+
+Two readings, both useful. Those three optimizations are worth **0.9 ms** together (33.2 -> 34.1),
+which is a reasonable check on their documented values. And blaze's older tt-metal costs a further
+**0.7 ms** at identical config — so the tree swap is nearly free, and **34.8 ms is the baseline any
+blaze op substitution must beat.**
+
+**3. No blaze op has been substituted into the model yet**, so there is still no
+blaze-attributable step improvement. What remains is genuinely mechanical rather than blocked:
+`DRAMStreamingMatmul` needs its weights DRAM-width-sharded *and* column-major tile-shuffled (a
+load-time transform), its activation replicated height-sharded across the 8 bank workers as a
+1x32 tile, and its output resharded back to what the model's next op expects. The activation and
+output resharding are per-call ops that did not exist before, and at ~35 us of saving per call
+they could plausibly consume the win — which is exactly why blaze fuses whole stages instead of
+single matmuls, and why the fused ops (blocked on F4's down projection and F11's gather) are
+where the real prize sits.
 
 ### rmsnorm — REGRESSION, do not adopt
 
@@ -327,6 +339,34 @@ attributed to the shape before the control disproved it.
 `tt-smi` was not on PATH but is installed at
 `tt-metal/python_env/bin/tt-smi`. On Galaxy it warns that CPLD FW v1.16+ is needed for `-r` and
 suggests `-glx_reset` as the fallback; `-r` worked here.
+
+### F13 — replicated mesh tensors report the concatenated shape on older tt-metal
+
+The last thing standing between GLM and a traced run in blaze's tree. `ttnn.copy` rejected the
+per-step RoPE write:
+
+    copy_device_operation.cpp: out_tensor.logical_shape() == input_tensor_a.logical_shape()
+    input Shape([1,1,1,64]) does not match output Shape([1,1,32,64])
+
+Cause: on that tt-metal a *replicated mesh tensor* built by `from_torch(..., mesh_mapper=...)`
+reports the **concatenated** shape -- 32 rows on a 32-device mesh -- while the device ops feeding
+it (`transpose` -> `interleaved_to_sharded`) report the per-device shape. The check therefore
+compares a global shape against a per-device one and can never pass.
+
+Nothing works from the consumer side: `ttnn.reshape` fails on volume (2048 vs 64) and
+`ttnn.assign` hits the same validation. What does work is `allocate_tensor_on_device` with an
+explicit `TensorSpec`, which gives per-device semantics on both versions -- verified by writing
+7.0 through the copy and reading it back from the original buffer.
+
+`model_tt._match_rope_buffer_shape` applies this **only when the shapes actually disagree**, so on
+our own tt-metal it is a no-op and the buffers are byte-identical (confirmed: the log line never
+fires, and the step stays at 33.1-33.2 ms). It also re-zeros the freshly allocated buffer, since
+`allocate_tensor_on_device` does not, and these feed RoPE.
+
+Two smaller divergences fell out on the way: `ttnn.argmax` has no `use_multicore` on older
+tt-metal (handled by `_argmax_mc`, probed once and remembered), and a run-summary line called
+`ttnn.device.get_default_dispatch_core_type()` directly -- a reporting line should never be what
+makes a model unrunnable, so it goes through `dispatch_core_label()` now.
 
 ### F9 (revised) — the trees are asymmetric: the MODEL runs in blaze's tree
 
