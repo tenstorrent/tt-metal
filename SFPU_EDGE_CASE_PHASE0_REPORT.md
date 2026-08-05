@@ -111,10 +111,41 @@ Blackhole: **4270 passed, 1174 skipped, 4 xfailed.**
 31 ops gained their negative branch, piecewise knees and saturation tails; 31 dead registry
 entries became live; one nightly test and its duplicated skip paths deleted.
 
+## Blast radius of 0d / 0e, and what is verified
+
+0e changed `passed_test`'s Bfp8_b path, which **26 test files** can reach. Two things bound the
+risk:
+
+- **It cannot regress.** Before, Bfp8_b had no dedicated branch and fell through to
+  `is_valid = is_close | is_nan`; it is now `is_close | is_nan | lattice`. A strict superset, so
+  any element that passed before still passes. The separate PCC gate is unchanged, so gross
+  errors are still caught.
+- **The residual risk is masking, not breaking** — a lattice-adjacent Bfp8_b error is now
+  accepted where it previously was not. That is the intent of the change, and re-running tests
+  cannot probe it (they pass either way). It is a judgement call to review, not a test gap.
+
+Sanity-checked anyway on the four sibling suites most likely to surface an interaction —
+`test_sfpu_binary.py`, `test_sfpu_ternary.py`, `test_eltwise_unary_datacopy.py`,
+`test_sfpu_binop_scalar.py` on Blackhole: **1551 passed, 466 skipped, 3 xfailed, 0 failed.**
+0d is narrower — it touches `UnarySFPUGolden` only, and unary is fully verified on both arches.
+
+## What is NOT verified
+
+- **Wormhole was not re-run for this work.** The WH figures above come from the branch's own
+  earlier commit messages; this host has only a Blackhole p300a. Blackhole is first-hand,
+  Wormhole is carried forward.
+- **One Blackhole board variant** (p300a). Other BH boards unexercised.
+- **`WITH_COVERAGE` builds.** 0i restructured the coverage skips — merging the two per-op unroll
+  lists and replacing the `@skip_for_coverage` decorator with an in-body profile skip. The
+  semantics are preserved by construction (see the commit), but no coverage build was run.
+- **CI.** These are `@pytest.mark.nightly` and were run directly, not through the repo's
+  `--compile-producer` / `--compile-consumer` two-phase flow that CI uses.
+- **The other 22 Bfp8_b-capable suites**, beyond the four above.
+
 ## Notes for reviewers
 
 - 0d and 0e are **shared infrastructure**: they affect every suite producing a Bfp8_b output, not
-  just unary. That is the main blast radius of this PR.
+  just unary. See the blast-radius section above.
 - 0f moves bounds that `accuracy/accuracy_harness.py` also consumes via `for_op()`, so the
   accuracy/ULP sweep shifts with them.
 - Two thirds of Phase 0's cost was that shared golden/comparison correctness. Phases 1–5 widen
