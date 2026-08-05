@@ -189,7 +189,11 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
 
     k_tiles = math.ceil(k / TILE_SIZE)
-    in0_block_w = min(4, max(1, k_tiles // grid_size[0]))
+    # in0_block_w must divide k_tiles (matmul asserts Kt % in0_block_w == 0). Take the largest
+    # divisor of k_tiles not exceeding the perf target min(4, k_tiles//grid) — a no-op when the
+    # target already divides (dense 27B), and picks a valid width for other dims (e.g. 35B-A3B).
+    _cand = min(4, max(1, k_tiles // grid_size[0]))
+    in0_block_w = max(d for d in range(1, _cand + 1) if k_tiles % d == 0)
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
