@@ -237,6 +237,10 @@ class TtVoxtralGPT:
 
         See NOTES.md [gpt-14].
         """
+        # w1 and w3 stay SEPARATE. Fusing them into one 3072x18432 weight is 4x SLOWER, not the
+        # small loss on record: identical 57.4 MB either way, but 48 GB/s fused against 192 separate.
+        # Matmul bandwidth collapses between 9216 and 18432 output columns -- 3072, 6144 and 9216 all
+        # hold the ceiling. Assume any fusion past N~9216 collapses. STATUS.md 6.24.
         g = ttnn.linear(h, w["w1"], activation="silu", compute_kernel_config=COMPUTE_CONFIG,
                         memory_config=mc)
         u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
