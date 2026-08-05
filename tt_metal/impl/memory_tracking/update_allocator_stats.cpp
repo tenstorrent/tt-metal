@@ -15,6 +15,14 @@ namespace tt::tt_metal {
 // Query ONLY locally-allocated CBs (device->get_total_cb_allocated() only counts local CBs)
 // Globally-allocated CBs create L1 Buffers and are already tracked in L1 column
 void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_t pid) {
+    // reviewer: narrow to CB-only. Per-program CB aggregation (device->get_total_cb_allocated())
+    // rescans all active programs and is the only expensive part of SHM tracking, so it is gated
+    // OFF by default (TT_METAL_SHM_CB_TRACKING_ENABLED). The cheap DRAM/L1/L1_SMALL/TRACE columns
+    // are updated on the record_allocation() fast path and are unaffected -- only the CB column
+    // reads 0 when this is disabled.
+    if (!cb_tracking_enabled_) {
+        return;
+    }
     if (!region_ || !device) {
         return;
     }

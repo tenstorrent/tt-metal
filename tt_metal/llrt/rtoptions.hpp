@@ -398,9 +398,13 @@ class RunTimeOptions {
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
-    // Disable shared memory tracking for tt-smi. Disabled by default; re-enable with
-    // TT_METAL_SHM_TRACKING_DISABLED=0.
-    bool shm_tracking_disabled = true;
+    // Disable shared memory tracking for tt-smi (whole feature). Enabled by default; disable with
+    // TT_METAL_SHM_TRACKING_DISABLED=1.
+    bool shm_tracking_disabled = false;
+    // Per-program CB (circular buffer) aggregation rescans all active programs and is the only
+    // expensive part of SHM tracking, so it is OFF by default. Enable with
+    // TT_METAL_SHM_CB_TRACKING_ENABLED=1. Note: opposite polarity to shm_tracking_disabled above.
+    bool shm_cb_tracking_enabled = false;
     bool shm_verbose = false;
 
     SanitizerSettings sanitizer_settings;
@@ -496,6 +500,7 @@ public:
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
+    bool get_shm_cb_tracking_enabled() const { return shm_cb_tracking_enabled; }
     bool get_shm_verbose() const { return shm_verbose; }
 
     // Info from inspector environment variables, setters included so that user
