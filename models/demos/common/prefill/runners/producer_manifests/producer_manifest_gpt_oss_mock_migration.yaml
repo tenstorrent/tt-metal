@@ -26,9 +26,11 @@ workload:
 
 migration:
   issue: false                            # Gate 1 does NOT migrate — table read-back only
-  table_path: /tmp/gpt_oss_kv_chunk_table.pb       # [MATCH RUNNER] PREFILL_MIGRATION_TABLE_PATH
-  device_map_path: /tmp/gpt_oss_kv_device_map.json # [MATCH RUNNER] PREFILL_MIGRATION_DEVICE_MAP_PATH
 
 env:
+  # ``prefill_producer.py`` (unlike ``migration_driver.py``) does NOT apply the ``migration:`` typed
+  # block, so the runner-matching paths have to live here in the env block instead.
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/gpt_oss_kv_chunk_table.pb       # [MATCH RUNNER]
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/gpt_oss_kv_device_map.json # [MATCH RUNNER]
   PREFILL_SEND_SHUTDOWN: "1"              # close the H2D stream so the runner exits cleanly after the run
   PREFILL_STANDALONE_CHUNKED_PCC: "0.93"  # producer pass threshold (M3 uses same default)
