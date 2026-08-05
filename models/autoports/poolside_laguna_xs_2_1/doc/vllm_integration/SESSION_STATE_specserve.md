@@ -182,3 +182,44 @@ Definitively pinned (always-on diagnostic in get_kv_cache_spec that writes to _r
    Keep the normal path byte-identical when the gate is off. RISK: tok-write/KV/position handling can silently
    corrupt — smoke-test spec-on (coherent output + speedup) before trusting; do NOT default on.
 3. Then vllm bench spec-on vs off (batch-1, copy-heavy), and the HumanEval/quality gate if desired.
+
+---
+
+## FINAL — traced spec-serve device validation (2026-08-05): DEADLOCK FIXED, but TRACED VERIFY BLOCKED
+
+Executed the traced-spec-serve plan (nested-hatching-corbato) on device (P150x4, --max-num-seqs 1, greedy).
+
+**SOLVED — the plan's one hard blocker (two-CCL-trace deadlock).** warmup_model_decode, when
+`TT_LAGUNA_SPEC_DECODE=1`, captures ONLY the verify traces (warmup_verify_decode_multi, K1=1..k_max+1) and
+OMITS the normal decode trace. Boots HEALTHY every time, no mesh hang. Log line: "captured verify traces
+K1=1..5; normal decode trace OMITTED". All batch-1 greedy decode routes through the verify traces (K1=1 =
+native step, K1=K+1 = spec step). This infra is correct and reusable.
+
+**Also fixed:** greedy served path gets NO prompt/output history from the plugin (penalty-gated,
+model_runner.py:1051) → stash prompt at prefill + accumulate history in-adapter; detect new request by
+position discontinuity (reset_batch fires every decode step). k_cap off-by-one → `63 - ((len-1)%64)`.
+
+**BLOCKER — traced batched-verify is intermittently incorrect (device/kernel-level).** Bisection with
+`TT_LAGUNA_SPEC_TRACED=0` (eager) + `TT_LAGUNA_SPEC_DEBUG=1` (shadow-eager per-row id compare):
+- EAGER batched-verify (verify_forward_decode): bit-correct on P-fib (40 tok) → upstream logic (history,
+  positions, accept, page-table refresh #49) is all CORRECT.
+- TRACED batched-verify (K1>=2): ~1/38 rounds a GROSS per-row id error vs eager reading the same KV
+  (e.g. K1=2 row0 traced=81865 vs eager=1915; K1=5 row2 268 vs 419; K1=4 row1 163 vs 86). The error occurs
+  even on ROW 0 (the anchor — no cross-row data dependency), so it is NOT a sequential-KV-write ordering
+  problem; it is an intermittent fault in the traced batched decode itself (on-device Sampling1D / reduce
+  over the K1 batch, or a stale-buffer read after execute_trace). When the fault hits the anchor's own
+  position, that KV is never rewritten (later anchors are at higher positions) → cascades to garbage output
+  (Korean/`#+#` gibberish, not a valid-greedy near-tie). Full-accept copy-heavy rounds mask it (no rejected
+  KV, and the model just repeats the prompt); partial-accept exposes it. Capping K (k_max=2 → K1<=3, or even
+  k_max=1 → K1<=2) does NOT avoid it — the fault appears at K1=2.
+
+**Verdict:** traced spec-serve cannot ship until the batched-decode-trace fault is fixed at the model/kernel
+layer (reproduce with a standalone K1>=2 traced-verify vs eager-verify loop over many iters — the shadow
+diagnostic is the repro). Eager spec-serve is correct but ~123ms/verify vs ~35ms native decode → net SLOWER,
+not shippable. **Serve the spec-off baseline** (no TT_LAGUNA_SPEC_DECODE). Other throughput levers for
+"agents work well" remain: cap per-step max_output_tokens (already helps), the shipped decode-perf wins
+(k_chunk128 SDPA + fused rope/reduce), and trimming reasoning on tool turns.
+
+Repro/diagnostic env (all in tt/generator_vllm.py, committed 1d350285d30):
+`TT_LAGUNA_SPEC_DECODE=1` (on), `TT_LAGUNA_SPEC_K=<k_max>`, `TT_LAGUNA_SPEC_TRACED=0|1`,
+`TT_LAGUNA_SPEC_DEBUG=1` (logs `[laguna spec] TRACE-vs-EAGER MISMATCH ...` per divergent round).
