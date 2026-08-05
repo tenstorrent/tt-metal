@@ -1,5 +1,7 @@
 # Metal 2.0 Audit Findings — `ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved`
 
+> **Re-audit.** This replaces the audit committed as `074a5166599` (2026-07-23), which was RED on **two** gates. **One has since cleared** (Device 2.0 on `eltwise_copy.cpp`, landed as `0fb47949a27` / PR #51179). **One remains** (offset base pointer, RM writer) — a fix *is* authored but **not merged**; see [Result](#result).
+
 Single device-operation directory:
 
 - **`ShardedToInterleavedDeviceOperation`** (`device/sharded_to_interleaved_device_operation.{hpp,cpp}`)
@@ -14,150 +16,224 @@ Single device-operation directory:
 | Writer (row-major) | `ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp` | `input.layout() == ROW_MAJOR` |
 | Compute (copy) | `ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp` | `convert_df` (input dtype ≠ output dtype; TILE only) |
 
-**Config matrix** (the factory has three reachable shapes):
+No unreferenced kernel files sit in the op directory (it holds no kernels at all).
+
+**Config matrix** (the factory has three reachable shapes, selected by runtime branch — *not* by separate `ProgramFactory`):
 
 - **C1 — TILE, no conversion**: reader + tiled writer.
 - **C2 — TILE, conversion** (`convert_df`): reader + tiled writer + compute.
-- **C3 — ROW_MAJOR** (never converts; dtype-mismatch requires TILE per `validate_inputs`): reader + RM writer.
+- **C3 — ROW_MAJOR** (never converts; a dtype mismatch requires TILE per `validate_inputs:67-71`): reader + RM writer.
+  - **C3a** — HEIGHT_SHARDED: per-core column offset is always `0`.
+  - **C3b** — WIDTH_SHARDED / BLOCK_SHARDED: per-core column offset is non-zero on every core after the first. **This is the blocked path.**
 
 **Scope:** TTNN op, Gen1 (WH/BH) target — within scope of `metal2_audit.md`.
 
-**Recipe docs:** *unpinnable* — this audit ran against `/localdev/edwinlee/metal2_audit.md` (not a repo-tracked file). The repo path `docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/` does not exist in this checkout, so `git log` yields no provenance hash. The Metal 2.0 `analyses/` triage docs (offset-base-pointers, 3rd-arg) and the `port/metal2_port.md` recipe are also absent from this checkout; findings below rely on first-hand code reads (the intended source of truth) and the live readiness sheet.
+**Recipe docs:** `4386dc456a1 2026-07-29 docs(metal_2.0): require an explicit opt_level when porting compute kernels`
+*(Pinned from the doc checkout at `/localdev/edwinlee/Port_Recipe`. The `metal_2.0/` doc tree is **not** present in this op checkout — `/localdev/edwinlee/metal2_audit.md` is a symlink into that separate checkout — so the hash pins the guidance, not this repo. Unlike the previous audit run, the `analyses/` triage docs **were** available and are cross-checked below.)*
+
+**Code state audited:** every source file below is **byte-identical to `origin/main` @ `f6a5267fa85` (2026-08-05)**; the only diff in this working tree is this report. Findings therefore apply to `main` as of the audit date.
 
 ## Status summary
 
 | Field | Value |
 |---|---|
 | **Op directory** | `ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved` |
-| **Overall** | **RED** — 2 independent, config-scoped gate blockers; clean subset **C1 (TILE, no conversion)** survives |
+| **Overall** | **RED** — one remaining gate (down from two), config-scoped to **C3** (ROW_MAJOR) |
 | **DOps / Factories** | `ShardedToInterleavedDeviceOperation` → `ShardedToInterleavedProgramFactory` |
-| *Prereqs* — Device 2.0 (every kernel used) | **No (RED)** — compute kernel `eltwise_copy.cpp` on legacy free-function CB API; config-scoped to C2. Small/self-contained, not broad Device 1.0. → Device 2.0 track |
-| *Prereqs* — Cross-op escapes | Ok (no function-call escapes; all 4 kernels file-path-borrowed → port-together coupling, FYI) |
+| *Prereqs* — Device 2.0 (every kernel used) | **Yes — GREEN** *(was RED; `eltwise_copy.cpp` migrated by `0fb47949a27` / PR #51179)* |
+| *Prereqs* — Cross-op escapes | Ok — no function-call escapes; all 4 kernels file-path-borrowed (coupling inventoried, FYI) |
 | *Feature Support* — overall | **GREEN** (all Appendix A entries N/A) |
-| *Feature Support* — Variadic-CTA | N/A (all CTA reads at constexpr index 0) |
-| *TTNN Readiness* — `Is able to port?` (the gate) | **Yes** (sheet; cross-check clean) |
+| *Feature Support* — Variadic-CTA | N/A (every CTA read at constexpr index 0) |
+| *TTNN Readiness* — `Is able to port?` (the gate) | **Yes** (sheet; cross-check clean, 1 row ↔ 1 factory) |
 | *TTNN Readiness* — Concept (current) | `descriptor` |
-| *TTNN Readiness* — Secretly SPMD | N/A (not `WorkloadDescriptor`) |
+| *TTNN Readiness* — Secretly SPMD (WorkloadDescriptor only) | N/A (not `WorkloadDescriptor`) |
 | *TTNN Readiness* — Is safe to port? | Yes |
 | *TTNN Readiness* — Custom hash | No |
-| *TTNN Readiness* — Runtime-args update | No |
+| *TTNN Readiness* — `get_dynamic_runtime_args` | No |
+| *TTNN Readiness* — `override_runtime_arguments` | No |
 | *TTNN Readiness* — Pybind `create_descriptor` | No |
 | *TTNN Readiness* — Op-owned tensors | No |
-| *TTNN Readiness* — Target concept | `MetalV2FactoryConcept` |
-| *Port work* — Offset base pointer | **GATE (RED)** — RM writer, Type 2 (accessor-fed interior offset); config-scoped to C3 → ops team + framework/Audrey (flag early) |
-| *Port work* — Tensor bindings (per binding) | input = clean (borrowed-memory DFB); output = Case 1 in C1/C2 (tiled), offset-gated in C3 |
+| *TTNN Readiness* — Target concept | `ProgramSpecFactoryConcept` |
+| *Port work* — Offset base pointer | **GATE (RED)** — RM writer, **Type 2** (accessor-fed offset base) @ `writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp:22`; config-scoped to **C3** → ops team + framework/Audrey (flag early) |
+| *Port work* — Tensor bindings (per binding) | `input_tensor` = clean (borrowed-memory DFB) · `output_tensor` = Case 1 in C1/C2; offset-gated in C3 |
 | *Port work* — TensorParameter relaxation | none |
-| *Port work* — TensorAccessor 3rd arg | none (no 3rd-arg sites) |
-| *Port work* — CB endpoints | all legal 1:1 (per config) |
+| *Port work* — TensorAccessor 3rd arg | none (no 3rd-arg site anywhere) |
+| *Port work* — CB endpoints | all legal 1P+1C, every CB in every config |
+
+**CB endpoints** are dispositions, not gates: every out-of-window CB has a port-time resolution. Here none is out of window — see [Gate detail](#gate-detail).
 
 ## Result
 
-**RED at op level; subset C1 (TILE input, no dtype conversion) is clear.**
+**RED at op level; no shippable portable subset.**
 
-Two independent gates block the full-op port, each confined to one config branch of the single factory:
+**One gate blocks the port**, down from two at the previous audit:
 
-1. **Device 2.0 — compute kernel not migrated** (config **C2**: TILE + dtype conversion). `ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp` still uses the legacy free-function circular-buffer API. → **Device 2.0 migration team.** Cheap, self-contained; op returns for a re-audit once it lands.
-2. **Offset base pointers — Type 2 accessor-fed interior offset** (config **C3**: ROW_MAJOR, width/block-sharded). The RM writer feeds `dst_addr + input_width_offset_bytes` as a `TensorAccessor` base; Metal 2.0's `tensor::name`-built accessor has no seam for a non-base start. → **ops team + framework/Audrey, flag early** (needs design discussion, not a mechanical port step).
+- **CLEARED — Device 2.0 on the shared compute kernel.** `ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp` was the previous audit's first blocker (four `cb_*` free-function FIFO calls, no wrapper in scope). It has been migrated on the Device 2.0 track — `0fb47949a27` *"[Cleanup] Device 2.0 Port for eltwise_copy kernel (#51179)"* — and now constructs `CircularBuffer cb_in(tt::CBIndex::c_0)` / `cb_out(tt::CBIndex::c_16)` and calls `wait_front` / `reserve_back` / `pop_front` / `push_back` as methods (`:19-20`, `:26-27`, `:34-35`), exactly the form the Device 2.0 migration guide's migrated examples use. **Gate GREEN.**
 
-The clean subset **C1** exercises only the reader and the tiled writer — both Device 2.0-compliant, clean-base — and is portable today on the readiness/feature/3rd-arg axes. **Caveat:** because all three configs live inside a *single* factory (kernel choice is a runtime branch on layout/dtype, not a separate `ProgramFactory`), the practical porting unit is the whole factory; the C1 subset cannot be shipped as an isolated factory port. It is offered to show the blockers are branch-local and small, so both clear quickly.
+- **STILL BLOCKED — offset base pointer, Type 2 (accessor-fed offset base).** The row-major writer feeds `dst_addr + input_width_offset_bytes` as a `TensorAccessor` **base** (`writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp:22`). Metal 2.0 builds the accessor from the `tensor::` binding and supplies the base itself — there is no seam for an interior base — so a mechanical Case-1 port would **silently drop** the per-core column offset. Non-zero only on **C3b** (row-major WIDTH/BLOCK-sharded), where it mis-addresses every core after the first. → **ops team + framework/Audrey, flag early.**
 
-**Neither blocker is a permanent wall.** The Device 2.0 gap is a routine straggler-kernel migration (the same conversion already applied to sibling shared compute kernels, e.g. `transpose_wh.cpp`). The offset-base gap has a plausible resolution (below) pending an ops/framework decision.
+  **A fix for exactly this is already authored — and is not on `main`.** Branch `origin/edwinlee/S2I_OffsetPointer`, commit `0a40dce7acb` *"Fix offset pointers in I2S and S2I"* (2026-07-31), moves the offset out of the accessor base and into the per-write destination `offset_bytes`:
+
+  ```
+  -    const auto s0 = TensorAccessor(dst_args, dst_addr + input_width_offset_bytes);
+  +    const auto s0 = TensorAccessor(dst_args, dst_addr);
+  ...
+  -        {.page_id = stick_id, .offset_bytes = 0});
+  +        {.page_id = stick_id, .offset_bytes = input_width_offset_bytes});
+  ```
+
+  `git merge-base --is-ancestor 0a40dce7acb origin/main` → **false**: the fix is **unmerged**. The gate therefore stands. This is the cheapest possible RED — **the re-audit after that branch merges should be a confirmation pass, not a re-derivation**, since it is the sole remaining blocker and every other subject is GREEN or clean.
+
+**No shippable portable subset.** The clean paths (C1/C2, TILE) exercise only the reader, the tiled writer and the compute kernel — all Device 2.0, clean-base, and green on every other axis. But all three configs live inside **one** `ProgramDescriptor` factory: kernel choice is a runtime branch on `input.layout()` (`program_factory.cpp:177-185`), not a separate `ProgramFactory`. So the porting unit is the whole factory, and the factory cannot be built without the RM writer. Per [Code-path scope], the blocking shape is *localized but not severable* → **`RED at op level; no portable subset`**. Naming C1/C2 as "clean" is diagnostic (it shows the blocker is one branch and one kernel line), not an offer of a partial port.
+
+**Neither blocker is a permanent wall**, and one is already gone. The remaining one is an op-readiness prerequisite with an authored fix awaiting merge — the shortest path to GREEN of any RED shape this audit can produce.
 
 ## Gate detail
 
-- **TTNN factory concept (`Is able to port?`):** **GREEN.** Readiness sheet ("TTNN Operations analysis", `dgomez@`, modified 2026-07-23) row:
-  `data_movement/sharded/sharded_to_interleaved | ShardedToInterleavedDeviceOperation | ShardedToInterleavedProgramFactory | Concept=descriptor | Custom hash=no | Runtime-args update (get_dynamic_runtime_args)=no | Runtime-args update (PD override)=no | Pybind descriptor=no | Smuggled pointer=no | Is safe to port?=yes | Is able to port?=yes | Op-owned tensors?=(no) | TensorParameter relaxation=none`.
+- **TTNN factory concept (`Is able to port?`):** **GREEN.** Live readiness sheet (*"Operations analysis"*, `dgomez@`), fetched fresh this run. Row `data_movement/sharded/sharded_to_interleaved`:
+
+  | Column | Value |
+  |---|---|
+  | `Device operation` | `ShardedToInterleavedDeviceOperation` |
+  | `Factory (variant)` | `ShardedToInterleavedProgramFactory` |
+  | `Concept` | `descriptor` |
+  | `Porting Target` | `ProgramSpecFactoryConcept` |
+  | `Custom hash (compute_program_hash)` | `no` |
+  | `Backdoor custom hash (attribute_values / to_hash)` | `no` |
+  | `Runtime-args update (get_dynamic_runtime_args)` | `no` |
+  | `Override runtime args method? (PD only)` | `no` |
+  | `Pybind descriptor (nb::class_ of device op)` | `no` |
+  | `Smuggled pointer (raw buffer addr in RTA/CRTA)` | `no` |
+  | `Is safe to port?` | `yes` |
+  | **`Is able to port?`** | **`yes`** |
+  | `TensorParameter relaxation` | `none` |
+  | `Op-owned tensors?` | *(blank)* |
+  | `Secretly SPMD Workload?` | *(blank — N/A, not `WorkloadDescriptor`)* |
+  | `Op Classification` | `PD Op (pointer-patching)` |
+  | `Pointer patching perf issue?` | `OK` · `Formerly custom hashed?` `no` |
+
   Cross-check against code — all confirmed:
-  - `Concept=descriptor` ✓ — `create_descriptor()` returns `tt::tt_metal::ProgramDescriptor` (`device/sharded_to_interleaved_program_factory.hpp:15`).
-  - `Custom hash=no` ✓ — no `compute_program_hash` override anywhere in the op dir.
-  - `Runtime-args update=no` ✓ — no `get_dynamic_runtime_args` / `override_runtime_arguments` in the op dir.
-  - `Pybind descriptor=no` ✓ — `sharded_to_interleaved_nanobind.cpp` binds only the `sharded_to_interleaved` function; no `create_descriptor`/`nb::class_` of the device op.
-  - `Op-owned tensors?=no` ✓ — consistent with `descriptor` concept (cross-column invariant holds).
-  No spreadsheet conflict. **Target concept: `MetalV2FactoryConcept`** (no op-owned tensors).
+  - `Concept = descriptor` ✓ — `create_descriptor()` returns `tt::tt_metal::ProgramDescriptor` (`device/sharded_to_interleaved_program_factory.hpp:15`).
+  - `Custom hash = no` ✓ — no `compute_program_hash` override anywhere in the op directory.
+  - `Runtime-args update (get_dynamic_runtime_args) = no` ✓ — no such hook on the device-op (`sharded_to_interleaved_device_operation.hpp:22-31` declares only `validate_inputs`, `validate_on_program_cache_miss`, `compute_output_specs`, `create_output_tensors`, `create_op_performance_model`).
+  - `Override runtime args method? = no` ✓ — no `override_runtime_arguments`; the concept is `descriptor`, so the legacy-signature reading does not apply either.
+  - `Pybind descriptor = no` ✓ — `sharded_to_interleaved_nanobind.cpp:46-53` binds only the `sharded_to_interleaved` free function via `ttnn::bind_function`; no `nb::class_` of the device op, no `create_descriptor` binding.
+  - `Op-owned tensors? = (blank/no)` ✓ — consistent with the `descriptor` concept (cross-column invariant holds; a `descriptor` row cannot carry op-owned tensors).
+  - **Factory-set match** ✓ — the sheet carries exactly **one** row for this op, and the code has exactly **one** factory (`program_factory_t = std::variant<ShardedToInterleavedProgramFactory>`, `device_operation.hpp:20`). No phantom row, no missing row.
+  - Cross-column invariants hold. No spreadsheet conflict.
 
-- **Device 2.0 (every kernel used):** **RED**, one kernel, config-scoped to **C2**.
+  **Target concept: `ProgramSpecFactoryConcept`** (no op-owned tensors) — the sheet's `Porting Target` column agrees. *(The previous audit recorded `MetalV2FactoryConcept`; the current recipe's [TTNN porting shape] names `ProgramSpecFactoryConcept`. Corrected here.)*
 
-  Reader and both writers are fully Device 2.0-native: `Noc`, `DataflowBuffer`, `TensorAccessor`, `noc.async_write` / `wait_front` / `pop_front` (migrated in PRs #49392 / #49410). `get_tile_size(cb_id)` (tiled writer :26) is a **sanctioned** free function — not a violation. The compute kernel is the sole holdover:
+- **Device 2.0 (every kernel used):** **GREEN — all four kernels compliant.** No violation table; there is nothing to route.
 
-  | File | Line | Call | Wrapper in scope |
-  |---|---|---|---|
-  | `ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp` | 20 | `cb_wait_front(tt::CBIndex::c_0, 1)` | none |
-  | `ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp` | 21 | `cb_reserve_back(tt::CBIndex::c_16, 1)` | none |
-  | `ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp` | 28 | `cb_pop_front(tt::CBIndex::c_0, 1)` | none |
-  | `ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp` | 29 | `cb_push_back(tt::CBIndex::c_16, 1)` | none |
+  | Kernel | Device 2.0 evidence |
+  |---|---|
+  | `reader_unary_sharded.cpp` | `DataflowBuffer dfb(cb_id_in0); dfb.push_back(...)` (`:15-16`). Migrated in the CB→DFB sweep (#49392 lineage). |
+  | `writer_unary_sharded_blocks_interleaved_start_id.cpp` | `Noc noc; DataflowBuffer dfb_out(cb_id_out)` (`:30-31`), `noc.async_write(dfb_out, s, …)` (`:41`), `dfb_out.wait_front/pop_front` (`:36`, `:49`), `TensorAccessor` (`:28`). `get_tile_size(cb_id_out)` (`:26`) is a **sanctioned** free function — not a violation. |
+  | `writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp` | `Noc noc; DataflowBuffer dfb_out(dfb_id_out0)` (`:24-25`), `noc.async_write(...)` (`:31`), `dfb_out.wait_front/pop_front` (`:28`, `:37`). |
+  | `eltwise_copy.cpp` | **Newly cleared.** `CircularBuffer cb_in(tt::CBIndex::c_0)` / `cb_out(tt::CBIndex::c_16)` (`:19-20`) with method-form FIFO ops (`:26-27`, `:34-35`). `#include "api/dataflow/circular_buffer.h"` (`:10`) is the Device-2.0 header the migration guide's own migrated example uses. |
 
-  **Sizing (for the Device 2.0 team):** *not* broad Device 1.0 — there are no addr-gen idioms (`InterleavedAddrGen`/`ShardedAddrGen`), no raw `noc_*`, no raw sem addresses. It is the FIFO-CB free-function API that the migration guide maps to `CircularBuffer`/`DataflowBuffer` object methods (`cb_wait_front(cb,n)` → `cb.wait_front(n)`, etc.). Slightly more than a 1-line in-scope-wrapper holdover only because **no wrapper object is currently in scope** — the fix constructs two wrappers (for `c_0` and `c_16`) and rewrites the four calls. This is exactly the conversion already applied to the sibling shared compute kernel `ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp` (`CircularBuffer cb_in(tt::CBIndex::c_0); cb_in.wait_front(1); …`). Route to the Device 2.0 track; the port whitelist cannot absorb it, so the op re-audits after the migration lands. **Owning family/pool:** the shared kernel pool `ttnn/cpp/ttnn/kernel/compute/` — co-consumers are `data_movement/copy` (SameMemoryConfig) and `data_movement/untilize_with_unpadding`, so the migration must land as one shared rewrite (see Team-only coupling).
+  Confirmed absent across all four kernels: `InterleavedAddrGen`, `ShardedAddrGen`, `InterleavedAddrGenFast`, `InterleavedPow2AddrGen*`, raw `noc_async_read` / `noc_async_write`, raw semaphore addresses, `cb_wait_front(` / `cb_push_back(` / `cb_pop_front(` / `cb_reserve_back(` free-function form, and any `get_write_ptr` / `get_read_ptr` / `get_local_cb_interface` / `fifo_*_ptr` raw access. The remaining CB-index free functions in `eltwise_copy.cpp` — `unary_op_init_common(c_0, c_16)`, `copy_tile_init(c_0)`, `copy_tile(c_0, …)`, `pack_tile(0, c_16)` — are **compute LLK**, outside the Device 2.0 *data-movement* API surface the guide covers, and are not holdovers.
 
-- **Feature compatibility:** every Appendix A entry scanned; all **N/A** (no `GREEN` row exists — each entry is a gate-feature, and none is present).
+- **Feature compatibility:** every Appendix A entry scanned against both host and kernel code; all **N/A** (each entry is a gate-feature, so an absent one is N/A, not GREEN).
 
   | Feature | Status | Notes |
   |---|---|---|
-  | GlobalCircularBuffer | N/A | no `GlobalCircularBuffer` type, `.global_circular_buffer` field, `remote_cb`/`.remote_index`. The input CB is a plain Buffer-backed (borrowed-memory) CB — `cb.buffer = src_buffer` (`program_factory.cpp:41,147`) — which is a mechanical `DataflowBufferSpec::borrowed_from` translation, **not** a GCB and **not** an Appendix A entry. |
-  | CBDescriptor `address_offset` (non-zero) | N/A | `push_s2i_cb_pair` never sets `.address_offset` (defaults 0); no `set_address_offset` anywhere. |
-  | GlobalSemaphore | N/A | the op uses no semaphores of any kind. |
-  | Variable-count compile-time arguments (CTA varargs) | N/A | every `get_compile_time_arg_val` read is at constexpr index 0 (reader :13, tiled writer :22, RM writer :19, compute :12); `tensor_args_t` is a fixed pair (`input_tensor` + optional `preallocated_output`), no `std::vector<Tensor>`; no runtime-varying CTA loop. |
+  | GlobalCircularBuffer | N/A | No `GlobalCircularBuffer` type, no `.global_circular_buffer` field on the `CBDescriptor`, no `remote_cb*` / `.remote_index(` / `remote_circular_buffer.h`, no 4-arg `experimental::CreateCircularBuffer`. The input CB **is** Buffer-backed (`cb.buffer = bound_buffer`, `program_factory.cpp:41`, from `:147`) — that is the legacy **borrowed-memory** pattern, a mechanical `DataflowBufferSpec::borrowed_from` translation, explicitly *not* an Appendix A entry and *not* a GCB. |
+  | CBDescriptor `address_offset` (non-zero) | N/A | `push_s2i_cb_pair` (`program_factory.cpp:25-43`) sets `total_size`, `core_ranges`, one `CBFormatDescriptor`, and `buffer` — it never touches `.address_offset` (defaults `0`). No `set_address_offset`, no 4-arg `UpdateDynamicCircularBufferAddress`, no `cb_descriptor_from_sharded_tensor` call anywhere in the op or its kernels. |
+  | GlobalSemaphore | N/A | The op uses **no semaphores of any kind** — no `GlobalSemaphore`, no `CreateSemaphore`, no `global_semaphore.hpp`, no kernel-side semaphore wait/post. |
+  | Variable-count compile-time arguments (CTA varargs) | N/A | Every kernel-side CTA read is at **constexpr index 0** and nothing else: reader `:13`, tiled writer `:22`, RM writer `:19`, compute `:13`. Host-side CTA lists are fixed-shape (`program_factory.cpp:168`, `:175-176`, `:195`); the writer's variable-length tail is `TensorAccessorArgs(*dst_buffer).append_to(...)` (`:176`), read kernel-side as the fixed `TensorAccessorArgs<1>()` NTTP, not a runtime-varying index. `tensor_args_t` is a fixed pair — `Tensor input_tensor` + `std::optional<Tensor> preallocated_output` (`device_operation_types.hpp:19-22`) — with no `std::vector<Tensor>`, so the op-level cue does not fire either. |
 
-- **Offset base pointers:** **RED — Type 2 (accessor-fed interior offset)**, config-scoped to **C3** (ROW_MAJOR).
+- **Offset base pointers:** **RED — Type 2 (accessor-fed offset base)**, config-scoped to **C3** (ROW_MAJOR), non-zero on **C3b** (WIDTH/BLOCK-sharded).
 
-  **Address RTAs resolved.** The output buffer reaches both writers via a `Buffer*` binding, not a smuggled `->address()`: `writer_rt.push_back(dst_buffer)` (`program_factory.cpp:242` tiled, `:293` RM) → arg 0. The framework auto-registers this as a `BufferBinding` and patches it on cache hits, so it is correct-on-cache-hit today (consistent with the sheet's `Smuggled pointer=no`). The kernel then receives a raw `uint32_t` base; classify by what the kernel does with it:
+  **Every address argument resolved.** The output buffer reaches both writers as a **`Buffer*` binding**, not a smuggled `->address()`: `writer_rt.push_back(dst_buffer)` (`program_factory.cpp:242` tiled, `:293` RM) into a `KernelDescriptor::RTArgList`, whose element type is `std::variant<uint32_t, Buffer*, std::reference_wrapper<const MeshTensor>>` (`tt_metal/api/tt-metalium/program_descriptors.hpp:186`). The framework auto-registers it as a `BufferBinding` and patches it on cache hits — correct-on-cache-hit today, consistent with the sheet's `Smuggled pointer = no`. The kernel receives a raw `uint32_t` base at arg 0; classify by what the kernel does with it:
 
-  - **Tiled writer (C1/C2):** `TensorAccessor(dst_args, dst_addr)` (`writer_unary_sharded_blocks_interleaved_start_id.cpp:28`) — **clean base.** All addressing is by `page_id = tile_id` / `start_id` (tile indices, not byte offsets). No fold. → ordinary Case-1 port work (see Tensor bindings).
-  - **RM writer (C3):** `TensorAccessor(dst_args, dst_addr + input_width_offset_bytes)` (`writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp:22`). `input_width_offset_bytes` = arg 5 = host `curr_idx_w` (`program_factory.cpp:298`), the byte column-offset of this core's shard block within each output stick. It is **non-zero on every core after the first** for WIDTH- and BLOCK-sharded RM (zero for HEIGHT-sharded RM, where a core spans the full row). The offset is baked into the **accessor base** — this is the [Type 2] shape: the offset *is* the accessor's start, not a relocatable trailing `+`, so Metal 2.0's `TensorAccessor(tensor::dst)` (base-only, args auto-built) has no seam to express it.
+  - **Tiled writer (C1/C2) — clean base.** `TensorAccessor(dst_args, dst_addr)` (`writer_unary_sharded_blocks_interleaved_start_id.cpp:28`), no arithmetic. All addressing is by **tile index**: `start_id = start_id_base + start_id_offset` (`:20`, from RTAs 7/8 = host `curr_idx_h + curr_idx_w` and `starting_idx_h`, `program_factory.cpp:249-250`) feeds `{.page_id = tile_id}` (`:41`). Those are page indices, **not** byte addresses — no fold. → ordinary Case-1 port work.
+  - **RM writer (C3) — offset base.** `TensorAccessor(dst_args, dst_addr + input_width_offset_bytes)` (`writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp:22`). `input_width_offset_bytes` is arg 5 = host `curr_idx_w` (`program_factory.cpp:298`), the byte column-offset of this core's shard block within each output stick, advanced by `output_unit_size` per core and wrapped at `num_units_per_row` (`:302-306`).
+    - **C3a HEIGHT_SHARDED:** `shard_spec.shape[1]` spans the full row, so `output_unit_size >= num_units_per_row` and `curr_idx_w` wraps to `0` on every iteration → offset always `0`.
+    - **C3b WIDTH_SHARDED / BLOCK_SHARDED:** shard width < row width → **non-zero on every core after the first.** Reachable: `validate_inputs` admits row-major input whenever the shard page size is L1-aligned (`device_operation.cpp:61-66`).
 
-  **Why this gates even though there is no host-side fold.** The offset-base recognition model keys on host folds (`buffer()->address() + <expr>` computed in the factory). Here the host passes a **clean base + a separate scalar offset arg**, and the kernel adds them — which the recipe's four-outcomes table treats as the *already-split-out / GREEN* case (cf. `roll` DRAM_RM). **But that GREEN disposition presumes the split-out offset is consumed *raw* (Case 2), not fed to a `TensorAccessor` base.** Here it *is* fed to the accessor base, so the exact Type-2 Metal 2.0 wall applies regardless of how the offset was delivered. A mechanical Case-1 port (`TensorAccessor(tensor::dst)`) would **silently drop** `input_width_offset_bytes` → wrong numerics on cache hits, only in width/block-sharded RM. Per the operating principle (identify gaps; default conservative when the failure mode is silent mis-addressing), this is gated. See Recipe notes for the recognition-rule gap.
+  **Why this gates, and why the recognition rule as written does not catch it.** The [Offset base pointers] recognition model resolves each address RTA *to its host computation* and keys on a **host-side** fold (`buffer()->address() + <expr>` in the factory). Here there is no host fold: the host passes a clean base plus a **separate scalar offset arg**, and the kernel adds them — which the subject's four-outcomes table classifies as the *already-split-out* case → **GREEN**, hand to [TensorParameter analysis]. But that GREEN disposition holds only when the split-out offset is consumed **raw** (Case 2, as `roll`'s DRAM_RM mode does). Here the sum is fed to a `TensorAccessor` as its **base**, so the Type-2 Metal 2.0 wall applies in full, independent of where the addition happens: `TensorAccessor(tensor::dst)` builds its args and takes its base from the binding, leaving no seam for an interior base. A mechanical Case-1 translation drops `input_width_offset_bytes` with nothing to flag it — **silent mis-addressing on C3b only**. Per the audit's operating principle (identify gaps; default conservative when the failure mode is silent), this is gated as **Type 2**. Recognition-rule gap logged in [Recipe notes](#recipe-notes).
 
-  **Plausible-but-unsettled resolution (for ops + framework):** the RM writer's `async_write` dst-args already carry an `.offset_bytes` field (currently `{.page_id = stick_id, .offset_bytes = 0}`, `:32`). Moving `input_width_offset_bytes` from the accessor base into that per-write `.offset_bytes`, with a clean-base `TensorAccessor(tensor::dst)`, is *likely* equivalent for interleaved addressing — but it is a kernel-logic change (off the mechanical porter whitelist) and its correctness across sharding/alignment cases needs framework confirmation. Alternative: a base-binding + kernel-side accessor construction from `tensor::dst.args` + `get_bank_base_address() + offset`. Either way this is a design decision, not a porter task — **flag early.**
+  **Triage-doc cross-check** (`analyses/2026-07-19_offset_base_pointers.md`, dated **2026-07-19** — a prior, not an authority; available this run, unlike the previous audit): `sharded_to_interleaved` appears in **none** of the four type tables. The Type-2 table lists only `slice` (`slice_program_factory_rm.cpp`), `padded_slice`, and `slice_write`. This is the doc's **"fold present, op _not_ in the tables"** outcome as it applies to a kernel-side sum — classified from the recognition model, **not waved through for being unlisted**. Recommend the triage-doc owner add this site; it shares the doc's own Type-2 characterisation exactly ("the affected variants are all row-major").
 
-  *Triage-doc cross-check:* the dated `analyses/2026-07-19_offset_base_pointers.md` is **absent from this checkout**, so it could not be consulted; this finding is from first-hand code read. Recommend the triage-doc owner reconcile whether `sharded_to_interleaved` (RM writer) is catalogued.
+  **The authored fix** (`origin/edwinlee/S2I_OffsetPointer` @ `0a40dce7acb`, 2026-07-31, unmerged) implements the previous audit's proposed resolution: clean-base accessor + the column shift carried as the per-write destination `offset_bytes`. For interleaved addressing the two forms resolve to the same NoC address, and the RM writer's `async_write` destination args already carry the field (`:32`). It is nonetheless a **kernel-logic change**, off the porter's kernel-side whitelist, so it correctly belongs on the ops team's track and *before* the port — which is where it now sits. **What is needed is a review + merge decision, not a design exploration.** Alternative shape, if that one is rejected: a base binding plus kernel-side accessor construction from `tensor::dst.args` and `get_bank_base_address() + offset`.
 
-- **TensorAccessor 3rd argument:** **GREEN / none.** Both `TensorAccessor` constructions are 2-arg (`(dst_args, dst_addr)` / `(dst_args, dst_addr + offset)`) — no explicit page-size third argument at any site. (The 3rd-arg triage doc is also absent from this checkout, but no site fires the syntactic signal.)
+- **TensorAccessor 3rd argument:** **GREEN / none.** Both `TensorAccessor` constructions in the op's kernels are **2-argument** — `TensorAccessor(dst_args, dst_addr)` (tiled writer `:28`) and `TensorAccessor(dst_args, dst_addr + input_width_offset_bytes)` (RM writer `:22`). No explicit page-size third argument at any site, so the syntactic signal never fires and there is nothing to classify. Cross-checked against `analyses/2026-07-06_tensor_accessor_3rd_arg_triage.md` (a dated prior, available this run): the op is **not** in its op→class table — consistent with the code.
 
-- **CB endpoints (GATE-free):** all CBs are legal **1 producer + 1 consumer** on every node in every config — no self-loop, multi-binding, or dead CB. Device 2.0 idioms are intact for the scanned kernels (compute-kernel holdover does not obscure the census: its CB touches are plain FIFO `cb_wait_front`/`cb_pop_front`/`cb_reserve_back`/`cb_push_back`).
+- **CB endpoints (GATE-free):** **all legal 1 producer + 1 consumer**, every CB on every node in every config. No self-loop, no 1P+1C assignment needed, no multi-binding flag, no dead CB. Device 2.0 idioms are intact across all four kernels, so the precondition for this scan holds and no deferral applies.
 
-  | CB | Config | Producer | Consumer | Verdict |
-  |---|---|---|---|---|
-  | `c_0` (`src0_cb_index`, borrowed-memory, `cb.buffer=src_buffer`) | C1 (no convert) | reader `dfb.push_back` (`reader_unary_sharded.cpp:16`) | writer `dfb_out.wait_front`/`pop_front` (`out_cb_index==c_0`) | 1P+1C legal |
-  | `c_0` | C2/C3 (convert / RM) | reader `dfb.push_back` | compute `cb_wait_front`/`cb_pop_front` (C2) · RM writer `wait_front`/`pop_front` (C3) | 1P+1C legal |
-  | `c_16` (`out_cb_index`, convert only) | C2 | compute `cb_reserve_back`/`cb_push_back` | tiled writer `dfb_out.wait_front`/`pop_front` | 1P+1C legal |
+  Two CBs exist. `c_0` (`src0_cb_index`) is the borrowed-memory input CB (`cb.buffer = src_buffer`, `program_factory.cpp:41` from `:147`), allocated in every config. `c_16` (`out_cb_index`) is allocated **only** when `convert_df` (`:149-160`, `bound_buffer = nullptr`); when `!convert_df`, `out_cb_index == src0_cb_index == c_0` (`:129`), so the writer's DFB *is* `c_0`.
 
-## Port-work summary  *(reference; no brief issued on RED)*
+  | CB | Config | Producer (locked) | Consumer (locked) | Census | Verdict |
+  |---|---|---|---|---|---|
+  | `c_0` (borrowed-memory) | **C1** (TILE, no convert) | reader `dfb.push_back` (`reader_unary_sharded.cpp:16`) | tiled writer `dfb_out.wait_front` / `pop_front` (`writer_unary_sharded_blocks…:36,49`); its `noc.async_write(dfb_out, …)` (`:41`) is a peek on the same binding, not a second endpoint | 2 touchers: 1 locked P + 1 locked C | **plain 1:1 legal** |
+  | `c_0` (borrowed-memory) | **C2** (TILE, convert) | reader `dfb.push_back` | compute `cb_in.wait_front` / `pop_front` (`eltwise_copy.cpp:26,34`) | 2 touchers: 1 P + 1 C | **plain 1:1 legal** |
+  | `c_16` | **C2** only | compute `cb_out.reserve_back` / `push_back` (`eltwise_copy.cpp:27,35`) | tiled writer `dfb_out.wait_front` / `pop_front` | 2 touchers: 1 P + 1 C | **plain 1:1 legal** |
+  | `c_0` (borrowed-memory) | **C3** (ROW_MAJOR) | reader `dfb.push_back` | RM writer `dfb_out.wait_front` / `pop_front` (`writer_unary_stick_layout…:28,37`) | 2 touchers: 1 P + 1 C | **plain 1:1 legal** |
+
+  **Hidden-second-writer hunt: negative, positively.** Every one of the four kernels was scanned for a raw co-fill or co-read — `get_write_ptr` / `get_read_ptr` / `get_local_cb_interface(…).fifo_wr_ptr` / `fifo_rd_ptr` / `evil_set_write_ptr` / `evil_set_read_ptr` — and there are **zero** occurrences. The op also allocates **no semaphores at all**, so the semaphore-gated co-fill face (a) has no coordinating primitive available to it. There is no dual-instance work-split: each kernel source is pushed into exactly **one** `KernelDescriptor` (`:310-314`), never two configs over the same core range. Face (b) multiple-readers does not fire either: each CB has exactly one reading kernel per config.
+
+  **No dead CB.** `c_0`'s index reaches the reader as CTA 0 (`:168`) and the writer as CTA 0 (`:175`, when `!convert_df`); `c_16`'s reaches the writer as CTA 0 when `convert_df` (`:150`, `:175`). Both are consumed by real FIFO ops in every config in which they are allocated.
+
+## Port-work summary  *(reference only; no brief issued on RED)*
 
 - **Tensor bindings** (per binding):
-  - **input_tensor** (`c_0`, borrowed-memory) — **clean** (borrowed-memory DFB read: the reader only `push_back`s the globally-allocated shard CB; no `TensorAccessor`). Port via `DataflowBufferSpec::borrowed_from`.
-  - **output_tensor** (`dst_buffer`, delivered via `Buffer*` binding) — **Case 1** in C1/C2 (tiled writer, clean-base `TensorAccessor`) → express as `TensorParameter`, kernel builds `TensorAccessor(tensor::dst)`. In **C3** (RM) this same binding is **offset-gated** (Type 2, above), *not* a clean Case 1 — do not port it mechanically.
-- **TensorParameter relaxation:** none.
-- **TensorAccessor 3rd arg:** none.
-- **CB endpoints:** all legal 1:1 (per config, table above).
+  - **`input_tensor`** (`c_0`, borrowed-memory) — **clean**, via the causal-link gate. The CB is Buffer-backed (`cb.buffer = src_buffer`); the reader only `push_back`s the already-resident shard pages and constructs no `TensorAccessor`; downstream kernels read it through FIFO ops and as an `async_write` L1 source. The borrowed-memory DFB *is* the tensor access. Port via `DataflowBufferSpec::borrowed_from`. Neither Case 1 nor Case 2.
+  - **`output_tensor`** (`dst_buffer`, delivered as a `Buffer*` binding → framework `BufferBinding`) — **Case 1** in **C1/C2**: the tiled writer feeds the base into `TensorAccessor(dst_args, dst_addr)` and does all addressing through it, so express the binding as a `TensorParameter` / `TensorBinding`, build `TensorAccessor(tensor::…)` kernel-side, and the arg-0 base plus the `TensorAccessorArgs` CTA plumbing (`program_factory.cpp:176`) both disappear. Mechanical, low-risk. In **C3** the *same* binding is the **offset-gated Type-2 site** above — **not** a clean Case 1; do not port it mechanically. (This is the per-config split the [Granularity] rule anticipates.)
+- **TensorParameter relaxation:** **none.** Sheet says `none`; the op has no custom hash, so there is no hash logic to reconcile.
+- **TensorAccessor 3rd arg:** **none** — no site passes one.
+- **CB endpoints:** all legal 1P+1C (table above). Nothing to self-loop, assign, flag, or drop.
+
+## Heads-ups  *(reference only; no brief issued on RED)*
+
+- **CB endpoints (multi-binding shapes to watch):** **none.** The hunt for all three faces came back negative with positive evidence (no raw pointer access in any kernel, no semaphores at all, no dual-instance work-split, one reader per CB per config).
+- **Cross-op / shared kernels:** **all four kernels are borrowed** — the op owns none. **No `_metal2` sibling fork exists beside any of them**, so a port creates the first for each. One wrinkle worth knowing: a real, non-quasar Metal 2.0 fork of the reader **does** exist, at `ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/reader_unary_sharded_metal2.cpp` (created by `cbde3d44ff3`, PR #51397, on `main`) — but it sits in **typecast's own tree**, not beside the original, so the rung-1 *locational* sibling check reports "no fork" and the next porter creates a second one. Its bindings (`dfb::in`, `args::num_tiles_per_core`) and its explanatory header comment are a ready naming precedent. See [Questions](#questions-for-the-user) — this is a decision for the user, not the porter. Full co-borrower/sunset inventory in [Team-only](#team-only).
+- **RTA varargs:** **none.** Every kernel reads its runtime args at **distinct constant indices** — reader index 0; tiled writer 0–8; RM writer 0, 2, 3, 4, 5, 6 — with no counted loop, no running `arg_index++`, and no data-selected index. Every arg is nameable; this is the preferred non-signal case.
 
 ## Team-only
 
-- **Out-of-directory coupling & donor shape:** roll-up **✓ clean** for function-call escapes (no kernel `#include`s an out-of-directory op helper; all kernel includes resolve to `tt_metal/*` LLK/HAL headers). The host factory `#include`s the in-family `sharded_common.hpp` for `calculate_starting_idx_h` — host code, no kernel-token bridging. **File-path kernel instantiation is the whole story here: the op owns none of its kernels.** Each borrowed kernel forms a Metal 2.0 **port-together set** (a shared kernel's CB→DFB / named-token rewrite is one change all co-borrowers must adopt together):
+- **Out-of-directory coupling & donor shape:** roll-up **✓ clean** for *function-call* escapes. No kernel `#include`s another op's helper: the four kernels' includes are `api/dataflow/dataflow_api.h`, `api/dataflow/noc.h`, `api/dataflow/dataflow_buffer.h`, `api/dataflow/circular_buffer.h`, `api/tensor/noc_traits.h`, `api/compute/{common,tile_move_copy,eltwise_unary/eltwise_unary}.h`, `api/debug/dprint.h` — all `tt_metal/*` LLK/HAL (donor class 1, no concern). No per-call shape analysis is owed. Host-side, the factory `#include`s the in-family `sharded_common.hpp` for `calculate_starting_idx_h` (`program_factory.cpp:11`, `:206`) — host code, no kernel-token bridging, out of this subject's scope.
 
-  | Borrowed kernel | Owning family / pool | Co-borrowers (same-repo scan) |
-  |---|---|---|
-  | `reader_unary_sharded.cpp` | `eltwise/unary` (cross-family) | broadly shared — typecast, tilize (×2), transpose_wh_sharded, untilize (×3), untilize_with_unpadding, sharded_to_interleaved_partial, slice_write (×2), + `experimental/quasar/*` variants |
-  | `writer_unary_sharded_blocks_interleaved_start_id.cpp` | `data_movement/sharded` (in-family) | sharded_to_interleaved_partial, `experimental/quasar/sharded_to_interleaved` |
-  | `writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp` | `data_movement/sharded` (in-family) | sharded_to_interleaved_partial, `experimental/quasar/sharded_to_interleaved` |
-  | `eltwise_copy.cpp` | `ttnn/cpp/ttnn/kernel/compute/` (shared pool) | copy (SameMemoryConfig), untilize_with_unpadding, sharded_to_interleaved_partial |
+  **File-path kernel instantiation is the whole coupling story: the op owns none of its kernels.** Consumer sets below are a **sunset and coordination list — not authorization to convert any of these files in place.** Census by filename grep over `ttnn/cpp`, hits filtered to factory bindings:
 
-  Note the same broadly-shared kernels are also used by `experimental/quasar/*` ops — out of scope for this Gen1 audit, but relevant to whoever sequences the shared-kernel rewrite. The Device 2.0 straggler `eltwise_copy.cpp` in the shared compute pool is itself a port-together concern: its Device 2.0 migration equally unblocks `copy` and `untilize_with_unpadding`.
+  | Borrowed kernel | Owning family / pool | Class | Sibling `_metal2` fork? | Co-binding ops (sunset list) |
+  |---|---|---|---|---|
+  | `reader_unary_sharded.cpp` | `eltwise/unary` | cross-family | **No** (but see the non-sibling typecast fork, above) | broadly shared — `sharded_to_interleaved_partial`, `tilize` (×2), `transpose_wh_sharded`, `untilize` (×3), `untilize_with_unpadding`, `slice_write` (×2) |
+  | `writer_unary_sharded_blocks_interleaved_start_id.cpp` | `data_movement/sharded` | in-family | **No** — this port creates it | `sharded_to_interleaved_partial` |
+  | `writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp` | `data_movement/sharded` | in-family | **No** — this port creates it | `sharded_to_interleaved_partial` |
+  | `eltwise_copy.cpp` | `ttnn/cpp/ttnn/kernel/compute/` (shared pool) | shared-lib | **No** — this port creates it | `copy` (×2: default-tilized, same-memory-config), `interleaved_to_sharded`, `sharded_to_interleaved_partial`, `interleaved_to_sharded_partial`, `untilize_with_unpadding` |
 
-- **Relaxation candidates (mined from custom hash):** none — the op has no custom hash.
+  **Sibling-fork check run locationally** (`ls` of each original's directory), per the [shared-kernel caution]. Copies under `experimental/quasar/**` also bind same-named kernels; those are whole-op pre-port copies, **do not count as forks to reuse**, and are excluded above. **Porter warning worth carrying forward: `ttnn/cpp/ttnn/operations/experimental/quasar/sharded_to_interleaved/` is a hacky pre-port copy of this exact op.** It will look like a finished answer to every question this port raises; it is not one, and it carries idioms the port recipe forbids. Do not read it, template from it, or lift its binding names.
 
-- **TTNN factory analysis (sheet-derived + `file:line`):** current concept `descriptor`; no op-owned tensors; no pybind `create_descriptor`; no custom hash; no custom `override_runtime_arguments`; `Is safe to port? = yes`; target concept `MetalV2FactoryConcept`. All gate conjuncts absent → gate clears.
+  The now-cleared Device 2.0 migration of `eltwise_copy.cpp` (`0fb47949a27`) landed as one shared rewrite and equally unblocked `copy`, `interleaved_to_sharded`, `untilize_with_unpadding` and both `*_partial` ops — worth noting for whoever sequences the shared compute pool's Metal 2.0 fork.
+
+- **Relaxation candidates (mined from a custom hash):** **none** — the op has no custom hash, so there is nothing to mine.
+
+- **TTNN factory analysis (sheet-derived + `file:line`):** current concept `descriptor` (`program_factory.hpp:15`); target `ProgramSpecFactoryConcept`; **no** op-owned tensors (no `WorkloadDescriptor`, no `buffers` vector); **no** pybind `create_descriptor` and no other risky pybind (`sharded_to_interleaved_nanobind.cpp` exposes only the free function); **no** custom hash; **no** `get_dynamic_runtime_args`; **no** `override_runtime_arguments`; `Is safe to port? = yes`. Every gate conjunct absent → the TTNN gate clears cleanly. One factory, one sheet row, no MeshWorkload need.
 
 ## Misc anomalies  *(team-only, non-gating; the port does not act on these)*
 
-- **Dead RTA in the RM writer.** The factory pushes 7 writer RTAs for the RM path — arg 1 = `num_units_per_row` (`program_factory.cpp:294`) — but `writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp` reads only indices 0,2,3,4,5,6 and never reads index 1. `num_units_per_row` is a dead RTA on the RM path.
-- **`is_l1_aligned` is a hardcoded `true`** (`program_factory.cpp:55`), which makes the RM-path guard `if (is_blackhole or is_l1_aligned) { if (!dst_is_dram or is_l1_aligned) { … } }` (`:286-289`) unconditionally taken. Consequently `is_blackhole` (`:135`) and `dst_is_dram` (`:134`) are computed but effectively dead in this branch (`dst_is_dram` has no other use). Suspicious dead branch / forced constant.
-- **`num_slices` / `slice_index` are always `1` / `0`** for this (non-partial) op — hardcoded at the launch site (`sharded_to_interleaved_device_operation.cpp:147`, `ShardedToInterleavedParams{…, 1, 0}`). `calculate_starting_idx_h(output, 1, 0)` therefore always yields the base start id; the slicing parameters are vestigial here (the real user is the separate `sharded_to_interleaved_partial` op). Not a bug, but dead generality carried into the hash-relevant attributes.
+- **Dead RTA on the row-major path.** The factory pushes **7** writer RTAs for C3 — index 1 is `num_units_per_row` (`program_factory.cpp:294`) — but `writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp` reads indices 0, 2, 3, 4, 5, 6 and **never index 1** (`:12-17`). `num_units_per_row` is dead plumbing on this path.
+- **`is_l1_aligned` is a hardcoded `true`** (`program_factory.cpp:55`), which makes the RM-path guard `if (is_blackhole or is_l1_aligned) { if (!dst_is_dram or is_l1_aligned) { … } }` (`:286-289`) unconditionally taken. Three consequences: `is_blackhole` (`:135`) and `dst_is_dram` (`:134`) are computed but effectively dead in this branch (`dst_is_dram` has no other use), and the first `padded_shard_width = tt::align(output_unit_size, dst_buffer->alignment())` (`:285`) is always overwritten at `:288`. A forced constant hiding a dead branch — worth a deliberate decision rather than leaving it as-is.
+- **`num_slices` / `slice_index` are vestigial here.** The launch site hardcodes them to `1` / `0` (`sharded_to_interleaved_device_operation.cpp:147`, `ShardedToInterleavedParams{…, 1, 0}`), and `calculate_starting_idx_h` early-returns `0` when `num_slices <= 1` (`sharded_common.cpp:17-19`). So `starting_idx_h` — the tiled writer's arg 8 / `start_id_base` — is **always 0** for this op. The real user of the slicing parameters is the separate `sharded_to_interleaved_partial` op. Not a bug, but dead generality carried into hash-relevant attributes (both fields sit on `ShardedToInterleavedParams`).
+- **The TILE/ROW_MAJOR decision is taken off two different tensors.** The unit-size and core-count blocks branch on `output.layout()` (`program_factory.cpp:81`, `:113`) while kernel selection and the per-core RTA loop branch on `input.layout()` (`:177`, `:213`, `:214`). They agree in practice — `compute_output_specs` builds the output with `PageConfig(input_tensor.layout())` (`device_operation.cpp:113`), and a preallocated output must match the input's layout (`:48-50`) — but the split reads as accidental and would diverge silently if either invariant were relaxed.
+- **Stray debug include in the borrowed reader.** `reader_unary_sharded.cpp:9` includes `api/debug/dprint.h` with no `DPRINT` use in the file. Cosmetic, and it belongs to `eltwise/unary` — not this op's to fix.
+
+## Per-DeviceOperation attribution
+
+Not applicable — the directory holds exactly one `DeviceOperation` with exactly one program factory. Findings above are already single-attribution. Where a finding differs **per config** within that one factory (offset base pointers, the `output_tensor` binding), the split is stated inline against C1 / C2 / C3.
 
 ## Questions for the user
 
-1. **Offset-base disposition on the RM writer:** the recognition rule as written (host-fold-only) would pass this site to TensorParameter analysis, where a mechanical Case-1 port silently drops the interior offset. I gated it conservatively as Type 2. Please confirm routing to ops + framework/Audrey, and whether the "move the offset into per-write `dst_args.offset_bytes`" resolution is acceptable/blessed (it is a kernel-logic change, off the mechanical porter whitelist).
-2. **Missing checkout docs:** the Metal 2.0 `analyses/` triage docs and `port/metal2_port.md` are not present in this checkout (only `metal2_audit.md` and `DFB_PORTING_GUIDE.md` at `/localdev/edwinlee/`). The offset-base and 3rd-arg dated priors could not be consulted. Findings rely on first-hand reads; flagging so the triage-doc owner can reconcile whether `sharded_to_interleaved` (RM writer) is catalogued.
+1. **Merge status of the offset-base fix — this is the whole gate.** `origin/edwinlee/S2I_OffsetPointer` @ `0a40dce7acb` (*"Fix offset pointers in I2S and S2I"*, 2026-07-31) already implements the resolution the previous audit proposed, and it is **not** an ancestor of `origin/main` @ `f6a5267fa85`. Has it been reviewed by ops + framework/Audrey, and is the "column shift rides the per-write destination `offset_bytes`" form blessed? Two things would be good to have on record before the port: (a) confirmation that the two forms are equivalent for interleaved destinations across the alignment cases the RM path admits (the kernel's own new comment asserts this; a reviewer's sign-off would make it a finding rather than an assertion), and (b) whether the same commit's `interleaved_to_sharded` half is in scope of the same review. **Once that lands on `main`, this op's re-audit should be a confirmation pass — every other gate and subject is already clear.**
+2. **Which fork does the reader bind?** `reader_unary_sharded_metal2.cpp` exists on `main` in **typecast's** directory rather than beside the original in `eltwise/unary/…/dataflow/`. Rung 1's locational check therefore misses it, and rung 2 would have this port create a *second* fork of the same kernel. Preference: (a) bind typecast's existing fork despite the non-sibling path, (b) create the sibling fork per the letter of rung 2 and accept two forks, or (c) relocate typecast's fork beside the original first, on the ops/porting track, so rung 1 works for every later consumer? This is a convention call, not a porter call — worth settling before the port, not during it.
+3. **Misc anomalies routing.** The `is_l1_aligned = true` forced constant and the dead RM arg 1 are pre-existing and non-gating, but the forced constant makes a real branch unreachable. Should these be filed against the ops team now, or carried as-is?
 
 ## Recipe notes  *(friction with the audit recipe itself)*
 
-- **Recognition-rule gap: kernel-side offset fed to a `TensorAccessor` base.** The [Offset base pointers] subject recognizes only *host-side* folds (`buffer()->address() + <expr>` in the factory), and its four-outcomes table classifies "clean base + separate scalar offset arg, added in the kernel" as GREEN → hand to [TensorParameter analysis]. But that GREEN disposition is only correct when the split-out offset is consumed **raw** (Case 2). When the kernel adds the offset and feeds the result to a `TensorAccessor` **base** (as this op's RM writer does), the Type-2 Metal 2.0 wall applies identically, yet neither subject catches it: the offset gate sees "no host fold," and TensorParameter analysis would call it Case 1 and silently drop the offset. Suggest the offset-base recognition add a kernel-side clause ("an `->address()`/base RTA plus a separately-delivered offset that are **summed and passed as a `TensorAccessor` base** is Type 2, regardless of where the sum is computed"), and that the four-outcomes "No fold → clean → TensorParameter analysis" bullet be qualified with "provided the base reaches the accessor unmodified." The `roll` DRAM_RM precedent cited for the GREEN case should state explicitly whether its split-out offset is raw-consumed or accessor-fed.
-- **Compute-kernel scope of the Device 2.0 gate is implicit.** The gate text and migration guide are framed as "Data Movement," which invites the reading that compute kernels are out of scope for CB-wrapper migration. In practice compute kernels *are* being migrated (`transpose_wh.cpp`, bcast compute kernels in the DFB PRs use `CircularBuffer`), and `cb_wait_front`/`cb_pop_front`/`cb_reserve_back`/`cb_push_back` in a compute kernel are gate violations. A one-line note that the CB-FIFO free functions gate in compute kernels too (only `get_tile_size` / `get_local_cb_interface` are sanctioned) would remove the ambiguity.
+- **The recognition-rule gap from the previous audit is still open** (recipe @ `4386dc456a1`, 2026-07-29; the prior audit logged it 2026-07-23). [Offset base pointers] resolves each address RTA "to its **host** computation" and its four-outcomes table classifies *clean base + separate scalar offset arg, summed in the kernel* as **GREEN → hand to [TensorParameter analysis]**. That is only right when the split-out offset is consumed **raw** (Case 2). When the kernel sums them and passes the result as a **`TensorAccessor` base** — this op's RM writer, `:22` — the Type-2 wall applies identically, but *neither* subject catches it: the offset gate sees no host fold, and TensorParameter analysis calls it Case 1 and silently drops the offset. Concretely, two edits would close it: (1) add a kernel-side clause to Type-2 recognition — *"a base RTA plus a separately-delivered offset that are **summed and passed as a `TensorAccessor` base** is Type 2, wherever the sum is computed"*; (2) qualify the four-outcomes "No fold → clean → TensorParameter analysis" bullet with *"provided the base reaches the accessor unmodified."* The `roll` DRAM_RM precedent cited as the GREEN case should also state explicitly that its split-out offset is **raw-consumed**, since that is what makes it green. Two independent audits have now had to extend the rule by hand to avoid a silent-wrong port; the extension shouldn't have to be re-derived a third time.
+- **Readiness-sheet column names have drifted from the docs.** The live sheet's header is **`Override runtime args method?\n(PD only)`**, but both `ttnn_op_porting_readiness.md` and `metal2_audit.md` quote it as `Override runtime args method? (PD and legacy)`. The readiness doc's standing guarantee is *"existing column names never change, and no column is ever deleted"* — so a name-based lookup keyed on the documented string finds nothing. It only worked here because I read the header row and matched by prefix. Worth reconciling in whichever direction is correct.
+- **The sheet now carries gate-adjacent columns the docs don't mention.** Beyond the documented set, the live header includes `Op Classification`, `Execution Model`, **`Porting Target`**, **`Backdoor custom hash (attribute_values / to_hash)`**, `Known op issues`, `Pointer patching perf issue?`, and `Formerly custom hashed?`. Two matter to this recipe, not just informationally: **`Porting Target`** supplies directly the target concept that [TTNN porting shape] currently has the auditor derive by hand from `Concept` + `Op-owned tensors?` (they agreed for this op — `ProgramSpecFactoryConcept` — but the recipe should say which is authoritative); and **`Backdoor custom hash`** looks like a fifth custom-hash-shaped signal that the documented `Is able to port?` derivation does not include, so an auditor cross-checking the derivation cannot tell whether it is a conjunct, a subsumed input, or informational. Both were `no` / benign here, so nothing turned on it.
+- **Disclosed deviation: I ran the seven purely-informational subjects despite a no-portable-subset RED.** The [Red outcome scoping rule] says skip them, on the reasoning that the detail goes unread and stale while blockers clear. That reasoning doesn't hold for this op: the sole blocker is a **two-line change in one kernel that is already authored and pushed**, so the code the census describes is very unlikely to move, and the post-merge re-audit becomes a confirmation pass instead of a full re-derivation. The census was also genuinely cheap here (2 CBs, 4 kernels, ~90 lines of kernel code total) — the rule's stated acute case is the opposite, a mega-op with dozens of CBs. Flagging rather than silently choosing: the rule might benefit from an explicit escape for *"RED whose remedy is already authored / narrowly scoped"*, since blanket-skipping there discards work that will be read within days.
+- **The rung-1 fork check is locational, but a real fork can be non-local — and the audit is where that gets caught.** [Caution: Porting a shared kernel] rung 1 deliberately checks for a **sibling** `_metal2` file and warns off tree-wide greps because they surface quasar copies. Correct as far as it goes, but it has a blind spot the quasar clause doesn't cover: a *legitimate, non-quasar* fork placed in the porting op's **own** tree instead of beside the original — `copy/typecast/device/kernels/dataflow/reader_unary_sharded_metal2.cpp` (PR #51397, on `main`) is exactly that. Rung 1 reports "no fork"; rung 2 then produces a second fork of one kernel, which is the duplication the convention exists to prevent. Suggest [Out-of-directory coupling]'s borrowed-kernel-file bullet ask the auditor to record **non-sibling non-quasar `_metal2` forks** as reuse candidates (a filename grep minus `experimental/quasar/**` is enough), since the auditor greps broadly anyway and the porter, working one file at a time, is the least likely to find it.
