@@ -40,14 +40,35 @@ namespace tt::tt_metal {
 namespace fs = std::filesystem;
 
 namespace {
-// Kernel path resolve:
+// Resolve a user-supplied compiler include path (-I):
+//  - Absolute paths pass through unchanged
+//  - Relative paths are resolved against the current working directory
 //
+// If the user-supplied path doesn't exist:
+//  - Absolute path will go straight to gcc, which will warn about the missing dir
+//  - Unresolved relative path will throw here
+//
+fs::path resolve_compiler_include_dir(const fs::path& given) {
+    if (given.is_absolute()) {
+        return given;
+    }
+    auto resolved = fs::current_path() / given;
+    if (!fs::is_directory(resolved)) {
+        TT_THROW(
+            "Compiler include directory '{}' not found relative to current working directory '{}'.",
+            given.string(),
+            fs::current_path().string());
+    }
+    return resolved;
+}
+}  // namespace
+
 // If the path is not an absolute path, then it must be resolved relative to:
 // 1. CWD
 // 2. TT_METAL_KERNEL_PATH
 // 3. System Kernel Directory
 // 4. TT_METAL_HOME / SetRootDir (API)
-fs::path resolve_path(const fs::path& given_file_name) {
+fs::path resolve_kernel_file_path(const fs::path& given_file_name, ContextId context_id) {
     // Priority 0: Absolute path
     if (given_file_name.is_absolute()) {
         return given_file_name;
@@ -61,7 +82,7 @@ fs::path resolve_path(const fs::path& given_file_name) {
         }
     }
 
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = MetalContext::instance(context_id).rtoptions();
 
     // Priority 2: Kernel directory
     if (rtoptions.is_kernel_dir_specified()) {
@@ -89,33 +110,13 @@ fs::path resolve_path(const fs::path& given_file_name) {
     TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", given_file_name);
 }
 
-// Resolve a user-supplied compiler include path (-I):
-//  - Absolute paths pass through unchanged
-//  - Relative paths are resolved against the current working directory
-//
-// If the user-supplied path doesn't exist:
-//  - Absolute path will go straight to gcc, which will warn about the missing dir
-//  - Unresolved relative path will throw here
-//
-fs::path resolve_compiler_include_dir(const fs::path& given) {
-    if (given.is_absolute()) {
-        return given;
-    }
-    auto resolved = fs::current_path() / given;
-    if (!fs::is_directory(resolved)) {
-        TT_THROW(
-            "Compiler include directory '{}' not found relative to current working directory '{}'.",
-            given.string(),
-            fs::current_path().string());
-    }
-    return resolved;
-}
-}  // namespace
-
 KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
     source_(source), source_type_(source_type) {
     if (source_type == FILE_PATH) {
-        path_ = resolve_path(source);
+        // Residual relative-path construction without a Program uses DEFAULT_CONTEXT_ID.
+        // Program-backed factories pre-resolve via resolve_kernel_file_path so this hits the
+        // absolute-path early-out and never reads context.
+        path_ = resolve_kernel_file_path(source);
     }
 };
 

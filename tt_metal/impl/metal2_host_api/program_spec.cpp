@@ -2617,13 +2617,14 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
 // MakeKernelSource: Create a KernelSource from a KernelSpec
 // ----------------------------------------------------------------------------
 
-KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
+KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_id) {
     return std::visit(
         [&](const auto& src) -> KernelSource {
             using T = std::decay_t<decltype(src)>;
             if constexpr (std::is_same_v<T, std::filesystem::path>) {
                 TT_FATAL(!src.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
-                return KernelSource(src.string(), KernelSource::SourceType::FILE_PATH);
+                return KernelSource(
+                    resolve_kernel_file_path(src, context_id).string(), KernelSource::SourceType::FILE_PATH);
             } else if constexpr (std::is_same_v<T, KernelSpec::SourceCode>) {
                 TT_FATAL(!src.code.empty(), "KernelSpec '{}' has empty inline source code", kernel_spec.unique_id);
                 return KernelSource(src.code, KernelSource::SourceType::SOURCE_CODE);
@@ -3018,7 +3019,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
-        KernelSource kernel_src = MakeKernelSource(kernel_spec);
+        KernelSource kernel_src = MakeKernelSource(kernel_spec, program_impl->get_context_id());
         const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
         // Make the local accessor name -> DFB device slot map for this kernel
