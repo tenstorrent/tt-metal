@@ -33,7 +33,7 @@ KernelHandle create_dispatch_engine_kernel(
     const CoreRangeSet core_ranges = CoreRangeSet(core);
     const KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
     std::shared_ptr<Kernel> kernel = std::make_shared<experimental::quasar::DispatchEngineKernel>(
-        kernel_src, core_ranges, config, dm_processor);
+        program.impl().get_context_id(), kernel_src, core_ranges, config, dm_processor);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::DISPATCH);
 }
 

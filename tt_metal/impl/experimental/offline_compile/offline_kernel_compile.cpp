@@ -79,9 +79,9 @@ std::shared_ptr<Kernel> make_offline_kernel(
         [&](const auto& cfg) -> std::shared_ptr<Kernel> {
             using T = std::decay_t<decltype(cfg)>;
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
-                return std::make_shared<DataMovementKernel>(kernel_src, core_range_set, cfg);
+                return std::make_shared<DataMovementKernel>(DEFAULT_CONTEXT_ID, kernel_src, core_range_set, cfg);
             } else {
-                return std::make_shared<ComputeKernel>(kernel_src, core_range_set, cfg);
+                return std::make_shared<ComputeKernel>(DEFAULT_CONTEXT_ID, kernel_src, core_range_set, cfg);
             }
         },
         config);

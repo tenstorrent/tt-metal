@@ -378,6 +378,7 @@ private:
 class DataMovementKernel : public Kernel {
 public:
     DataMovementKernel(
+        ContextId context_id,
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const DataMovementConfig& config,
@@ -388,8 +389,7 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {},
-        ContextId context_id = DEFAULT_CONTEXT_ID) :
+        const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
@@ -441,10 +441,10 @@ private:
 class EthernetKernel : public Kernel {
 public:
     EthernetKernel(
+        ContextId context_id,
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
-        const EthernetConfig& config,
-        ContextId context_id = DEFAULT_CONTEXT_ID) :
+        const EthernetConfig& config) :
         Kernel(
             context_id,
             config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
@@ -484,10 +484,7 @@ private:
 class DramKernel : public Kernel {
 public:
     DramKernel(
-        const KernelSource& kernel_src,
-        const CoreRangeSet& cr_set,
-        const DramConfig& config,
-        ContextId context_id = DEFAULT_CONTEXT_ID) :
+        ContextId context_id, const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DramConfig& config) :
         Kernel(
             context_id,
             HalProgrammableCoreType::DRAM,
@@ -529,11 +526,11 @@ namespace experimental::quasar {
 class DispatchEngineKernel : public Kernel {
 public:
     DispatchEngineKernel(
+        ContextId context_id,
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
-        DataMovementProcessor dm_processor,
-        ContextId context_id = DEFAULT_CONTEXT_ID) :
+        DataMovementProcessor dm_processor) :
         Kernel(
             context_id,
             HalProgrammableCoreType::DISPATCH,
@@ -587,6 +584,7 @@ private:
 class ComputeKernel : public Kernel {
 public:
     ComputeKernel(
+        ContextId context_id,
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const ComputeConfig& config,
@@ -597,8 +595,7 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {},
-        ContextId context_id = DEFAULT_CONTEXT_ID) :
+        const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
@@ -674,6 +671,7 @@ enum class QuasarComputeProcessor : uint8_t {
 class QuasarDataMovementKernel : public Kernel {
 public:
     QuasarDataMovementKernel(
+        ContextId context_id,
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
@@ -685,8 +683,7 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {},
-        ContextId context_id = DEFAULT_CONTEXT_ID) :
+        const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
@@ -748,6 +745,7 @@ private:
 class QuasarComputeKernel : public Kernel {
 public:
     QuasarComputeKernel(
+        ContextId context_id,
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarComputeConfig& config,
@@ -759,8 +757,7 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {},
-        ContextId context_id = DEFAULT_CONTEXT_ID) :
+        const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
