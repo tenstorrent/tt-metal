@@ -269,7 +269,7 @@ The key question then becomes:
 
 ## Testing newly added asserts
 
-After adding new `LLK_ASSERT` statements, you should validate them through CI to confirm they do not trigger false positives on supported configurations. One tt-metal CI actions are particularly useful:
+After adding new `LLK_ASSERT` statements, you should validate them through CI to confirm they do not trigger false positives on supported configurations. One tt-metal CI action is particularly useful:
 
 **Sanity action with LLK asserts enabled**
 
