@@ -26,6 +26,14 @@
 
 namespace ckernel {
 
+// BroadcastType::NONE is a pass through: llk_unpack_A leaves the tile in SrcA and never raises a SrcB
+// data valid (Tensix only zero-fills SrcB), so the math thread must read it back with A2D. Using B2D
+// would copy zeros, wait on a SrcB data valid that never arrives and never clear SrcA's data valid,
+// hanging the unpacker on the next tile. The broadcast modes leave the tile in SrcB, so they use B2D.
+template <BroadcastType bcast_type>
+constexpr DataCopyType unary_bcast_data_copy_type =
+    (bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
+
 template <BroadcastType bcast_type>
 ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
@@ -48,7 +56,8 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     } else {
         UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(
             false, false /*transpose within 16x16 face*/, icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<unary_bcast_data_copy_type<bcast_type>, DST_ACCUM_MODE, bcast_type>(
+            icb)));
     }
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
@@ -98,8 +107,11 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
             llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)));
     } else {
         UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type, false>(
-            dst_tile_index, icb)));
+        MATH((llk_math_eltwise_unary_datacopy<
+              unary_bcast_data_copy_type<bcast_type>,
+              DST_ACCUM_MODE,
+              bcast_type,
+              false>(dst_tile_index, icb)));
     }
 #endif
 #else
@@ -147,8 +159,7 @@ template <BroadcastType old_bcast_type, BroadcastType new_bcast_type>
 void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, uint32_t new_ocb) {
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     // Pass through uses A2D and potentially direct unpack to dest.
-    constexpr DataCopyType data_copy_type =
-        (new_bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
+    constexpr DataCopyType data_copy_type = unary_bcast_data_copy_type<new_bcast_type>;
     constexpr bool enable_unpack_to_dest = (data_copy_type == DataCopyType::A2D);
     const std::uint32_t new_operand_id = get_operand_id(new_icb);
     const std::uint32_t old_operand_id = get_operand_id(old_icb);

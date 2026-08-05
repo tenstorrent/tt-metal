@@ -13,7 +13,7 @@ when not on a galaxy or when no golden trace is provided.
 
 Env:
   PREFILL_TRACE_DIR   golden trace dir (metadata.json + kv_cache/layer_N.safetensors)     [required]
-  PREFILL_CHUNKED     "1" -> chunked (NOT SUPPORTED yet: cache-read is NotImplemented); "0" -> one-shot [default 0]
+  PREFILL_CHUNKED     "1" -> chunked (SP ring cache-read for chunks 1+); "0" -> one-shot            [default 0]
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode only)                             [default 5120]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement                   [default 1]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs) [default: all]
@@ -104,19 +104,21 @@ def main():
         flush=True,
     )
     if chunked:
-        # P2 not yet implemented: the GQA cache-read attention path (cached_len>0) raises
-        # NotImplementedError in attention/prefill.py, so chunk 2+ fails. Warn loudly.
+        # chunks 1+ drive the SP ring cache-read (attention/dense_sp.py); chunk 0 is the gather-Q
+        # stand-in. Full-attention layers fold the sink once across ring iterations (accuracy-clean).
         print(
-            "[prefill-pcc] WARNING: chunked prefill drives the cache-READ attention path (cached_len>0), "
-            "which is NotImplementedError today (see attention/prefill.py). Expect a failure on chunk 2. "
-            "Use one-shot (PREFILL_CHUNKED=0) until the ring/paged chunked SDPA lands.",
+            "[prefill-pcc] chunked: chunk 0 = gather-Q stand-in, chunks 1+ = ring cache-read (sinks all layers)",
             flush=True,
         )
 
     from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
     from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    # Chunked (chunks 1+) uses the ring cache-read, which needs the cyclic torus route for the
+    # sliding-halo wraparound -> FABRIC_1D_RING + the torus mesh descriptor
+    # (TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto). One-shot
+    # (gather-Q AllGather) runs on the linear fabric + the plain mesh descriptor.
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING if chunked else ttnn.FabricConfig.FABRIC_1D)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
     print(f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:
