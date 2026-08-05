@@ -3,6 +3,7 @@
 
 import os
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -158,6 +159,53 @@ class CCLManager:
         # and the layer's window, so a 60-layer stack needs exactly two entries
         # (sliding, global) — not 60 copies of an 8 MiB tensor.
         self._cp_mask_cache = {}
+
+        # ── Ring attention (cross-chunk prefill under CP) ─────────────────────
+        # ring_joint SDPA reads the CP-sharded KV cache and gathers the prefix
+        # across the CP axis internally with online softmax, so a rank can attend
+        # history it does not hold without an explicit AllGather. That is what makes
+        # a sharded cache workable for chunk > 0.
+        self.compute_grid_size = mesh_device.compute_with_storage_grid_size()
+        # CCL workers take the LAST compute column; ring_joint's SDPA compute uses
+        # the remaining columns. The op requires the two sets to be disjoint and
+        # asserts ccl_core_grid_offset.x < sdpa_grid.x, so both must derive from this
+        # same grid (Blackhole is wider than 8x8).
+        self.ring_attention_ccl_core_grid_offset = (self.compute_grid_size.x - 1, 0)
+        # Forward/backward pair, matching deepseek_v3_d_p and minimax_m3.
+        self.ring_attention_ccl_semaphore_handles = [
+            ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(2)
+        ]
+        self._ring_gather_buffers = {}
+
+    def get_ring_gather_buffer(self, key, n_kv, seq, head_dim, dtype):
+        """Persistent ring-gather scratch for ``ring_joint`` SDPA.
+
+        Allocated once and reused across every layer and chunk. The op treats it as
+        scratch: it fills the gathered region and masks the invalid tail via
+        ``kv_actual_isl``, so reuse without re-zeroing is safe.
+
+        ``seq`` must be the FULL cache capacity (max_seq_len), not the current
+        ``logical_n``. ring_joint gathers the entire per-device cache shard
+        (seq_local = max_seq_len/cp, times cp around the ring), independent of how
+        much of it is valid. Sizing to logical_n happens to work when the final
+        chunk's logical_n == max_seq_len — i.e. a 2-chunk run — and fails beyond
+        that with "gather dim 2 too small" (minimax_m3 hit this at 11 chunks).
+
+        ``key`` separates buffers live in the same call ("k" vs "v"); shape and dtype
+        key the rest. Heads shard on the TP columns, sequence replicated across the
+        CP rows — the layout the ring op reconstructs into.
+        """
+        cache_key = (key, n_kv, seq, head_dim, str(dtype))
+        if cache_key not in self._ring_gather_buffers:
+            rows, cols = tuple(self.mesh_device.shape)
+            self._ring_gather_buffers[cache_key] = ttnn.from_torch(
+                torch.zeros(1, n_kv, seq, head_dim),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
+            )
+        return self._ring_gather_buffers[cache_key]
 
     def get_rs_semaphore(self):
         """Returns list of 3 semaphores for reduce_scatter (cycles double-buffer)."""
