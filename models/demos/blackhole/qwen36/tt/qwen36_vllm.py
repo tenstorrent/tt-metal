@@ -8,7 +8,6 @@ trace for long, via prefill_dispatch) while Generator drives decode only. GDN + 
 model-bound, so the kv_cache contract param is accepted but unused.
 """
 
-import gc
 import math
 import os
 from collections import defaultdict
@@ -26,7 +25,7 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
-from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch
+from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
 from models.tt_transformers.tt.generator import Generator
 
 _PREFILL_WARMUP_CHUNK = 2048
@@ -404,43 +403,4 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # Drop stale `non_greedy_decoding_on_device` from the old vLLM plugin; no-op for Qwen.
         kwargs.pop("non_greedy_decoding_on_device", None)
         self._validate_device_sampling_request(kwargs.get("can_sample_on_device", False))
-        max_b = kwargs.get("max_batch_size")
-        # Compile every width before the first trace capture. Program-cache allocations made by a
-        # later width can otherwise overlap temporary addresses baked into an earlier live trace.
-        if os.environ.get("TT_DECODE_BUCKETING", "1") == "1" and isinstance(max_b, int) and max_b > 1:
-            widths, w = [], 1
-            while w < max_b:
-                widths.append(w)
-                w *= 2
-            widths.append(max_b)
-            result = None
-            compile_key = (
-                tuple(widths),
-                kwargs.get("num_blocks"),
-                kwargs.get("can_sample_on_device"),
-                kwargs.get("greedy_only", False),
-            )
-            trace_enabled = kwargs.get("enable_trace", False)
-            if getattr(self, "_decode_bucket_compile_key", None) != compile_key:
-                for width in widths:
-                    kw = dict(kwargs)
-                    kw["max_batch_size"] = width
-                    kw["enable_trace"] = False
-                    logger.info(f"Qwen decode compile warmup: bucket width={width}")
-                    result = super().warmup_model_decode(*args, **kw)
-                self._decode_bucket_compile_key = compile_key
-
-            if not trace_enabled:
-                return result
-
-            ttnn.synchronize_device(self.mesh_device)
-            gc.collect()
-            for width in widths:
-                kw = dict(kwargs)
-                kw["max_batch_size"] = width
-                kw["enable_trace"] = True
-                kw["skip_trace_precompile"] = True
-                logger.info(f"Qwen decode trace capture: bucket width={width}")
-                result = super().warmup_model_decode(*args, **kw)
-            return result
-        return super().warmup_model_decode(*args, **kwargs)
+        return warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)

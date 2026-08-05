@@ -96,12 +96,11 @@ def test_trace_buffer_reuse_is_opt_in(monkeypatch):
 
 
 def test_bucket_warmup_compiles_all_widths_before_capture(monkeypatch):
-    from models.common.warmup import WarmupForwardMixin
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+    from models.demos.blackhole.qwen36.tt.generator_interface import warmup_decode_buckets
 
     calls = []
 
-    def record_warmup(self, *args, **kwargs):
+    def record_warmup(*args, **kwargs):
         calls.append(
             (
                 kwargs["max_batch_size"],
@@ -110,23 +109,22 @@ def test_bucket_warmup_compiles_all_widths_before_capture(monkeypatch):
             )
         )
 
-    monkeypatch.setattr(WarmupForwardMixin, "warmup_model_decode", record_warmup)
     monkeypatch.setattr(ttnn, "synchronize_device", lambda *_: None)
     monkeypatch.setenv("TT_DECODE_BUCKETING", "1")
-    generator = object.__new__(Qwen36ForCausalLM)
-    generator.mesh_device = object()
-    generator.model = []
-    generator.model_args = []
-    generator.data_parallel = 1
+    generator = SimpleNamespace(mesh_device=object())
 
-    generator.warmup_model_decode(
+    warmup_decode_buckets(
+        generator,
+        record_warmup,
         kv_cache=None,
         enable_trace=False,
         max_batch_size=8,
         num_blocks=1,
         can_sample_on_device=True,
     )
-    generator.warmup_model_decode(
+    warmup_decode_buckets(
+        generator,
+        record_warmup,
         kv_cache=None,
         enable_trace=True,
         max_batch_size=8,
