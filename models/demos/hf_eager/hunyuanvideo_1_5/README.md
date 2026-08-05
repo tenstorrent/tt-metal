@@ -62,9 +62,10 @@ $PY -m pytest $DIR/tests/e2e/test_e2e_pipeline.py -s      # e2e gate (Gate 1/2/3
 $PY -m pytest $DIR/tests/e2e/test_real_weight_pcc.py -s   # real-weight DiT PCC (single + mesh)
 
 # --- 121-frame video generation (fastest config: 32-chip sp=4, tile-sharded VAE) ---
-#   HY_MESH=4,8       : 32-chip sp=4         HY_TT_QWEN/HY_TT_VAE=1 : encoders on device
-#   HY_VAE_TILE_PX=128: required at 121f     (VAE auto tile-shards across the mesh, ndev>1)
-HY_MESH=4,8 HY_TT_QWEN=1 HY_TT_VAE=1 HY_VAE_TILE=1 HY_VAE_TILE_PX=128 \
+#   HY_MESH=4,8 + HY_DIT_SP=1 : 32-chip, rows=sp=4 cols=tp=8 (SP required, else flat tp=32)
+#   HY_TT_QWEN/HY_TT_VAE=1    : encoders on device;  VAE auto tile-shards across the mesh
+#   HY_VAE_TILE_PX=128        : required at 121f (192 px fragments DRAM)
+HY_MESH=4,8 HY_DIT_SP=1 HY_DIT_BF16=1 HY_TT_QWEN=1 HY_TT_VAE=1 HY_VAE_TILE=1 HY_VAE_TILE_PX=128 \
 HY_FRAMES=121 HY_STEPS=50 HY_H=480 HY_W=848 \
 $PY -m pytest $DIR/tests/e2e/test_stage2b_gen.py::test_stage2b_gen_qb2 -svv
 
