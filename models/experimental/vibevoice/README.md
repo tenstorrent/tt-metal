@@ -5,6 +5,15 @@ a long-form, multi-speaker text-to-speech model. Runs fully on Tenstorrent hardw
 (prefill + autoregressive decode + audio rendering), with a vendored PyTorch reference kept
 alongside for PCC/WER/SIM comparison.
 
+## Reviewer guidance
+
+| Path | Origin | Review |
+|------|--------|--------|
+| [`tt/`](tt/) | **Authored** TTNN port — LM, acoustic/semantic tokenizers, diffusion head, connectors, DPM scheduler, generator, weight load | **Primary** |
+| [`common/`](common/), [`demo/`](demo/), [`tests/`](tests/) | **Authored** — path/download helpers, demo CLI, PCC + perf tests | Yes |
+| [`reference/modular/`](reference/modular/), [`reference/processor/`](reference/processor/), [`reference/schedule/`](reference/schedule/) | **Vendored verbatim** from [microsoft/VibeVoice](https://github.com/microsoft/VibeVoice) / [vibevoice-community/VibeVoice](https://github.com/vibevoice-community/VibeVoice) (1.5B torch reference for PCC/WER/SIM) | Skip / skim |
+| [`reference/lm_runner.py`](reference/lm_runner.py) | **Authored** adapter (not vendored) — CPU fp32 LM swap-in for PCC | Small, yes |
+
 ## Model description
 
 VibeVoice is **not** a plain TTS decoder: it is an autoregressive LLM whose "audio token" is a
