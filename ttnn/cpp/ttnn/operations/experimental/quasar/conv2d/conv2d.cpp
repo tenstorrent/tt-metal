@@ -327,6 +327,40 @@ Result conv2d_DRAM(
     const std::optional<const MemoryConfig>& memory_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
 
+// [#48552] The quasar conv-as-matmul sets its output logical height to per_core_M * num_cores (the matmul's
+// padded M), which OVER-COUNTS when the true output NHW (batch*oh*ow) is not a multiple of num_cores*TILE_H:
+// e.g. a 28x28 output on 2 cores = 784 true rows, but per_core_M=13 tiles -> logical 2*13*32 = 832. The
+// physical layout is last-core-partial (core0 full, the last core partial + tile padding), which ttnn
+// sharding supports, so restoring the true logical NHW while KEEPING the padded physical shape is a valid
+// metadata-only view. It is required, or callers see the padded height: the per-op test's
+// reshape(1, oh, ow, -1) fails (size 832*C not divisible by oh*ow), and on the DRAM path slice_write's
+// "slice volume must match sharded input volume" assert trips (true 392 vs padded 448). No-op when the
+// logical height already equals the true NHW (the common tile-aligned-per-core case).
+static ttnn::Tensor fix_conv_output_logical_nhw(
+    const ttnn::Tensor& out, uint32_t batch_size, uint32_t output_height, uint32_t output_width) {
+    const auto& logical = out.logical_shape();
+    // Only the flattened conv-as-matmul output form [1, 1, NHW, C] is over-counted here; leave anything else
+    // (already-unflattened, rank != 4, or batch/H folded differently) untouched to avoid mislabeling a real
+    // spatial dim as NHW.
+    if (logical.rank() != 4 || logical[0] != 1 || logical[1] != 1) {
+        return out;
+    }
+    const uint32_t true_nhw = batch_size * output_height * output_width;
+    if (static_cast<uint32_t>(logical[2]) == true_nhw || static_cast<uint32_t>(logical[2]) < true_nhw) {
+        // Already correct, or somehow smaller (never over-count) -- do not touch.
+        return out;
+    }
+    ttnn::SmallVector<uint32_t> new_logical{
+        static_cast<uint32_t>(logical[0]),
+        static_cast<uint32_t>(logical[1]),
+        true_nhw,
+        static_cast<uint32_t>(logical[3])};
+    // Keep the padded (physical) shape so this is a pure relabel of the logical extent (last-core-partial),
+    // not a re-tile: the sequential-fill conv parallelization makes core0 full and only the last core partial,
+    // so logical NHW == sum of real per-core rows is a valid sharded shape over the same physical buffer.
+    return ttnn::operations::experimental::quasar::reshape(out, ttnn::Shape(new_logical), out.padded_shape());
+}
+
 Result conv2d_L1(
     const ttnn::Tensor& input_tensor_,
     const ttnn::Tensor& weight_tensor_,
@@ -1054,14 +1088,24 @@ Result conv2d_L1(
                 matmul_output = ttnn::operations::experimental::quasar::to_memory_config(
                     matmul_output, memory_config.value(), std::nullopt);
             }
-            return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+            return {
+                fix_conv_output_logical_nhw(matmul_output, batch_size, output_height, output_width),
+                output_height,
+                output_width,
+                weight_tensor_on_device,
+                bias_tensor_on_device};
         }
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::operations::experimental::quasar::to_memory_config(
                 conv_output, memory_config.value(), std::nullopt);
         }
-        return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        return {
+            fix_conv_output_logical_nhw(conv_output, batch_size, output_height, output_width),
+            output_height,
+            output_width,
+            weight_tensor_on_device,
+            bias_tensor_on_device};
     }  // Matmul expects inputs to be in Tile Layout
     tilize_with_optional_deallocation_qsr(input_tensor_post_tm, should_deallocate_act);
 
@@ -1102,7 +1146,12 @@ Result conv2d_L1(
             matmul_output, memory_config.value(), std::nullopt);
     }
 
-    return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+    return {
+        fix_conv_output_logical_nhw(matmul_output, batch_size, output_height, output_width),
+        output_height,
+        output_width,
+        weight_tensor_on_device,
+        bias_tensor_on_device};
 }
 
 ResultWithOptions result_to_result_with_options(
