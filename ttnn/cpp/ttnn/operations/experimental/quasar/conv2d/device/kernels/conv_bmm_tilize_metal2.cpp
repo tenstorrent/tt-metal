@@ -809,8 +809,19 @@ void kernel_main() {
                         {
                             DataflowBuffer curr_out_cb =
                                 curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
+                            // [#48552 DIAG - remove after] PACK-progress. PKrsv=PACK reached this subblock's
+                            // reserve; PKgot=PACK got MATH's committed DEST (tile_regs_wait returned); PKdone=PACK
+                            // packed+pushed. If PKrsv i0=0 prints but PKgot i0=0 does NOT -> PACK stuck waiting on
+                            // MATH's subblock-0 commit = MATH<->PACK deadlock. If PKdone i0=0 prints then PKrsv i0=1
+                            // stalls -> PACK is fine and MATH is the sole bottleneck (MATH-internal MVMUL stall).
+                            if (in0_block_h_i == 0) {
+                                PACK(DPRINT("PKrsv i0={}\n", (uint32_t)in0_subblock_i));
+                            }
                             curr_out_cb.reserve_back(out_subblock_num_tiles);
                             tile_regs_wait();
+                            if (in0_block_h_i == 0) {
+                                PACK(DPRINT("PKgot i0={}\n", (uint32_t)in0_subblock_i));
+                            }
 
                             if constexpr (packer_l1_acc) {
                                 if (in0_block_w_i == 0) {
@@ -849,6 +860,9 @@ void kernel_main() {
 
                             tile_regs_release();
                             curr_out_cb.push_back(out_subblock_num_tiles);
+                            if (in0_block_h_i == 0) {
+                                PACK(DPRINT("PKdone i0={}\n", (uint32_t)in0_subblock_i));  // [#48552 DIAG]
+                            }
                         }
 
                         in1_index_subblock_offset += out_subblock_w;
