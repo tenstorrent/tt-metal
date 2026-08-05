@@ -51,7 +51,10 @@
       "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap as E2B (pcc_thresholds ~0.986); measured ~0.985 on 12B/P150x8 full-attention via_harness. Tier-1 unit test — gate below measured.",
       "test_attention_paged_decode_via_harness[blackhole-full-1x8]": 0.984,
       "test_attention_paged_decode_via_harness[blackhole-sliding-1x8]": 0.98,
-      "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999
+      "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999,
+      "_comment_full_model": "12B is gemma4_unified with num_global_key_value_heads=1 (GQA 16:1). 31B is gemma4 with 4 global KV heads and measures ~0.997 on the same 1x8 stack — not a missing 12B if-branch. With GeLU=Accurate, LB P150x8 full_model measures ~0.968–0.980 and full_model_decode ~0.978; previously fell through to default 0.99. Same unified-arch accumulation gap as 1x1/1x4. Linear HiFi4/fp32 can push prefill ~0.989 but regresses decode (unicode garbage) — do not re-enable. Gate below measured.",
+      "test_full_model[blackhole-1x8]": 0.96,
+      "test_full_model_decode[blackhole-1x8]": 0.97
     },
     "1x4": {
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.98,

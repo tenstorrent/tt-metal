@@ -3,6 +3,7 @@
 
 """Host-only tests for Gemma4 CCL topology / async / L1 env knobs."""
 
+import math
 from pathlib import Path
 
 import pytest
@@ -102,14 +103,34 @@ def test_dram_shard_disabled_off_blackhole(monkeypatch):
     assert not can_dram_shard(2816, 528)
 
 
-def test_dram_shard_31b_gate_up_fits_with_in0_cap(monkeypatch):
-    """31B fused gate_up @ TP=4 previously overflowed L1 at in0_block_w=6; cap=2 fits."""
+def test_dram_shard_31b_gate_up_fits_with_l1_aware_in0(monkeypatch):
+    """31B fused gate_up @ TP=4: L1-aware in0 shrink keeps the shape shardable."""
     monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
     import ttnn
+    from models.demos.gemma4.tt.dram_sharded import decode_progcfg
 
     # hidden=5376, gu_n=2*21504/4=10752
     assert can_dram_shard(5376, 10752, dtype=ttnn.bfloat16)
     assert can_dram_shard(5376, 10752, dtype=ttnn.bfloat8_b)
+    pc = decode_progcfg(32, 5376, 10752, dtype=ttnn.bfloat16)
+    assert pc.in0_block_w >= 1
+
+
+def test_decode_progcfg_covers_full_n_tiles(monkeypatch):
+    """per_core_N * num_cores must cover padded N — K-only grids used to truncate.
+
+    31B wqkv at TP=8: k=5376, n=2048 → old K-only 28-core grid left
+    n_tiles % cores != 0 and silently wrong PCC (tt_transformers warning).
+    """
+    monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: True)
+    from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, _decode_core_grid, _padded_n_tiles, decode_progcfg
+
+    k, n = 5376, 2048
+    assert can_dram_shard(k, n)
+    _r, _c, num_cores = _decode_core_grid(k, n)
+    pc = decode_progcfg(TILE_SIZE, k, n)
+    assert pc.per_core_N * num_cores >= math.ceil(n / TILE_SIZE)
+    assert _padded_n_tiles(n) % num_cores == 0
 
 
 def test_prefill_progcfg_in0_block_w_divides_kt():

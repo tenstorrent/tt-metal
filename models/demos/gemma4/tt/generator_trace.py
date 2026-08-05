@@ -24,15 +24,12 @@ from models.tt_transformers.tt.generator import (
 # directly shrinks the required ``trace_region_size``. The override drives both
 # warmup capture (``patch_gemma4_trace_model_args``) and runtime eligibility
 # (``can_gemma4_enable_prefill_trace``) so they stay consistent.
-# Omit 4096 by default: vLLM ``enable_chunked_prefill`` + ``max_num_batched_tokens=4096``
-# runs the first scheduler chunk through a *traced* 4k prefill, but continuations
-# are eager (``num_cached_tokens>0``). Traced replay does not refresh Python-side
-# sliding K/V tails, so a remnant chunk shorter than ``sliding_window`` (1024)
-# drops prior-window context — LB 12B ~9k garbage (#51186). Keeping 4k eager
-# lets the single-chunk sliding-tail stash in ``attention/prefill.py`` stay live
-# across vLLM chunk boundaries. Override with ``GEMMA4_TRACE_PREFILL_SEQ_LENS``
-# if a deployment needs traced 4k and does not use token-chunked prefill.
-_DEFAULT_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048]
+# Include 4096 so cold single-chunk / first scheduler grant ≤4k can replay a
+# prefill device trace (TTFT). Continuations (``num_cached_tokens>0``) stay eager
+# unless ``GEMMA4_CHUNKED_PREFILL_TRACE=1`` (product yaml). Sliding-tail stash +
+# persistent rebind in ``attention/prefill.py`` keep remnant chunks coherent
+# across vLLM chunk boundaries (#51186). Trim via ``GEMMA4_TRACE_PREFILL_SEQ_LENS``.
+_DEFAULT_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048, 4096]
 
 
 def _resolve_trace_prefill_seq_lens() -> list[int]:
@@ -677,10 +674,14 @@ def warmup_gemma4_batched_prefill_traces(
 ) -> None:
     """Capture prefill traces for MoE models across batch sizes and trace ISLs.
 
-    Sweeps ``SUPPORTED_PREFILL_BATCH_SIZES`` × ``trace_prefill_supported_seq_lens``,
-    skipping combinations that meet or exceed ``MAX_BATCHED_PREFILL_SEQ_LEN`` (128k).
-    Caller must set ``generator.already_warmed_up_prefill`` before calling if needed,
-    or this function sets it on entry.
+    Matches tt_transformers ``Generator.warmup_model_prefill``: warm **batch=1**
+    only for each trace-eligible ISL ≤ chunk (≤4096). Runtime may still pack
+    multiple users into one prefill step; that path does not need a dedicated
+    B>1 warmup capture. Longer prompts are covered by generator / vLLM
+    chunked prefill (same chunk size), not by warming every batch×ISL combo.
+
+    Override with ``GEMMA4_WARMUP_PREFILL_BATCHES=1,2,4`` only if a demo needs
+    explicit B>1 trace capture (not the server product path).
 
     ``prefill_forward_fn`` selects the entry point used for each capture. It
     defaults to ``generator.prefill_forward_text`` (demo / uniform-page-table
@@ -705,14 +706,34 @@ def warmup_gemma4_batched_prefill_traces(
     from models.demos.gemma4.tt.generator import max_batched_prefill_users
 
     user_cap = max_batched_prefill_users()
-    warmup_batch_sizes = tuple(b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= max_batch_size and b <= user_cap)
+    override = os.environ.get("GEMMA4_WARMUP_PREFILL_BATCHES")
+    if override:
+        warmup_batch_sizes = tuple(
+            b
+            for b in sorted({int(x) for x in override.split(",") if x.strip()})
+            if 1 <= b <= max_batch_size and b <= user_cap and b in SUPPORTED_PREFILL_BATCH_SIZES
+        )
+        if not warmup_batch_sizes:
+            warmup_batch_sizes = (1,)
+    else:
+        # Same as tt_transformers: batch-1-only traced prefill warmup.
+        warmup_batch_sizes = (1,)
 
-    logger.info(
-        "Gemma4 batched prefill trace warmup: batch sizes {} x trace ISLs {} (user_cap={})",
-        warmup_batch_sizes,
-        sorted(trace_isls),
-        user_cap,
-    )
+    if warmup_batch_sizes == (1,):
+        logger.info(
+            "Using batch-1-only traced prefill warmup; runtime batched prefill "
+            "remains enabled. Trace ISLs={} (user_cap={})",
+            sorted(trace_isls),
+            user_cap,
+        )
+    else:
+        logger.info(
+            "Gemma4 traced prefill warmup (GEMMA4_WARMUP_PREFILL_BATCHES override): "
+            "batches={} x trace ISLs {} (user_cap={})",
+            warmup_batch_sizes,
+            sorted(trace_isls),
+            user_cap,
+        )
 
     skip_sequence_lengths = False
     sampling_parameters_sweeped = False
@@ -885,9 +906,8 @@ def warmup_gemma4_model_prefill(
     # sampling_params=None for longer lengths. Pairing SamplingParams with the
     # 4096 eager warmup hung indefinitely on 31B/P150x8 (256k bounded).
     #
-    # Also warm max_batch×128 (no SamplingParams) when max_batch>1. Otherwise
-    # demos that gate off prefill-trace (e.g. former batch-32 @ max_seq_len=4096)
-    # only compile B=1 and wedge on the first real batched prefill CCL.
+    # Optional: warm max_batch×128 when GEMMA4_WARMUP_PREFILL_BATCHES lists B>1
+    # (demo-only; product/server uses batch-1 like tt_transformers).
     if getattr(generator, "already_warmed_up_prefill", False):
         return
     generator.already_warmed_up_prefill = True
@@ -898,10 +918,12 @@ def warmup_gemma4_model_prefill(
     # e.g. chunk=49152 → get_padded_prefill_len=65536 > pool → RoPE slice FATAL.
     from models.tt_transformers.tt.common import get_padded_prefill_len
 
-    chunk = min(chunk, max_seq)
+    # Cap eager compile lengths at the policy chunk (same as traced path /
+    # tt_transformers capped_warmup_seq_len). Longer ISL is chunked at runtime.
+    chunk = min(chunk, max_seq, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
     if chunk > 0 and get_padded_prefill_len(chunk) > max_seq:
         chunk = 1 << max(max_seq.bit_length() - 1, 11)
-        chunk = min(chunk, max_seq)
+        chunk = min(chunk, max_seq, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
     # GEMMA4_TRACE_PREFILL_SEQ_LENS historically only trimmed the *traced* bucket
     # set. PLI / full-ISL single-chunk boots take this eager path instead, and
     # would otherwise warm max_prefill_chunk_size (== max_seq_len, e.g. 131072)
@@ -936,7 +958,7 @@ def warmup_gemma4_model_prefill(
 
     prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
     logger.info(
-        "Eager prefill warmup (no trace): lengths={} sampling_on_short={}",
+        "Eager prefill warmup (no trace, batch=1): lengths={} sampling_on_short={}",
         lengths,
         sampling_params_short is not None,
     )
@@ -959,24 +981,29 @@ def warmup_gemma4_model_prefill(
         )
         logger.info("Finished eager prefill warmup seq_len={}", length)
 
-    from models.demos.gemma4.tt.generator import max_batched_prefill_users
+    # Demo-only opt-in: compile B>1 CCL once. Server / chunked-prefill product
+    # path stays batch-1 (tt_transformers pattern).
+    batch_override = os.environ.get("GEMMA4_WARMUP_PREFILL_BATCHES")
+    if batch_override:
+        from models.demos.gemma4.tt.generator import max_batched_prefill_users
 
-    max_batch = int(getattr(generator.model_args[0], "max_batch_size", 1) or 1)
-    warm_batch = min(max_batch, max_batched_prefill_users())
-    # Largest supported size ≤ warm_batch (matches runtime chunk padding).
-    warm_batch = max((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= warm_batch), default=1)
-    if warm_batch > 1 and 128 * warm_batch < MAX_BATCHED_PREFILL_SEQ_LEN:
-        logger.info(
-            "Warming up eager batched prefill batch_size={} seq_len=128 (no sampling)",
-            warm_batch,
-        )
-        warmup_args = generator._mock_tokens(warm_batch, 128, kv_cache, 0)
-        prefill_forward(
-            **warmup_args,
-            kv_cache=kv_cache,
-            enable_trace=False,
-            model_id_warmup=0,
-            sampling_params=None,
-            warmup_prefill=False,
-        )
-        logger.info("Finished eager batched prefill warmup batch_size={}", warm_batch)
+        max_batch = int(getattr(generator.model_args[0], "max_batch_size", 1) or 1)
+        warm_batch = min(max_batch, max_batched_prefill_users())
+        requested = [int(x) for x in batch_override.split(",") if x.strip()]
+        warm_batch = max((b for b in requested if 1 < b <= warm_batch), default=1)
+        warm_batch = max((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= warm_batch), default=1)
+        if warm_batch > 1 and 128 * warm_batch < MAX_BATCHED_PREFILL_SEQ_LEN:
+            logger.info(
+                "Warming up eager batched prefill batch_size={} seq_len=128 (no sampling)",
+                warm_batch,
+            )
+            warmup_args = generator._mock_tokens(warm_batch, 128, kv_cache, 0)
+            prefill_forward(
+                **warmup_args,
+                kv_cache=kv_cache,
+                enable_trace=False,
+                model_id_warmup=0,
+                sampling_params=None,
+                warmup_prefill=False,
+            )
+            logger.info("Finished eager batched prefill warmup batch_size={}", warm_batch)

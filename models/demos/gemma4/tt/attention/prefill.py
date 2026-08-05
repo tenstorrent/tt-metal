@@ -13,6 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
     PREFILL_SDPA_MAX_SEQ,
@@ -161,6 +162,42 @@ def _left_pad_kv_to_hist(tt_k, tt_v, hist, head_dim, *, deallocate_inputs=False)
         tt_k.deallocate(True)
         tt_v.deallocate(True)
     return k_out, v_out
+
+
+def _copy_sliding_tail_into_persistent(config, k_tail_out, v_tail_out, head_dim):
+    """Copy a (possibly short) sliding-tail stash into the persistent ring buffers.
+
+    Traced short buckets stash unpadded tails (``allow_short_pad=False`` mid-
+    capture). A prior full-chunk request may have left a hist-wide persistent
+    ring (e.g. 1024) on ``config``. Blind ``ttnn.copy(128 → 1024)`` TT_FATALs
+    under vLLM APC remnant / preempt-resume (GPQA conc=32 engine death).
+
+    On width mismatch, **rebind** (deallocate old ring, adopt the new stash).
+    Do not left-pad here: ``ttnn.zeros`` is illegal mid-trace-capture. Same-
+    width path keeps the captured addresses via ``ttnn.copy``. Returns the
+    ``(k, v)`` pair to keep as ``sliding_tail_out``.
+    """
+    del head_dim  # width checks use tensor shapes; kept for call-site symmetry
+    persistent = getattr(config, "sliding_prefill_tail_persistent", None)
+    if persistent is None:
+        config.sliding_prefill_tail_persistent = (k_tail_out, v_tail_out)
+        return (k_tail_out, v_tail_out)
+    persistent_k, persistent_v = persistent
+    pk_seq = int(persistent_k.shape[-2])
+    ko_seq = int(k_tail_out.shape[-2])
+    if ko_seq != pk_seq:
+        for t in (persistent_k, persistent_v):
+            try:
+                t.deallocate(True)
+            except Exception:
+                pass
+        config.sliding_prefill_tail_persistent = (k_tail_out, v_tail_out)
+        return (k_tail_out, v_tail_out)
+    ttnn.copy(k_tail_out, persistent_k)
+    ttnn.copy(v_tail_out, persistent_v)
+    k_tail_out.deallocate(True)
+    v_tail_out.deallocate(True)
+    return (persistent_k, persistent_v)
 
 
 def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, *, allow_short_pad=True):
@@ -335,6 +372,7 @@ def _prefill_forward_single(
         tt_v.deallocate(True)
         tt_k, tt_v = shared_kv
     else:
+        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
         tt_k = apply_per_head_norm(
             tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc
         )
@@ -519,9 +557,9 @@ def _prefill_forward_single(
         # chunk's last ``sliding_window`` K/V become next chunk's tail.
         sdpa_ckc = ttnn.init_device_compute_kernel_config(
             tt_q.device().arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
             packer_l1_acc=False,
         )
         hist = ((sliding_window + 31) // 32) * 32
@@ -567,7 +605,9 @@ def _prefill_forward_single(
                 is_causal=True,
                 scale=1.0,
                 sliding_window_size=sliding_window,
-                program_config=prefill_sdpa_program_config(config.head_dim, hist + seq_len),
+                program_config=prefill_sdpa_program_config(
+                    config.head_dim, hist + seq_len, sliding_window=sliding_window
+                ),
                 compute_kernel_config=sdpa_ckc,
             )
             q_cat.deallocate(True)
@@ -601,7 +641,7 @@ def _prefill_forward_single(
                 is_causal=True,
                 scale=1.0,
                 sliding_window_size=sliding_window,
-                program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
+                program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window),
                 compute_kernel_config=sdpa_ckc,
             )
         # Save this chunk's last ``hist`` K/V tokens as the next chunk's tail.
@@ -625,23 +665,13 @@ def _prefill_forward_single(
             # Bind fixed DRAM addresses into the graph so middle-chunk replay
             # sees the previous chunk's window without re-running Python.
             # Prefer the capture-time buffers stashed on config so replay copies
-            # into the same addresses the trace recorded.
-            persistent = getattr(config, "sliding_prefill_tail_persistent", None)
-            if persistent is not None:
-                persistent_k, persistent_v = persistent
-                ttnn.copy(k_tail_out, persistent_k)
-                ttnn.copy(v_tail_out, persistent_v)
-                k_tail_out.deallocate(True)
-                v_tail_out.deallocate(True)
-                sliding_tail_out = (persistent_k, persistent_v)
+            # into the same addresses the trace recorded. Shape-mismatch safe
+            # (short APC remnant vs hist-wide ring from a prior chunk/request).
+            if getattr(config, "sliding_prefill_tail_persistent", None) is not None:
+                sliding_tail_out = _copy_sliding_tail_into_persistent(config, k_tail_out, v_tail_out, config.head_dim)
             elif sliding_tail_in is not None:
-                persistent_k, persistent_v = sliding_tail_in
-                config.sliding_prefill_tail_persistent = (persistent_k, persistent_v)
-                ttnn.copy(k_tail_out, persistent_k)
-                ttnn.copy(v_tail_out, persistent_v)
-                k_tail_out.deallocate(True)
-                v_tail_out.deallocate(True)
-                sliding_tail_out = (persistent_k, persistent_v)
+                config.sliding_prefill_tail_persistent = sliding_tail_in
+                sliding_tail_out = _copy_sliding_tail_into_persistent(config, k_tail_out, v_tail_out, config.head_dim)
             else:
                 # First persistent alloc: clones above already own independent DRAM.
                 config.sliding_prefill_tail_persistent = (k_tail_out, v_tail_out)
@@ -689,9 +719,9 @@ def _prefill_forward_single(
         # prefill SDPA op (unlike the decode op, where it halves dest for head_dim=512).
         sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             tt_q.device().arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
             packer_l1_acc=False,
         )
         tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
@@ -701,7 +731,7 @@ def _prefill_forward_single(
             is_causal=True,
             scale=1.0,
             sliding_window_size=sliding_window,
-            program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
+            program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window),
             compute_kernel_config=sdpa_compute_kernel_config,
         )
     # Persist sliding-window K/V tail after *any* sliding prefill, not only
@@ -712,9 +742,8 @@ def _prefill_forward_single(
     # first grant is shorter than ``sliding_window`` (APC remnant / short
     # ``max_num_batched_tokens`` slice). Left-pad short tails to ``hist`` so
     # the continuation concat stays square (#51186). Clone so the tail
-    # outlives tt_k/tt_v dealloc (#51041). Default prefill-trace buckets omit
-    # 4096 so the common vLLM chunk size stays eager and this Python-side
-    # stash stays live (see ``_DEFAULT_TRACE_PREFILL_SEQ_LENS``).
+    # outlives tt_k/tt_v dealloc (#51041). Width-mismatch rebind keeps the
+    # stash alive after traced 4k grants (see ``_DEFAULT_TRACE_PREFILL_SEQ_LENS``).
     if (
         sliding_tail_out is None
         and config.is_sliding
@@ -847,6 +876,7 @@ def prefill_forward(
         tt_v.deallocate(True)
         tt_k, tt_v = shared_kv
     else:
+        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
         tt_k = apply_per_head_norm(
             tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc
         )
@@ -873,11 +903,40 @@ def prefill_forward(
             )
             page_len = page_table.shape[1] * eff_bs
             valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(batch_size))
+            # Per-slot real lengths (hetero prompts in one pad bucket). Without
+            # this, zero-pad rows are written into KV and corrupt decode — B=1
+            # already slices via scalar ``valid_seq_len``; batched used to skip it.
             for slot_idx in valid_slots:
                 k_user = tt_k[slot_idx : slot_idx + 1, :, :, :]
                 v_user = tt_v[slot_idx : slot_idx + 1, :, :, :]
-                k_user_sliced = k_user[:, :, :page_len, :] if page_len < seq_len_per_user else k_user
-                v_user_sliced = v_user[:, :, :page_len, :] if page_len < seq_len_per_user else v_user
+                fill_len = seq_len_per_user
+                if isinstance(valid_seq_len, (list, tuple)):
+                    if 0 <= int(slot_idx) < len(valid_seq_len) and valid_seq_len[int(slot_idx)] is not None:
+                        fill_len = min(fill_len, max(0, int(valid_seq_len[int(slot_idx)])))
+                elif valid_seq_len is not None:
+                    fill_len = min(fill_len, max(0, int(valid_seq_len)))
+                fill_len = min(fill_len, page_len)
+                # Tile-ceil so the writer sees a legal RM height (match B=1 path).
+                # Zero-length slots must skip fill — tile_end==0 used to fall into
+                # the else branch and write the full pad into KV.
+                tile_end = ((fill_len + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
+                tile_end = min(tile_end, seq_len_per_user, page_len) if fill_len > 0 else 0
+                if tile_end <= 0:
+                    continue
+                if tile_end < seq_len_per_user:
+                    k_user_sliced = ttnn.slice(
+                        k_user,
+                        [0, 0, 0, 0],
+                        [1, k_user.shape[1], tile_end, k_user.shape[3]],
+                    )
+                    v_user_sliced = ttnn.slice(
+                        v_user,
+                        [0, 0, 0, 0],
+                        [1, v_user.shape[1], tile_end, v_user.shape[3]],
+                    )
+                else:
+                    k_user_sliced = k_user[:, :, :page_len, :] if page_len < seq_len_per_user else k_user
+                    v_user_sliced = v_user[:, :, :page_len, :] if page_len < seq_len_per_user else v_user
                 ttnn.experimental.paged_fill_cache(
                     k_cache,
                     k_user_sliced,
@@ -905,11 +964,13 @@ def prefill_forward(
     # (forced-FP32 reduce accumulation removed).
     sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
         tt_q.device().arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
         packer_l1_acc=False,
     )
+    # Batched path previously omitted program_config → op default q/k=32
+    # (#51911, ~3x SDPA slowdown on Gemma4 shapes). Match the single-user path.
     tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
         tt_k,
@@ -917,6 +978,7 @@ def prefill_forward(
         is_causal=True,
         scale=1.0,
         sliding_window_size=sliding_window,
+        program_config=prefill_sdpa_program_config(config.head_dim, int(tt_q.shape[-2]), sliding_window=sliding_window),
         compute_kernel_config=sdpa_compute_kernel_config,
     )
     tt_q.deallocate(True)

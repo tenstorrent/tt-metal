@@ -9,6 +9,8 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
+from models.common.sampling import SamplingParams
+from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
@@ -21,6 +23,7 @@ from models.demos.gemma4.tt.generator_trace import (
     warmup_gemma4_model_prefill,
 )
 from models.tt_transformers.tt.common import (
+    Mode,
     get_block_size,
     get_max_prefill_chunk_size,
     get_padded_prefill_len,
@@ -236,8 +239,87 @@ class ChunkedPrefillPageTableGuardMixin:
       intermediate ``get_last_token=-1``.
     - Eager on-device sampling writeback into padded decode tokens (#51186) so
       non-PLI async decode stays coherent without shared-generator changes.
+    - Safe async-ahead token merge on ``decode_forward`` (bucket / OOB
+      ``slot_remap`` host fallback) via :mod:`models.demos.gemma4.tt.async_decode`.
+    - Sequential multi-user prefill: slice hybrid per-layer page tables to the
+      active 1-row (tt_transformers forces ``user_id=0`` with a sliced legacy
+      ``page_table``; full-attn must not keep reading batch row 0).
     - Mixed into demo (:class:`Gemma4Generator`) and vLLM (``Gemma4ForCausalLM``).
     """
+
+    @staticmethod
+    def _match_page_table_row(page_table_1row, page_tables_per_layer) -> int | None:
+        """Return the batch row whose page-table prefix matches ``page_table_1row``."""
+        if page_table_1row is None or not page_tables_per_layer:
+            return None
+        if not isinstance(page_table_1row, torch.Tensor):
+            return None
+        pt = page_table_1row if page_table_1row.dim() > 1 else page_table_1row.unsqueeze(0)
+        if int(pt.shape[0]) != 1:
+            return None
+        candidates = [
+            p for p in page_tables_per_layer if isinstance(p, torch.Tensor) and p.dim() > 1 and int(p.shape[0]) > 1
+        ]
+        if not candidates:
+            return 0
+        pt32 = pt[0].to(dtype=torch.int32)
+        for ref in candidates:
+            cols = min(int(pt32.shape[0]), int(ref.shape[1]))
+            if cols <= 0:
+                continue
+            ref32 = ref.to(dtype=torch.int32)
+            for r in range(int(ref32.shape[0])):
+                if torch.equal(pt32[:cols], ref32[r, :cols]):
+                    return r
+        return None
+
+    def _activate_sequential_per_layer_row(self, page_table) -> None:
+        """Slice multi-row hybrid page-table stash to the active sequential user.
+
+        Under bounded sliding the bridge keeps per-layer tables (full vs sliding)
+        and also stuffs the remapped *sliding* table into legacy ``page_table``.
+        Sequential tt_transformers then passes ``user_id=0`` with a 1-row slice —
+        without this, every user writes/reads batch row 0 of the per-layer stash
+        (and chunked full-attn fill uses ``full_pt[0]``).
+        """
+        if page_table is None or not isinstance(page_table, torch.Tensor):
+            return
+        pt = page_table if page_table.dim() > 1 else page_table.unsqueeze(0)
+        if int(pt.shape[0]) != 1:
+            return
+        for m in self.model:
+            active = getattr(m, "_active_page_tables_per_layer", None)
+            if not active:
+                continue
+            batch_host = getattr(m, "_sequential_batch_page_tables", None)
+            if batch_host is None:
+                if not any(isinstance(p, torch.Tensor) and p.dim() > 1 and int(p.shape[0]) > 1 for p in active):
+                    continue
+                m._sequential_batch_page_tables = active
+                batch_host = active
+            row = self._match_page_table_row(pt, batch_host)
+            if row is None:
+                continue
+            sliced = []
+            for p in batch_host:
+                if isinstance(p, torch.Tensor) and p.dim() > 1 and int(p.shape[0]) > 1:
+                    sliced.append(p[row : row + 1])
+                else:
+                    sliced.append(p)
+            m._active_page_tables_per_layer = sliced
+            # Prefill installs full-batch host tables and H2D-copies them once
+            # (batch_key=B). Sequential users then slice host `_active` to 1-row
+            # but `ttnn_prefill_forward` only calls `_page_tables_to_ttnn`, which
+            # returns existing B=1 device buffers *without* refreshing content.
+            # Without this H2D, users after the first keep reading/writing user
+            # 0's block IDs (full-attn cross-chunk SDPA + sliding ring fill).
+            if hasattr(m, "update_persistent_per_layer_page_tables"):
+                m.update_persistent_per_layer_page_tables(sliced)
+
+    def _clear_sequential_batch_page_tables(self) -> None:
+        for m in self.model:
+            if hasattr(m, "_sequential_batch_page_tables"):
+                del m._sequential_batch_page_tables
 
     def _effective_paged_block_size(self, kv_cache):
         """Effective block_size the paged ops address this model's K/V cache with.
@@ -472,6 +554,10 @@ class ChunkedPrefillPageTableGuardMixin:
         return trace_id, tt_out_trace, *device_inputs
 
     def _easy_trace_prefill(self, *args, **kwargs):
+        page_table = kwargs.get("page_table")
+        if page_table is None and len(args) >= 2:
+            page_table = args[1]
+        self._activate_sequential_per_layer_row(page_table)
         # Refresh before capture *and* replay so the writer kernel sees the
         # current request's real length (trace binds the buffer address; this
         # updates its contents out-of-trace).
@@ -605,6 +691,7 @@ class ChunkedPrefillPageTableGuardMixin:
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
     ):
+        self._activate_sequential_per_layer_row(page_table)
         if page_table is not None and kv_cache is not None:
             block_size = self._effective_paged_block_size(kv_cache)
             needed_blocks = num_blocks_in_seq(tokens.shape[-1] + num_cached_tokens, block_size)
@@ -890,6 +977,11 @@ class ChunkedPrefillPageTableGuardMixin:
             **kwargs,
         )
         prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, *_ = inputs
+        # Batched: keep get_last_token=-1 (deferred lm_head / full hidden return)
+        # but pass per-slot real lengths so pad rows are not written into KV.
+        valid_seq_lens = None
+        if batch_size > 1 and isinstance(last_token_idx, (list, tuple)):
+            valid_seq_lens = [int(i) + 1 for i in last_token_idx]
         return self.model[model_id].ttnn_prefill_forward(
             prefill_input,
             rot_mats_global=rot_mats_global_prefill,
@@ -899,13 +991,14 @@ class ChunkedPrefillPageTableGuardMixin:
             get_last_token=(-1 if batch_size > 1 else self._prefill_get_last_token(last_token_idx)),
             kv_cache=kv_cache,
             batch_size=batch_size,
+            valid_seq_lens=valid_seq_lens,
         )
 
     def _gemma4_eager_token_feedback_buffer(self, model_id: int):
-        """Padded decode-token buffer for async-safe eager sampling writeback (#51186).
+        """Padded decode-token buffer for async-safe sampling writeback (#51186).
 
         Non-PLI Gemma4 pads tokens to ``[1,1,1,_DECODE_TOKEN_FEEDBACK_WIDTH]`` so
-        ``ttnn.sampling`` can write the next id into the captured decode-trace
+        the next decode step can read the sampled id from the captured trace
         input. Returns None for PLI / missing traces / incompatible shapes.
         """
         model = self.model[model_id]
@@ -925,6 +1018,49 @@ class ChunkedPrefillPageTableGuardMixin:
             return feedback
         return None
 
+    def _gemma4_commit_sampled_tokens_to_feedback(self, sampled_outputs) -> bool:
+        """Host-roundtrip the sampled ids into the decode token feedback buffer.
+
+        In-place ``tt_out_tok=`` writeback is unreliable across sampling paths:
+        force-argmax emits ``[1,1,B]`` while the feedback buffer is ``[1,1,1,32]``,
+        and under ``async_scheduling`` a missed writeback restages the previous
+        token ("TheThe user user…"). Always commit via host so the next traced
+        decode step sees the just-sampled ids.
+        """
+        wrote = False
+        for i, sampled in enumerate(sampled_outputs):
+            feedback = self._gemma4_eager_token_feedback_buffer(i)
+            if feedback is None:
+                continue
+            tok = sampled[0] if isinstance(sampled, tuple) else sampled
+            if tok is None:
+                continue
+            try:
+                host = ttnn.to_torch(ttnn.get_device_tensors(tok)[0]).reshape(-1).to(torch.int64)
+            except Exception:
+                continue
+            pad_w = int(feedback.shape[-1])
+            buf = torch.zeros(pad_w, dtype=torch.int64)
+            n = min(pad_w, int(host.numel()))
+            if n <= 0:
+                continue
+            buf[:n] = host[:n]
+            mesh = self.model_args[i].mesh_device
+            replicate = (
+                ttnn.ReplicateTensorToMesh(mesh)
+                if hasattr(mesh, "get_num_devices") and mesh.get_num_devices() > 1
+                else None
+            )
+            host_tt = ttnn.from_torch(
+                buf.reshape(1, 1, 1, pad_w),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                mesh_mapper=replicate,
+            )
+            ttnn.copy_host_to_device_tensor(host_tt, feedback)
+            wrote = True
+        return wrote
+
     def sample_decode_on_device(
         self,
         tt_logits,
@@ -936,23 +1072,26 @@ class ChunkedPrefillPageTableGuardMixin:
         slot_remap=None,
         enable_trace=False,
     ):
-        """Eager sampling writeback into padded decode tokens (Gemma4-only, #51186).
+        """Eager ``tt_out_tok`` inject for padded decode feedback (#51186).
 
         Shared ``Generator.sample_decode_on_device`` only passes ``tt_out_tok`` when
-        the sampling *trace* is enabled. Gemma4 skips sampling traces for non-max
-        decode batches (B=1) and non-PLI disables host restage — without writeback
-        the decode token buffer stays stale under ``async_scheduling``.
+        the sampling *trace* is enabled. Gemma4 skips sampling traces
+        (``_tt_disable_sampling_trace``), so inject the padded feedback buffer for
+        eager sample. Sync only after a real eager writeback — unconditional
+        host-commit + double ``synchronize_device`` per token (~2× mesh sync)
+        tanks decode tok/s on the metal demo / non-async path.
 
-        Implemented here (not in ``tt_transformers``) by injecting the feedback
-        buffer into ``sampling.sample`` for the duration of the parent call.
-
-        After an eager writeback we ``synchronize_device`` so the next
-        non-blocking decode trace on multi-chip (esp. P150x8) cannot race the
-        sampling all-gather / argmax that fills the feedback buffer — that race
-        showed up as long-prefill decode garbage on LB 12B (#51186).
+        Opt into host-roundtrip commit with ``GEMMA4_HOST_COMMIT_FEEDBACK=1``
+        for async force-argmax shape mismatches (``[1,1,B]`` ↛ ``[1,1,1,32]``).
         """
         restores = []
         wrote_feedback = False
+        host_commit = os.environ.get("GEMMA4_HOST_COMMIT_FEEDBACK", "0").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
         try:
             for i in range(self.data_parallel):
                 sampling_module = getattr(self.model[i], "sampling", None)
@@ -966,9 +1105,6 @@ class ChunkedPrefillPageTableGuardMixin:
                 def _make_sample(orig, fb):
                     def _sample(logits, *, enable_trace=True, tt_out_tok=None, skip_precompile=False):
                         nonlocal wrote_feedback
-                        # Inject whenever the parent omitted writeback. Traced
-                        # sampling already bound tt_out_tok at capture time; eager
-                        # B=1 (and any path that passes tt_out_tok=None) needs it.
                         if tt_out_tok is None:
                             tt_out_tok = fb
                             if not enable_trace:
@@ -995,7 +1131,26 @@ class ChunkedPrefillPageTableGuardMixin:
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
             )
-            if wrote_feedback:
+            if host_commit:
+                try:
+                    mesh = getattr(self.model_args[0], "mesh_device", None)
+                    if mesh is not None:
+                        ttnn.synchronize_device(mesh)
+                except Exception:
+                    pass
+                self._gemma4_commit_sampled_tokens_to_feedback(out)
+                wrote_feedback = True
+            # Default: skip host sync after eager sample. Single-CQ metal demos
+            # already order sample → next decode on the same queue; a full mesh
+            # sync every token was costing ~4–8 tok/s on LB 12B. Re-enable with
+            # GEMMA4_SAMPLE_FEEDBACK_SYNC=1 for multi-CQ / async races (#51186).
+            need_sync = wrote_feedback and os.environ.get("GEMMA4_SAMPLE_FEEDBACK_SYNC", "0").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+            if need_sync:
                 try:
                     mesh = getattr(self.model_args[0], "mesh_device", None)
                     if mesh is not None:
@@ -1006,6 +1161,130 @@ class ChunkedPrefillPageTableGuardMixin:
         finally:
             for sampling_module, orig_sample in restores:
                 sampling_module.sample = orig_sample
+
+    def decode_forward(
+        self,
+        tokens,
+        start_pos,
+        page_table=None,
+        kv_cache=None,
+        enable_trace=True,
+        read_from_device=True,
+        sampling_params: SamplingParams = None,
+        reset_batch=False,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
+        slot_remap=None,
+        defer_device_sampling: bool = False,
+        **kwargs,
+    ):
+        """Gemma4 decode with safe async-ahead merge (no ``tt_transformers`` edits).
+
+        Same control flow as ``Generator.decode_forward``, but merges host/device
+        tokens via :func:`merge_async_ahead_decode_tokens` so bucket changes and
+        OOB ``slot_remap`` fall back instead of ``IndexError``.
+        """
+        del kwargs  # Generator accepts extras; Gemma4 path ignores them.
+        mode_switched = False
+        if self.mode != Mode.DECODE:
+            self.mode = Mode.DECODE
+            mode_switched = True
+
+        for i in range(len(self.model)):
+            self.model[i].switch_mode(Mode.DECODE)
+
+        on_device_sampling = (sampling_params is not None) or defer_device_sampling
+        B = tokens.shape[0]
+        decode_trace_key = (on_device_sampling, B)
+
+        tokens = torch.chunk(tokens, self.data_parallel, 0)
+        start_pos = torch.chunk(start_pos, self.data_parallel, 0)
+        page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
+
+        if (
+            on_device_sampling
+            and (reset_batch or mode_switched)
+            and enable_trace
+            and self.trace_inputs_decode[decode_trace_key]
+        ):
+            new_tokens = []
+            new_start_pos = []
+            for i, tok_chunk in enumerate(tokens):
+                trace_in = self.trace_inputs_decode[decode_trace_key][i]
+                host_pos = start_pos[i].reshape(-1).to(torch.int64)
+                host_toks = tok_chunk.reshape(-1)
+                host_b = int(host_toks.shape[0])
+                # Read the full device buffer before truncating. Nearest-bucket
+                # B changes and mesh-row sharding can make shard-0 narrower than
+                # host_b; the gemma4 helper falls back before any gather.
+                dev_toks_full = ttnn.to_torch(ttnn.get_device_tensors(trace_in[0])[0]).reshape(-1).to(tok_chunk.dtype)
+                dev_pos_full = ttnn.to_torch(ttnn.get_device_tensors(trace_in[1])[0]).reshape(-1).to(torch.int64)
+                slot_remap_local = None
+                if slot_remap is not None:
+                    remap = slot_remap[i * host_b : (i + 1) * host_b]
+                    remap_t = (remap if isinstance(remap, torch.Tensor) else torch.tensor(remap)).long()
+                    slot_remap_local = remap_t - i * host_b
+                prefilled = getattr(self, "_slots_prefilled_since_decode", None)
+                prefilled_local = None
+                if prefilled:
+                    bs = tok_chunk.shape[0]
+                    prefilled_local = {slot - i * bs for slot in prefilled if i * bs <= slot < (i + 1) * bs}
+                merged, merged_pos, src = merge_async_ahead_decode_tokens(
+                    host_toks,
+                    host_pos,
+                    dev_toks_full,
+                    dev_pos_full,
+                    slot_remap_local=slot_remap_local,
+                    prefilled_local=prefilled_local,
+                )
+                if src != "merged" or int(dev_toks_full.shape[0]) != int(host_toks.shape[0]):
+                    logger.info(
+                        "async_ahead_merge src={} host_b={} dev_len={}",
+                        src,
+                        int(host_toks.shape[0]),
+                        int(dev_toks_full.shape[0]),
+                    )
+                new_tokens.append(merged.view(tok_chunk.shape).to(tok_chunk.dtype))
+                new_start_pos.append(merged_pos.view(start_pos[i].shape).to(start_pos[i].dtype))
+            tokens = new_tokens
+            start_pos = new_start_pos
+        self._slots_prefilled_since_decode = set()
+
+        decode_kwargs = {
+            "current_pos": start_pos,
+            "tokens": tokens,
+            "page_table": page_table,
+            "kv_cache": kv_cache,
+            "on_device_sampling": on_device_sampling,
+        }
+
+        if enable_trace:
+            tt_decode_output = self._decode_forward_trace_text(
+                **decode_kwargs,
+                reset_batch=reset_batch or mode_switched,
+            )
+        else:
+            tt_decode_output = self._decode_forward_no_trace_text(
+                **decode_kwargs,
+            )
+
+        if defer_device_sampling and on_device_sampling:
+            return tt_decode_output
+        if sampling_params is not None:
+            tt_decode_output = self.sample_decode_on_device(
+                tt_decode_output,
+                sampling_params=sampling_params,
+                start_pos=start_pos,
+                reset_batch=reset_batch,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
+                enable_trace=enable_trace,
+            )
+        if read_from_device:
+            to_host = self.read_decode_output(tt_decode_output)
+            return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
+        return tt_decode_output
 
 
 class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
@@ -1091,6 +1370,9 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
         ]
         is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
+        # Batched prefill is eligible on identical *padded* buckets. Hetero
+        # *actual* lengths are OK once per-slot ``valid_seq_lens`` caps KV fill
+        # (see attention/prefill.py batched path) — do not require actual_lens_equal.
         can_batch_prefill = (
             page_table is not None
             and batch_size > 1
@@ -1111,7 +1393,9 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
                 self.model_args[0].max_batch_size,
             )
             max_users_per_chunk = resolve_batched_prefill_chunk_users(padded_batch, prefill_seq_lens[0])
-            # Chunk when over the 128k token ceiling *or* the B≥8 device hang cap.
+            # True-batched B>user_cap hangs on P150x8 after the first all_gather.
+            # Micro-batch at ≤user_cap with remapped local slots; per-slot
+            # valid_seq_lens keep pad rows out of KV (decode stays coherent).
             if batch_size > max_users_per_chunk and padded_batch <= self.model_args[0].max_batch_size:
                 logger.info(
                     "Chunking Gemma4 batched prefill: batch_size={} padded_batch={} "

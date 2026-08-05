@@ -3,6 +3,8 @@
 
 from types import SimpleNamespace
 
+import torch
+
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 
 
@@ -12,6 +14,36 @@ def _generator_with_bounded_window(window=1024):
     layer = SimpleNamespace(self_attn=SimpleNamespace(config=config))
     generator.model = [SimpleNamespace(bounded_sliding_kv_cache=True, layers=[layer])]
     return generator
+
+
+def test_activate_sequential_per_layer_row_refreshes_persistent_device_tables():
+    """Sequential users must H2D-refresh B=1 persistent page tables.
+
+    Host `_active` is sliced per user, but device buffers are keyed by batch=1
+    and reused without content update unless ``update_persistent…`` runs.
+    """
+    generator = object.__new__(ChunkedPrefillPageTableGuardMixin)
+    full = torch.tensor([[10, 11, 12], [20, 21, 22], [30, 31, 32]], dtype=torch.int32)
+    sliding = torch.tensor([[110, 111], [120, 121], [130, 131]], dtype=torch.int32)
+    updates = []
+
+    def _update(sliced):
+        updates.append([t.detach().clone() for t in sliced])
+
+    model = SimpleNamespace(
+        _active_page_tables_per_layer=[full, sliding],
+        update_persistent_per_layer_page_tables=_update,
+    )
+    generator.model = [model]
+
+    generator._activate_sequential_per_layer_row(full[1:2])
+
+    assert model._active_page_tables_per_layer[0].shape == (1, 3)
+    assert torch.equal(model._active_page_tables_per_layer[0], full[1:2])
+    assert torch.equal(model._active_page_tables_per_layer[1], sliding[1:2])
+    assert len(updates) == 1
+    assert torch.equal(updates[0][0], full[1:2])
+    assert torch.equal(updates[0][1], sliding[1:2])
 
 
 def test_bounded_last_chunk_expansion_preserves_ring_origin():

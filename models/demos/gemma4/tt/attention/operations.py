@@ -219,18 +219,21 @@ def apply_rope_decode_peruser(tensor, cos_b, sin_b):
     return ttnn.add(ttnn.mul(tensor, cos_b), ttnn.mul(_rotate_half(tensor), sin_b))
 
 
-def prefill_sdpa_program_config(head_dim, seq_len):
+def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None):
     """Tuned SDPAProgramConfig for the non-chunked prefill path (seq <= 32768).
 
-    The op defaults to small auto-picked q/k chunks; explicit larger chunks cut
-    the per-chunk launch + softmax-reduction overhead that dominates the
-    flash-attention inner loop at these sequence lengths. head_dim=512 (global)
-    layers need the smaller (8,4) grid + 128 chunks to fit L1 (q=k=256 overflows
-    there); head_dim<=256 (sliding) layers run the full (8,8) grid with larger
-    chunks. Chunks are clamped to divide seq_len (buckets are powers of two, as
-    are the chunk sizes, so min() stays a divisor). Sizes overridable for sweeps
-    via GEMMA4_PREFILL_SDPA_QCHUNK / _KCHUNK.
+    The op defaults to ``q_chunk=k_chunk=32`` when ``program_config`` is omitted
+    (tenstorrent/tt-metal#51911) — up to ~3.7x slower on Gemma4 prefill shapes.
+    Explicit larger chunks cut per-chunk launch + softmax-reduction overhead.
+
+    head_dim=512 (global) layers need the smaller (8,4) grid + 128 chunks to fit
+    L1 (q=k=256 overflows there); head_dim<=256 (sliding) layers run the full
+    (8,8) grid with larger chunks. When ``sliding_window`` is set, cap
+    ``k_chunk`` at ``window//2`` so the K loop does not walk mostly-masked
+    chunks (#51911). Chunks are multiples of 32 and clamped to ``seq_len``.
+    Overridable via ``GEMMA4_PREFILL_SDPA_QCHUNK`` / ``_KCHUNK``.
     """
+    seq_len = max(32, int(seq_len))
     if head_dim >= 512:
         grid = ttnn.CoreCoord(8, 4)
         dq, dk = 128, 128
@@ -242,9 +245,15 @@ def prefill_sdpa_program_config(head_dim, seq_len):
         dq, dk = 256, 128
     q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", dq))
     k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", dk))
+    if sliding_window is not None:
+        # Wider k_chunk than the window walks masked tiles and can regress vs
+        # the flat-32 default on short windows (#51911).
+        k_chunk = min(k_chunk, max(32, int(sliding_window) // 2))
     # Chunk sizes must be a multiple of 32 and not exceed the (padded) seq_len.
     q_chunk = max(32, min(q_chunk, seq_len))
     k_chunk = max(32, min(k_chunk, seq_len))
+    q_chunk = (q_chunk // 32) * 32
+    k_chunk = (k_chunk // 32) * 32
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid,
         q_chunk_size=q_chunk,
@@ -327,11 +336,13 @@ def chunked_prefill_sdpa(
     # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed.
     # Matches the non-chunked prefill SDPA so long-context (>32768) prefill keeps
     # the same accumulation precision as the short-seq path.
+    from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         tt_q.device().arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
         packer_l1_acc=False,
     )
 
@@ -444,11 +455,13 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
     stride = PREFILL_SLIDING_CHUNK_SIZE
     # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed,
     # matching the non-chunked prefill SDPA on the long-context (>32768) path.
+    from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         tt_q.device().arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
         packer_l1_acc=False,
     )
 
@@ -465,9 +478,8 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
         q_slice = ttnn.slice(tt_q, [0, 0, slice_start, 0], [1, nh, slice_end, head_dim])
         k_slice = ttnn.slice(tt_k, [0, 0, slice_start, 0], [1, nkv, slice_end, head_dim])
         v_slice = ttnn.slice(tt_v, [0, 0, slice_start, 0], [1, nkv, slice_end, head_dim])
-        # Leave program_config to the op default here: ``prefill_sdpa_program_config``
-        # assumes power-of-two seq buckets; overlapping sliding slices (e.g. 31744)
-        # are not always safe with those explicit q/k chunks.
+        # Explicit program_config (#51911): op default is q/k=32 and ~3x slower
+        # on Gemma4 long-seq sliding slices. Cap k_chunk via sliding_window.
         o = ttnn.transformer.scaled_dot_product_attention(
             q_slice,
             k_slice,
@@ -475,6 +487,7 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
             is_causal=True,
             scale=scale,
             sliding_window_size=sliding_window,
+            program_config=prefill_sdpa_program_config(head_dim, slice_len, sliding_window=sliding_window),
             compute_kernel_config=compute_kernel_config,
         )
         q_slice.deallocate(True)
