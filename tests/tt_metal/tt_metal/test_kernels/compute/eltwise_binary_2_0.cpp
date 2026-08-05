@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/bcast.h"
 
 #include <cstdint>
 
@@ -67,13 +68,21 @@ void kernel_main() {
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
+#ifdef PRECEDE_DEST_REUSE_WITH_COL_BROADCAST
+    dfb_in1.wait_front(1);
+    dfb_in2.wait_front(1);
+#endif
+
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         dfb_in0.wait_front(per_core_block_size);
+#ifndef PRECEDE_DEST_REUSE_WITH_COL_BROADCAST
         dfb_in1.wait_front(per_core_block_size);
+#endif
         dfb_out.reserve_back(per_core_block_size);
         tile_regs_acquire();
 
-#if defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST) || defined(ELTWISE_DEST_REUSE_TYPE)
+#if (defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST) || defined(ELTWISE_DEST_REUSE_TYPE)) && \
+    !defined(PRECEDE_DEST_REUSE_WITH_COL_BROADCAST)
         dfb_in2.wait_front(per_core_block_size);
         copy_tile_to_dst_init_short(dfb::in2);
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
@@ -82,6 +91,19 @@ void kernel_main() {
         dfb_in2.pop_front(per_core_block_size);
 #endif
 
+#ifdef PRECEDE_DEST_REUSE_WITH_COL_BROADCAST
+        reconfig_data_format(dfb::in0, dfb::in1);
+        sub_bcast_cols_init_short(dfb::in0, dfb::in1);
+        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            sub_tiles_bcast_cols(dfb::in0, dfb::in1, i, 0, i);
+        }
+        dfb_in0.pop_front(per_core_block_size);
+        reconfig_data_format_srca(dfb::in0, dfb::in2);
+        binary_dest_reuse_tiles_init<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(dfb::in2);
+        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(dfb::in2, 0, i);
+        }
+#else
 #if defined(DST_ACCUM_MODE) || defined(ACC_TO_DEST)
 // The following define is needed for WH/BH if mul_tiles/_init is used
 #if defined(MUL_TILES_WITH_DST_ACCUM)
@@ -116,6 +138,7 @@ void kernel_main() {
             SFPU_OP_CHAIN_0
 #endif
         }
+#endif
         tile_regs_commit();
 
         tile_regs_wait();
@@ -124,8 +147,15 @@ void kernel_main() {
         }
         tile_regs_release();
 
+#ifndef PRECEDE_DEST_REUSE_WITH_COL_BROADCAST
         dfb_in0.pop_front(per_core_block_size);
         dfb_in1.pop_front(per_core_block_size);
+#endif
         dfb_out.push_back(per_core_block_size);
     }
+
+#ifdef PRECEDE_DEST_REUSE_WITH_COL_BROADCAST
+    dfb_in1.pop_front(1);
+    dfb_in2.pop_front(1);
+#endif
 }
