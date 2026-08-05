@@ -70,7 +70,8 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 10
+      # 8 not 10: dropping k3 from this row's selector took it from 5 collected cases to 4.
+      timeout: 8
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -84,8 +85,7 @@
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       rc=0
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and k3 and cpu and 8x4 and fabric2d and scalar and no_determinism" -vvv --tb=short || rc=1
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "plain-5k and k3 and func and 8x4 and fabric2d and scalar and with_determinism" -vvv --tb=short || rc=1
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and 8x4 and fabric2d and scalar and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism))" -vvv --tb=short || rc=1
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and 8x4 and fabric2d" -vvv --tb=short || rc=1
       exit $rc
     '
@@ -93,7 +93,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 20
+      timeout: 8
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
