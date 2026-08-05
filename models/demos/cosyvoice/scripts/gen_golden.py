@@ -290,6 +290,34 @@ def build_recorder(model, rec: Recorder) -> None:
     rec.hook_module("flow.spk_embed_affine", flow.spk_embed_affine_layer, ["x"], ["y"])
     rec.hook_module("flow.input_embedding", flow.input_embedding, ["tokens"], ["emb"])
     rec.hook_module("flow.encoder", flow.encoder, ["xs", "xs_lens"], ["xs", "masks"])
+    # One RelPositionMultiHeadedAttention layer, with its weights. ESPnet rel-pos
+    # attention is NOT standard SDPA (02_plan.md sec.3.3) and is the second-hardest
+    # risk in the bring-up, so it gets a golden of its own rather than being
+    # validated only through the encoder it sits inside.
+    attn = flow.encoder.encoders[0].self_attn
+    rec.patch(
+        "flow.rel_pos_attention",
+        attn,
+        "forward",
+        ["query", "key", "value", "mask", "pos_emb", "cache"],
+        ["out", "new_cache"],
+    )
+    rec.add(
+        "flow.rel_pos_attention_weights",
+        w_query=attn.linear_q.weight,
+        b_query=attn.linear_q.bias,
+        w_key=attn.linear_k.weight,
+        b_key=attn.linear_k.bias,
+        w_value=attn.linear_v.weight,
+        b_value=attn.linear_v.bias,
+        w_out=attn.linear_out.weight,
+        b_out=attn.linear_out.bias,
+        w_pos=attn.linear_pos.weight,
+        pos_bias_u=attn.pos_bias_u,
+        pos_bias_v=attn.pos_bias_v,
+        n_head=attn.h,
+        d_k=attn.d_k,
+    )
     rec.hook_module("flow.encoder_proj", flow.encoder_proj, ["x"], ["y"])
     rec.patch(
         "flow.length_regulator",
