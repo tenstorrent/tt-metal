@@ -39,8 +39,6 @@ TEST_F(QuasarUnitMeshFixture, MultiDmAddTwoInts) {
         log_error(tt::LogTest, "For example, export TT_METAL_DPRINT_CORES=(0,0),(1,0)");
     }
 
-    IDevice* dev = this->device().get_devices()[0];
-
     const experimental::KernelSpecName KERNEL_0{"kernel_0"};
     const experimental::KernelSpecName KERNEL_1{"kernel_1"};
     const experimental::KernelSpecName KERNEL_2{"kernel_2"};
@@ -115,12 +113,10 @@ TEST_F(QuasarUnitMeshFixture, MultiDmAddTwoInts) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> result_core_0(3, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        dev, CoreCoord(0, 0), result_base, sizeof(uint32_t) * 3, result_core_0);
+    this->ReadFromL1(CoreCoord(0, 0), result_base, sizeof(uint32_t) * 3, result_core_0);
 
     std::vector<uint32_t> result_core_1(3, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        dev, CoreCoord(1, 0), result_base, sizeof(uint32_t) * 3, result_core_1);
+    this->ReadFromL1(CoreCoord(1, 0), result_base, sizeof(uint32_t) * 3, result_core_1);
 
     ASSERT_EQ(result_core_0, (std::vector<uint32_t>{3, 7, 11}));
     ASSERT_EQ(result_core_1, (std::vector<uint32_t>{3, 7, 15}));

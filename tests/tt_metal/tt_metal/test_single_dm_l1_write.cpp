@@ -26,8 +26,6 @@ TEST_F(QuasarUnitMeshFixture, SingleDmL1Write) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
 
-    IDevice* dev = this->device().get_devices()[0];
-
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t value = 0x12345678;
@@ -43,7 +41,7 @@ TEST_F(QuasarUnitMeshFixture, SingleDmL1Write) {
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     const experimental::NodeCoord node{0, 0};
-    tt_metal::detail::WriteToDeviceL1(dev, node, address, outputs);
+    this->WriteToL1(node, address, outputs);
     const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
 
     experimental::KernelSpec dm_kernel_spec{
@@ -84,7 +82,7 @@ TEST_F(QuasarUnitMeshFixture, SingleDmL1Write) {
               << std::endl;
 
     this->RunProgram(std::move(program));
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address, 4, outputs);
+    this->ReadFromL1(node, address, 4, outputs);
 
     ASSERT_EQ(outputs[0], value) << "Got the value " << std::hex << outputs[0] << " instead of " << value;
 }

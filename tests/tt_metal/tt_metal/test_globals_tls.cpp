@@ -48,8 +48,7 @@ TEST_F(QuasarUnitMeshFixture, GlobalsAndTLS) {
     // Initialize L1 signal so hart FIRST_USER_DM (2) can proceed first; the simple_tls_check
     // kernel chains the signal forward (signal_addr := hartid + 1) so hartids 2..7 run in order.
     std::vector<uint32_t> init_signal = {FIRST_USER_DM};
-    tt_metal::detail::WriteToDeviceL1(
-        device,
+    this->WriteToL1(
         core,
         signal_address,
         std::span(reinterpret_cast<const uint8_t*>(init_signal.data()), sizeof(uint32_t)),
@@ -270,8 +269,6 @@ static constexpr uint32_t NUM_COMPUTE_SLOTS =
 static constexpr uint32_t QUASAR_FIRST_COMPUTE_HARTID = 8;  // DM 0-7, compute 8-23
 
 TEST_F(QuasarUnitMeshFixture, QuasarComputeKernelTLS) {
-    IDevice* device = this->device().get_devices()[0];
-
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
@@ -283,16 +280,14 @@ TEST_F(QuasarUnitMeshFixture, QuasarComputeKernelTLS) {
     constexpr uint32_t total_result_bytes = NUM_COMPUTE_SLOTS * TLS_CHECK_RESULT_SLOT_BYTES;
 
     std::vector<uint32_t> init_signal = {QUASAR_FIRST_COMPUTE_HARTID};
-    tt_metal::detail::WriteToDeviceL1(
-        device,
+    this->WriteToL1(
         core,
         signal_address,
         std::span(reinterpret_cast<const uint8_t*>(init_signal.data()), sizeof(uint32_t)),
         CoreType::WORKER);
 
     std::vector<uint32_t> init_data(total_result_bytes / sizeof(uint32_t), 0);
-    tt_metal::detail::WriteToDeviceL1(
-        device,
+    this->WriteToL1(
         core,
         l1_result_addr,
         std::span(reinterpret_cast<const uint8_t*>(init_data.data()), total_result_bytes),
@@ -338,7 +333,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarComputeKernelTLS) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> l1_data;
-    tt_metal::detail::ReadFromDeviceL1(device, core, l1_result_addr, total_result_bytes, l1_data, CoreType::WORKER);
+    this->ReadFromL1(core, l1_result_addr, total_result_bytes, l1_data, CoreType::WORKER);
 
     auto slot_global_addr = [&l1_data](uint32_t slot) {
         const uint32_t offset = slot * TLS_CHECK_RESULT_SLOT_WORDS;

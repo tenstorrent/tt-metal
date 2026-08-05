@@ -28,14 +28,14 @@ bool should_skip_test() { return std::getenv("TT_METAL_SIMULATOR") == nullptr; }
 
 // Runs one write pass of `size_bytes` via `write_path` (0=uncached,1=cached+flush)
 // on a single DM core, then reads back and verifies the byte pattern landed.
-bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_bytes, std::uint32_t write_path) {
-    IDevice* device = mesh_device.get_devices()[0];
+bool run_cache_write(UnitMeshFixture& fixture, std::uint32_t size_bytes, std::uint32_t write_path) {
+    auto& mesh_device = fixture.device();
     constexpr CoreCoord core = {0, 0};
     const experimental::NodeCoord node{0, 0};
 
     // Pre-fill destination with a sentinel so a no-op run fails the read-back.
     std::vector<std::uint32_t> init_data((size_bytes + 3) / 4, 0xA5A5A5A5);
-    tt_metal::detail::WriteToDeviceL1(device, core, BASE_ADDR, init_data);
+    fixture.WriteToL1(core, BASE_ADDR, init_data);
 
     const experimental::KernelSpecName DM_KERNEL{"cache_write_perf"};
     experimental::KernelSpec dm_kernel_spec{
@@ -71,7 +71,7 @@ bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_by
     distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<std::uint32_t> out;
-    tt_metal::detail::ReadFromDeviceL1(device, core, BASE_ADDR, ((size_bytes + 3) / 4) * 4, out);
+    fixture.ReadFromL1(core, BASE_ADDR, ((size_bytes + 3) / 4) * 4, out);
     const std::uint8_t* bytes = reinterpret_cast<const std::uint8_t*>(out.data());
     for (std::uint32_t i = 0; i < size_bytes; i++) {
         if (bytes[i] != 0x5A) {
@@ -100,7 +100,7 @@ TEST_F(QuasarCacheWrite, SizeSweep) {
     // mode: 0=uncached 1B, 1=uncached 8B, 2=cached+range flush (April), 3=cached+fast flush
     for (std::uint32_t mode : {0u, 1u, 2u, 3u}) {
         for (std::uint32_t size_bytes : unit_tests::dm::quasar_cache_perf::kSizesBytes) {
-            pass &= unit_tests::dm::quasar_cache_perf::run_cache_write(this->device(), size_bytes, mode);
+            pass &= unit_tests::dm::quasar_cache_perf::run_cache_write(*this, size_bytes, mode);
         }
     }
     EXPECT_TRUE(pass);

@@ -182,7 +182,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarMultipleClustersMultiSemaphorePipeline) {
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    tt_metal::detail::WriteToDeviceL1(this->device().get_devices()[0], node_0, buf_a_addr, initial_data);
+    this->WriteToL1(node_0, buf_a_addr, initial_data);
 
     const CoreCoord core_1_virtual = this->device().worker_core_from_logical_core(node_1);
 

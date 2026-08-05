@@ -53,8 +53,8 @@ distributed::MeshWorkload make_l1_write_workload(
     return wl;
 }
 
-void run_cross_cq_handoff(distributed::MeshDevice& mesh_device, uint8_t producer_cq, uint8_t consumer_cq) {
-    IDevice* dev = mesh_device.get_devices()[0];
+void run_cross_cq_handoff(UnitMeshFixture& fixture, uint8_t producer_cq, uint8_t consumer_cq) {
+    auto& mesh_device = fixture.device();
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t producer_address = MetalContext::instance().hal().get_dev_addr(
@@ -64,7 +64,7 @@ void run_cross_cq_handoff(distributed::MeshDevice& mesh_device, uint8_t producer
     const uint32_t consumer_value = 0x2c110000u | consumer_cq;
 
     std::vector<uint32_t> zeros(2, 0);
-    tt_metal::detail::WriteToDeviceL1(dev, node, producer_address, zeros);
+    fixture.WriteToL1(node, producer_address, zeros);
 
     distributed::MeshCommandQueue& producer = mesh_device.mesh_command_queue(producer_cq);
     distributed::MeshCommandQueue& consumer = mesh_device.mesh_command_queue(consumer_cq);
@@ -84,11 +84,11 @@ void run_cross_cq_handoff(distributed::MeshDevice& mesh_device, uint8_t producer
     distributed::Finish(consumer);
 
     std::vector<uint32_t> producer_out(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, producer_address, sizeof(uint32_t), producer_out);
+    fixture.ReadFromL1(node, producer_address, sizeof(uint32_t), producer_out);
     ASSERT_EQ(producer_out[0], producer_value);
 
     std::vector<uint32_t> consumer_out(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, consumer_address, sizeof(uint32_t), consumer_out);
+    fixture.ReadFromL1(node, consumer_address, sizeof(uint32_t), consumer_out);
     ASSERT_EQ(consumer_out[0], consumer_value);
 }
 
@@ -98,7 +98,6 @@ TEST_F(QuasarUnitMeshFixture, EventSynchronize) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = this->device().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
@@ -106,7 +105,7 @@ TEST_F(QuasarUnitMeshFixture, EventSynchronize) {
     const uint32_t value = 0x12abcd34;
 
     std::vector<uint32_t> zeros(1, 0);
-    tt_metal::detail::WriteToDeviceL1(dev, node, address, zeros);
+    this->WriteToL1(node, address, zeros);
 
     distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
     distributed::MeshWorkload workload = make_l1_write_workload(this->device(), node, address, value, "cq_kernel");
@@ -117,7 +116,7 @@ TEST_F(QuasarUnitMeshFixture, EventSynchronize) {
     distributed::EventSynchronize(event);
 
     std::vector<uint32_t> outputs(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address, sizeof(uint32_t), outputs);
+    this->ReadFromL1(node, address, sizeof(uint32_t), outputs);
     ASSERT_EQ(outputs[0], value);
 }
 
@@ -143,7 +142,6 @@ TEST_F(QuasarUnitMeshFixture, EventBetweenWorkloads) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = this->device().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
@@ -153,7 +151,7 @@ TEST_F(QuasarUnitMeshFixture, EventBetweenWorkloads) {
     const uint32_t value_2 = 0xccdd3344;
 
     std::vector<uint32_t> zeros(2, 0);
-    tt_metal::detail::WriteToDeviceL1(dev, node, address_1, zeros);
+    this->WriteToL1(node, address_1, zeros);
 
     distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
 
@@ -169,14 +167,14 @@ TEST_F(QuasarUnitMeshFixture, EventBetweenWorkloads) {
     distributed::EventSynchronize(event_after_wl1);
 
     std::vector<uint32_t> out_1(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address_1, sizeof(uint32_t), out_1);
+    this->ReadFromL1(node, address_1, sizeof(uint32_t), out_1);
     ASSERT_EQ(out_1[0], value_1);
 
     // Drain the remaining wl2.
     distributed::Finish(cq);
 
     std::vector<uint32_t> out_2(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address_2, sizeof(uint32_t), out_2);
+    this->ReadFromL1(node, address_2, sizeof(uint32_t), out_2);
     ASSERT_EQ(out_2[0], value_2);
 }
 
@@ -185,7 +183,7 @@ TEST_F(QuasarMultiCQUnitMeshFixture, CrossCQEventHandoffCQ0ToCQ1) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
-    run_cross_cq_handoff(this->device(), /*producer_cq=*/0, /*consumer_cq=*/1);
+    run_cross_cq_handoff(*this, /*producer_cq=*/0, /*consumer_cq=*/1);
 }
 
 // Reverse direction: issue_record_event_commands / issue_wait_for_event_commands branch on
@@ -195,7 +193,7 @@ TEST_F(QuasarMultiCQUnitMeshFixture, CrossCQEventHandoffCQ1ToCQ0) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
-    run_cross_cq_handoff(this->device(), /*producer_cq=*/1, /*consumer_cq=*/0);
+    run_cross_cq_handoff(*this, /*producer_cq=*/1, /*consumer_cq=*/0);
 }
 
 TEST_F(QuasarMultiCQUnitMeshFixture, RecordEventToHostFromBothCQs) {
@@ -204,7 +202,6 @@ TEST_F(QuasarMultiCQUnitMeshFixture, RecordEventToHostFromBothCQs) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = this->device().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address_0 = MetalContext::instance().hal().get_dev_addr(
@@ -214,7 +211,7 @@ TEST_F(QuasarMultiCQUnitMeshFixture, RecordEventToHostFromBothCQs) {
     const uint32_t value_1 = 0x2c2c0001;
 
     std::vector<uint32_t> zeros(2, 0);
-    tt_metal::detail::WriteToDeviceL1(dev, node, address_0, zeros);
+    this->WriteToL1(node, address_0, zeros);
 
     distributed::MeshCommandQueue& cq0 = this->device().mesh_command_queue(0);
     distributed::MeshCommandQueue& cq1 = this->device().mesh_command_queue(1);
@@ -233,10 +230,10 @@ TEST_F(QuasarMultiCQUnitMeshFixture, RecordEventToHostFromBothCQs) {
     distributed::EventSynchronize(event_1);
 
     std::vector<uint32_t> out_0(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address_0, sizeof(uint32_t), out_0);
+    this->ReadFromL1(node, address_0, sizeof(uint32_t), out_0);
     ASSERT_EQ(out_0[0], value_0);
 
     std::vector<uint32_t> out_1(1, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address_1, sizeof(uint32_t), out_1);
+    this->ReadFromL1(node, address_1, sizeof(uint32_t), out_1);
     ASSERT_EQ(out_1[0], value_1);
 }

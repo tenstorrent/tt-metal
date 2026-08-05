@@ -422,12 +422,11 @@ void verify_results(
 // physical DMs DM2..DM(2+kQuasarNumUserDms-1). DM0/DM1 are reserved by Metal 2.0 runtime.
 // The kernel uses raw `hartid` (= 2..7) to index into a MAX_DMS-wide L1 region anchored at DM0's slot.
 void verify_quasar_crtas(
-    distributed::MeshDevice& mesh_device,
+    UnitMeshFixture& fixture,
     const CoreCoord& core,
     const std::vector<std::vector<uint32_t>>& per_user_dm_crtas,
     bool expect_shared_address) {
-    auto* device = mesh_device.get_devices()[0];
-    uint32_t l1_base = mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint32_t l1_base = fixture.device().allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     uint32_t results_base = get_runtime_arg_addr(l1_base, tt::tt_metal::HalProcessorClassType::DM, 0, true);
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
@@ -450,7 +449,7 @@ void verify_quasar_crtas(
         uint32_t crta_addr = results_base + ((kCommonRTASeparation + physical_dm_id * num_crtas) * sizeof(uint32_t));
 
         std::vector<uint32_t> observed;
-        tt_metal::detail::ReadFromDeviceL1(device, core, crta_addr, num_crtas * sizeof(uint32_t), observed);
+        fixture.ReadFromL1(core, crta_addr, num_crtas * sizeof(uint32_t), observed);
 
         for (size_t j = 0; j < num_crtas; j++) {
             EXPECT_EQ(observed[j], expected_crtas[j]) << "DM" << physical_dm_id << " CRTA[" << j << "]";
@@ -462,7 +461,7 @@ void verify_quasar_crtas(
         uint32_t physical_dm_id = kQuasarFirstUserDm + user_dm_idx;
         uint32_t addr_offset = addr_base + (physical_dm_id * sizeof(uint32_t));
         std::vector<uint32_t> addr;
-        tt_metal::detail::ReadFromDeviceL1(device, core, addr_offset, sizeof(uint32_t), addr);
+        fixture.ReadFromL1(core, addr_offset, sizeof(uint32_t), addr);
         crta_addrs.push_back(addr[0]);
     }
 
@@ -1069,7 +1068,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarCRTASharedL1Address) {
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
     // Verify all 6 user DMs (DM2..DM7) share the same CRTA L1 address
-    unit_tests::runtime_args::verify_quasar_crtas(this->device(), core, all_crtas, /*expect_shared_address*/ true);
+    unit_tests::runtime_args::verify_quasar_crtas(*this, core, all_crtas, /*expect_shared_address*/ true);
 }
 
 // Quasar only test: 6 separate kernels, each running on a unique user DM processor (DM2..DM7), with unique CRTAs.
@@ -1111,7 +1110,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarCRTAUniqueL1Addresses) {
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
     // Verify each user DM (DM2..DM7) has a unique CRTA L1 address
-    unit_tests::runtime_args::verify_quasar_crtas(this->device(), core, all_crtas, /*expect_shared_address*/ false);
+    unit_tests::runtime_args::verify_quasar_crtas(*this, core, all_crtas, /*expect_shared_address*/ false);
 }
 
 TEST_F(QuasarUnitMeshFixture, QuasarMergeProgramRunArgs) {
@@ -1127,7 +1126,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarMergeProgramRunArgs) {
 
     // Zero-init both output slots.
     std::vector<uint32_t> zeros(2, 0);
-    tt_metal::detail::WriteToDeviceL1(this->device().get_devices()[0], node, address_1, zeros);
+    this->WriteToL1(node, address_1, zeros);
 
     // Two kernels, each using one DM thread, writing to distinct L1 addresses.
     const experimental::KernelSpecName K1{"k1"}, K2{"k2"};
@@ -1167,7 +1166,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarMergeProgramRunArgs) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> out(2, 0);
-    tt_metal::detail::ReadFromDeviceL1(this->device().get_devices()[0], node, address_1, 2 * sizeof(uint32_t), out);
+    this->ReadFromL1(node, address_1, 2 * sizeof(uint32_t), out);
     ASSERT_EQ(out, std::vector<uint32_t>({value_1, value_2}));
 }
 
@@ -1203,7 +1202,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarUpdateProgramRunArgs) {
     Program& prog = workload.get_programs().at(device_range);
 
     std::vector<uint32_t> zeros(2, 0);
-    tt_metal::detail::WriteToDeviceL1(this->device().get_devices()[0], node, address_1, zeros);
+    this->WriteToL1(node, address_1, zeros);
 
     // First enqueue: write value_1 to address_1.
     experimental::ProgramRunArgs params1;
@@ -1226,7 +1225,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarUpdateProgramRunArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> outputs(2, 0);
-    tt_metal::detail::ReadFromDeviceL1(this->device().get_devices()[0], node, address_1, 2 * sizeof(uint32_t), outputs);
+    this->ReadFromL1(node, address_1, 2 * sizeof(uint32_t), outputs);
     ASSERT_EQ(outputs, std::vector<uint32_t>({value_1, value_2}));
 }
 

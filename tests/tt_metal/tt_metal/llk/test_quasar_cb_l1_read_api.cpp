@@ -46,8 +46,8 @@ constexpr std::uint32_t CB_API_NUM_READER_THREADS = 3;
 // involved, isolating whether the mailbox mechanism itself faults independent of the
 // dataflow-buffer address computation in QuasarCbL1ReadApi.
 TEST_F(LLKQuasarUnitMeshFixture, QuasarMailboxMinimal) {
-    auto* device = this->device().get_devices()[0];
-    auto& cq = this->device().mesh_command_queue();
+    auto& device = this->device();
+    auto& cq = device.mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -66,18 +66,18 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarMailboxMinimal) {
 
     // Kernel (MATH thread) writes the mailbox-read value here; host reads it back after the run.
     // Round up to the L1 allocation alignment, matching the CB API test below.
-    const std::uint32_t l1_alignment = device->allocator()->get_alignment(BufferType::L1);
+    const std::uint32_t l1_alignment = device.allocator()->get_alignment(BufferType::L1);
     const std::uint32_t aligned_result_size = (sizeof(std::uint32_t) + l1_alignment - 1) / l1_alignment * l1_alignment;
-    const std::uint32_t result_l1_addr = static_cast<std::uint32_t>(device->l1_size_per_core()) - aligned_result_size;
+    const std::uint32_t result_l1_addr = static_cast<std::uint32_t>(device.l1_size_per_core()) - aligned_result_size;
     std::vector<std::uint32_t> result_init(1, 0);
-    detail::WriteToDeviceL1(device, WORKER_CORE, result_l1_addr, result_init);
+    this->WriteToL1(WORKER_CORE, result_l1_addr, result_init);
 
     SetRuntimeArgs(program_, compute_kernel, WORKER_CORE, {result_l1_addr});
 
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
     std::vector<std::uint32_t> host_buffer;
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_l1_addr, sizeof(std::uint32_t), host_buffer);
+    this->ReadFromL1(WORKER_CORE, result_l1_addr, sizeof(std::uint32_t), host_buffer);
 
     ASSERT_EQ(host_buffer.size(), 1u);
     EXPECT_EQ(host_buffer[0], MAILBOX_MIN_EXPECTED_VALUE);
@@ -92,7 +92,7 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarMailboxMinimal) {
 // buffer. Checking all three slices (rather than only UNPACK's) is what makes this cover the
 // mailbox delivery -- verifying UNPACK alone would pass even if MATH/PACK received nothing.
 TEST_F(LLKQuasarUnitMeshFixture, QuasarCbL1ReadApi) {
-    auto* device = this->device().get_devices()[0];
+    auto& device = this->device();
 
     const std::uint32_t tile_page_size = tt::tile_size(CB_API_DATA_FORMAT);
 
@@ -124,14 +124,14 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarCbL1ReadApi) {
     // Preload two known tiles into the DFB's L1 ring (single DFB -> ring base is the L1
     // allocator base). Tiles are entry_size apart for this 1-producer/1-consumer layout.
     const std::uint32_t dfb_l1_addr =
-        static_cast<std::uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+        static_cast<std::uint32_t>(device.allocator()->get_base_allocator_addr(HalMemType::L1));
     const std::uint32_t words_per_entry = tile_page_size / sizeof(CbApiDataT);
     std::vector<CbApiDataT> ring(2 * words_per_entry, 0);
     ring[0] = CB_API_VAL0;
     ring[1] = CB_API_VAL1;
     ring[words_per_entry + 0] = CB_API_VAL2;
     ring[words_per_entry + 1] = CB_API_VAL3;
-    detail::WriteToDeviceL1(device, WORKER_CORE, dfb_l1_addr, ring);
+    this->WriteToL1(WORKER_CORE, dfb_l1_addr, ring);
 
     std::vector<CbApiDataT> expected_result;
     for (std::uint32_t thread = 0; thread < CB_API_NUM_READER_THREADS; ++thread) {
@@ -141,19 +141,19 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarCbL1ReadApi) {
 
     // Each thread writes its reads here; host reads this spot back after the run.
     const std::uint32_t result_size_bytes = expected_result.size() * sizeof(CbApiDataT);
-    const std::uint32_t l1_alignment = device->allocator()->get_alignment(BufferType::L1);
+    const std::uint32_t l1_alignment = device.allocator()->get_alignment(BufferType::L1);
     const std::uint32_t aligned_result_size = (result_size_bytes + l1_alignment - 1) / l1_alignment * l1_alignment;
-    const std::uint32_t result_l1_addr = static_cast<std::uint32_t>(device->l1_size_per_core()) - aligned_result_size;
+    const std::uint32_t result_l1_addr = static_cast<std::uint32_t>(device.l1_size_per_core()) - aligned_result_size;
 
     std::vector<CbApiDataT> result_init(expected_result.size(), 0);
-    detail::WriteToDeviceL1(device, WORKER_CORE, result_l1_addr, result_init);
+    this->WriteToL1(WORKER_CORE, result_l1_addr, result_init);
 
     SetRuntimeArgs(program, compute_kernel, WORKER_CORE, {result_l1_addr});
 
     this->RunProgram(std::move(program));
 
     std::vector<CbApiDataT> host_buffer;
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_l1_addr, result_size_bytes, host_buffer);
+    this->ReadFromL1(WORKER_CORE, result_l1_addr, result_size_bytes, host_buffer);
 
     EXPECT_EQ(host_buffer, expected_result);
 }

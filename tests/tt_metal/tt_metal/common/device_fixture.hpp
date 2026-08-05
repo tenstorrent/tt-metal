@@ -170,7 +170,8 @@ protected:
 class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};
 
 // Single unit-mesh fixture: always owns exactly one MeshDevice and exposes
-// RunProgram / WriteBuffer / ReadBuffer overloads that do not take a device arg.
+// RunProgram / WriteBuffer / ReadBuffer / WriteToL1 / ReadFromL1 overloads that do not
+// take a device arg.
 class UnitMeshFixture : public MeshDeviceSingleCardFixture {
 public:
     distributed::MeshDevice& device() { return *device_; }
@@ -187,6 +188,37 @@ public:
     void ReadBuffer(const std::shared_ptr<distributed::MeshBuffer>& out_buffer, std::vector<uint32_t>& dst_vec) {
         MeshDispatchFixture::ReadBuffer(device_, out_buffer, dst_vec);
     }
+    // detail::WriteToDeviceL1/ReadFromDeviceL1 index the cluster by IDevice::id(), which for
+    // MeshDevice is a logical mesh id — not a chip id. Pass the unit-mesh's physical sub-device.
+    bool WriteToL1(
+        CoreCoord logical_core,
+        uint32_t address,
+        std::vector<uint32_t>& host_buffer,
+        CoreType core_type = CoreType::WORKER) {
+        return detail::WriteToDeviceL1(underlying_device(), logical_core, address, host_buffer, core_type);
+    }
+    bool WriteToL1(
+        CoreCoord logical_core,
+        uint32_t address,
+        std::span<const uint8_t> host_buffer,
+        CoreType core_type = CoreType::WORKER) {
+        return detail::WriteToDeviceL1(underlying_device(), logical_core, address, host_buffer, core_type);
+    }
+    bool ReadFromL1(
+        CoreCoord logical_core,
+        uint32_t address,
+        uint32_t size,
+        std::vector<uint32_t>& host_buffer,
+        CoreType core_type = CoreType::WORKER) {
+        return detail::ReadFromDeviceL1(underlying_device(), logical_core, address, size, host_buffer, core_type);
+    }
+    bool ReadFromL1(
+        CoreCoord logical_core,
+        uint32_t address,
+        std::span<uint8_t> host_buffer,
+        CoreType core_type = CoreType::WORKER) {
+        return detail::ReadFromDeviceL1(underlying_device(), logical_core, address, host_buffer, core_type);
+    }
 
 protected:
     void create_devices() override {
@@ -194,6 +226,8 @@ protected:
         AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
         device_ = devices_.front();
     }
+
+    IDevice* underlying_device() { return device_->get_devices().at(0); }
 
     std::shared_ptr<distributed::MeshDevice> device_;
 };

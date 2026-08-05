@@ -86,14 +86,14 @@ IdmaSrcDstBuffers make_idma_src_dst_buffers(distributed::MeshDevice& mesh_device
 }
 
 // Basic: 16 elements * 8 B = 128 B linear copy from src to dst
-bool run_idma_basic_test(distributed::MeshDevice& mesh_device) {
+bool run_idma_basic_test(UnitMeshFixture& fixture) {
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t num_elements = 16;
     constexpr uint32_t elem_size = 8;
     constexpr uint32_t total_bytes = num_elements * elem_size;
     constexpr uint32_t num_words = total_bytes / sizeof(uint32_t);
 
-    IDevice* device = mesh_device.get_devices()[0];
+    auto& mesh_device = fixture.device();
     auto buffers = make_idma_src_dst_buffers(mesh_device, total_bytes);
     const uint32_t src_base = buffers.src->address();
     const uint32_t dst_base = buffers.dst->address();
@@ -102,12 +102,12 @@ bool run_idma_basic_test(distributed::MeshDevice& mesh_device) {
     for (uint32_t i = 0; i < num_words; i++) {
         src_data[i] = 0xA0000000 + i;
     }
-    tt_metal::detail::WriteToDeviceL1(device, core, src_base, src_data);
+    fixture.WriteToL1(core, src_base, src_data);
 
     run_kernel(mesh_device, kIdmaBasic, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
-    tt_metal::detail::ReadFromDeviceL1(device, core, dst_base, total_bytes, dst_data);
+    fixture.ReadFromL1(core, dst_base, total_bytes, dst_data);
 
     bool pass = (dst_data == src_data);
     if (!pass) {
@@ -127,12 +127,13 @@ bool run_idma_basic_test(distributed::MeshDevice& mesh_device) {
 
 // 1D strided: 10 elements, src_stride=16 B, dst linear.
 // dst[i] = src[i * src_stride] (every other 8 B element from src)
-bool run_idma_1d_strided_test(distributed::MeshDevice& mesh_device) {
+bool run_idma_1d_strided_test(UnitMeshFixture& fixture) {
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t num_elements = 10;
     constexpr uint32_t elem_size = 8;
     constexpr uint32_t src_stride = 2 * elem_size;  // 16 B
     constexpr uint32_t total_bytes = num_elements * src_stride;
+    auto& mesh_device = fixture.device();
     auto buffers = make_idma_src_dst_buffers(mesh_device, total_bytes);
     const uint32_t src_base = buffers.src->address();
     const uint32_t dst_base = buffers.dst->address();
@@ -141,13 +142,11 @@ bool run_idma_1d_strided_test(distributed::MeshDevice& mesh_device) {
     constexpr uint32_t src_num_words = (num_elements * src_stride) / sizeof(uint32_t);
     constexpr uint32_t dst_num_words = (num_elements * elem_size) / sizeof(uint32_t);
 
-    IDevice* device = mesh_device.get_devices()[0];
-
     std::vector<uint32_t> src_data(src_num_words);
     for (uint32_t i = 0; i < src_num_words; i++) {
         src_data[i] = 0xB0000000 + i;
     }
-    tt_metal::detail::WriteToDeviceL1(device, core, src_base, src_data);
+    fixture.WriteToL1(core, src_base, src_data);
 
     // Build expected: for each element i, copy elem_size bytes from src_base + i*src_stride
     constexpr uint32_t words_per_elem = elem_size / sizeof(uint32_t);     // 2
@@ -162,7 +161,7 @@ bool run_idma_1d_strided_test(distributed::MeshDevice& mesh_device) {
     run_kernel(mesh_device, kIdma1DStrided, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
-    tt_metal::detail::ReadFromDeviceL1(device, core, dst_base, num_elements * elem_size, dst_data);
+    fixture.ReadFromL1(core, dst_base, num_elements * elem_size, dst_data);
 
     bool pass = (dst_data == expected);
     if (!pass) {
@@ -193,7 +192,7 @@ TEST_F(QuasarIdmaOps, IDMA_Basic) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     // Host writes pattern to src, kernel copies 16*8=128 B to dst, host verifies dst==src
-    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_basic_test(this->device()));
+    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_basic_test(*this));
 }
 
 TEST_F(QuasarIdmaOps, IDMA_1D_Strided) {
@@ -201,7 +200,7 @@ TEST_F(QuasarIdmaOps, IDMA_1D_Strided) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     // Host writes pattern to src, kernel copies 10 elements with src_stride=16 B to dst linearly
-    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_1d_strided_test(this->device()));
+    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_1d_strided_test(*this));
 }
 
 }  // namespace tt::tt_metal
