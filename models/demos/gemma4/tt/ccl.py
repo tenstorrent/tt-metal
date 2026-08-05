@@ -50,6 +50,69 @@ def ccl_persistent_buffers_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_PERSISTENT_BUF", "1").lower() not in ("0", "false", "no")
 
 
+def ccl_sync_split_enabled() -> bool:
+    """Run the TP all-reduce as sync ``reduce_scatter`` + sync ``all_gather``
+    instead of the fused ``ttnn.all_reduce``. Default ON; ``GEMMA4_CCL_SPLIT=0``
+    opts back out.
+
+    ``ttnn.all_reduce`` *is* those two ops -- measured identical to within noise
+    (fused 95.5 us vs split 96.1 us) and ``torch.equal`` bit-identical on
+    per-device-distinct data. But the fused op exposes only
+    {cluster_axis, memory_config, num_links, topology, subdevice_id}, while the
+    sync halves also expose ``chunks_per_sync`` / ``num_workers_per_link`` /
+    ``num_buffers_per_channel``. Splitting therefore costs nothing and unlocks
+    the knobs -- see ``ccl_sync_rs_workers``.
+
+    This is NOT the async path (``GEMMA4_CCL_ASYNC``), which uses
+    ``reduce_scatter_minimal_async`` and loses in every arm.
+    """
+    return os.environ.get("GEMMA4_CCL_SPLIT", "1").lower() not in ("0", "false", "no")
+
+
+def ccl_sync_rs_workers() -> int:
+    """``num_workers_per_link`` for the split all-reduce's reduce-scatter.
+
+    Trace-replay sweep of the Gemma4-31B decode all-reduce ([1,1,32,5376] bf16,
+    Ring, num_links=1, 1x8 WH LoudBox), 3 repeats, min-of-rounds, every arm
+    checked ``torch.equal`` against the fused ``ttnn.all_reduce`` result:
+
+        fused ttnn.all_reduce (shipping)           95.5 us  -> 11.46 ms/step
+        split, both halves default                 96.1 us  -> 11.54 ms/step
+        split, RS w=1 c=1                        **88.9 us**->**10.67 ms/step**
+        split, RS w=2 c=1                          94.0 us  -> 11.28 ms/step
+        split, RS w=1 c=2                          96.1 us  -> 11.54 ms/step
+        split, RS w=1 c=4                          99.0 us  -> 11.88 ms/step
+        split, RS w=4 c=1                         141.0 us  -> 16.9  ms/step
+
+    So ``w=1, c=1`` is worth -6.6 us/all-reduce = **-0.79 ms/decode step**, and
+    it is bit-exact -- the reduction order is unchanged, only the worker/sync
+    granularity is. ``num_buffers_per_channel`` is noise here (b=2/4/8 all
+    88.8-89.4 us); 4 is taken as the middle.
+
+    Note ``w=4`` is a 1.5x cliff, not a plateau: with a single link, extra
+    workers contend. Do not raise this without re-sweeping, and do not confuse
+    it with the async path's ``GEMMA4_CCL_NUM_WORKERS`` default of 2.
+
+    The GATHER half was swept over the same knobs (w x c x b, 12 arms) and is
+    completely insensitive -- 95.5-95.9 us throughout. It runs on ONE worker core
+    (vs the reduce-scatter's 6) and 44.7 us for a 688 KB gather is the num_links=1
+    fabric floor, not core starvation. Leave it on defaults.
+    """
+    return max(1, int(os.environ.get("GEMMA4_CCL_SYNC_RS_WORKERS", "1")))
+
+
+def ccl_sync_rs_chunks() -> int:
+    """``chunks_per_sync`` for the split all-reduce's reduce-scatter. See
+    ``ccl_sync_rs_workers`` -- 1 measured 88.9 us, 2 measured 96.1, 4 measured 99.0."""
+    return max(1, int(os.environ.get("GEMMA4_CCL_SYNC_RS_CHUNKS", "1")))
+
+
+def ccl_sync_rs_buffers() -> int:
+    """``num_buffers_per_channel`` for the split all-reduce's reduce-scatter.
+    Noise across 2/4/8; see ``ccl_sync_rs_workers``."""
+    return max(1, int(os.environ.get("GEMMA4_CCL_SYNC_RS_BUFFERS", "4")))
+
+
 def default_ccl_topology(mesh_device=None, is_moe: bool = False):
     """Default CCL topology for Gemma4 TP collectives.
 
@@ -256,9 +319,15 @@ class CCLManager:
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     """All-reduce across TP devices.
 
-    Sync ``ttnn.all_reduce`` by default. With ``GEMMA4_CCL_ASYNC=1``, uses
-    reduce_scatter_minimal_async + all_gather_async (tt_transformers composite
-    pattern) on ``ccl_manager.topology`` (Ring on P150x8).
+    By default, sync ``ttnn.reduce_scatter`` + sync ``ttnn.all_gather`` with a
+    swept reduce-scatter worker config (``GEMMA4_CCL_SPLIT=0`` falls back to the
+    fused ``ttnn.all_reduce``, which is bit-identical but 6.6 us/call slower --
+    see ``ccl_sync_split_enabled`` / ``ccl_sync_rs_workers``).
+
+    With ``GEMMA4_CCL_ASYNC=1``, uses reduce_scatter_minimal_async +
+    all_gather_async (tt_transformers composite pattern) on
+    ``ccl_manager.topology`` (Ring on P150x8). That path loses in every measured
+    arm; it is kept for the record, not as a default.
     """
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
@@ -309,6 +378,30 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
         if rs_bufs is None:
             scattered.deallocate(True)
         return gathered
+
+    if ccl_sync_split_enabled():
+        scattered = ttnn.reduce_scatter(
+            tensor,
+            dim=3,
+            cluster_axis=tp_axis,
+            num_links=ccl_manager.num_links,
+            topology=topology,
+            memory_config=memory_config,
+            num_workers_per_link=ccl_sync_rs_workers(),
+            chunks_per_sync=ccl_sync_rs_chunks(),
+            num_buffers_per_channel=ccl_sync_rs_buffers(),
+        )
+        tensor.deallocate(True)
+        result = ttnn.all_gather(
+            scattered,
+            dim=3,
+            cluster_axis=tp_axis,
+            num_links=ccl_manager.num_links,
+            topology=topology,
+            memory_config=memory_config,
+        )
+        scattered.deallocate(True)
+        return result
 
     result = ttnn.all_reduce(
         tensor,
