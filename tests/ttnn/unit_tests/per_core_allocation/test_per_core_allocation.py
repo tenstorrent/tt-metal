@@ -11,6 +11,7 @@ which triggers the per-bank allocator (AllocatorID bank_id+1) instead of lockste
 The local conftest.py sets TT_METAL_ALLOCATOR_MODE_HYBRID=1 and creates the device.
 """
 
+import pytest
 import torch
 import ttnn
 from conftest import requires_hybrid_allocator
@@ -416,6 +417,10 @@ def test_all_cores_lockstep_then_per_core_then_reverse(device):
         assert per_core_tensors[i].is_allocated()
 
 
+# Fixed kv_grid rows 8-9, columns 0-8: this reproduces a specific dense-attention core layout,
+# so it cannot be sized from the device grid like the other tests here. Skip where those cores
+# do not exist (e.g. Wormhole's 8x8 worker grid) rather than building an invalid shard grid.
+@pytest.mark.requires_grid_size((9, 10))
 @requires_hybrid_allocator
 def test_per_core_width_sharded_tiled_bfp4_round_trip(device):
     """FORMAT coverage: per-core allocation coexists with WIDTH_SHARDED + TILE_LAYOUT +
@@ -442,11 +447,15 @@ def test_per_core_width_sharded_tiled_bfp4_round_trip(device):
     relocate_cores = [ttnn.CoreCoord(0, 8), ttnn.CoreCoord(0, 9)]
     prealloc = [_create_single_core_tensor(device, c, 2048) for c in relocate_cores]
 
-    # Phase 2: WIDTH_SHARDED, TILE_LAYOUT, BFP4 per-core tensor with distinct
-    # nonzero data per column-shard (column block c filled with value c+1).
+    # Phase 2: WIDTH_SHARDED, TILE_LAYOUT, BFP4 per-core tensor with distinct nonzero data per
+    # column-shard (column block c filled with 2**c). Powers of two because BFP4 keeps only a
+    # few mantissa bits: consecutive integers quantize into each other (17 and 18 both read back
+    # 16), so no tolerance could both absorb that and still catch a shard read from the wrong
+    # address. Each block is uniform, so its shared exponent reproduces a power of two exactly,
+    # and neighbouring shards differ by 2x — far outside any rounding.
     data = torch.zeros(H, W, dtype=torch.float32)
     for c in range(num_cores):
-        data[:, c * shard_w : (c + 1) * shard_w] = float(c + 1)
+        data[:, c * shard_w : (c + 1) * shard_w] = float(2**c)
 
     shard_spec = ttnn.ShardSpec(kv_grid, [H, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
@@ -462,16 +471,20 @@ def test_per_core_width_sharded_tiled_bfp4_round_trip(device):
     print(f"\n[REPRO-KVA] distinct_addrs={len(set(addrs.values()))} relocated={relocated} base_addr={base}")
 
     result = ttnn.to_torch(ttnn.from_device(tensor)).float()
-    # per column-shard: mean abs (BFP4 is lossy, but zero stays ~zero)
-    zero_shards = []
+    # Check the VALUE, not just non-zeroness: a shard read back from the wrong address is
+    # usually still nonzero, holding a neighbour's constant, which a zero-only check passes.
+    bad_shards = []
     for c in range(num_cores):
         block = result[:, c * shard_w : (c + 1) * shard_w]
-        if float(block.abs().mean().item()) < 1e-3:
-            zero_shards.append((c, (kv_cores[c].x, kv_cores[c].y)))
-    print(f"[REPRO-KVA] zero_shards={len(zero_shards)}/{num_cores}: {zero_shards}")
-    assert not zero_shards, (
-        f"{len(zero_shards)}/{num_cores} WIDTH-sharded BFP4 per-core column-shards read back ZERO "
-        f"(BFP4/TILE/WIDTH per-core creation round-trip is broken): {zero_shards}"
+        expected = float(2**c)
+        max_err = float((block - expected).abs().max().item())
+        if max_err > 1e-3 * expected:
+            bad_shards.append((c, (kv_cores[c].x, kv_cores[c].y), expected, float(block.mean().item())))
+    print(f"[REPRO-KVA] bad_shards={len(bad_shards)}/{num_cores}: {bad_shards}")
+    assert not bad_shards, (
+        f"{len(bad_shards)}/{num_cores} WIDTH-sharded BFP4 per-core column-shards read back the "
+        f"wrong values (BFP4/TILE/WIDTH per-core creation round-trip is broken); "
+        f"(shard, core, expected, actual_mean): {bad_shards}"
     )
 
 

@@ -10,12 +10,12 @@ Tests the two-level allocator architecture:
 - Per-core and lockstep allocations never overlap on any device
 """
 
+import pytest
 import torch
 from loguru import logger
 
 import ttnn
 from conftest import requires_hybrid_allocator
-
 
 # --- Helpers ---
 
@@ -534,6 +534,9 @@ def test_single_device_loopback(mesh_device):
         )
 
 
+# Fixed kv_grid rows 8-9, columns 0-8 (see the single-device counterpart): skip where those
+# cores do not exist rather than building an invalid shard grid.
+@pytest.mark.requires_grid_size((9, 10))
 @requires_hybrid_allocator
 def test_kva_width_sharded_bfp4_replicate_data_round_trip(mesh_device):
     """FORMAT + MESH coverage: per-core allocation coexists with WIDTH_SHARDED,
@@ -565,8 +568,11 @@ def test_kva_width_sharded_bfp4_replicate_data_round_trip(mesh_device):
     ]
 
     data = torch.zeros(H, W, dtype=torch.float32)
+    # 2**c rather than consecutive integers: BFP4 quantizes neighbouring integers into each
+    # other, so only well-separated values can distinguish a shard read from the wrong address.
+    # See the single-device counterpart.
     for c in range(num_cores):
-        data[:, c * shard_w : (c + 1) * shard_w] = float(c + 1)
+        data[:, c * shard_w : (c + 1) * shard_w] = float(2**c)
 
     shard_spec = ttnn.ShardSpec(kv_grid, [H, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
@@ -584,18 +590,23 @@ def test_kva_width_sharded_bfp4_replicate_data_round_trip(mesh_device):
     for dev_idx, dt in enumerate(ttnn.get_device_tensors(tensor)):
         addrs = [_per_core_addr(dt, c) for c in kv_cores]
         result = ttnn.to_torch(ttnn.from_device(dt)).float()
-        zero_shards = []
+        # Check the value, not just non-zeroness: a shard read from the wrong address usually
+        # still holds a neighbour's (nonzero) constant. See the single-device counterpart.
+        bad_shards = []
         for c in range(num_cores):
             block = result[:, c * shard_w : (c + 1) * shard_w]
-            if float(block.abs().mean().item()) < 1e-3:
-                zero_shards.append((c, (kv_cores[c].x, kv_cores[c].y)))
+            expected = float(2**c)
+            max_err = float((block - expected).abs().max().item())
+            if max_err > 1e-3 * expected:
+                bad_shards.append((c, (kv_cores[c].x, kv_cores[c].y), expected, float(block.mean().item())))
         logger.info(
             f"[KVA-MESH] dev{dev_idx} distinct_addrs={len(set(addrs))} "
-            f"zero_shards={len(zero_shards)}/{num_cores} {zero_shards}"
+            f"bad_shards={len(bad_shards)}/{num_cores} {bad_shards}"
         )
-        assert not zero_shards, (
-            f"dev{dev_idx}: {len(zero_shards)}/{num_cores} replicated BFP4 per-core column-shards "
-            f"read ZERO (per-core creation round-trip broken on this device): {zero_shards}"
+        assert not bad_shards, (
+            f"dev{dev_idx}: {len(bad_shards)}/{num_cores} replicated BFP4 per-core column-shards "
+            f"read back the wrong values (per-core creation round-trip broken on this device); "
+            f"(shard, core, expected, actual_mean): {bad_shards}"
         )
 
 
