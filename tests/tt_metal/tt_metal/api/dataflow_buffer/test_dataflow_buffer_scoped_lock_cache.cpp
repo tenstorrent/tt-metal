@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Quasar scoped_lock CACHE-OP validation (invalidate on acquire / flush on release).
-// Ported into the recategorized DFB test layout (was in the monolithic test_dataflow_buffer.cpp); see #45917.
-// scoped_lock's L2 cache ops execute on Quasar (the WH/BH path only records the lock tracker event), so these
+// Quasar scoped-lock CACHE-OP validation (invalidate on acquire / flush on release).
+// The L2 cache ops execute on Quasar only (the WH/BH path just records the lock tracker event), so these
 // tests are Quasar-only. Technique: the DFB ring lives in cacheable L1; the same address + MEM_L1_UNCACHED_BASE
 // is the non-cacheable alias (straight to TL1). The kernels build deterministic stale (L2=OLD) / fresh (TL1=NEW)
-// state and verify that scoped_lock touches EXACTLY the held entries (invalidate both roles / flush producer-only).
+// state and verify the lock touches exactly the held entries: both lock kinds invalidate on acquire, and only
+// a write lock flushes on release.
 
 #include "dfb_test_common.hpp"
 #include "tt_metal/tt_metal/test_kernels/dataflow/dfb_scoped_lock_cache_common.h"
@@ -55,12 +55,12 @@ uint32_t dfb_cache_stride_in_entries(const DfbCacheParams& p) {
 }
 
 // Expected per-slot read-back. A slot reads back NEW iff it is a held entry AND the op that touches it
-// happened: flush-on-release happens only for the producer; invalidate-on-acquire happens for both roles.
+// happened: flush-on-release only for a write lock, invalidate-on-acquire for both lock kinds.
 std::vector<uint32_t> dfb_cache_expected(const DfbCacheParams& p) {
     const uint32_t stride = dfb_cache_stride_in_entries(p);
     std::vector<bool> held(p.num_entries, false);
     for (uint32_t k = 0; k < p.lock_n; ++k) {
-        held[(k * stride) % p.num_entries] = true;  // wraps at the ring limit, like scoped_lock
+        held[(k * stride) % p.num_entries] = true;  // wraps at the ring limit, like the lock's walk
     }
     const bool op_makes_fresh = (p.mode == DfbCacheTestMode::InvalidateOnAcquire) ||
                                 (p.mode == DfbCacheTestMode::FlushOnRelease && p.active_is_producer);
@@ -209,7 +209,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(
 
 #define DFB_CACHE_SKIP_IF_NOT_QUASAR()                                                               \
     if (devices_.at(0)->arch() != ARCH::QUASAR) {                                                    \
-        GTEST_SKIP() << "scoped_lock cache ops are Quasar-only; the WH/BH path is the lock tracker"; \
+        GTEST_SKIP() << "scoped-lock cache ops are Quasar-only; the WH/BH path is the lock tracker"; \
     }
 
 // ---- Flush-on-release (producer) -------------------------------------------------------
@@ -305,7 +305,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheFlushConsumerDoesNotFlu
     EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->devices_.at(0), p), dfb_cache_expected(p));
 }
 
-// ---- Invalidate-on-acquire (both roles) ------------------------------------------------
+// ---- Invalidate-on-acquire (both lock kinds) -------------------------------------------
 // Held entries' stale L2 lines are discarded (re-read fetches NEW from TL1); non-held keep the stale OLD.
 
 // Baseline: 1P/1C STRIDED producer (stride==1), lock_n=4 -> held = {0..3}.
@@ -338,7 +338,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheInvalidateProducerStrid
     EXPECT_EQ(run_dfb_scoped_lock_cache_test(this->devices_.at(0), p), dfb_cache_expected(p));
 }
 
-// Consumer also invalidates on acquire (both roles) -> held {0,1,2,3}=NEW, rest OLD.
+// A read lock also invalidates on acquire -> held {0,1,2,3}=NEW, rest OLD.
 TEST_F(QuasarMeshDeviceSingleCardFixture, ScopedLockCacheInvalidateConsumer) {
     DFB_CACHE_SKIP_IF_NOT_QUASAR();
     DfbCacheParams p{

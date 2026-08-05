@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Validates that DataflowBuffer::scoped_lock() applies the Quasar L2 cache ops to *exactly the held
-// entries it walks*: invalidate on acquire (both roles) and flush on release (producer only). The
+// Validates that the DFB scoped lock applies the Quasar L2 cache ops to *exactly the held
+// entries it walks*: invalidate on acquire (both lock kinds) and flush on release (write lock only). The
 // held entries are wr_ptr + k*stride_size for k in [0, lock_n) — i.e. STRIDED neighbours must NOT be
 // touched.
 
@@ -61,9 +61,9 @@ void kernel_main() {
     }
 
     if (mode == DfbCacheTestMode::FlushOnRelease) {
-        // FLUSH-on-release. scoped_lock invalidates the held entries on construction and flushes on
-        // destruction, so the producer must write the data INSIDE the lock. Release then flushes the
-        // HELD entries (producer) L2->TL1; non-held stores stay cache-resident -> TL1 stays OLD.
+        // FLUSH-on-release. A write lock invalidates the held entries on acquire and flushes them on
+        // release, so the producer must write the data INSIDE the lock. Release then flushes the
+        // HELD entries L2->TL1; non-held stores stay cache-resident -> TL1 stays OLD.
         {
             auto lk = dfb.scoped_write_lock(lock_n);
             for (uint32_t s = 0; s < num_entries; ++s) {
@@ -77,7 +77,7 @@ void kernel_main() {
     } else {
         // INVALIDATE-on-acquire. Drop any prior cached lines, fetch the host's OLD sentinels into the
         // cache, then overwrite TL1 with NEW via the non-cacheable alias (cache keeps the stale OLD; an uncached
-        // write is not snooped). scoped_lock acquire invalidates the HELD entries' lines; a cacheable re-read
+        // write is not snooped). The lock's acquire invalidates the HELD entries' lines; a cacheable re-read
         // then misses for held slots (refetching NEW from TL1) and hits stale OLD for the rest. Results go to
         // the scratch region via the uncached alias.
         invalidate_l2_cache_range(ring_base, num_entries * entry_size);
