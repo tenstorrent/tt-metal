@@ -786,6 +786,21 @@ constexpr uint32_t SYNC_DBG_TAG_GLOBAL_OPEN = 0xB8;
 constexpr uint32_t SYNC_DBG_TAG_GLOBAL_SENT = 0xB9;
 constexpr uint32_t SYNC_DBG_TAG_GLOBAL_CLOSED = 0xBA;
 
+// [NOC-DELIVERY PROBE] Did the sync core's NoC write to the router actually land?
+//
+// send_header_non_blocking() uses EDM_IO_BLOCKING_MODE::NON_BLOCKING, so send_chunk_from_address()
+// issues noc_async_write() and returns WITHOUT any flush or barrier. The sync core then goes straight
+// into global_sync_finish() and spins on the semaphore. Nothing ever confirms the write reached the
+// router's L1 -- it is fire-and-forget, and the last packet before a long blocking wait is exactly
+// where that is most dangerous.
+//
+//   NOCPRE  value = outstanding non-posted writes BEFORE the flush (issued - acked)
+//   NOCPOST value = outstanding AFTER the flush; reaching this at all proves the write was acked,
+//                   i.e. it landed in the router's L1 and the NoC is NOT the failure point.
+// NOCPRE with no NOCPOST == the flush never returned == the write is stuck in the NoC.
+constexpr uint32_t SYNC_DBG_TAG_NOC_PRE = 0xBC;
+constexpr uint32_t SYNC_DBG_TAG_NOC_POST = 0xBD;
+
 // POLL pacing. The ring buffer holds only DEBUG_RING_BUFFER_ELEMENTS (32) entries, so an unbounded
 // poll is self-defeating: the sync core legitimately sits in local_sync(1) for the WHOLE run (it is
 // waiting for every sender to finish its 100M packets), and a fixed-interval poll fills all 32 slots
@@ -887,10 +902,25 @@ struct LineSyncConfig {
         packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val});
     }
 
-    void global_sync_start() {
+    void global_sync_start(uint8_t sync_iter = 0) {
         connection_manager_->template wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
         connection_manager_->template send_header_non_blocking<false>(
             connection_ptr_, connection_idx_, (uint32_t)packet_header);
+        // [NOC-DELIVERY PROBE] The send above is fire-and-forget (NON_BLOCKING: no flush, no barrier).
+        // Record outstanding non-posted writes, then force a flush so we learn whether the write was
+        // actually acked by the router's L1. NOTE: this flush is a behaviour change, not a pure
+        // observation -- it makes the send synchronous. If it also makes the hang disappear, that is
+        // itself the finding.
+        const uint8_t noc = get_fabric_worker_noc();
+        sync_dbg_push(
+            SYNC_DBG_TAG_NOC_PRE,
+            sync_iter,
+            noc_get_nonposted_writes_issued(noc) - noc_get_nonposted_writes_acked(noc));
+        noc_async_writes_flushed(noc);
+        sync_dbg_push(
+            SYNC_DBG_TAG_NOC_POST,
+            sync_iter,
+            noc_get_nonposted_writes_issued(noc) - noc_get_nonposted_writes_acked(noc));
     }
 
     void global_sync_finish(uint8_t sync_iter) {
@@ -2351,7 +2381,7 @@ struct SyncKernelConfig {
 
         // Send sync start packets
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            line_sync_configs()[i].global_sync_start();
+            line_sync_configs()[i].global_sync_start(sync_iter);
             sync_dbg_push(SYNC_DBG_TAG_GLOBAL_SENT, sync_iter, i);
         }
 

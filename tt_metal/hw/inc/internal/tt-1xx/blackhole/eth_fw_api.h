@@ -589,6 +589,84 @@ inline void fabric_dbg_mark_hwtx_after_restore() {
 #endif
 }
 
+// [SEND-GATE PROBE] Why did / didn't the router transmit, per sender channel.
+//
+// The router only puts a packet on the wire when BOTH inputs to its send gate are true:
+//     receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet()
+//     has_unsent_packet             = get_ptr_val(free_slots_stream) != num_buffers
+//     can_send                      = receiver_has_space && has_unsent_packet
+// Knowing WHICH input is false separates the two candidate explanations for the wedged barrier:
+//   has_unsent=0                -> nothing was handed to this channel; the packet isn't here
+//   has_unsent=1, recv_space=0  -> the packet IS queued but the remote receiver shows zero free
+//                                  slots, i.e. the sender is credit-starved and can never transmit
+//                                  it. This is the case that ties the barrier hang to the credit
+//                                  loss we measured, and it means the sync packet never reaches
+//                                  the wire at all.
+//
+// This matters most at END OF RUN: data traffic has stopped by then, so the only thing left to send
+// is the sync packet, and whatever the gate says at the hang is the reason the barrier died.
+// Overwritten every sender step, so a wedged router leaves the gate state frozen at the stuck value.
+//
+// Layout: [31:24] 0xC0|channel   [23:16] remote receiver free slots   [15:8] local free-slot stream
+//         [7:0] flags: bit0 has_unsent_packet, bit1 receiver_has_space, bit2 can_send
+constexpr uint32_t MEM_AERISC_SENDER_GATE_CH0_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 64;  // word[16]
+constexpr uint32_t MEM_AERISC_SENDER_GATE_CH1_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 68;  // word[17]
+
+// [SYNC-PACKET COUNTERS] Monotonic counts of atomic-inc packets crossing the eth link.
+//
+// A sync packet is distinguishable from bulk traffic by its header: the global-sync patterns are built
+// with ntype = NOC_UNICAST_ATOMIC_INC and size = 0, whereas this test's data pattern is
+// NOC_UNICAST_WRITE with a 4KB payload. So noc_send_type == NOC_UNICAST_ATOMIC_INC (2) uniquely
+// identifies a barrier sync signal here, and both the sender and receiver steps already have the
+// header field to hand -- the receiver literally already decodes it into packed.noc_send_type.
+//
+// These are COUNTERS, not state snapshots. That distinction matters: the send-gate words above record
+// the CURRENT gate state, which cannot tell "a packet was never queued" from "a packet was queued and
+// successfully transmitted" -- both leave the channel empty. A monotonic count settles it.
+//
+// Compare across a link: sender's TX count vs the peer's RX count.
+//   TX advances, peer RX advances -> packet crossed the wire; failure is further downstream
+//   TX advances, peer RX flat     -> transmitted and lost in flight
+//   TX flat                       -> never transmitted; the failure is upstream of the wire
+constexpr uint32_t MEM_AERISC_SYNC_TX_COUNT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 72;  // word[18]
+constexpr uint32_t MEM_AERISC_SYNC_RX_COUNT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 76;  // word[19]
+
+// ERISC0 owns the sender step, so the TX counter is single-writer there.
+inline void fabric_dbg_inc_sync_tx_count() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_TX_COUNT_ADDR);
+    *p = *p + 1;
+#endif
+}
+
+// ERISC1 owns the receiver step, so the RX counter is single-writer there.
+inline void fabric_dbg_inc_sync_rx_count() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
+    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_RX_COUNT_ADDR);
+    *p = *p + 1;
+#endif
+}
+
+inline void fabric_dbg_set_sender_gate(
+    [[maybe_unused]] uint32_t channel_index,
+    [[maybe_unused]] uint32_t recv_free_slots,
+    [[maybe_unused]] uint32_t local_free_slots,
+    [[maybe_unused]] bool has_unsent,
+    [[maybe_unused]] bool recv_has_space,
+    [[maybe_unused]] bool can_send) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    // Only channels 0/1 have a slot; anything else is dropped rather than scribbling past the region.
+    if (channel_index > 1) {
+        return;
+    }
+    const uint32_t addr = (channel_index == 0) ? MEM_AERISC_SENDER_GATE_CH0_ADDR : MEM_AERISC_SENDER_GATE_CH1_ADDR;
+    const uint32_t packed = ((0xC0u | (channel_index & 0xF)) << 24) | ((recv_free_slots & 0xFF) << 16) |
+                            ((local_free_slots & 0xFF) << 8) | (has_unsent ? 0x1u : 0u) | (recv_has_space ? 0x2u : 0u) |
+                            (can_send ? 0x4u : 0u);
+    *reinterpret_cast<volatile uint32_t*>(addr) = packed;
+#endif
+}
+
 // Push the current TX packet count into the watcher ring buffer. Called on every context switch so the
 // per-core ring buffer becomes a time series of the counter -- if the values keep changing across
 // dumps, TX is advancing; if they flatline, TX has stalled. Replaces the old recovery/link-status

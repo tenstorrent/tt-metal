@@ -122,6 +122,18 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
 
+#if defined(ARCH_BLACKHOLE)
+    // [SEND-GATE PROBE] Record why this channel will/won't transmit. At end of run the only packet
+    // left is the sync packet, so a frozen gate state here is the reason the barrier wedged.
+    fabric_dbg_set_sender_gate(
+        sender_channel_index,
+        outbound_to_receiver_channel_pointers.num_free_slots,
+        free_slots,
+        has_unsent_packet,
+        receiver_has_space_for_packet,
+        can_send);
+#endif
+
     if (can_send) {
         progress = true;
 
@@ -133,6 +145,13 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             uint32_t src_addr = local_sender_channel.get_cached_next_buffer_slot_addr();
 
             const size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
+
+#if defined(ARCH_BLACKHOLE)
+            // [SYNC-PACKET COUNTER] Classify BEFORE the send: once the payload is issued the slot is
+            // advanced and may be reused, so reading the header afterwards would be racy.
+            const bool is_sync_pkt =
+                (pkt_header->get_noc_send_type() == tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC);
+#endif
 
             bool busy = internal_::eth_txq_is_busy(sender_txq_id);
 
@@ -173,6 +192,11 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             fabric_dbg_advance_resume_phase(RESUME_PHASE_RETRAIN_DONE, RESUME_PHASE_FIRST_TX);
             fabric_dbg_set_resume_phase(RESUME_PHASE_TX_SEND_DONE);  // [FREEZE-PROBE] payload out + count bumped
             fabric_dbg_inc_tx_pkt_count();  // [TX-COUNT] one successful eth-link send by ERISC0
+            // [SYNC-PACKET COUNTER] Counted here, after the TXQ drain spin, so it means "actually put on
+            // the wire" rather than "queued".
+            if (is_sync_pkt) {
+                fabric_dbg_inc_sync_tx_count();
+            }
 #endif
         }
         sender_state.sender_amort_counter++;
@@ -326,6 +350,10 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
 #if defined(ARCH_BLACKHOLE)
         fabric_dbg_advance_resume_phase(RESUME_PHASE_FIRST_TX, RESUME_PHASE_FIRST_RX);
         fabric_dbg_inc_rx_pkt_count();  // [RX-COUNT] one packet received off eth + delivered locally
+        // [SYNC-PACKET COUNTER] packed.noc_send_type is already decoded above, so this is free.
+        if (packed.noc_send_type == tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC) {
+            fabric_dbg_inc_sync_rx_count();
+        }
 #endif
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(packet_header, local_fabric_telemetry);

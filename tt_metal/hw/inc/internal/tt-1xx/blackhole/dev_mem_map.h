@@ -260,8 +260,19 @@
 //   word[14] (+56) = receiver-step heartbeat -- increments every receiver step. If this
 //                    advances while word[0] (resume phase) is frozen, ERISC1 is alive and
 //                    the wedge is isolated to ERISC0.                                     (ERISC1)
-//   word[15]      = spare
-#define MEM_AERISC_RESUME_PHASE_SIZE 64
+//   word[15] (+60) = HW frames_txd sampled AFTER the post-retrain config restore            (ERISC0)
+//   word[16] (+64) = sender channel 0 send-gate state (see fabric_dbg_set_sender_gate)      (ERISC0)
+//   word[17] (+68) = sender channel 1 send-gate state -- the sync channel                   (ERISC0)
+//   word[18] (+72) = count of NOC_UNICAST_ATOMIC_INC packets TRANSMITTED over eth           (ERISC0)
+//   word[19] (+76) = count of NOC_UNICAST_ATOMIC_INC packets RECEIVED off eth               (ERISC1)
+// Words 18/19 isolate the barrier's sync packets from bulk traffic. In this test the data
+// pattern is NOC_UNICAST_WRITE and the ONLY atomic-inc packets are the global-sync signals,
+// so these two counters are effectively "sync packets sent / sync packets received" and can
+// be compared across a link to see whether a sync packet made it over the wire.
+// NOTE: words 16/17 exist because at end-of-run the ONLY thing left to transmit is the sync
+// packet, so whatever blocks the send gate then is what wedges the barrier. They record WHY
+// the router did or did not transmit, per channel, every sender step.
+#define MEM_AERISC_RESUME_PHASE_SIZE 80
 #define MEM_AERISC_RESUME_PHASE_BASE (MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE - MEM_AERISC_RESUME_PHASE_SIZE)
 
 // ERISC retrain counter (PRODUCTION -- not gated on watcher/testing, unlike the debug slot above). One
