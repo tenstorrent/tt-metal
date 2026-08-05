@@ -45,17 +45,50 @@ import torch
 DEFAULT_ROOT = os.environ.get("COSYVOICE_ROOT", "/root/tt/CosyVoice")
 
 
-def load_hift(model_dir: str):
+def load_module(model_dir: str, which: str):
+    """`which` is 'hift' or 'flow'; both come from the same cosyvoice.yaml."""
     from hyperpyyaml import load_hyperpyyaml
 
     with open(os.path.join(model_dir, "cosyvoice.yaml")) as fh:
         configs = load_hyperpyyaml(fh)
-    hift = configs["hift"]
-    sd = torch.load(os.path.join(model_dir, "hift.pt"), map_location="cpu", weights_only=True)
-    sd = {k.replace("generator.", ""): v for k, v in sd.items()}
-    hift.load_state_dict(sd, strict=True)
-    hift.eval()
-    return hift
+    module = configs[which]
+    sd = torch.load(os.path.join(model_dir, f"{which}.pt"), map_location="cpu", weights_only=True)
+    if which == "hift":
+        # hift.pt is saved with a `generator.` prefix; flow.pt is not.
+        sd = {k.replace("generator.", ""): v for k, v in sd.items()}
+    module.load_state_dict(sd, strict=True)
+    module.eval()
+    return module
+
+
+def load_hift(model_dir: str):
+    return load_module(model_dir, "hift")
+
+
+def flow_meta(flow) -> dict:
+    """Architecture constants the TTNN side needs and cannot read off a tensor."""
+    enc = flow.encoder
+    layer0 = enc.encoders[0]
+    attn = layer0.self_attn
+    return {
+        "module": "flow",
+        "n_layers": len(enc.encoders),
+        "n_head": int(attn.h),
+        "d_k": int(attn.d_k),
+        "d_model": int(attn.h * attn.d_k),
+        "ffn_dim": int(layer0.feed_forward.w_1.out_features),
+        "ff_scale": float(layer0.ff_scale),
+        "normalize_before": bool(layer0.normalize_before),
+        "layer_norm_eps": 1e-12,
+        "has_macaron": layer0.feed_forward_macaron is not None,
+        "has_conv_module": layer0.conv_module is not None,
+        "input_frame_rate": int(flow.input_frame_rate),
+        "output_size": int(flow.output_size),
+        "vocab_size": int(flow.input_embedding.num_embeddings),
+        "n_timesteps": 10,  # hardcoded at flow.py:inference
+        "inference_cfg_rate": float(flow.decoder.inference_cfg_rate),
+        "t_scheduler": flow.decoder.t_scheduler,
+    }
 
 
 def fold_weight_norm_inplace(model: torch.nn.Module) -> int:
@@ -81,6 +114,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cosyvoice-root", default=DEFAULT_ROOT)
     ap.add_argument("--checkpoint", default="CosyVoice-300M")
+    ap.add_argument("--module", default="hift", choices=["hift", "flow"], help="which submodule to export")
     ap.add_argument("--out", default=None, help="default <this file>/../tests/golden/hift_weights.npz")
     ap.add_argument("--fp16", action="store_true", help="halve the file; the device carries bf16 anyway")
     args = ap.parse_args()
@@ -90,49 +124,57 @@ def main() -> int:
     sys.path.insert(0, os.path.join(root, "third_party", "Matcha-TTS"))
     model_dir = os.path.join(root, "pretrained_models", args.checkpoint)
     out = args.out or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "tests", "golden", "hift_weights.npz"
+        os.path.dirname(os.path.abspath(__file__)), "..", "tests", "golden", f"{args.module}_weights.npz"
     )
     out = os.path.abspath(out)
 
-    hift = load_hift(model_dir)
-    n_params = sum(p.numel() for p in hift.parameters())
-    print(f"loaded {args.checkpoint} hift: {n_params/1e6:.2f} M params")
+    model = load_module(model_dir, args.module)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"loaded {args.checkpoint} {args.module}: {n_params/1e6:.2f} M params")
 
-    # Prove the fold is a no-op numerically before trusting it.
-    torch.manual_seed(0)
-    mel = torch.randn(1, 80, 64)
-    with torch.no_grad():
-        before = hift.f0_predictor(mel)
-    n_folded = fold_weight_norm_inplace(hift)
-    with torch.no_grad():
-        after = hift.f0_predictor(mel)
-    delta = (before - after).abs().max().item()
-    print(f"weight_norm folded in {n_folded} modules; max|Δ| on a forward pass = {delta:.3e}")
-    if delta > 1e-4:
-        raise SystemExit(f"fold changed the output by {delta} -- refusing to export")
+    if args.module == "hift":
+        # Prove the fold is a no-op numerically before trusting it.
+        torch.manual_seed(0)
+        mel = torch.randn(1, 80, 64)
+        with torch.no_grad():
+            before = model.f0_predictor(mel)
+        n_folded = fold_weight_norm_inplace(model)
+        with torch.no_grad():
+            after = model.f0_predictor(mel)
+        delta = (before - after).abs().max().item()
+        print(f"weight_norm folded in {n_folded} modules; max|Δ| on a forward pass = {delta:.3e}")
+        if delta > 1e-4:
+            raise SystemExit(f"fold changed the output by {delta} -- refusing to export")
+    else:
+        # The flow module uses no weight_norm anywhere; assert rather than assume.
+        assert fold_weight_norm_inplace(model) == 0, "flow unexpectedly has weight_norm"
 
     arrays, total = {}, 0
-    for name, tensor in hift.state_dict().items():
+    for name, tensor in model.state_dict().items():
         a = tensor.detach().cpu().float().numpy()
         if args.fp16 and a.dtype == np.float32 and a.size > (1 << 16):
             a = a.astype(np.float16)
         arrays[name] = a
         total += a.nbytes
 
-    meta = {
-        "checkpoint": args.checkpoint,
-        "n_params": int(n_params),
-        "istft_params": dict(hift.istft_params),
-        "lrelu_slope": float(hift.lrelu_slope),
-        "audio_limit": float(hift.audio_limit),
-        "num_kernels": int(hift.num_kernels),
-        "num_upsamples": int(hift.num_upsamples),
-        "sampling_rate": int(hift.sampling_rate),
-        # The Hann window the reference builds with scipy get_window(..., fftbins=True).
-        # Exported rather than recomputed so the device cannot disagree about it.
-        "stft_window": hift.stft_window.detach().cpu().numpy().tolist(),
-        "weight_norm_folded": True,
-    }
+    meta = {"checkpoint": args.checkpoint, "n_params": int(n_params), "module": args.module}
+    if args.module == "hift":
+        meta.update(
+            {
+                "istft_params": dict(model.istft_params),
+                "lrelu_slope": float(model.lrelu_slope),
+                "audio_limit": float(model.audio_limit),
+                "num_kernels": int(model.num_kernels),
+                "num_upsamples": int(model.num_upsamples),
+                "sampling_rate": int(model.sampling_rate),
+                # The Hann window the reference builds with scipy get_window(..., fftbins=True).
+                # Exported rather than recomputed so the device cannot disagree about it.
+                "stft_window": model.stft_window.detach().cpu().numpy().tolist(),
+                "weight_norm_folded": True,
+            }
+        )
+    else:
+        meta.update(flow_meta(model))
     arrays["__meta__"] = np.frombuffer(json.dumps(meta).encode(), dtype=np.uint8)
 
     os.makedirs(os.path.dirname(out), exist_ok=True)
