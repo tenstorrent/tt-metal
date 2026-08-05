@@ -28,7 +28,9 @@ from models.demos.cosyvoice.tt.weights import default_weights_path
 
 LLM_WEIGHTS = default_weights_path().replace("hift_", "llm_")
 
-needs_l1_small = pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+needs_l1_small = pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 67108864}], indirect=True
+)
 needs_weights = pytest.mark.skipif(
     not os.path.exists(LLM_WEIGHTS), reason="run scripts/export_weights.py --module llm --fp16 first"
 )
