@@ -254,30 +254,85 @@ class WanPipeline(PipelineAPIMixin):
     """
 
     @classmethod
-    def create_pipeline(
+    def _config_overrides(cls) -> dict[str, object]:
+        """`WanPipelineConfig.default` fields this variant pins, keyed by argument name.
+
+        A variant overrides this instead of reimplementing `create_pipeline`, and layers on
+        top via ``{**super()._config_overrides(), ...}``. A caller's `config_overrides` wins
+        over anything returned here.
+        """
+        return {"model_type": "t2v", "checkpoint_name": _DEFAULT_CHECKPOINT}
+
+    @classmethod
+    def default_config(
         cls,
         *,
         mesh_device: ttnn.MeshDevice,
-        checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        checkpoint_name: str | None = None,
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
         cfg_enabled: bool = True,
         max_sequence_length: int = 512,
+        config_overrides: dict[str, object] | None = None,
+    ) -> WanPipelineConfig:
+        """The config this variant runs by default, with `config_overrides` layered on top.
+
+        `config_overrides` takes any `WanPipelineConfig.default` keyword. Pair this with a
+        direct constructor call to build a variant whose `__init__` takes more than the
+        arguments `create_pipeline` knows about.
+        """
+        overrides = {**cls._config_overrides(), **(config_overrides or {})}
+        if checkpoint_name is not None:
+            overrides["checkpoint_name"] = checkpoint_name
+        return WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            cfg_enabled=cfg_enabled,
+            max_sequence_length=max_sequence_length,
+            **overrides,
+        )
+
+    @classmethod
+    def create_pipeline(
+        cls,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        checkpoint_name: str | None = None,
+        height: int = 480,
+        width: int = 832,
+        num_frames: int = 81,
+        cfg_enabled: bool = True,
+        max_sequence_length: int = 512,
+        config_overrides: dict[str, object] | None = None,
         scheduler: SchedulerMixin | None = None,
+        run_warmup: bool = True,
+        lora_enabled: bool = False,
         pipeline_class: type[WanPipeline] | None = None,
     ) -> WanPipeline:
-        config = WanPipelineConfig.default(
-            mesh_shape=mesh_device.shape,
+        """Build a pipeline from this variant's defaults plus the given overrides."""
+        # Resolved off the class being constructed, not `cls`, so `pipeline_class` gets its
+        # own overrides rather than those of whichever class the call was made on.
+        pipeline_class_ = pipeline_class or cls
+        config = pipeline_class_.default_config(
+            mesh_device=mesh_device,
             checkpoint_name=checkpoint_name,
             height=height,
             width=width,
             num_frames=num_frames,
             cfg_enabled=cfg_enabled,
             max_sequence_length=max_sequence_length,
+            config_overrides=config_overrides,
         )
-        pipeline_class_ = pipeline_class or cls
-        return pipeline_class_(device=mesh_device, config=config, scheduler=scheduler)
+        return pipeline_class_(
+            device=mesh_device,
+            config=config,
+            scheduler=scheduler,
+            run_warmup=run_warmup,
+            lora_enabled=lora_enabled,
+        )
 
     def __init__(
         self,
@@ -367,7 +422,7 @@ class WanPipeline(PipelineAPIMixin):
 
         self._solver = solver_for_scheduler(
             scheduler
-            or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=12.0)
+            or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=5)
         )
 
         # persistent latent buffers to enable safe tracing.
@@ -493,6 +548,19 @@ class WanPipeline(PipelineAPIMixin):
             latents = ttnn.typecast(latents, ttnn.bfloat16)
         return latents
 
+    def prepare_schedule(self, num_inference_steps: int, *, flow_shift: float | None = None) -> None:
+        """Adopt the schedule for one denoising run.
+
+        Override to derive the schedule from something other than the solver's own scheduler,
+        e.g. an explicit sigma ladder stepped by a scheduler-less solver.
+
+        Args:
+            num_inference_steps: Number of denoising steps.
+            flow_shift: Flow shift for this run only; the solver's construction-time value is
+                used when omitted.
+        """
+        self._solver.set_schedule(num_inference_steps, shift=flow_shift)
+
     def prepare_latents(
         self,
         batch_size: int,
@@ -601,11 +669,9 @@ class WanPipeline(PipelineAPIMixin):
 
         # 4. Prepare schedule
         # flow_shift is host-side only (it reshapes the sigma schedule); no captured trace
-        # depends on it. Omitting it restores the scheduler's construction-time value, so a
-        # per-request value never persists into a later request. Only passed when set, since
-        # a subclass running on a flow-match scheduler names its shift `shift` instead.
-        shift_kwargs = {} if flow_shift is None else {"flow_shift": flow_shift}
-        self._solver.set_schedule(num_inference_steps, **shift_kwargs)
+        # depends on it. None restores the solver's construction-time shift, so a per-request
+        # value never persists into a later request.
+        self.prepare_schedule(num_inference_steps, flow_shift=flow_shift)
         timesteps = self._solver.timesteps
 
         # 5. Prepare latent variables
@@ -674,6 +740,10 @@ class WanPipeline(PipelineAPIMixin):
                             self.condition_buffer = cond_latents_tt
                         else:
                             ttnn.copy(cond_latents_tt, self.condition_buffer)
+
+                        # Conditioning now lives in the persistent buffer; drop the host copy
+                        # so a later iteration cannot re-enter this branch and redo the work.
+                        cond_latents = None
 
                     rope_cos_1HND, rope_sin_1HND, trans_mat = ts.model.get_rope_features(latents)
                     rope_args = {

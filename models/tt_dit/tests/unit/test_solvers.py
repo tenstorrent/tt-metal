@@ -12,7 +12,7 @@ from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepSchedu
 
 import ttnn
 from models.tt_dit.solvers.euler import EulerSolver
-from models.tt_dit.solvers.factory import solver_for_scheduler
+from models.tt_dit.solvers.factory import CustomSigmaScheduler, solver_for_scheduler
 from models.tt_dit.solvers.unipc import UniPCSolver, UniPCVariant
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.check import assert_quality
@@ -121,6 +121,8 @@ def test_euler_without_scheduler_accepts_only_sigmas(expect_error) -> None:
         solver.set_schedule(_NUM_STEPS)
     with expect_error(ValueError, "accepts only `sigmas`"):
         solver.set_schedule(sigmas=sigmas, shift=5.0)
+    with expect_error(ValueError, "accepts only `sigmas`"):
+        solver.set_schedule(sigmas=sigmas, mu=0.75)
 
 
 def test_solver_without_schedule_rejects_access(expect_error) -> None:
@@ -129,11 +131,11 @@ def test_solver_without_schedule_rejects_access(expect_error) -> None:
         _ = EulerSolver().sigmas
 
 
-@pytest.mark.parametrize("shift_kwarg", ["flow_shift", "shift"])
-def test_omitted_shift_restores_construction_value(shift_kwarg: str) -> None:
-    """A per-run shift must not persist into the next run."""
+@pytest.mark.parametrize("family", ["unipc", "euler"])
+def test_omitted_shift_restores_construction_value(family: str) -> None:
+    """Every solver spells the per-run shift `shift`, and it must not persist into the next run."""
     default_shift = 3.0
-    if shift_kwarg == "flow_shift":
+    if family == "unipc":
         solver = solver_for_scheduler(_unipc_scheduler(flow_shift=default_shift))
     else:
         solver = solver_for_scheduler(FlowMatchEulerDiscreteScheduler(shift=default_shift))
@@ -141,14 +143,14 @@ def test_omitted_shift_restores_construction_value(shift_kwarg: str) -> None:
     solver.set_schedule(_NUM_STEPS)
     expected = solver.sigmas
 
-    solver.set_schedule(_NUM_STEPS, **{shift_kwarg: 12.0})
+    solver.set_schedule(_NUM_STEPS, shift=12.0)
     shifted = solver.sigmas
     assert shifted != expected
 
     solver.set_schedule(_NUM_STEPS)
     assert solver.sigmas == expected
 
-    solver.set_schedule(_NUM_STEPS, **{shift_kwarg: 12.0})
+    solver.set_schedule(_NUM_STEPS, shift=12.0)
     assert solver.sigmas == shifted
 
 
@@ -162,6 +164,16 @@ def test_solver_for_scheduler_dispatch(expect_error) -> None:
 
     with expect_error(ValueError, "no solver available"):
         solver_for_scheduler(object())
+
+
+def test_custom_sigma_scheduler_dispatches_to_a_scheduler_less_euler() -> None:
+    """The marker asks for Euler over sigmas the caller supplies, taken as given."""
+    solver = solver_for_scheduler(CustomSigmaScheduler())
+    assert isinstance(solver, EulerSolver)
+    assert solver.scheduler is None
+
+    solver.set_schedule(sigmas=[1.0, 0.5, 0.0])
+    assert solver.sigmas == (1.0, 0.5, 0.0)
 
 
 def test_solver_for_scheduler_takes_solver_config_from_scheduler() -> None:

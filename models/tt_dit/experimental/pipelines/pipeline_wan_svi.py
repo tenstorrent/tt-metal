@@ -141,51 +141,6 @@ class WanPipelineSVI(WanPipelineI2VLora):
             ),
         )
 
-    @classmethod
-    def create_pipeline(
-        cls,
-        *,
-        mesh_device: ttnn.MeshDevice,
-        height: int = 480,
-        width: int = 832,
-        num_frames: int = 81,
-        num_links: int | None = None,
-        dynamic_load: bool | None = None,
-        topology: ttnn.Topology | None = None,
-        is_fsdp: bool | None = None,
-        svi_high: str,
-        svi_low: str,
-        lightx2v_high: Optional[str] = None,
-        lightx2v_low: Optional[str] = None,
-        regime: Regime = "python",
-        num_motion_latent: int = 1,
-        num_overlap_frame: int = 4,
-    ) -> WanPipelineSVI:
-        config = WanPipelineConfig.default(
-            mesh_shape=mesh_device.shape,
-            checkpoint_name=WanPipelineI2VLora.BASE_DIFFUSERS_REPO,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            num_links=num_links,
-            topology=topology,
-            dynamic_load=dynamic_load,
-            is_fsdp=is_fsdp,
-            boundary_ratio=0.875,
-            model_type="i2v",
-        )
-        return cls(
-            device=mesh_device,
-            config=config,
-            svi_high=svi_high,
-            svi_low=svi_low,
-            lightx2v_high=lightx2v_high,
-            lightx2v_low=lightx2v_low,
-            regime=regime,
-            num_motion_latent=num_motion_latent,
-            num_overlap_frame=num_overlap_frame,
-        )
-
     def __call__(
         self,
         *args,
