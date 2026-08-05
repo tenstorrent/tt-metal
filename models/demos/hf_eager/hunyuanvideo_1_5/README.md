@@ -17,8 +17,8 @@ sampler calls repeatedly:
 
 - **Branch:** `sdawle/hunyuanvideo-bringup_bh_glx`
 - **18/18** DiT modules **on device** (native ttnn, PCC-verified)
-- **Full 121-frame video generation: 5:59 end-to-end** (32-chip sp=4, tile-sharded VAE)
-  — 3.2× vs the ~19 min 8-chip baseline. DiT + tiled VAE on device (all 32 chips);
+- **Full 121-frame video generation: 5:13 end-to-end** (32-chip sp=8×tp=4, tile-sharded
+  VAE) — 3.6× vs the ~19 min 8-chip baseline. DiT + tiled VAE on device (all 32 chips);
   text-encode (Qwen) on host — see "What runs where" below
 - **Per-step DiT device time optimized `6.43 → 5.10 ms` (1.26×)** via 16 committed
   fusion/sharding wins + an L1-fit guard (tt-hw-planner `optimize`)
@@ -68,8 +68,8 @@ $PY -m pytest $DIR/tests/e2e/test_real_weight_pcc.py -s   # real-weight DiT PCC 
 $PY -m pytest $DIR/tests/pcc/ -s                          # all 18 per-module PCC tests
 $PY -m pytest $DIR/tests/e2e/test_vae_decoder.py -s       # tiled VAE decode
 
-# --- 121-frame video generation (fastest: 32-chip sp=4 + tile-sharded VAE, ~5:59 e2e) ---
-HY_MESH=4,8 HY_DIT_SP=1 HY_DIT_BF16=1 HY_TT_QWEN=1 HY_TT_VAE=1 HY_VAE_TILE=1 HY_VAE_TILE_PX=128 \
+# --- 121-frame video generation (fastest: 32-chip sp=8×tp=4 + tile-sharded VAE, ~5:13 e2e) ---
+HY_MESH=8,4 HY_DIT_SP=1 HY_DIT_BF16=1 HY_TT_QWEN=1 HY_TT_VAE=1 HY_VAE_TILE=1 HY_VAE_TILE_PX=128 \
 HY_FRAMES=121 HY_STEPS=50 HY_H=480 HY_W=848 \
 $PY -m pytest $DIR/tests/e2e/test_stage2b_gen.py::test_stage2b_gen_qb2 -svv
 
@@ -90,7 +90,7 @@ Every flag is an env var; all are optional with the defaults below.
 | `HY_MESH` | (parametrized) | DiT mesh as `rows,cols` (e.g. `4,8`). With `HY_DIT_SP=1`: **rows → sp, cols → tp** |
 | `HY_DIT_SP` | `0` | **Sequence parallelism** — shard the latent sequence across mesh rows (`sp=rows`, head-`tp=cols`). **Required for any multi-row mesh**; without it the mesh flattens to `tp=N_devices` and the 16-head DiT errors (`heads_total=16 not divisible by tp=32`) |
 | `HY_DIT_BF16` | `0` | Load DiT weights + run block matmuls in **bf16** (faster; used for all perf numbers) |
-| `HY_TT_QWEN` | `0` | Run the **Qwen text encoder on device** if a submesh can be carved; **at sp=4 there's no room (DiT fills all rows) so it falls back to host** |
+| `HY_TT_QWEN` | `0` | Run the **Qwen text encoder on device** if a submesh can be carved; **at sp=4/sp=8 the DiT fills all rows so there's no room and it falls back to host** |
 | `HY_TT_VAE` | `0` | Run the **VAE decode on device** (else on host); auto **tile-shards** across the mesh when `ndev>1` |
 | `HY_VAE_TILE` | `0` | Enable **tiled VAE decode** (split the latent into H/W tiles) — required at high frame counts |
 | `HY_VAE_TILE_PX` | `0` | Per-tile pixel size; `0` = model default. **Use `128` at 121f** (192 px fragments DRAM) |
@@ -145,33 +145,37 @@ a single tile.
 | baseline (8-chip) | ~15:00 | — | 18:52 |
 | 16-chip, sp=2 | 6:21 | ~2:30 | 10:38 |
 | 32-chip, sp=4, replicated VAE | 3:05 | ~5:00 | 9:47 |
-| **32-chip, sp=4, tile-sharded VAE** | 3:02 | ~2:00 | **5:59** ✅ |
+| 32-chip, sp=4, tile-sharded VAE | 2:49 | ~2:00 | 5:59 |
+| **32-chip, sp=8×tp=4, tile-sharded VAE** | 1:55 | ~2:00 | **5:13** ✅ |
 
-**sp=4 with tile-sharded VAE is the fastest full-video config: 5:59 e2e (3.2× vs the
-~19 min 8-chip baseline)**, beating 16-chip sp=2 (10:38). Both DiT and VAE weights stay
-resident throughout; output is crisp and coherent (no tiling seams). Reproduced on
-hardware with the exact command above (warm cache): 359 s total, denoise 2:49.
+**sp=8×tp=4 with tile-sharded VAE is the fastest full-video config: 5:13 e2e (3.6× vs the
+~19 min 8-chip baseline).** The denoise is **attention-bound at 121f** (seq ~49k), and
+sequence-parallel directly divides the O(seq²) attention — so rebalancing sp=4→8 (tp=8→4,
+`HY_MESH=8,4`) cut per-step denoise **3.24→2.15 s/it (−34%)**, dropping denoise 2:49→1:55.
+Verified lossless: PCC(sp4, sp8) = 0.9971 on a matched forward (bf16 reduction-order noise
+only). Both DiT and VAE weights stay resident; output is crisp and coherent. *(sp=2×tp=16
+and any tp=16 are geometrically impossible on the 8×4 Galaxy — no 16-wide axis.)*
 
 At 121 frames the VAE tiles must be **128 px, not 192 px** — the high frame count (T=31)
 makes each tile's decode ~8× larger and 192 px fragments DRAM; 128 px fits with margin and
 still gives the two-round win. `ndev=1` falls back to the sequential path unchanged; the
 tile-shard flags default off.
 
-#### What runs where (5:59 sp=4 config)
+#### What runs where (5:13 sp=8×tp=4 config)
 
 | stage | placement | detail |
 |---|---|---|
-| Qwen 2.5-VL text-encode | **host (CPU)** | one-time; at sp=4 the DiT fills all 4 mesh rows, so no Qwen submesh can be carved (`HY_TT_QWEN=1` falls back to CPU) |
+| Qwen 2.5-VL text-encode | **host (CPU)** | one-time; the DiT fills every mesh row, so no Qwen submesh can be carved (`HY_TT_QWEN=1` falls back to CPU) |
 | byT5 text-encode | **host (CPU)** | one-time; no TT adapter (its DiT-side projection `s_byt5` *is* on device) |
 | Latent init + scheduler step | **host (CPU)** | stock diffusers: noise init once + flow-match latent update per step (cheap elementwise) |
-| **DiT denoise** (50 steps) | **on device** | all 32 chips, sp=4 × tp=8 — the heavy per-step compute |
+| **DiT denoise** (50 steps) | **on device** | all 32 chips, sp=8 × tp=4 — the heavy per-step compute |
 | **VAE decode** | **on device** | tile-sharded across all 32 chips, reusing the full mesh after denoise |
 | Frame post-proc → mp4/gif | **host (CPU)** | one-time save |
 
 So only the two heavy compute stages — **DiT and VAE** — run on device; both text encoders
 (Qwen + byT5) and the scheduler/latent/post-proc torch ops run on host. All of the host
 work is one-time or a cheap per-step elementwise update, so it barely dents the
-denoise-dominated 5:59. (No image encoder / VAE-encode runs in t2v at all.) At **sp=2**
+denoise-dominated 5:13. (No image encoder / VAE-encode runs in t2v at all.) At **sp=2**
 (16-chip) a spare mesh row *does* leave room to carve a Qwen submesh, so Qwen runs on
 device there — but the smaller DiT (denoise 6:21) makes that config slower overall
 (10:38 e2e).
@@ -252,7 +256,7 @@ All are 480×848, 24 fps, decoded through the on-device tiled VAE.
 - **Tiled VAE at 121f:** VAE tiles must be **128 px** (`HY_VAE_TILE_PX=128`); the high
   frame count makes each tile's decode ~8× larger and 192 px fragments DRAM. Decode is
   tile-sharded across the mesh, so it reuses the full 32-chip mesh once the DiT denoise
-  is done (sequential phases), which is what makes sp=4 the fastest e2e config.
+  is done (sequential phases), which is what lets the full 32-chip mesh (sp=8×tp=4) win.
 - **Reference vs real weights:** the per-component / e2e-PCC tests use deterministic-random
   (seed 0) weights with the repeated stacks shrunk to `num_layers=2` for CPU feasibility,
   so PCC validates the op implementation. `test_real_weight_pcc*` and the generation
