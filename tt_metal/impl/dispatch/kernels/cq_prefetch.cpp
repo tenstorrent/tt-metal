@@ -1123,10 +1123,13 @@ public:
     // two always agree.
     FORCE_INLINE InterleavedBankWalker(
         uint32_t page_id, uint32_t bank_base_address, uint32_t page_size, bool fold_offset) :
-        page_size_(page_size) {
+        // A page occupies a whole allocator-aligned slot in its bank, so the row stride is the page size rounded up to
+        // that alignment, not the page size itself. The two differ only for a command whose page size is not already
+        // aligned, which no buffer read generates but the command permits.
+        row_stride_(align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<is_dram>())) {
         const uint32_t row = interleaved_addr_gen::get_bank_offset_index<is_dram>(page_id);
         bank_ = interleaved_addr_gen::get_bank_index<is_dram>(page_id, row);
-        row_addr_ = bank_base_address + row * page_size;
+        row_addr_ = bank_base_address + row * row_stride_;
         if (fold_offset) {
             row_addr_ += interleaved_addr_gen::get_bank_offset<is_dram>(0);
         }
@@ -1173,7 +1176,7 @@ public:
     FORCE_INLINE void wrap_row() {
         ASSERT(bank_ == num_banks);
         bank_ = 0;
-        row_addr_ += page_size_;
+        row_addr_ += row_stride_;
     }
 
 #if ASSERT_ENABLED
@@ -1195,7 +1198,7 @@ private:
 
     uint32_t bank_ = 0;
     uint32_t row_addr_ = 0;
-    uint32_t page_size_ = 0;
+    uint32_t row_stride_ = 0;
 #if ASSERT_ENABLED
     uint32_t page_id_ = 0;
 #endif
