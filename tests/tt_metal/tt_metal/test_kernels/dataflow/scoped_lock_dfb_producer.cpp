@@ -17,6 +17,9 @@ void kernel_main() {
     const uint32_t target_entry_offset = get_arg(args::target_entry_offset);
     const uint32_t write_after_unlock = get_arg(args::write_after_unlock);
     const uint32_t skip_lock = get_arg(args::skip_lock);
+    // L1 word to stage the ring base into, so the host can read it back and hand it to a later,
+    // DFB-free program.
+    const uint32_t publish_ring_base_addr = get_arg(args::publish_ring_base_addr);
 
     Noc noc;
     UnicastEndpoint unicast_endpoint;
@@ -53,6 +56,10 @@ void kernel_main() {
         ring_base = static_cast<uint32_t>(lock.get_ptr().get_address());
         do_write();  // held lock covers only its entry: offset 0 -> no issue, in-region ->
                      // WRITE_TO_UNLOCKED_DFB, past -> no issue
+    }
+
+    if (publish_ring_base_addr != 0) {
+        *(volatile tt_l1_ptr uint32_t*)(uintptr_t)publish_ring_base_addr = ring_base;
     }
 
     dfb.push_back(1);

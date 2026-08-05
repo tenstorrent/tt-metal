@@ -669,9 +669,16 @@ void run_dfb_scoped_lock_test(
     bool write_after_unlock,
     ExpectedDfbIssue expected,
     bool skip_lock = false,
-    NOC producer_noc = NOC::NOC_0) {
+    NOC producer_noc = NOC::NOC_0,
+    DataMovementProcessor producer_processor = DataMovementProcessor::RISCV_0,
+    uint32_t publish_ring_base_addr = 0) {
     const experimental::NodeCoord core = {0, 0};
     auto virtual_core = mesh_device->worker_core_from_logical_core(core);
+
+    const bool producer_is_rv0 = (producer_processor == DataMovementProcessor::RISCV_0);
+    const int producer_proc_id = producer_is_rv0 ? 0 : 1;
+    const DataMovementProcessor consumer_processor =
+        producer_is_rv0 ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0;
 
     auto& mc = MetalContext::instance();
     uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
@@ -698,9 +705,9 @@ void run_dfb_scoped_lock_test(
     // The two DM kernels claim different NOCs, so the consumer takes whichever one the producer did not.
     const NOC consumer_noc = (producer_noc == NOC::NOC_0) ? NOC::NOC_1 : NOC::NOC_0;
     const experimental::DataMovementHardwareConfig dm_producer_cfg =
-        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = producer_noc};
+        experimental::DataMovementGen1Config{.processor = producer_processor, .noc = producer_noc};
     const experimental::DataMovementHardwareConfig dm_consumer_cfg =
-        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = consumer_noc};
+        experimental::DataMovementGen1Config{.processor = consumer_processor, .noc = consumer_noc};
 
     experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,
@@ -715,7 +722,8 @@ void run_dfb_scoped_lock_test(
                   "self_noc_y",
                   "target_entry_offset",
                   "write_after_unlock",
-                  "skip_lock"}},
+                  "skip_lock",
+                  "publish_ring_base_addr"}},
         .hw_config = dm_producer_cfg,
     };
     experimental::KernelSpec consumer_spec{
@@ -751,7 +759,8 @@ void run_dfb_scoped_lock_test(
          {"self_noc_y", static_cast<uint32_t>(virtual_core.y)},
          {"target_entry_offset", target_entry_offset},
          {"write_after_unlock", static_cast<uint32_t>(write_after_unlock)},
-         {"skip_lock", static_cast<uint32_t>(skip_lock)}});
+         {"skip_lock", static_cast<uint32_t>(skip_lock)},
+         {"publish_ring_base_addr", publish_ring_base_addr}});
     experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;  // no runtime args
     run_args.kernel_run_args = {producer_params, consumer_params};
@@ -768,7 +777,7 @@ void run_dfb_scoped_lock_test(
     if (expected == ExpectedDfbIssue::Locked) {
         std::vector<NOCDebugIssueType> locked_issues;
         for (IDevice* device : mesh_device->get_devices()) {
-            auto issues = fixture->get_write_to_locked_issues(device->id(), virtual_core, 0);
+            auto issues = fixture->get_write_to_locked_issues(device->id(), virtual_core, producer_proc_id);
             locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
         ASSERT_FALSE(locked_issues.empty()) << "Expected WRITE_TO_LOCKED_DFB; NOC debug did not report the violation.";
@@ -784,7 +793,7 @@ void run_dfb_scoped_lock_test(
     } else if (expected == ExpectedDfbIssue::Unlocked) {
         std::vector<NOCDebugIssueType> unlocked_issues;
         for (IDevice* device : mesh_device->get_devices()) {
-            auto issues = fixture->get_write_to_unlocked_dfb_issues(device->id(), virtual_core, 0);
+            auto issues = fixture->get_write_to_unlocked_dfb_issues(device->id(), virtual_core, producer_proc_id);
             unlocked_issues.insert(unlocked_issues.end(), issues.begin(), issues.end());
         }
         ASSERT_FALSE(unlocked_issues.empty())
@@ -800,12 +809,90 @@ void run_dfb_scoped_lock_test(
         }
     } else {
         for (IDevice* device : mesh_device->get_devices()) {
-            EXPECT_FALSE(fixture->has_write_to_locked_issue(device->id(), virtual_core, 0))
+            EXPECT_FALSE(fixture->has_write_to_locked_issue(device->id(), virtual_core, producer_proc_id))
                 << "Unexpected write-to-locked-DFB issue.";
-            EXPECT_FALSE(fixture->has_write_to_unlocked_dfb_issue(device->id(), virtual_core, 0))
+            EXPECT_FALSE(fixture->has_write_to_unlocked_dfb_issue(device->id(), virtual_core, producer_proc_id))
                 << "Unexpected write-to-unlocked-DFB issue.";
         }
     }
+}
+
+// A DFB's L1 extent must stop being tracked once the kernel that declared it exits, otherwise a later
+// program that reuses the same L1 for something else gets false WRITE_TO_UNLOCKED_DFB reports.
+void run_dfb_region_cleared_between_launches_test(
+    NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const experimental::NodeCoord core = {0, 0};
+    auto virtual_core = mesh_device->worker_core_from_logical_core(core);
+
+    auto& mc = MetalContext::instance();
+    const uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
+    const uint32_t unreserved_addr =
+        mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t src_buffer_addr = unreserved_addr + 0x10000;  // matches run_dfb_scoped_lock_test
+    const uint32_t publish_addr = unreserved_addr + 0x20000;     // scratch, clear of the ring
+    const uint32_t write_size = alignment;
+
+    // Launch 1. skip_lock -> writes entry 1 of its own ring with no lock held, so it must be flagged.
+    run_dfb_scoped_lock_test(
+        fixture,
+        mesh_device,
+        /*target_entry_index=*/1,
+        /*write_after_unlock=*/false,
+        ExpectedDfbIssue::Unlocked,
+        /*skip_lock=*/true,
+        /*producer_noc=*/NOC::NOC_0,
+        /*producer_processor=*/DataMovementProcessor::RISCV_0,
+        /*publish_ring_base_addr=*/publish_addr);
+
+    IDevice* device = mesh_device->get_devices()[0];
+    std::vector<uint32_t> published;
+    detail::ReadFromDeviceL1(device, CoreCoord{core.x, core.y}, publish_addr, sizeof(uint32_t), published);
+    ASSERT_FALSE(published.empty());
+    const uint32_t ring_base = published[0];
+    ASSERT_GT(ring_base, 0u) << "launch 1 did not publish its DFB ring base";
+
+    // Launch 2: a program with NO DFB binding, writing entry 0.
+    const experimental::KernelSpecName WRITER{"writer"};
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_l1_writer.cpp",
+        .num_threads = 1,
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"src_buffer_addr", "write_size", "self_noc_x", "self_noc_y", "target_addr"}},
+        .hw_config = experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0},
+    };
+    experimental::WorkUnitSpec writer_wu{.name = "main", .kernels = {WRITER}, .target_nodes = core};
+    experimental::ProgramSpec writer_program_spec{
+        .name = "dfb_free_l1_write", .kernels = {writer_spec}, .work_units = {writer_wu}};
+
+    Program writer_program = experimental::MakeProgramFromSpec(*mesh_device, writer_program_spec);
+    experimental::ProgramRunArgs writer_run_args;
+    experimental::ProgramRunArgs::KernelRunArgs writer_params{};
+    writer_params.kernel = WRITER;
+    writer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        core,
+        {{"src_buffer_addr", src_buffer_addr},
+         {"write_size", write_size},
+         {"self_noc_x", static_cast<uint32_t>(virtual_core.x)},
+         {"self_noc_y", static_cast<uint32_t>(virtual_core.y)},
+         {"target_addr", ring_base}});
+    writer_run_args.kernel_run_args = {writer_params};
+    experimental::SetProgramRunArgs(writer_program, writer_run_args);
+
+    distributed::MeshWorkload writer_workload;
+    const auto zero_coord = distributed::MeshCoordinate(0, 0);
+    writer_workload.add_program(distributed::MeshCoordinateRange(zero_coord, zero_coord), std::move(writer_program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), writer_workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    std::vector<NOCDebugIssueType> unlocked_issues;
+    for (IDevice* dev : mesh_device->get_devices()) {
+        auto issues = fixture->get_write_to_unlocked_dfb_issues(dev->id(), virtual_core, 0);
+        unlocked_issues.insert(unlocked_issues.end(), issues.begin(), issues.end());
+    }
+    EXPECT_EQ(unlocked_issues.size(), 1u)
+        << "Expected exactly one WRITE_TO_UNLOCKED_DFB (launch 1's). Got " << unlocked_issues.size() << ".";
 }
 
 // Cross-core variant: a WRITER on a different core NOC-writes into the locker's locked DFB ring
@@ -1285,6 +1372,45 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteUnlockedEntryIssue
     }
 }
 
+// Same case again, but the DFB producer runs on NCRISC instead of BRISC, and the issue is
+// asserted on NCRISC.
+TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteUnlockedEntryIssueNcrisc) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
+            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
+        }
+        run_dfb_scoped_lock_test(
+            this,
+            mesh_device,
+            /*target_entry_index=*/2,
+            /*write_after_unlock=*/false,
+            ExpectedDfbIssue::Unlocked,
+            /*skip_lock=*/false,
+            /*producer_noc=*/NOC::NOC_0,
+            /*producer_processor=*/DataMovementProcessor::RISCV_1);
+    }
+}
+
+// Writing into the entry you yourself locked, from NCRISC.
+TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteInOwnLockNoIssueNcrisc) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
+            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
+        }
+        run_dfb_scoped_lock_test(
+            this,
+            mesh_device,
+            /*target_entry_index=*/0,
+            /*write_after_unlock=*/false,
+            ExpectedDfbIssue::None,
+            /*skip_lock=*/false,
+            /*producer_noc=*/NOC::NOC_0,
+            /*producer_processor=*/DataMovementProcessor::RISCV_1);
+    }
+}
+
 // Lock held (one entry), but the write targets just PAST the ring -> no issue (outside the DFB region).
 TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBNoIssueSpatial) {
     for (auto& mesh_device : devices_) {
@@ -1323,6 +1449,18 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteNeverLockedIssue) 
             /*write_after_unlock=*/false,
             ExpectedDfbIssue::Unlocked,
             /*skip_lock=*/true);
+    }
+}
+
+// A DFB's L1 extent must stop being tracked when the kernel that declared it exits, so a later program
+// reusing that L1 is not falsely flagged.
+TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBRegionClearedBetweenLaunches) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
+            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
+        }
+        run_dfb_region_cleared_between_launches_test(this, mesh_device);
     }
 }
 
