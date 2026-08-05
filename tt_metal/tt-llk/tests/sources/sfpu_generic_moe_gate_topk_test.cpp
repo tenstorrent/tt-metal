@@ -35,10 +35,13 @@
 // under test cannot tell the difference, and a failure cannot be blamed on the FPU
 // half.
 //
-// NOTE: the LLK header is not self-contained -- it uses `Converter::as_float` in
-// `_generic_moe_gate_normalize_` without including sfpu/ckernel_sfpu_converter.h,
-// and reaches for `sfpu_reciprocal`/`sfpu_reciprocal_init` from the metal tree's
-// llk_sfpu/ckernel_sfpu_recip.h. Both are pulled in below before it.
+// The LLK header self-includes its prerequisites (sfpu/ckernel_sfpu_converter.h for
+// `Converter::as_float` and ckernel_sfpu_recip.h for `sfpu_reciprocal`), so this
+// driver just includes the header itself. Note the recip include is spelled
+// unqualified there and the exp/recip kernels live one layer up in the metal tree
+// (hw/ckernels/blackhole/metal/llk_api/llk_sfpu/), so the tt-llk test build has to
+// put that directory on the include path -- see setup_compilation_options in
+// helpers/test_config.py.
 
 #include <cstdint>
 
@@ -94,10 +97,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-
-// Prerequisites the LLK header uses but does not include (see file header).
-#include "llk_sfpu/ckernel_sfpu_recip.h"
-#include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h"
 
 using namespace ckernel;

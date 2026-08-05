@@ -24,6 +24,11 @@
 // half, and also asserts a column-order-independent invariant so a mapping
 // mismatch is distinguishable from a wrong result.
 //
+// The rows above are per invocation. VECTOR_MODE selects how many invocations:
+// None gives one (face 0 only), C gives two (face 0 then face 2, i.e. the same
+// rows again at +16). The *_first_column helpers are dispatched with C in
+// production, so both are swept for them.
+//
 // Buffer layout (all three input tiles come from buffer_A so no second operand
 // buffer is needed):
 //   tile 0 -> DEST tile 0 : in0
@@ -110,11 +115,11 @@ inline void run_sampling_op()
 #elif defined(SAMPLING_OP_GE)
     ckernel::sfpu::calculate_sampling_binary_comp_first_column<SfpuType::ge>(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
 #elif defined(SAMPLING_OP_ADD)
-    ckernel::sfpu::calculate_sampling_add_binary_first_column(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
+    ckernel::sfpu::calculate_sampling_binary_first_column<ckernel::sfpu::SamplingBinaryOp::add>(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
 #elif defined(SAMPLING_OP_SUB)
-    ckernel::sfpu::calculate_sampling_sub_binary_first_column(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
+    ckernel::sfpu::calculate_sampling_binary_first_column<ckernel::sfpu::SamplingBinaryOp::sub>(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
 #elif defined(SAMPLING_OP_MUL)
-    ckernel::sfpu::calculate_sampling_mul_binary_first_column(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
+    ckernel::sfpu::calculate_sampling_binary_first_column<ckernel::sfpu::SamplingBinaryOp::mul>(SAMPLING_IN0_TILE, SAMPLING_IN1_TILE, SAMPLING_OUT_TILE);
 #else
 #error "No SAMPLING_OP_* selected -- pass helpers.test_variant_parameters.SAMPLING_OP"
 #endif
@@ -132,11 +137,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    // The non-legacy reciprocal path reads vConstFloatPrgm0, so program it; the
-    // legacy_compat path carries its own constants and needs no setup. Everything
-    // else needs only the invariant SFPU config + ADDR_MOD_7 from the LLK init.
+    // The header's own init: programs vConstFloatPrgm0 for the non-legacy reciprocal
+    // path and is a no-op for legacy_compat. Everything else needs only the invariant
+    // SFPU config + ADDR_MOD_7 from the LLK init.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    ckernel::sfpu::sfpu_reciprocal_init<false /* APPROXIMATE */>();
+    ckernel::sfpu::sampling_recip_init<SAMPLING_LEGACY_COMPAT>();
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
@@ -146,11 +151,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             tile, formats.math, formats.math);
     }
 
-    // The sampling helpers do their own DEST tile addressing off dst_reg, so the
-    // window is opened at tile 0 and the vector mode is a single pass.
-    _llk_math_eltwise_sfpu_start_(0 /* dst_index */);
-    run_sampling_op();
-    _llk_math_eltwise_sfpu_done_();
+    // The sampling helpers do their own DEST tile addressing off dst_reg, so tile 0 is
+    // the window base for every vector mode.
+    //
+    // VectorMode::None is the single-pass unit check. VectorMode::C is what production
+    // actually dispatches the *_first_column helpers with (deepseek_v3_b1
+    // unified_kernels/sampling.hpp), and it is the interesting case: it invokes the
+    // helper twice with an inc_dst_face_addr between, so it pins down whether the
+    // helper's internal `dst_reg += 2` is a per-instruction immediate offset (second
+    // pass lands on face 2, as intended) or a persistent RWC advance (it does not).
+    _llk_math_eltwise_unary_sfpu_params_([] { run_sampling_op(); }, 0 /* dst_index */, VECTOR_MODE);
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

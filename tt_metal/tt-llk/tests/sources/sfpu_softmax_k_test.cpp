@@ -23,31 +23,16 @@
 // its even partner k-1 is a valid non-zero lane, so it would otherwise be
 // exponentiated. Valid inputs must be non-zero.
 //
-// ---------------------------------------------------------------------------
-// UPSTREAM BLOCKER -- read before extending this test
-// ---------------------------------------------------------------------------
-// ckernel_sfpu_softmax_k.h does not compile as committed. Three problems:
+// ckernel_sfpu_softmax_k.h self-includes its exp/reduce prerequisites and declares
+// SFPCONFIG_TARGET_LREG11 / SFPCONFIG_MOD_SET_LREG11 itself, so this driver needs no
+// prerequisite includes and no local #defines. Note the header still spells those
+// includes unqualified ("ckernel_sfpu_exp.h"), and the exp/reduce kernels live one
+// layer up in the metal tree (hw/ckernels/blackhole/metal/llk_api/llk_sfpu/), so the
+// tt-llk test build has to put that directory on the include path -- see
+// setup_compilation_options in helpers/test_config.py.
 //
-//  1. It calls `sfpu::exp_init` and `sfpu::calculate_exponential` without
-//     including them; they live in the metal tree at
-//     llk_sfpu/ckernel_sfpu_exp.h.
-//  2. It calls `sfpu::horizontal_reduce<false>()` without including it; that is
-//     in llk_sfpu/ckernel_sfpu_reduce.h. (Both are layers ABOVE tt-llk.)
-//  3. `_zero_paired_odd_tail_lane_` uses SFPCONFIG_TARGET_LREG11 and
-//     SFPCONFIG_MOD_SET_LREG11, which are declared NOWHERE in tt-metal or
-//     tt-llk. They are ordinary identifiers, not macros, so lookup happens at
-//     template-definition time -- the file fails to compile even when the odd-k
-//     branch is never instantiated.
-//
-// (1) and (2) are fixed here by including the two headers first. (3) cannot be
-// fixed from a test without inventing the encoding, so the two names are
-// #defined below with the values the rest of the codebase uses for this
-// operation (`_sfpu_load_config32_` in sfpu/ckernel_sfpu_load_config.h does
-// `TTI_SFPCONFIG(0, dest, 0)` to write LREG11..14), and the python side sweeps
-// EVEN k only, where the branch is dead. Odd k stays uncovered until the LLK
-// declares these constants for real -- the imm16 mask usage in softmax_k
-// (0x5555 / 1 << (k-1)) has no precedent in the tree, so guessing it here would
-// be inventing hardware behaviour rather than testing it.
+// Both even and odd k are swept. Odd k is what exercises
+// `_zero_paired_odd_tail_lane_` and its 1u << (k - 1) tail mask.
 
 #include <cstdint>
 
@@ -94,16 +79,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 
-// Prerequisites the LLK header calls but does not include -- see UPSTREAM BLOCKER
-// (1) and (2). Order matters: these must precede the softmax_k include.
-#include "llk_sfpu/ckernel_sfpu_exp.h"
-#include "llk_sfpu/ckernel_sfpu_reduce.h"
-
-// UPSTREAM BLOCKER (3): supply the two undeclared SFPCONFIG operands so the file
-// parses. Only reached for odd k, which this test does not sweep.
-#define SFPCONFIG_TARGET_LREG11  ckernel::p_sfpu::LREG11
-#define SFPCONFIG_MOD_SET_LREG11 0
-
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
 #include "sfpu/experimental/ckernel_sfpu_softmax_k.h"
 #undef DST_ACCUM_MODE
@@ -116,7 +91,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     static_assert(SOFTMAX_K >= 2 && SOFTMAX_K <= 16, "softmax_k operates on the 16 columns of one face");
-    static_assert((SOFTMAX_K % 2) == 0, "odd k needs _zero_paired_odd_tail_lane_, which does not compile -- see UPSTREAM BLOCKER (3)");
 
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();

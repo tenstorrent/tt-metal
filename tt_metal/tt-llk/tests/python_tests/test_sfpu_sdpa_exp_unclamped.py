@@ -68,12 +68,11 @@ INPUT_RANGES = [(-20.0, 0.0), (-88.0, 0.0), (-4.0, 4.0)]
 
 @parametrize(
     formats=FORMATS,
-    dest_acc=[DestAccumulation.No],
     input_range=INPUT_RANGES,
     scale=[BF16_ONE, BF16_HALF],
     num_tiles=[1, 2],
 )
-def test_sfpu_sdpa_exp_unclamped(formats, dest_acc, input_range, scale, num_tiles):
+def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale, num_tiles):
     torch.manual_seed(0)
 
     torch_format = format_dict[formats.input_format]
@@ -111,7 +110,8 @@ def test_sfpu_sdpa_exp_unclamped(formats, dest_acc, input_range, scale, num_tile
             tile_count_B=1,
             tile_count_res=num_tiles,
         ),
-        dest_acc=dest_acc,
+        # Pinned, not swept: the kernel static_asserts !is_fp32_dest_acc_en.
+        dest_acc=DestAccumulation.No,
         unpack_to_dest=False,
     )
 

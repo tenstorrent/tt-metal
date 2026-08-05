@@ -12,6 +12,14 @@ hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sampling.
   binary_comp_first_column<le|lt|ge>   (in0 OP in1) ? 1 : 0   rows 0-15
   add/sub/mul_binary_first_column      in0 +|-|* in1          rows 0-15
 
+The row ranges above are per invocation, at the current face base. vector_mode
+selects how many invocations the SFPU dispatch makes: VectorMode.None_ one (face 0),
+VectorMode.C two (face 0, then face 2 = the same rows at +16). Production dispatches
+the *_first_column helpers with VectorMode::C, so both modes are swept for them; the
+single-slot scalar ops are always VectorMode::None there. The C case is what pins
+down whether the helpers' internal `dst_reg += 2` is a per-instruction immediate
+offset (second pass lands on face 2, as intended) or a persistent RWC advance.
+
 One SFPLOAD/SFPSTORE covers 4 DEST rows x 8 of a face's 16 columns, and the
 "first column" helpers step +4 address units per iteration, so they walk rows 0-15
 of face 0 but only half its columns -- the callers only ever read column 0. Address
@@ -42,7 +50,7 @@ from helpers.golden_generators import (
     get_golden_generator,
     round_to_dest_width,
 )
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation, VectorMode, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
@@ -50,6 +58,7 @@ from helpers.test_variant_parameters import (
     SAMPLING_LEGACY_COMPAT,
     SAMPLING_OP,
     SFPU_UNARY_SCALAR,
+    VECTOR_MODE,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
@@ -63,9 +72,14 @@ NUM_TILES = 3  # in0, in1, zero-initialised output
 TOUCHED_COLUMNS = list(range(0, FACE_DIM, 2))
 UNTOUCHED_COLUMNS = list(range(1, FACE_DIM, 2))
 
-# Rows of face 0 each helper walks.
+# Rows each helper walks, per invocation, starting at the invocation's face base.
 SINGLE_SLOT_ROWS = 4
 FIRST_COLUMN_ROWS = 16
+
+# Row offset of each face the dispatch visits. VectorMode.None_ invokes the helper
+# once (face 0); VectorMode.C invokes it again after two inc_dst_face_addr, landing
+# on face 2, which is rows 16-31 of the same columns.
+FACE_ROW_BASES = {VectorMode.None_: (0,), VectorMode.C: (0, 16)}
 
 CLAMP_MAX = 0.75
 MUL_SCALAR = 3.0
@@ -143,10 +157,10 @@ def _column_uniform_tile(row_values: torch.Tensor, torch_format) -> torch.Tensor
 
 
 def assert_row_multiset(
-    result_face, expected_transformed, expected_untouched, rows, op, tol
+    result_face, expected_transformed, expected_untouched, walked_rows, op, tol
 ):
     """Checks each walked row without assuming which half of its columns was hit."""
-    for row in range(rows):
+    for row in walked_rows:
         got = sorted(result_face[row, :FACE_DIM].tolist())
         want = sorted(
             [expected_transformed[row].item()] * len(TOUCHED_COLUMNS)
@@ -162,10 +176,10 @@ def assert_row_multiset(
 
 
 def assert_even_columns(
-    result_face, expected_transformed, expected_untouched, rows, op, tol
+    result_face, expected_transformed, expected_untouched, walked_rows, op, tol
 ):
     """Pins the even-column reading of the SFPU DEST address."""
-    for row in range(rows):
+    for row in walked_rows:
         for col in TOUCHED_COLUMNS:
             got = result_face[row, col].item()
             want = expected_transformed[row].item()
@@ -187,15 +201,28 @@ def assert_even_columns(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     op=list(SAMPLING_OPS.keys()),
     legacy_compat=[True, False],
+    vector_mode=[VectorMode.None_, VectorMode.C],
 )
-def test_sfpu_sampling(formats, dest_acc, op, legacy_compat):
-    is_binary, rows_walked = SAMPLING_OPS[op]
+def test_sfpu_sampling(formats, dest_acc, op, legacy_compat, vector_mode):
+    is_binary, rows_per_face = SAMPLING_OPS[op]
 
     if op != "recip_scalar" and not legacy_compat:
         pytest.skip("legacy_compat only applies to recip_scalar")
 
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    if vector_mode == VectorMode.C and rows_per_face != FIRST_COLUMN_ROWS:
+        # Production dispatches only the *_first_column helpers with VectorMode::C;
+        # the single-slot scalar ops are always VectorMode::None.
+        pytest.skip("VectorMode::C only applies to the *_first_column helpers")
+
+    walked_rows = [
+        base + row
+        for base in FACE_ROW_BASES[vector_mode]
+        for row in range(rows_per_face)
+    ]
+    untouched_rows = [row for row in range(TILE_DIM) if row not in walked_rows]
 
     torch.manual_seed(0)
 
@@ -230,6 +257,7 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat):
             SAMPLING_OP(op=op),
             SAMPLING_LEGACY_COMPAT(legacy_compat=legacy_compat),
             SFPU_UNARY_SCALAR(value_bits=scalar_bits),
+            VECTOR_MODE(vector_mode=vector_mode),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -291,12 +319,14 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat):
         out_face = result_tiles[0]
         untouched = in0_ref
 
-    assert_row_multiset(out_face, transformed, untouched, rows_walked, op, tol)
-    assert_even_columns(out_face, transformed, untouched, rows_walked, op, tol)
+    assert_row_multiset(out_face, transformed, untouched, walked_rows, op, tol)
+    assert_even_columns(out_face, transformed, untouched, walked_rows, op, tol)
 
     # Rows the helper never walks. Compared exactly: these lanes are still the
     # datacopied input, which round-trips losslessly for every format combination.
-    for row in range(rows_walked, TILE_DIM):
+    # For VectorMode::C this is what catches the second invocation landing on the
+    # wrong face -- a stray write shows up here rather than in the walked rows.
+    for row in untouched_rows:
         for col in range(TILE_DIM):
             got = out_face[row, col].item()
             want = untouched[row].item()
@@ -304,8 +334,8 @@ def test_sfpu_sampling(formats, dest_acc, op, legacy_compat):
                 f"{op}: row {row} is outside the walked range but changed at "
                 f"column {col}: got {got}, want {want}"
             )
-    # Face 1 (columns 16-31) is never addressed, even in the walked rows.
-    for row in range(rows_walked):
+    # The right-hand faces (columns 16-31) are never addressed, even in walked rows.
+    for row in walked_rows:
         for col in range(FACE_DIM, TILE_DIM):
             got = out_face[row, col].item()
             want = untouched[row].item()
