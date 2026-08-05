@@ -29,9 +29,12 @@ from ....encoders.qwen3vl.vision_qwen3vl import (
     Qwen3VlVisionAttention,
     Qwen3VlVisionBlock,
     Qwen3VlVisionMLP,
+    resolve_vision_parallel,
     vision_rope_position_ids,
     vision_rope_tensors,
 )
+from ....parallel.config import EncoderParallelConfig, ParallelFactor
+from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
@@ -177,14 +180,70 @@ def test_head_dim_padding_is_a_noop_when_aligned():
 
 # ------------------------------------------------------------------------- device
 
-_MESH = [pytest.param((1, 1), (1, 1), id="single")]
+# `single` is the replicated reference. The parallel configs shard the tower itself: TP fractures the
+# 16 heads (2/device at TP=8) and the MLP's intermediate; SP splits the patch rows and runs ring SDPA.
+# TP and SP must occupy different mesh axes, so the 8x4 system covers TP=8 x SP=4.
+#
+# `device_params` is per-config: the CCL paths need FABRIC_1D, but requesting it on a 1x1 mesh has no
+# remote ethernet partner and times out in router init.
+_L1_SMALL = 32768
+_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": _L1_SMALL}
+_NO_FABRIC = {"l1_small_size": _L1_SMALL}
+
+_MESH = [
+    pytest.param((1, 1), (1, 1), None, None, 1, _NO_FABRIC, id="single"),
+    pytest.param((8, 4), (8, 4), 0, None, 2, _FABRIC, id="tp8"),
+    pytest.param((8, 4), (8, 4), None, 1, 2, _FABRIC, id="sp4"),
+    pytest.param((8, 4), (8, 4), 0, 1, 2, _FABRIC, id="tp8_sp4"),
+]
+_PARAMS = pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "tp_axis", "sp_axis", "num_links", "device_params"),
+    _MESH,
+    indirect=["mesh_device", "device_params"],
+)
 
 
-@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+def _parallel(submesh, tp_axis, sp_axis, num_links):
+    """The resolved `VisionParallel` these submodules take, or `None` when fully replicated."""
+    if tp_axis is None and sp_axis is None:
+        return None
+    shape = tuple(submesh.shape)
+    cfg = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=shape[tp_axis] if tp_axis is not None else 1, mesh_axis=tp_axis),
+        sequence_parallel=(ParallelFactor(factor=shape[sp_axis], mesh_axis=sp_axis) if sp_axis is not None else None),
+    )
+    ccl = CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear)
+    return resolve_vision_parallel(submesh, cfg, ccl)
+
+
+def _skip_if_sp_misaligned(total, submesh, sp_axis):
+    """SP needs a tile-aligned per-device row count.
+
+    Ring SDPA requires `N_local_q % 32 == 0`, which is stricter than the merger's 4-row merge group.
+    The `small` grid is 24 patches and cannot divide into 4 tile-aligned shards, so it is a skip rather
+    than a failure -- it exists to keep the CPU reference cheap, not to exercise SP.
+    """
+    if sp_axis is None:
+        return
+    sp = tuple(submesh.shape)[sp_axis]
+    if total % (sp * 32) != 0:
+        pytest.skip(f"{total} patches do not divide into {sp} tile-aligned shards (needs a multiple of {sp * 32})")
+
+
+def _sp_shard(x, submesh, sp_axis):
+    """Upload row-sharded on the SP axis (replicated when SP is off)."""
+    if sp_axis is None:
+        return bf16_tensor(x, device=submesh)
+    return bf16_tensor(x, device=submesh, mesh_axis=sp_axis, shard_dim=0)
+
+
+@_PARAMS
 @pytest.mark.parametrize("name", list(GRIDS))
-def test_mlp_on_device(reference, mesh_device, submesh_shape, name):
+def test_mlp_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name):
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    parallel = _parallel(submesh, tp_axis, sp_axis, num_links)
     total = sum(t * h * w for t, h, w in GRIDS[name])
+    _skip_if_sp_misaligned(total, submesh, sp_axis)
     torch.manual_seed(0)
     x = torch.randn(total, HIDDEN_SIZE)
     with torch.no_grad():
@@ -195,19 +254,22 @@ def test_mlp_on_device(reference, mesh_device, submesh_shape, name):
         intermediate_size=INTERMEDIATE_SIZE,
         hidden_act=HIDDEN_ACT,
         mesh_device=submesh,
+        parallel=parallel,
     )
     mlp.load_torch_state_dict(reference.blocks[0].mlp.state_dict())
-    out = mlp.forward(bf16_tensor(x, device=submesh))
-    assert_quality(golden, tensor.to_torch(out, mesh_axes=[None, None]), pcc=0.998)
+    # SP leaves the result row-sharded (only the tower gathers), so rows are composed back here.
+    out = mlp.forward(_sp_shard(x, submesh, sp_axis))
+    assert_quality(golden, tensor.to_torch(out, mesh_axes=[sp_axis, None]), pcc=0.998)
 
 
-@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+@_PARAMS
 @pytest.mark.parametrize("name", list(GRIDS))
-def test_attention_on_device(reference, mesh_device, submesh_shape, name):
+def test_attention_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name):
     """One image is one block, so the reference's `cu_seqlens = [0, h*w]` path is plain attention."""
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     grid = torch.tensor(GRIDS[name], dtype=torch.long)
     total = sum(t * h * w for t, h, w in GRIDS[name])
+    _skip_if_sp_misaligned(total, submesh, sp_axis)
 
     torch.manual_seed(0)
     x = torch.randn(total, HIDDEN_SIZE)
@@ -219,26 +281,33 @@ def test_attention_on_device(reference, mesh_device, submesh_shape, name):
             .float()
         )
 
-    attn = Qwen3VlVisionAttention(hidden_size=HIDDEN_SIZE, num_heads=NUM_HEADS, mesh_device=submesh)
+    attn = Qwen3VlVisionAttention(
+        hidden_size=HIDDEN_SIZE,
+        num_heads=NUM_HEADS,
+        mesh_device=submesh,
+        parallel=_parallel(submesh, tp_axis, sp_axis, num_links),
+    )
     # the override that keeps the padding zeros from changing the softmax temperature
     assert attn.head_dim == HEAD_DIM and attn.padded_head_dim == PADDED_HEAD_DIM
     assert attn.scale == pytest.approx(HEAD_DIM**-0.5)
     attn.load_torch_state_dict(reference.blocks[0].attn.state_dict())
     tt_cos, tt_sin = vision_rope_tensors(grid, head_dim=HEAD_DIM, spatial_merge_size=SPATIAL_MERGE_SIZE)
+    # cos/sin are per-row, so they shard alongside the hidden states under SP.
     out = attn.forward(
-        bf16_tensor(x, device=submesh),
-        pos_embeds=(bf16_tensor(tt_cos, device=submesh), bf16_tensor(tt_sin, device=submesh)),
+        _sp_shard(x, submesh, sp_axis),
+        pos_embeds=(_sp_shard(tt_cos, submesh, sp_axis), _sp_shard(tt_sin, submesh, sp_axis)),
     )
-    assert_quality(golden, tensor.to_torch(out, mesh_axes=[None, None]), pcc=0.99)
+    assert_quality(golden, tensor.to_torch(out, mesh_axes=[sp_axis, None]), pcc=0.99)
 
 
-@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+@_PARAMS
 @pytest.mark.parametrize("name", list(GRIDS))
-def test_block_on_device(reference, mesh_device, submesh_shape, name):
+def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name):
     """The whole pre-norm block: LayerNorm + attention + LayerNorm + MLP, both residuals."""
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     grid = torch.tensor(GRIDS[name], dtype=torch.long)
     total = sum(t * h * w for t, h, w in GRIDS[name])
+    _skip_if_sp_misaligned(total, submesh, sp_axis)
 
     torch.manual_seed(0)
     x = torch.randn(total, HIDDEN_SIZE)
@@ -255,11 +324,12 @@ def test_block_on_device(reference, mesh_device, submesh_shape, name):
         hidden_act=HIDDEN_ACT,
         norm_eps=NORM_EPS,
         mesh_device=submesh,
+        parallel=_parallel(submesh, tp_axis, sp_axis, num_links),
     )
     block.load_torch_state_dict(reference.blocks[0].state_dict())
     tt_cos, tt_sin = vision_rope_tensors(grid, head_dim=HEAD_DIM, spatial_merge_size=SPATIAL_MERGE_SIZE)
     out = block.forward(
-        bf16_tensor(x, device=submesh),
-        pos_embeds=(bf16_tensor(tt_cos, device=submesh), bf16_tensor(tt_sin, device=submesh)),
+        _sp_shard(x, submesh, sp_axis),
+        pos_embeds=(_sp_shard(tt_cos, submesh, sp_axis), _sp_shard(tt_sin, submesh, sp_axis)),
     )
-    assert_quality(golden, tensor.to_torch(out, mesh_axes=[None, None]), pcc=0.99)
+    assert_quality(golden, tensor.to_torch(out, mesh_axes=[sp_axis, None]), pcc=0.99)

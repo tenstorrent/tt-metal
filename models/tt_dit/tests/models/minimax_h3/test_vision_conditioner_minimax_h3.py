@@ -201,7 +201,19 @@ def conditioner():
     return path, hf.model.eval()
 
 
-def _tower(reference_visual, submesh):
+def _tower(reference_visual, submesh, tp_axis=None, num_links=1):
+    """The tower under the SAME tensor-parallel factor the decoder runs at.
+
+    The tower used to run fully replicated while the decoder sharded its weights TP ways, so 8 devices
+    each recomputed the identical tower. TP fractures its heads, MLP intermediate and mergers instead.
+    Its merged tokens still come back full-width, so nothing downstream changes -- `_scatter_rows` needs
+    the whole width and gets it.
+
+    Sequence parallelism is deliberately NOT enabled here: `ref2va` and video presentations produce
+    several `cu_seqlens` blocks, which the tower rejects under SP (ring SDPA takes no block boundaries).
+    Single-image `fl2va` could take it, at `sp_axis=0` on this 4x8 mesh, once the patch count is a
+    multiple of `sp_factor * 32`.
+    """
     vc = reference_visual.config
     tower = Qwen3VlVisionModel(
         hidden_size=vc.hidden_size,
@@ -218,6 +230,16 @@ def _tower(reference_visual, submesh):
         norm_eps=1e-6,
         deepstack_visual_indexes=vc.deepstack_visual_indexes,
         mesh_device=submesh,
+        parallel_config=(
+            None
+            if tp_axis is None
+            else EncoderParallelConfig(
+                tensor_parallel=ParallelFactor(factor=tuple(submesh.shape)[tp_axis], mesh_axis=tp_axis)
+            )
+        ),
+        ccl_manager=(
+            None if tp_axis is None else CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear)
+        ),
     )
     tower.load_torch_state_dict(reference_visual.state_dict())
     return tower
@@ -253,7 +275,7 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
             ref_out = reference.visual(pixel_values, grid_thw=grid, return_dict=True)
         assert len(ref_out.deepstack_features) == len(vc.deepstack_visual_indexes)
 
-    tower = _tower(reference.visual, submesh)
+    tower = _tower(reference.visual, submesh, tp_axis, num_links)
     print("Prepare Vision Rope")
     cos, sin = tower.prepare_rope(grid)
     print("Tower Forward")
@@ -356,7 +378,7 @@ def test_vision_tower_ref2va_real_weights(conditioner, mesh_device, submesh_shap
         with torch.no_grad():
             ref_out = reference.visual(pixel_values, grid_thw=grid, return_dict=True)
 
-    tower = _tower(reference.visual, submesh)
+    tower = _tower(reference.visual, submesh, tp_axis, num_links)
     print("Prepare Vision Rope")
     cos, sin = tower.prepare_rope(grid)
     print("Tower Forward")
@@ -466,7 +488,7 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
         assert golden.shape == (1, seq_len, cfg.hidden_size)
 
     # --- port ---
-    tower = _tower(reference.visual, submesh)
+    tower = _tower(reference.visual, submesh, tp_axis, num_links)
     print("Prepare Vision Rope")
     vis_cos, vis_sin = tower.prepare_rope(grid)
     print("Tower Forward")
@@ -642,7 +664,7 @@ def test_fused_conditioner_ref2va_real_weights(conditioner, mesh_device, submesh
         golden = captured[TAP].float()
 
     # --- port ---
-    tower = _tower(reference.visual, submesh)
+    tower = _tower(reference.visual, submesh, tp_axis, num_links)
     print("Prepare Vision Rope")
     vis_cos, vis_sin = tower.prepare_rope(grid)
     print("Tower Forward")
