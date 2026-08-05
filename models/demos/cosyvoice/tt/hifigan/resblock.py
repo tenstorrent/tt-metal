@@ -89,20 +89,30 @@ class TtResBlock:
         )
 
     def __call__(self, x, length: int, batch_size: int = 1):
-        """x: ttnn [N, L, C] -> ttnn [N, L, C]. Length is unchanged ("same" padding)."""
+        """x: ttnn [N, L, C] -> ttnn [N, L, C]. Length is unchanged ("same" padding).
+
+        OWNERSHIP: this frees only the intermediates it creates, never `x`. HiFT
+        runs three ResBlocks over the *same* input per stage and averages them, so
+        a block that deallocated its input would hand the next one a freed tensor.
+        That is exactly what happened -- it passes in isolation and dies at
+        integration with `TT_FATAL: Input Tensor A is not allocated`, which names
+        the victim rather than the culprit.
+        """
+        cur = x
         for i in range(self.n):
-            xt = self.act1[i](x)
+            xt = self.act1[i](cur)
             xt, _ = self.convs1[i](xt, length, batch_size)
             xt = self.act2[i](xt)
             xt, _ = self.convs2[i](xt, length, batch_size)
             # The residual add is why the block is cheap to get subtly wrong: if
             # conv output layout ever stops matching x's, this broadcasts instead
             # of adding elementwise. Shapes are asserted in the PCC test.
-            nxt = ttnn.add(x, xt)
+            nxt = ttnn.add(cur, xt)
             ttnn.deallocate(xt)
-            ttnn.deallocate(x)
-            x = nxt
-        return x
+            if cur is not x:  # ours to free; the caller's is not
+                ttnn.deallocate(cur)
+            cur = nxt
+        return cur
 
     @staticmethod
     def torch_reference(x: torch.Tensor, convs1, convs2, alphas1, alphas2) -> torch.Tensor:
