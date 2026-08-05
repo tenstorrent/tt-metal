@@ -56,6 +56,7 @@ it is classified differently on different systems.
 | Gemma-4-12B | BH QuietBox 2 |
 | Gemma-4-26B-A4B | BH QuietBox 2 |
 | Gemma-4-31B | BH QuietBox 2 |
+| LTX-2.3 | BH SC1 |
 | Whisper | WH N150, BH P150 |
 | Flux.1-schnell | BH QuietBox 2 |
 | Flux.1-dev | BH QuietBox 2, BH Single Galaxy |
