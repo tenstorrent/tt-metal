@@ -43,15 +43,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-import torch
 
 import ttnn
 
-from .conv import TtConv1d
 from .istft import TtIStft
-from .resblock import TtResBlock
 from .stft import TtStft
-from .upsample import TtConvTranspose1d
 
 
 @dataclass
@@ -137,29 +133,64 @@ def shape_trace(
 class TtHiFTGenerator:
     """The vocoder, on device. Tensors are channels-last `[B, L, C]` internally."""
 
-    def __init__(self, device, module: torch.nn.Module, dtype=ttnn.bfloat16):
-        """Built from a live cosyvoice.hifigan.generator.HiFTGenerator, so every
-        weight comes from the checkpoint rather than being re-derived."""
+    def __init__(self, device, bag, dtype=ttnn.bfloat16, upsample_rates=(8, 8), resblock_dilations=(1, 3, 5)):
+        """Built from a `WeightBag` -- the flat .npz `scripts/export_weights.py`
+        emits -- so nothing here imports the CosyVoice package. See tt/weights.py
+        for why that boundary is load-bearing."""
+        from ..weights import build_conv1d, build_conv_transpose1d, build_resblock
+
         self.device = device
         self.dtype = dtype
-        self.n_fft = module.istft_params["n_fft"]
-        self.hop_len = module.istft_params["hop_len"]
-        self.lrelu_slope = module.lrelu_slope
-        self.audio_limit = module.audio_limit
-        self.num_kernels = module.num_kernels
-        self.num_upsamples = module.num_upsamples
+        meta = bag.meta
+        self.n_fft = meta["istft_params"]["n_fft"]
+        self.hop_len = meta["istft_params"]["hop_len"]
+        self.lrelu_slope = meta["lrelu_slope"]
+        self.audio_limit = meta["audio_limit"]
+        self.num_kernels = meta["num_kernels"]
+        self.num_upsamples = meta["num_upsamples"]
         self.bins = self.n_fft // 2 + 1
+        self.upsample_rates = tuple(upsample_rates)
 
-        self.conv_pre = TtConv1d.from_module(device, module.conv_pre, dtype=dtype)
-        self.ups = [TtConvTranspose1d.from_module(device, m, dtype=dtype) for m in module.ups]
-        self.source_downs = [TtConv1d.from_module(device, m, dtype=dtype) for m in module.source_downs]
-        self.source_resblocks = [TtResBlock.from_module(device, m, dtype=dtype) for m in module.source_resblocks]
-        self.resblocks = [TtResBlock.from_module(device, m, dtype=dtype) for m in module.resblocks]
-        self.conv_post = TtConv1d.from_module(device, module.conv_post, dtype=dtype)
+        self.conv_pre = build_conv1d(device, bag.sub("conv_pre"), padding=3, dtype=dtype)
 
-        window = module.stft_window.detach().cpu().numpy()
+        # ups[i]: ConvTranspose1d(k=16, stride=u, padding=(k-u)//2)
+        self.ups = []
+        for i, u in enumerate(self.upsample_rates):
+            sub = bag.sub(f"ups.{i}")
+            k = sub.tensor("weight").shape[-1]
+            self.ups.append(build_conv_transpose1d(device, sub, stride=u, padding=(k - u) // 2, dtype=dtype))
+
+        # source_downs[i]: k=1/s=1 when the cumulative rate is 1, else k=2u/s=u/pad=u//2
+        self.source_downs = []
+        for i in range(bag.count("source_downs")):
+            sub = bag.sub(f"source_downs.{i}")
+            k = sub.tensor("weight").shape[-1]
+            stride = k // 2 if k > 1 else 1
+            self.source_downs.append(
+                build_conv1d(device, sub, stride=stride, padding=(stride // 2 if k > 1 else 0), dtype=dtype)
+            )
+
+        self.source_resblocks = [
+            build_resblock(device, bag.sub(f"source_resblocks.{i}"), dilations=resblock_dilations, dtype=dtype)
+            for i in range(bag.count("source_resblocks"))
+        ]
+        self.resblocks = [
+            build_resblock(device, bag.sub(f"resblocks.{i}"), dilations=resblock_dilations, dtype=dtype)
+            for i in range(bag.count("resblocks"))
+        ]
+        self.conv_post = build_conv1d(device, bag.sub("conv_post"), padding=3, dtype=dtype)
+
+        # The window travels in the export rather than being recomputed, so the
+        # device cannot disagree with the reference about it.
+        window = bag.window
         self.stft = TtStft(device, self.n_fft, self.hop_len, window=window, dtype=dtype)
         self.istft = TtIStft(device, self.n_fft, self.hop_len, window=window, dtype=dtype)
+
+    @classmethod
+    def from_export(cls, device, path: str | None = None, **kw):
+        from ..weights import WeightBag, default_weights_path
+
+        return cls(device, WeightBag.load(path or default_weights_path()), **kw)
 
     def decode(self, mel, s, mel_frames: int, batch_size: int = 1):
         """mel: ttnn [B, T_mel, 80]; s: ttnn [B, T_audio, 1] -> [B, L, 1] waveform."""
@@ -171,49 +202,78 @@ class TtHiFTGenerator:
         x, _ = self.conv_pre(mel, mel_frames, batch_size)
 
         for st in trace["stages"]:
-            x = ttnn.leaky_relu(x, self.lrelu_slope)
-            x, _ = self.ups[st.index](x, st.in_length, batch_size)
+            act = ttnn.leaky_relu(x, self.lrelu_slope)
+            ttnn.deallocate(x)
+            x, _ = self.ups[st.index](act, st.in_length, batch_size)
+            ttnn.deallocate(act)
 
             if st.index == self.num_upsamples - 1:
                 # ReflectionPad1d((1, 0)): prepend x[:, 1] -- one sample, so the
                 # "reflection" is a single slice, no exchange matmul needed.
                 head = ttnn.slice(x, [0, 1, 0], [batch_size, 2, st.out_channels])
-                x = ttnn.concat([head, x], dim=1)
+                padded = ttnn.concat([head, x], dim=1)
                 ttnn.deallocate(head)
+                ttnn.deallocate(x)
+                x = padded
 
             si, _ = self.source_downs[st.index](s_stft, trace["stft_frames"], batch_size)
-            si = self.source_resblocks[st.index](si, st.source_length, batch_size)
-            nx = ttnn.add(x, si)
+            si_res = self.source_resblocks[st.index](si, st.source_length, batch_size)
             ttnn.deallocate(si)
+            nx = ttnn.add(x, si_res)
+            ttnn.deallocate(si_res)
             ttnn.deallocate(x)
             x = nx
 
+            # Three ResBlocks read the SAME x and their outputs are averaged, so x
+            # must outlive all three -- see the ownership note in resblock.py.
             acc = None
             for j in range(self.num_kernels):
                 out = self.resblocks[st.index * self.num_kernels + j](x, st.padded_length, batch_size)
-                acc = out if acc is None else ttnn.add(acc, out)
-                if acc is not out:
+                if acc is None:
+                    acc = out
+                else:
+                    nacc = ttnn.add(acc, out)
+                    ttnn.deallocate(acc)
                     ttnn.deallocate(out)
+                    acc = nacc
             ttnn.deallocate(x)
             x = ttnn.multiply(acc, 1.0 / self.num_kernels)
             ttnn.deallocate(acc)
 
-        x = ttnn.leaky_relu(x, 0.01)  # F.leaky_relu default slope, as the reference
-        x, _ = self.conv_post(x, trace["conv_post_length"], batch_size)
+        act = ttnn.leaky_relu(x, 0.01)  # F.leaky_relu default slope, as the reference
+        ttnn.deallocate(x)
+        x, _ = self.conv_post(act, trace["conv_post_length"], batch_size)
+        ttnn.deallocate(act)
 
         # [B, T, 18] -> magnitude/phase, then back to [B, 9, T] for the iSTFT.
-        x = ttnn.permute(x, (0, 2, 1))
-        mag = ttnn.exp(ttnn.slice(x, [0, 0, 0], [batch_size, self.bins, trace["conv_post_length"]]))
-        pha = ttnn.sin(ttnn.slice(x, [0, self.bins, 0], [batch_size, 2 * self.bins, trace["conv_post_length"]]))
+        T = trace["conv_post_length"]
+        spec = ttnn.permute(x, (0, 2, 1))
         ttnn.deallocate(x)
-        mag = ttnn.clamp(mag, None, 1e2)  # the reference clips magnitude at 1e2
+        mag_lin = ttnn.slice(spec, [0, 0, 0], [batch_size, self.bins, T])
+        pha_lin = ttnn.slice(spec, [0, self.bins, 0], [batch_size, 2 * self.bins, T])
+        ttnn.deallocate(spec)
 
-        real = ttnn.multiply(mag, ttnn.cos(pha))
-        imag = ttnn.multiply(mag, ttnn.sin(pha))
+        mag = ttnn.exp(mag_lin)
+        ttnn.deallocate(mag_lin)
+        # The reference clips magnitude at 1e2. exp() is non-negative, so a lower
+        # bound of 0 makes this the same operation as torch.clip(max=1e2) without
+        # depending on clamp accepting a None bound.
+        mag_c = ttnn.clamp(mag, 0.0, 1e2)
         ttnn.deallocate(mag)
+
+        pha = ttnn.sin(pha_lin)
+        ttnn.deallocate(pha_lin)
+        cos_p, sin_p = ttnn.cos(pha), ttnn.sin(pha)
         ttnn.deallocate(pha)
+        real = ttnn.multiply(mag_c, cos_p)
+        imag = ttnn.multiply(mag_c, sin_p)
+        ttnn.deallocate(cos_p)
+        ttnn.deallocate(sin_p)
+        ttnn.deallocate(mag_c)
 
         wav = self.istft(real, imag)
         ttnn.deallocate(real)
         ttnn.deallocate(imag)
-        return ttnn.clamp(wav, -self.audio_limit, self.audio_limit)
+        out = ttnn.clamp(wav, -self.audio_limit, self.audio_limit)
+        ttnn.deallocate(wav)
+        return out
