@@ -41,6 +41,8 @@ import torch
 
 import ttnn
 
+from ..hifigan.conv import accurate_compute_config
+
 
 def espnet_rel_positional_encoding(size: int, d_model: int) -> torch.Tensor:
     """`EspnetRelPositionalEncoding.position_encoding(offset=0, size=T)`.
@@ -99,8 +101,11 @@ def _layernorm_weights(device, bag, name, dtype):
 class TtRelPosAttention:
     """ESPnet RelPositionMultiHeadedAttention, explicit-matmul form."""
 
-    def __init__(self, device, bag, n_head: int, d_k: int, dtype=ttnn.bfloat16):
+    def __init__(self, device, bag, n_head: int, d_k: int, dtype=ttnn.bfloat16, cc=None):
         self.device, self.h, self.d_k, self.dtype = device, n_head, d_k, dtype
+        # HiFi4 + fp32 accumulation: see F20 in the notes. The flow encoder is 6
+        # blocks and the AR decoder is 14, and the decoder runs hundreds of times.
+        self.cc = accurate_compute_config(device) if cc is None else cc
         self.scale = 1.0 / math.sqrt(d_k)
         self.wq, self.bq = _linear(device, bag, "linear_q", dtype)
         self.wk, self.bk = _linear(device, bag, "linear_k", dtype)
@@ -142,29 +147,57 @@ class TtRelPosAttention:
 
     def __call__(self, x, pos_emb, mask=None):
         """x: [B, T, d_model]; pos_emb: [B, 2T-1, d_model] -> [B, T, d_model]."""
+        out, _ = self.forward_cached(x, pos_emb, mask=mask, cache=None)
+        return out
+
+    def forward_cached(self, x, pos_emb, mask=None, cache=None, return_cache=False):
+        """The same attention, with an optional `(k, v)` cache prepended.
+
+        `cache` is a pair of `[B, h, cache_t, d_k]` tensors, kept unpacked rather
+        than in the reference's `[1, h, cache_t, 2*d_k]` packing -- that packing
+        exists to make its ONNX export a single tensor and buys nothing here.
+
+        `cache=None, return_cache=True` is the first chunk of an autoregressive
+        decode: nothing to prepend, but the k/v it computes must be kept. The two
+        flags are separate for exactly that case.
+
+        Returns `(output, (k, v) | None)`, where the returned k/v span cache plus
+        this chunk and become the caller's to free.
+        """
         b, t, _ = x.shape
         tp = pos_emb.shape[1]
 
-        q = self._heads(ttnn.linear(x, self.wq, bias=self.bq), b, t)
-        k = self._heads(ttnn.linear(x, self.wk, bias=self.bk), b, t)
-        v = self._heads(ttnn.linear(x, self.wv, bias=self.bv), b, t)
-        p = self._heads(ttnn.linear(pos_emb, self.wp), b, tp)
+        q = self._heads(ttnn.linear(x, self.wq, bias=self.bq, compute_kernel_config=self.cc), b, t)
+        k = self._heads(ttnn.linear(x, self.wk, bias=self.bk, compute_kernel_config=self.cc), b, t)
+        v = self._heads(ttnn.linear(x, self.wv, bias=self.bv, compute_kernel_config=self.cc), b, t)
+        p = self._heads(ttnn.linear(pos_emb, self.wp, compute_kernel_config=self.cc), b, tp)
+
+        if cache is not None:
+            ck, cv = cache
+            k_full = ttnn.concat([ck, k], dim=2)
+            v_full = ttnn.concat([cv, v], dim=2)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            k, v = k_full, v_full
 
         qu = ttnn.add(q, self.bias_u)
         qv = ttnn.add(q, self.bias_v)
         ttnn.deallocate(q)
 
         kt = ttnn.permute(k, (0, 1, 3, 2))
-        ac = ttnn.matmul(qu, kt)
+        ac = ttnn.matmul(qu, kt, compute_kernel_config=self.cc)
         ttnn.deallocate(qu)
         ttnn.deallocate(kt)
 
         pt = ttnn.permute(p, (0, 1, 3, 2))
         ttnn.deallocate(p)
-        bd = ttnn.matmul(qv, pt)
+        bd = ttnn.matmul(qv, pt, compute_kernel_config=self.cc)
         ttnn.deallocate(qv)
         ttnn.deallocate(pt)
-        if tp != t:
+        # `if matrix_ac.shape != matrix_bd.shape` upstream. With a KV cache the
+        # comparison is against the *attention key size*, not the chunk length --
+        # a one-token decode step still needs the skew.
+        if bd.shape[-1] != ac.shape[-1]:
             bd = self.rel_shift(bd, b, self.h, t, tp)
 
         scores = ttnn.multiply(ttnn.add(ac, bd), self.scale)
@@ -172,29 +205,38 @@ class TtRelPosAttention:
         ttnn.deallocate(bd)
 
         if mask is not None:
-            # mask is [B, 1, T] (1 = keep); make it [B, 1, 1, T] additive
+            # additive mask, already broadcastable to [B, 1|h, T, T_key]
             scores = ttnn.add(scores, mask)
         attn = ttnn.softmax(scores, dim=-1)
         ttnn.deallocate(scores)
 
-        ctx = ttnn.matmul(attn, v)  # [B, h, T, d_k]
+        ctx = ttnn.matmul(attn, v, compute_kernel_config=self.cc)  # [B, h, T, d_k]
         ttnn.deallocate(attn)
-        ttnn.deallocate(v)
         ctx = ttnn.permute(ctx, (0, 2, 1, 3))
         ctx = ttnn.reshape(ctx, (b, t, self.h * self.d_k))
-        out = ttnn.linear(ctx, self.wo, bias=self.bo)
+        out = ttnn.linear(ctx, self.wo, bias=self.bo, compute_kernel_config=self.cc)
         ttnn.deallocate(ctx)
-        return out
+
+        if not return_cache:
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            return out, None
+        return out, (k, v)
 
 
 class TtConformerLayer:
     """One pre-norm block: attention then position-wise feed-forward."""
 
-    def __init__(self, device, bag, meta, dtype=ttnn.bfloat16):
+    def __init__(self, device, bag, meta, dtype=ttnn.bfloat16, cc=None):
         self.device, self.dtype = device, dtype
+        self.cc = accurate_compute_config(device) if cc is None else cc
         self.eps = meta["layer_norm_eps"]
-        self.ff_scale = meta["ff_scale"]
-        self.attn = TtRelPosAttention(device, bag.sub("self_attn"), meta["n_head"], meta["d_k"], dtype)
+        self.ff_scale = meta.get("ff_scale", 1.0)
+        # ConformerEncoder takes activation_type="swish" by default and
+        # TransformerEncoder takes "relu"; cosyvoice.yaml overrides neither, so the
+        # two stacks in one checkpoint genuinely differ. Read it, do not assume it.
+        self.ffn_act = ttnn.relu if meta.get("ffn_activation", "silu") == "relu" else ttnn.silu
+        self.attn = TtRelPosAttention(device, bag.sub("self_attn"), meta["n_head"], meta["d_k"], dtype, self.cc)
         self.w1, self.b1 = _linear(device, bag, "feed_forward.w_1", dtype)
         self.w2, self.b2 = _linear(device, bag, "feed_forward.w_2", dtype)
         self.g_mha, self.bt_mha = _layernorm_weights(device, bag, "norm_mha", dtype)
@@ -209,10 +251,10 @@ class TtConformerLayer:
         ttnn.deallocate(x)
 
         h = ttnn.layer_norm(x1, weight=self.g_ff, bias=self.bt_ff, epsilon=self.eps)
-        f = ttnn.linear(h, self.w1, bias=self.b1)
+        f = ttnn.linear(h, self.w1, bias=self.b1, compute_kernel_config=self.cc)
         ttnn.deallocate(h)
-        f = ttnn.silu(f)  # PositionwiseFeedForward uses SiLU here
-        f2 = ttnn.linear(f, self.w2, bias=self.b2)
+        f = self.ffn_act(f)
+        f2 = ttnn.linear(f, self.w2, bias=self.b2, compute_kernel_config=self.cc)
         ttnn.deallocate(f)
         if self.ff_scale != 1.0:
             f2 = ttnn.multiply(f2, self.ff_scale)
@@ -227,17 +269,33 @@ class TtConformerEncoder:
 
     def __init__(self, device, bag, meta, dtype=ttnn.bfloat16):
         self.device, self.dtype, self.meta = device, dtype, meta
+        self.cc = accurate_compute_config(device)
         self.xscale = math.sqrt(meta["d_model"])
+        # subsampling.py pins eps=1e-5 on the embedding norm while encoder_layer.py
+        # pins 1e-12 on the block norms -- genuinely two different values.
+        self.embed_eps = meta.get("embed_norm_eps", 1e-5)
+        self.has_relu = bool(meta.get("embed_has_relu", False))
         # embed.out is Sequential(Linear, LayerNorm, Dropout) for LinearNoSubsampling
         self.w_in, self.b_in = _linear(device, bag, "embed.out.0", dtype)
         self.g_in, self.bt_in = _layernorm_weights(device, bag, "embed.out.1", dtype)
-        self.layers = [TtConformerLayer(device, bag.sub(f"encoders.{i}"), meta, dtype) for i in range(meta["n_layers"])]
+        self.layers = [
+            TtConformerLayer(device, bag.sub(f"encoders.{i}"), meta, dtype, self.cc) for i in range(meta["n_layers"])
+        ]
         self.g_after, self.bt_after = _layernorm_weights(device, bag, "after_norm", dtype)
 
     def __call__(self, x, pos_emb, mask=None):
-        """x: [B, T, input_size] -> [B, T, d_model]."""
-        h = ttnn.linear(x, self.w_in, bias=self.b_in)
-        h = ttnn.layer_norm(h, weight=self.g_in, bias=self.bt_in, epsilon=self.meta["layer_norm_eps"])
+        """x: [B, T, input_size] -> [B, T, d_model].
+
+        `mask` is an **additive** score bias, broadcastable to `[B, 1, T, T]`. The
+        flow encoder passes None: its `static_chunk_size` is 0, so attention is
+        full. The LLM's text encoder sets `static_chunk_size: 1`, which
+        `subsequent_chunk_mask` turns into a plain causal mask -- same class, same
+        weights layout, different attention pattern.
+        """
+        h = ttnn.linear(x, self.w_in, bias=self.b_in, compute_kernel_config=self.cc)
+        h = ttnn.layer_norm(h, weight=self.g_in, bias=self.bt_in, epsilon=self.embed_eps)
+        if self.has_relu:  # LegacyLinearNoSubsampling only
+            h = ttnn.relu(h)
         # LinearNoSubsampling scales by sqrt(d_model) inside its positional encoding
         h = ttnn.multiply(h, self.xscale)
         for layer in self.layers:
