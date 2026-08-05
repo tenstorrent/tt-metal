@@ -242,7 +242,9 @@ class TtHiFTGenerator:
         out = ttnn.reshape(spread, (batch_size, mel_frames * total, 1))
         return out, mel_frames * total
 
-    def inference(self, mel, mel_frames: int, phase_vec=None, sine_noise=None, batch_size: int = 1):
+    def inference(
+        self, mel, mel_frames: int, phase_vec=None, sine_noise=None, sine_noise_unit=None, batch_size: int = 1
+    ):
         """`HiFTGenerator.inference`: mel in, waveform out, source branch included.
 
         mel is `[B, T_mel, 80]` channels-last; the result is `[B, T_audio, 1]`.
@@ -258,7 +260,7 @@ class TtHiFTGenerator:
         f0 = self.f0_predictor(mel, mel_frames, batch_size)
         up, audio_len = self.upsample_f0(f0, mel_frames, batch_size)
         ttnn.deallocate(f0)
-        s, _, _ = self.m_source(up, phase_vec=phase_vec, sine_noise=sine_noise)
+        s, _, _ = self.m_source(up, phase_vec=phase_vec, sine_noise=sine_noise, sine_noise_unit=sine_noise_unit)
         ttnn.deallocate(up)
         # SineGen accumulates its phase in fp32 on purpose -- the cumsum runs over
         # 72k samples and bfloat16 there is catastrophic (see tt/hifigan/source.py).
