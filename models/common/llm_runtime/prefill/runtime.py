@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal, Sequence
 
@@ -45,6 +46,7 @@ class PrefillProgramSignature:
 
     operation_variant: PrefillVariant
     padded_batch_size: int
+    active_batch_size: int
     invocation_sequence_length: int
     page_table_width: int
     chunk_page_table_width: int | None
@@ -55,6 +57,7 @@ class PrefillProgramSignature:
         return (
             ("operation_variant", self.operation_variant),
             ("padded_batch_size", self.padded_batch_size),
+            ("active_batch_size", self.active_batch_size),
             ("invocation_sequence_length", self.invocation_sequence_length),
             ("page_table_width", self.page_table_width),
             ("chunk_page_table_width", self.chunk_page_table_width),
@@ -68,12 +71,14 @@ class PrefillTraceSignature:
     """Identity of the regular prefill hidden body and persistent schema."""
 
     padded_batch_size: int
+    active_batch_size: int
     padded_sequence_length: int
     page_table_width: int
 
     def key_material(self) -> tuple[tuple[str, str | int | None], ...]:
         return (
             ("padded_batch_size", self.padded_batch_size),
+            ("active_batch_size", self.active_batch_size),
             ("padded_sequence_length", self.padded_sequence_length),
             ("page_table_width", self.page_table_width),
         )
@@ -264,6 +269,13 @@ class PrefillRuntime:
             block_size=layout.block_size,
             max_batch_size=self.config.max_batch_size,
             max_prefill_chunk_size=self.config.max_prefill_chunk_size,
+            supports_batched_prefill=self.config.supports_batched_prefill,
+            disable_batched_prefill=(
+                self.config.disable_batched_prefill
+                or bool(os.environ.get("DISABLE_BATCHED_PREFILL"))
+                or (sampling_params is not None and not self.config.batched_prefill_batched_extract)
+            ),
+            max_prefill_batch_size=self.config.max_prefill_batch_size,
             max_actual_page_table_width=layout.raw_capacity_width,
             canonical_page_table_width=layout.prefill_width,
         )
@@ -415,9 +427,9 @@ class PrefillRuntime:
                         output_rows,
                         cluster_shape,
                     )
-                    for source_row, slot in zip(request.source_rows, request.slots):
+                    for local_row, source_row in enumerate(request.source_rows):
                         if request.kind == "batched":
-                            token_index = slot
+                            token_index = local_row
                         elif uses_static_q128:
                             token_index = (request.last_token_indices[0] - request.cached_tokens[0]) % _TILE_SIZE
                         else:
@@ -428,13 +440,24 @@ class PrefillRuntime:
                             host_log_probs = _select_sample_log_prob(host_log_probs, token_index)
                         row_log_probs.append((request.source_rows, host_log_probs))
                 elif request.kind == "batched":
-                    for source_row, slot in zip(request.source_rows, request.slots):
-                        output_logits[source_row] = _process_output_prefill(
-                            host_primary,
-                            slot,
-                            vocab_size,
-                            cluster_shape,
-                        )
+                    if isinstance(host_primary, list):
+                        for local_row, (source_row, last_token, cached_tokens) in enumerate(
+                            zip(request.source_rows, request.last_token_indices, request.cached_tokens)
+                        ):
+                            output_logits[source_row] = _process_output_prefill(
+                                host_primary[local_row],
+                                (last_token - cached_tokens) % _TILE_SIZE,
+                                vocab_size,
+                                cluster_shape,
+                            )
+                    else:
+                        for local_row, source_row in enumerate(request.source_rows):
+                            output_logits[source_row] = _process_output_prefill(
+                                host_primary,
+                                local_row,
+                                vocab_size,
+                                cluster_shape,
+                            )
                 else:
                     relative_last = (request.last_token_indices[0] - request.cached_tokens[0]) % _TILE_SIZE
                     output_logits[request.source_rows[0]] = _process_output_prefill(
@@ -508,6 +531,7 @@ class PrefillRuntime:
                 PrefillProgramSignature(
                     operation_variant=variant,
                     padded_batch_size=request.padded_batch_size,
+                    active_batch_size=len(request.source_rows),
                     invocation_sequence_length=chunk.chunk_size,
                     page_table_width=request.page_table_width,
                     chunk_page_table_width=(
@@ -522,12 +546,19 @@ class PrefillRuntime:
     def _trace_signature(self, request: PrefillRequest) -> PrefillTraceSignature | None:
         if request.uses_chunked_prefill:
             return None
+        if (
+            request.kind == "batched"
+            and len(request.source_rows) != request.padded_batch_size
+            and self.config.supports_batched_prefill is not None
+        ):
+            return None
         if any(request.cached_tokens):
             return None
         if not self.config.can_enable_trace(request.padded_sequence_length, 0):
             return None
         return PrefillTraceSignature(
             padded_batch_size=request.padded_batch_size,
+            active_batch_size=len(request.source_rows),
             padded_sequence_length=request.padded_sequence_length,
             page_table_width=request.page_table_width,
         )
@@ -739,7 +770,7 @@ class PrefillRuntime:
         return self.config.model.prefill_forward(
             self.config.model.embed_prefill(device_inputs.tokens),
             [device_inputs.rotary_cos, device_inputs.rotary_sin],
-            user_id=list(range(request.padded_batch_size)) if request.kind == "batched" else 0,
+            user_id=list(range(len(request.source_rows))) if request.kind == "batched" else 0,
             page_table=device_inputs.page_table,
             chunk_page_table=device_inputs.chunk_page_table,
             get_last_token=-1,
@@ -759,6 +790,22 @@ class PrefillRuntime:
     ) -> Any:
         request = prepared.request
         relative_last = [last - cached for last, cached in zip(request.last_token_indices, request.cached_tokens)]
+        if request.kind == "batched" and not self.config.batched_prefill_batched_extract:
+            hidden = ttnn.reshape(
+                hidden,
+                [request.padded_batch_size, 1, request.padded_sequence_length, int(hidden.shape[-1])],
+            )
+            outputs = []
+            for local_row, last_token in enumerate(relative_last):
+                logits = self.config.model.post_process_prefill_output(
+                    hidden[local_row : local_row + 1],
+                    last_token,
+                )
+                _retain_owned(owned, logits)
+                output = ttnn.untilize(logits, use_multicore=True)
+                _retain_owned(owned, output)
+                outputs.append(output)
+            return outputs
         if request.kind == "batched":
             padded_last = list(relative_last) + [0] * (request.padded_batch_size - len(relative_last))
             logits = self.config.model.post_process_batched_prefill_output(
@@ -766,8 +813,6 @@ class PrefillRuntime:
                 padded_last,
                 request.padded_batch_size,
                 request.padded_sequence_length,
-                last_token_slice=(position_inputs.slice_start, position_inputs.slice_end),
-                last_token_index=position_inputs.row_index,
             )
         elif self._uses_static_q128_topk(request, prepared.sampling_path):
             logits = self.config.model.post_process_prefill_output(hidden, relative_last[0])

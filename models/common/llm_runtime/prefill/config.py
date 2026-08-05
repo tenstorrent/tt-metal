@@ -12,6 +12,8 @@ from models.common.llm_runtime.config import PageTableLayout
 from models.common.llm_runtime.output_reader import OutputReader
 from models.common.llm_runtime.prefill.sampling_helpers import _TILE_SIZE
 
+_SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
+
 
 @dataclass(frozen=True)
 class PrefillRuntimeConfig:
@@ -23,6 +25,10 @@ class PrefillRuntimeConfig:
     page_table_layout: PageTableLayout
     max_batch_size: int
     max_prefill_chunk_size: int
+    supports_batched_prefill: bool | None
+    disable_batched_prefill: bool
+    max_prefill_batch_size: int
+    batched_prefill_batched_extract: bool
     cluster_shape: tuple[int, int]
     device_sampling_enabled: bool
     can_enable_trace: Callable[[int, int], bool]
@@ -42,6 +48,10 @@ class PrefillRuntimeConfig:
         page_table_layout: PageTableLayout,
         max_batch_size: int,
         max_prefill_chunk_size: int,
+        supports_batched_prefill: bool | None = None,
+        disable_batched_prefill: bool = False,
+        max_prefill_batch_size: int = 8,
+        batched_prefill_batched_extract: bool = True,
         device_sampling_enabled: bool,
         can_enable_trace: Callable[[int, int], bool],
     ) -> "PrefillRuntimeConfig":
@@ -49,6 +59,11 @@ class PrefillRuntimeConfig:
 
         _require_positive_int("max_batch_size", max_batch_size)
         _require_positive_int("max_prefill_chunk_size", max_prefill_chunk_size)
+        _require_optional_bool("supports_batched_prefill", supports_batched_prefill)
+        _require_bool("disable_batched_prefill", disable_batched_prefill)
+        _require_positive_int("max_prefill_batch_size", max_prefill_batch_size)
+        _require_supported_prefill_batch_size(max_prefill_batch_size)
+        _require_bool("batched_prefill_batched_extract", batched_prefill_batched_extract)
         if not isinstance(output_reader, OutputReader):
             raise TypeError("output_reader must be an OutputReader")
         mesh_device = output_reader.mesh_device
@@ -95,6 +110,10 @@ class PrefillRuntimeConfig:
             page_table_layout=page_table_layout,
             max_batch_size=max_batch_size,
             max_prefill_chunk_size=max_prefill_chunk_size,
+            supports_batched_prefill=supports_batched_prefill,
+            disable_batched_prefill=disable_batched_prefill,
+            max_prefill_batch_size=max_prefill_batch_size,
+            batched_prefill_batched_extract=batched_prefill_batched_extract,
             cluster_shape=resolved_cluster_shape,
             device_sampling_enabled=device_sampling_enabled,
             can_enable_trace=can_enable_trace,
@@ -109,6 +128,11 @@ class PrefillRuntimeConfig:
     def __post_init__(self) -> None:
         _require_positive_int("max_batch_size", self.max_batch_size)
         _require_positive_int("max_prefill_chunk_size", self.max_prefill_chunk_size)
+        _require_optional_bool("supports_batched_prefill", self.supports_batched_prefill)
+        _require_bool("disable_batched_prefill", self.disable_batched_prefill)
+        _require_positive_int("max_prefill_batch_size", self.max_prefill_batch_size)
+        _require_supported_prefill_batch_size(self.max_prefill_batch_size)
+        _require_bool("batched_prefill_batched_extract", self.batched_prefill_batched_extract)
         _require_positive_int("sampling_batch_size", self.sampling_batch_size)
         if not isinstance(self.output_reader, OutputReader):
             raise TypeError("output_reader must be an OutputReader")
@@ -191,3 +215,18 @@ class PrefillRuntimeConfig:
 def _require_positive_int(name: str, value: Any) -> None:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
+
+
+def _require_bool(name: str, value: Any) -> None:
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be bool")
+
+
+def _require_optional_bool(name: str, value: Any) -> None:
+    if value is not None:
+        _require_bool(name, value)
+
+
+def _require_supported_prefill_batch_size(value: int) -> None:
+    if value not in _SUPPORTED_PREFILL_BATCH_SIZES:
+        raise ValueError(f"max_prefill_batch_size must be one of {_SUPPORTED_PREFILL_BATCH_SIZES}")

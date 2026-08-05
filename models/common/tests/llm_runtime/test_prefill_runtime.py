@@ -81,6 +81,10 @@ def _runtime(
     allow_force_argmax=False,
     sampling_batch_size=32,
     device_sampling_enabled=True,
+    supports_batched_prefill=True,
+    disable_batched_prefill=False,
+    max_prefill_batch_size=8,
+    batched_prefill_batched_extract=True,
 ):
     mesh_device = SimpleNamespace(shape=(1, 1))
     config = PrefillRuntimeConfig.resolve(
@@ -98,6 +102,10 @@ def _runtime(
         ),
         max_batch_size=32,
         max_prefill_chunk_size=2048,
+        supports_batched_prefill=supports_batched_prefill,
+        disable_batched_prefill=disable_batched_prefill,
+        max_prefill_batch_size=max_prefill_batch_size,
+        batched_prefill_batched_extract=batched_prefill_batched_extract,
         device_sampling_enabled=device_sampling_enabled,
         can_enable_trace=lambda length, cached: cached == 0 and length in trace_lengths,
     )
@@ -113,7 +121,18 @@ def _inputs(*, prompt_length, cached_tokens=0, token_width=None, page_width=256,
     return tokens, page_table, prompt_lens, start_pos
 
 
-def _plan(*, prompt_length, cached_tokens=0, token_width=None, page_width=256, slots=(0,), maximum=2048):
+def _plan(
+    *,
+    prompt_length,
+    cached_tokens=0,
+    token_width=None,
+    page_width=256,
+    slots=(0,),
+    maximum=2048,
+    supports_batched_prefill=True,
+    disable_batched_prefill=False,
+    max_prefill_batch_size=8,
+):
     tokens, page_table, prompt_lens, start_pos = _inputs(
         prompt_length=prompt_length,
         cached_tokens=cached_tokens,
@@ -130,6 +149,9 @@ def _plan(*, prompt_length, cached_tokens=0, token_width=None, page_width=256, s
         block_size=32,
         max_batch_size=32,
         max_prefill_chunk_size=maximum,
+        supports_batched_prefill=supports_batched_prefill,
+        disable_batched_prefill=disable_batched_prefill,
+        max_prefill_batch_size=max_prefill_batch_size,
         max_actual_page_table_width=256,
         canonical_page_table_width=264,
     )
@@ -149,6 +171,9 @@ def test_trace_applicability_classification_does_not_allocate_a_prefill_plan(mon
         block_size,
         max_batch_size,
         max_prefill_chunk_size,
+        supports_batched_prefill,
+        disable_batched_prefill,
+        max_prefill_batch_size,
         max_actual_page_table_width=None,
         canonical_page_table_width=None,
     ):
@@ -469,17 +494,15 @@ def test_full_and_truncated_scheduler_tables_produce_equivalent_semantic_plans()
     assert torch.equal(full.chunks[0].chunk_page_table, truncated.chunks[0].chunk_page_table)
 
 
-def test_q128_batching_and_noncontiguous_slot_fallback_preserve_source_order():
-    batched = _plan(prompt_length=80, slots=(0, 1, 2))[0]
-    assert batched.kind == "batched"
-    assert batched.source_rows == (0, 1, 2)
-    assert batched.slots == (0, 1, 2)
-    assert batched.padded_batch_size == 4
+def test_q128_batching_snaps_down_and_maps_noncontiguous_slots_to_local_rows():
+    requests = _plan(prompt_length=80, slots=(7, 3, 11))
 
-    fallback = _plan(prompt_length=80, slots=(7, 3, 11))
-    assert [request.kind for request in fallback] == ["single", "single", "single"]
-    assert [request.source_rows for request in fallback] == [(0,), (1,), (2,)]
-    assert [request.slots for request in fallback] == [(7,), (3,), (11,)]
+    assert [request.kind for request in requests] == ["batched", "batched"]
+    assert [request.source_rows for request in requests] == [(0, 1), (2,)]
+    assert [request.slots for request in requests] == [(7, 3), (11,)]
+    assert [request.padded_batch_size for request in requests] == [2, 2]
+    assert torch.equal(requests[0].tokens[0, :80], torch.arange(80))
+    assert torch.equal(requests[0].tokens[1, :80], torch.arange(80, 160))
 
 
 def test_q128_batching_accepts_different_exact_prompt_lengths():
@@ -495,18 +518,135 @@ def test_q128_batching_accepts_different_exact_prompt_lengths():
         block_size=32,
         max_batch_size=32,
         max_prefill_chunk_size=2048,
+        supports_batched_prefill=True,
         max_actual_page_table_width=256,
         canonical_page_table_width=264,
     )
 
-    assert len(requests) == 1
-    assert requests[0].kind == "batched"
-    assert requests[0].prompt_lengths == (87, 115, 125)
+    assert len(requests) == 2
+    assert [request.kind for request in requests] == ["batched", "batched"]
+    assert requests[0].prompt_lengths == (87, 115)
+    assert requests[1].prompt_lengths == (125,)
     assert requests[0].padded_sequence_length == 128
-    assert requests[0].padded_batch_size == 4
+    assert requests[0].padded_batch_size == 2
 
 
-def test_mixed_lengths_fall_back_per_row_without_reordering():
+@pytest.mark.parametrize(("prompt_lengths", "padded_length"), [((87, 115), 128), ((129, 900), 1024)])
+def test_batched_prefill_copies_full_padded_bucket_page_mappings(prompt_lengths, padded_length):
+    rows = len(prompt_lengths)
+    token_width = max(prompt_lengths)
+    tokens = torch.arange(rows * token_width, dtype=torch.long).reshape(rows, token_width)
+    page_table = 1000 + torch.arange(rows * 256, dtype=torch.int32).reshape(rows, 256)
+
+    request = _plan_prefill_requests(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=torch.tensor(prompt_lengths),
+        empty_slots=[7, 3],
+        start_pos=torch.zeros(rows, dtype=torch.long),
+        block_size=32,
+        max_batch_size=32,
+        max_prefill_chunk_size=2048,
+        supports_batched_prefill=True,
+        max_actual_page_table_width=256,
+        canonical_page_table_width=264,
+    )[0]
+
+    bucket_width = padded_length // 32
+    assert request.padded_sequence_length == padded_length
+    assert torch.equal(request.page_table[0, :bucket_width], page_table[0, :bucket_width])
+    assert torch.equal(request.page_table[1, :bucket_width], page_table[1, :bucket_width])
+
+
+def test_omitted_batched_policy_preserves_only_legacy_contiguous_q128_behavior():
+    contiguous = _inputs(prompt_length=80, rows=3)
+    arguments = dict(
+        tokens=contiguous[0],
+        page_table=contiguous[1],
+        prompt_lens=contiguous[2],
+        start_pos=contiguous[3],
+        block_size=32,
+        max_batch_size=32,
+        max_prefill_chunk_size=2048,
+    )
+
+    legacy = _plan_prefill_requests(empty_slots=(0, 1, 2), **arguments)
+    noncontiguous = _plan_prefill_requests(empty_slots=(7, 3, 11), **arguments)
+    longer = _plan_prefill_requests(
+        tokens=torch.zeros((2, 1024), dtype=torch.long),
+        page_table=torch.zeros((2, 256), dtype=torch.int32),
+        prompt_lens=torch.full((2,), 1024, dtype=torch.long),
+        empty_slots=(0, 1),
+        start_pos=torch.zeros(2, dtype=torch.long),
+        block_size=32,
+        max_batch_size=32,
+        max_prefill_chunk_size=2048,
+    )
+
+    assert len(legacy) == 1
+    assert legacy[0].kind == "batched"
+    assert legacy[0].padded_batch_size == 4
+    assert [request.kind for request in noncontiguous] == ["single", "single", "single"]
+    assert [request.kind for request in longer] == ["single", "single"]
+
+
+def test_omitted_batched_policy_keeps_mixed_cache_hits_sequential():
+    requests = _plan_prefill_requests(
+        tokens=torch.zeros((3, 128), dtype=torch.long),
+        page_table=torch.zeros((3, 256), dtype=torch.int32),
+        prompt_lens=torch.tensor([80, 128, 96]),
+        empty_slots=(0, 1, 2),
+        start_pos=torch.tensor([0, 128, 0]),
+        block_size=32,
+        max_batch_size=32,
+        max_prefill_chunk_size=2048,
+    )
+
+    assert [request.kind for request in requests] == ["single", "single"]
+    assert [request.source_rows for request in requests] == [(0,), (2,)]
+
+
+def test_omitted_batched_policy_keeps_legacy_padded_partial_trace_eligible():
+    runtime = _runtime(supports_batched_prefill=None)
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80, rows=3)
+
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        start_pos=start_pos,
+        empty_slots=(0, 1, 2),
+    )
+
+    assert len(prepared) == 1
+    assert prepared[0].request.padded_batch_size == 4
+    assert prepared[0].trace_signature is not None
+    assert prepared[0].trace_signature.active_batch_size == 3
+    assert prepared[0].program_signatures[0].active_batch_size == 3
+    assert torch.all(prepared[0].request.page_table[3] == 0)
+
+    tokens4, page_table4, prompt_lens4, start_pos4 = _inputs(prompt_length=80, rows=4)
+    full = runtime.prepare(
+        tokens=tokens4,
+        page_table=page_table4,
+        prompt_lens=prompt_lens4,
+        start_pos=start_pos4,
+        empty_slots=(0, 1, 2, 3),
+    )[0]
+    assert full.trace_signature is not None
+    assert full.trace_signature.active_batch_size == 4
+    assert full.trace_signature != prepared[0].trace_signature
+    assert full.program_signatures != prepared[0].program_signatures
+
+    seen = []
+    runtime.config.model.prefill_forward = lambda *args, **kwargs: seen.append(kwargs) or "hidden"
+    device_inputs = PrefillDeviceInputs("tokens", "cos", "sin", "page", None, "positions", None)
+
+    assert runtime._run_hidden_body(prepared[0].request, device_inputs) == "hidden"
+    assert seen[0]["user_id"] == [0, 1, 2]
+
+
+def test_mixed_lengths_batch_per_bucket_and_preserve_source_mapping():
     tokens = torch.arange(3 * 160, dtype=torch.long).reshape(3, 160)
     page_table = torch.arange(3 * 256, dtype=torch.int32).reshape(3, 256)
     requests = _plan_prefill_requests(
@@ -518,12 +658,184 @@ def test_mixed_lengths_fall_back_per_row_without_reordering():
         block_size=32,
         max_batch_size=32,
         max_prefill_chunk_size=2048,
+        supports_batched_prefill=True,
         max_actual_page_table_width=256,
         canonical_page_table_width=264,
     )
-    assert [request.source_rows for request in requests] == [(0,), (1,), (2,)]
-    assert [request.slots for request in requests] == [(4,), (1,), (9,)]
-    assert [request.padded_sequence_length for request in requests] == [128, 128, 1024]
+    assert [request.kind for request in requests] == ["batched", "single"]
+    assert [request.source_rows for request in requests] == [(0, 1), (2,)]
+    assert [request.slots for request in requests] == [(4, 1), (9,)]
+    assert [request.padded_sequence_length for request in requests] == [128, 1024]
+
+
+def test_mixed_cache_hit_cached_and_batchable_rows_preserve_planning_page_rows_and_assembly(monkeypatch):
+    runtime = _runtime()
+    token_width = 1056
+    tokens = torch.arange(4 * token_width, dtype=torch.long).reshape(4, token_width)
+    page_table = 1000 + torch.arange(4 * 256, dtype=torch.int32).reshape(4, 256)
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=torch.tensor([87, 128, 120, 1056]),
+        start_pos=torch.tensor([0, 128, 0, 32]),
+        empty_slots=(7, 3, 11, 5),
+    )
+
+    assert [item.request.source_rows for item in prepared] == [(0, 2), (3,)]
+    assert [item.request.slots for item in prepared] == [(7, 11), (5,)]
+    assert torch.equal(prepared[0].request.page_table[0, :4], page_table[0, :4])
+    assert torch.equal(prepared[0].request.page_table[1, :4], page_table[2, :4])
+
+    batched_host = torch.zeros(1, 1, 32, runtime.config.model.vocab_size)
+    batched_host[0, 0, 0, :] = 10
+    batched_host[0, 0, 1, :] = 20
+    cached_host = torch.zeros_like(batched_host)
+    cached_host[0, 0, 31, :] = 30
+    monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda value: [])
+
+    output = runtime.assemble(
+        [
+            (prepared[0], InvocationResult(batched_host, "batched-owned")),
+            (prepared[1], InvocationResult(cached_host, "cached-owned")),
+        ],
+        batch_size=4,
+    )
+
+    assert output[:, 0, 0].tolist() == [10, 0, 20, 30]
+
+
+@pytest.mark.parametrize(
+    ("overrides"),
+    [
+        {"supports_batched_prefill": False},
+        {"disable_batched_prefill": True},
+    ],
+)
+def test_batched_prefill_policy_is_opt_in_and_has_runtime_escape_hatches(overrides):
+    requests = _plan(prompt_length=80, slots=(0, 1), **overrides)
+
+    assert [request.kind for request in requests] == ["single", "single"]
+
+
+def test_disabled_batched_extract_keeps_batched_forward_and_uses_per_slot_postprocess(monkeypatch):
+    runtime = _runtime(batched_prefill_batched_extract=False)
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80, rows=2)
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        start_pos=start_pos,
+        empty_slots=(7, 3),
+    )[0]
+    hidden = torch.arange(2 * 128, dtype=torch.float32).reshape(1, 1, 256, 1)
+    seen = []
+    monkeypatch.setattr(prefill_module.ttnn, "reshape", lambda value, shape: value.reshape(shape))
+
+    def post_process_prefill_output(slot_hidden, last_token):
+        seen.append((slot_hidden.clone(), last_token))
+        return torch.full((1, 1, 32, runtime.config.model.vocab_size), len(seen), dtype=torch.float32)
+
+    runtime.config.model.post_process_prefill_output = post_process_prefill_output
+    monkeypatch.setattr(prefill_module.ttnn, "untilize", lambda logits, **kwargs: logits)
+
+    outputs = runtime._finish_regular_prefill(
+        prepared,
+        hidden,
+        None,
+        PrefillPositionInputs("unused-start", "unused-end", "unused-row"),
+    )
+
+    assert prepared.request.kind == "batched"
+    assert [last_token for _, last_token in seen] == [79, 79]
+    assert torch.equal(seen[0][0], hidden.reshape(2, 1, 128, 1)[0:1])
+    assert torch.equal(seen[1][0], hidden.reshape(2, 1, 128, 1)[1:2])
+    assert len(outputs) == 2
+
+    assembled = runtime.assemble(
+        [(prepared, InvocationResult(outputs, "owned"))],
+        batch_size=2,
+    )
+    assert assembled[:, 0, 0].tolist() == [1, 2]
+
+
+def test_disabled_batched_extract_uses_sequential_path_for_device_sampling():
+    runtime = _runtime(batched_prefill_batched_extract=False)
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80, rows=2)
+
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        start_pos=start_pos,
+        empty_slots=(7, 3),
+        sampling_params=SamplingParams(temperature=1.0, top_k=32, top_p=0.08),
+    )
+
+    assert [item.request.kind for item in prepared] == ["single", "single"]
+
+
+def test_batched_prefill_cap_splits_bucket_into_fixed_partial_groups():
+    requests = _plan(
+        prompt_length=1024,
+        slots=tuple(range(32)),
+        max_prefill_batch_size=8,
+    )
+
+    assert [request.padded_batch_size for request in requests] == [8, 8, 8, 8]
+    assert [request.source_rows for request in requests] == [
+        tuple(range(0, 8)),
+        tuple(range(8, 16)),
+        tuple(range(16, 24)),
+        tuple(range(24, 32)),
+    ]
+
+
+def test_batched_prefill_snap_down_uses_power_of_two_for_partial_group():
+    requests = _plan(
+        prompt_length=128,
+        slots=tuple(range(30)),
+        max_prefill_batch_size=32,
+    )
+
+    assert [request.padded_batch_size for request in requests] == [16, 16]
+    assert [len(request.source_rows) for request in requests] == [16, 14]
+
+
+@pytest.mark.parametrize("prompt_length", [129, 1024, 1025, 2048])
+def test_batched_prefill_accepts_arbitrary_uniform_length_buckets_through_chunk_limit(prompt_length):
+    requests = _plan(prompt_length=prompt_length, slots=(0, 1))
+
+    assert len(requests) == 1
+    assert requests[0].kind == "batched"
+    assert requests[0].padded_sequence_length <= 2048
+
+
+def test_batched_prefill_strict_token_guard_rejects_128k_fold():
+    requests = _plan(
+        prompt_length=4096,
+        slots=tuple(range(32)),
+        maximum=4096,
+        max_prefill_batch_size=32,
+    )
+
+    assert len(requests) == 32
+    assert all(request.kind == "single" for request in requests)
+
+
+def test_disable_batched_prefill_environment_is_checked_per_prepare(monkeypatch):
+    runtime = _runtime()
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80, rows=2)
+    kwargs = {
+        "tokens": tokens,
+        "page_table": page_table,
+        "prompt_lens": prompt_lens,
+        "start_pos": start_pos,
+        "empty_slots": (0, 1),
+    }
+
+    assert [prepared.request.kind for prepared in runtime.prepare(**kwargs)] == ["batched"]
+    monkeypatch.setenv("DISABLE_BATCHED_PREFILL", "1")
+    assert [prepared.request.kind for prepared in runtime.prepare(**kwargs)] == ["single", "single"]
 
 
 def test_program_signatures_are_material_and_trace_classification_is_separate_from_planning():
@@ -867,24 +1179,107 @@ def test_regular_batched_step_and_finalization_preserve_exact_model_contract(mon
             "forward",
             ("embedded", ["cos", "sin"]),
             {
-                "user_id": [0, 1, 2, 3],
+                "user_id": [0, 1],
                 "page_table": "page",
                 "chunk_page_table": None,
                 "get_last_token": -1,
-                "batch_size": 4,
+                "batch_size": 2,
                 "chunk_start_idx_tensor": None,
             },
         ),
         (
             "postprocess",
-            ("hidden", [79, 79, 79, 0], 4, 128),
+            ("hidden", [79, 79], 2, 128),
             {
-                "last_token_slice": ("slice-start", "slice-end"),
-                "last_token_index": "row",
+                "last_token_slice": None,
+                "last_token_index": None,
             },
         ),
         ("untilize", "logits", {"use_multicore": True}),
     ]
+
+
+def test_partial_batched_group_executes_only_real_kv_users_at_padded_fold_size():
+    runtime = _runtime()
+    request = _plan(prompt_length=80, slots=(7, 3, 11))[1]
+    seen = []
+
+    def prefill_forward(*args, **kwargs):
+        seen.append(kwargs)
+        return "hidden"
+
+    runtime.config.model.prefill_forward = prefill_forward
+    device_inputs = PrefillDeviceInputs("tokens", "cos", "sin", "page", None, "positions", None)
+
+    assert runtime._run_hidden_body(request, device_inputs) == "hidden"
+    assert len(request.source_rows) == 1
+    assert request.padded_batch_size == 2
+    assert seen[0]["user_id"] == [0]
+    assert seen[0]["batch_size"] == 2
+
+
+def test_batched_postprocess_uses_per_row_last_token_indices_for_mixed_exact_lengths(monkeypatch):
+    runtime = _runtime()
+    tokens = torch.arange(2 * 128, dtype=torch.long).reshape(2, 128)
+    page_table = torch.arange(2 * 256, dtype=torch.int32).reshape(2, 256)
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=torch.tensor([87, 115]),
+        start_pos=torch.zeros(2, dtype=torch.long),
+        empty_slots=(7, 3),
+    )[0]
+    seen = []
+
+    def post_process_batched_prefill_output(
+        hidden,
+        last_token_indices,
+        padded_batch_size,
+        padded_sequence_length,
+        last_token_slice=None,
+        last_token_index=None,
+    ):
+        seen.append(
+            (
+                list(last_token_indices),
+                padded_batch_size,
+                padded_sequence_length,
+                last_token_slice,
+                last_token_index,
+            )
+        )
+        return "logits"
+
+    runtime.config.model.post_process_batched_prefill_output = post_process_batched_prefill_output
+    monkeypatch.setattr(prefill_module.ttnn, "untilize", lambda logits, **kwargs: "output")
+
+    assert (
+        runtime._finish_regular_prefill(
+            prepared,
+            "hidden",
+            None,
+            PrefillPositionInputs("shared-start", "shared-end", "shared-row"),
+        )
+        == "output"
+    )
+    assert seen == [([86, 114], 2, 128, None, None)]
+
+
+def test_partial_batched_group_is_trace_ineligible_while_full_group_keeps_trace():
+    runtime = _runtime()
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80, rows=3)
+
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        start_pos=start_pos,
+        empty_slots=(7, 3, 11),
+    )
+
+    assert [len(item.request.source_rows) for item in prepared] == [2, 1]
+    assert prepared[0].trace_signature is not None
+    assert prepared[1].trace_signature is None
 
 
 @pytest.mark.parametrize(
@@ -1511,7 +1906,7 @@ def test_trace_capture_uses_hidden_body_without_eager_sequence(monkeypatch):
 
 def test_assemble_restores_source_rows_and_releases_each_owned_result(monkeypatch):
     runtime = _runtime()
-    requests = _plan(prompt_length=80, slots=(7, 3))
+    requests = _plan(prompt_length=80, slots=(7, 3), disable_batched_prefill=True)
     prepared = [SimpleNamespace(request=request, sampling_params=None) for request in requests]
     first = torch.zeros(1, 1, 32, runtime.config.model.vocab_size)
     second = torch.zeros_like(first)
@@ -1529,6 +1924,26 @@ def test_assemble_restores_source_rows_and_releases_each_owned_result(monkeypatc
     assert torch.equal(output[0, 0], torch.ones(runtime.config.model.vocab_size))
     assert torch.equal(output[1, 0], torch.full((runtime.config.model.vocab_size,), 2.0))
     assert released == ["owned-0", "owned-1"]
+
+
+def test_assemble_maps_batched_extract_rows_independently_of_physical_slots(monkeypatch):
+    runtime = _runtime()
+    request = _plan(prompt_length=80, slots=(7, 3))[0]
+    prepared = SimpleNamespace(request=request, sampling_params=None)
+    host = torch.zeros(1, 1, 32, runtime.config.model.vocab_size)
+    host[0, 0, 0, :] = 1
+    host[0, 0, 1, :] = 2
+    released = []
+    monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda value: released.append(value) or [])
+
+    output = runtime.assemble(
+        [(prepared, InvocationResult(host, "owned"))],
+        batch_size=2,
+    )
+
+    assert torch.equal(output[0, 0], torch.ones(runtime.config.model.vocab_size))
+    assert torch.equal(output[1, 0], torch.full((runtime.config.model.vocab_size,), 2.0))
+    assert released == ["owned"]
 
 
 def test_transient_cleanup_retries_failed_release(monkeypatch):
@@ -1583,6 +1998,10 @@ def test_prefill_runtime_config_resolves_frozen_static_capabilities(expect_error
     assert config.allow_force_argmax
     assert config.sampling_batch_size == 16
     assert not config.static_q128_topk_supported
+    assert config.supports_batched_prefill
+    assert not config.disable_batched_prefill
+    assert config.max_prefill_batch_size == 8
+    assert config.batched_prefill_batched_extract
     with expect_error(FrozenInstanceError, "cannot assign to field"):
         config.max_batch_size = 8
 
@@ -1608,6 +2027,23 @@ def test_prefill_runtime_config_rejects_mesh_and_sampler_mismatches(expect_error
     model.sampling = None
     with expect_error(TypeError, "model.sampling.config"):
         PrefillRuntimeConfig.resolve(**arguments)
+
+
+def test_prefill_runtime_config_rejects_non_power_of_two_batched_prefill_cap(expect_error):
+    mesh_device = SimpleNamespace(shape=(1, 1))
+
+    with expect_error(ValueError, "max_prefill_batch_size must be one of"):
+        PrefillRuntimeConfig.resolve(
+            model=FakeModel(mesh_device),
+            output_reader=FakeReader(mesh_device),
+            page_table_layout=PageTableLayout(32, 256, 264, 256),
+            max_batch_size=32,
+            max_prefill_chunk_size=2048,
+            supports_batched_prefill=True,
+            max_prefill_batch_size=3,
+            device_sampling_enabled=True,
+            can_enable_trace=lambda length, cached: True,
+        )
 
 
 def test_page_table_layout_replacement_is_immutable_and_bounded(expect_error):
