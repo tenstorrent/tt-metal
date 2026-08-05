@@ -42,13 +42,35 @@ from models.demos.hf_eager.hunyuanvideo_1_5.tests.e2e.test_real_weight_pcc impor
 from models.demos.hf_eager.hunyuanvideo_1_5.tt import pipeline as P
 
 _COMMUNITY = "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v"
+_I2V_COMMUNITY = "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v"
 
 
-def _pipeline_path():
+def _pipeline_path(repo=_COMMUNITY):
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     from huggingface_hub import snapshot_download
 
-    return snapshot_download(_COMMUNITY)  # cached if present, else downloads (~50GB)
+    return snapshot_download(repo)  # cached if present, else downloads (~50GB)
+
+
+def _load_i2v_image(height, width, label=""):
+    """i2v needs a conditioning first-frame image. HY_IMAGE=<path> overrides; otherwise
+    fall back to a saved real frame, else a synthetic gradient, so the test is self-
+    contained. The pipeline's image_processor resizes to the target bucket internally."""
+    import numpy as np
+    from PIL import Image
+
+    candidates = [os.environ.get("HY_IMAGE"), "/home/tt-admin/sdawle/hunyuanvideo1.5/hy720p_FIXED_frame060.png"]
+    for c in candidates:
+        if c and os.path.exists(c):
+            img = Image.open(c).convert("RGB")
+            print(f"[{label}] i2v conditioning image: {c} {img.size}", flush=True)
+            return img
+    arr = np.zeros((height, width, 3), dtype="uint8")
+    arr[..., 0] = 120
+    arr[..., 1] = np.linspace(40, 200, height)[:, None]
+    img = Image.fromarray(arr)
+    print(f"[{label}] i2v conditioning image: synthetic gradient {img.size}", flush=True)
+    return img
 
 
 def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, label, use_trace):
@@ -59,7 +81,21 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
     from PIL import Image
 
     coerce_bf16()
-    pipe = HunyuanVideo15Pipeline.from_pretrained(_pipeline_path(), torch_dtype=torch.bfloat16)
+    # HY_I2V=1: image->video. Uses a DIFFERENT diffusers pipeline class
+    # (HunyuanVideo15ImageToVideoPipeline): it adds a SigLIP image_encoder -> image_embeds
+    # AND VAE-encodes the input image into the DiT's conditioning channels (in_channels=65 =
+    # 32 noise + 32 image-cond + 1 mask). Loading the i2v checkpoint directly means its
+    # scheduler already carries the correct shift (480p_i2v=5.0) -- no override needed (unlike
+    # the t2v HY_720P transformer-swap below, which must fix the reused 480p scheduler).
+    _i2v = os.environ.get("HY_I2V") == "1"
+    if _i2v:
+        from diffusers import HunyuanVideo15ImageToVideoPipeline
+
+        pipe = HunyuanVideo15ImageToVideoPipeline.from_pretrained(
+            _pipeline_path(_I2V_COMMUNITY), torch_dtype=torch.bfloat16
+        )
+    else:
+        pipe = HunyuanVideo15Pipeline.from_pretrained(_pipeline_path(), torch_dtype=torch.bfloat16)
     # HY_720P=1: swap the 480p DiT for the 720p_t2v transformer (same arch, target_size=960).
     # VAE + text encoders are identical across tiers, so we reuse the cached 480p ones and
     # only load the 720p transformer (its shards must already be in the HF cache). Pass
@@ -69,8 +105,13 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
 
         from huggingface_hub import snapshot_download
 
+        _repo720 = (
+            "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v"
+            if _i2v
+            else "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v"
+        )
         _720 = snapshot_download(
-            "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v",
+            _repo720,
             allow_patterns=["transformer/*", "model_index.json"],
         )
         _cls = type(pipe.transformer)
@@ -82,13 +123,19 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
         pipe.transformer = _cls.from_pretrained(
             _720, subfolder="transformer", torch_dtype=torch.bfloat16, low_cpu_mem_usage=False
         )
+        # The i2v pipeline caches target_size at __init__ from the (480p) transformer and uses
+        # it to pick the output resolution bucket -- refresh it from the swapped-in 720p
+        # transformer (640 -> 960) or i2v keeps generating at 480p. (t2v takes explicit H/W so
+        # it has no target_size attr; the guard skips it.)
+        if hasattr(pipe, "target_size"):
+            pipe.target_size = pipe.transformer.config.target_size
         # The 720p checkpoint uses flow-match scheduler shift=9.0 (480p uses 5.0); keeping
         # the 480p shift under-shifts the 720p denoise trajectory -> washed-out/oversaturated
         # output. VAE scaling_factor + guidance are identical, so only the shift needs fixing.
         # NOTE: FlowMatchEulerDiscreteScheduler.set_timesteps reads `self.shift` (the property
         # backed by `self._shift`), NOT `self.config.shift`. register_to_config only updates the
         # config dict, so it's a silent no-op -- must go through set_shift()/`_shift`.
-        _shift = float(os.environ.get("HY_SCHED_SHIFT", "9.0"))
+        _shift = float(os.environ.get("HY_SCHED_SHIFT", "7.0" if _i2v else "9.0"))
         if hasattr(pipe.scheduler, "set_shift"):
             pipe.scheduler.set_shift(_shift)
         else:
@@ -182,7 +229,7 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
                 encoder_hidden_states_2=encoder_hidden_states_2,
                 encoder_attention_mask_2=encoder_attention_mask_2,
                 image_embeds=image_embeds,
-                task="t2v",
+                task=("i2v" if _i2v else "t2v"),
             )
             dtype = hidden_states.dtype
             guider = self.__dict__["_guider"]
@@ -273,14 +320,19 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
     _prompt = os.environ.get("HY_PROMPT", "A cat walks on the grass, realistic")
     _neg = os.environ.get("HY_NEG_PROMPT") or None
     _pkw = {"negative_prompt": _neg} if _neg is not None else {}
+    if _i2v:
+        # i2v derives the output resolution from the input image + the checkpoint's
+        # target_size (640->480p, 960->720p), so it takes NO height/width -- it computes
+        # them via video_processor.calculate_default_height_width and crop-resizes the image.
+        _pkw["image"] = _load_i2v_image(height, width, label)
+    _dims = {} if _i2v else {"height": height, "width": width}
     print(f"[{label}] prompt: {_prompt}\n[{label}] negative: {_neg}", flush=True)
     out = pipe(
         prompt=_prompt,
-        height=height,
-        width=width,
         num_frames=frames,
         num_inference_steps=steps,
         generator=torch.Generator().manual_seed(0),
+        **_dims,
         **_pkw,
     ).frames[0]
     print(
