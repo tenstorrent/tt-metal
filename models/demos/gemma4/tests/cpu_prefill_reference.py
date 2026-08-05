@@ -40,6 +40,14 @@ import torch
 
 REFERENCE_CHUNK = 4096
 
+# Long-context references. A full 256k reference is not reachable on CPU: the
+# forward is ~51 h by extrapolation from the measured 4k run, and eager attention
+# would need an ~8.8 TB score matrix per layer. 32768 is the largest of the device
+# targets that fits (~1 h, ~137 GB transient), so that is where the numerical
+# evidence for the ring path tops out.
+LONG_REFERENCE_CONTEXTS = [8192, 16384, 32768]
+FILLER_SEED = 1234
+
 # Bumped when the dump's contents or semantics change, so an old file on disk is
 # rejected instead of being compared against.
 _FORMAT_VERSION = 1
@@ -47,6 +55,25 @@ _FORMAT_VERSION = 1
 
 def _model_path() -> str:
     return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "google/gemma-4-31B-it")
+
+
+def build_token_sequence(model_path, chunk, context_len, vocab_size):
+    """The exact token sequence a chunked prefill run consumes.
+
+    Chunk 0 carries the real prompt; later chunks are deterministic filler. Shared
+    by the reference generator and the device test so the two cannot drift — a PCC
+    comparison against a differently-tokenized reference would be worse than none.
+    """
+    import torch as _torch
+
+    from models.demos.gemma4.demo.text_demo_prefill import _prompt_tokens
+
+    tokens_first, tokenizer, prompt_len = _prompt_tokens(model_path, chunk)
+    parts = [tokens_first]
+    _torch.manual_seed(FILLER_SEED)
+    for _ in range(context_len // chunk - 1):
+        parts.append(_torch.randint(0, vocab_size, (1, chunk), dtype=_torch.int32))
+    return _torch.cat(parts, dim=-1), tokenizer, prompt_len
 
 
 def reference_path(model_path: str | None = None, chunk: int = REFERENCE_CHUNK) -> Path:
@@ -169,5 +196,84 @@ def generate(model_path: str | None = None, chunk: int = REFERENCE_CHUNK, out_pa
     return out_path
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and not os.environ.get("GEMMA4_CPU_REF_CONTEXT"):
     generate()
+
+
+def long_reference_path(model_path: str | None = None, context_len: int = 8192) -> Path:
+    """Dump location for a long-context reference, keyed by context length."""
+    model_path = model_path or _model_path()
+    root = os.environ.get("TT_CACHE_PATH")
+    base = Path(root) if root else Path("generated") / "gemma4_cpu_reference"
+    slug = os.path.basename(model_path.rstrip("/")).replace("/", "--")
+    return base / f"cpu_prefill_reference_{slug}_ctx{context_len}_v{_FORMAT_VERSION}.pt"
+
+
+def load_long(model_path: str | None = None, context_len: int = 8192):
+    path = long_reference_path(model_path, context_len)
+    if not path.exists():
+        return None
+    return torch.load(path, map_location="cpu", weights_only=False)
+
+
+def generate_long(model_path: str | None = None, context_len: int = 8192, chunk: int = REFERENCE_CHUNK) -> Path:
+    """Whole-sequence CPU reference for a ``context_len``-token prefill.
+
+    The device runs this as ``context_len / chunk`` chunks with each chunk after
+    the first reading history through the ring; the reference is one flat forward
+    over the same tokens. Comparing per-chunk slices is what actually tests the
+    history read — a chunk that ignored the prefix would diverge here while still
+    looking finite and stable.
+
+    Cost grows quadratically in the full-attention layers: ~6 min at 8k, ~18 min at
+    16k, ~1 h at 32k, and out of reach beyond that (256k extrapolates to ~51 h with
+    an ~8.8 TB eager attention matrix per layer).
+    """
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    model_path = model_path or _model_path()
+    out_path = long_reference_path(model_path, context_len)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    text_config = getattr(config, "text_config", config)
+    text_config._attn_implementation = "eager"
+    config._attn_implementation = "eager"
+
+    tokens, _tokenizer, prompt_len = build_token_sequence(model_path, chunk, context_len, text_config.vocab_size)
+    assert tokens.shape[-1] == context_len, f"token sequence is {tokens.shape[-1]}, expected {context_len}"
+    print(f"[cpu-ref] ctx={context_len} tokens={tuple(tokens.shape)} sha={hash_tokens(tokens)}", flush=True)
+
+    print("[cpu-ref] loading weights in fp32...", flush=True)
+    t0 = time.time()
+    full = AutoModelForCausalLM.from_pretrained(
+        model_path, dtype=torch.float32, low_cpu_mem_usage=True, trust_remote_code=True
+    )
+    full.eval()
+    text_model = full.model.language_model
+    print(f"[cpu-ref] weights loaded in {time.time() - t0:.0f}s", flush=True)
+
+    print(f"[cpu-ref] running {context_len}-token forward (this is the slow part)...", flush=True)
+    t0 = time.time()
+    with torch.no_grad():
+        out = text_model(input_ids=tokens.to(torch.long), use_cache=False)
+    hidden = out.last_hidden_state.to(torch.float32)
+    forward_s = time.time() - t0
+    print(f"[cpu-ref] done in {forward_s:.0f}s; hidden={tuple(hidden.shape)}", flush=True)
+
+    payload = {
+        "fingerprint": _fingerprint(tokens, model_path, context_len),
+        "tokens": tokens.cpu(),
+        "context_len": int(context_len),
+        "chunk": int(chunk),
+        "prompt_len": int(prompt_len),
+        "hidden": hidden.cpu(),
+        "forward_seconds": forward_s,
+    }
+    torch.save(payload, out_path)
+    print(f"[cpu-ref] wrote {out_path} ({out_path.stat().st_size / 1e9:.2f} GB)", flush=True)
+    return out_path
+
+
+if __name__ == "__main__" and os.environ.get("GEMMA4_CPU_REF_CONTEXT"):
+    generate_long(context_len=int(os.environ["GEMMA4_CPU_REF_CONTEXT"]))
