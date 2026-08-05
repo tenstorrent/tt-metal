@@ -523,21 +523,8 @@
     wh_galaxy_perf:
       timeout: 10
       tier: 1
-  owner_id: U053W15B6JF # Djordje Ivanovic
-  team: models
-
-- name: Qwen3-32B unit tests (Blackhole Galaxy)
-  cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
-    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder.py
-  model: qwen3-32b-galaxy
-  model_family: Qwen
-  skus:
     bh_galaxy:
-      timeout: 25
+      timeout: 15
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
