@@ -1592,17 +1592,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_decode[on_device_sampling][i],
                 )
-            elif page_table_changed:
-                # With async device sampling, token/position inputs may
-                # intentionally be stale on host: the previous decode updates
-                # them on device. Page tables still need refreshing when new KV
-                # blocks are allocated, so copy only that trace input and
-                # preserve device-produced tokens.
+            else:
+                # EXPERIMENT ONLY (#52176) — do not merge. Re-stage only current_pos and
+                # rope_idxs from host each step, leaving the device-produced token feedback
+                # intact. Host and device values should already agree, so this is a no-op
+                # unless the device-side plus_one increments drift.
                 host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
-                host_page_table = host_inputs_i[DECODE_PAGE_TABLE_INPUT_IDX]
-                device_page_table = self.trace_inputs_decode[on_device_sampling][i][DECODE_PAGE_TABLE_INPUT_IDX]
-                if host_page_table is not None:
-                    ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
+                device_inputs_i = self.trace_inputs_decode[on_device_sampling][i]
+                for idx in (1, 2):
+                    if host_inputs_i[idx] is not None:
+                        ttnn.copy_host_to_device_tensor(host_inputs_i[idx], device_inputs_i[idx])
+                if page_table_changed:
+                    host_page_table = host_inputs_i[DECODE_PAGE_TABLE_INPUT_IDX]
+                    device_page_table = device_inputs_i[DECODE_PAGE_TABLE_INPUT_IDX]
+                    if host_page_table is not None:
+                        ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
 
         if page_table_changed:
             self.prev_page_table = tuple(pt.clone() for pt in page_table)
