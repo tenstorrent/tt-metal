@@ -16,14 +16,9 @@ HF_ENV = "DFLASH_HF_MODEL"
 
 # ---- HF drafter reference (ground truth for the device PCC) ----
 # Build the REAL DFlashDraftModel from the vendored reference modeling code (``reference/dflash_prefill``) +
-# the checkout's config, and run its context-KV forward. ``load_hf_drafter`` RAISES (``DrafterUnavailable``
-# for a missing/incomplete checkpoint — soft; ``RuntimeError`` for a genuine build failure — hard);
-# ``_load_hf_drafter`` below turns the soft case into a ``pytest.skip``.
-class DrafterUnavailable(RuntimeError):
-    """The DFlash drafter checkpoint is absent or incomplete — a soft/expected condition, translated to a
-    ``pytest.skip`` by ``_load_hf_drafter``."""
-
-
+# the checkout's config, and run its context-KV forward. ``_load_hf_drafter`` skips (``pytest.skip``) when the
+# checkpoint is missing/incomplete or the built model is not a drafter (a soft/expected condition), and raises
+# ``RuntimeError`` when the model/config genuinely fails to build (a hard error).
 def is_drafter(m) -> bool:
     return all(hasattr(m, a) for a in ("fc", "hidden_norm", "layers", "target_layer_ids"))
 
@@ -74,19 +69,17 @@ def normalize_rope_config(config):
     return config
 
 
-def load_hf_drafter(path: str, *, load_weights: bool = True):
+def _load_hf_drafter(load_weights: bool = True):
     """Build the REAL z-lab DFlashDraftModel (fp32, eager) from the VENDORED reference modeling code
     (``reference/dflash_prefill``) + the checkout's config (+ safetensors when ``load_weights``). The
-    model *code* is always the in-repo reference; only config/weights come from ``path``. With
+    model *code* is always the in-repo reference; only config/weights come from ``$DFLASH_HF_MODEL``. With
     ``load_weights=False`` (random mode) no safetensors is loaded — the caller supplies random weights.
 
-    Raises ``DrafterUnavailable`` when the checkpoint is missing/incomplete or the built model is not a
-    drafter (a soft condition — a skip in tests); ``RuntimeError`` when the model/config genuinely fails to
-    build (a hard error in both contexts)."""
+    Skips (``pytest.skip``) when the checkpoint is missing/incomplete or the built model is not a drafter
+    (a soft/expected condition); raises ``RuntimeError`` when the model/config genuinely fails to build."""
+    path = os.environ.get(HF_ENV)
     if not path or not os.path.exists(path):
-        raise DrafterUnavailable(
-            f"DFLASH drafter checkpoint not found: {path!r} (dir with config.json [+ model.safetensors])"
-        )
+        pytest.skip(f"set {HF_ENV}=/path/to/Kimi-K2.x-DFlash (dir with config.json [+ model.safetensors])")
     try:
         config = normalize_rope_config(AutoConfig.from_pretrained(path, trust_remote_code=True))
         model = DFlashDraftModel(config).float().eval()
@@ -108,10 +101,10 @@ def load_hf_drafter(path: str, *, load_weights: bool = True):
         ]
         absent = [k for k in required if k in missing]
         if absent:
-            raise DrafterUnavailable(f"checkpoint missing required drafter tensors, e.g. {absent[:3]}")
+            pytest.skip(f"checkpoint missing required drafter tensors, e.g. {absent[:3]}")
 
     if not is_drafter(model):
-        raise DrafterUnavailable("built model is not a DFlashDraftModel (missing fc/hidden_norm/target_layer_ids)")
+        pytest.skip("built model is not a DFlashDraftModel (missing fc/hidden_norm/target_layer_ids)")
     model.config._attn_implementation = "eager"  # force eager so the synthetic forward runs on CPU
     return model
 
@@ -185,19 +178,6 @@ def _hf_context_kv(model, cfg: DFlashDrafterConfig, ctx: torch.Tensor, q_len: in
         k, v = cache_kv(pkv, i)  # [1, kv_heads, total, head_dim]
         out[i] = (k[0, :, :ctx_len, :].float(), v[0, :, :ctx_len, :].float())
     return out
-
-
-# helpers
-def _load_hf_drafter(load_weights: bool = True):
-    """Thin test wrapper over ``load_hf_drafter``: reads ``$DFLASH_HF_MODEL`` and translates a
-    'checkpoint unavailable/incomplete' soft failure (``DrafterUnavailable``) into a ``pytest.skip``; a
-    genuine build failure (``RuntimeError``) still propagates as a test error. The drafter model *code* is
-    always the vendored reference; only config/weights come from ``$DFLASH_HF_MODEL``. With
-    ``load_weights=False`` (random mode) no safetensors is loaded — the caller supplies random weights."""
-    try:
-        return load_hf_drafter(os.environ.get(HF_ENV), load_weights=load_weights)
-    except DrafterUnavailable as e:
-        pytest.skip(f"set {HF_ENV}=/path/to/Kimi-K2.x-DFlash — {e}")
 
 
 def _random_state_dict(cfg: DFlashDrafterConfig, seed: int = 42) -> dict:
