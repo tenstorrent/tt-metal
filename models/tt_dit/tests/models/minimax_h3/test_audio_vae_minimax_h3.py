@@ -20,13 +20,23 @@ before ``conv_post``, where LTX's narrowest is 24. ``_AlignedOutConv1d`` pads 8 
 while ``SnakeBeta`` keeps 8, so that boundary gets its own case.
 """
 
+import copy
 import json
 import math
 import os
 
 import pytest
 import torch
+from loguru import logger
 
+import ttnn
+
+from ....layers.audio_ops import Conv1dViaConv3d
+
+# Imported for the decoder gates below -- but note the import itself also runs
+# ``register_h3_audio_blockings()``, which is what puts the H3 audio conv shapes into
+# ``_FP32_BLOCKINGS``. Without it every conv here would silently fall back to the conservative
+# ``C_in_block = 32`` default and measure a *different op* than production (STATE.md am. 111).
 from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ....models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ....utils.check import assert_quality
@@ -34,16 +44,26 @@ from ....utils.check import assert_quality
 # The vocoder needs extra L1 scratch, as the LTX audio tests do.
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
 
-# RMSE/sigma bar, set from measurement rather than convention. Three candidate error
-# sources were each measured individually and are correct: the MAC fallback in
-# depthwise_tap_filter is **bit-exact** (rel_max 0.0), `Activation1d` is pcc 0.9999998 /
-# RMSE 0.17%, and the decoder path contains no SDPA so the bf16 attention island cannot
-# explain it. What remains is accumulation: ~0.17% per anti-aliased activation over 126 of
-# them plus ~130 convolutions lands at ~10% RMSE while PCC stays at 99.5%. So PCC plus the
-# perceptual gates (PSNR, log-spectrogram distance) are the meaningful bars here, and RMSE
-# is held at a level consistent with the measured chain depth rather than at a value that
-# would only be reachable by a shallower model.
+# RMSE/sigma bar, set from measurement rather than convention. Candidate error sources were each
+# measured: the MAC fallback in depthwise_tap_filter is **bit-exact** (rel_max 0.0), `Activation1d` is
+# pcc 0.9999998 / RMSE 0.17%, and the decoder path contains no SDPA so the bf16 attention island cannot
+# explain it. What remains is accumulation across the chain -- and the per-op term is now identified
+# rather than inferred: an fp32 conv3d on this hardware is fp32 storage and fp32 accumulate with a
+# multiply that keeps only ~11 significand bits, which measures 1.86e-03 on `conv_pre` at production
+# blocking and is **flat in the reduction depth**. Over ~130 convolutions plus 126 anti-aliased
+# activations that lands at ~10% RMSE while PCC stays at 99.5%.
+#
+# So PCC plus the perceptual gates (PSNR, log-spectrogram distance) are the meaningful bars here, and
+# RMSE is held at a level consistent with the measured chain depth rather than at a value only a
+# shallower model could reach. `MINIMAX_H3_AUDIO_CONV_SPLIT=full` halves it to 5.4% by splitting the
+# conv operands (see `conv_split_mode` and STATE.md am. 111-112); this bar deliberately still describes
+# the **default** path, so it must be re-derived if that default ever changes.
 AUDIO_RELATIVE_RMSE = 0.12
+
+# `conv_pre`: the decoder's widest reduction, Cin 2048 x k 7 = 14336, and the shape every operand-split
+# measurement in am. 111 was taken at. Its T is the 5 s latent length, as in the decode gates.
+CONV_PRE_SHAPE = (2048, 1024, 7)
+CONV_PRE_LATENT_FRAMES = 207
 
 LATENT_CHANNELS = 32
 HOP_LENGTH = 800
@@ -194,6 +214,73 @@ def test_decode(mesh_device, num_latent_frames):
     # rather than being an accidental broadcast of one channel.
     left, right = actual[0, 0], actual[1, 0]
     assert not torch.allclose(left, right, atol=1e-4), "stereo channels are identical -- a broadcast bug"
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
+def test_conv_operand_split_improves_precision(mesh_device, monkeypatch):
+    """Operand splitting really does beat the fp32 conv floor, at `conv_pre`'s production shape.
+
+    The floor is the multiplier, not the accumulator: an fp32 conv3d keeps ~11 significand bits per
+    operand and its relative error is flat in the reduction depth, so ``fp32_dest_acc_en`` and HiFi4 --
+    both already on -- cannot improve it. Splitting an operand into ``hi = bf16(v)`` and the exact
+    residual ``lo = v - hi`` lets a second conv carry the bits the first dropped.
+
+    Gated as an inequality against the ``off`` baseline rather than at absolute values, because the
+    absolute numbers are hardware- and blocking-dependent while the *ordering* is the claim. The
+    baseline itself does carry a loose absolute ceiling, which is what would catch the blocking
+    registration silently regressing (am. 111): unregistered, this shape measures 2.40e-03 instead of
+    1.86e-03 because ``C_in_block`` falls back to 32.
+    """
+    in_channels, out_channels, kernel = CONV_PRE_SHAPE
+    torch.manual_seed(0)
+    reference = torch.nn.Conv1d(in_channels, out_channels, kernel, padding=kernel // 2).float().eval()
+    x = torch.randn(2, in_channels, CONV_PRE_LATENT_FRAMES) * 0.1
+    with torch.no_grad():
+        # fp64 golden, so the reference's own fp32 rounding is excluded from every number below.
+        golden = copy.deepcopy(reference).double()(x.double()).float()
+
+    x_device = None
+    errors = {}
+    for mode in ("off", "weight", "full"):
+        # Read at construction, so it must be set before the layer is built.
+        monkeypatch.setenv("MINIMAX_H3_AUDIO_CONV_SPLIT", mode)
+        layer = Conv1dViaConv3d(
+            in_channels,
+            out_channels,
+            kernel_size=kernel,
+            padding_mode="zeros",
+            bias=True,
+            mesh_device=mesh_device,
+            dtype=ttnn.float32,
+        )
+        assert layer.split_mode == mode, f"layer resolved split_mode {layer.split_mode!r}, expected {mode!r}"
+        assert (layer.weight_lo is None) == (mode == "off"), f"weight residual allocation wrong for {mode!r}"
+        layer.load_torch_state_dict(
+            {
+                "weight": reference.weight.detach().contiguous(),
+                "bias": reference.bias.detach().contiguous(),
+            },
+            strict=False,
+        )
+        if x_device is None:
+            x_device = ttnn.from_torch(
+                x.transpose(1, 2).contiguous(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+            )
+        actual = ttnn.to_torch(layer(x_device)).float().transpose(1, 2)
+        errors[mode] = float((actual.double() - golden.double()).pow(2).mean().sqrt() / golden.double().std())
+
+    logger.info("conv_pre rel_rmse by split mode: " + ", ".join(f"{k}={v:.3e}" for k, v in errors.items()))
+
+    # Guards the blocking registration, not the split: 2.1e-03 sits between production's 1.86e-03 and
+    # the 2.40e-03 an unregistered C_in_block=32 fallback would give.
+    assert errors["off"] <= 2.1e-3, (
+        f"baseline conv_pre error {errors['off']:.3e} is above the production floor -- "
+        "C_in_block has probably fallen back to 32, meaning register_h3_audio_blockings() did not run"
+    )
+    # Measured 1.86e-03 / 1.25e-03 / 1.00e-03; bars carry ~1.3x margin on each ratio.
+    assert errors["weight"] <= 0.85 * errors["off"], f"weight-split did not improve: {errors}"
+    assert errors["full"] <= 0.70 * errors["off"], f"full split did not improve enough: {errors}"
+    assert errors["full"] < errors["weight"], f"full split should beat weight-only: {errors}"
 
 
 def _tt_encoder(config: dict, mesh_device):

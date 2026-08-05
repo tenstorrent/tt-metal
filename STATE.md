@@ -49,15 +49,25 @@ export TT_DIT_CACHE_DIR=/data/kevinmi/tt_dit_cache
 
 ## Pending work
 
-### Audio decode precision — ~2.7x available, measured, not implemented (am. 111)
-The fp32 floor is a **multiplier-mantissa** limit, flat in K (1.162e-03 at K=32 through 1.169e-03 at
-K=14336): fp32 storage + fp32 accumulate with an fp16-grade multiply, ~11 significand bits at HiFi4.
-Splitting operands into `bf16 hi + fp32 residual` beats it — 3.7x on matmul (3 terms; `lo*lo` exactly
-negligible), 1.9x on the real `conv_pre` at production blocking, **2.7x** stacked with `C_in_block` 512
-(1.857e-03 → 6.987e-04). A device `bfloat16` typecast round trip reproduces torch `.bfloat16()`
-bit-exactly, so no host help is needed. Expected chain effect: 10.5 % → ~4 %, at 3x the conv count.
-The cost estimate leans on am. 103's `Conv2d` profile (4.0 % of stage vs ~70 % layout) and must be
-measured, not assumed. `C_in_block` 1024/2048 are rejected by the op's blocking rules.
+### Audio decode precision — implemented behind a flag; one decision left (am. 111, 112)
+`MINIMAX_H3_AUDIO_CONV_SPLIT` ∈ `off` (default) / `weight` / `full` splits the fp32 conv operands into
+`bf16 hi + exact residual`, beating the multiplier-mantissa floor. Measured end to end at 5 s stereo:
+
+| mode | convs | rel_rmse | PCC | PSNR | mel | warm median |
+|---|---|---|---|---|---|---|
+| `off` | 1 | 0.1046 | 99.5451 % | 40.29 dB | 0.0783 | 4.03 s |
+| `weight` | 2 | 0.0793 | 99.7397 % | 42.70 dB | 0.0600 | 5.00 s |
+| **`full`** | 3 | **0.0538** | **99.8950 %** | **46.07 dB** | 0.0478 | 5.10 s |
+
+**Open decision: whether to make `full` the default.** It halves the error for ~+25 % on the stage
+(~+1 s on a 63–74 s e2e). Blocked on nothing technical — the traced path passes with it on — but
+flipping it changes published latency and obsoletes `AUDIO_RELATIVE_RMSE = 0.12`, which deliberately
+still describes the default path and would need re-deriving from the 5.4 % measurement.
+
+Still unexploited: `C_in_block` 512 stacks for a further ~1.4x on `conv_pre` (am. 111), which needs a
+per-shape "largest legal block" picker since 1024/2048 are rejected by the op's blocking rules. Also
+untouched are the depthwise resample taps, which go through `ttnn.conv1d` rather than `conv3d` and so
+are not covered by the split.
 
 ### Perf 1 — VAE decode readback (task #12)
 Device-side stitch via all-gather is **a wash** and is left unwired behind
@@ -204,3 +214,63 @@ production row. Do not loosen the bar without a measured floor behind it (am. 76
 - `_probe_streams` returns stream **dicts**, not durations; `_decoded_frames` takes `count=`.
 - **Look at the frames.** Seams and flicker are the two defects every whole-tensor metric hides, and both
   are parallelism bugs.
+
+---
+
+## Amendment 112 (2026-08-05) — operand splitting implemented: audio decode e2e RMSE 10.46 % → 5.38 %
+
+Implements what am. 111 measured. `MINIMAX_H3_AUDIO_CONV_SPLIT` ∈ `off` (default) / `weight` / `full`,
+resolved **at layer construction** (so the env var cannot desync an allocated residual from what
+`forward` expects) and forced to `off` for any non-fp32 dtype, since splitting only addresses the fp32
+datapath.
+
+`conv3d_maybe_split` sums the terms; `prepare_conv3d_weight_state(split=True)` prepares `w_hi` and the
+exact residual `w_lo` from one already-padded weight, so the bias is never padded twice, and the bias is
+applied to exactly one term because it is not a factor of the product being split. Covers
+`Conv1dViaConv3d` (hence `_AlignedOutConv1d` and `ConvTranspose1dViaConv3d`, which delegate to it) and
+`Conv2dViaConv3d`.
+
+The activation split needs **no layout change**: on ROW_MAJOR fp32 a `bfloat16` typecast round trip
+reproduces torch's `.bfloat16()` bit-for-bit and `hi + lo` reconstructs the input exactly, both verified.
+That mattered — am. 103 profiled this stage at ~70 % layout ops, so a tilize round trip would likely have
+cost more than the precision was worth.
+
+### End to end, `test_decode`'s inputs (latent from the reference encoder, 5 s, stereo)
+
+| mode | convs | rel_rmse | PCC | PSNR | mel dist | warm median (min–max) |
+|---|---|---|---|---|---|---|
+| `off` | 1 | 0.1046 | 99.5451 % | 40.29 dB | 0.0783 | 4.028 s (3.811–4.362) |
+| `weight` | 2 | 0.0793 | 99.7397 % | 42.70 dB | 0.0600 | 5.003 s (3.149–5.286) |
+| **`full`** | 3 | **0.0538** | **99.8950 %** | **46.07 dB** | **0.0478** | 5.100 s (4.617–5.604) |
+
+`full` gives **1.94x** on RMSE — matching the 1.9x measured on `conv_pre` alone, so the per-conv gain
+carries through the whole ~130-conv chain without attenuation. PCC error falls 4.3x (4.55e-03 → 1.05e-03),
+PSNR gains 5.8 dB, mel distance drops 39 %.
+
+**On the cost, honestly.** Medians say +24 % (`weight`) and +27 % (`full`), but the ranges overlap —
+`weight`'s fastest rep (3.149 s) is below `off`'s fastest (3.811 s) — so at n=5 the two split modes are
+**not separable in time**, and only the off-vs-split gap is. That `full` is no dearer than `weight`
+despite an extra conv per layer is consistent with the layout-dominated profile: the convs are not what
+this stage spends its time on. So the earlier guess that 3x convs would be "a single-digit stage cost"
+was wrong in magnitude (~+25 %, not ~+8 %) while right that it is cheap relative to the accuracy won:
+~+1 s on a 63–74 s e2e.
+
+### Gates
+
+New `test_conv_operand_split_improves_precision` at `conv_pre`'s production shape reproduces
+1.857e-03 / 1.246e-03 / **9.979e-04** and asserts the *ordering* rather than absolute values, since the
+absolutes are hardware- and blocking-dependent while the ordering is the claim. It also asserts the
+allocation contract (`weight_lo` present iff splitting) and carries one loose absolute ceiling on the
+baseline — 2.1e-03, between production's 1.86e-03 and the 2.40e-03 an unregistered `C_in_block = 32`
+fallback gives — so am. 111's blocking-registration trap cannot silently return. Full audio suite
+**8 passed** with the default, and `test_audio_decode_traced` passes with `full`, so the flag is safe on
+the traced path production uses.
+
+`AUDIO_RELATIVE_RMSE = 0.12` is unchanged and its comment now says explicitly that it describes the
+**default** path, so it must be re-derived if the default ever flips. Its justification is also repaired:
+it now cites the *measured* 1.86e-03 per fp32 conv rather than the inferred 0.17 %-per-activation figure
+that am. 109/110 argued over.
+
+**A measurement note.** A single warm rep put these at 1.29 / 1.56 / 2.02 s — about 3x too fast, because
+the first call after compile is not steady state. Five reps and a median is the minimum here; am. 82's
+±8 % run-to-run was measured on a warm loop, not on the first iteration of one.
