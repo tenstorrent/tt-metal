@@ -49,16 +49,17 @@ SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 DECODE_PAGE_TABLE_INPUT_IDX = 3
 
 
-def _mark_trace_buffers_corruptible(value):
-    """Acknowledge trace I/O that another live trace may overwrite."""
-    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
-    if mark_corruptible is None or value is None:
+def _mark_trace_buffers_corruptible(owner, value):
+    """Acknowledge opt-in trace I/O that another live trace may overwrite."""
+    if not getattr(owner, "_tt_allow_decode_trace_buffer_reuse", False) or value is None:
         return
     if isinstance(value, (list, tuple)):
         for item in value:
-            _mark_trace_buffers_corruptible(item)
+            _mark_trace_buffers_corruptible(owner, item)
         return
-    mark_corruptible(value)
+    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
+    if mark_corruptible is not None:
+        mark_corruptible(value)
 
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
@@ -1512,7 +1513,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 tokens[i], current_pos[i], page_table=user_page_table
             )
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
-            _mark_trace_buffers_corruptible(device_inputs_i)
+            _mark_trace_buffers_corruptible(self, device_inputs_i)
             device_inputs.append(device_inputs_i)
 
         for i in range(self.data_parallel):
@@ -1543,7 +1544,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
-            _mark_trace_buffers_corruptible(tt_out_trace[-1])
+            _mark_trace_buffers_corruptible(self, tt_out_trace[-1])
 
             if sampling_trace_enabled:
                 # NOTE: sampling trace can be keyed depending on sampling params,

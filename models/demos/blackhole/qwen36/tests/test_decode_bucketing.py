@@ -82,6 +82,19 @@ def test_unsupported_device_sampling_fails_at_startup(expect_error):
         Qwen36ForCausalLM._validate_device_sampling_request(wrapper, True)
 
 
+def test_trace_buffer_reuse_is_opt_in(monkeypatch):
+    from models.tt_transformers.tt.generator import _mark_trace_buffers_corruptible
+
+    marked = []
+    monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
+    _mark_trace_buffers_corruptible(SimpleNamespace(), ["default"])
+    _mark_trace_buffers_corruptible(
+        SimpleNamespace(_tt_allow_decode_trace_buffer_reuse=True),
+        ["input", None, ("output",)],
+    )
+    assert marked == ["input", "output"]
+
+
 def test_bucket_warmup_compiles_all_widths_before_capture(monkeypatch):
     from models.common.warmup import WarmupForwardMixin
     from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM

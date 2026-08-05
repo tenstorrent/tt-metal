@@ -23,16 +23,17 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
-def _mark_trace_buffers_corruptible(value):
-    """Acknowledge trace I/O that another live trace may overwrite."""
-    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
-    if mark_corruptible is None or value is None:
+def _mark_trace_buffers_corruptible(bucket, value):
+    """Acknowledge bucketed trace I/O that another live trace may overwrite."""
+    if bucket is None or value is None:
         return
     if isinstance(value, (list, tuple)):
         for item in value:
-            _mark_trace_buffers_corruptible(item)
+            _mark_trace_buffers_corruptible(bucket, item)
         return
-    mark_corruptible(value)
+    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
+    if mark_corruptible is not None:
+        mark_corruptible(value)
 
 
 def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
@@ -359,7 +360,7 @@ class SamplingGenerator:
         slot["input"] = logits
         slot["output"] = output
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
-        _mark_trace_buffers_corruptible((logits, output))
+        _mark_trace_buffers_corruptible(self._active_trace_bucket, (logits, output))
 
         return slot["output"]
 
