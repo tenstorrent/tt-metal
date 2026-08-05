@@ -92,6 +92,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="list the fused kernels that hide an internal collective, and what each hides",
     )
+
+    ln = sub.add_parser("link", help="link per-stage graphs into one multi-stage pipeline graph")
+    ln.add_argument(
+        "stages",
+        nargs="+",
+        metavar="NAME=GRAPH",
+        help="stage name and graph, e.g. dit=dit.json vae=example:sd35_block (in pipeline order)",
+    )
+    ln.add_argument("--out", default=None, metavar="PATH", help="write the linked graph JSON here")
+    ln.add_argument("--analyze", action="store_true", help="analyze the linked graph straight away")
+    ln.add_argument("--top", type=int, default=10, help="findings to print with --analyze")
     return p
 
 
@@ -270,6 +281,35 @@ def main(argv: Optional[list] = None) -> int:
                 load_graph(args.missing or args.check), fail=bool(args.check), stub=getattr(args, "stub", False)
             )
         print(describe_registry())
+        return 0
+
+    if args.cmd == "link":
+        from .link import link_stages
+
+        stages = []
+        for spec in args.stages:
+            if "=" not in spec:
+                raise SystemExit("stage %r must be NAME=GRAPH (e.g. dit=dit.json)" % spec)
+            name, ref = spec.split("=", 1)
+            stages.append((name, load_graph(ref)))
+        linked = link_stages(stages)
+        print(
+            "linked %d stages (%s): %d nodes, %d segments, meshes %s"
+            % (
+                len(stages),
+                " -> ".join(n for n, _ in stages),
+                len(linked.nodes),
+                len(linked.segments()),
+                [tuple(linked.mesh.shape)] + [tuple(m.shape) for m in linked.meshes.values()],
+            )
+        )
+        if args.out:
+            with open(args.out, "w") as fh:
+                fh.write(linked.to_json())
+            print("wrote %s" % args.out)
+        if args.analyze:
+            print()
+            print(render_report(analyze_graph(linked), top=args.top))
         return 0
 
     graph = load_graph(args.graph)

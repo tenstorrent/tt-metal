@@ -241,6 +241,7 @@ report.py     text rendering: state tables, ranked findings, proofs, diagnostics
 builder.py    DSL for writing/lifting graphs; expands fused ttnn ops into stages
 capture.py    record a real ttnn forward pass -> trace -> graph
 conform.py    on-device: diff the shim's per-device shapes against real ttnn (phase 7b/11)
+link.py       link per-stage graphs into one multi-stage pipeline graph (`ditcheck link`, phase 10c)
 dryrun/       real model code under a metadata-only ttnn -> graph, no device
 dryrun/checkpoint.py  checkpoint-derived branch flags from a metadata-only index
 examples/     gold graphs (LTX-2.3 block x2 topologies, SD3.5 block, synthetic patterns)

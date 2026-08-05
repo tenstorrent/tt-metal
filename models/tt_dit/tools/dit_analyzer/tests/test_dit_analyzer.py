@@ -312,6 +312,32 @@ def test_trace_to_graph_lifts_local_shapes_and_flags_assumptions():
     assert graph2.meta["assumptions"]
 
 
+def test_link_stages_builds_a_multi_stage_multi_mesh_pipeline():
+    # Compose separately-analyzed stages into one linked pipeline graph (phase 10c):
+    # a DiT stage on an 8-device mesh and a second stage on a 32-device mesh, split
+    # by a readback boundary. The analyzer resolves each stage on its own mesh and
+    # preserves the per-stage findings.
+    from dit_analyzer.link import link_stages
+
+    dit = load_graph("example:sd35_block")  # 2x4 = 8 devices, 0 findings
+    gen = load_graph("example:ltx_block_bh_4x8")  # 4x8 = 32 devices, 6 duplicate gathers
+    linked = link_stages([("dit", dit), ("gen", gen)])
+
+    assert linked.meta["stages"] == ["dit", "gen"]
+    assert len(linked.segments()) == 2  # readback boundary between stages
+    assert "gen" in linked.meshes and linked.meshes["gen"].num_devices == 32
+
+    report = analyze_graph(linked)
+    # exactly the LTX Ring finding, inside a pipeline -- no spurious dead_collective
+    # from the DiT stage's outputs (each stage's results are read back at its boundary)
+    assert [f.rule for f in report.findings] == ["duplicate_gather"] * 6, [f.rule for f in report.findings]
+    dups = report.findings
+    for f in dups:  # every flagged collective lives on the 32-device gen mesh
+        assert linked.mesh_of(linked.node(f.nodes[0])).num_devices == 32
+
+    assert len(link_stages([("dit", dit)]).segments()) == 1  # a lone stage is one segment
+
+
 def test_multi_mesh_resolves_per_node_and_round_trips():
     # A whole-pipeline graph spans submeshes (blocker 22): a node/symbol names a
     # non-primary mesh, and the analysis resolves each node's mesh (here a 2-device
