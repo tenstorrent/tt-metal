@@ -990,6 +990,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         for (const auto& [node_diff, name_idx_pairs] : candidates_by_diff) {
             best_matches_topology.clear();
             best_matches_psd_placed.clear();
+            best_matches_topology.reserve(name_idx_pairs.size());
 
             for (const auto& [name, idx] : name_idx_pairs) {
                 const auto& grouping_info = mesh_flat_groupings.at(name)[idx];
@@ -1626,7 +1627,7 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
             used_asic_ids.insert(asic_id);
         }
 
-        results.push_back(result);
+        results.push_back(std::move(result));
 
         std::set<uint32_t> all_target_nodes(flat_mesh.get_nodes().begin(), flat_mesh.get_nodes().end());
         TT_FATAL(

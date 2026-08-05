@@ -314,6 +314,7 @@ ChannelTrimmingGlobalOverrides load_channel_trimming_global_overrides(const std:
         }
         if (vc_node["force_enable_sender_channels"]) {
             std::vector<size_t> indices;
+            indices.reserve(vc_node["force_enable_sender_channels"].size());
             for (const auto& idx_node : vc_node["force_enable_sender_channels"]) {
                 indices.push_back(idx_node.as<size_t>());
             }
@@ -321,6 +322,7 @@ ChannelTrimmingGlobalOverrides load_channel_trimming_global_overrides(const std:
         }
         if (vc_node["force_enable_receiver_channels"]) {
             std::vector<size_t> indices;
+            indices.reserve(vc_node["force_enable_receiver_channels"].size());
             for (const auto& idx_node : vc_node["force_enable_receiver_channels"]) {
                 indices.push_back(idx_node.as<size_t>());
             }

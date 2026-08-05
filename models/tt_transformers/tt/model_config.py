@@ -1667,16 +1667,12 @@ class ModelArgs:
                     in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                     out_subblock_h=1,  # Must be divisible by per_core_M
                     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                    per_core_M=1  # workaround for issue #50656
-                    if self.device_name == "P100"
-                    else (
-                        max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                            1,
-                            8
-                            if seq_len >= self.MAX_QKV_MM_SEQ_LEN
-                            else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
-                        )
-                    ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                    # This branch is only reached when use_minimal_qkv_prefill_matmul() is False,
+                    # i.e. seq_len <= 128, so the former `8 if seq_len >= MAX_QKV_MM_SEQ_LEN` arm
+                    # (MAX_QKV_MM_SEQ_LEN == 2048) was unreachable and has been removed. At every
+                    # reachable seq_len the max(1, ...) floor makes this 1.
+                    # NOTE: P100 runs OOM in L1 with a larger per_core_M (workaround for issue #50656).
+                    per_core_M=1 if self.device_name == "P100" else max(1, math.ceil(seq_len / ttnn.TILE_SIZE / 8)),
                     per_core_N=math.ceil(
                         self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
                     ),  # N / TILE_WIDTH / grid width

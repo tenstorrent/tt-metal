@@ -181,6 +181,9 @@ uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uin
         log_debug(tt::LogOp, "Topological dimension {}", ring_size);
         return ring_size;
     }
+    // Without a cluster_axis the CCL spans the tensor's own device list, and
+    // get_linearized_index_from_physical_coord indexes into that same list. Keep the two in sync:
+    // switching this to the global mesh size alone would let a ring index exceed the ring size.
     const auto device_coords = tensor.device_storage().get_coords();
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());
@@ -477,6 +480,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
     const ttsl::SmallVector<uint32_t>& unpad_elements,
     const int dim) {
     std::vector<ttnn::Tensor> combined_tensors;
+    combined_tensors.reserve(num_devices);
 
     ttsl::SmallVector<uint32_t> begins = {0, 0, 0, 0};
     ttsl::SmallVector<uint32_t> ends = {1, 1, 1, 1};
@@ -489,7 +493,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
 
         ttnn::Tensor sliced_tensor = ttnn::slice(output_tensor.at(0), begins, ends, step);
 
-        combined_tensors.push_back(sliced_tensor);
+        combined_tensors.push_back(std::move(sliced_tensor));
     }
     ttnn::Tensor concat_tensor = ttnn::concat(combined_tensors, dim);
     return {concat_tensor};

@@ -559,3 +559,34 @@
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
   sp_config: sc1
+
+# MiniMax-M3 full-model chunked-prefill throughput regression (same harness as KV PCC, PCC skipped).
+# Gates whole-sequence tok/s against PREFILL_EXPECTED_TPS +/- PREFILL_PERF_MARGIN on high-power Galaxy.
+- name: "Blaze - MiniMax-M3 Prefill Perf"
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
+    export PREFILL_TRACE_DIR=/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_56320
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    export EXPERT_DTYPE=bf4
+    export PREFILL_CHUNKED=1
+    export PREFILL_CHUNK_SIZE=5120
+    export PREFILL_TPS_ITERS=5
+    export PREFILL_SKIP_PCC=1
+    export PREFILL_REQUIRE_HIGH_POWER=1
+    export PREFILL_EXPECTED_TPS=3600
+    export PREFILL_PERF_MARGIN=0.05
+    mpirun --pernode --tag-output bash -lc '
+      python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+    '
+  test_type: minimax_prefill_perf
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      # Warm tilized-cache + chunked prefill (5120) x5 timed iters, no PCC; cold cache build will exceed this.
+      timeout: 35
+  owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+  sp_config: sc1

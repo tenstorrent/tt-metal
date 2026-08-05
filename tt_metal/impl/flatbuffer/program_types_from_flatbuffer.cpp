@@ -139,6 +139,7 @@ CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* fb_core_range_set) 
     TT_FATAL(fb_core_range_set, "Invalid CoreRangeSet data from flatbuffer.");
 
     std::vector<CoreRange> ranges;
+    ranges.reserve(fb_core_range_set->ranges()->size());
     for (const auto* range : *fb_core_range_set->ranges()) {
         ranges.emplace_back(from_flatbuffer(range));  // Reuse CoreRange deserialization
     }

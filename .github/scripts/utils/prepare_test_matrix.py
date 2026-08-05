@@ -145,17 +145,29 @@ def load_sku_config(sku_config_path):
     return config["skus"]
 
 
-def substitute_cmd_placeholders(entry):
+def substitute_cmd_placeholders(entry, allow_missing_cmd=False):
     """
     Replace placeholders in entry["cmd"] with values from the same entry.
 
     Placeholders use the form {key_name}; e.g. {tt_cache_path} is replaced with
     entry["tt_cache_path"]. This allows per-SKU values (e.g. different TT_CACHE_PATH
     paths) to be injected into the same base command.
+
+    By default every entry must carry a non-empty `cmd`. Pipelines that build the
+    command in the impl workflow from structured per-entry fields (e.g. vLLM Model
+    Tests) opt out of that requirement with allow_missing_cmd=True, which permits an
+    *absent* `cmd` key. A present-but-empty `cmd` ("" / whitespace) is always an
+    error — it would yield a matrix leg that runs nothing and reports success.
     """
     cmd = entry.get("cmd")
-    if not cmd or not isinstance(cmd, str):
+    if cmd is None:
+        if allow_missing_cmd:
+            return
+        raise ValueError(f"cmd is missing for test '{entry.get('name', 'Unnamed Test')}'")
+    if not isinstance(cmd, str):
         raise ValueError(f"cmd is not a string: {cmd}")
+    if not cmd.strip():
+        raise ValueError(f"cmd is present but empty for test '{entry.get('name', 'Unnamed Test')}'")
     for key, value in entry.items():
         placeholder = "{" + key + "}"
         if placeholder in cmd:
@@ -191,7 +203,7 @@ def load_tests(tests_yaml_path):
     return tests
 
 
-def build_test_matrix(tests, enabled_skus, sku_config, event=None):
+def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing_cmd=False):
     """
     Filter tests based on enabled SKUs and expand multi-SKU entries into flat matrix entries.
 
@@ -269,7 +281,7 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None):
             # exabox-multihost-with-nfs) that need the ttop allocation/reset lifecycle rather than
             # the single-host container path. Mark the leg so consumers can route it accordingly.
             entry["multihost"] = "allocation" in sku_entry
-            substitute_cmd_placeholders(entry)
+            substitute_cmd_placeholders(entry, allow_missing_cmd=allow_missing_cmd)
             filtered_tests.append(entry)
 
     if not filtered_tests:
@@ -314,6 +326,13 @@ def main(argv=None):
         default=None,
         help="Omit for no filter; empty string skips all; else CSV of logical SKUs",
     )
+    parser.add_argument(
+        "--allow-missing-cmd",
+        action="store_true",
+        help="Allow entries without a `cmd` key (for pipelines that build the command "
+        "in the impl from structured fields, e.g. vLLM Model Tests). A present-but-empty "
+        "cmd is still rejected.",
+    )
     args = parser.parse_args(argv)
 
     print(f"Loading tests from: {args.tests_yaml_path}")
@@ -346,7 +365,9 @@ def main(argv=None):
         write_matrix_output([])
         return 0
 
-    filtered_matrix = build_test_matrix(tests, enabled_skus, sku_config, event=args.event)
+    filtered_matrix = build_test_matrix(
+        tests, enabled_skus, sku_config, event=args.event, allow_missing_cmd=args.allow_missing_cmd
+    )
     write_matrix_output(filtered_matrix)
     return 0
 

@@ -1464,6 +1464,7 @@ std::vector<uint32_t> build_reader_sender_args(
     }
 
     std::vector<uint32_t> args;
+    args.reserve(7 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
     args.push_back(mcast_start.x);
     args.push_back(mcast_start.y);
     args.push_back(mcast_end.x);
@@ -1493,6 +1494,7 @@ std::vector<uint32_t> build_reader_sender_args(
 std::vector<uint32_t> build_reader_receiver_all_to_all_args(
     const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> args;
+    args.reserve(6 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
 
     bool is_last_all_to_all_worker;
     if (ctx.grid.use_two_stage_reduce) {
@@ -1530,6 +1532,7 @@ std::vector<uint32_t> build_reader_receiver_all_to_all_args(
 
 std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> args;
+    args.reserve(7);
     args.push_back(false);  // is_last_all_to_all_worker
     args.push_back(idx.all_to_all_worker_tile_offset_bytes);
     args.push_back(0);  // is_second_stage_reader
@@ -1594,6 +1597,7 @@ std::vector<uint32_t> build_writer_args(
     const std::vector<uint32_t>& write_back_args,
     bool is_all_to_all) {
     std::vector<uint32_t> args;
+    args.reserve(6 + write_back_args.size());
 
     if (is_all_to_all) {
         if (ctx.grid.use_two_stage_reduce && idx.width_index >= ctx.workers.num_cores_all_to_all_first_stage) {

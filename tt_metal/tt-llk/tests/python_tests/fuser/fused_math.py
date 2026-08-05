@@ -357,7 +357,10 @@ class ComputePipeline:
         )
 
     def _pack_dest_init(
-        self, operation: "FusedOperation", config: "GlobalConfig"
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        pack_nodes: List[PackNode],
     ) -> str:
         if not config.quasar_use_dvalid and operation.stage_id != 1:
             return ""
@@ -365,6 +368,7 @@ class ComputePipeline:
             operation.dest_sync.cpp_enum_value,
             config.dest_acc.cpp_enum_value,
             quasar_use_dvalid=config.quasar_use_dvalid,
+            pack_mode=pack_nodes[0].packer.pack_mode,
         )
 
     def _pack_constants(
@@ -397,7 +401,7 @@ class ComputePipeline:
         if hoist_reconfig and pack_only:
             init_code += pack_only[0].reconfig(operation, config)
         init_code += pack_common.pack_reduce_mask_config(operation)
-        init_code += self._pack_dest_init(operation, config)
+        init_code += self._pack_dest_init(operation, config, pack_only)
         if hoist and not pack_only[0].packer.per_block_init:
             init_code += pack_only[0].configure(operation, config, None)
         code += self._zone(config, "INIT", init_code)

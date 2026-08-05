@@ -176,6 +176,7 @@ public:
             case tt::tt_metal::DataType::UINT8: return extract_logical_data.template operator()<uint8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return extract_logical_data.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return extract_logical_data.template operator()<int32_t>(tensor);
+            case tt::tt_metal::DataType::INT8: return extract_logical_data.template operator()<int8_t>(tensor);
             case tt::tt_metal::DataType::INVALID: TT_THROW("Invalid data type: {}", tensor.tensor_spec().data_type());
         }
         TT_THROW("Unreachable");
@@ -218,17 +219,18 @@ public:
             auto distributed_buffer = make_distributed_host_buffer();
             auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
             std::vector<MeshCoordinate> buffer_coords;
+            buffer_coords.reserve(distribution_shape_.mesh_size());
             for (const auto& coord : MeshCoordinateRange(distribution_shape_)) {
                 const auto mapped_coord = remap_fn(coord);
                 buffer_coords.push_back(mapped_coord);
                 distributed_buffer.emplace_shard(mapped_coord, [&b = replicated_buffer]() { return b; });
             }
 
-            const auto tensor_topology =
-                tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, buffer_coords);
+            auto tensor_topology =
+                tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, std::move(buffer_coords));
 
             return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
-                std::move(distributed_buffer), tensor_spec, tensor_topology));
+                std::move(distributed_buffer), tensor_spec, std::move(tensor_topology)));
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -350,6 +352,7 @@ private:
         std::unordered_map<XTensorViewKey, tt::tt_metal::HostBuffer> converted_buffers;
 
         std::vector<MeshCoordinate> buffer_coords;
+        buffer_coords.reserve(sharded_xtensor_views.size());
         size_t num_views_with_value = 0;
         for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
             if (!xtensor_view.has_value()) {
@@ -398,11 +401,11 @@ private:
         const auto actual_distribution_shape =
             (distribution_shape_.dims() == 1) ? MeshShape(num_views_with_value) : distribution_shape_;
 
-        const auto tensor_topology =
-            tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, buffer_coords);
+        auto tensor_topology =
+            tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, std::move(buffer_coords));
 
         return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
-            std::move(distributed_buffer), shard_spec, tensor_topology));
+            std::move(distributed_buffer), shard_spec, std::move(tensor_topology)));
     }
 
     // Mesh parameters. `mesh_device_view_` is empty when constructed from a `MeshShape` only.
@@ -517,6 +520,7 @@ public:
             case tt::tt_metal::DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tensor);
+            case tt::tt_metal::DataType::INT8: return dispatch_to_concrete.template operator()<int8_t>(tensor);
             case tt::tt_metal::DataType::INVALID: TT_THROW("Invalid data type: {}", tensor.dtype());
         }
         TT_THROW("Unreachable");
@@ -743,6 +747,7 @@ Tensor create_distributed_tensor(
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(bfloat16)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(float)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(int32_t)
+INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(int8_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint8_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint16_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint32_t)
@@ -755,6 +760,7 @@ template std::pair<std::vector<uint32_t>, Shape> MeshToTensor::compose<uint32_t>
 template std::pair<std::vector<float>, Shape> MeshToTensor::compose<float>(const Tensor& tensor) const;
 template std::pair<std::vector<bfloat16>, Shape> MeshToTensor::compose<bfloat16>(const Tensor& tensor) const;
 template std::pair<std::vector<int32_t>, Shape> MeshToTensor::compose<int32_t>(const Tensor& tensor) const;
+template std::pair<std::vector<int8_t>, Shape> MeshToTensor::compose<int8_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint8_t>, Shape> MeshToTensor::compose<uint8_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint16_t>, Shape> MeshToTensor::compose<uint16_t>(const Tensor& tensor) const;
 template std::pair<std::vector<float8_e4m3>, Shape> MeshToTensor::compose<float8_e4m3>(const Tensor& tensor) const;

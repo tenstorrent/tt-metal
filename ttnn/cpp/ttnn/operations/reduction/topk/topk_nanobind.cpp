@@ -46,7 +46,6 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 output_tensor (tuple[ttnn.Tensor, ttnn.Tensor], optional): A tuple with preallocated output tensors for the values and indices. If specified, must be on the same device as :attr:`input_tensor`. Defaults to (`None`, `None`).
                 sub_core_grids (ttnn.CoreRangeSet, optional): Core range set to run the operation on. Defaults to `None`.
                 indices_tensor (ttnn.Tensor, optional): Input tensor containing pre-computed index values. When provided, the operation reads indices from this tensor instead of generating them. Defaults to `None`.
-                stable (bool, optional): whether equal values break ties by lowest index instead of by array position. Off by default, since it changes which index is returned for tied values. Defaults to `False`.
 
             Returns:
                 tuple[ttnn.Tensor, ttnn.Tensor]: a tuple of (values_tensor, indices_tensor).
@@ -59,7 +58,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT8, BFLOAT16
+                    * - BFLOAT8, BFLOAT16, FLOAT32
                       - TILE
 
                 .. list-table:: index_tensor
@@ -101,8 +100,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
         nb::arg("indices_tensor") = nb::none(),
-        nb::arg("output_tensor") = nb::none(),
-        nb::arg("stable") = false);
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail
