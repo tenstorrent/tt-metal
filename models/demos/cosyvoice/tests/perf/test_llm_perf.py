@@ -180,3 +180,82 @@ def test_device_decode_throughput_fixed_cache(device):
     print(f"    first / last step        {per_step[0]:8.2f} / {per_step[-1]:8.2f} ms")
     print(f"  P4 target is >= 30 tok/s; 50 tok/s is real time at this token rate")
     assert tok_s > 0
+
+
+@needs_weights
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 131072, "trace_region_size": 67108864}], indirect=True)
+def test_device_decode_bfloat8_weights(device):
+    """`bfloat8_b` weights against `bfloat16`, on the traced decode step.
+
+    Once tracing removed the dispatch overhead, what is left of a decode step is
+    reading the AR decoder's weights out of DRAM to produce a single token. At
+    batch 1 there is no reuse to amortise that against -- every matmul is a matrix
+    against one row -- so the step is bandwidth-bound and halving the weight width
+    is the lever that matches the bottleneck. Activations stay `bfloat16`; only the
+    matrices narrow.
+
+    Both halves of the trade get measured, because either one alone is misleading:
+    throughput, and the drift the narrower mantissa costs after 14 blocks.
+    """
+    import ttnn
+    from models.demos.cosyvoice.tt.llm.decoder import TracedDecodeStep, TtARDecoder, right_aligned_bias
+    from models.demos.cosyvoice.tt.weights import WeightBag
+
+    bag = WeightBag.load(LLM_WEIGHTS)
+    meta = bag.meta["ar_decoder"]
+    d = meta["input_size"]
+    prefix_len, n_steps, max_len = 209, 32, 256
+
+    def dev(v):
+        return ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    torch.manual_seed(0)
+    prefix = torch.randn(1, prefix_len, d) * 0.1
+    steps_in = [torch.randn(1, 1, d) * 0.1 for _ in range(n_steps)]
+
+    def measure(weights_dtype):
+        decoder = TtARDecoder(device, bag.sub("llm"), meta, weights_dtype=weights_dtype)
+        caches = decoder.empty_cache(max_len, prefix_len)
+        ys, caches = decoder.forward_chunk_fixed(
+            dev(prefix),
+            caches,
+            max_len,
+            valid=prefix_len,
+            mask=dev(right_aligned_bias(max_len, prefix_len, prefix_len, causal=True)),
+        )
+        ttnn.deallocate(ys)
+
+        traced = TracedDecodeStep(decoder, max_len).capture()
+        traced.seed(caches)
+        TtARDecoder.free_caches(caches)
+
+        traced.step(steps_in[0], prefix_len + 1)  # warm the replay path
+        ttnn.synchronize_device(device)
+
+        per_step, last = [], None
+        for i, x in enumerate(steps_in):
+            t = time.perf_counter()
+            out = traced.step(x, min(prefix_len + 1 + i, max_len))
+            ttnn.synchronize_device(device)
+            per_step.append((time.perf_counter() - t) * 1e3)
+            last = ttnn.to_torch(out).float()
+        traced.release()
+        return sum(per_step) / len(per_step), last
+
+    bf16_ms, bf16_out = measure(None)
+    bf8_ms, bf8_out = measure(ttnn.bfloat8_b)
+
+    a, b = bf16_out.flatten(), bf8_out.flatten()
+    pcc = float(torch.corrcoef(torch.stack([a, b]))[0, 1])
+    speedup = bf16_ms / bf8_ms
+
+    print(f"\n  traced decode step, mean of {n_steps}")
+    print(f"    bfloat16 weights {bf16_ms:8.2f} ms   ({1e3 / bf16_ms:6.1f} tok/s)")
+    print(f"    bfloat8_b weights{bf8_ms:8.2f} ms   ({1e3 / bf8_ms:6.1f} tok/s)   {speedup:.2f}x")
+    print(f"    hidden-state PCC, bf8 vs bf16      {pcc:.10f}")
+    print(f"    LLM RTF at 164 tokens / 3.27 s: {bf16_ms * 164 / 3270:.3f} -> {bf8_ms * 164 / 3270:.3f}")
+
+    # The gate is accuracy, not speed: a faster decoder that drifts is not a win,
+    # and the speedup is reported rather than asserted because it is the thing
+    # being measured.
+    assert pcc >= 0.99, f"bfloat8_b weights cost too much accuracy: PCC {pcc}"

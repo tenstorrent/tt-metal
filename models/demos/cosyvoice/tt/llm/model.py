@@ -46,8 +46,17 @@ from .sampling import greedy, ras_sampling
 class TtTransformerLM:
     """The LLM stage. Activations are `[1, T, C]`."""
 
-    def __init__(self, device, bag, meta, dtype=ttnn.bfloat16):
+    def __init__(self, device, bag, meta, dtype=ttnn.bfloat16, weights_dtype=None):
+        """`weights_dtype=ttnn.bfloat8_b` stores the AR decoder's matrices at half
+        the width of the activations.
+
+        It applies to the **AR decoder only**, which is the stage that reads every
+        weight from DRAM to produce one token -- at batch 1 that is a bandwidth
+        problem, not an arithmetic one. The text encoder runs once per utterance
+        and the output head is a single matmul, so neither is worth the accuracy.
+        """
         self.device, self.dtype, self.meta = device, dtype, meta
+        self.weights_dtype = weights_dtype or dtype
         self.cc = accurate_compute_config(device)
         self.text_meta = meta["text_encoder"]
         self.ar_meta = meta["ar_decoder"]
@@ -68,7 +77,7 @@ class TtTransformerLM:
         self.speech_embedding = ttnn.from_torch(
             self.speech_embedding_host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         )
-        self.decoder = TtARDecoder(device, bag.sub("llm"), self.ar_meta, dtype)
+        self.decoder = TtARDecoder(device, bag.sub("llm"), self.ar_meta, dtype, weights_dtype)
         self.head_w, self.head_b = _linear(device, bag, "llm_decoder", dtype)
         self._causal: dict[int, object] = {}
 
