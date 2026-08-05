@@ -23,10 +23,11 @@ using namespace tt::tt_metal;
 namespace {
 
 // ops/repeat/spec.py: READ_BATCH / WRITE_BATCH / _CB_DEPTH (shared verbatim by repeat_interleave's
-// TILE and RM builders).
-constexpr uint32_t kReadBatch = 4;
-constexpr uint32_t kWriteBatch = 4;
-constexpr uint32_t kCbDepth = std::max(2 * std::max(kReadBatch, kWriteBatch), 8u);
+// TILE and RM builders). Prefixed: unity builds merge anonymous namespaces across TUs, so
+// unprefixed names collide with repeat_codegen_program_factory.cpp.
+constexpr uint32_t kRiReadBatch = 4;
+constexpr uint32_t kRiWriteBatch = 4;
+constexpr uint32_t kRiCbDepth = std::max(2 * std::max(kRiReadBatch, kRiWriteBatch), 8u);
 
 // sequencers.h SEQ_REPEAT_INTERLEAVE (ops/repeat_interleave/builder.py's SEQ_REPEAT_INTERLEAVE).
 constexpr uint32_t kSeqRepeatInterleave = 9;
@@ -112,7 +113,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
         const uint32_t cb_page_size = tile_size(out_data_format);
 
         desc.cbs.push_back(CBDescriptor{
-            .total_size = kCbDepth * cb_page_size,
+            .total_size = kRiCbDepth * cb_page_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = cb_id,
@@ -128,7 +129,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
         // reader_tile_interleaved_unified.cpp reads "src_page_pitch" unconditionally for every
         // seq_id (not just the ones that override it); 0 keeps the accessor's own page size.
         reader_desc.named_compile_time_args = {
-            {"seq_id", kSeqRepeatInterleave}, {"cb_id", cb_id}, {"batch", kReadBatch}, {"src_page_pitch", 0}};
+            {"seq_id", kSeqRepeatInterleave}, {"cb_id", cb_id}, {"batch", kRiReadBatch}, {"src_page_pitch", 0}};
         reader_desc.config = ReaderConfigDescriptor{};
 
         const uint32_t out_page_size = align_up(cb_page_size, page_alignment(output.memory_config()));
@@ -137,7 +138,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
         writer_desc.core_ranges = all_cores;
         writer_desc.compile_time_args = {cb_id, out_page_size};
         TensorAccessorArgs(*out_buffer).append_to(writer_desc.compile_time_args);
-        writer_desc.compile_time_args.push_back(kWriteBatch);
+        writer_desc.compile_time_args.push_back(kRiWriteBatch);
         writer_desc.config = WriterConfigDescriptor{};
 
         for (const auto& work : layout) {
@@ -167,7 +168,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
         "repeat_interleave codegen: RM within-stick (last-dim) replication is not wired in this "
         "program factory; supported_by_codegen() must reject it before create_descriptor runs");
 
-    // An RM slot is a whole stick, so kReadBatch/kWriteBatch worth of them is not guaranteed to
+    // An RM slot is a whole stick, so kRiReadBatch/kRiWriteBatch worth of them is not guaranteed to
     // fit: shrink the batch (and with it the CB depth) to what per-core L1 admits. The gate
     // rejects anything below kRmCbMinSlots, so the loop always terminates with batch >= 1.
     const auto cb_budget = ttnn::operations::data_movement::rm_cb_budget(input, output.memory_config());
@@ -179,7 +180,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
         operation_attributes.stick_size,
         ttnn::operations::data_movement::kRmCbMinSlots,
         cb_budget.max_slots);
-    uint32_t batch = kReadBatch;
+    uint32_t batch = kRiReadBatch;
     while (2 * batch > cb_budget.max_slots) {
         batch /= 2;
     }
