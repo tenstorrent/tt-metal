@@ -6,7 +6,6 @@ allowed-tools:
   - Grep
   - Glob
   - Skill
-  - TodoWrite
   - Bash(gh issue view:*)
   - Bash(gh search:*)
   - Bash(gh issue list:*)
@@ -52,7 +51,7 @@ above in every Task prompt so each subagent receives an exact readable path.
   one concrete fact that would confirm or refute it. Do not manufacture generic
   concerns merely to produce comments.
 
-Create a todo list, then follow these steps precisely:
+Follow these steps precisely:
 
 1. Launch a Haiku agent to check whether the pull request is closed. If it is
    closed, post a short issue-level skip comment with `gh pr comment` when

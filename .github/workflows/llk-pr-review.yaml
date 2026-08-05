@@ -149,13 +149,14 @@ jobs:
           # no effort argument). gh is used for both PR inspection and posting.
           claude_args: |
             --effort ${{ github.event.inputs.effort || 'max' }}
-            --allowedTools "Agent,Task,Read,Grep,Glob,Skill,TodoWrite,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(tail:*),Bash(sed:*),Bash(awk:*),Bash(cat:*),Bash(ls:*),Bash(wc:*),Bash(nl:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tree:*),Bash(basename:*),Bash(dirname:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
+            --allowedTools "Agent,Task,Read,Grep,Glob,Skill,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(tail:*),Bash(sed:*),Bash(awk:*),Bash(cat:*),Bash(ls:*),Bash(wc:*),Bash(nl:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tree:*),Bash(basename:*),Bash(dirname:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
             --max-turns 100
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
 
       # The execution file can contain private injected knowledge and tool
-      # arguments. Read only denied tool names, and aggregate them for the log.
+      # arguments. Emit only aggregate tool counts and static Bash categories;
+      # never print commands, arguments, paths, prompts, or file contents.
       - name: Report Claude permission denials
         if: always() && steps.llk_code_review.outputs.execution_file != ''
         env:
@@ -164,37 +165,73 @@ jobs:
           set -euo pipefail
 
           if [ ! -f "$CLAUDE_EXECUTION_FILE" ]; then
-            echo "::warning::Claude execution file was not found; denied tool names are unavailable"
+            echo "::warning::Claude execution file was not found; denial summary is unavailable"
             exit 0
           fi
 
-          if ! denied_tools="$(
+          if ! denial_summary="$(
             jq -r '
-              [
+              def denials:
                 .[]
                 | select(.type == "result")
-                | .permission_denials[]?
-                | .tool_name // "unknown"
+                | .permission_denials[]?;
+
+              def command:
+                .tool_input.command? // "";
+
+              def bash_prefix_category:
+                command as $command
+                | if $command == "" then
+                    "empty-or-unavailable"
+                  elif ($command | test("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=")) then
+                    "inline-environment-assignment"
+                  elif ($command | test("^[[:space:]]*gh([[:space:]]|$)")) then
+                    "allowlisted-gh"
+                  elif ($command | test("^[[:space:]]*git([[:space:]]|$)")) then
+                    "allowlisted-git"
+                  elif ($command | test("^[[:space:]]*(grep|rg|find|diff|head|tail|sed|awk|cat|ls|wc|nl|cut|sort|uniq|tree|basename|dirname)([[:space:]]|$)")) then
+                    "allowlisted-read-command"
+                  else
+                    "unrecognized-or-unlisted"
+                  end;
+
+              [
+                (denials | ["tool", (.tool_name // "unknown")]),
+                (denials
+                  | select(.tool_name == "Bash")
+                  | ["bash-prefix", bash_prefix_category]),
+                (denials
+                  | select(.tool_name == "Bash" and (command | test("&&|\\|\\||[;|\\n]|(^|[^&])&([^&]|$)")))
+                  | ["bash-feature", "compound-or-separated"]),
+                (denials
+                  | select(.tool_name == "Bash" and (command | test("[<>]")))
+                  | ["bash-feature", "contains-redirection-character"]),
+                (denials
+                  | select(.tool_name == "Bash" and (command | test("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=")))
+                  | ["bash-feature", "inline-environment-assignment"]),
+                (denials
+                  | select(.tool_name == "Bash" and (command | length > 10000))
+                  | ["bash-feature", "over-10000-characters"])
               ]
               | sort
               | group_by(.)
               | .[]
-              | "\(length)\t\(.[0])"
+              | "\(.[0][0])\t\(.[0][1])\t\(length)"
             ' "$CLAUDE_EXECUTION_FILE"
           )"; then
             echo "::warning::Could not parse Claude permission denials"
             exit 0
           fi
 
-          if [ -z "$denied_tools" ]; then
+          if [ -z "$denial_summary" ]; then
             echo "Claude reported no permission denials"
             exit 0
           fi
 
-          echo "Claude permission denials (tool names and counts only):"
-          while IFS=$'\t' read -r count tool_name; do
-            echo "${tool_name}: ${count}"
-          done <<< "$denied_tools"
+          echo "Claude permission denials (aggregate categories only):"
+          while IFS=$'\t' read -r category label count; do
+            echo "${category}/${label}: ${count}"
+          done <<< "$denial_summary"
 
       # A successful Claude session is not enough: the run is useful only if it
       # actually leaves visible output on the requested PR.
