@@ -87,7 +87,8 @@ KvCache::KvCache(
 
     // Create cache tensors in DRAM
     // Shape: [batch_size, num_groups, max_seq_len, head_dim]
-    const auto dram_memory_config = ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
+    const auto dram_memory_config =
+        ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
 
     for (uint32_t layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
         const auto kv_cache_shape = ttnn::Shape({batch_size, num_groups, max_seq_len, head_dim});
@@ -117,10 +118,10 @@ KvCache::KvCache(const KvCacheConfig& config) :
 }
 
 const uint32_t KvCache::update_prefill(
-    const tt::tt_metal::Tensor& key_tensor,
-    const tt::tt_metal::Tensor& value_tensor,
-    tt::tt_metal::Tensor& k_cache,
-    tt::tt_metal::Tensor& v_cache,
+    const ttnn::Tensor& key_tensor,
+    const ttnn::Tensor& value_tensor,
+    ttnn::Tensor& k_cache,
+    ttnn::Tensor& v_cache,
     const uint32_t new_tokens) {
     const auto kv_shape = key_tensor.logical_shape();
     TT_FATAL(
@@ -131,8 +132,8 @@ const uint32_t KvCache::update_prefill(
     const ttsl::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
     const ttsl::SmallVector<uint32_t> kv_end = {kv_shape[0], kv_shape[1], new_tokens, kv_shape[3]};
 
-    const tt::tt_metal::Tensor& new_key = ttnn::slice(key_tensor, token_start, kv_end, step);
-    const tt::tt_metal::Tensor& new_value = ttnn::slice(value_tensor, token_start, kv_end, step);
+    const ttnn::Tensor& new_key = ttnn::slice(key_tensor, token_start, kv_end, step);
+    const ttnn::Tensor& new_value = ttnn::slice(value_tensor, token_start, kv_end, step);
 
     const ttsl::SmallVector<uint32_t> cache_start = {0, 0, 0, 0};
     const ttsl::SmallVector<uint32_t> cache_end = {cache_shape[0], cache_shape[1], new_tokens, cache_shape[3]};
@@ -144,10 +145,10 @@ const uint32_t KvCache::update_prefill(
 }
 
 const uint32_t KvCache::update_decode(
-    const tt::tt_metal::Tensor& key_tensor,
-    const tt::tt_metal::Tensor& value_tensor,
-    tt::tt_metal::Tensor& k_cache,
-    tt::tt_metal::Tensor& v_cache,
+    const ttnn::Tensor& key_tensor,
+    const ttnn::Tensor& value_tensor,
+    ttnn::Tensor& k_cache,
+    ttnn::Tensor& v_cache,
     const uint32_t cache_position,
     const uint32_t new_tokens) {
     const auto cache_shape = k_cache.logical_shape();
@@ -158,8 +159,8 @@ const uint32_t KvCache::update_decode(
     const ttsl::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
     const ttsl::SmallVector<uint32_t> kv_end = {kv_shape[0], kv_shape[1], new_tokens, kv_shape[3]};
 
-    const tt::tt_metal::Tensor& new_key = ttnn::slice(key_tensor, token_start, kv_end, step);
-    const tt::tt_metal::Tensor& new_value = ttnn::slice(value_tensor, token_start, kv_end, step);
+    const ttnn::Tensor& new_key = ttnn::slice(key_tensor, token_start, kv_end, step);
+    const ttnn::Tensor& new_value = ttnn::slice(value_tensor, token_start, kv_end, step);
 
     const ttsl::SmallVector<uint32_t> cache_start = {0, 0, cache_position, 0};
     const ttsl::SmallVector<uint32_t> cache_end = {
@@ -173,8 +174,8 @@ const uint32_t KvCache::update_decode(
 
 const uint32_t KvCache::update(
     const uint32_t layer_idx,
-    const tt::tt_metal::Tensor& key_states,
-    const tt::tt_metal::Tensor& value_states,
+    const ttnn::Tensor& key_states,
+    const ttnn::Tensor& value_states,
     const uint32_t new_tokens) {
     TT_FATAL(layer_idx < m_kv_cache.size(), "Layer index out of range");
 

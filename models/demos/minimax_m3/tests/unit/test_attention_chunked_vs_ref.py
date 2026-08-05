@@ -126,7 +126,7 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
         ccl_manager=ccl,
         mesh_config=mesh_config,
         program_config=MiniMaxM3AttentionProgramConfig(),
-        layer_idx=0,
+        global_layer_idx=0,
         transformation_mats=rope_setup.get_both_trans_mats(),
     )
 
@@ -303,7 +303,7 @@ def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, ch
         ccl_manager=ccl,
         mesh_config=mesh_config,
         program_config=MiniMaxM3AttentionProgramConfig(),
-        layer_idx=0,
+        global_layer_idx=0,
         transformation_mats=rope_setup.get_both_trans_mats(),
     )
 

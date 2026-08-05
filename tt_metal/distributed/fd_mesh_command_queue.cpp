@@ -52,7 +52,7 @@
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include "llrt/tt_cluster.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
@@ -110,6 +110,40 @@ void record_program_sub_device_for_range(
     TT_THROW("No local device found for range");
 }
 
+dispatch_telemetry_types::SMCDispatchCoreCoords build_smc_dispatch_core_coords(Device& device, uint8_t cq_id) {
+    auto& context = MetalContext::instance(device.get_context_id());
+
+    auto pack_logical_dispatch_core = [&](const tt_cxy_pair& logical_cxy) {
+        const CoreType core_type = context.get_dispatch_core_manager().get_dispatch_core_type();
+        const CoreCoord virtual_core =
+            device.virtual_core_from_logical_core(CoreCoord{logical_cxy.x, logical_cxy.y}, core_type);
+        return dispatch_telemetry_types::pack_smc_dispatch_core_xy(
+            static_cast<uint16_t>(virtual_core.x), static_cast<uint16_t>(virtual_core.y));
+    };
+
+    auto& dcm = context.get_dispatch_core_manager();
+    const uint16_t channel = context.get_cluster().get_assigned_channel_for_device(device.id());
+    const ChipId chip = device.id();
+
+    // dcm getters are not read only, they allocate new cores as a side effect. Verify that a core
+    // is allocated before retrieving its coordinates.
+    dispatch_telemetry_types::SMCDispatchCoreCoords coords;
+    if (dcm.is_prefetcher_core_allocated(chip, channel, cq_id)) {
+        coords.prefetch_xy = pack_logical_dispatch_core(dcm.prefetcher_core(chip, channel, cq_id));
+    } else if (dcm.is_prefetcher_d_core_allocated(chip, channel, cq_id)) {
+        coords.prefetch_xy = pack_logical_dispatch_core(dcm.prefetcher_d_core(chip, channel, cq_id));
+    }
+    if (dcm.is_dispatcher_core_allocated(chip, channel, cq_id)) {
+        coords.dispatch_xy = pack_logical_dispatch_core(dcm.dispatcher_core(chip, channel, cq_id));
+    } else if (dcm.is_dispatcher_d_core_allocated(chip, channel, cq_id)) {
+        coords.dispatch_xy = pack_logical_dispatch_core(dcm.dispatcher_d_core(chip, channel, cq_id));
+    }
+    coords.dispatch_s_xy = dcm.is_dispatcher_s_core_allocated(chip, channel, cq_id)
+                               ? pack_logical_dispatch_core(dcm.dispatcher_s_core(chip, channel, cq_id))
+                               : dispatch_telemetry_types::INVALID_SMC_DISPATCH_CORE_COORDS;
+    return coords;
+}
+
 }  // namespace
 
 struct MeshReadEventDescriptor {
@@ -147,9 +181,8 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     reader_thread_pool_(reader_thread_pool),
     prefetcher_dram_aligned_block_size_(
         MetalContext::instance(mesh_device->impl().get_context_id()).hal().get_alignment(HalMemType::DRAM)),
-    prefetcher_cache_sizeB_(MetalContext::instance(mesh_device->impl().get_context_id())
-                                .dispatch_mem_map(this->dispatch_core_type_)
-                                .ringbuffer_size()),
+    prefetcher_cache_sizeB_(
+        MetalContext::instance(mesh_device->impl().get_context_id()).dispatch_mem_map().ringbuffer_size()),
     prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
     prefetcher_cache_manager_size_(
         1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
@@ -165,6 +198,14 @@ FDMeshCommandQueue::FDMeshCommandQueue(
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
         mesh_device_->allocator_impl()->get_config().l1_unreserved_base);
     this->populate_virtual_program_dispatch_core();
+
+    for (auto* device : mesh_device_->get_devices()) {
+        if (auto* physical_device = dynamic_cast<Device*>(device)) {
+            physical_device->update_smc_dispatch_telemetry_for_fast_dispatch(
+                this->id_, build_smc_dispatch_core_coords(*physical_device, this->id_));
+        }
+    }
+
     this->populate_read_descriptor_queue();
     completion_queue_reader_thread_ = std::thread(&FDMeshCommandQueue::read_completion_queue, this);
 }
@@ -348,10 +389,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
-    auto dispatch_core_config = MetalContext::instance(this->device()->impl().get_context_id())
-                                    .get_dispatch_core_manager()
-                                    .get_dispatch_core_config();
-    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     if (!sysmem_manager.get_bypass_mode()) {
         auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
         auto& sub_device = sub_device_cq_owner[*sub_device_id];
@@ -472,11 +509,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
             expected_num_workers_completed,
             this->virtual_program_dispatch_core(),
-            dispatch_core_type,
             sub_device_id,
             dispatch_metadata,
             mesh_workload.impl().get_program_binary_status(mesh_device_id),
-            std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
+            std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
+            static_cast<uint8_t>(this->id()));
 
         record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
 
@@ -524,7 +561,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     uint32_t size_bytes,
     bool blocking,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
 
     auto lock = lock_api_function_();
     if (!mesh_device_->impl().is_local(address.device_coord)) {
@@ -559,7 +596,7 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
     uint32_t value,
     bool blocking,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
 
     // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
     // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
@@ -606,7 +643,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     uint32_t size_bytes,
     bool blocking,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
     auto lock = lock_api_function_();
 
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
@@ -692,7 +729,7 @@ void FDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId> sub_device_ids) {
     this->finish_nolock(sub_device_ids);
 
     {
-        ZoneScopedN("RealtimeProfilerSyncCheck");
+        TTZoneScopedDN(RT_PROFILER, "RealtimeProfilerSyncCheck");
         mesh_device_->impl().trigger_realtime_profiler_sync_check();
     }
 
@@ -1145,14 +1182,10 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     bool stall_first,
     bool stall_before_program,
     std::unordered_set<uint32_t>& chip_ids_in_workload) {
-    auto dispatch_core_config = MetalContext::instance(mesh_device_->impl().get_context_id())
-                                    .get_dispatch_core_manager()
-                                    .get_dispatch_core_config();
-    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
         auto device = mesh_device_->impl().get_device(coord);
         program_dispatch::write_program_command_sequence(
-            program_cmd_seq, device->sysmem_manager(), id_, dispatch_core_type, stall_first, stall_before_program);
+            program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
         chip_ids_in_workload.insert(device->id());
     });
 }
@@ -1337,7 +1370,9 @@ void FDMeshCommandQueue::record_end() {
         // safe because allocate_trace_programs() reinitializes dispatch_metadata at the start of
         // each range's processing, overwriting any stale mutations from a previous range.
         std::vector<TraceNode*> trace_nodes;
+        trace_nodes.reserve(trace_nodes_.size());
         std::vector<MeshTraceNode*> mesh_trace_nodes;
+        mesh_trace_nodes.reserve(trace_nodes_.size());
         // Records the number of MeshTraceNodes that had no relevant program.
         struct UnusedNodeData {
             uint32_t unused_nodes_both_multicast_and_unicast = 0;
@@ -1509,10 +1544,10 @@ void FDMeshCommandQueue::record_end() {
                 worker_launch_msg_state.get_unicast_wptr(),
                 trace_worker_descriptors[sub_device_id].num_completion_worker_cores,
                 this->virtual_program_dispatch_core(),
-                MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
                 sub_device_id,
                 ProgramBinaryStatus::Committed,
-                std::pair<bool, int>(mesh_node.unicast_go_signals, num_virtual_eth_cores));
+                std::pair<bool, int>(mesh_node.unicast_go_signals, num_virtual_eth_cores),
+                static_cast<uint8_t>(this->id()));
 
             record_program_sub_device_for_range(mesh_device_, range, node.program_runtime_id, sub_device_id);
 
@@ -1521,7 +1556,6 @@ void FDMeshCommandQueue::record_end() {
                 cached_program_command_sequence,
                 sysmem_manager_for_trace,
                 this->id_,
-                MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
                 node.dispatch_metadata.stall_first,
                 node.dispatch_metadata.stall_before_program,
                 node.dispatch_metadata.send_binary);

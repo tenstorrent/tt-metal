@@ -46,8 +46,8 @@ static void run_single_dfb_multicore_2_0(
 
     // Each core owns num_entries slots → total = 2 * num_entries.
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 2 * num_entries, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     m2::DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
@@ -93,12 +93,12 @@ static void run_single_dfb_multicore_2_0(
     params.kernel_run_args = {
         {.kernel = PRODUCER,
          .runtime_arg_values =
-             {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}},
-              {.node = core_b, .args = {{"chunk_offset", num_entries}, {"entries_per_core", num_entries}}}}},
+             {{"chunk_offset", {{core_a, 0u}, {core_b, num_entries}}},
+              {"entries_per_core", {{core_a, num_entries}, {core_b, num_entries}}}}},
         {.kernel = CONSUMER,
          .runtime_arg_values =
-             {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}},
-              {.node = core_b, .args = {{"chunk_offset", num_entries}, {"entries_per_core", num_entries}}}}},
+             {{"chunk_offset", {{core_a, 0u}, {core_b, num_entries}}},
+              {"entries_per_core", {{core_a, num_entries}, {core_b, num_entries}}}}},
     };
     params.tensor_args = {
         {IN_TENSOR, std::cref(in_tensor)},
@@ -137,8 +137,8 @@ static void run_concurrent_dfbs_program_2_0(
     // One big DRAM tensor sliced num_dfbs ways for input + same for output.
     const uint32_t total_entries = num_dfbs * entries_per_dfb;
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_entries, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     // Build N DFBs + N producer kernels + N consumer kernels.
     std::vector<m2::DataflowBufferSpec> dfbs;
@@ -263,8 +263,8 @@ static void run_sequential_4_dfbs_2_0(
     in_tensors.reserve(4);
     out_tensors.reserve(4);
     for (uint32_t i = 0; i < 4; ++i) {
-        in_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{}));
-        out_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{}));
+        in_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, tensor_spec));
+        out_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, tensor_spec));
     }
 
     std::vector<m2::DataflowBufferSpec> dfbs;
@@ -346,8 +346,8 @@ static void run_sequential_4_dfbs_2_0(
     // framework actually launches them on each node. Without this, the kernels
     // are wired up but never start, and outputs stay at the initial value (0).
     params.kernel_run_args = {
-        {.kernel = PRODUCER, .runtime_arg_values = {{.node = node, .args = {}}}},
-        {.kernel = CONSUMER, .runtime_arg_values = {{.node = node, .args = {}}}},
+        {.kernel = PRODUCER, .runtime_arg_values = {}},
+        {.kernel = CONSUMER, .runtime_arg_values = {}},
     };
     for (uint32_t i = 0; i < 4; ++i) {
         params.tensor_args.insert({m2::TensorParamName{SRC_NAMES[i]}, std::cref(in_tensors[i])});
@@ -444,7 +444,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     std::vector<MeshTensor> out_tensors;
     out_tensors.reserve(4);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        out_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, dram_spec, TensorTopology{}));
+        out_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, dram_spec));
     }
 
     std::vector<m2::DataflowBufferSpec> dfbs;
@@ -531,12 +531,12 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     m2::ProgramRunArgs params;
     // Producer has no runtime args but still needs a KernelRunArgs entry to be
     // launched. Without it, the kernel is wired up but never runs.
-    params.kernel_run_args.push_back({.kernel = PRODUCER, .runtime_arg_values = {{.node = node, .args = {}}}});
+    params.kernel_run_args.push_back({.kernel = PRODUCER, .runtime_arg_values = {}});
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         params.kernel_run_args.push_back(
             {.kernel = m2::KernelSpecName{CONSUMER_NAMES[i]},
-             .runtime_arg_values = {
-                 {.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}}});
+             .runtime_arg_values =
+                 m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})});
     }
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         params.tensor_args.insert({m2::TensorParamName{DST_NAMES[i]}, std::cref(out_tensors[i])});
@@ -591,8 +591,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
 
     // Each core owns num_entries slots → 4 cores × num_entries pages total.
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 4 * num_entries, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     m2::DataflowBufferSpec dfb_spec{
         .unique_id = DFB,

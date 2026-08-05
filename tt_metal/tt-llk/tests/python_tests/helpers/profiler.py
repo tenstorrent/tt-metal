@@ -8,9 +8,10 @@ from enum import Enum
 from typing import ClassVar
 
 import pandas as pd
-from ttexalens.tt_exalens_lib import read_words_from_device
 
+from .device_io import read_words_from_device
 from .llk_params import PerfRunType
+from .perf_schema import MARKER, MEAN, STD, stat_column, stat_prefix
 from .test_config import TestConfig
 
 
@@ -121,7 +122,7 @@ class ProfilerData:
             [
                 "thread",
                 "type",
-                "marker",
+                MARKER,
                 "timestamp",
                 "duration",
                 "data",
@@ -167,7 +168,7 @@ class ProfilerData:
     # Filter by marker
     def marker(self, marker: str) -> "ProfilerData":
         """Filter: Marker"""
-        return ProfilerData(self.df, self.mask & (self.df["marker"] == marker))
+        return ProfilerData(self.df, self.mask & (self.df[MARKER] == marker))
 
     def __str__(self):
         return f"{self.raw()}"
@@ -175,11 +176,11 @@ class ProfilerData:
 
 def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
     # don't aggregate marker column
-    timings = perf_data.columns.drop("marker")
-    result = perf_data.groupby("marker", as_index=False)[timings].agg(["mean", "std"])
+    timings = perf_data.columns.drop(MARKER)
+    result = perf_data.groupby(MARKER, as_index=False)[timings].agg(["mean", "std"])
 
-    columns = ["marker"]
-    columns += [f"{stat}({col})" for col in timings for stat in ["mean", "std"]]
+    columns = [MARKER]
+    columns += [stat_column(col, stat) for col in timings for stat in (MEAN, STD)]
 
     result.columns = columns
 
@@ -191,7 +192,7 @@ def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
     empty_std_columns = [
         col
         for col in result.columns
-        if col.startswith("std(") and result[col].isna().all()
+        if col.startswith(stat_prefix(STD)) and result[col].isna().all()
     ]
     if empty_std_columns:
         result = result.drop(columns=empty_std_columns)
@@ -215,7 +216,7 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
         )
 
     # Group by both marker and run_index to ensure events from the same run are paired
-    groups = raw_data.groupby(["marker", "run_index"])
+    groups = raw_data.groupby([MARKER, "run_index"])
 
     timings = []
     for (marker, run_index), group in groups:
@@ -244,7 +245,7 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
 
         marker_timings = pd.DataFrame(
             {
-                "marker": marker,
+                MARKER: marker,
                 PerfRunType.L1_TO_L1.name: durations,
             }
         )
@@ -271,7 +272,7 @@ def _stats_thread(stat: str, raw_thread: pd.DataFrame) -> pd.DataFrame:
 
     timings = pd.DataFrame(
         {
-            "marker": start_entries["marker"],
+            MARKER: start_entries[MARKER],
             stat: end_entries["timestamp"] - start_entries["timestamp"],
         }
     )
@@ -304,7 +305,7 @@ def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
         return pd.DataFrame()
     result = frames[0]
     for df in frames[1:]:
-        result = pd.merge(result, df, on="marker", how="outer", validate="1:1")
+        result = pd.merge(result, df, on=MARKER, how="outer", validate="1:1")
     return result
 
 
@@ -417,7 +418,7 @@ class Profiler:
             "type": pd.CategoricalDtype(
                 categories=["TIMESTAMP", "ZONE_START", "ZONE_END"]
             ),
-            "marker": "string",
+            MARKER: "string",
             "timestamp": "int64",
             "data": "Int64",  # nullable
             "marker_id": "int32",
@@ -492,7 +493,7 @@ class Profiler:
                         raise ValueError(
                             f"ZONE_END marker '{marker.marker}' (id={marker.id}) "
                             f"does not match ZONE_START marker "
-                            f"'{start_row['marker']}' (id={start_row['marker_id']}) "
+                            f"'{start_row[MARKER]}' (id={start_row['marker_id']}) "
                             f"on thread '{thread}'. Possible nested zone mismatch."
                         )
                     rows.append(start_row)
@@ -507,7 +508,7 @@ class Profiler:
         return {
             "thread": thread,
             "type": type,
-            "marker": marker.marker,
+            MARKER: marker.marker,
             "timestamp": timestamp,
             "data": data,
             "marker_id": marker.id,

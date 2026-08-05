@@ -13,3 +13,10 @@ set(TTNN_OP_SLIDING_WINDOW_API_HEADERS
     sliding_window.hpp
     op_slicing/op_slicing.hpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/sliding_window/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_SLIDING_WINDOW_NANOBIND_SRCS sliding_window_nanobind.cpp)

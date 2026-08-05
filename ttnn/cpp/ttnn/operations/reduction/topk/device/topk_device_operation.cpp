@@ -267,13 +267,13 @@ TopKDeviceOperation::spec_return_value_t TopKDeviceOperation::compute_output_spe
     const bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max());  // 65535
 
     // Create values tensor specification (same data type as input)
-    const auto values_spec = TensorSpec(
+    const auto values_spec = tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), args.output_memory_config));
 
     // Create indices tensor specification (integer type based on dimension size)
     const DataType index_dtype = uint16_output ? DataType::UINT16 : DataType::UINT32;
-    const auto index_spec =
-        TensorSpec(output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), args.output_memory_config));
+    const auto index_spec = tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), args.output_memory_config));
 
     return {values_spec, index_spec};
 }

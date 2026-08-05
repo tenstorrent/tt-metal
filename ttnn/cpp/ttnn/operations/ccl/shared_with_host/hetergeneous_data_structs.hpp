@@ -188,7 +188,16 @@ inline size_t flattened_index (const ttnn::ccl::Shape4D<uint32_t>& shape, const 
         size_t new_y = index / tensor_slice_shape.x;
         size_t new_x = index - (new_y * tensor_slice_shape.x);
 
-        curr_page_idx = flattened_index(tensor_shape, tensor_slice_shape + Shape4D<uint32_t>{new_x, new_y, new_z, new_w});
+        // Explicit narrowing casts: new_* are size_t here (unlike the uint32_t twin in
+        // advance_worker_global_page below) but are page coords bounded by the uint32_t slice-shape
+        // dims, so they fit. Required for -Werror=narrowing under stricter kernel build.
+        curr_page_idx = flattened_index(
+            tensor_shape,
+            tensor_slice_shape + Shape4D<uint32_t>{
+                                     static_cast<uint32_t>(new_x),
+                                     static_cast<uint32_t>(new_y),
+                                     static_cast<uint32_t>(new_z),
+                                     static_cast<uint32_t>(new_w)});
     }
 
     return end_of_worker_slice_row;

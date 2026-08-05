@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -105,9 +105,9 @@ void kernel_main() {
         }
 
         // Reserve space in the circular buffer for the X-block length
-        CircularBuffer cb(tt::CBIndex::c_0);
-        cb.reserve_back(x_block_size);
-        uint32_t src_buffer_l1_addr = cb.get_write_ptr();
+        DataflowBuffer dfb(tt::CBIndex::c_0);
+        dfb.reserve_back(x_block_size);
+        uint32_t src_buffer_l1_addr = dfb.get_write_ptr();
 
         // We read in 'x_block_len' chunks along the X dimension
         uint32_t page_offset = 0;
@@ -123,6 +123,6 @@ void kernel_main() {
         // Wait for all async reads to complete before proceeding
         noc.async_read_barrier();
         // Push the filled block into the circular buffer
-        cb.push_back(x_block_size);
+        dfb.push_back(x_block_size);
     }
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import shutil
+from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,33 +15,42 @@ import torch
 from helpers.accuracy_metrics import compute_pointwise_metrics
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
-    TILE_DIMENSIONS,
     UnarySFPUGolden,
     get_golden_generator,
 )
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
     FastMode,
     MathOperation,
+    PerfRunType,
+    StableSort,
+    Transpose,
     format_dict,
 )
-from helpers.param_config import get_num_blocks_and_num_tiles_in_block
+from helpers.perf import PerfConfig
 from helpers.sfpu_domains import for_op
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import (
+    DistributionKind,
+    StimuliSpec,
+    calculate_tile_and_face_counts,
+    generate_stimuli,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
     FAST_MODE,
+    ITERATIONS,
+    LOOP_FACTOR,
     MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
+    NUM_FACES,
+    PERF_RUN_TYPE,
+    STABLE_SORT,
     TILE_COUNT,
-    DestSync,
-    generate_input_dim,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
 )
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -314,28 +324,67 @@ def clear_shards() -> None:
     SHARD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+class RunMode(Enum):
+    """Which pipeline a single run_case variant exercises."""
+
+    ACCURACY = "accuracy"
+    PERF = "perf"
+    BOTH = "both"
+
+
+# PERF profiles every scenario (matches the standalone perf sweep). BOTH is
+# restricted to L1_TO_L1 — the only run type whose L1 output can be read back
+# and compared to the golden.
+_PERF_ONLY_RUN_TYPES = [
+    PerfRunType.L1_TO_L1,
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.MATH_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+    PerfRunType.L1_CONGESTION,
+]
+_ACCURACY_CAPABLE_RUN_TYPES = [PerfRunType.L1_TO_L1]
+
+
 def run_case(
     op: MathOperation,
     formats: InputOutputFormat,
     approx_mode: ApproximationMode,
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
+    perf_report=None,
     *,
+    run_mode: RunMode = RunMode.ACCURACY,
+    loop_factor: int = 16,
+    iterations: int = 32,
     points: int = DEFAULT_SWEEP_POINTS,
     distribution: DistributionKind = DistributionKind.RAMP,
     seed: Optional[int] = None,
-) -> Path:
-    """Measure one (op, format, config) on hardware and write its shard CSV.
+) -> Optional[Path]:
+    """Run one (op, format, config) variant in the requested *run_mode*.
 
-    The full pipeline for one variant:
+    All three modes run the same merged kernel (eltwise_unary_sfpu_perf.cpp).
+    RunMode.ACCURACY (default) runs it through a plain TestConfig — no profiler
+    build, no perf_report — checks the result against the torch golden, and writes
+    a shard CSV.
+    RunMode.PERF runs it through PerfConfig for timings only.
+    RunMode.BOTH runs it through PerfConfig once in L1_TO_L1 and captures both the
+    timings and the accuracy shard.
+
+    The pipeline for the accuracy-producing modes (ACCURACY, BOTH):
       1. build the input sweep for this op (deterministic RAMP by default;
          pass *distribution* for another, and *seed* for reproducible random ones),
       2. compute the torch "golden" output,
       3. compile + run the op on the device to get the "hw" output,
       4. compute per-element errors and write a shard via rows_dataframe/write_shard.
 
-    Returns the shard path.
+    Returns the shard path for ACCURACY/BOTH, or None for PERF (timings only).
     """
+    if run_mode in (RunMode.PERF, RunMode.BOTH) and perf_report is None:
+        raise ValueError(
+            f"run_mode={run_mode.value} needs the pytest perf_report fixture; "
+            "only RunMode.ACCURACY may omit it"
+        )
+
     # Seed the global RNG too (not just spec.seed) so it's consistent with the
     # param: 0 when unseeded (reproducible baseline), else the requested seed.
     torch.manual_seed(0 if seed is None else seed)
@@ -351,6 +400,95 @@ def run_case(
         input_dimensions_B=input_dimensions,
     )
 
+    variant_stimuli = StimuliConfig(
+        src_A,
+        formats.input_format,
+        src_B,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+    )
+
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
+
+    _, _, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+    )
+
+    if run_mode == RunMode.ACCURACY:
+        configuration = TestConfig(
+            "sources/eltwise_unary_sfpu_perf.cpp",
+            formats,
+            templates=[
+                PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+                MATH_OP(mathop=op),
+                APPROX_MODE(approx_mode),
+                ITERATIONS(iterations),
+                FAST_MODE(fast_mode),
+                STABLE_SORT(StableSort.No),
+                CLAMP_NEGATIVE(True),
+            ],
+            runtimes=[
+                TILE_COUNT(tile_cnt_A),
+                LOOP_FACTOR(1),
+                NUM_FACES(num_faces=faces_to_generate),
+                UNPACK_TRANS_FACES(Transpose.No),
+                UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            ],
+            variant_stimuli=variant_stimuli,
+            dest_acc=dest_acc,
+            unpack_to_dest=unpack_to_dest,
+        )
+        res_from_L1 = configuration.run().result
+    else:
+        run_types = (
+            _ACCURACY_CAPABLE_RUN_TYPES
+            if run_mode == RunMode.BOTH
+            else _PERF_ONLY_RUN_TYPES
+        )
+        configuration = PerfConfig(
+            "sources/eltwise_unary_sfpu_perf.cpp",
+            formats,
+            run_types=run_types,
+            templates=[
+                MATH_OP(mathop=op),
+                APPROX_MODE(approx_mode),
+                ITERATIONS(iterations),
+                FAST_MODE(fast_mode),
+                STABLE_SORT(StableSort.No),
+                CLAMP_NEGATIVE(True),
+            ],
+            runtimes=[
+                TILE_COUNT(tile_cnt_A),
+                LOOP_FACTOR(loop_factor),
+                NUM_FACES(num_faces=faces_to_generate),
+                UNPACK_TRANS_FACES(Transpose.No),
+                UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            ],
+            variant_stimuli=variant_stimuli,
+            unpack_to_dest=unpack_to_dest,
+            dest_acc=dest_acc,
+        )
+
+        if run_mode == RunMode.PERF:
+            # Timings only — PerfConfig.run() writes runtime params and collects
+            # timings; it needs no real stimuli written and no result read back.
+            configuration.run(perf_report)
+            return None
+
+        # BOTH: PerfConfig.run() does not write stimuli or read the result, so
+        # write the real input to L1 first and read it back after.
+        configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+        configuration.run(perf_report)
+        res_from_L1 = configuration.variant_stimuli.collect_results(
+            TestConfig.TENSIX_LOCATION
+        )
+
+    # ── Golden + accuracy CSV ──────────────────────────────────────────────────
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(
         op,
@@ -361,47 +499,6 @@ def run_case(
         input_dimensions,
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            FAST_MODE(fast_mode),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=op),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
-    )
-
-    res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor), (
         f"{op.name}: result length {len(res_from_L1)} != golden "
         f"{len(golden_tensor)}"

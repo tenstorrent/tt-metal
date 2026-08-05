@@ -130,6 +130,7 @@ def test_transformer_accuracy(
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
     )
 
     # Get list of step directories

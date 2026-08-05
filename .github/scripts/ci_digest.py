@@ -20,6 +20,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 
@@ -58,45 +60,96 @@ def latest_run(repo: str, workflow: str, branch: str) -> dict | None:
     return runs[0] if runs else None
 
 
-def fetch_run_summary(repo: str, run_id: int) -> dict | None:
-    """Download a run's ``ai_run_summary_<run_id>`` artifact and parse its JSON.
+def _latest_artifact_id(listing: list[str]) -> str | None:
+    """Newest artifact id from ``created_at\\tid`` lines — RFC3339-Z sorts
+    lexically, ties break on the higher id. None for an empty listing."""
+    if not listing:
+        return None
+    return max(listing, key=lambda ln: (ln.split("\t")[0], int(ln.split("\t")[1]))).split("\t")[1]
 
-    The ai_summary/run action uploads ``ai_run_summary_<run_id>.json`` (the
-    factual, deterministic run report: succeeded / failed / infra_failure) inside
-    that artifact. Returns None when the artifact is absent — the workflow doesn't
-    run ai_summary/run, or the run predates JSON output — so the caller can fall
-    back to the run's conclusion.
+
+def fetch_run_summary(repo: str, run_id: int) -> dict | None:
+    """Download the latest attempt's ``ai_run_summary_<run_id>`` JSON.
+
+    Re-runs upload multiple artifacts under this one name; pick the newest by
+    created_at, since a name-only download has no defined order among duplicates.
+    Returns None when no such artifact exists — the workflow doesn't run
+    ai_summary/run, or the run predates JSON output — so the caller can fall back
+    to the run's conclusion.
     """
     name = f"ai_run_summary_{run_id}"
+    listing = subprocess.run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
+            "--jq",
+            f'.artifacts[] | select(.name == "{name}") | "\\(.created_at)\\t\\(.id)"',
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    art_id = _latest_artifact_id(listing)
+    if art_id is None:
+        return None
     with tempfile.TemporaryDirectory() as d:
-        try:
-            subprocess.run(
-                ["gh", "run", "download", str(run_id), "-R", repo, "-n", name, "-D", d],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError:
-            return None  # no such artifact on this run
+        zip_path = os.path.join(d, "artifact.zip")
+        with open(zip_path, "wb") as fh:
+            subprocess.run(["gh", "api", f"repos/{repo}/actions/artifacts/{art_id}/zip"], stdout=fh, check=True)
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(d)
         matches = _glob.glob(os.path.join(d, "**", f"{name}.json"), recursive=True)
         if not matches:
             return None  # artifact present but .md-only (run predates JSON output)
-        with open(matches[0], encoding="utf-8") as f:
-            return json.load(f)
+        with open(matches[0], encoding="utf-8") as fh:
+            return json.load(fh)
 
 
-def summarize_run(data: dict) -> tuple[str, list[dict], list[dict], int]:
-    """Map a run-summary JSON into (outcome, failed_rows, infra_rows, passing).
+# Conclusions where the run genuinely broke, as opposed to merely not finishing
+# (cancelled/skipped/neutral/…), which we can't score either way.
+_BROKEN_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
 
-    A run is REAL_FAIL if it has any real failure, else INFRA if it has any infra
-    failure, else GREEN. failed/infra rows are passed through verbatim — they
-    already carry job_name, job_url, status, category, error_message, root_cause.
+
+@dataclass(frozen=True)
+class RunReport:
+    """One watched run's result: the failure rows plus the run's own conclusion.
+
+    ``outcome`` is derived, never stored, so it cannot drift from the rows it
+    summarizes. With no rows to show, the conclusion decides: a broken one
+    (matrix generation died before any leg, checkout failed) is REAL_FAIL — an
+    empty summary must never read as GREEN — while a merely-unfinished one
+    (cancelled, skipped) is UNKNOWN rather than a false red.
+
+    failed/infra rows are passed through verbatim — they already carry job_name,
+    job_url, status, category, error_message, root_cause.
     """
-    failed = data.get("failed") or []
-    infra = data.get("infra_failure") or []
-    passing = len(data.get("succeeded") or [])
-    outcome = "REAL_FAIL" if failed else "INFRA" if infra else "GREEN"
-    return outcome, failed, infra, passing
+
+    conclusion: str
+    failed: list[dict]
+    infra: list[dict]
+    passing: int
+
+    @property
+    def outcome(self) -> str:
+        if self.failed:
+            return "REAL_FAIL"
+        if self.infra:
+            return "INFRA"
+        if self.conclusion == "success":
+            return "GREEN"
+        return "REAL_FAIL" if self.conclusion in _BROKEN_CONCLUSIONS else "UNKNOWN"
+
+
+def summarize_run(data: dict, conclusion: str) -> RunReport:
+    """Build a RunReport from a run-summary JSON and the run's GH conclusion."""
+    return RunReport(
+        conclusion=conclusion,
+        failed=data.get("failed") or [],
+        infra=data.get("infra_failure") or [],
+        passing=len(data.get("succeeded") or []),
+    )
 
 
 def _sev_emoji(row: dict) -> str:
@@ -136,12 +189,11 @@ def _fmt_ts(iso: str) -> str:
     return datetime.fromisoformat(iso.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
 
 
-def _health_bar(counts: dict, width: int = 20) -> str | None:
-    """Bar of passing / total jobs; None when there are no jobs to score."""
+def _health_bar(counts: dict, width: int = 20) -> str:
+    """Bar of passing / total jobs. No jobs scores 0% — a failed run with no
+    per-job detail is 0% healthy, and the bar keeps every section uniform."""
     total = counts.get("broken", 0) + counts.get("infra", 0) + counts.get("passing", 0)
-    if not total:
-        return None
-    pct = round(100 * counts.get("passing", 0) / total)
+    pct = round(100 * counts.get("passing", 0) / total) if total else 0
     filled = round(pct / 100 * width)
     return f"Health: `{'█' * filled}{'░' * (width - filled)}` {pct}%"
 
@@ -157,19 +209,24 @@ def _section(r: dict) -> list[str]:
     failed-jobs table; a green run stops at the counts line (it's enough to see
     it's green)."""
     when = f" · {_fmt_ts(r['latest_ts'])} UTC" if r.get("latest_ts") else ""
-    out = [f"### {_link(r)}"]
+    attempt = r.get("run_attempt")
+    hdr = _link(r) + (f" (attempt {attempt})" if attempt and attempt > 1 else "")
+    out = [f"### {hdr}"]
     c = r.get("counts") or {}
-    total = c.get("broken", 0) + c.get("infra", 0) + c.get("passing", 0)
-    if total:
-        bar = _health_bar(c)
-        if bar:
-            out.append(bar)
-        out.append(f"🔴 {c.get('broken', 0)} · 🟣 {c.get('infra', 0)} · 🟢 {c.get('passing', 0)}{when}")
+    broken, infra, passing = c.get("broken", 0), c.get("infra", 0), c.get("passing", 0)
+    if broken or infra or (r.get("outcome") == "GREEN" and passing):
+        out.append(_health_bar(c))
+        out.append(f"🔴 {broken} · 🟣 {infra} · 🟢 {passing}{when}")
     elif r.get("outcome") == "GREEN":
         # Green via the run-conclusion fallback (no per-job counts available).
         out.append(f"🟢 green{when}")
+    elif passing:
+        # Broken run whose summarized legs all passed — the failure is outside
+        # them, so neither a 100% nor a 0% bar is meaningful. State it plainly.
+        out.append(f"🔴 run failed; {passing} summarized leg(s) passed, none failed{when}")
     else:
-        out.append(f"🔴 run not green — no per-job detail in the run summary{when}")
+        out.append(_health_bar(c))  # 0% — uniform with scored sections
+        out.append(f"🔴 no per-job summary{when}")
     jobs = (r.get("real_jobs") or []) + (r.get("infra_jobs") or [])
     if jobs:
         rows = [
@@ -227,28 +284,34 @@ def check_workflow(repo: str, branch: str, workflow: str) -> dict:
             return {**base, "outcome": "UNKNOWN", "note": "no completed run found"}
         label = run.get("workflowName") or workflow
         meta = {"label": label, "latest_url": run["url"], "latest_ts": run["createdAt"]}
+        conclusion = run.get("conclusion") or ""
         data = fetch_run_summary(repo, run["databaseId"])
         if data is None:
-            # No machine-readable summary. Fall back to the run conclusion: a green
-            # run is healthy; a non-green one we can't detail (workflow doesn't run
-            # ai_summary/run, or the run predates JSON output).
-            if run.get("conclusion") == "success":
-                return {**base, **meta, "outcome": "GREEN"}
-            return {**base, **meta, "outcome": "UNKNOWN", "note": "no ai_run_summary artifact"}
-        outcome, failed, infra, passing = summarize_run(data)
+            # No machine-readable summary (uninstrumented workflow, or the run
+            # predates JSON output); classify from the conclusion alone, the same
+            # rule a present-but-empty summary gets.
+            outcome = RunReport(conclusion, [], [], 0).outcome
+            result = {**base, **meta, "outcome": outcome}
+            if outcome == "UNKNOWN":
+                result["note"] = "no ai_run_summary artifact"
+            return result
+        report = summarize_run(data, conclusion)
         return {
             **base,
             **meta,
-            "outcome": outcome,
-            "real_jobs": failed,
-            "infra_jobs": infra,
-            "counts": {"broken": len(failed), "infra": len(infra), "passing": passing},
+            "outcome": report.outcome,
+            "run_attempt": data.get("run_attempt"),
+            "real_jobs": report.failed,
+            "infra_jobs": report.infra,
+            "counts": {"broken": len(report.failed), "infra": len(report.infra), "passing": report.passing},
         }
     except subprocess.CalledProcessError as exc:
         # One flaky gh call must not discard the other workflows' results.
         err = ((exc.stderr or "").strip().splitlines() or ["gh command failed"])[-1]
         return {**base, "outcome": "ERROR", "note": err[:200]}
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError, zipfile.BadZipFile) as exc:
+        # A corrupt/truncated artifact marks only this workflow ERROR, never
+        # aborts the others' reports.
         return {**base, "outcome": "ERROR", "note": str(exc)[:200]}
 
 
@@ -280,20 +343,46 @@ def main(argv: list[str]) -> int:
 
 class TestSummarizeRun(unittest.TestCase):
     def test_real_fail_when_any_failure(self):
-        out, failed, infra, passing = summarize_run(
-            {"failed": [{"job_name": "a"}], "infra_failure": [{"job_name": "b"}], "succeeded": [{}, {}]}
+        r = summarize_run(
+            {"failed": [{"job_name": "a"}], "infra_failure": [{"job_name": "b"}], "succeeded": [{}, {}]},
+            "failure",
         )
-        self.assertEqual((out, len(failed), len(infra), passing), ("REAL_FAIL", 1, 1, 2))
+        self.assertEqual((r.outcome, len(r.failed), len(r.infra), r.passing), ("REAL_FAIL", 1, 1, 2))
 
     def test_infra_when_only_infra(self):
-        out, _, infra, passing = summarize_run({"infra_failure": [{"job_name": "b"}], "succeeded": [{}]})
-        self.assertEqual((out, len(infra), passing), ("INFRA", 1, 1))
+        r = summarize_run({"infra_failure": [{"job_name": "b"}], "succeeded": [{}]}, "failure")
+        self.assertEqual((r.outcome, len(r.infra), r.passing), ("INFRA", 1, 1))
 
-    def test_green_when_only_success(self):
-        self.assertEqual(summarize_run({"succeeded": [{}, {}, {}]}), ("GREEN", [], [], 3))
+    def test_green_when_success_and_only_success(self):
+        r = summarize_run({"succeeded": [{}, {}, {}]}, "success")
+        self.assertEqual((r.outcome, r.failed, r.infra, r.passing), ("GREEN", [], [], 3))
 
-    def test_empty_is_green(self):
-        self.assertEqual(summarize_run({}), ("GREEN", [], [], 0))
+    def test_empty_summary_but_failed_conclusion_is_real_fail(self):
+        # A run that failed before producing any leg (matrix generation died,
+        # checkout failed) has an empty summary — must not read as green.
+        r = summarize_run({}, "failure")
+        self.assertEqual((r.outcome, r.passing), ("REAL_FAIL", 0))
+
+    def test_empty_summary_and_success_is_green(self):
+        self.assertEqual(summarize_run({}, "success").outcome, "GREEN")
+
+    def test_cancelled_or_skipped_with_no_rows_is_unknown(self):
+        # A run that didn't finish isn't broken — don't render it as a false red.
+        self.assertEqual(summarize_run({}, "cancelled").outcome, "UNKNOWN")
+        self.assertEqual(summarize_run({}, "skipped").outcome, "UNKNOWN")
+
+
+class TestLatestArtifactId(unittest.TestCase):
+    def test_newest_created_at_wins(self):
+        lines = ["2026-07-23T01:00:00Z\t100", "2026-07-23T02:00:00Z\t50"]
+        self.assertEqual(_latest_artifact_id(lines), "50")
+
+    def test_tie_breaks_on_higher_id(self):
+        lines = ["2026-07-23T01:00:00Z\t100", "2026-07-23T01:00:00Z\t200"]
+        self.assertEqual(_latest_artifact_id(lines), "200")
+
+    def test_empty_listing_is_none(self):
+        self.assertIsNone(_latest_artifact_id([]))
 
 
 class TestRender(unittest.TestCase):
@@ -304,6 +393,7 @@ class TestRender(unittest.TestCase):
             "outcome": "REAL_FAIL",
             "latest_url": "http://run/2",
             "latest_ts": "2026-06-14T06:34:32Z",
+            "run_attempt": 2,
             "counts": {"broken": 1, "infra": 1, "passing": 3},
             "real_jobs": [
                 {
@@ -330,6 +420,7 @@ class TestRender(unittest.TestCase):
             "models", [self._broken(), {"workflow": "WF-D", "outcome": "GREEN", "latest_url": "http://run/3"}]
         )
         self.assertIn("[WF-A](http://run/2)", md)
+        self.assertIn("(attempt 2)", md)  # re-run exposed in the header
         self.assertIn("[job-x](http://job/x)", md)
         self.assertIn("🟣", md)
         self.assertIn("TESTS_FAILED", md)  # precise status surfaced
@@ -353,8 +444,29 @@ class TestRender(unittest.TestCase):
                 }
             ],
         )
-        self.assertIn("no per-job detail", md)
+        self.assertIn("no per-job summary", md)
+        self.assertIn("0%", md)  # health bar present and at zero, uniform with scored sections
         self.assertNotIn("Failed jobs", md)
+
+    def test_broken_run_with_only_passing_legs_is_not_100_percent(self):
+        # Run concluded failure but every summarized leg passed (failure outside
+        # them): must not render as a healthy 100% bar.
+        md = render_markdown(
+            "m",
+            [
+                {
+                    "workflow": "WF-P",
+                    "outcome": "REAL_FAIL",
+                    "latest_url": "u",
+                    "real_jobs": [],
+                    "infra_jobs": [],
+                    "counts": {"broken": 0, "infra": 0, "passing": 5},
+                }
+            ],
+        )
+        self.assertIn("run failed", md)
+        self.assertIn("5 summarized leg(s) passed", md)
+        self.assertNotIn("100%", md)
 
     def test_infra_only(self):
         md = render_markdown(

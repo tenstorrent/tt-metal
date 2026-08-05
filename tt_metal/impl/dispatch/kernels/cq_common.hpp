@@ -35,7 +35,8 @@ struct CQWriteInterface {
     uint32_t completion_fifo_wr_toggle;
 };
 
-constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
+// PROGRAMMABLE_CORE_TYPE is set by the HAL JIT defines from the build's HalProgrammableCoreType.
+constexpr ProgrammableCoreType programmable_core_type = static_cast<ProgrammableCoreType>(PROGRAMMABLE_CORE_TYPE);
 
 template <typename T>
 FORCE_INLINE T round_up_pow2(T v, uint32_t pow2_size) {
@@ -91,9 +92,13 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
 
 #ifdef ARCH_QUASAR
 // Returns a pointer to the L1 worker completion counter for `stream`. Workers signal completion
-// into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers.
-FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(uint32_t stream, uint32_t first_stream_used) {
-    return uncached_l1_ptr<uint32_t>(DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (stream - first_stream_used));
+// into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers. `completion_counter_offset`
+// selects this CQ's range of counters, when multiple CQs share this dispatch core. `first_stream_used`
+// is the index of the first stream used by this CQ.
+FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
+    uint32_t stream, uint32_t first_stream_used, uint32_t completion_counter_offset) {
+    return uncached_l1_ptr<uint32_t>(
+        DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (completion_counter_offset + stream - first_stream_used));
 }
 #endif
 
@@ -185,7 +190,7 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
 
 template <enum CQNocFlags flags, bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
 FORCE_INLINE void cq_noc_async_write_init_state(
-    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint8_t noc = noc_index) {
+    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
     WAYPOINT("CNIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc, cmd_buf)) {
@@ -200,13 +205,18 @@ FORCE_INLINE void cq_noc_async_write_init_state(
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, mcast ? DEBUG_SANITIZE_NOC_MULTICAST : DEBUG_SANITIZE_NOC_UNICAST);
 
     noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
-    cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size);
+    cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size, ndests);
 }
 // Similar to the above function but this one takes noc-xy coordinates as a separate argument to permit 64-bit
 // addressing at NOC tile
 template <enum CQNocFlags flags, bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
 FORCE_INLINE void cq_noc_async_wwrite_init_state(
-    uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint8_t noc = noc_index) {
+    uint32_t src_addr,
+    uint32_t dst_noc_addr,
+    uint64_t dst_addr,
+    uint32_t size = 0,
+    uint8_t noc = noc_index,
+    uint32_t ndests = 1) {
     WAYPOINT("CNIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc, cmd_buf)) {
@@ -222,7 +232,7 @@ FORCE_INLINE void cq_noc_async_wwrite_init_state(
 
     noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
     cq_noc_async_wwrite_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(
-        src_addr, dst_noc_addr, dst_addr, size, noc);
+        src_addr, dst_noc_addr, dst_addr, size, ndests, noc);
 }
 
 template <enum CQNocInlineFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
@@ -286,7 +296,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
 template <uint32_t sem_id>
 FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(sem_id)));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(sem_id)));
 
     // Downstream component sets the MSB as a terminate bit
     // Mask that off to avoid a race between the sem count and terminate
@@ -311,7 +321,7 @@ class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         // Ensure last sem_inc has landed
         noc_async_atomic_barrier();
@@ -332,7 +342,7 @@ public:
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
@@ -388,10 +398,10 @@ public:
         }
 #endif
 #ifdef ARCH_QUASAR
-        Semaphore<fd_core_type>(downstream_sem_id).up(n);
+        Semaphore<programmable_core_type>(downstream_sem_id).up(n);
 #else
         noc_semaphore_inc(
-            get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
+            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)), n, noc_idx);
 #endif
     }
 
@@ -413,8 +423,8 @@ private:
 //  - Provides non-blocking availability via acquire_pages() and a blocking drain via wait_all_pages().
 // Notes:
 //  - This class only accounts for pages locally; it does NOT release credits back to the producer.
-//    Use CBReaderWithReleasePolicy or CBReaderWithManualRelease when credits must be returned.
-//  - Credits are returned per-block, not per-page.
+//    Use CBReaderWithReleasePolicy for block-based credit release, or CBReaderWithManualRelease when the caller
+//    returns credits explicitly.
 template <
     uint32_t my_sem_id,
     uint32_t cb_log_page_size,
@@ -425,7 +435,7 @@ class CBReader {
 public:
     FORCE_INLINE void wait_all_pages() {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         uint32_t to_wait_for = upstream_count_;
 
@@ -469,7 +479,7 @@ protected:
     FORCE_INLINE uint32_t acquire_pages() {
         static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");
@@ -604,40 +614,38 @@ private:
     uint32_t block_noc_writes_to_clear_{0};
 };
 
-template <
-    uint32_t my_sem_id,
-    uint32_t cb_log_page_size,
-    uint32_t cb_blocks,
-    uint32_t cb_pages_per_block,
-    uint32_t cb_base,
-    uint32_t cb_end>
-class CBReaderWithManualRelease : public CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base> {
+template <uint32_t my_sem_id, uint32_t cb_log_page_size, uint32_t cb_base, uint32_t cb_end>
+class CBReaderWithManualRelease {
+    static_assert((cb_end - cb_base) % (1 << cb_log_page_size) == 0, "CB size must be a whole number of pages");
+
 public:
     FORCE_INLINE void init() {
-        this->CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base>::init();
+        cb_fence_ = cb_base;
+        upstream_count_ = 0;
+        local_count_ = 0;
     }
+
+    // Return available space (in bytes) after data_ptr. This data will always be contiguous in memory and will never
+    // wrap around.
+    uint32_t available_bytes(uintptr_t data_ptr) const { return static_cast<uint32_t>(cb_fence_ - data_ptr); }
 
     // Get a new CB page. Will update cmd_ptr on wrap-around. Returns the number of pages acquired. Will not release
     // pages to writer.
     FORCE_INLINE uint32_t get_cb_page(uintptr_t& cmd_ptr) {
-        // Strided past the data that has arrived, get the next page
-        if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
-            if (this->rd_block_idx_ == cb_blocks - 1) {
-                cmd_ptr = cb_base;
-                this->cb_fence_ = cb_base;
-            }
-            this->move_rd_to_next_block();
+        if (cb_fence_ == cb_end) {
+            cmd_ptr = cb_base;
+            cb_fence_ = cb_base;
         }
 
-        return this->acquire_pages();
+        return acquire_pages();
     }
 
     // Returns how much data is available. Will block until data is available.
     FORCE_INLINE uint32_t wait_for_available_data(uintptr_t& cmd_ptr) {
-        if (this->available_bytes(cmd_ptr) == 0) {
+        if (available_bytes(cmd_ptr) == 0) {
             get_cb_page(cmd_ptr);
         }
-        return this->available_bytes(cmd_ptr);
+        return available_bytes(cmd_ptr);
     }
 
     // Advance cmd_ptr by length. If we wrap around, wrap the fence (should only happen if we hit the end exactly).
@@ -647,17 +655,47 @@ public:
         if (cmd_ptr + length >= cb_end) {
             length -= static_cast<uint32_t>(cb_end - cmd_ptr);
             cmd_ptr = cb_base;
-            if (this->cb_fence_ == cb_end) {
+            if (cb_fence_ == cb_end) {
                 // We hit the nail on the head, wrap the fence
                 ASSERT(length == 0);
-                this->cb_fence_ = cb_base;
-                // TODO eliminate usage of block_next_start_addr_ in this CB reader. rd_block_idx_ will point to the
-                // last block, not the first block, so the limit calculation in acquire_pages will be incorrect. We
-                // don't really use blocks for anything, here, so we should get rid of them and simplify the code.
+                cb_fence_ = cb_base;
             }
         }
         cmd_ptr += length;
     }
+
+private:
+    // Acquire pages from upstream up to the end of the ring. Pages are released manually by the caller.
+    FORCE_INLINE uint32_t acquire_pages() {
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+
+        if (local_count_ == upstream_count_) {
+            WAYPOINT("UAPW");
+            uint32_t heartbeat = 0;
+            do {
+                invalidate_l1_cache();
+                IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
+            } while ((upstream_count_ = *sem_addr) == local_count_);
+            WAYPOINT("UAPD");
+        }
+
+        uint32_t limit = static_cast<uint32_t>((cb_end - cb_fence_) >> cb_log_page_size);
+        uint32_t available = upstream_count_ - local_count_;
+        uint32_t usable = (available > limit) ? limit : available;
+
+        local_count_ += usable;
+        cb_fence_ += usable << cb_log_page_size;
+
+        return usable;
+    }
+
+    // Byte address fence delimiting the end of currently usable data (do not process beyond this address).
+    uintptr_t cb_fence_{0};
+    // Last value read from the upstream semaphore (producer credits). Cached snapshot for availability checks.
+    uint32_t upstream_count_{0};
+    // Number of pages this reader has already accounted for (consumed) into the cb_fence_ region.
+    uint32_t local_count_{0};
 };
 
 constexpr uint32_t l1_to_local_cache_copy_chunk = 6;
@@ -705,7 +743,8 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
         uint32_t worker_count = *(data_ptr++);
         workers_per_sub_device[i] = worker_count;
         if constexpr (telemetry_enabled) {
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
                 ->workers_per_sub_device[i] = worker_count;
         }
 #if DEVICE_PRINT_DISPATCH_ENABLED
@@ -715,7 +754,8 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
     for (uint32_t i = num_sub_devices; i < max_num_worker_sems; ++i) {
         workers_per_sub_device[i] = 0;
         if constexpr (telemetry_enabled) {
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
                 ->workers_per_sub_device[i] = 0;
         }
     }

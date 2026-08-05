@@ -45,7 +45,9 @@ from .fpu.reduce import ReduceFpu
 from .fpu.reduce_block_max import ReduceBlockMaxFpu
 from .fpu.reduce_block_max_runtime import ReduceBlockMaxRuntimeFpu
 from .fpu.sub_bcast_col_custom import SubBcastColCustomFpu
+from .fpu.transpose_dest import TransposeDestFpu
 from .packer.packer import Packer
+from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
@@ -54,6 +56,7 @@ from .unpacker.reduce_block_max import ReduceBlockMaxUnpacker
 from .unpacker.reduce_block_max_runtime import ReduceBlockMaxRuntimeUnpacker
 from .unpacker.sub_bcast_col_custom import SubBcastColCustomUnpacker
 from .unpacker.tilize_a import UnpackerTilizeA
+from .unpacker.transpose_dest import TransposeDestUnpacker
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
 
@@ -121,6 +124,10 @@ UNPACKER_MAP = {
     ),
     "SubBcastColCustomUnpacker": (
         lambda s: SubBcastColCustomUnpacker(),
+        None,
+    ),
+    "TransposeDestUnpacker": (
+        lambda s: TransposeDestUnpacker(),
         None,
     ),
 }
@@ -192,6 +199,13 @@ _eltwise_bcast_32x16 = (
     "32x16 tiles are not supported for eltwise with column/row broadcast",
 )
 
+_only_32x32_or_16x32_tile = (
+    lambda s, a, b: _tile_dims(a.tile_shape) not in ((32, 32), (16, 32)),
+    "Only (32, 32) or (16, 32) tiles are supported for this operation",
+)
+
+# 32x32-only: for ops whose Blackhole fuser generators do not yet plumb tile shape / dst_index
+# (e.g. SubBcastColCustom, whose BH math generator calls the ct_dim-only overload -> 32x32 default).
 _only_32x32_tile = (
     lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32),
     "Only (32, 32) tiles are supported for this operation",
@@ -285,14 +299,18 @@ FPU_MAP = {
     ),
     "ReduceBlockMax": (
         lambda s: ReduceBlockMaxFpu(),
-        [_no_reuse_dest, _forced_unpacker("ReduceBlockMaxUnpacker"), _only_32x32_tile],
+        [
+            _no_reuse_dest,
+            _forced_unpacker("ReduceBlockMaxUnpacker"),
+            _only_32x32_or_16x32_tile,
+        ],
     ),
     "ReduceBlockMaxRuntime": (
         lambda s: ReduceBlockMaxRuntimeFpu(),
         [
             _no_reuse_dest,
             _forced_unpacker("ReduceBlockMaxRuntimeUnpacker"),
-            _only_32x32_tile,
+            _only_32x32_or_16x32_tile,
         ],
     ),
     "SubBcastColCustom": (
@@ -300,6 +318,14 @@ FPU_MAP = {
         [
             _no_reuse_dest,
             _forced_unpacker("SubBcastColCustomUnpacker"),
+            _only_32x32_tile,
+        ],
+    ),
+    "TransposeDest": (
+        lambda s: TransposeDestFpu(),
+        [
+            _no_reuse_dest,
+            _forced_unpacker("TransposeDestUnpacker"),
             _only_32x32_tile,
         ],
     ),
@@ -311,8 +337,27 @@ _l1_acc_format = (
     "Output data format does not support L1 accumulation",
 )
 
+_untilize_full_tile = (
+    lambda s, output: output.tile_shape.total_num_faces() != 4,
+    "PackUntilize supports only 32x32 output tiles",
+)
+
+_untilize_no_block_float = (
+    lambda s, output: output.data_format.is_block_float(),
+    "PackUntilize does not support block float output formats",
+)
+
+_untilize_no_l1_acc = (
+    lambda s, output: s.pack_l1_accumulation == L1Accumulation.Yes,
+    "PackUntilize does not support L1 accumulation",
+)
+
 PACKER_MAP = {
     "Packer": (Packer, [_l1_acc_format]),
+    "PackUntilize": (
+        PackUntilize,
+        [_untilize_full_tile, _untilize_no_block_float, _untilize_no_l1_acc],
+    ),
 }
 
 _eltwise_dims = lambda a, b: (min(a[0], b[0]), min(a[1], b[1]))
@@ -330,6 +375,7 @@ OUTPUT_DIMS = {
     "ReduceBlockMax": _src_a_dims,
     "ReduceBlockMaxRuntime": _src_a_dims,
     "SubBcastColCustom": _src_a_dims,
+    "TransposeDest": _src_a_dims,
 }
 
 UNARY_SFPU_OPS = {
@@ -423,6 +469,15 @@ class OperationSchema(OperationSchemaBase):
         if len(unique_unpackers) > 1 and "UnpackerTilizeA" in unique_unpackers:
             raise ValueError(
                 "UnpackerTilizeA cannot be combined with other unpackers on BH"
+            )
+
+        if (
+            self.math
+            and isinstance(self.math[0], FpuMathSchema)
+            and self.math[0].operation == "TransposeDest"
+        ):
+            raise ValueError(
+                "TransposeDest cannot be the first math operation: Dst must already contain data"
             )
 
     def _arch_kwargs(self) -> dict:
