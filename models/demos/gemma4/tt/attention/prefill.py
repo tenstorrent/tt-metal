@@ -26,6 +26,7 @@ from .operations import (
     concat_heads,
     effective_block_size,
     interleave_qkv_if_sharded,
+    o_proj_input_memcfg,
     prefill_sdpa_program_config,
     prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
@@ -318,7 +319,8 @@ def _prefill_forward_single(
     xqkv = apply_qkv_projection(hidden_states, weights)
 
     # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
-    # #48861). o_proj / allreduce stay DRAM (CB clash with CCL).
+    # #48861). The allreduce input stays DRAM (CCL path); the o_proj matmul writes
+    # L1 block-sharded under its tuned config and is interleaved back before CCL.
     # Fused QKV may land L1 block-sharded (sweep winner); head-split needs interleaved.
     act_mc = prefill_short_lived_memcfg()
     xqkv = interleave_qkv_if_sharded(xqkv, memory_config=act_mc)
@@ -747,12 +749,10 @@ def _prefill_forward_single(
     elif keep_kv:
         kept_kv = (tt_k, tt_v)
 
-    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=act_mc)
-    # o_proj + allreduce need DRAM activations (CCL / matmul CB pressure).
-    if act_mc == ttnn.L1_MEMORY_CONFIG:
-        tt_out_l1 = tt_out
-        tt_out = ttnn.to_memory_config(tt_out_l1, ttnn.DRAM_MEMORY_CONFIG)
-        tt_out_l1.deallocate(True)
+    # The tuned o_proj matmul reads in0 from L1 interleaved — land the head-concat
+    # there directly when it fits the L1 budget (else act_mc, i.e. DRAM by default).
+    concat_mc = o_proj_input_memcfg(tt_sdpa, config.hidden_size, default_memcfg=act_mc)
+    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=concat_mc)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
@@ -932,11 +932,8 @@ def prefill_forward(
     elif keep_kv:
         kept_kv = (tt_k, tt_v)
 
-    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=act_mc)
-    if act_mc == ttnn.L1_MEMORY_CONFIG:
-        tt_out_l1 = tt_out
-        tt_out = ttnn.to_memory_config(tt_out_l1, ttnn.DRAM_MEMORY_CONFIG)
-        tt_out_l1.deallocate(True)
+    concat_mc = o_proj_input_memcfg(tt_sdpa, config.hidden_size, default_memcfg=act_mc)
+    tt_out = concat_heads(tt_sdpa, is_decode_mode=False, memory_config=concat_mc)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
