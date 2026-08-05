@@ -150,7 +150,7 @@ class TtSineGen:
         ttnn.deallocate(frac)
         return out
 
-    def __call__(self, f0, phase_vec=None, noise=None):
+    def __call__(self, f0, phase_vec=None, noise=None, noise_unit=None):
         """f0: ttnn [B, T, 1] -> (sine_waves [B, T, H+1], uv [B, T, 1], noise).
 
         phase_vec / noise are the captured RNG draws; pass them in PCC tests.
@@ -178,12 +178,25 @@ class TtSineGen:
         uv = ttnn.gt(f0, self.voiced_threshold)
         uv = ttnn.typecast(uv, self.dtype)
 
-        if noise is None:
+        if noise is not None:
+            # a captured draw, already scaled by the reference's noise_amp
+            n = noise
+        elif noise_unit is not None:
+            # a standard normal from the host, scaled here. This is the production
+            # path: the amplitude depends on `uv`, which only exists on device, so
+            # the caller supplies unit noise and the scaling happens where the
+            # voicing decision lives.
             noise_amp = ttnn.add(ttnn.multiply(uv, self.noise_std - self.sine_amp / 3.0), self.sine_amp / 3.0)
-            n = ttnn.multiply(noise_amp, 0.0)  # deterministic zero when unseeded
+            n = ttnn.multiply(noise_unit, noise_amp)
             ttnn.deallocate(noise_amp)
         else:
-            n = noise
+            # Deterministic zero. NOT a neutral default: for unvoiced frames `uv`
+            # zeroes the sine bank, so the noise is the *entire* excitation there --
+            # every fricative and plosive goes silent. Fine for a PCC test against a
+            # captured golden, wrong for synthesis.
+            noise_amp = ttnn.add(ttnn.multiply(uv, self.noise_std - self.sine_amp / 3.0), self.sine_amp / 3.0)
+            n = ttnn.multiply(noise_amp, 0.0)
+            ttnn.deallocate(noise_amp)
 
         out = ttnn.add(ttnn.multiply(sine_waves, uv), n)
         ttnn.deallocate(sine_waves)
@@ -261,9 +274,9 @@ class TtSourceModuleHnNSF:
             **kw,
         )
 
-    def __call__(self, f0, phase_vec=None, sine_noise=None, branch_noise=None):
+    def __call__(self, f0, phase_vec=None, sine_noise=None, branch_noise=None, sine_noise_unit=None):
         """f0: ttnn [B, T, 1] -> (sine_merge [B, T, 1], noise, uv)."""
-        sine_waves, uv, _ = self.sine_gen(f0, phase_vec=phase_vec, noise=sine_noise)
+        sine_waves, uv, _ = self.sine_gen(f0, phase_vec=phase_vec, noise=sine_noise, noise_unit=sine_noise_unit)
         merged = ttnn.linear(sine_waves, self.weight, bias=self.bias)
         ttnn.deallocate(sine_waves)
         sine_merge = ttnn.tanh(merged)
