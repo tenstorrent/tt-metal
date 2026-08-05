@@ -46,7 +46,7 @@ stale copy to disagree.
 | Graph source | `ditcheck dryrun` from source, or hand-written via `builder.py`; a trace still needs hand-declared placements |
 | Validated on | LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear), the SD3.5-large joint block (0 findings), **and** the SD3.5 VAE ResnetBlock (conv/group_norm, 0 findings) — **all derived from source** by the dry run; the two DiT blocks diffed against a hand-written oracle, the VAE checked for zero unregistered ops + zero diagnostics; asserted in `tests/test_dryrun.py` |
 | Tests | 26 analyzer + 25 dry-run, no device and no pytest required; plus `conform.py` on a device |
-| Conformance | `conform.py`: per-device shape diff vs real ttnn, **green on the 2×4 Loudbox** (the LTX block's shapes match; 4×8 Ring needs a Galaxy) |
+| Conformance | `conform.py`: **per-op** conformance vs real ttnn, **12/12 green on the 2×4 Loudbox** — distribution/tile-padding for LTX + SD3.5 (incl. 38→40 padded qkv, conv & group-norm weights) *and* the output shapes of matmul, the fused-QKV split, and concatenate-heads. Remaining: collectives/fused/conv kernels (CCL/config setup) and the whole-block collective log; 4×8 Ring needs a Galaxy |
 
 ### Phases
 
@@ -61,7 +61,7 @@ real code by hand (the CI half of the old phase 13 is now out of scope).
 | **roadmap 6 — dry-run front end** | **done** | — |
 | **roadmap 7 — shape and layout fidelity** | **done (7a); 7b on 2×4, Ring blocked** | tiling, exact shard division, block-float bytes, checkpoint keys, and the chunk rule all shipped and corroborated against real ttnn on the 2×4 Loudbox via `conform.py`; the 4×8 Ring corroboration needs a 32-chip Galaxy |
 | roadmap 8 — op coverage | **core done** | LTX, SD3.5-large **and** the SD3.5 VAE ResnetBlock covered from source (0 unregistered); fused-kernel data table + generic-op one-registration merge landed; the remaining tails (LTX-VAE halo/`neighbor_pad`, conv3d, Mochi/Wan tier-2) surface as those targets are added and are partly phase-10-gated |
-| **roadmap 11 — conformance (needs a device)** | **next — the trust bottleneck** | per-op conformance + a whole-block collective log + buffer-liveness/barrier soundness gates; promotes findings from "the shim believes" to "the hardware confirms". 2×4 reachable now; the 4×8 Ring finding stays Galaxy-blocked |
+| **roadmap 11 — conformance (needs a device)** | **in progress — the trust bottleneck** | **11a done**: per-op conformance green on 2×4 (`conform.py`, 12/12 — distribution + matmul/split-qkv/concat-heads output shapes). Remaining: 11b whole-block collective log on hardware, 11c buffer-liveness/barrier/memory soundness gates. 2×4 reachable; 4×8 Ring stays Galaxy-blocked |
 | roadmap 10 — multi-mesh / stage / host | not started (reach) | submeshes, encoder→DiT→VAE, carried state, readbacks; unblocks the LTX VAE |
 | roadmap 9 — scale | not started (with 10) | loop + finding rollup so a whole-pipeline report is readable, and keep runtime/memory tractable; stable-ID run-to-run diffing **dropped with CI** |
 | roadmap 12 — branch and shape matrix | not started (optional) | one graph is currently one branch; a manual convenience, not on the spine |
@@ -502,12 +502,18 @@ The device's whole remaining job, plus the gates between "look here" and "do thi
 The spike is the argument for the conformance half: two shape bugs invented 15
 findings that read exactly as convincingly as the 6 real ones.
 
-- Per-op conformance harness: for each registered op, build inputs on a real
-  mesh, run real ttnn, and assert the shim's shape/layout/dist match. Run on a
-  device (by hand, or on a device runner as maintenance); a mismatch is a hard
-  failure naming the op.
-- Whole-block collective log (flat, no tensor identity) diffed against the dry
-  run: same collectives, same order, same dims/axes/shapes, same source lines.
+- **11a — per-op conformance harness · done (2×4).** `conform.py` builds inputs on
+  the real mesh and diffs the shim's shape/layout/dist against ttnn: 12/12 green —
+  distribution/tile-padding for LTX + SD3.5 (incl. the 38→40 padded qkv weight,
+  conv and group-norm weights) and the output shapes of `matmul`, the fused-QKV
+  split, and `concatenate_heads`. Still to cover: collectives and fused kernels
+  (need CCL setup) and conv2d/group_norm compute (program-config setup) — their
+  shape math (shard division, tile padding, channel sharding) is already covered
+  by the distribution cases, but the kernels themselves aren't run yet.
+- **11b — whole-block collective log (flat, no tensor identity)** diffed against the
+  dry run: same collectives, same order, same dims/axes/shapes, same source lines.
+  Needs the model running on hardware (the `capture.py` path, not yet run on a
+  device); the 4×8 Ring log needs a Galaxy.
 - Buffer liveness: record persistent-buffer identity and semaphore IDs, and
   suppress a `duplicate_gather` CSE recommendation when the earlier result's slot
   is reused before the candidate site — with the reason stated.
