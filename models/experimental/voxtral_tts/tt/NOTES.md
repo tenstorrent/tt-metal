@@ -314,6 +314,18 @@ TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 # cost: one core is +0.273 ms. The earlier sweep only went down to 8 and recorded a flat 31.36-31.46
 # ms, which was true but on a build with w2 in BFP8 and the norm on 8x1.
 #
+# THE GRID DOES NOT REACH THE CONSUMERS, which is the real reason the count is inert and a stronger
+# one than "the total did not move". nlp_create_qkv_heads_decode imposes its OWN output layout:
+# feed it 1 / 6 / 8 / 24 / 48 cores and qh, kh and vh all come out as 1 core, shard (32, 128), every
+# time. So paged_update_cache and sdpa_decode never see this config. Only the shard fill and the
+# split op can be affected by it.
+#
+# Do NOT try to confirm that by timing the consumer chain in isolation. Feeding it a PRE-COMPUTED
+# qkv tensor (instead of the wqkv matmul's fresh output) inverts the answer -- the isolated chain
+# says 1 core is 0.157 ms CHEAPER while the 26-layer step says it is 0.273 ms DEARER -- and the
+# prefix split produced a NEGATIVE marginal cost for paged_update_cache V, which is proof the method
+# has broken down at these sizes. Same trap as the norm: isolating an op changes what you measure.
+#
 # THIS NOTE USED TO ARGUE THE OPPOSITE ABOUT THE NORM -- that its count "DOES matter: 16.2 us on 8
 # cores against 21.2 on 32". Those are ISOLATED norm timings, and STATUS.md 6.18 showed that metric is
 # ANTI-CORRELATED with end-to-end: 32 cores is the slowest norm in isolation and the fastest step
