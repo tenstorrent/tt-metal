@@ -233,13 +233,19 @@ TEST(MxCommonTests, MxFp8E4M3ReservedEncodings) {
 // (the OCP MX spec's rounding, which this host-side packer implements) must round
 // away from zero rather than tie to even.
 TEST(MxCommonTests, SubnormalRoundingKeepsStickyBitsAboveMidpoint) {
-    EXPECT_EQ(convert_to_mxfp_elem_bits(0.25000006f, kMxFp4Params), 0x1u);         // -> 0.5, not 0
-    EXPECT_EQ(convert_to_mxfp_elem_bits(0.062500015f, kMxFp6PParams), 0x01u);      // -> 0.125, not 0
-    EXPECT_EQ(convert_to_mxfp_elem_bits(0.031250007f, kMxFp6RParams), 0x01u);      // -> 0.0625, not 0
-    EXPECT_EQ(convert_to_mxfp_elem_bits(7.629396e-06f, kMxFp8E5M2Params), 0x01u);  // -> 2^-16, not 0
-    EXPECT_EQ(convert_to_mxfp_elem_bits(0.0009765627f, kMxFp8E4M3Params), 0x01u);  // -> 2^-9, not 0
+    // Stepped up with nextafter rather than written as a decimal literal, so the
+    // one-ULP claim cannot drift: the nearest decimals land two ULPs up.
+    constexpr float kUp = std::numeric_limits<float>::infinity();
+    EXPECT_EQ(convert_to_mxfp_elem_bits(std::nextafter(0.25f, kUp), kMxFp4Params), 0x1u);          // -> 0.5
+    EXPECT_EQ(convert_to_mxfp_elem_bits(std::nextafter(0.0625f, kUp), kMxFp6PParams), 0x01u);      // -> 0.125
+    EXPECT_EQ(convert_to_mxfp_elem_bits(std::nextafter(0.03125f, kUp), kMxFp6RParams), 0x01u);     // -> 0.0625
+    EXPECT_EQ(convert_to_mxfp_elem_bits(std::nextafter(0x1p-17f, kUp), kMxFp8E5M2Params), 0x01u);  // -> 2^-16
+    EXPECT_EQ(convert_to_mxfp_elem_bits(std::nextafter(0x1p-10f, kUp), kMxFp8E4M3Params), 0x01u);  // -> 2^-9
 
     // Exactly on the midpoint (no dropped bits) still ties to even, i.e. to zero.
     EXPECT_EQ(convert_to_mxfp_elem_bits(0.25f, kMxFp4Params), 0x0u);
     EXPECT_EQ(convert_to_mxfp_elem_bits(0.0625f, kMxFp6PParams), 0x0u);
+    EXPECT_EQ(convert_to_mxfp_elem_bits(0.03125f, kMxFp6RParams), 0x0u);
+    EXPECT_EQ(convert_to_mxfp_elem_bits(0x1p-17f, kMxFp8E5M2Params), 0x0u);
+    EXPECT_EQ(convert_to_mxfp_elem_bits(0x1p-10f, kMxFp8E4M3Params), 0x0u);
 }
