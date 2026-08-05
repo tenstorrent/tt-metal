@@ -840,6 +840,12 @@ TENSOR_OPS = {
     "embedding": embedding,
     "slice": slice_op,
     "mesh_partition": mesh_partition,
+    # plain norms (MiniMax-H3 VAE ViT decoder): same emission as the fused variant --
+    # a layernorm node with needs_full_axes=[-1], weight/bias riding along.
+    "rms_norm": dit_rms_norm_unary_fused,
+    "layer_norm": dit_rms_norm_unary_fused,
+    # top-level spelling of the partial-RoPE rotate (also under experimental.*)
+    "alt_complex_rotate90": _unary("alt_complex_rotate90"),
     "copy": copy,
     "add_": _inplace("add"),
     "multiply_": _inplace("mul"),
@@ -881,6 +887,7 @@ EXPERIMENTAL_OPS = {
     "dit_fused_distributed_rmsnorm_create_stats_buffer": lambda *a, **k: None,
     "dit_fused_distributed_layernorm_create_stats_buffer": lambda *a, **k: None,
     "nlp_create_qkv_heads": nlp_create_qkv_heads,
+    "nlp_concat_heads": concatenate_heads,
     "rotary_embedding_llama": rotary_embedding_llama,
     "alt_complex_rotate90": _unary("alt_complex_rotate90"),
 }

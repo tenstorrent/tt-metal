@@ -482,6 +482,17 @@ generator (phase 8) already emits both halves for a new such op.
   lands. Plausibly real optimizations (skip FFN/output on conditioning-only tokens),
   but they still want device conformance before acting — the "delete the collective"
   fix wording is wrong (it's structural).
+- **MiniMax-H3 visual VAE decoder** (`cglagovich/minimax-h3`, `MiniMaxH3ViTDecoder3d`
+  — a 36-layer ViT, not a conv stack) — dry-runs with **0 unregistered** after four
+  pure name-aliases of families already covered: `rms_norm`/`layer_norm` → the
+  `layernorm` emitter, top-level `alt_complex_rotate90` → pointwise (the rule already
+  existed under `experimental.*`), `nlp_concat_heads` → `concatenate_heads`
+  (merge_heads). No new op. **No findings from the decoder itself:** it is
+  replicated-only (0 collectives even on a 2-device mesh) — the VAE's parallelism
+  lives in the `data_parallel` / `hw_parallel` wrappers, which is where collective
+  findings would surface. Not yet scouted: the conv-based VAE **encoder**
+  (`conv_minimax_h3.py`) and the **audio VAE** — the likely home of genuinely new ops
+  (conv3d, spatial halo exchange).
 - **Grouped-query attention** — `nlp_create_qkv_heads` now branches on its call
   shape: `num_kv_heads == 0` (LTX / Ideogram / Wan, `out, _, _ = …`) is the plain
   single-tensor head split; `num_kv_heads > 0` (Qwen3-VL / Gemma / **MiniMax-H3**,

@@ -463,6 +463,35 @@ def test_ttnn_slice_reads_local_bounds_and_lifts_to_logical():
     assert "ok" in proc.stdout, proc.stdout
 
 
+def test_vae_decoder_op_aliases_dispatch_to_existing_families():
+    """The MiniMax-H3 visual VAE ViT decoder reaches four ops by names the shim did
+    not carry, each an alias of a family already covered: rms_norm / layer_norm ->
+    layernorm, top-level alt_complex_rotate90 -> pointwise, nlp_concat_heads ->
+    merge_heads. Registering them leaves zero unregistered ops."""
+    snippet = (
+        "from dit_analyzer.dryrun import install, recorder, start, provenance;"
+        "from dit_analyzer.ir import Dist;"
+        "from dit_analyzer.dryrun.context import CTX;"
+        "md = install((1, 1), 'blackhole');"
+        "start(md, axis_names=('x', 'y'), name='t', topology='Linear');"
+        "import ttnn;"
+        "x = recorder.entry([1, 32, 128], Dist.replicated(CTX.mesh), base='x');"
+        "h = recorder.entry([1, 8, 16, 64], Dist.replicated(CTX.mesh), base='h');"
+        "ttnn.rms_norm(x, epsilon=1e-5);"
+        "ttnn.layer_norm(x, weight=None, bias=None, epsilon=1e-5);"
+        "ttnn.alt_complex_rotate90(x);"
+        "ttnn.experimental.nlp_concat_heads(h);"
+        "assert not provenance()['unregistered_ops'], provenance()['unregistered_ops'];"
+        "ops = [n.op for n in CTX.require_graph().nodes];"
+        "assert ops.count('layernorm') == 2, ops;"
+        "assert 'pointwise' in ops and 'merge_heads' in ops, ops;"
+        "print('ok')"
+    )
+    proc = _python("-c", snippet)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ok" in proc.stdout, proc.stdout
+
+
 def test_fused_swiglu_preprocessing_runs_on_meta_and_preserves_shape():
     # the roadmap's "run the real _prepare_torch_state on meta tensors": the
     # swiglu reorder is a pure reshape/permute, so it runs with no bytes and is
