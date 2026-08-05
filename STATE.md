@@ -4669,3 +4669,80 @@ scales with volume; measured, the canvas moves half the bytes at a third of the 
 reason this was visible at all is that the profile counts **volume and per-wave time separately** — a
 single "readback: 2.13 s" row would have looked like a modest regression rather than a bandwidth
 anomaly with a specific cause to chase.
+
+---
+
+## Amendment 107 (2026-08-05) — RETRACTION of amendment 63: T-parallel audio decode is wrong at **every** factor, not just factor 8. And the pipeline never used it
+
+**What amendment 63 claimed.** "T-parallel audio decode works at factor 4; factor 8 is silently wrong."
+`KNOWN_BROKEN = {(8, 1)}` in `test_audio_parallel_minimax_h3.py` encodes exactly that.
+
+**Measured now, on the same code:**
+
+| t_factor | axis | time | speedup | PSNR vs 1-device |
+|---|---|---|---|---|
+| 1 | 1 | 1.7048 s | 1.00x | inf |
+| **4** | 0 | 1.0035 s | **1.70x** | **-10.2 dB** |
+| 8 | 1 | 0.8795 s | 1.94x | -11.1 dB |
+
+**Factor 4 is silently wrong too.** The speedups are real in *time* and worthless: both produce a
+different signal. So the audio parallelism lever — lever 1, the highest in the ordering — is **blocked
+on a correctness bug**, not available for the taking.
+
+My `layers/linear.py` change was the only plausible recent cause and is **exonerated**: reverting that
+one file and re-running reproduces -10.2 dB exactly. This is pre-existing.
+
+### The bug is localized, and it is not the halo width
+
+`_localize_divergence` added to the test, because "PSNR -10.2 dB" names no bug. Per-shard mean absolute
+error, against a baseline whose absmax is **0.28**:
+
+| t_factor | per-shard mean error | boundary/interior ratio | correlation at lag 0 |
+|---|---|---|---|
+| 4 | **[0.278, 1.000, 1.000, 1.000]** | 1.23 | 0.042 |
+| 8 | [1.000 x 8] | 1.00 | 0.004 |
+
+Three readings, and together they exclude the obvious hypothesis:
+
+1. **Not a halo-width bug.** A conv stack missing `kernel_size - 1` samples of neighbour context
+   degrades in a *narrow band* at each internal boundary. The boundary/interior ratio is 1.23 and 1.00
+   — the error is **uniform within each shard**.
+2. **Shards >= 1 emit saturated garbage.** A mean absolute error of ~1.000 against a signal of absmax
+   0.28 is the vocoder's final `tanh` railing at +-1. Those shards are not slightly wrong, they are
+   computing on wrong input entirely and blowing up through the 7-stage upsampling chain.
+3. **Shard 0 is merely wrong** (0.278, the same order as the signal) at factor 4, and wrong like the
+   rest at factor 8 — consistent with only the first shard receiving anything resembling real history.
+
+So the cross-shard exchange is not delivering neighbour context at all, rather than delivering too
+little of it. Note the op in play is named `neighbor_pad_async`, which surfaced in a stack trace as
+`TT_FATAL ... num_devices >` under a mis-parameterized run — that is where to look.
+
+### Two process errors of mine, both worth recording
+
+1. **I skipped a device reset after a crash.** A standalone script of mine died on a `DRAM Auto slice`
+   TT_FATAL and I went straight to the next run, against the discipline in `shared/device-hangs.md`
+   that I had quoted earlier in the same session. The next run then failed in an unrelated place
+   (`bank_manager.cpp:462`) and I spent a cycle suspecting the code. **Reset after every kill, before
+   concluding anything** — the rule exists precisely because the *next* failure is somewhere else.
+2. **I inserted a helper between a `@pytest.mark.parametrize` and its `def`.** The decorator then bound
+   to the helper, the test ran **undecorated** with default mesh params, `l1_small_size` defaulted to 0,
+   and every factor died with `Out of Memory ... L1_SMALL ... bank size is 0 B`. It looked exactly like
+   a device fault and it was an editing error. The tell was `bank size is 0 B` — not "too small", but
+   *unallocated*, which means the parameter never arrived.
+
+### The test could not fail, and now can
+
+When all three factors raised, each was swallowed by the `except Exception` as "unsupported" and the run
+reported **green**. A gate that cannot fail is worse than no gate. Two assertions added: the
+single-device baseline must have run (with a message naming the dirty-device cause), and at least one
+parallel factor must have run at all.
+
+### Where this leaves audio decode
+
+- Production is **correct and unparallelized**: the pipeline builds the decoder with no
+  `parallel_config`, so it replicates across 32 devices and uses one device's compute, 1.7 s.
+- The 1.70x is unavailable until the halo exchange is fixed. That is the highest-value audio work and it
+  is a correctness task, not a perf one.
+- Amendment 71's fused-FIR proposal remains the *other* lever, and my amendment 103 profile refines its
+  target: `Conv2d` is 4.0 % of the stage while concat/ternary/untilize/padded-slice/tilize/permute are
+  ~70 %.
