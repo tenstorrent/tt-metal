@@ -20,6 +20,7 @@
 #include <chrono>
 #include <thread>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -89,6 +90,37 @@ uint32_t drisc_gap_cycles() {
         return (s == nullptr || *s == '\0') ? 0u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
     }();
     return v;
+}
+
+// TT_METAL_PERF_DEBUG_WRITER_TIMEOUT_S: how long the writer tolerates zero progress before giving up.
+// Breaking out stops acking FOREVER, which converts a transient stall into a permanent deadlock (a drainer
+// in socket_reserve_pages spins with no escape and never re-checks *stop), so this is a diagnostic knob:
+// lower it to surface a hang quickly, and read the drainer dump it now emits on the way out.
+std::chrono::seconds writer_timeout() {
+    static const std::chrono::seconds v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_WRITER_TIMEOUT_S");
+        const uint32_t n = (s == nullptr || *s == '\0') ? 120u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+        return std::chrono::seconds(n == 0 ? 120u : n);
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_DRAIN_TENSIX: run the drain kernel on a Tensix BRISC instead of a DRISC. Control
+// path only -- see boot_device(). Requires slow dispatch.
+bool drain_on_tensix() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRAIN_TENSIX");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_NSTAGE: cap on staging slots. A DRISC's L1 fits 7; a Tensix's fits ~130, which would
+// make the two drainers incomparable, so the Tensix path clamps to the DRISC count by default.
+uint32_t nstage_cap(uint32_t computed) {
+    const char* s = std::getenv("TT_METAL_PERF_DEBUG_NSTAGE");
+    const uint32_t cap = (s == nullptr || *s == '\0') ? 7u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+    return (cap != 0 && computed > cap) ? cap : computed;
 }
 
 // Read once: profile the X280 drain harts as well as the worker kernels.
@@ -411,9 +443,26 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     const uint32_t device_id = ctx.chip_id;
     const auto& soc = cluster.get_soc_desc(device_id);
 
+    // TT_METAL_PERF_DEBUG_DRAIN_TENSIX=1 runs the identical drain kernel on a Tensix BRISC instead of a
+    // DRISC. It is a control for "does the DRAM core have anything to do with the PCIe hang", not a product
+    // mode: it needs TT_METAL_SLOW_DISPATCH_MODE=1 so the dispatch row/column is free (the drainer core is
+    // taken from there, leaving the producers the full compute grid) and so a resident non-CQ program is
+    // legal on a worker at all.
+    const bool tensix_drain = drain_on_tensix();
+    const char* sd_env = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (tensix_drain && (sd_env == nullptr || *sd_env == '\0' || *sd_env == '0')) {
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] Device {}: TT_METAL_PERF_DEBUG_DRAIN_TENSIX needs "
+            "TT_METAL_SLOW_DISPATCH_MODE=1 (a resident worker program cannot coexist with fast dispatch)",
+            device_id);
+        disarm_producers(mesh_device, device_id);
+        return false;
+    }
+
     // The drainer is a DRISC: one DM RISC-V on a DRAM core. Nothing else here is Blackhole-specific, but
     // that is the only place they exist today.
-    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+    if (!tensix_drain && !hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         log_warning(
             tt::LogMetal,
             "[perf-debug profiler] Device {}: no DRAM programmable cores (card FW below the DRISC gate?)",
@@ -424,7 +473,16 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
 
     const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
-    const uint32_t gx = static_cast<uint32_t>(grid.x), gy = static_cast<uint32_t>(grid.y);
+    // Slow dispatch hands the WHOLE worker grid to compute (12x10 here) because nothing is reserved for
+    // dispatch. Give the last column back: the drainers live there and the producer grid becomes 11x10 =
+    // 110, which is exactly the grid the DRISC runs saw under fast dispatch. Run the workload with
+    // `--gx 11` to match -- the poll list built below stops at column 11, so a producer placed there would
+    // both go undrained and scribble on the drainer's L1.
+    // Reserved for BOTH drainer types, not just Tensix: the poll list length IS the idle sweep cost, so a
+    // DRISC polling 120 cores against a Tensix polling 110 would differ by the grid, not the core type.
+    const bool reserve_column = sd_env != nullptr && *sd_env != '\0' && *sd_env != '0';
+    const uint32_t gx = static_cast<uint32_t>(grid.x) - (reserve_column ? 1u : 0u);
+    const uint32_t gy = static_cast<uint32_t>(grid.y);
     const uint64_t num_cores = static_cast<uint64_t>(gx) * gy;
     ctx.nl = static_cast<uint32_t>(num_cores) * kNRisc;
     ctx.core_virt.resize(num_cores);
@@ -467,26 +525,52 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         if (my_cores == 0) {
             continue;
         }
-        ctx.drisc_logical[d] = mesh_device->impl().pick_unused_dram_logical_core(d);
-        const CoreCoord translated =
-            soc.dram_bank_endpoint_coords.at(ctx.drisc_logical[d].x).at(ctx.drisc_logical[d].y);
-        const tt::umd::CoreCoord drisc_phys = soc.translate_coord_to(
-            tt::umd::CoreCoord(translated.x, translated.y, CoreType::DRAM, CoordSystem::TRANSLATED),
-            CoordSystem::NOC0);
-        ctx.drisc_virtual[d] = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical[d], CoreType::DRAM);
-        ctx.drisc_l1_base[d] = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-        ctx.drisc_l1_noc[d] = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+        CoreCoord drisc_phys{};  // NOC0 coords of the drainer core, for the socket and the log line
+        uint32_t region = 0;     // usable L1 on the drainer core
+        if (tensix_drain) {
+            // Under slow dispatch the dispatch row/column is idle, so the drainer takes a core from there
+            // and the producers keep the FULL compute grid -- the offered load is then identical to the
+            // DRISC runs, which is the only way the two are comparable.
+            // Column gx is the one held back above; drainer d takes row d of it.
+            TT_FATAL(
+                d < gy,
+                "drainer {} does not fit the reserved column (only {} rows)",
+                d,
+                gy);
+            ctx.drisc_logical[d] = CoreCoord{gx, d};
+            ctx.drisc_virtual[d] = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical[d], CoreType::WORKER);
+            drisc_phys = cluster.get_physical_coordinate_from_logical_coordinates(
+                device_id, ctx.drisc_logical[d], CoreType::WORKER, /*no_warn=*/true);
+            // A Tensix's unreserved L1 belongs to the allocator, so the HAL refuses to name it (hal.hpp:705)
+            // -- take the allocator's base instead and run to the top of L1. Safe to carve raw here because
+            // the drainer core is outside the producer grid and this workload allocates no L1 buffers; a
+            // workload that did would need a real sharded allocation on this core.
+            ctx.drisc_l1_base[d] = ctx.device->allocator()->get_base_allocator_addr(HalMemType::L1);
+            ctx.drisc_l1_noc[d] = ctx.drisc_l1_base[d];  // worker L1 is addressed directly, no DRAM-view offset
+            region = ctx.device->l1_size_per_core() - static_cast<uint32_t>(ctx.drisc_l1_base[d]);
+        } else {
+            ctx.drisc_logical[d] = mesh_device->impl().pick_unused_dram_logical_core(d);
+            const CoreCoord translated =
+                soc.dram_bank_endpoint_coords.at(ctx.drisc_logical[d].x).at(ctx.drisc_logical[d].y);
+            const tt::umd::CoreCoord phys = soc.translate_coord_to(
+                tt::umd::CoreCoord(translated.x, translated.y, CoreType::DRAM, CoordSystem::TRANSLATED),
+                CoordSystem::NOC0);
+            drisc_phys = CoreCoord{phys.x, phys.y};
+            ctx.drisc_virtual[d] = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical[d], CoreType::DRAM);
+            ctx.drisc_l1_base[d] = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+            ctx.drisc_l1_noc[d] = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+            region = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+        }
 
         const uint32_t span_bytes = (kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE +
                                      kNRisc * kernel_profiler::PROFILER_L1_VECTOR_SIZE) *
                                     sizeof(uint32_t);
         const uint32_t slot_bytes = kernel_profiler::SPSC_SPAN_PREFIX_WORDS * sizeof(uint32_t) + span_bytes;
-        const uint32_t region = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
         constexpr uint32_t kCfgReserve = 8 * 1024;
         constexpr uint32_t kScratchBytes = 128 * 32;
         constexpr uint32_t kMiscBytes = 512;
         const uint32_t fixed = kCfgReserve + kScratchBytes + kMiscBytes;
-        const uint32_t nstage = region > fixed ? (region - fixed) / slot_bytes : 0;
+        const uint32_t nstage = nstage_cap(region > fixed ? (region - fixed) / slot_bytes : 0);
         if (nstage == 0) {
             log_warning(tt::LogMetal, "[perf-debug profiler] Device {}: DRISC L1 too small; skipping", device_id);
             disarm_producers(mesh_device, device_id);
@@ -502,14 +586,21 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
 
         // Stream mode first: the socket config is written from the host and only lands in L1 once the NIU
         // stops forwarding inbound DRAM-range addresses to GDDR. The kernel restores it on the host's word.
-        set_drisc_niu_mode(ctx.device, ctx.drisc_logical[d], 1);
+        // A Tensix NIU is already a NoC master, so this (and the kernel's restore tail) is DRISC-only.
+        if (!tensix_drain) {
+            set_drisc_niu_mode(ctx.device, ctx.drisc_logical[d], 1);
+        }
 
         try {
+            // sender_is_l2cpu switches the socket between "physical NoC coord + full L1 address" (DRISC,
+            // X280) and the normal worker path (logical coord, worker-L1 semantics, static TLB write-back).
             ctx.sockets[d] = std::make_unique<distributed::D2HSocket>(
                 mesh_device,
-                distributed::MeshCoreCoord{scoord, CoreCoord(drisc_phys.x, drisc_phys.y)},
+                distributed::MeshCoreCoord{
+                    scoord,
+                    tensix_drain ? ctx.drisc_logical[d] : CoreCoord(drisc_phys.x, drisc_phys.y)},
                 static_cast<uint32_t>((static_cast<uint64_t>(kHRingWords) * 4 / kPageSize) * kPageSize),
-                distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = true});
+                distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_l1, .sender_is_l2cpu = !tensix_drain});
             ctx.sockets[d]->set_page_size(kPageSize);
             ctx.decode[d] = std::make_unique<pz::ProfzoneDecodeState>();
             ctx.decode[d]->reset(ctx.nl);
@@ -517,31 +608,44 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 ctx.decode[d]->core_of_xy[coords[c]] = c;  // full map: lane ids stay global across drainers
             }
 
-            uint32_t zero = 0;
+            // Zero done AND the heartbeat/phase words behind it. Zeroing only `done` leaves the PREVIOUS
+            // run's hb/phase in L1, so a drainer that never starts reads as the last run's final state --
+            // which is exactly how a failed start got misread as "exited and wedged in the socket tail".
+            uint32_t zero3[3] = {0, 0, 0};
             cluster.write_core(
-                &zero,
-                sizeof(uint32_t),
+                zero3,
+                sizeof(zero3),
                 tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
                 ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
 
             ctx.drain_program[d] = std::make_unique<Program>(CreateProgram());
-            auto drain_id = CreateKernel(
-                *ctx.drain_program[d],
-                "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp",
-                ctx.drisc_logical[d],
-                DramConfig{
-                    .noc = NOC::NOC_0,
-                    .compile_args = {
-                        stage_base,
-                        nstage,
-                        head_scratch,
-                        ctx.results_addr[d],
-                        ctx.done_addr[d],
-                        ctx.stop_addr[d],
-                        ctx.sockets[d]->get_config_buffer_address(),
-                        0xFFFFFFFFu,
-                        128,
-                        drisc_gap_cycles()}});
+            const std::vector<uint32_t> cargs = {
+                stage_base,
+                nstage,
+                head_scratch,
+                ctx.results_addr[d],
+                ctx.done_addr[d],
+                ctx.stop_addr[d],
+                ctx.sockets[d]->get_config_buffer_address(),
+                0xFFFFFFFFu,
+                128,
+                drisc_gap_cycles()};
+            const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
+            auto drain_id =
+                tensix_drain ? CreateKernel(
+                                   *ctx.drain_program[d],
+                                   kdrain,
+                                   ctx.drisc_logical[d],
+                                   DataMovementConfig{
+                                       .processor = DataMovementProcessor::RISCV_0,
+                                       .noc = NOC::RISCV_0_default,
+                                       .compile_args = cargs,
+                                       .defines = {{"DRAIN_ON_TENSIX", "1"}}})
+                             : CreateKernel(
+                                   *ctx.drain_program[d],
+                                   kdrain,
+                                   ctx.drisc_logical[d],
+                                   DramConfig{.noc = NOC::NOC_0, .compile_args = cargs});
             std::vector<uint32_t> rt = {my_cores, static_cast<uint32_t>(prof_l1)};
             rt.insert(rt.end(), coords.begin() + lo, coords.begin() + hi);
             SetRuntimeArgs(*ctx.drain_program[d], drain_id, ctx.drisc_logical[d], rt);
@@ -550,6 +654,45 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             detail::WriteRuntimeArgsToDevice(ctx.device, *ctx.drain_program[d], /*force_slow_dispatch=*/true);
             detail::LaunchProgram(
                 ctx.device, *ctx.drain_program[d], /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+
+            // VERIFY THE DRAINER ACTUALLY STARTED. A resident drainer is launched fire-and-forget, so a core
+            // that fails to come out of reset produces no error -- the producers simply fill their rings,
+            // block (they are lossless), and the workload wedges forever with a perfectly healthy card. That
+            // is the same failure the X280 port hit: the host checked one hart, the rest never started, and
+            // the run hung. Poll the heartbeat instead of assuming: it must leave 0 and then advance.
+            {
+                const uint64_t hb_addr =
+                    ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]) + 4;
+                const tt_cxy_pair core(device_id, ctx.drisc_virtual[d]);
+                uint32_t hb0 = 0, hb1 = 0;
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+                while (std::chrono::steady_clock::now() < deadline) {
+                    cluster.read_core(&hb0, sizeof(hb0), core, hb_addr);
+                    if (hb0 != 0) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                if (hb0 != 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    cluster.read_core(&hb1, sizeof(hb1), core, hb_addr);
+                }
+                if (hb0 == 0 || hb1 == hb0) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] Device {}: drainer {} FAILED TO START (heartbeat {} -> {} after "
+                        "launch). The producers would block forever on a full ring and wedge the workload, so "
+                        "capture is disabled for this run instead.",
+                        device_id,
+                        d,
+                        hb0,
+                        hb1);
+                    ctx.drain_program[d].reset();
+                    ctx.sockets[d].reset();
+                    disarm_producers(mesh_device, device_id);
+                    return false;
+                }
+            }
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,
@@ -565,9 +708,10 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
 
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] Device {}: DRISC {} resident on logical ({},{}) [noc0 ({},{})], cores "
+            "[perf-debug profiler] Device {}: {} {} resident on logical ({},{}) [noc0 ({},{})], cores "
             "[{},{}) of {}, {} staging slots x {} B",
             device_id,
+            tensix_drain ? "TENSIX-BRISC drainer" : "DRISC",
             d,
             ctx.drisc_logical[d].x,
             ctx.drisc_logical[d].y,
@@ -744,7 +888,23 @@ bool PerfDebugProfiler::drain_pass(DeviceCtx& ctx, uint32_t sock_idx) {
         return false;
     }
     if (np >= fifo_pages) {
-        np = fifo_pages - 1u;  // never read more than the FIFO holds (pages_available can spike)
+        // A FLOW-CONTROL VIOLATION, not a quirk: pages_available() is (bytes_sent - bytes_acked)/page, so
+        // exceeding the FIFO means the sender wrote more than the FIFO holds at least once. Clamping keeps
+        // the read in bounds but desynchronizes host read_ptr from device write_ptr -- the host then acks
+        // bytes it never consumed, over-crediting the sender permanently. Say so loudly, once per socket.
+        if (!ss.overflow_reported) {
+            ss.overflow_reported = true;
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] socket {}: FLOW-CONTROL VIOLATION -- pages_available={} >= fifo_pages={} "
+                "(sender wrote past the FIFO). Clamping to {}; host read_ptr and device write_ptr are now "
+                "desynchronized and the sender may be permanently over-credited.",
+                sock_idx,
+                np,
+                fifo_pages,
+                fifo_pages - 1u);
+        }
+        np = fifo_pages - 1u;
     }
     const uint32_t cap = max_pages_per_read(kMaxPagesPerRead);
     if (cap != 0 && np > cap) {
@@ -888,8 +1048,20 @@ void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
         if (any) {
             watchdog = std::chrono::steady_clock::now();
         } else {
-            if (std::chrono::steady_clock::now() - watchdog > std::chrono::seconds(120)) {
-                log_warning(tt::LogMetal, "[perf-debug profiler] writer WALL TIMEOUT (120 s no progress)");
+            if (std::chrono::steady_clock::now() - watchdog > writer_timeout()) {
+                log_warning(
+                    tt::LogMetal,
+                    "[perf-debug profiler] writer WALL TIMEOUT ({} s no progress)",
+                    std::chrono::duration_cast<std::chrono::seconds>(writer_timeout()).count());
+                // Before giving up -- which permanently stops acking and so permanently strands a drainer
+                // that IS waiting on credits -- record what the drainer is actually doing. A starving writer
+                // and a credit-blocked drainer are contradictory states (blocked implies a FULL fifo), so if
+                // both appear the flow-control accounting has desynchronized.
+                for (auto& c : devices_) {
+                    for (uint32_t dd = 0; dd < kNSockets; dd++) {
+                        dump_drainer_state(c, dd, "writer-wall-timeout");
+                    }
+                }
                 break;
             }
             // Every socket came back empty: the writer is STARVED waiting on the device. If this dominates
@@ -1109,10 +1281,64 @@ void PerfDebugProfiler::consumer_thread() {
     dropped_.fetch_add(rd.dropped());
 }
 
+void PerfDebugProfiler::dump_drainer_state(DeviceCtx& ctx, uint32_t d, const char* why) {
+    if (ctx.drain_program[d] == nullptr) {
+        return;
+    }
+    auto& cluster = MetalContext::instance().get_cluster();
+    const tt_cxy_pair drisc(ctx.chip_id, ctx.drisc_virtual[d]);
+    const uint64_t base = ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]);
+    // done | heartbeat | phase, read as one 3-word block, twice, so a frozen heartbeat is distinguishable
+    // from a slow one. 60 ms is ~2000 sweeps of headroom at the measured 27-30 us/sweep.
+    uint32_t a[3] = {0, 0, 0}, b[3] = {0, 0, 0};
+    cluster.read_core(a, sizeof(a), drisc, base);
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    cluster.read_core(b, sizeof(b), drisc, base);
+    const bool exited = (a[0] & 0xFFFF0000u) == 0xD09E0000u;
+    const char* phase_name = "?";
+    switch (b[2]) {
+        case 1: phase_name = "INIT"; break;
+        case 2: phase_name = "POLL"; break;
+        case 3: phase_name = "RESERVE(credit-wait)"; break;
+        case 4: phase_name = "WRITE"; break;
+        case 5: phase_name = "EXIT"; break;
+        default: break;
+    }
+    uint32_t np = 0, fifo_pages = 0;
+    if (ctx.sockets[d]) {
+        np = ctx.sockets[d]->pages_available();
+        fifo_pages = ctx.sockets[d]->get_fifo_curr_size() / ctx.sockets[d]->get_page_size();
+    }
+    log_warning(
+        tt::LogMetal,
+        "[perf-debug profiler] DRAINER STATE ({}) dev {} drainer {}: done=0x{:08X} ({}) | heartbeat {} -> {} "
+        "({}) | phase {} ({}) | host sees {} of {} fifo pages available",
+        why,
+        ctx.chip_id,
+        d,
+        a[0],
+        exited ? "KERNEL EXITED" : "still resident",
+        a[1],
+        b[1],
+        b[1] == a[1] ? "FROZEN" : "advancing",
+        b[2],
+        phase_name,
+        np,
+        fifo_pages);
+    if (b[1] == a[1] && !exited && b[2] == 3 && np == 0) {
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler]   => CONTRADICTION: drainer blocked on credits while host sees an EMPTY "
+            "fifo. bytes_sent/bytes_acked have desynchronized; the sender is waiting for credit the host "
+            "believes it already granted.");
+    }
+}
+
 void PerfDebugProfiler::stop() {
     if (stopped_.exchange(true)) {
         return;
     }
+
     // Tell each DRISC to quiesce, then wait for it to publish `done` -- which it does only after its
     // socket barrier, so every page is already on its way to the host when we stop reading.
     for (auto& ctx : devices_) {
