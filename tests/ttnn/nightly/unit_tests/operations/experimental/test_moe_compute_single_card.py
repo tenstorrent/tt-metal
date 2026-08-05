@@ -752,6 +752,14 @@ _MOE_50669_SWEEP_TOKENS = [1, 2, 3, 6, 16, 32, 48, 63, 64]
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_single_card_nontile_tokens_sweep(mesh_device, mesh_shape, cfg, tokens_per_device):
     """Regression for tt-metal#50669: correctness across non-tile-aligned token counts / configs."""
+    arch = mesh_device.arch()
+    worker_grid = mesh_device.compute_with_storage_grid_size()
+    if cfg["name"] == "c4_silu" and arch == ttnn.device.Arch.WORMHOLE_B0 and worker_grid.x <= 7 and worker_grid.y <= 8:
+        pytest.xfail(
+            "moe_compute core placement FATAL on WH 7x8 worker grid "
+            "(https://github.com/tenstorrent/tt-metal/issues/52246)"
+        )
+
     ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
