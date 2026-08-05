@@ -81,8 +81,8 @@
     {
       "branch": "silencer/unused-var-groupnorm-out-block-hw-actual-f45a844be7c0d8c8",
       "pattern": "-Wunused-but-set-variable: out_block_hw_actual dead-computed in groupnorm dataflow kernels (198x across 3 files in job sample)",
-      "status": "ci-dispatched-this-run",
-      "note": "PR #52108 open, mergeable_state blocked (codeowners pending), codeowners ping posted. Dispatched t3000-demo-tests (this run) against correct branch (with hash suffix) since prior dispatch attempt from PR-creation turn did not produce a run. Awaiting run completion + codeowner approval.",
+      "status": "resolved",
+      "note": "PR #52108 fully resolved: validation run 30981284542 (t3000-demo-tests) build-artifact job succeeded, build logs grepped for out_block_hw_actual (0 occurrences confirmed). Outcome commented and marked ready for review (2026-08-05).",
       "number": 52108
     },
     {
