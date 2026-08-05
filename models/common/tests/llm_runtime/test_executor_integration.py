@@ -18,6 +18,8 @@ from models.common.models.llama32_1b import executor as llama32_executor
 from models.common.models.llama32_1b import generator as llama32_generator
 from models.common.models.llama32_3b import executor as llama32_3b_executor
 from models.common.models.llama32_3b import generator as llama32_3b_generator
+from models.common.models.qwen2_7b import executor as qwen2_executor
+from models.common.models.qwen2_7b import generator as qwen2_generator
 
 EXECUTOR_BINDINGS = {
     "llama32_1b": SimpleNamespace(
@@ -35,6 +37,7 @@ EXECUTOR_BINDINGS = {
         make_recording_target=lambda **kwargs: _RecordingTarget(_make_llama32_model(), **kwargs),
         make_product=lambda mesh_device, max_batch_size: _make_llama32_product(mesh_device, max_batch_size),
         make_lane=lambda llm, config: _FakeLane(llm, config),
+        hf_model="meta-llama/Llama-3.2-1B-Instruct",
     ),
     "llama32_3b": SimpleNamespace(
         executor_module=llama32_3b_executor,
@@ -51,6 +54,24 @@ EXECUTOR_BINDINGS = {
         make_recording_target=lambda **kwargs: _RecordingTarget(_make_llama32_model(), **kwargs),
         make_product=lambda mesh_device, max_batch_size: _make_llama32_product(mesh_device, max_batch_size),
         make_lane=lambda llm, config: _FakeLane(llm, config),
+        hf_model="meta-llama/Llama-3.2-3B-Instruct",
+    ),
+    "qwen2_7b": SimpleNamespace(
+        executor_module=qwen2_executor,
+        executor_class=qwen2_executor.Qwen2Executor,
+        executor_config_class=qwen2_executor.Qwen2ExecutorConfig,
+        generator_module=qwen2_generator,
+        generator_class=qwen2_generator.Qwen2Generator,
+        generator_config_class=qwen2_generator.Qwen2GeneratorConfig,
+        build_generator_name="build_qwen2_7b_generator",
+        build_executor_name="build_qwen2_7b_executor",
+        make_model=lambda **kwargs: _make_qwen2_model(**kwargs),
+        make_runtime_config=lambda: _make_qwen2_runtime_config(),
+        make_executor_config=lambda mode="none": _make_qwen2_executor_config(mode),
+        make_recording_target=lambda **kwargs: _RecordingTarget(_make_qwen2_model(), **kwargs),
+        make_product=lambda mesh_device, max_batch_size: _make_qwen2_product(mesh_device, max_batch_size),
+        make_lane=lambda llm, config: _FakeLane(llm, config),
+        hf_model="Qwen/Qwen2-7B-Instruct",
     ),
 }
 
@@ -66,6 +87,14 @@ class _Mesh:
     @staticmethod
     def get_num_devices():
         return 1
+
+
+class _Mesh2:
+    shape = (1, 2)
+
+    @staticmethod
+    def get_num_devices():
+        return 2
 
 
 def _make_llama32_model(max_batch_size=4):
@@ -133,6 +162,60 @@ def _make_llama32_product(mesh_device, max_batch_size):
     model = _make_llama32_model(max_batch_size=max_batch_size)
     model.config.mesh_device = mesh_device
     return SimpleNamespace(model=model, runtime_config=_make_llama32_runtime_config())
+
+
+def _make_qwen2_model(max_batch_size=4):
+    model = _make_llama32_model(max_batch_size=max_batch_size)
+    model.config.mesh_device = _Mesh2()
+    model.config.num_devices = 2
+    model.num_devices = 2
+    attention = model.layers[0].attention.config
+    attention.n_kv_heads = 4
+    attention.head_dim = 128
+    return model
+
+
+def _make_qwen2_runtime_config():
+    runtime = _make_llama32_runtime_config()
+    runtime.trace_prefill_supported_seq_lens = (128, 1024)
+    runtime.can_enable_trace = lambda length, num_cached_tokens=0: length in (128, 1024)
+    return runtime
+
+
+def _make_qwen2_executor_config(mode="none"):
+    return qwen2_executor.Qwen2ExecutorConfig(
+        trace=TraceConfig(mode),
+        warmup=WarmupConfig(prefill_seq_lens=(128, 1024), prefill_batch_sizes=(1,)),
+        paged_kv_cache=PagedKVCacheConfig(block_size=32, max_num_blocks=132, dtype=ttnn.bfloat8_b),
+        device_sampling_enabled=False,
+    )
+
+
+def _make_qwen2_product(mesh_device, max_batch_size):
+    model = _make_qwen2_model(max_batch_size=max_batch_size)
+    model.config.mesh_device = mesh_device
+    return SimpleNamespace(model=model, runtime_config=_make_qwen2_runtime_config())
+
+
+def test_qwen2_binding_preserves_tp2_runtime_and_sampling_defaults():
+    model = _make_qwen2_model()
+    _, num_layers, kv_heads_per_device, head_dim = qwen2_generator._model_kv_metadata(model)
+    runtime = _make_qwen2_runtime_config()
+    config = qwen2_generator.Qwen2GeneratorConfig(
+        hf_model="Qwen/Qwen2-7B-Instruct",
+        hf_revision="test-revision",
+        mesh_device=model.config.mesh_device,
+        max_batch_size=32,
+        max_seq_len=4096,
+    )
+
+    assert model.config.mesh_device.shape == (1, 2)
+    assert (num_layers, kv_heads_per_device, head_dim) == (1, 2, 128)
+    assert runtime.trace_prefill_supported_seq_lens == (128, 1024)
+    assert runtime.max_prefill_chunk_size == 2048
+    assert runtime.max_prefill_batch_size == 32
+    assert config.hf_revision == "test-revision"
+    assert config.device_sampling_enabled is False
 
 
 @pytest.mark.parametrize("mode", ["none", "decode_only", "all"])
@@ -486,7 +569,7 @@ def test_initialize_vllm_model_threads_policy(binding, monkeypatch):
     )
 
     result = binding.generator_class.initialize_vllm_model(
-        SimpleNamespace(_name_or_path="meta-llama/Llama-3.2-1B-Instruct"),
+        SimpleNamespace(_name_or_path=binding.hf_model),
         mesh_device,
         8,
         4096,
@@ -500,7 +583,7 @@ def test_initialize_vllm_model_threads_policy(binding, monkeypatch):
     assert result is sentinel
     config = captured[0]
     assert isinstance(config, binding.generator_config_class)
-    assert config.hf_model == "meta-llama/Llama-3.2-1B-Instruct"
+    assert config.hf_model == binding.hf_model
     assert config.mesh_device is mesh_device
     assert config.max_batch_size == 8
     assert config.max_seq_len == 4096
@@ -560,7 +643,7 @@ def test_generator_constructs_data_parallel_lane_group(binding, monkeypatch):
 
     generator = getattr(binding.generator_module, binding.build_generator_name)(
         binding.generator_config_class(
-            hf_model="meta-llama/Llama-3.2-1B-Instruct",
+            hf_model=binding.hf_model,
             mesh_device=parent_mesh,
             max_batch_size=4,
             max_seq_len=4096,
