@@ -39,7 +39,7 @@ class ApplyCtx:
 
     @property
     def mesh(self) -> Mesh:
-        return self.graph.mesh
+        return self.graph.mesh_of(self.node)  # the mesh this node runs on (blocker 22)
 
     def sym(self, sid: str) -> TensorSymbol:
         return self.graph.symbol(sid)
@@ -132,7 +132,7 @@ class DemandCtx:
 
     @property
     def mesh(self) -> Mesh:
-        return self.graph.mesh
+        return self.graph.mesh_of(self.node)  # the mesh this node runs on (blocker 22)
 
     def sym(self, sid: str) -> TensorSymbol:
         return self.graph.symbol(sid)

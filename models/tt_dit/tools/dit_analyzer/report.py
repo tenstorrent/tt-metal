@@ -234,9 +234,8 @@ def render_states(report: Report, node_filter: Optional[str] = None) -> str:
             "  tensor %s %s %s   calls/forward=%d%s"
             % (xs.id, list(xs.shape), xs.dtype, node.calls, "  src=" + node.loc if node.loc else "")
         )
-        out.append(
-            "  layout %s  ->  %s" % (v.in_state.dist.describe(graph.mesh), v.out_state.dist.describe(graph.mesh))
-        )
+        vm = graph.mesh_of(node)  # the collective's own mesh (blocker 22)
+        out.append("  layout %s  ->  %s" % (v.in_state.dist.describe(vm), v.out_state.dist.describe(vm)))
         out.append("  %-6s %-34s %-34s %s" % ("device", "available before", "materialised after", "needed downstream"))
         for d in v.group:
             out.append(

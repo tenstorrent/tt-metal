@@ -97,11 +97,10 @@ def initial_state(graph: Graph) -> Dict[str, SymbolState]:
     for sid, placement in graph.placements.items():
         sym = graph.symbol(sid)
         dist = placement.dist.normalized(sym.ndim)
+        mesh = graph.mesh_of_symbol(sid)  # inputs may live on a non-primary mesh (blocker 22)
         regions = {}
-        for dev in graph.mesh.devices():
-            regions[dev] = (
-                placement.region if placement.region is not None else device_region(graph.mesh, sym, dist, dev)
-            )
+        for dev in mesh.devices():
+            regions[dev] = placement.region if placement.region is not None else device_region(mesh, sym, dist, dev)
         state[sid] = SymbolState(
             symbol=sid,
             dist=dist,

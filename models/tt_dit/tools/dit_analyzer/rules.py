@@ -215,7 +215,7 @@ def collect_views(graph: Graph, fwd: ForwardResult, bwd: DemandResult) -> List[C
         x, y = before[xid], after[yid]
         nd = graph.symbol(yid).ndim
         reduces = x.dist.partial[node.mesh_axis] and not y.dist.partial[node.mesh_axis]
-        for group in graph.mesh.groups(node.mesh_axis):
+        for group in graph.mesh_of(node).groups(node.mesh_axis):  # the node's mesh (blocker 22)
             needed = {d: bwd.of(yid, d, nd) for d in group}
             local = {d: x.regions[d] for d in group}
             # For a reduction the pre-state is an unreduced partial sum, so none of
@@ -254,13 +254,13 @@ def _base_proof(v: CollectiveView) -> Dict[str, Any]:
         "op": v.node.op,
         "fused_in": v.node.fused_in,
         "mesh_axis": v.node.mesh_axis,
-        "mesh_axis_name": v.graph.mesh.axis_names[v.node.mesh_axis],
+        "mesh_axis_name": v.graph.mesh_of(v.node).axis_names[v.node.mesh_axis],
         "participants": list(v.group),
         "tensor": v.in_sym.id,
         "shape": list(v.in_sym.shape),
         "dtype": v.in_sym.dtype,
-        "layout_before": v.in_state.dist.describe(v.graph.mesh),
-        "layout_after": v.out_state.dist.describe(v.graph.mesh),
+        "layout_before": v.in_state.dist.describe(v.graph.mesh_of(v.node)),
+        "layout_after": v.out_state.dist.describe(v.graph.mesh_of(v.node)),
         "value_id": v.in_state.value_id,
         "available_before": {str(d): v.local[d].describe(v.in_sym.shape) for d in v.group},
         "materialised_after": {str(d): v.out_state.regions[d].describe(v.out_sym.shape) for d in v.group},
@@ -515,7 +515,7 @@ def check_mergeable_collectives(
             proof["independent"] = "%s does not consume %s" % (b.node.display, a.node.outputs[0])
             proof["conclusion"] = "two independent %s ops on %s could be issued as one" % (
                 op,
-                graph.mesh.axis_names[mesh_axis],
+                graph.mesh_of(b.node).axis_names[mesh_axis],
             )
             hints.append(
                 (
@@ -528,7 +528,7 @@ def check_mergeable_collectives(
                         nodes=[a.node.id, b.node.id],
                         reason=[
                             "Both are %s over %s across devices %s, with no dependency between them."
-                            % (op, graph.mesh.axis_names[mesh_axis], list(group)),
+                            % (op, graph.mesh_of(b.node).axis_names[mesh_axis], list(group)),
                             "Merging saves fixed per-collective cost (semaphores, barrier, ring warm-up), not bytes.",
                         ],
                         suggestion="Concatenate the two payloads into one %s, or fuse the consumers so one collective feeds both."

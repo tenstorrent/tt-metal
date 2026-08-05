@@ -312,6 +312,46 @@ def test_trace_to_graph_lifts_local_shapes_and_flags_assumptions():
     assert graph2.meta["assumptions"]
 
 
+def test_multi_mesh_resolves_per_node_and_round_trips():
+    # A whole-pipeline graph spans submeshes (blocker 22): a node/symbol names a
+    # non-primary mesh, and the analysis resolves each node's mesh (here a 2-device
+    # VAE mesh vs the 8-device primary) rather than assuming one.
+    from dit_analyzer.ir import Dist, Graph, Mesh, Node, Placement, TensorSymbol
+
+    primary = Mesh(shape=(2, 4), axis_names=("sp", "tp"))
+    vae = Mesh(shape=(1, 2), axis_names=("sp", "tp"))
+    g = Graph(name="pipe", mesh=primary, meshes={"vae": vae})
+    g.symbols["x0"] = TensorSymbol(id="x0", shape=(1, 512, 1024), value_id="x0")
+    g.placements["x0"] = Placement(dist=Dist.make(primary, {1: 2}))
+    g.symbols["y0"] = TensorSymbol(id="y0", shape=(1, 512, 1024), value_id="x0")
+    g.symbols["y0h"] = TensorSymbol(id="y0h", shape=(1, 512, 1024), value_id="x0")  # host readback
+    g.symbols["x1"] = TensorSymbol(id="x1", shape=(1, 256, 512), value_id="x1", mesh="vae")
+    g.placements["x1"] = Placement(dist=Dist.make(vae, {1: 2}))
+    g.symbols["y1"] = TensorSymbol(id="y1", shape=(1, 256, 512), value_id="x1", mesh="vae")
+    g.nodes = [
+        Node(id="ag0", op="all_gather", inputs=["x0"], outputs=["y0"], mesh_axis=1, attrs={"dim": 2}),
+        Node(id="rb", op="host_read", inputs=["y0"], outputs=["y0h"], attrs={"boundary": True, "devices": [0]}),
+        Node(id="ag1", op="all_gather", inputs=["x1"], outputs=["y1"], mesh_axis=1, attrs={"dim": 2}, mesh="vae"),
+    ]
+    g.outputs = ["y1"]
+
+    # each node/symbol resolves to its own mesh (8 devices vs 2)
+    assert g.mesh_of_symbol("x0").num_devices == 8 and g.mesh_of_symbol("x1").num_devices == 2
+    assert g.mesh_of(g.node("ag1")).num_devices == 2 and g.mesh_of(g.node("ag0")).num_devices == 8
+    assert len(g.segments()) == 2  # readback splits primary segment from the VAE segment
+
+    # the analysis runs each node on its own mesh: the VAE gather's state is over 2 devices
+    report = analyze_graph(g)
+    ag1_view = next((v for v in report.views if v.node.id == "ag1"), None)
+    assert ag1_view is not None and set(ag1_view.out_state.regions) == {0, 1}
+
+    # meshes and per-node/symbol mesh ids survive serialization
+    g2 = Graph.from_json(g.to_json())
+    assert "vae" in g2.meshes and tuple(g2.meshes["vae"].shape) == (1, 2)
+    assert g2.symbols["x1"].mesh == "vae" and g2.node("ag1").mesh == "vae"
+    assert g2.symbols["x0"].mesh is None  # primary-mesh symbols stay unannotated
+
+
 def test_readback_boundary_splits_graph_into_segments():
     # a readback (host_read marked boundary) ends a device segment, so a whole-
     # pipeline graph is a sequence of stages (phase 10, blocker 43). A block with

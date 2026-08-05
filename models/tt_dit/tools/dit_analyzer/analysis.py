@@ -53,7 +53,7 @@ def run_backward(graph: Graph, forward: ForwardResult) -> DemandResult:
     for sid in graph.outputs:
         st = forward.final.get(sid)
         sym = graph.symbol(sid)
-        for dev in graph.mesh.devices():
+        for dev in graph.mesh_of_symbol(sid).devices():
             add(sid, dev, st.regions[dev] if st else sym.full_region())
 
     for node in reversed(graph.nodes):

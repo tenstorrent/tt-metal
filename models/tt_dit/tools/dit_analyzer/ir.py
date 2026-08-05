@@ -190,6 +190,7 @@ class TensorSymbol:
     kind: str = ACT
     value_id: str = ""
     note: str = ""
+    mesh: Optional[str] = None  # which mesh this symbol lives on (None = the graph's primary)
 
     @property
     def ndim(self) -> int:
@@ -219,6 +220,7 @@ class Node:
     label: Optional[str] = None  # human name, e.g. "attn.to_qkv"
     calls: int = 1  # how many times this node runs per forward (e.g. 38 blocks)
     fused_in: Optional[str] = None  # set when this node models one stage of a fused ttnn op
+    mesh: Optional[str] = None  # which mesh this node runs on (None = the graph's primary)
 
     @property
     def display(self) -> str:
@@ -271,6 +273,21 @@ class Graph:
     #   "captured"     -- lifted from a real device trace (ground-truth shapes).
     #   "unknown"      -- provenance not recorded; treat as unverified.
     provenance: str = "unknown"
+    # Additional meshes beyond the primary ``mesh``, by id (roadmap blocker 22). A
+    # whole-pipeline graph spans submeshes -- CFG / encoder / DiT / VAE on separate
+    # ``MeshDevice``s -- so a node or symbol can name a non-primary mesh; a single
+    # block leaves this empty and everything is on ``mesh``.
+    meshes: Dict[str, "Mesh"] = field(default_factory=dict)
+
+    def mesh_for(self, mesh_id: Optional[str]) -> Mesh:
+        """Resolve a mesh id to a Mesh; ``None`` (or unknown) is the primary mesh."""
+        return self.meshes.get(mesh_id, self.mesh) if mesh_id else self.mesh
+
+    def mesh_of(self, node: Node) -> Mesh:
+        return self.mesh_for(node.mesh)
+
+    def mesh_of_symbol(self, sid: str) -> Mesh:
+        return self.mesh_for(self.symbols[sid].mesh)
 
     def symbol(self, sid: str) -> TensorSymbol:
         return self.symbols[sid]
@@ -318,12 +335,8 @@ class Graph:
             "steps": self.steps,
             "meta": self.meta,
             "provenance": self.provenance,
-            "mesh": {
-                "shape": list(self.mesh.shape),
-                "axis_names": list(self.mesh.axis_names),
-                "arch": self.mesh.arch,
-                "topology": self.mesh.topology,
-            },
+            "mesh": _mesh_to_dict(self.mesh),
+            "meshes": {mid: _mesh_to_dict(m) for mid, m in self.meshes.items()},
             "symbols": [
                 {
                     "id": s.id,
@@ -332,6 +345,7 @@ class Graph:
                     "kind": s.kind,
                     "value_id": s.value_id,
                     "note": s.note,
+                    **({"mesh": s.mesh} if s.mesh else {}),
                 }
                 for s in self.symbols.values()
             ],
@@ -352,6 +366,7 @@ class Graph:
                     "label": n.label,
                     "calls": n.calls,
                     "fused_in": n.fused_in,
+                    **({"mesh": n.mesh} if n.mesh else {}),
                 }
                 for n in self.nodes
             ],
@@ -363,19 +378,14 @@ class Graph:
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "Graph":
-        m = d["mesh"]
-        mesh = Mesh(
-            shape=tuple(m["shape"]),
-            axis_names=tuple(m.get("axis_names", ("axis0", "axis1"))),
-            arch=m.get("arch", "wormhole_b0"),
-            topology=m.get("topology", "Linear"),
-        )
+        mesh = _mesh_from_dict(d["mesh"])
         g = Graph(
             name=d.get("name", "graph"),
             mesh=mesh,
             steps=d.get("steps", 1),
             meta=d.get("meta", {}),
             provenance=d.get("provenance", "unknown"),
+            meshes={mid: _mesh_from_dict(md) for mid, md in d.get("meshes", {}).items()},
         )
         for s in d["symbols"]:
             g.symbols[s["id"]] = TensorSymbol(
@@ -385,6 +395,7 @@ class Graph:
                 kind=s.get("kind", ACT),
                 value_id=s.get("value_id") or s["id"],
                 note=s.get("note", ""),
+                mesh=s.get("mesh"),
             )
         for sid, p in d.get("placements", {}).items():
             dist = Dist(
@@ -406,6 +417,7 @@ class Graph:
                     label=n.get("label"),
                     calls=int(n.get("calls", 1)),
                     fused_in=n.get("fused_in"),
+                    mesh=n.get("mesh"),
                 )
             )
         g.outputs = list(d.get("outputs", []))
@@ -414,6 +426,19 @@ class Graph:
     @staticmethod
     def from_json(text: str) -> "Graph":
         return Graph.from_dict(json.loads(text))
+
+
+def _mesh_to_dict(m: Mesh) -> Dict[str, Any]:
+    return {"shape": list(m.shape), "axis_names": list(m.axis_names), "arch": m.arch, "topology": m.topology}
+
+
+def _mesh_from_dict(m: Dict[str, Any]) -> Mesh:
+    return Mesh(
+        shape=tuple(m["shape"]),
+        axis_names=tuple(m.get("axis_names", ("axis0", "axis1"))),
+        arch=m.get("arch", "wormhole_b0"),
+        topology=m.get("topology", "Linear"),
+    )
 
 
 def derive_value_id(op: str, input_value_ids: Sequence[str], attrs: Optional[Dict[str, Any]] = None) -> str:
