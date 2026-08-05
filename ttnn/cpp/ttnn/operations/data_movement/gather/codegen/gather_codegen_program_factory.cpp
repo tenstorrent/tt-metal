@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -44,12 +45,21 @@ uint64_t gather_usable_l1(const Tensor& input_tensor) {
            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 }
 
-CoreRangeSet gather_core_grid(IDevice* device, const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (sub_core_grids.has_value()) {
-        return sub_core_grids.value();
+// builder_utils.py::rect_core_range_set — packs `nc` cores into at most two CoreRanges by treating
+// x as the row index and grid.y as the row length, so dispatch carries 1-2 range entries rather
+// than one per core.
+CoreRangeSet gather_rect_core_range_set(uint32_t nc, const CoreCoord& grid) {
+    const uint32_t cols = static_cast<uint32_t>(grid.y);
+    const uint32_t full_rows = nc / cols;
+    const uint32_t remaining = nc % cols;
+    std::vector<CoreRange> ranges;
+    if (full_rows > 0) {
+        ranges.emplace_back(CoreCoord(0, 0), CoreCoord(full_rows - 1, cols - 1));
     }
-    const auto grid_size = device->compute_with_storage_grid_size();
-    return num_cores_to_corerangeset(grid_size.x * grid_size.y, grid_size, /*row_wise=*/true);
+    if (remaining > 0) {
+        ranges.emplace_back(CoreCoord(full_rows, 0), CoreCoord(full_rows, remaining - 1));
+    }
+    return CoreRangeSet(std::move(ranges));
 }
 
 struct CoreSplit {
@@ -59,15 +69,54 @@ struct CoreSplit {
     CoreRangeSet group2;
     uint32_t work_per_core_1;
     uint32_t work_per_core_2;
+    CoreCoord grid;
 };
 
-// split_cores(device, total_work, core_ranges=sub_core_grids)[0] equivalent: a rectangular,
-// row-wise work split over either the caller's sub_core_grids or the full compute grid.
+// builder_utils.py::split_cores. An explicit sub_core_grids is authoritative and goes straight to
+// the splitter; otherwise the candidate set is exactly min(total_work, device cores) cores, so the
+// splitter always sees units >= candidate cores and hands back the candidate set verbatim.
+//
+// row_wise=false is what split_cores' own two-argument ttnn.split_work_to_cores() call resolves to,
+// and the resulting column-major group order is load-bearing rather than cosmetic: it makes
+// gather_assigned_cores()' walk visit the extra-work group first, and the row-buffered/streaming
+// kernels stride by num_cores from their ordinal, so an ordinal at or above the extra-work core
+// count must never receive a second work unit.
 CoreSplit split_gather_work(IDevice* device, const std::optional<CoreRangeSet>& sub_core_grids, uint32_t total_work) {
-    const auto core_grid = gather_core_grid(device, sub_core_grids);
+    const auto grid = device->compute_with_storage_grid_size();
+    const uint32_t device_cores = static_cast<uint32_t>(grid.x * grid.y);
+    const CoreRangeSet candidate = sub_core_grids.has_value()
+                                       ? sub_core_grids.value()
+                                       : gather_rect_core_range_set(std::min(total_work, device_cores), grid);
     const auto [num_cores, core_range, group1, group2, wpc1, wpc2] =
-        tt::tt_metal::split_work_to_cores(core_grid, total_work, /*row_wise=*/true);
-    return CoreSplit{num_cores, core_range, group1, group2, wpc1, wpc2};
+        tt::tt_metal::split_work_to_cores(candidate, total_work, /*row_wise=*/false);
+    return CoreSplit{num_cores, core_range, group1, group2, wpc1, wpc2, grid};
+}
+
+// builder_utils.py::iter_cores + factory/emit.py::emit_per_core_rt — walk the whole device grid
+// x-outer/y-inner, yielding each assigned core with its clamped work count. Both the per-core
+// ordinal (row-buffered, streaming) and the contiguous [start, n) offsets (tiled) are numbered in
+// exactly this order.
+std::vector<std::pair<CoreCoord, uint32_t>> gather_assigned_cores(const CoreSplit& split, uint32_t total_work) {
+    std::vector<std::pair<CoreCoord, uint32_t>> assigned;
+    assigned.reserve(split.num_cores);
+    uint32_t emitted = 0;
+    for (uint32_t x = 0; x < static_cast<uint32_t>(split.grid.x); ++x) {
+        for (uint32_t y = 0; y < static_cast<uint32_t>(split.grid.y); ++y) {
+            const CoreCoord core(x, y);
+            uint32_t work = 0;
+            if (split.group1.contains(core)) {
+                work = split.work_per_core_1;
+            } else if (split.group2.contains(core)) {
+                work = split.work_per_core_2;
+            } else {
+                continue;
+            }
+            work = std::min(work, total_work - emitted);
+            emitted += work;
+            assigned.emplace_back(core, work);
+        }
+    }
+    return assigned;
 }
 
 CBDescriptor make_tile_cb(uint32_t cb_id, const Tensor& tensor, uint32_t depth, const CoreRangeSet& core_range) {
@@ -150,8 +199,15 @@ uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& 
     // Output dtype always equals input dtype, same as gather_interleaved_fits_l1's reasoning.
     const uint64_t fixed_pages = index_page + input_page;
     const uint64_t affordable = usable_l1 > fixed_pages ? (usable_l1 - fixed_pages) / input_page : 0;
-    // Two keeps the reader's DRAM reads overlapping its scan when L1 is too tight for more; the row
-    // length is the ceiling because a deeper block would just hold pages no index can select.
+    // Two keeps the reader's DRAM reads overlapping its scan when L1 is too tight for more, and is
+    // the floor gather_min_plan_fits_l1() gates against.
+    //
+    // Deepest-affordable, capped at the row, is build_gather_streaming_factory's own formula and is
+    // transliterated as-is. A depth that does not divide Wt_input leaves the writer padding the tail
+    // block by re-reading the row's last page, which an even spread over the same block count would
+    // avoid at the same scan count -- but that is a change to the reference PLAN, not a translation
+    // of it, and the port is measured for parity against the plan the reference builds. It belongs
+    // in build_gather_streaming_factory first.
     return static_cast<uint32_t>(std::min<uint64_t>(std::max<uint64_t>(affordable, 2), Wt_input));
 }
 
@@ -212,24 +268,13 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_d
     writer_desc.config = WriterConfigDescriptor{};
 
     // Per-core RT follows the ORDINAL convention (spec.py's `_ordinal_rt`): a sequential counter over
-    // assigned cores in iter_cores order (group1 rows, then group2 rows), NOT the per-core work
-    // offset. Kernel ABI: reader [index_addr, n, tile_w, tile_h, core_id], writer
-    // [in_addr, out_addr, n, core_id].
+    // assigned cores in iter_cores order, NOT the per-core work offset. Kernel ABI:
+    // reader [index_addr, n, tile_w, tile_h, core_id], writer [in_addr, out_addr, n, core_id].
     uint32_t id = 0;
-    for (const auto& [group, n] :
-         {std::make_pair(split.group1, split.work_per_core_1), std::make_pair(split.group2, split.work_per_core_2)}) {
-        for (const auto& range : group.ranges()) {
-            for (const auto& core : range) {
-                if (n > 0) {
-                    reader_desc.emplace_runtime_args(core, {index_t.buffer(), n, tile_width, tile_height, id});
-                    writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), n, id});
-                } else {
-                    reader_desc.emplace_runtime_args(core, {0u, 0u, tile_width, tile_height, id});
-                    writer_desc.emplace_runtime_args(core, {0u, 0u, 0u, id});
-                }
-                id++;
-            }
-        }
+    for (const auto& [core, n] : gather_assigned_cores(split, geometry.Ht)) {
+        reader_desc.emplace_runtime_args(core, {index_t.buffer(), n, tile_width, tile_height, id});
+        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), n, id});
+        id++;
     }
 
     desc.kernels.push_back(std::move(reader_desc));
@@ -300,20 +345,10 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
     // default `[n, start]` work-offset convention, unlike Interleaved/Streaming's core ordinal).
     // Kernel ABI: reader [index_addr, start, n, tile_w, tile_h], writer [in_addr, out_addr, start, n].
     uint32_t start = 0;
-    for (const auto& [group, n] :
-         {std::make_pair(split.group1, split.work_per_core_1), std::make_pair(split.group2, split.work_per_core_2)}) {
-        for (const auto& range : group.ranges()) {
-            for (const auto& core : range) {
-                if (n > 0) {
-                    reader_desc.emplace_runtime_args(core, {index_t.buffer(), start, n, tile_width, tile_height});
-                    writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), start, n});
-                } else {
-                    reader_desc.emplace_runtime_args(core, {0u, start, 0u, tile_width, tile_height});
-                    writer_desc.emplace_runtime_args(core, {0u, 0u, start, 0u});
-                }
-                start += n;
-            }
-        }
+    for (const auto& [core, n] : gather_assigned_cores(split, total_work)) {
+        reader_desc.emplace_runtime_args(core, {index_t.buffer(), start, n, tile_width, tile_height});
+        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), start, n});
+        start += n;
     }
 
     desc.kernels.push_back(std::move(reader_desc));
@@ -343,8 +378,8 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
     ProgramDescriptor desc;
     // The input CB holds one chunk_tiles-deep block of the row rather than the whole row, which is
     // what makes this the fallback when gather_interleaved_fits_l1() rejects the row-buffered plan.
-    // Both kernels walk ceil(Wt_input / chunk_tiles) blocks of exactly chunk_tiles pages (the tail
-    // padded), so the CB is emptied every block and never wraps mid-block.
+    // Both kernels walk ceil(Wt_input / chunk_tiles) blocks of exactly chunk_tiles pages, so the CB
+    // is emptied every block and never wraps mid-block.
     desc.cbs.push_back(make_tile_cb(kCbInput, in_t, chunk_tiles, split.core_range));
     desc.cbs.push_back(make_tile_cb(kCbIndex, index_t, 1, split.core_range));
     desc.cbs.push_back(make_tile_cb(kCbOutput, output_tensor, 1, split.core_range));
@@ -386,20 +421,10 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
     // Ordinal RT convention, same as Interleaved (work is split by Wt_index; each core streams its
     // strided columns across all Ht rows -- see gather_reader_streaming.cpp).
     uint32_t id = 0;
-    for (const auto& [group, n] :
-         {std::make_pair(split.group1, split.work_per_core_1), std::make_pair(split.group2, split.work_per_core_2)}) {
-        for (const auto& range : group.ranges()) {
-            for (const auto& core : range) {
-                if (n > 0) {
-                    reader_desc.emplace_runtime_args(core, {index_t.buffer(), n, tile_width, tile_height, id});
-                    writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), n, id});
-                } else {
-                    reader_desc.emplace_runtime_args(core, {0u, 0u, tile_width, tile_height, id});
-                    writer_desc.emplace_runtime_args(core, {0u, 0u, 0u, id});
-                }
-                id++;
-            }
-        }
+    for (const auto& [core, n] : gather_assigned_cores(split, geometry.Wt_index)) {
+        reader_desc.emplace_runtime_args(core, {index_t.buffer(), n, tile_width, tile_height, id});
+        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), n, id});
+        id++;
     }
 
     desc.kernels.push_back(std::move(reader_desc));

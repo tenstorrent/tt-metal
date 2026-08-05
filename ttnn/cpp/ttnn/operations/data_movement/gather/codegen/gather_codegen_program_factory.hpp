@@ -42,8 +42,8 @@ bool gather_min_plan_fits_l1(const Tensor& input_tensor, const Tensor& input_ind
 // Depth of the streaming factory's input CB, in input tile pages. The streaming reader rescans the
 // whole index tile once per resident block of input tiles, so its scalar cost per output tile is
 // ceil(Wt_input / depth) * TILE_HW: a block deep enough to hold the entire row costs the single scan
-// the row-buffered reader pays. Fills whatever L1 the fixed index and output pages leave, capped at
-// the row length.
+// the row-buffered reader pays. Sized to the deepest block the L1 left over by the fixed index and
+// output pages affords, capped at the row -- build_gather_streaming_factory's own formula.
 uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& input_index_tensor, uint32_t Wt_input);
 
 // Row-buffered: full Wt_input row resident in L1 (kernels/gather_reader.cpp, gather_writer.cpp).
