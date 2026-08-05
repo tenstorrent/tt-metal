@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Sequence
 
 import torch
@@ -21,6 +22,85 @@ from ..utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
 
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
 _ZEROS_CACHE: dict = {}
+
+CONV_SPLIT_MODES = ("off", "weight", "full")
+
+
+def conv_split_mode() -> str:
+    """Operand-splitting mode for the fp32 conv3d paths, from ``MINIMAX_H3_AUDIO_CONV_SPLIT``.
+
+    An fp32 conv3d on this hardware is fp32 *storage* and fp32 *accumulate* with a multiply that keeps
+    only ~11 significand bits (the FPU takes ~5 mantissa bits per fidelity pass, and HiFi4's 4 passes is
+    the ceiling). The resulting relative error is **flat in the reduction depth** -- 1.162e-03 at K=32
+    and 1.169e-03 at K=14336 -- so it is the operands being truncated, not the sum drifting, and
+    ``fp32_dest_acc_en`` cannot help.
+
+    Because the multiply is the bottleneck and conv is linear in both arguments, splitting an operand into
+    ``hi = bf16(v)`` plus the exact residual ``lo = v - hi`` lets a second conv carry the mantissa bits the
+    first one dropped. ``hi`` has 8 significand bits so the multiplier represents it exactly, and
+    ``hi + lo`` reconstructs the input bit-for-bit.
+
+    * ``off`` (default) -- one conv, today's behaviour.
+    * ``weight`` -- 2 convs, splitting the weight only. Needs no activation ops at all, just a second
+      prepared weight. Measured 1.5x on ``conv_pre`` at production blocking.
+    * ``full`` -- 3 convs, splitting both. ``lo*lo`` is genuinely negligible (a 4-term form measures
+      identically), so it is omitted. Measured 1.9x.
+
+    See STATE.md amendment 111 for the measurements and 112 for the end-to-end result.
+    """
+    mode = os.environ.get("MINIMAX_H3_AUDIO_CONV_SPLIT", "off").lower()
+    if mode not in CONV_SPLIT_MODES:
+        raise ValueError(f"MINIMAX_H3_AUDIO_CONV_SPLIT must be one of {CONV_SPLIT_MODES}, got {mode!r}")
+    return mode
+
+
+def _split_operand(x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """``(hi, lo)`` with ``hi = bf16(x)`` and ``lo = x - hi``, exactly, staying in the input's layout.
+
+    Verified on ROW_MAJOR fp32: the typecast round trip reproduces torch's ``.bfloat16()`` bit-for-bit and
+    ``hi + lo`` reconstructs ``x`` exactly, so this costs two elementwise ops and no tilize -- which
+    matters, since am. 103 profiled the audio decode stage at ~70 % layout ops.
+    """
+    hi = ttnn.typecast(ttnn.typecast(x, ttnn.bfloat16), ttnn.float32)
+    return hi, ttnn.subtract(x, hi)
+
+
+def conv3d_maybe_split(
+    *,
+    split_mode: str,
+    input_tensor: ttnn.Tensor,
+    weight_tensor: ttnn.Tensor,
+    weight_lo_tensor: ttnn.Tensor | None,
+    bias_tensor: ttnn.Tensor | None,
+    **conv_kwargs,
+) -> ttnn.Tensor:
+    """``ttnn.experimental.conv3d``, optionally summed over operand-split terms. See `conv_split_mode`.
+
+    ``bias`` is applied to exactly one term, since it is not a factor of the product being split.
+    """
+    if split_mode == "off":
+        return ttnn.experimental.conv3d(
+            input_tensor=input_tensor, weight_tensor=weight_tensor, bias_tensor=bias_tensor, **conv_kwargs
+        )
+    assert weight_lo_tensor is not None, f"split_mode={split_mode!r} needs a prepared weight residual"
+
+    if split_mode == "weight":
+        x_hi, terms = input_tensor, None
+    else:  # full — the activation is split too, so the two w_hi terms take hi and lo separately
+        x_hi, x_lo = _split_operand(input_tensor)
+        terms = ((x_lo, weight_tensor, None),)
+
+    out = ttnn.experimental.conv3d(
+        input_tensor=x_hi, weight_tensor=weight_tensor, bias_tensor=bias_tensor, **conv_kwargs
+    )
+    for extra_input, extra_weight, extra_bias in ((x_hi, weight_lo_tensor, None),) + (terms or ()):
+        out = ttnn.add(
+            out,
+            ttnn.experimental.conv3d(
+                input_tensor=extra_input, weight_tensor=extra_weight, bias_tensor=extra_bias, **conv_kwargs
+            ),
+        )
+    return out
 
 
 def channel_axis(parallel_config) -> int | None:
@@ -92,8 +172,15 @@ def prepare_conv3d_weight_state(
     out_channels: int,
     unpadded_in: int | None = None,
     in_channels: int | None = None,
+    split: bool = False,
 ) -> None:
-    """Zero-pad the 5D conv weight/bias to aligned size, prepare, and write to ``state``."""
+    """Zero-pad the 5D conv weight/bias to aligned size, prepare, and write to ``state``.
+
+    With ``split``, also writes ``state["weight_lo"]``: the weight is decomposed into ``hi = bf16(w)`` and
+    the exact residual ``lo = w - hi``, each prepared separately, so `conv3d_maybe_split` can recover the
+    mantissa bits the ~11-bit multiplier drops. The padding above is applied once, before the split, so
+    the bias is never padded twice.
+    """
     if out_channels != unpadded_out:
         pad_co = out_channels - unpadded_out
         w_5d = torch.nn.functional.pad(w_5d, (0, 0, 0, 0, 0, 0, 0, 0, 0, pad_co))
@@ -101,11 +188,20 @@ def prepare_conv3d_weight_state(
             state["bias"] = torch.nn.functional.pad(state["bias"], (0, pad_co))
     if in_channels is not None and in_channels != unpadded_in:
         w_5d = torch.nn.functional.pad(w_5d, (0, 0, 0, 0, 0, 0, 0, in_channels - unpadded_in))
-    weight_tt = ttnn.from_torch(w_5d, dtype=dtype, pad_value=0)
-    prepared = ttnn.experimental.prepare_conv3d_weights(
-        weight_tensor=weight_tt, C_in_block=conv_config.C_in_block, device=mesh_device
-    )
-    state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+
+    def _prepare(w: torch.Tensor) -> torch.Tensor:
+        weight_tt = ttnn.from_torch(w, dtype=dtype, pad_value=0)
+        prepared = ttnn.experimental.prepare_conv3d_weights(
+            weight_tensor=weight_tt, C_in_block=conv_config.C_in_block, device=mesh_device
+        )
+        return ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+
+    if split:
+        w_hi = w_5d.float().bfloat16().float()
+        state["weight"] = _prepare(w_hi)
+        state["weight_lo"] = _prepare(w_5d.float() - w_hi)
+    else:
+        state["weight"] = _prepare(w_5d)
 
 
 def _t_neighbor_pad(
@@ -541,8 +637,16 @@ class Conv2dViaConv3d(Module):
             packer_l1_acc=False,
         )
 
+        # See `conv_split_mode`; splitting only helps an fp32 datapath.
+        self.split_mode = conv_split_mode() if dtype == ttnn.float32 else "off"
+
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
         self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.weight_lo = (
+            Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+            if self.split_mode != "off"
+            else None
+        )
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -563,6 +667,7 @@ class Conv2dViaConv3d(Module):
                 dtype=self.dtype,
                 unpadded_out=self.unpadded_out_channels,
                 out_channels=self.out_channels,
+                split=self.split_mode != "off",
             )
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
@@ -589,9 +694,11 @@ class Conv2dViaConv3d(Module):
 
         x_5d = ttnn.reshape(x_BHWC, (x_BHWC.shape[0], 1, x_BHWC.shape[1], x_BHWC.shape[2], x_BHWC.shape[3]))
 
-        out_5d = ttnn.experimental.conv3d(
+        out_5d = conv3d_maybe_split(
+            split_mode=self.split_mode,
             input_tensor=x_5d,
             weight_tensor=self.weight.data,
+            weight_lo_tensor=self.weight_lo.data if self.weight_lo is not None else None,
             bias_tensor=self.bias.data,
             config=self.conv_config,
             output_channels=self.out_channels,
@@ -720,6 +827,10 @@ class Conv1dViaConv3d(Module):
             packer_l1_acc=True,
         )
 
+        # Resolved once at construction, so a test setting the env var mid-process cannot desync the
+        # allocated residual from what forward() expects. Splitting only helps an fp32 datapath.
+        self.split_mode = conv_split_mode() if dtype == ttnn.float32 else "off"
+
         self._alloc_weight_bias()
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -742,6 +853,7 @@ class Conv1dViaConv3d(Module):
                 out_channels=self.out_channels,
                 unpadded_in=self.unpadded_in_channels,
                 in_channels=self.in_channels,
+                split=self.split_mode != "off",
             )
         if "bias" in state and self.bias is not None:
             state["bias"] = state["bias"].reshape(1, -1)
@@ -760,6 +872,18 @@ class Conv1dViaConv3d(Module):
             dtype=self.dtype,
             mesh_axes=mesh_axes,
         )
+        # The weight residual is laid out exactly like the weight, so it shards the same way.
+        self.weight_lo = (
+            Parameter(
+                total_shape=[d, self.out_channels],
+                device=self.mesh_device,
+                pad_value=0,
+                dtype=self.dtype,
+                mesh_axes=mesh_axes,
+            )
+            if self.split_mode != "off"
+            else None
+        )
         self.bias = (
             Parameter(
                 total_shape=[1, self.out_channels],
@@ -773,11 +897,12 @@ class Conv1dViaConv3d(Module):
         )
 
     def _conv_args(self):
-        """``(weight, bias, conv_config, output_channels)``; column-parallel returns the per-chip C_out shard."""
+        """``(weight, weight_lo, bias, conv_config, output_channels)``; column-parallel returns the per-chip C_out shard."""
         bias = self.bias.data if self.bias is not None else None
+        weight_lo = self.weight_lo.data if self.weight_lo is not None else None
         if self._is_col_parallel():
-            return self.weight.data, bias, self.conv_config_shard, self.out_channels_shard
-        return self.weight.data, bias, self.conv_config, self.out_channels
+            return self.weight.data, weight_lo, bias, self.conv_config_shard, self.out_channels_shard
+        return self.weight.data, weight_lo, bias, self.conv_config, self.out_channels
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         """``x_BTC``: ``(B, T, C)`` ROW_MAJOR → ``(B, T_out, C_out)`` (T sharded uses a halo exchange)."""
@@ -785,7 +910,7 @@ class Conv1dViaConv3d(Module):
 
         # Channel-TP: gather C_in to full, then column-parallel emits this chip's C_out slice.
         x_BTC = gather_channel_to_full(self.ccl_manager, x_BTC, self.parallel_config)
-        weight, bias, conv_config, out_channels = self._conv_args()
+        weight, weight_lo, bias, conv_config, out_channels = self._conv_args()
 
         if self.parallel_config is not None and self.parallel_config.factor > 1:
             x_BTC = _t_neighbor_pad(
@@ -808,9 +933,11 @@ class Conv1dViaConv3d(Module):
 
         x_5d = ttnn.reshape(x_BTC, (x_BTC.shape[0], x_BTC.shape[1], 1, 1, x_BTC.shape[2]))
 
-        out_5d = ttnn.experimental.conv3d(
+        out_5d = conv3d_maybe_split(
+            split_mode=self.split_mode,
             input_tensor=x_5d,
             weight_tensor=weight,
+            weight_lo_tensor=weight_lo,
             bias_tensor=bias,
             config=conv_config,
             output_channels=out_channels,
