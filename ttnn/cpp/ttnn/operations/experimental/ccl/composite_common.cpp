@@ -355,16 +355,17 @@ ttnn::Tensor composite_all_gather(
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
-    auto input_shape = input_tensor.logical_shape();
-
-    int32_t rank = input_tensor.logical_shape().rank();
-    int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+    auto input_shape = input_tensor.logical_shape();  // copied, not referenced (input_tensor is reassigned below)
+    const int32_t rank = static_cast<int32_t>(input_shape.rank());
+    const int32_t gather_dim = static_cast<int32_t>(input_shape.get_normalized_index(dim));
 
     // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
-    // and after re-tilizing
+    // and after re-tilizing.
+    // rank-1 has no -2 axis, and ShapeBase[-2] returns a phantom 1 rather than throwing.
     ttnn::DataType input_dtype = input_tensor.dtype();
-    bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
-                                         (input_shape[-2] % tile_height != 0 || input_shape[-1] % tile_width != 0);
+    bool is_tiled_and_not_tile_aligned =
+        input_tensor.layout() == ttnn::Layout::TILE &&
+        ((rank >= 2 && input_shape[-2] % tile_height != 0) || input_shape[-1] % tile_width != 0);
     bool convert_to_bfloat16_for_composite = is_tiled_and_not_tile_aligned && input_dtype == ttnn::DataType::BFLOAT8_B;
 
     auto input_memory_config = input_tensor.memory_config();
