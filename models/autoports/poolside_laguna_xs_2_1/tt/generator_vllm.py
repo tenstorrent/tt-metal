@@ -145,6 +145,8 @@ class LagunaForCausalLM:
         self._spec_hist: list = []  # running token history for the single served request (ngram source)
         self._spec = None  # lazily-built SpeculativeDecoder (served mode); needs kv_cache/page_table per call
         self._spec_tok = None  # persistent [1,1,1,1] device token buffer the plugin reads back
+        self._spec_next_pos = None  # position we expect on the next decode call; discontinuity = new request
+        self._spec_prefill_seq: list = []  # prompt tokens stashed at prefill (greedy gives no history via kwargs)
         # Diagnostic sink: MPI-worker stdout isn't captured in the readiness log, so spec/probe verdicts go
         # to a file readable regardless of process. Only touched when spec mode is set (no normal-run noise).
         self._spec_log_path = (
@@ -728,6 +730,25 @@ class LagunaForCausalLM:
             prompt_lens = [int(tokens.shape[1])] * batch
         starts = [0] * batch if start_pos is None else [int(x) for x in start_pos]
 
+        if self._spec_mode == "1" and batch == 1:
+            # Stash the prompt token sequence for ngram seeding — on the greedy served path the plugin
+            # passes NO prompt_tokens/output_tokens (those are penalty-gated, model_runner.py:1051), so
+            # this prefill is the only place the running request's prompt is visible. Offset-write handles
+            # chunked prefill (multiple calls with increasing start_pos); start_pos 0 begins a new request.
+            try:
+                row = [int(v) for v in tokens[0].tolist()[: int(prompt_lens[0])]]
+                s = int(starts[0])
+                if s == 0:
+                    self._spec_prefill_seq = list(row)
+                    self._spec_next_pos = None  # force reseed on the first decode of this request
+                else:
+                    need = s + len(row)
+                    if len(self._spec_prefill_seq) < need:
+                        self._spec_prefill_seq += [0] * (need - len(self._spec_prefill_seq))
+                    self._spec_prefill_seq[s:need] = row
+            except Exception:  # noqa: BLE001 - diagnostic stash; never break prefill
+                pass
+
         device_sampling = sampling_params is not None
         st = self._prefill_state() if device_sampling else None
         last_logits = []
@@ -923,6 +944,7 @@ class LagunaForCausalLM:
             from models.autoports.poolside_laguna_xs_2_1.tt.spec_decode import SpeculativeDecoder
 
             k_max = int(os.environ.get("TT_LAGUNA_SPEC_K", "4"))
+            traced = os.environ.get("TT_LAGUNA_SPEC_TRACED", "1") == "1"  # 0 = eager verify (bisection)
             self._spec = SpeculativeDecoder(
                 self,
                 kv_cache=kv_cache,
@@ -932,25 +954,54 @@ class LagunaForCausalLM:
                 draft_len=k_max,
                 ngram_max_n=int(os.environ.get("TT_LAGUNA_SPEC_NGRAM_MAX", "10")),
                 verify_mode="decode",
-                traced=True,
+                traced=traced,
                 adaptive=True,
                 k_min=1,
                 k_max=k_max,
                 guard=True,
             )
+            self._spec_log(f"serve INIT: traced={traced} k_max={k_max}")
             self._spec_tok = self.gen._rep(torch.zeros([1, 1, 1, 1], dtype=torch.int32), ttnn.uint32)
         # per-call context refresh (the request's block table grows as it advances)
         self._spec.kv_cache = kv_cache
         self._spec.page_table = page_table
         self._spec.page_tables_per_layer = page_tables_per_layer
-        if reset_batch:  # new request / batch-layout change → reset guard/adaptive + drop stale buffer
+        cur = int(torch.as_tensor(tokens).reshape(-1)[0])
+        p0 = int(pos.reshape(-1)[0])
+        # NEW-REQUEST detection by position CONTINUITY, not reset_batch. reset_batch fires every decode
+        # step here (per-step full refresh, see laguna-batched-decode-corruption), so it cannot flag a new
+        # request. Within a request the plugin advances pos by exactly 1 each call; a mismatch (or the very
+        # first call) means a fresh request → reseed history from the stashed prompt + reset guard/adaptive.
+        if self._spec_next_pos is None or p0 != self._spec_next_pos or not self._spec_hist:
             self._spec.serve_reset()
             self._spec_buf = []
+            # Seed from the prompt stashed at prefill (greedy path gets no history via kwargs). History must
+            # have len == p0+1 and end with cur (verify uses anchor_pos = len-1 as the absolute KV position).
+            seed = list(self._spec_prefill_seq or [])
+            if len(seed) >= p0:
+                seed = seed[:p0]
+            else:  # prompt stash short (unexpected) — front-pad so positions still line up
+                seed = [cur] * (p0 - len(seed)) + seed
+            seed.append(cur)
+            self._spec_hist = seed
+            self._spec_log(
+                f"serve NEWREQ: seeded hist len={len(seed)} pos0={p0} cur={cur} "
+                f"prompt_stash={len(self._spec_prefill_seq or [])}"
+            )
         if not self._spec_buf:
-            history = self._spec_history(kwargs.get("prompt_tokens"), kwargs.get("output_tokens"), tokens)
-            k_cap = 63 - (len(history) % 64)  # bounded-K: never draft past the current block_size=64 block
-            self._spec_buf = list(self._spec.serve_round(history, k_cap=k_cap))
+            history = self._spec_hist  # SELF-TRACKED across the whole request (authoritative)
+            # bounded-K: keep look-ahead writes (anchor_pos+1 .. anchor_pos+K) inside the anchor's own
+            # block. anchor_pos = len-1, so the room left in the block is 63 - (anchor_pos % 64).
+            k_cap = 63 - ((len(history) - 1) % 64)
+            committed = list(self._spec.serve_round(history, k_cap=k_cap))
+            self._spec_hist.extend(committed)  # grow history so the next round's anchor advances
+            self._spec_buf = committed
+            self._spec_log(
+                f"serve ROUND: anchor_pos={p0} committed={len(committed)} toks={committed[:8]} "
+                f"k_cur={getattr(self._spec,'_sv_k_cur',None)} spec_on={getattr(self._spec,'_sv_spec_on',None)}"
+            )
         tok_id = int(self._spec_buf.pop(0))
+        self._spec_next_pos = p0 + 1  # plugin appends the returned token → next decode is at p0+1
         ttnn.copy_host_to_device_tensor(
             self._host_rank4_tok_batch(torch.tensor([[tok_id]], dtype=torch.int64), 1), self._spec_tok
         )
@@ -1121,7 +1172,29 @@ class LagunaForCausalLM:
                 ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt"])
                 st["last_pt_host"] = pt_host.clone()
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=True)
-        return self._read_tokens_host(st["tok"], K1)  # per-row greedy ids sampled ON DEVICE
+        traced_ids = self._read_tokens_host(st["tok"], K1)  # per-row greedy ids sampled ON DEVICE
+        if os.environ.get("TT_LAGUNA_SPEC_DEBUG", "") == "1":
+            # Shadow the traced verify with an EAGER verify (known-correct host-argmax path) on the SAME
+            # tokens/positions/pt/kv. Both read the CURRENT (post-trace) KV, so agreement means the trace's
+            # per-step COMPUTE matches eager (any full-run divergence is then accumulating KV-write drift);
+            # disagreement means the trace's own read/compute is wrong THIS step.
+            try:
+                elog = self.verify_forward_decode(
+                    tokens, pos, page_table=page_table, kv_cache=kv_cache, page_tables_per_layer=page_tables_per_layer
+                )
+                eager_ids = torch.argmax(elog, dim=-1).to(torch.int32).reshape(-1)
+                t_ids = torch.as_tensor(traced_ids).reshape(-1)
+                if not torch.equal(t_ids.to(torch.int64), eager_ids.to(torch.int64)):
+                    self._spec_log(
+                        f"TRACE-vs-EAGER MISMATCH K1={K1} pos={[int(x) for x in pos]} "
+                        f"traced={[int(x) for x in t_ids]} eager={[int(x) for x in eager_ids]} "
+                        f"pt0={[int(x) for x in pt_host[0][:4]]}"
+                    )
+                else:
+                    self._spec_log(f"trace==eager K1={K1} pos0={int(pos[0])} pt0={[int(x) for x in pt_host[0][:4]]}")
+            except Exception as e:  # noqa: BLE001
+                self._spec_log(f"shadow-eager failed: {type(e).__name__}: {e}")
+        return traced_ids
 
     def verify_sampler_eager(self, tokens, positions, page_table=None, kv_cache=None):
         """DIAGNOSTIC: run the batched decode-verify through the on-device SAMPLER but EAGERLY (no trace
