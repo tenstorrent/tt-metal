@@ -58,30 +58,36 @@ jobs:
         run: |
           # This runner's proxy isn't inherited by the isolated buildx builder
           # (see docker-run/action.yml's forward_civ2_proxy_env_vars).
-          # NO_PROXY is one entry, no comma - docker buildx create --driver-opt
-          # can't handle commas in a value (docker/buildx#1133).
+          #
+          # Deliberately NOT setting NO_PROXY here (previously "tenstorrent.net").
+          # That suffix matches harbor.ci.tenstorrent.net, which made BuildKit
+          # bypass the proxy and dial Harbor's ingress VIP directly - a path
+          # that silently blackholes (dial tcp ...: i/o timeout, no RST/ICMP,
+          # confirmed via live packet capture) due to a NetworkPolicy/DNAT
+          # ordering issue on the runner's cluster (infra-side; the egress
+          # ipBlock rule for Harbor's VIP has apparently never actually
+          # worked. Every path that reaches Harbor successfully today, e.g.
+          # the runner's own dockerd, goes via the proxy instead, since
+          # dockerd's own NO_PROXY entry for Harbor is a malformed pattern
+          # that never matches and so never takes the broken direct route).
+          # Routing everything through the proxy, same as dockerd already
+          # does, is what actually works - see run 31018713433, job
+          # 92352981018 for the failure this avoids.
           echo "PROXY_HTTP=${HTTP_PROXY:-${http_proxy:-}}" >> "$GITHUB_ENV"
           echo "PROXY_HTTPS=${HTTPS_PROXY:-${https_proxy:-}}" >> "$GITHUB_ENV"
-          echo "PROXY_NO_PROXY=tenstorrent.net" >> "$GITHUB_ENV"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
-          # network=host: the docker-container driver runs BuildKit as its
-          # own nested container on a Docker bridge network, not the
-          # runner's host network. Proxied traffic (ghcr.io etc.) still
-          # reaches its destination fine via the proxy above, but anything
-          # NO_PROXY excludes - i.e. harbor.ci.tenstorrent.net, which is on
-          # the runner's internal VLAN - has to route directly out of that
-          # bridge instead, and that path has been observed to silently
-          # time out (dial tcp ...: i/o timeout) even though a plain `docker
-          # pull` from the runner's own dockerd reaches the same host fine
-          # in the same job (run 31015384936, job 92342670213). Putting the
-          # builder on host networking removes that extra NAT hop entirely.
+          # network=host: shares the runner's own network namespace instead
+          # of the docker-container driver's default bridge. Doesn't fix the
+          # Harbor timeout above (that's a proxy-routing issue, not a bridge
+          # NAT-hop issue - confirmed by reproducing the same failure with
+          # this in place), but it's a reasonable simplification with one
+          # fewer layer of network indirection, so left in.
           driver-opts: |
             network=host
             env.HTTP_PROXY=${{ env.PROXY_HTTP }}
             env.HTTPS_PROXY=${{ env.PROXY_HTTPS }}
-            env.NO_PROXY=${{ env.PROXY_NO_PROXY }}
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
