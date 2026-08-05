@@ -84,15 +84,32 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      rc=0
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and 8x4 and fabric2d and scalar and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism))" -vvv --tb=short || rc=1
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and 8x4 and fabric2d" -vvv --tb=short || rc=1
-      exit $rc
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and 8x4 and fabric2d and scalar and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism))" -vvv --tb=short
     '
   test_type: k3_mla
   test_group: module
   skus:
     bh_sc1:
+      # Measured 2.38 min (run 31008174878) for both cases in one process.
+      timeout: 6
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
+# Perf needs the high-power SKU: test_mla_chunked_perf_check is guarded by is_high_power(), which is
+# False on plain bh_sc1 -- it skipped there in run 31008174878 rather than measuring anything.
+- name: "Blaze - K3 MLA perf"
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and 8x4 and fabric2d" -vvv --tb=short
+    '
+  test_type: k3_mla_perf
+  test_group: module
+  skus:
+    bh_sc1_high_power:
       timeout: 8
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
@@ -397,8 +414,9 @@
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      # Both perf checks run in ~5.6 min; 23 leaves headroom for Galaxy variance.
-      timeout: 23
+      # 12, not 23: the test step measured 3.9 min max across the 2026-08-03..05 nightlies, so this
+      # still leaves ~3x. Freed budget funds "Blaze - K3 MLA perf" on the same SKU.
+      timeout: 12
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
