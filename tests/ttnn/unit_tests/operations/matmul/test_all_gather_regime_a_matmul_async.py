@@ -35,11 +35,15 @@
 #
 #   (unset)                                        Phase 0: all_gather_async + matmul, the correctness oracle
 #   TT_AGMM_FUSED_GATHER=1                         Phase 1: fused gather via a DRAM staging buffer -- 40/40
-#   TT_AGMM_FUSED_GATHER=1 TT_AGMM_DIRECT_L1=1     Phase 2: fabric writes straight into cb0 -- 28/40, with
-#                                                  the other 12 REFUSED at program creation (Ns>1, and >64
-#                                                  mux channels on a LINE at num_links=1), not failing.
-#                                                  See tools/mm_sweep/AGMM_DIRECT_L1_DESIGN.md, "Scope
-#                                                  limits of the implementation".
+#   TT_AGMM_FUSED_GATHER=1 TT_AGMM_DIRECT_L1=1     Phase 2: fabric writes straight into cb0 -- 28/40 here,
+#                                                  with the other 12 REFUSED at program creation, not
+#                                                  failing: 8x Ns>1 and 4x ">64 mux channels" on the LINE
+#                                                  cases. The latter 4 are an artefact of num_links=1
+#                                                  BELOW -- at num_links=2 the same binary is 32/40 and the
+#                                                  channel cap never fires, so Ns>1 is the only real limit.
+#                                                  1 link is kept deliberately (tighter mux budget; it is
+#                                                  what found that ceiling). See
+#                                                  tools/mm_sweep/AGMM_DIRECT_L1_DESIGN.md, "Scope limits".
 #
 # A refusal is a TT_FATAL, never a silent fallback -- so a Phase-2 run can never be reported as Phase 2 when
 # it actually took the staged path. Note that ONE refusal shows up as many failures: the fixture leaks
