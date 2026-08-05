@@ -400,9 +400,11 @@
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      # Measured steps: 3.9 min (sdpa perf, 2026-08-03..05 nightlies) + 1.7 (K3 MLA perf, run
-      # 31010521345) + ~2.6 (K3 ring_mla accuracy/determinism, loudbox sp=8) = 8.2. Was 23.
-      timeout: 14
+      # Measured steps sum to 8.2 min: 3.9 (sdpa perf, 2026-08-03..05 nightlies) + 1.7 (K3 MLA
+      # perf, run 31010521345) + ~2.6 (K3 ring_mla accuracy/determinism, loudbox sp=8). The extra
+      # room is for hang-detection-timeout=10, which a hang spends before triage can report -- see
+      # run 31010521345, where a wan2_2 ring8 hang took the step to 12.08 min.
+      timeout: 20
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
