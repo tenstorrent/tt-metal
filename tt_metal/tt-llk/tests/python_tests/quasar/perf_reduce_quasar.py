@@ -16,6 +16,8 @@ from quasar.test_reduce_quasar import (
     reduce_dest_acc_modes,
     reduce_dest_sync_modes,
     reduce_implied_math_formats,
+    reduce_perf_input_dimensions,
+    reduce_perf_tile_dimensions,
     reduce_pool_type_and_math_fidelity_combinations,
 )
 from quasar.test_reduce_quasar import test_reduce_quasar as run_reduce_quasar
@@ -29,8 +31,11 @@ from quasar.test_reduce_quasar import (
 @pytest.mark.nightly
 @parametrize(
     formats=REDUCE_FORMATS,
-    tile_dimensions=[(32, 32)],
+    tile_dimensions=reduce_perf_tile_dimensions,
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
+    input_dimensions=lambda dest_acc, tile_dimensions: reduce_perf_input_dimensions(
+        dest_acc, tile_dimensions
+    ),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(
         is_perf=True
@@ -48,6 +53,7 @@ def test_perf_reduce_quasar(
     formats,
     tile_dimensions,
     dest_acc,
+    input_dimensions,
     reduce_dim,
     pool_type_and_math_fidelity,
     dest_sync_mode,
@@ -68,6 +74,7 @@ def test_perf_reduce_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+        input_dimensions=input_dimensions,
     )
 
 
@@ -88,6 +95,7 @@ def test_perf_reduce_quasar(
         ),
     ],
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
+    input_dimensions=lambda dest_acc: reduce_perf_input_dimensions(dest_acc),
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=[MathFidelity.LoFi],
@@ -101,6 +109,7 @@ def test_perf_reduce_quasar_mxfp4_2x_gapool(
     register_format_hint,
     formats,
     dest_acc,
+    input_dimensions,
     reduce_dim,
     pool_type,
     math_fidelity,
@@ -121,4 +130,5 @@ def test_perf_reduce_quasar_mxfp4_2x_gapool(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+        input_dimensions=input_dimensions,
     )

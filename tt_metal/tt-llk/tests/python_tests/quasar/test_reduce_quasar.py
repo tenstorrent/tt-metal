@@ -24,7 +24,11 @@ from helpers.llk_params import (
     ReducePool,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    generate_perf_input_dimensions,
+    input_output_formats,
+    parametrize,
+)
 from helpers.perf import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -98,6 +102,20 @@ def reduce_input_dimensions(*, is_perf=False):
     return [64, 64]
 
 
+def reduce_perf_tile_dimensions(formats):
+    return [
+        tile_dimensions
+        for tile_dimensions in ((32, 32), (1, 32), (16, 32))
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, tile_dimensions
+        )
+    ]
+
+
+def reduce_perf_input_dimensions(dest_acc, tile_dimensions=(32, 32)):
+    return generate_perf_input_dimensions(dest_acc, tile_dimensions)
+
+
 def generate_pool_type_and_math_fidelity_combinations(*, is_perf=False):
     def is_valid_combination(pool_type, math_fidelity):
         # Max pool only supports LoFi
@@ -108,9 +126,11 @@ def generate_pool_type_and_math_fidelity_combinations(*, is_perf=False):
 
     if is_perf:
         return [
-            combo
-            for combo in product(POOL_TYPES, [MathFidelity.LoFi])
-            if is_valid_combination(*combo)
+            (ReducePool.Max, MathFidelity.LoFi),
+            (ReducePool.Sum, MathFidelity.LoFi),
+            (ReducePool.Sum, MathFidelity.HiFi2),
+            (ReducePool.Sum, MathFidelity.HiFi4),
+            (ReducePool.Average, MathFidelity.LoFi),
         ]
 
     return [
@@ -159,6 +179,7 @@ def test_reduce_quasar(
     *,
     is_perf=False,
     perf_report=None,
+    input_dimensions=None,
 ):
 
     pool_type, math_fidelity = pool_type_and_math_fidelity
@@ -183,11 +204,12 @@ def test_reduce_quasar(
             "Row reduce variants, so the residual is accepted as expected."
         )
 
-    input_dimensions = (
-        reduce_input_dimensions(is_perf=True)
-        if is_perf
-        else [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
-    )
+    if input_dimensions is None:
+        input_dimensions = (
+            reduce_input_dimensions(is_perf=True)
+            if is_perf
+            else [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
+        )
 
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -374,8 +396,10 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     *,
     is_perf=False,
     perf_report=None,
+    input_dimensions=None,
 ):
-    input_dimensions = reduce_input_dimensions(is_perf=is_perf)
+    if input_dimensions is None:
+        input_dimensions = reduce_input_dimensions(is_perf=is_perf)
     tile_shape = construct_tile_shape((32, 32))
 
     src_A, tile_cnt, _, _ = generate_stimuli(

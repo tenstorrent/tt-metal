@@ -28,6 +28,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     input_output_formats,
     parametrize,
     runtime,
@@ -103,8 +104,14 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
 
     if is_perf:
         unpack_reduce_col_tilizeA_strided_dims = {
-            (DestSync.Half, DestAccumulation.No): [[32, 32]],
-            (DestSync.Half, DestAccumulation.Yes): [[32, 32]],
+            (
+                DestSync.Half,
+                DestAccumulation.No,
+            ): generate_perf_input_dimensions(DestAccumulation.No),
+            (
+                DestSync.Half,
+                DestAccumulation.Yes,
+            ): generate_perf_input_dimensions(DestAccumulation.Yes),
         }
 
     combinations = []
