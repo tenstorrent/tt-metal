@@ -16,12 +16,12 @@ migration-specific performance validation.
 ## MIG-001 — Chain trailing CT arguments from `McastArgs`
 
 - **Date:** 2026-08-04
-- **Status:** Open
+- **Status:** Implemented
 - **Kernel:**
   `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp`
 - **Related API feedback:** `api_feedback.md`, API-001
 
-The migrated kernel constructs:
+The original v9 migration constructed:
 
 ```cpp
 constexpr dataflow_kernel_lib::McastArgs<12, 3, num_input_cores> act_mcast_args;
@@ -35,11 +35,11 @@ load_config_tensor_if_in_dram<26, 27, 28, cb_reader_indices>(
     noc, reader_indices_dfb, 0);
 ```
 
-This couples the migration to the current five-word `McastArgs` CT encoding.
+That coupled the migration to the five-word v9 `McastArgs` CT encoding.
 For example, API-001's proposed addition of a host-provided rotating span would
 shift every following CT argument and silently invalidate these indices.
 
-### Expected direction
+### Implemented direction
 
 Use the decoder's existing chaining method as the source of truth:
 
@@ -70,15 +70,16 @@ The same principle applies to runtime arguments: a block following
 `McastArgs` should begin at `act_mcast_args.next_runtime_args_offset()` rather
 than restating the current mcast RT width.
 
-### Resolution checklist
+### Resolution
 
-- Rewrite CT reads at indices 17 through 28 as a chained, named layout rooted at
-  `act_mcast_args.next_compile_time_args_offset()`.
-- Confirm the host factory appends fields in exactly the same block order.
-- Check the rest of the migration for absolute offsets that cross an
-  `McastArgs` boundary.
-- Compile the kernel through the mapped width-sharded Conv test after the
-  migration is updated.
+Gate 2 rewrote every following CT field and the config-tensor tail relative to
+`act_mcast_args.next_compile_time_args_offset()` and confirmed the factory's
+contiguous block order. Gate 4 then changed the kernel to
+`McastArgs<12, 3>` under API v10; the sixth `rotating_span` word moves the
+following block without any caller-side index update. The exact fresh-JIT
+width-sharded case passed at PCC `0.9999992597711427`, and the complete mapped
+width inventory passed 48 runnable cases with 16 expected skips plus its
+DRAM-config route and the shared 14-case DRAM inventory.
 
 ## MIG-002 — Sort row-start handshake remains outside the Pipe
 

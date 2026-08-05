@@ -1,6 +1,23 @@
-# mcast_pipe rollout report — API v9, width-sharded Conv re-entry 2026-08-03
+# mcast_pipe rollout report — API v10, self-describing wire verified 2026-08-05
 
-## Run header
+## API v10 update — 2026-08-05
+
+API-001 is implemented. `MCAST_PIPE_API_VERSION=10` adds `rotating_span` as the sixth uniform CT
+word and removes the third template argument from `McastArgs`. All 13 migrated kernels and 12 host
+bindings remain current; API-002 face metadata and RT compaction remain deferred.
+
+- `./build_metal.sh`: passed.
+- `McastHostFixture.*`: 25/25; complete helper device suite: 73/73.
+- Fresh-JIT focused cases passed for Matmul, Conv height/block/width, GroupNorm legacy/Welford, and
+  Sort. Width-sharded Conv passed at PCC `0.9999992597711427` with 0/26 JIT hits.
+- Full mapped inventories: Matmul 302 passed / 188 expected skips; each Conv route 48/16 plus its
+  DRAM-config case and shared DRAM 14/14; GroupNorm legacy 108/2, Welford 108/2, fixed/default 19/6;
+  Sort long 7/7 and deadlock 2/2.
+- The opaque-boundary audit remains green and now also rejects a third `McastArgs` template argument.
+
+The remainder of this report retains the prior v9 rollout history and migration anchors.
+
+## Prior v9 run header
 
 - Helper: `mcast_pipe`, `MCAST_PIPE_API_VERSION=9` (unchanged)
 - Entry mode: **re-entry**

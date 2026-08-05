@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v9 status includes the fully end-to-end Conv2d single-sender rectangle migration at code commit 991b5b6b6386a90726d15007002fe1f5a77d8487, fixed-line migration at code commit 51dfb1f1ed61045ed10dc679269960b6d2ccac9e, width-sharded activation migration at code commit fe866a1d0c4c32b78aae8a76e875c0da109f51c8, matmul in1 multicast migration at code commit aeeb28ff007807c71b1f60842cca85e5c41efa7f, GroupNorm v2 migration at code commit bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0, and sort single-row control migration at code commit 7337302b564. Remaining kernel status is reconciled through 2026-08-03 from exact helper use, mapped unit-test inventories, JIT-path evidence, and baseline equality for blocked rows. Historical v8 commits are retained only in dated logs.",
+  "source_of_truth_note": "Current v10 status carries all 13 migrated kernels and 12 host bindings onto the self-describing six-word CT wire verified on 2026-08-05. The underlying fully end-to-end migrations remain anchored by Conv2d single-sender rectangle commit 991b5b6b6386a90726d15007002fe1f5a77d8487, fixed-line commit 51dfb1f1ed61045ed10dc679269960b6d2ccac9e, width-sharded activation commit fe866a1d0c4c32b78aae8a76e875c0da109f51c8, matmul in1 commit aeeb28ff007807c71b1f60842cca85e5c41efa7f, GroupNorm v2 commit bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0, and sort single-row control commit 7337302b564. Gate 4 revalidated every mapped inventory after the v10 wire change. Historical v8/v9 commits and results remain in dated logs.",
   "host_bindings": [
     {
       "id": "weights-mcast:conv2d-sharded:single-sender-rect",
@@ -16,7 +16,7 @@
       ],
       "migration_unit": "conv2d-weights-single-sender-rect",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "991b5b6b6386a90726d15007002fe1f5a77d8487",
       "validation_set": [
         "build_metal.sh: passed",
@@ -24,10 +24,11 @@
         "CONV-HEIGHT: 49 passed, 16 expected skips",
         "test_conv_dram: 14 passed",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:1",
         "fully-end-to-end"
@@ -43,7 +44,7 @@
       ],
       "migration_unit": "conv2d-weights-fixed-line",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "51dfb1f1ed61045ed10dc679269960b6d2ccac9e",
       "validation_set": [
         "build_metal.sh: passed",
@@ -51,10 +52,11 @@
         "CONV-BLOCK: 49 passed, 16 expected skips",
         "test_conv_dram: 14 passed",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:2",
         "fully-end-to-end"
@@ -70,7 +72,7 @@
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
@@ -82,10 +84,11 @@
         "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
         "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "medium",
-      "last_verified": "2026-08-03",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:3",
         "fully-end-to-end",
@@ -103,7 +106,7 @@
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
@@ -116,10 +119,11 @@
         "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
         "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-03",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:3",
         "fully-end-to-end"
@@ -136,7 +140,7 @@
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
@@ -148,10 +152,11 @@
         "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
         "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "medium",
-      "last_verified": "2026-08-03",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:3",
         "fully-end-to-end",
@@ -169,7 +174,7 @@
       ],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
@@ -182,10 +187,11 @@
         "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
         "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-03",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:3",
         "fully-end-to-end"
@@ -202,7 +208,7 @@
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
       "validation_set": [
         "build_metal.sh: passed",
@@ -210,10 +216,11 @@
         "GN-SHARDED-PARAMETERIZED legacy: 108 passed, 2 expected skips",
         "fixed/default routing: 19 passed, 6 expected skips",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:4",
         "fully-end-to-end",
@@ -229,7 +236,7 @@
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
       "validation_set": [
         "build_metal.sh: passed",
@@ -237,10 +244,11 @@
         "fixed/default routing: 19 passed, 6 expected skips",
         "McastHostFixture degenerate cases: passed",
         "test_mcast_pipe.py including test_f3_degenerate: 68 passed",
-        "coverage gap: no mapped device operation test reaches the GroupNorm v2 use_mcast=false binding"
+        "coverage gap: no mapped device operation test reaches the GroupNorm v2 use_mcast=false binding",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "medium",
-      "last_verified": "2026-07-30",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:4",
         "fully-end-to-end",
@@ -259,7 +267,7 @@
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
       "validation_set": [
         "build_metal.sh: passed",
@@ -267,10 +275,11 @@
         "GN-SHARDED-PARAMETERIZED Welford: 108 passed, 2 expected skips",
         "fixed/default routing: 19 passed, 6 expected skips",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:4",
         "fully-end-to-end",
@@ -286,7 +295,7 @@
       ],
       "migration_unit": "groupnorm-sharded-v2-mcast-host",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0",
       "validation_set": [
         "build_metal.sh: passed",
@@ -294,10 +303,11 @@
         "fixed/default routing: 19 passed, 6 expected skips",
         "McastHostFixture degenerate cases: passed",
         "test_mcast_pipe.py including test_f3_degenerate: 68 passed",
-        "coverage gap: no mapped device operation test reaches the GroupNorm v2 use_mcast=false binding"
+        "coverage gap: no mapped device operation test reaches the GroupNorm v2 use_mcast=false binding",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "medium",
-      "last_verified": "2026-07-30",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:4",
         "fully-end-to-end",
@@ -317,17 +327,18 @@
       ],
       "migration_unit": "sort-single-row-control",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "7337302b5649b7cd169764cd95c0b0343e88950d",
       "validation_set": [
         "build_metal.sh: passed",
         "exact test_sort_long_tensor[shape=[1, 524288]-dim=-1-descending=False] under --dev from a fresh isolated JIT cache: passed; coordinator, reader, and writer artifacts confirmed",
         "test_sort_multi_row_multi_core_no_deadlock: 2 passed (descending false and true)",
         "test_sort_long_tensor: 7 passed",
-        "test_mcast_pipe.py: 72 passed, including four control-only Counter cases"
+        "test_mcast_pipe.py: 72 passed, including four control-only Counter cases",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-03",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:5",
         "fully-end-to-end",
@@ -344,17 +355,18 @@
       ],
       "migration_unit": "conv2d-activation-width-sharded",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "fe866a1d0c4c32b78aae8a76e875c0da109f51c8",
       "validation_set": [
         "build_metal.sh: passed",
         "exact BF16/BF16 filter-3 tile-output test_conv_features node under --dev from fresh isolated cache: passed at PCC 0.999956503; activation_reader_width_sharded JIT artifact confirmed",
         "CONV-WIDTH test_conv_features: 48 passed, 16 expected row-major+bfloat8 skips",
         "CONV-WIDTH test_conv_dram_config: 1 passed at PCC 0.998234911; activation_reader_width_sharded JIT artifact confirmed",
-        "test_mcast_pipe.py: 72 passed after production integration"
+        "test_mcast_pipe.py: 72 passed after production integration",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-03",
+      "last_verified": "2026-08-05",
       "flags": [
         "tier:6",
         "atomic-unit:conv2d-activation-width-sharded",
@@ -413,7 +425,7 @@
       "role": "hybrid",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
@@ -427,11 +439,12 @@
         "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
         "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-03",
-      "census_note": "V9 kernel and host wire migrated; explicit active receiver acknowledgement count handles rectangles containing inactive cores. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
+      "last_verified": "2026-08-05",
+      "census_note": "V10 current after self-describing wire migration; explicit active receiver acknowledgement count handles rectangles containing inactive cores. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
       "flags": [],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
@@ -442,7 +455,7 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "aeeb28ff007807c71b1f60842cca85e5c41efa7f",
       "validation_set": [
         "build_metal.sh: passed",
@@ -456,11 +469,12 @@
         "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
         "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-03",
-      "census_note": "V9 kernel and host wire migrated; all in1 and optional bias multicast semaphore operations are pipe-owned. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
+      "last_verified": "2026-08-05",
+      "census_note": "V10 current after self-describing wire migration; all in1 and optional bias multicast semaphore operations are pipe-owned. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
       "flags": [],
       "migration_unit": "matmul-in1-mcast-padding-host",
       "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
@@ -612,7 +626,7 @@
       "role": "sender",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "991b5b6b6386a90726d15007002fe1f5a77d8487",
       "validation_set": [
         "build_metal.sh: passed",
@@ -620,11 +634,12 @@
         "CONV-HEIGHT: 49 passed, 16 expected skips",
         "test_conv_dram: 14 passed",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
-      "census_note": "Fully end-to-end at v9. Host Mcast2D owns the full-rectangle geometry and CT/RT wire while num_active remains total_active_num_cores-1; McastArgs decodes the sender face. Weights and optional-bias handshakes are pipe-owned.",
+      "last_verified": "2026-08-05",
+      "census_note": "Fully end-to-end at v10. Host Mcast2D owns the full-rectangle geometry and CT/RT wire while num_active remains total_active_num_cores-1; McastArgs decodes the sender face. Weights and optional-bias handshakes are pipe-owned.",
       "flags": [
         "tier:1",
         "fully-end-to-end"
@@ -637,7 +652,7 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "991b5b6b6386a90726d15007002fe1f5a77d8487",
       "validation_set": [
         "build_metal.sh: passed",
@@ -645,11 +660,12 @@
         "CONV-HEIGHT: 49 passed, 16 expected skips",
         "test_conv_dram: 14 passed",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
-      "census_note": "Fully end-to-end at v9. Host Mcast2D emits the receiver sender-coordinate RT block and McastArgs decodes the receiver face; weights and bias receive handshakes are pipe-owned.",
+      "last_verified": "2026-08-05",
+      "census_note": "Fully end-to-end at v10. Host Mcast2D emits the receiver sender-coordinate RT block and McastArgs decodes the receiver face; weights and bias receive handshakes are pipe-owned.",
       "flags": [
         "tier:1",
         "fully-end-to-end"
@@ -662,7 +678,7 @@
       "role": "sender",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "51dfb1f1ed61045ed10dc679269960b6d2ccac9e",
       "validation_set": [
         "build_metal.sh: passed",
@@ -670,11 +686,12 @@
         "CONV-BLOCK: 49 passed, 16 expected skips",
         "test_conv_dram: 14 passed",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
-      "census_note": "Fully end-to-end at v9. Host Mcast1D owns PerRow/PerColumn fixed-line geometry and the CT/RT wire over the dense zero-anchored output grid; McastArgs decodes the sender face. Weights and bias send handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
+      "last_verified": "2026-08-05",
+      "census_note": "Fully end-to-end at v10. Host Mcast1D owns PerRow/PerColumn fixed-line geometry and the CT/RT wire over the dense zero-anchored output grid; McastArgs decodes the sender face. Weights and bias send handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
       "flags": [
         "tier:2",
         "fully-end-to-end"
@@ -687,7 +704,7 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "51dfb1f1ed61045ed10dc679269960b6d2ccac9e",
       "validation_set": [
         "build_metal.sh: passed",
@@ -695,11 +712,12 @@
         "CONV-BLOCK: 49 passed, 16 expected skips",
         "test_conv_dram: 14 passed",
         "McastHostFixture: 19 passed",
-        "test_mcast_pipe.py: 68 passed"
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-30",
-      "census_note": "Fully end-to-end at v9. Host Mcast1D emits each receiver's fixed sender coordinate for both PerRow and PerColumn topologies, and McastArgs decodes the receiver face. Weights and bias receive handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
+      "last_verified": "2026-08-05",
+      "census_note": "Fully end-to-end at v10. Host Mcast1D emits each receiver's fixed sender coordinate for both PerRow and PerColumn topologies, and McastArgs decodes the receiver face. Weights and bias receive handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
       "flags": [
         "tier:2",
         "fully-end-to-end"
@@ -712,18 +730,19 @@
       "role": "hybrid",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "fe866a1d0c4c32b78aae8a76e875c0da109f51c8",
       "validation_set": [
         "build_metal.sh: passed",
         "exact BF16/BF16 filter-3 tile-output node under --dev from fresh isolated cache: passed at PCC 0.999956503; activation_reader_width_sharded JIT artifact confirmed",
         "CONV-WIDTH test_conv_features: 48 passed, 16 expected row-major+bfloat8 skips",
         "CONV-WIDTH test_conv_dram_config: 1 passed at PCC 0.998234911; activation_reader_width_sharded JIT artifact confirmed",
-        "test_mcast_pipe.py: 72 passed after production integration"
+        "test_mcast_pipe.py: 72 passed after production integration",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-03",
-      "census_note": "Fully end-to-end at v9. Host Mcast2D emits one rotating full-rectangle wire with adopted factory semaphores and the divergent active ACK count. Kernel McastArgs owns both sender and receiver faces; the current SenderPipe ACK-fences real loopback completion before resetting its local Flag cell.",
+      "last_verified": "2026-08-05",
+      "census_note": "Fully end-to-end at v10. Host Mcast2D emits one rotating full-rectangle wire with adopted factory semaphores and the divergent active ACK count. Kernel McastArgs owns both sender and receiver faces; the current SenderPipe ACK-fences real loopback completion before resetting its local Flag cell.",
       "flags": [
         "tier:6",
         "atomic-unit:conv2d-activation-width-sharded",
@@ -821,16 +840,17 @@
       "role": "sender",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "59e75d6fc3a9264ba96bb43416e103811ba194e4",
       "validation_set": [
         "GN legacy inventory: 108 passed, 2 expected skips",
         "fixed/default-routing GN nodes: 19 passed, 6 expected skips",
-        "fresh sender and receiver JIT paths verified"
+        "fresh sender and receiver JIT paths verified",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "V9 migrated. The raw acknowledgement gate remains before remote L1 reads; all data/flag multicasts use no-handshake SenderPipes. Mapped inventories validate the host-generated rectangle partition.",
+      "last_verified": "2026-08-05",
+      "census_note": "V10 current. The raw acknowledgement gate remains before remote L1 reads; all data/flag multicasts use no-handshake SenderPipes. Mapped inventories validate the host-generated rectangle partition.",
       "flags": [
         "tier:2a"
       ],
@@ -842,14 +862,15 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "acd84d7f3fc30f9744101883b3ada5a5dc8da652",
       "validation_set": [
-        "GN legacy inventory: 124 passed, 8 expected skips"
+        "GN legacy inventory: 124 passed, 8 expected skips",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "V9 migrated; every readiness-counter and data-ready-flag operation is pipe-owned.",
+      "last_verified": "2026-08-05",
+      "census_note": "V10 current; every readiness-counter and data-ready-flag operation is pipe-owned.",
       "flags": [],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
@@ -919,16 +940,17 @@
       "role": "sender",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "59e75d6fc3a9264ba96bb43416e103811ba194e4",
       "validation_set": [
         "GN Welford inventory: 108 passed, 2 expected skips",
         "fixed/default-routing GN nodes: 19 passed, 6 expected skips",
-        "fresh sender and receiver JIT paths verified"
+        "fresh sender and receiver JIT paths verified",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "V9 migrated. The raw acknowledgement gate remains before remote L1 reads; the persistent no-handshake middle SenderPipe owns data/flag send. Optional rectangles partition num_mcast_cores-1.",
+      "last_verified": "2026-08-05",
+      "census_note": "V10 current. The raw acknowledgement gate remains before remote L1 reads; the persistent no-handshake middle SenderPipe owns data/flag send. Optional rectangles partition num_mcast_cores-1.",
       "flags": [
         "tier:2a"
       ],
@@ -958,14 +980,15 @@
       "role": "receiver",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "acd84d7f3fc30f9744101883b3ada5a5dc8da652",
       "validation_set": [
-        "GN Welford inventory: 116 passed, 8 expected skips"
+        "GN Welford inventory: 116 passed, 8 expected skips",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "V9 migrated; every readiness-counter and data-ready-flag operation is pipe-owned.",
+      "last_verified": "2026-08-05",
+      "census_note": "V10 current; every readiness-counter and data-ready-flag operation is pipe-owned.",
       "flags": [],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
@@ -1200,17 +1223,18 @@
       "role": "sender",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "7337302b5649b7cd169764cd95c0b0343e88950d",
       "validation_set": [
         "build_metal.sh: passed",
         "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed coordinator/reader/writer JIT paths from a fresh isolated cache",
         "test_sort_multi_row_multi_core_no_deadlock: 2 passed",
-        "test_mcast_pipe.py: 72 passed"
+        "test_mcast_pipe.py: 72 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-03",
-      "census_note": "MIGRATED API v9: no-handshake Counter SenderPipe::send_signal via host Mcast2D. Reader-ready and writer-done counts remain independent op-owned counters. Factory selection guarantees a dense full-grid rectangle and helper semaphore ID 0 is constexpr.",
+      "last_verified": "2026-08-05",
+      "census_note": "MIGRATED API v10: no-handshake Counter SenderPipe::send_signal via host Mcast2D. Reader-ready and writer-done counts remain independent op-owned counters. Factory selection guarantees a dense full-grid rectangle and helper semaphore ID 0 is constexpr.",
       "flags": [
         "tier:5",
         "atomic-unit:sort-single-row-control",
@@ -1223,17 +1247,18 @@
       "role": "receiver",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 9,
+      "migrated_api_version": 10,
       "commit": "7337302b5649b7cd169764cd95c0b0343e88950d",
       "validation_set": [
         "build_metal.sh: passed",
         "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed coordinator/reader/writer JIT paths from a fresh isolated cache",
         "test_sort_multi_row_multi_core_no_deadlock: 2 passed",
-        "test_mcast_pipe.py: 72 passed"
+        "test_mcast_pipe.py: 72 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-08-03",
-      "census_note": "MIGRATED API v9: no-handshake Counter ReceiverPipe::receive_signal via the coordinator's Mcast2D wire. Per-row readiness up remains explicit op protocol; the old inverted level signal and runtime semaphore IDs are gone.",
+      "last_verified": "2026-08-05",
+      "census_note": "MIGRATED API v10: no-handshake Counter ReceiverPipe::receive_signal via the coordinator's Mcast2D wire. Per-row readiness up remains explicit op protocol; the old inverted level signal and runtime semaphore IDs are gone.",
       "flags": [
         "tier:5",
         "atomic-unit:sort-single-row-control",

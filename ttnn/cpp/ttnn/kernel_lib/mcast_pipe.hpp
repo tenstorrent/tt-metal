@@ -52,7 +52,7 @@
 // re-materialization changes the caller-facing API (renamed/removed type, moved param, changed
 // count/flag semantics — anything that forces a call site rewrite); leave it for internal-only
 // changes.
-#define MCAST_PIPE_API_VERSION 9
+#define MCAST_PIPE_API_VERSION 10
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -307,37 +307,37 @@ private:
 // it the nice way — like TensorAccessorArgs<BASE> — so the call site stops hand-indexing CT slots,
 // stops fishing coords out of RT, and stops re-spelling the SenderPipe/ReceiverPipe template.
 //
-// ONE decoder owns BOTH arg lists: it is templated on the CT base AND the RT base (and, for the
-// rotating wire, the line span). Row vs column vs single-rect is a pure HOST concern (which cores
-// send, what rect); the decoder is shape-agnostic, so the SAME McastArgs serves a row-family, a
-// column-family, and a single-sender->rect.
+// ONE decoder owns BOTH arg lists: it is templated on the CT base AND the RT base. Row vs column vs
+// single-rect is a pure HOST concern (which cores send, what rect); the decoder is shape-agnostic, so
+// the SAME McastArgs serves a row-family, a column-family, and a single-sender->rect.
 //
-//   CT block (5 words):  [ active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags ]
+//   CT block (6 words):  [ active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags,
+//                          rotating_span ]
 //        flags bit0 = pre_handshake (gate on the receiver->sender readiness ack)
 //        flags bit1 = data-ready signal (0 = Flag, 1 = Counter)
-//   RT block, fixed (SPAN == 0), 4 words:
+//        rotating_span = 0 for fixed sender; sender count for rotating mode
+//   RT block, fixed (rotating_span == 0), 4 words:
 //        sender   -> dest rect corners (virtual, NOC-ordered)
 //        receiver -> [ sender_x, sender_y, 0, 0 ]
-//   RT block, rotating (SPAN > 0), 4 + 2*SPAN words:
-//        every core -> [ full-line rect corners, s0_x, s0_y, ... s{SPAN-1}_x, s{SPAN-1}_y ]
+//   RT block, rotating (rotating_span > 0), 4 + 2*rotating_span words:
+//        every core -> [ full-line rect corners, s0_x, s0_y, ... ]
 //
 // The pipe *behaviour* (pre_handshake, data-ready signal, dense/divergent ack, rotating) is NOT a
 // call-site knob any more — the host computes each and rides it on the wire, and McastArgs feeds them
 // into the pipe template. So `sender(noc)` / `receiver(noc)` take nothing but the Noc, and McastArgs is
 // the ONLY place that touches runtime args: sender() reads the dest rect off RT and hands it to a
 // SenderPipe (which keeps it); receiver() hands a stable view of the sender coord(s) in RT directly to
-// ReceiverPipe. Neither pipe fetches args by index in its hot methods. The rotating vs fixed RT layout
-// is the one thing the caller still spells, as the SPAN template param (it sizes the RT block); SPAN >
-// 0 alone selects rotating.
+// ReceiverPipe. Neither pipe fetches args by index in its hot methods. The host-emitted rotating_span
+// is the single source of truth for fixed/rotating mode, receiver type, and RT block size.
 
 // The one mcast-args decoder. Chainable in BOTH arg lists, exactly like TensorAccessorArgs:
 //   McastArgs<a.next_compile_time_args_offset(), a.next_runtime_args_offset()> picks up right after a
-//   previous family `a` in CT and RT alike — no hand-indexed slots. SPAN defaults to 0 (fixed
-//   sender, 4-word RT); a non-zero SPAN selects the rotating wire (4 + 2*SPAN RT words) AND the
-//   rotating-sender pipe behaviour. The CT reads are constexpr (valid non-type template args); the RT
-//   reads are lazy (get_arg_val at access), so the object holds only its template bases and stays
-//   constexpr-constructible for the chain.
-template <uint32_t CT_BASE, uint32_t RT_BASE, uint32_t SPAN = 0>
+//   previous family `a` in CT and RT alike — no hand-indexed slots. A zero rotating_span selects the
+//   fixed sender's 4-word RT block; a non-zero value selects the rotating wire
+//   (4 + 2*rotating_span RT words) and rotating-sender pipe behaviour. The CT reads are constexpr
+//   (valid non-type template args); the RT reads are lazy (get_arg_val at access), so the object holds
+//   only its template bases and stays constexpr-constructible for the chain.
+template <uint32_t CT_BASE, uint32_t RT_BASE>
 struct McastArgs {
     // ---- CT (self-parsed) ----
     static constexpr uint32_t active = get_compile_time_arg_val(CT_BASE + 0);
@@ -345,18 +345,19 @@ struct McastArgs {
     static constexpr uint32_t consumer_ready = get_compile_time_arg_val(CT_BASE + 2);
     static constexpr uint32_t num_active = get_compile_time_arg_val(CT_BASE + 3);
     static constexpr uint32_t flags = get_compile_time_arg_val(CT_BASE + 4);
+    static constexpr uint32_t rotating_span = get_compile_time_arg_val(CT_BASE + 5);
 
     // Pipe behaviour lifted off the flags word (host-computed): the caller never spells these.
     static constexpr bool pre_handshake = (flags & 0x1u) != 0u;
     static constexpr DataReadySignal signal =
         ((flags >> 1) & 0x1u) != 0u ? DataReadySignal::Counter : DataReadySignal::Flag;
-    static constexpr bool rotating = SPAN > 0;
+    static constexpr bool rotating = rotating_span > 0;
 
-    // Sender coord pairs this family carries: 1 for a fixed sender, SPAN for a rotating line.
-    static constexpr uint32_t num_senders = SPAN == 0 ? 1u : SPAN;
+    // Sender coord pairs this family carries: 1 for a fixed sender, rotating_span otherwise.
+    static constexpr uint32_t num_senders = rotating ? rotating_span : 1u;
 
-    static constexpr uint32_t next_compile_time_args_offset() { return CT_BASE + 5; }
-    static constexpr uint32_t num_runtime_args() { return SPAN == 0 ? 4u : (4u + 2u * SPAN); }
+    static constexpr uint32_t next_compile_time_args_offset() { return CT_BASE + 6; }
+    static constexpr uint32_t num_runtime_args() { return rotating ? (4u + 2u * rotating_span) : 4u; }
     static constexpr uint32_t next_runtime_args_offset() { return RT_BASE + num_runtime_args(); }
 
     // ---- pipe construction: NO behaviour knobs; everything comes from the wire ----
@@ -370,10 +371,10 @@ struct McastArgs {
     }
 
     // receiver(): hand ReceiverPipe a non-owning view directly into the stable RT block. FIXED: the
-    // one pair starts at RT_BASE+0. ROTATING: SPAN pairs, one per round, start past the rect at
-    // RT_BASE+4. The call site then just calls receive() (fixed) / receive(round) (rotating).
+    // one pair starts at RT_BASE+0. ROTATING: rotating_span pairs, one per round, start past the rect
+    // at RT_BASE+4. The call site then just calls receive() (fixed) / receive(round) (rotating).
     ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders> receiver(const Noc& noc) const {
-        const uint32_t* coords = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + (SPAN == 0 ? 0 : 4)));
+        const uint32_t* coords = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + (rotating ? 4 : 0)));
         return ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders>(noc, coords);
     }
 
@@ -392,7 +393,7 @@ struct McastArgs {
     // Receiver view, FIXED: the sender's coords (the target of this receiver's readiness ack).
     uint32_t sender_x() const { return get_arg_val<uint32_t>(RT_BASE + 0); }
     uint32_t sender_y() const { return get_arg_val<uint32_t>(RT_BASE + 1); }
-    // Receiver view, ROTATING: the coords of the sender broadcasting on `round`, round in [0, SPAN).
+    // Receiver view, ROTATING: the sender broadcasting on `round`, round in [0, rotating_span).
     uint32_t sender_x(uint32_t round) const { return get_arg_val<uint32_t>(RT_BASE + 4 + 2 * round + 0); }
     uint32_t sender_y(uint32_t round) const { return get_arg_val<uint32_t>(RT_BASE + 4 + 2 * round + 1); }
 };

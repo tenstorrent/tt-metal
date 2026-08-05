@@ -1,12 +1,24 @@
-# activation_reader_width_sharded.cpp — MIGRATED API v9 (2026-08-03)
+# activation_reader_width_sharded.cpp — MIGRATED API v10 (verified 2026-08-05)
 
 - Unit: `conv2d-activation-width-sharded` (Tier 6, `run-all`).
 - Kernel role: hybrid rotating sender/receiver.
 - Factory: `conv2d_op_width_sharded_program_factory.cpp`.
 - Production commit: `fe866a1d0c4c32b78aae8a76e875c0da109f51c8`.
-- Final status: **migrated**, fully end-to-end at `MCAST_PIPE_API_VERSION=9`.
+- Final status: **migrated**, fully end-to-end at `MCAST_PIPE_API_VERSION=10`.
 
-## API-v9 formulation
+## API-v10 wire update
+
+The helper CT block now carries the full rotating rectangle area in its sixth `rotating_span` word.
+The kernel uses `McastArgs<12, 3>` and derives its RT width and post-helper CT/RT boundaries from
+that wire. The operation's actual loop count remains `num_input_cores`; the receiver coordinate
+table may contain additional inert output-only/noop rectangle cores, but the helper owns and skips
+the complete runtime block before operation-specific arguments.
+
+The v10 host build, 25 host gtests, and complete 73-case helper device suite passed. The exact
+fresh-JIT width case passed at PCC `0.9999992597711427` with 0/26 cache hits; the complete width
+feature inventory passed 48/16, its DRAM-config route passed, and shared DRAM passed 14/14.
+
+## Historical API-v9 formulation
 
 The factory retains its two existing semaphore descriptors and adopts them in helper order
 `[data_ready=act_mcast_receiver_semaphore, consumer_ready=act_mcast_sender_semaphore]`. One host

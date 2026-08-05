@@ -4,7 +4,7 @@
 // mcast_pipe + mcast_host END-TO-END rotating-LINE test kernel.
 //
 // Every core on a 1D line runs this ONE kernel and plays BOTH faces of the channel over `span`
-// rounds, decoding the host::Mcast1D(rotating) wire with McastArgs<CT=1, RT=5, SPAN=span>.
+// rounds, decoding the host::Mcast1D(rotating) wire with McastArgs<CT=1, RT=5>.
 //
 // On round r == my_index this core is the SENDER; on every other round it RECEIVES the shard the
 // round-r sender broadcasts and records it to DRAM. This is the 1D mirror of the block-sharded
@@ -28,14 +28,12 @@ using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb = get_compile_time_arg_val(0);  // mcast + landing region (one per core)
-    // `span` is the first scalar after the mcast CT block; read it via a SPAN-less view of the args,
-    // then form the SPAN-typed McastArgs (rotating).
-    constexpr uint32_t SCALARS = McastArgs</*CT=*/1, /*RT=*/5>::next_compile_time_args_offset();  // = 6
-    constexpr uint32_t span = get_compile_time_arg_val(SCALARS + 0);
-    constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/5, span>();
-    constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 1);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 2);
-    constexpr auto in_args = TensorAccessorArgs<SCALARS + 3>();
+    constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/5>();
+    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 7
+    constexpr uint32_t span = mc.rotating_span;
+    constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 0);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 1);
+    constexpr auto in_args = TensorAccessorArgs<SCALARS + 2>();
     constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);

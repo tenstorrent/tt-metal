@@ -1,9 +1,10 @@
 # Annotation — `activation_reader_width_sharded.cpp`
 
-> API-v9 outcome (2026-08-03): **migrated** in `fe866a1d0c4`. The current
+> API-v10 outcome (verified 2026-08-05): **migrated**. The current
 > ACK-fenced rotating loopback resolved the prior attempt's 25 numeric failures.
 > The complete mapped inventory passed: 48 feature cases, 16 legitimate skips,
-> and one DRAM-config case, with fresh JIT evidence for this kernel.
+> one DRAM-config case, and the shared 14-case DRAM inventory, with fresh JIT
+> evidence for the two-argument `McastArgs<12, 3>` decoder.
 
 Path: `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/`
 Role: **reader, HYBRID (sender + receiver + loopback)** — width-sharded activation mcast, round-robin.
@@ -77,7 +78,7 @@ receiver faces.
 - None. Every primitive call maps to a protocol step. The F2-MIXED counter/flag split is a deliberate
   design choice, not a hole — flagged above for the `Pipe` canonicalization decision.
 
-## API-v9 formulation (2026-08-03)
+## Historical API-v9 formulation (2026-08-03)
 
 - Host `Mcast2D`: full reader bounding rectangle, `rotating_sender=true`, Flag staging, handshake
   enabled, adopted sem IDs `[data_ready=receiver_sem, consumer_ready=sender_sem]`, and
@@ -93,10 +94,12 @@ receiver faces.
 
 - Host: rotating, handshaked Flag `Mcast2D` over the full reader rectangle, adopting the existing
   data-ready and consumer-ready semaphore IDs and carrying the smaller active ACK count separately.
-- Kernel: `McastArgs<12, 3, num_input_cores>`, `SenderPipe::send()`, and
+- Kernel under v10: `McastArgs<12, 3>`, `SenderPipe::send()`, and
   `ReceiverPipe::receive(round)` replace the raw CT/RT wire and primitive sequence.
-- Validation: build passed; exact fresh-cache `--dev` case passed at PCC `0.999956503`; full
+- Validation under v10: build passed; exact fresh-cache `--dev` case passed at PCC
+  `0.9999992597711427`; full
   `CONV-WIDTH` feature inventory passed 48 with 16 expected skips; DRAM-config passed at PCC
-  `0.998234911`; helper suite passed 72/72.
+  `0.998234911`; helper suite passed 73/73.
 
-Verdict: **migrated, fully end-to-end at API v9; no helper change or API bump required.**
+Verdict: **migrated, fully end-to-end at API v10.** The six-word CT wire is self-describing; API-002
+face metadata remains deferred.

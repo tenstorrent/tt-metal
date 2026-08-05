@@ -141,7 +141,8 @@ def _run_pipe(
     semaphores = mc.owned_semaphores()
 
     # ---- sender kernel ----
-    # CT: [cb_src, cb_dst] + McastArgs block [active, data_ready, consumer_ready, num_active, flags] + scalars.
+    # CT: [cb_src, cb_dst] + McastArgs block
+    # [active, data_ready, consumer_ready, num_active, flags, rotating_span] + scalars.
     # pre_handshake + signal are in the mcast block (flags word) now — no separate pre_handshake CT word.
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
@@ -594,7 +595,8 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
     semaphores = mc.owned_semaphores()
 
     # sender kernel (writes its own shard 0)
-    # CT: [cb_src, cb_dst] + McastArgs block [active, data_ready, consumer_ready(UNUSED), num_active, flags].
+    # CT: [cb_src, cb_dst] + McastArgs block
+    # [active, data_ready, consumer_ready(UNUSED), num_active, flags, rotating_span].
     # handshake=False -> flags pre_handshake bit clear, so the sender/receiver run without the ack.
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
@@ -674,7 +676,8 @@ def test_f3_degenerate(device):
 # End-to-end proof of the rotating WIRE (not just the pipe's shared-cell mechanics above):
 # ttnn.Mcast1D(PerRow, rotating_sender=True) emits the semaphores, CT, and the per-core RT block (full-line rect
 # + ordered per-round sender coords); pipe_rotating_line.cpp decodes it with ONE
-# McastArgs<1,5,SPAN> (owns both arg lists) and runs the N-core rotating line -- the 1D mirror of block-sharded
+# McastArgs<1,5> (owns both arg lists and reads rotating_span from CT) and runs the N-core rotating line --
+# the 1D mirror of block-sharded
 # matmul in0. Each core i holds a distinct constant shard (i+1). Over N rounds core r broadcasts its
 # shard to the whole line; every core records what it saw per round to DRAM. The check
 # output[c*N + r] == shard(r) validates BOTH the data path AND that the receiver indexes the sender
@@ -720,12 +723,12 @@ def _run_rotating_line(device, span, payload_tiles):
         ),
     ]
 
-    # CT: [cb] + McastArgs<1,5,span> block (5 words) + [span, payload_pages, page_bytes] + TA(in) + TA(out)
-    ct = [cb] + list(mc.compile_time_args()) + [N, payload_pages, page_bytes]
+    # CT: [cb] + McastArgs<1,5> block (6 words) + [payload_pages, page_bytes] + TA(in) + TA(out)
+    ct = [cb] + list(mc.compile_time_args()) + [payload_pages, page_bytes]
     ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
-    # RT: [in_addr, in_start, out_addr, out_start, my_index] + McastArgs<1,5,span> RT block (rect + coords)
+    # RT: [in_addr, in_start, out_addr, out_start, my_index] + McastArgs<1,5> RT block (rect + coords)
     rt = ttnn.RuntimeArgs()
     for X in range(N):
         core = ttnn.CoreCoord(X, 0)
@@ -853,7 +856,7 @@ def _run_fixed_line(
         ),
     ]
 
-    # CT: [cb] + McastArgs<1,5> block (5 words) + [num_blocks, payload_pages, page_bytes] + TA(in) + TA(out)
+    # CT: [cb] + McastArgs<1,5> block (6 words) + [num_blocks, payload_pages, page_bytes] + TA(in) + TA(out)
     ct = [cb] + list(mc.compile_time_args()) + [NB, payload_pages, page_bytes]
     ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())

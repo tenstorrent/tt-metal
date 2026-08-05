@@ -1,6 +1,6 @@
 {
-  "_comment": "Current production-kernel v9 port map. Inventory definitions below are the durable meaning of each inventory label. Execution results and JIT evidence are maintained in the per-kernel migration logs and report.md.",
-  "helper_version": 9,
+  "_comment": "Current production-kernel v10 port map. Inventory definitions below are the durable meaning of each inventory label. Execution results and JIT evidence are maintained in the per-kernel migration logs and report.md.",
+  "helper_version": 10,
   "baseline": "4a1d6a97ca9bd4efabd0ad6115fcb30538851c90",
   "machine": "single-chip Blackhole p100a",
   "updated": "2026-08-03",

@@ -86,9 +86,9 @@ TEST_F(McastHostFixture, PerRow8x8) {
     EXPECT_EQ(sems[1].id, 1u);
     EXPECT_EQ(sems[1].initial_value, 0u);
 
-    // --- CT: [active, data_ready, consumer_ready, num_active, flags] (num_active = span-1 = 7;
-    //         flags = 1: handshake => pre_handshake bit0, Flag => bit1 clear) ---
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 7, 1}));
+    // --- CT: [active, data_ready, consumer_ready, num_active, flags, rotating_span]
+    //         (num_active = span-1 = 7; flags = 1; rotating_span = 0 for fixed mode) ---
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 7, 1, 0}));
 
     // --- RT: sender at col 0 of row Y -> rect over cols [1, 7] of that row ---
     for (uint32_t Y : {0u, 3u, 7u}) {
@@ -132,7 +132,7 @@ TEST_F(McastHostFixture, PerColumn8x8) {
     EXPECT_EQ(sems[0].id, 2u);
     EXPECT_EQ(sems[1].id, 3u);
 
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 2, 3, 7, 1}));
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 2, 3, 7, 1, 0}));
 
     // sender at row 0 of column X -> rect over rows [1, 7] of that column.
     for (uint32_t X : {0u, 4u, 7u}) {
@@ -157,7 +157,7 @@ TEST_F(McastHostFixture, PerRowDegenerateSingleColumn) {
 
     EXPECT_FALSE(mc.active());
     // active=0, ids still emitted; num_active=0 (no receivers); flags=1 (handshake, Flag).
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{0, 0, 1, 0, 1}));
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{0, 0, 1, 0, 1, 0}));
     for (uint32_t Y : {0u, 3u, 7u}) {
         EXPECT_TRUE(mc.is_sender(CoreCoord(0, Y)));
         EXPECT_EQ(mc.runtime_args(CoreCoord(0, Y)), (std::vector<uint32_t>{0, 0, 0, 0})) << "row " << Y;
@@ -174,7 +174,7 @@ TEST_F(McastHostFixture, PerColumnDegenerateSingleRow) {
     Mcast1D mc(dev, grid, Mcast1DShape::PerColumn, /*sender_row=*/0, cfg);
 
     EXPECT_FALSE(mc.active());
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{0, 2, 3, 0, 1}));
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{0, 2, 3, 0, 1, 0}));
     for (uint32_t X : {0u, 4u, 7u}) {
         EXPECT_TRUE(mc.is_sender(CoreCoord(X, 0)));
         EXPECT_EQ(mc.runtime_args(CoreCoord(X, 0)), (std::vector<uint32_t>{0, 0, 0, 0})) << "col " << X;
@@ -194,7 +194,7 @@ TEST_F(McastHostFixture, OffsetPerRowUniformNoc0) {
     EXPECT_EQ(semaphores[0].id, 5u);
     EXPECT_EQ(semaphores[1].id, 6u);
     EXPECT_EQ(semaphores[0].core_ranges, grid);
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 5, 6, 3, 1}));
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 5, 6, 3, 1, 0}));
 
     EXPECT_TRUE(mc.is_sender(CoreCoord(3, 4)));
     EXPECT_FALSE(mc.is_sender(CoreCoord(2, 4)));
@@ -355,8 +355,8 @@ TEST_F(McastHostFixture, PerRowRotating8x8) {
 
     EXPECT_TRUE(mc.active());
     EXPECT_EQ(mc.num_senders(), 8u);  // 8 rounds; every column takes a sender turn
-    // CT is unchanged by rotation (num_active = span-1 = 7, flags = 1).
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 7, 1}));
+    // The rotating span is self-described by the sixth CT word.
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 7, 1, 8}));
 
     for (uint32_t Y : {0u, 3u, 7u}) {
         std::vector<std::pair<uint32_t, uint32_t>> line;
@@ -396,7 +396,7 @@ TEST_F(McastHostFixture, PerColumnRotating8x8) {
 
     EXPECT_TRUE(mc.active());
     EXPECT_EQ(mc.num_senders(), 8u);
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 2, 3, 7, 1}));
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 2, 3, 7, 1, 8}));
 
     for (uint32_t X : {0u, 4u, 7u}) {
         std::vector<std::pair<uint32_t, uint32_t>> line;
@@ -455,6 +455,7 @@ TEST_F(McastHostFixture, PerRowRotatingDegenerate) {
 
     EXPECT_FALSE(mc.active());
     EXPECT_EQ(mc.num_senders(), 1u);
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{0, 0, 1, 0, 1, 1}));
     for (uint32_t Y : {0u, 7u}) {
         const auto s = virt(0, Y);
         EXPECT_EQ(mc.runtime_args(CoreCoord(0, Y)), (std::vector<uint32_t>{0, 0, 0, 0, s.first, s.second}))
@@ -526,8 +527,8 @@ TEST_F(McastHostFixture, Mcast2DFullyInsideDense) {
     EXPECT_EQ(sems[0].core_ranges, rect);
     EXPECT_EQ(sems[0].core_ranges.num_cores(), 64u);
 
-    // CT: [active, data_ready, consumer_ready, num_active, flags] (flags=1: handshake, Flag).
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 63, 1}));
+    // CT: [active, data_ready, consumer_ready, num_active, flags, rotating_span].
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 63, 1, 0}));
 
     // sender -> whole-rect corners; receivers -> the sender's virtual coords.
     EXPECT_TRUE(mc.is_sender(CoreCoord(0, 0)));
@@ -566,7 +567,7 @@ TEST_F(McastHostFixture, Mcast2DDivergentNumActive) {
 
     EXPECT_EQ(mc.num_active(), 10u);
     EXPECT_EQ(mc.num_receivers(CoreCoord(0, 0)), 63u);  // geometric fan-out unchanged
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 10, 1}));
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 10, 1, 0}));
 }
 
 // Separate sender: the sender sits OUTSIDE the rect, so every rect core is a receiver (fan-out area),
@@ -588,7 +589,7 @@ TEST_F(McastHostFixture, Mcast2DSeparateSender) {
     EXPECT_EQ(mc.num_active(), 16u);  // no sender to exclude => fan-out == area
     EXPECT_EQ(mc.num_receivers(sender), 16u);
     EXPECT_EQ(mc.num_receivers(CoreCoord(2, 3)), 0u);
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 16, 1}));
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 16, 1, 0}));
 
     // participating set = rect (16) ∪ {sender} (1) = 17 cores.
     const auto sems = mc.owned_semaphores();
@@ -606,7 +607,7 @@ TEST_F(McastHostFixture, Mcast2DSeparateSender) {
 }
 
 // Rotating over a rect: every core takes a sender turn (area rounds); RT = 4 + 2*area, coords
-// row-major (y outer, x inner). Decoded by McastArgs<CT_BASE, RT_BASE, area> (SPAN = area).
+// row-major (y outer, x inner). McastArgs<CT_BASE, RT_BASE> reads the area from rotating_span.
 TEST_F(McastHostFixture, Mcast2DRotating) {
     auto* dev = device_;
     const auto rect = make_grid(/*gc=*/4, /*gr=*/4);  // 16 cores
@@ -622,7 +623,7 @@ TEST_F(McastHostFixture, Mcast2DRotating) {
     EXPECT_TRUE(mc.active());
     EXPECT_EQ(mc.num_senders(), 16u);
     EXPECT_EQ(mc.num_active(), 15u);  // each round reaches the other 15 (sender_in_rect => area-1)
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 15, 1}));
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 15, 1, 16}));
 
     // Every core in the rect emits the SAME line-uniform block (rect + row-major coords).
     std::vector<uint32_t> expected = expected_rect2d(dev, 0, 0, 3, 3, /*noc1=*/false);
@@ -671,7 +672,7 @@ TEST_F(McastHostFixture, Mcast2DDegenerate) {
 
     EXPECT_FALSE(mc.active());
     EXPECT_EQ(mc.num_active(), 0u);
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{0, 0, 1, 0, 1}));
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{0, 0, 1, 0, 1, 0}));
     EXPECT_TRUE(mc.is_sender(CoreCoord(2, 2)));
     const auto w = dev->worker_core_from_logical_core(CoreCoord(2, 2));
     const auto vx = static_cast<uint32_t>(w.x);
@@ -710,14 +711,14 @@ TEST_F(McastHostFixture, FlagsWordEncoding) {
         McastConfig cfg;
         cfg.handshake = false;
         Mcast1D mc(dev, grid, Mcast1DShape::PerRow, /*sender_col=*/0, cfg);
-        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, UNUSED, 7, 0}));
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, UNUSED, 7, 0, 0}));
     }
     // handshake on + Counter => flags 3 (bit0 pre_handshake | bit1 signal).
     {
         McastConfig cfg;
         cfg.data_ready = DataReadyMode::Counter;
         Mcast1D mc(dev, grid, Mcast1DShape::PerRow, /*sender_col=*/0, cfg);
-        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 7, 3}));
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 7, 3, 0}));
     }
     // handshake off + Counter => flags 2 (bit1 only); Mcast2D dense fan-out 63, consumer_ready UNUSED.
     {
@@ -725,7 +726,7 @@ TEST_F(McastHostFixture, FlagsWordEncoding) {
         cfg.handshake = false;
         cfg.data_ready = DataReadyMode::Counter;
         Mcast2D mc(dev, grid, /*sender=*/CoreCoord(0, 0), cfg);
-        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, UNUSED, 63, 2}));
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, UNUSED, 63, 2, 0}));
     }
 }
 
@@ -740,17 +741,17 @@ TEST_F(McastHostFixture, PreHandshakeOverride) {
     // handshake=True object: default emission has pre_handshake (flags bit0) set.
     McastConfig cfg;  // handshake=true, Flag
     Mcast2D mc(dev, grid, /*sender=*/CoreCoord(0, 0), cfg, /*num_active=*/2);
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 2, 1}));  // default -> bit0 set
-    EXPECT_EQ(mc.compile_time_args(/*pre_handshake=*/true), (std::vector<uint32_t>{1, 0, 1, 2, 1}));
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 2, 1, 0}));  // default -> bit0 set
+    EXPECT_EQ(mc.compile_time_args(/*pre_handshake=*/true), (std::vector<uint32_t>{1, 0, 1, 2, 1, 0}));
     // Override clears bit0 for a non-acking receiver kernel — same ids, same num_active, same geometry.
-    EXPECT_EQ(mc.compile_time_args(/*pre_handshake=*/false), (std::vector<uint32_t>{1, 0, 1, 2, 0}));
+    EXPECT_EQ(mc.compile_time_args(/*pre_handshake=*/false), (std::vector<uint32_t>{1, 0, 1, 2, 0, 0}));
 
     // Symmetric for Mcast1D, and it composes with the Counter signal bit (bit1 stays put).
     McastConfig cfg1;
     cfg1.data_ready = DataReadyMode::Counter;
     Mcast1D mc1(dev, grid, Mcast1DShape::PerRow, /*sender_col=*/0, cfg1);
-    EXPECT_EQ(mc1.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 7, 3}));                         // bit0|bit1
-    EXPECT_EQ(mc1.compile_time_args(/*pre_handshake=*/false), (std::vector<uint32_t>{1, 0, 1, 7, 2}));  // bit1 only
+    EXPECT_EQ(mc1.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 7, 3, 0}));  // bit0|bit1, fixed
+    EXPECT_EQ(mc1.compile_time_args(/*pre_handshake=*/false), (std::vector<uint32_t>{1, 0, 1, 7, 2, 0}));
 }
 
 }  // namespace ttnn::kernel_lib::host::test
