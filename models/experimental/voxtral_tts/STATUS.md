@@ -1434,18 +1434,32 @@ other, and at 8x1 in Block 2 subblock_w 4 and 1 measure *byte-identical* (24.628
 not build at all -- a hard register-budget limit. So the knob nobody had tested turns out not to
 matter, which is worth knowing precisely so nobody tests it again.
 
-**What DOES matter is the core count, and more is monotonically better end to end** -- the opposite
-of what §6.9 recorded. Block 1, `_layer_step` x26:
+**What DOES matter is the core count**, contrary to §6.9. **THE COUNT MUST DIVIDE THE TILE COUNT.**
+A 32x3072 tensor is 1 x 96 tiles, a tile is the indivisible unit, and `block_w` IS the quotient --
+tiles per core. So only divisors of 96 are legal, which rules out 40, 56 and **64** (96/64 = 1.5).
+That is why 8x8 does not build rather than merely running slowly.
 
-| grid | cores | block_w | isolated norm | **ms/step** |
-|---|---|---|---|---|
-| 2x1 | 2 | 48 | 43.5 µs | 25.53 |
-| 4x1 | 4 | 24 | 43.9 µs | 24.84 |
-| 8x1 ← was shipped | 8 | 12 | 45.6 µs | 24.57 |
-| 8x2 | 16 | 6 | 48.2 µs | 24.45 |
-| **8x4 ← ships** | **32** | **3** | **54.6 µs** | **24.41** |
+Block 1, `_layer_step` x26, interleaved round-robin:
 
-64 cores is impossible: 3072/32 = 96 tiles and 96/64 = 1.5.
+| grid | cores | 96/cores | legal? | isolated norm | **ms/step** |
+|---|---|---|---|---|---|
+| 2x1 | 2 | 48 | yes | 43.5 µs | 25.53 |
+| 4x1 | 4 | 24 | yes | 43.9 µs | 24.84 |
+| 8x1 ← was shipped | 8 | 12 | yes | 45.6 µs | 24.57 |
+| 8x2 | 16 | 6 | yes | 48.2 µs | 24.45 |
+| 8x3 | 24 | 4 | yes | — | 24.42 |
+| **8x4 ← ships** | **32** | **3** | **yes** | **54.6 µs** | **24.41** |
+| 8x5 | 40 | 2.4 | **no** | — | — |
+| 8x6 | 48 | 2 | yes | — | 24.44 |
+| 8x7 / 8x8 | 56 / 64 | 1.71 / 1.5 | **no** | — | — |
+
+**IT IS NOT MONOTONE -- IT HAS A MINIMUM AT 32, AND I CLAIMED OTHERWISE.** The first sweep tested
+2/4/8/16/32 by doubling, missed the non-power-of-two counts, saw a monotone curve and concluded "32 is
+the largest that divides the work evenly." Both halves were wrong: **48 also divides evenly**, and it
+is **slower** (24.44 vs 24.41, against a 0.007-0.011 ms spread, so ~4x the noise). 32 is the measured
+optimum, not the largest legal grid. Plausibly the cross-core reduce and shard scatter start to
+dominate once each core holds only 2 tiles, but that mechanism is a guess -- only the ordering is
+measured.
 
 **THE ISOLATED NORM RANKS THESE BACKWARDS.** 8x4 is the SLOWEST in isolation (54.6 µs vs 43.5) and
 the FASTEST end to end. §6.9 concluded "the core count barely matters" and "8x2/8x4/8x8 are all

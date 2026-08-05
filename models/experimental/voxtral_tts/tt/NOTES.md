@@ -247,10 +247,15 @@ TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 #     4x1     4      24       43.9 us    24.84
 #     8x1     8      12       45.6 us    24.57   <- what used to ship
 #     8x2    16       6       48.2 us    24.45
+#     8x3    24       4          -        24.42
 #     8x4    32       3       54.6 us    24.41   <- ships now, SLOWEST in isolation
-# 64 cores cannot work: 3072/32 = 96 tiles, 96/64 = 1.5. `subblock_w` is inert (1/2/3/4 within
-# 0.02 ms; >=6 will not build). A norm cannot be benchmarked alone -- it is ~16 us of reduction
-# inside ~28 us of resharding, and the reshard's cost depends on what consumes it next.
+#     8x6    48       2          -        24.44   legal, and SLOWER -- the curve turns around
+# THE COUNT MUST DIVIDE THE TILE COUNT: 32x3072 is 1 x 96 tiles, a tile is indivisible, and block_w
+# IS tiles-per-core. Only divisors of 96 are legal, so 40 (8x5), 56 (8x7) and 64 (8x8) cannot build
+# at all -- 96/64 = 1.5. 32 is the measured OPTIMUM, not the largest legal grid: 48 divides evenly
+# and loses. `subblock_w` is inert (1/2/3/4 within 0.02 ms; >=6 will not build). And a norm cannot
+# be benchmarked alone -- it is ~16 us of reduction inside ~28 us of resharding, and the reshard's
+# cost depends on what consumes it next.
 #
 # THE SECOND RESHARD CANNOT BE DODGED, and both ways of trying are now measured.
 #

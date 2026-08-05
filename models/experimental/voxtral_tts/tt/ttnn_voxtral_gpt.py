@@ -42,9 +42,10 @@ _L1 = ttnn.L1_MEMORY_CONFIG
 # Grid and blocking for the sharded norm. NOTES.md [gpt-04] has the sweep; the short version is
 # that `block_w` is NOT a free knob (it is DIM // cores // TILE, so it only moves when the core
 # count does), `subblock_w` IS free but inert (1/2/3/4 within 0.02 ms, and >=6 will not build), and
-# MORE CORES IS MONOTONICALLY FASTER END TO END: 2/4/8/16/32 cores measure 25.53/24.84/24.56/24.45/
-# 24.41 ms/step. 32 cores (8x4) is the fastest that divides the work evenly -- 64 cannot, since
-# 3072/32 = 96 tiles and 96/64 is not an integer.
+# and the core count has a MINIMUM AT 32, not a monotone trend: 2/4/8/16/24/32/48 cores measure
+# 25.53/24.84/24.56/24.45/24.42/24.41/24.44 ms/step. The count must DIVIDE the 96 width-tiles of a
+# 32x3072 tensor, since block_w is tiles-per-core and a tile is indivisible -- so 40, 56 and 64 do
+# not build at all (96/64 = 1.5), while 48 is legal and simply loses.
 _NORM_GRID_X, _NORM_GRID_Y, _NORM_SUBBLOCK_W = 8, 4, 1
 _NORM_CORES = _NORM_GRID_X * _NORM_GRID_Y
 _NORM_SHARD = ttnn.create_sharded_memory_config(
