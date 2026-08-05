@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
 # SPDX-License-Identifier: Apache-2.0
 #
 # Stage 1 & Stage 2 Verification Script for microsoft/phi-1 on Tenstorrent Wormhole (N150/N300)

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tenstorrent Bounty #18287: Bring up microsoft/phi-1 on Wormhole (N150/N300)
@@ -115,7 +117,7 @@ class TTPhi1Attention:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # Deallocate intermediate Q, K, V activations to prevent Tensix L1 memory exhaustion (Claude Review Item #3)
+        # Deallocate intermediate Q, K, V activations to prevent Tensix L1 memory exhaustion
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
