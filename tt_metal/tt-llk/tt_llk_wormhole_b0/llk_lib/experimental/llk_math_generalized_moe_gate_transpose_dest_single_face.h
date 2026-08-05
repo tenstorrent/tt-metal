@@ -218,16 +218,12 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init
  */
 inline void generalized_moe_gate_mop_prologue()
 {
-    // set_dst_write_addr issues a SETC16 on DEST_TARGET_REG_CFG_MATH_Offset, which the op reaches
-    // straight out of an SFPU call whose loads and stores address DEST through that same register.
-    // SETC16 executes in the config unit, a different backend port from MATH/SFPU, so it can land
-    // while earlier math/SFPU work is still in flight; stall the config unit on MATH and SFPU1
-    // first, the way dest_section_flip does before writing the same register.
+    // Stall the config write for in-flight work to be done.
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
     math::reset_counters(p_setrwc::SET_ABD_F);
     math::_configure_mov_ops_zero_flag_state_(); // MOVB2D must not flush datums with a zero low byte
-    // MOVD2B does not wait for SrcB to come back to the Matrix Unit on its own, so wait here.
+    // MOVD2B does not wait for SrcB to come back to the FPU on its own, so wait here.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
 }
 
