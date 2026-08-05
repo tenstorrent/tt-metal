@@ -312,7 +312,6 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
 
     const uint32_t num_input_tiles = 2 * head_dim_t;
     const uint32_t num_output_tiles = num_input_tiles;
-    const uint32_t num_interm_tiles = head_dim_t;
 
     const bool row_major = true;
     const uint32_t num_cores = num_cores_x * num_cores_y;
@@ -358,17 +357,17 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         DataflowBufferSpec{
             .unique_id = ROTATED_INTERM_DFB,
             .entry_size = input_single_tile_size,
-            .num_entries = num_interm_tiles,
+            .num_entries = head_dim_t,
             .data_format_metadata = input_cb_data_format},
         DataflowBufferSpec{
             .unique_id = COS_INTERM_DFB,
             .entry_size = cos_single_tile_size,
-            .num_entries = num_interm_tiles,
+            .num_entries = head_dim_t,
             .data_format_metadata = cos_cb_data_format},
         DataflowBufferSpec{
             .unique_id = SIN_INTERM_DFB,
             .entry_size = sin_single_tile_size,
-            .num_entries = num_interm_tiles,
+            .num_entries = head_dim_t,
             .data_format_metadata = sin_cb_data_format},
         DataflowBufferSpec{
             .unique_id = OUT_DFB,
@@ -378,7 +377,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         DataflowBufferSpec{
             .unique_id = ZERO_DFB,
             .entry_size = output_single_tile_size,
-            .num_entries = num_interm_tiles,
+            .num_entries = head_dim_t,
             .data_format_metadata = output_cb_data_format},
     };
     if (has_metadata) {
