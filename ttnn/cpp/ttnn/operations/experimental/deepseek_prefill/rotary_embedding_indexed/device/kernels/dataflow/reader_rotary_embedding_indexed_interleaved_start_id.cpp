@@ -112,7 +112,7 @@ void kernel_main() {
     const uint32_t sin_tile_bytes = dfb_sin.get_entry_size();
     const uint32_t trans_mat_tile_bytes = dfb_trans_mat.get_entry_size();
 
-    // Read transformation matrix in CB (only once, because it will be reused)
+    // Read transformation matrix into the DFB (only once, because it will be reused)
     dfb_trans_mat.reserve_back(onetile);
     uint32_t trans_mat_l1_write_addr = dfb_trans_mat.get_write_ptr();
     noc.async_read(s3, CoreLocalMem<uint32_t>(trans_mat_l1_write_addr), trans_mat_tile_bytes, {.page_id = 0}, {});
@@ -160,7 +160,7 @@ void kernel_main() {
                     sin_curr_idx = rope_seq_tile * Wt;
                 }
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    // Read input into CB
+                    // Read input into the DFB
                     noc.async_read(
                         s0,
                         CoreLocalMem<uint32_t>(input_l1_write_addr),

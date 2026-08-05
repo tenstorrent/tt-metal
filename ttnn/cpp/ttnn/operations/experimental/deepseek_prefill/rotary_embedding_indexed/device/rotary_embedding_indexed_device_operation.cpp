@@ -19,6 +19,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding_llama/device/rotary_embedding_llama_metal2_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed {
@@ -26,21 +27,20 @@ namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_ind
 using namespace tt::tt_metal;
 using namespace tt::constants;
 using namespace tt::tt_metal::experimental;
+// Reused-kernel binding vocabulary (DFB / tensor names, writer+compute sources) — single-sourced here.
+using namespace ttnn::experimental::prim::rope_metal2;
 
 namespace {
 
 // Writer + compute kernels are reused verbatim from the rotary_embedding_llama prefill path (they
 // consume cos/sin from the CB and write output indexed by local seq tile -- neither touches the
 // cos/sin source index). Only the reader is forked to derive the per-device cos/sin shard offset.
+// The shared DFB/tensor names and the writer/compute sources come from rope_metal2 (kWriterSource,
+// kComputeSource, INPUT_DFB, OUT_DFB, OUTPUT_PARAM, ...) so the reused-kernel binding contract has one
+// source of truth; only the reader source and the metadata-path names are local.
 constexpr auto kReaderKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/kernels/dataflow/"
     "reader_rotary_embedding_indexed_interleaved_start_id.cpp";
-constexpr auto kWriterKernelPath =
-    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/"
-    "writer_rotary_embedding_llama_interleaved_start_id.cpp";
-constexpr auto kComputeKernelPath =
-    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/"
-    "rotary_embedding_llama.cpp";
 
 // Metadata path only: L1-scratch DFB the reader reads the metadata page into. The metadata tensor is a
 // dedicated 1-element uint32 tensor holding kv_actual_global directly at element [0]; the reader
@@ -48,26 +48,8 @@ constexpr auto kComputeKernelPath =
 // L1 page-alignment floor -- the read itself is 4 bytes.
 constexpr uint32_t kMetadataBytes = 16;  // DFB entry size (16B L1 alignment floor); only 4B (element [0]) is read
 
-// Named-resource vocabulary. accessor_name strings for the writer/compute bindings must match the
-// symbols the reused rotary_embedding_llama kernels reference (dfb::out, tensor::output, ...).
-const KernelSpecName READER{"reader"};
-const KernelSpecName WRITER{"writer"};
-const KernelSpecName COMPUTE{"compute"};
-const DFBSpecName INPUT_DFB{"input"};
-const DFBSpecName COS_DFB{"cos"};
-const DFBSpecName SIN_DFB{"sin"};
-const DFBSpecName TRANS_MAT_DFB{"trans_mat"};
-const DFBSpecName ROTATED_INTERM_DFB{"rotated_interm"};
-const DFBSpecName COS_INTERM_DFB{"cos_interm"};
-const DFBSpecName SIN_INTERM_DFB{"sin_interm"};
-const DFBSpecName OUT_DFB{"out"};
-const DFBSpecName ZERO_DFB{"zero"};
+// Metadata-path-only names (everything else comes from rope_metal2).
 const DFBSpecName META_DFB{"meta"};
-const TensorParamName INPUT_PARAM{"input"};
-const TensorParamName COS_PARAM{"cos"};
-const TensorParamName SIN_PARAM{"sin"};
-const TensorParamName TRANS_MAT_PARAM{"trans_mat"};
-const TensorParamName OUTPUT_PARAM{"output"};
 const TensorParamName METADATA_PARAM{"metadata"};
 
 // Structural + per-call checks shared by the cache-miss and cache-hit paths. The structural checks
@@ -405,10 +387,10 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
 
     const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
-    const KernelSpec::CompilerOptions::Defines reader_defines =
-        has_metadata
-            ? KernelSpec::CompilerOptions::Defines{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}, {"HAS_METADATA", "1"}}
-            : reload_define;
+    KernelSpec::CompilerOptions::Defines reader_defines = reload_define;
+    if (has_metadata) {
+        reader_defines.emplace("HAS_METADATA", "1");
+    }
 
     // ------------------------------------------------------------------ reader spec (this op's own)
     std::vector<DFBBinding> reader_dfbs = {
@@ -462,10 +444,11 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     // ------------------------------------------------------------------ writer + compute (reused llama)
     KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = std::filesystem::path{kWriterKernelPath},
+        .source = kWriterSource,
         .compiler_options = {.defines = reload_define},
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
+             // zero is a single-toucher (writer fills + reads it) -> self-loop (PRODUCER + CONSUMER).
              DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::PRODUCER},
              DFBBinding{
                  .dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::CONSUMER}},
@@ -477,7 +460,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = std::filesystem::path{kComputeKernelPath},
+        .source = kComputeSource,
         .compiler_options = {.defines = reload_define},
         .dfb_bindings =
             {DFBBinding{
@@ -489,6 +472,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
                  .accessor_name = "trans_mat",
                  .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
+             // Intermediate DFBs: compute is the sole toucher -> each is a self-loop (PRODUCER + CONSUMER).
              DFBBinding{
                  .dfb_spec_name = ROTATED_INTERM_DFB,
                  .accessor_name = "rotated_interm",
