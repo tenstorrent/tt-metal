@@ -60,22 +60,46 @@ DIR=models/demos/hf_eager/hunyuanvideo_1_5
 # --- correctness ---
 $PY -m pytest $DIR/tests/e2e/test_e2e_pipeline.py -s      # e2e gate (Gate 1/2/3, PCC >= 0.95)
 $PY -m pytest $DIR/tests/e2e/test_real_weight_pcc.py -s   # real-weight DiT PCC (single + mesh)
+$PY -m pytest $DIR/tests/pcc/ -s                          # all 18 per-module PCC tests
+$PY -m pytest $DIR/tests/e2e/test_vae_decoder.py -s       # tiled VAE decode
 
-# --- 121-frame video generation (fastest config: 32-chip sp=4, tile-sharded VAE) ---
-#   HY_MESH=4,8 + HY_DIT_SP=1 : 32-chip, rows=sp=4 cols=tp=8 (SP required, else flat tp=32)
-#   HY_TT_QWEN/HY_TT_VAE=1    : encoders on device;  VAE auto tile-shards across the mesh
-#   HY_VAE_TILE_PX=128        : required at 121f (192 px fragments DRAM)
+# --- 121-frame video generation (fastest: 32-chip sp=4 + tile-sharded VAE, ~5:59 e2e) ---
 HY_MESH=4,8 HY_DIT_SP=1 HY_DIT_BF16=1 HY_TT_QWEN=1 HY_TT_VAE=1 HY_VAE_TILE=1 HY_VAE_TILE_PX=128 \
 HY_FRAMES=121 HY_STEPS=50 HY_H=480 HY_W=848 \
 $PY -m pytest $DIR/tests/e2e/test_stage2b_gen.py::test_stage2b_gen_qb2 -svv
 
-# --- perf (device_ms, trace+2CQ, capped 2-layer workload) ---
+# --- per-step DiT perf (device_ms, trace+2CQ, capped 2-layer workload) ---
 $PY -m pytest $DIR/tests/e2e/test_main_perf.py::test_main_perf -svv
 
 # --- demos (single denoise step) ---
 $PY -m models.demos.hf_eager.hunyuanvideo_1_5.demo.demo_i2v
 $PY -m models.demos.hf_eager.hunyuanvideo_1_5.demo.demo_t2v
 ```
+
+### Generation flags (`test_stage2b_gen_qb2`)
+
+Every flag is an env var; all are optional with the defaults below.
+
+| flag | default | meaning |
+|---|---|---|
+| `HY_MESH` | (parametrized) | DiT mesh as `rows,cols` (e.g. `4,8`). With `HY_DIT_SP=1`: **rows → sp, cols → tp** |
+| `HY_DIT_SP` | `0` | **Sequence parallelism** — shard the latent sequence across mesh rows (`sp=rows`, head-`tp=cols`). **Required for any multi-row mesh**; without it the mesh flattens to `tp=N_devices` and the 16-head DiT errors (`heads_total=16 not divisible by tp=32`) |
+| `HY_DIT_BF16` | `0` | Load DiT weights + run block matmuls in **bf16** (faster; used for all perf numbers) |
+| `HY_TT_QWEN` | `0` | Run the **Qwen text encoder on device** (else on host) |
+| `HY_TT_VAE` | `0` | Run the **VAE decode on device** (else on host); auto **tile-shards** across the mesh when `ndev>1` |
+| `HY_VAE_TILE` | `0` | Enable **tiled VAE decode** (split the latent into H/W tiles) — required at high frame counts |
+| `HY_VAE_TILE_PX` | `0` | Per-tile pixel size; `0` = model default. **Use `128` at 121f** (192 px fragments DRAM) |
+| `HY_FRAMES` | `13` | Number of video frames (e.g. `121`) |
+| `HY_STEPS` | `50` | Number of denoise steps |
+| `HY_H` / `HY_W` | `480` / `848` | Output height / width in pixels |
+| `HY_TRACE` | `1` | `1` = trace-capture + 2 command queues; `0` = eager. (Per-step ~identical at 121f; capture is a one-time cost — see Performance) |
+| `HY_PROMPT` / `HY_NEG_PROMPT` | cat prompt / — | Positive / negative text prompt |
+| `HY_OUT` | `/tmp/hy15_stage2b_qb2` | Output dir (frames + `tt_blackhole.mp4` + `.gif`) |
+| `HY_FPS` | `24` | Output video frame rate |
+| `HY_QWEN_ZERO_PAD` | `1` | Zero out leaked Qwen padding tokens (correctness; `0` disables) |
+
+`HY_TRUNC` (text truncation) is read only by the single-device `test_stage2b_gen`, **not** by
+`qb2`. `HY_TRACE_REGION_SIZE` and the CQ count are set automatically by the test.
 
 ## Performance
 
@@ -120,7 +144,8 @@ a single tile.
 
 **sp=4 with tile-sharded VAE is the fastest full-video config: 5:59 e2e (3.2× vs the
 ~19 min 8-chip baseline)**, beating 16-chip sp=2 (10:38). Both DiT and VAE weights stay
-resident throughout; output is crisp and coherent (no tiling seams).
+resident throughout; output is crisp and coherent (no tiling seams). Reproduced on
+hardware with the exact command above (warm cache): 359 s total, denoise 2:49.
 
 At 121 frames the VAE tiles must be **128 px, not 192 px** — the high frame count (T=31)
 makes each tile's decode ~8× larger and 192 px fragments DRAM; 128 px fits with margin and
