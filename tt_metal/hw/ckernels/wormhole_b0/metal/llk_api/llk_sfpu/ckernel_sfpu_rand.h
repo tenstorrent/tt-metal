@@ -36,21 +36,22 @@ inline void rand_init(std::uint32_t seed) {
 inline void make_lane_salt() {
     // Reconstruct the salt for every tile so rand_tile remains valid after
     // arbitrary SFPU operations have clobbered the mutable LREGs. LTILEID is
-    // the ISA-defined LREG15, whose lane i contains 2*i. LREG7 holds the
-    // mixer's +8 shift; the immediate encodings select LREG4/LREG5 as sources.
-    TTI_SFPSHFT2(p_sfpu::LTILEID, p_sfpu::LREG7, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
-    TTI_SFPXOR(0, p_sfpu::LTILEID, p_sfpu::LREG4, 0);
-    TTI_SFPSHFT2(20, 0, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
-    TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2((-11) & 0xFFF, 0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
-    TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG3, 0);
+    // the ISA-defined LREG15, whose lane i contains 2*i. Offset LTILEID first
+    // so lane zero also receives a nonzero salt. The immediate shift encodings
+    // select LREG4 and LREG7 as their respective sources.
+    TTI_SFPIADD(
+        (-1800) & 0xFFF, p_sfpu::LTILEID, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSHFT2(20, 0, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+    TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG7, 0);
+    TTI_SFPSHFT2((-9) & 0xFFF, 0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+    TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG3, 0);
 }
 
 inline void begin_mix_uint32_fast() {
-    // The same bijective ARX permutation used on Blackhole, scheduled around
-    // SFPSHFT2's independent source and destination registers. LREG4, LREG7,
-    // LREG12, and LREG13 hold -14, 8, -5, and 11, respectively. LREG1 holds x
-    // on entry and LREG0 holds the result on exit.
+    // A bijective ARX permutation scheduled around SFPSHFT2's independent
+    // source and destination registers. LREG4, LREG7, LREG12, and LREG13 hold
+    // -14, 8, -5, and 11, respectively. LREG1 holds x on entry and LREG0 holds
+    // the result on exit.
     TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
 }
 
@@ -93,9 +94,8 @@ inline void rand_row() {
 
 template <bool APPROXIMATION_MODE>
 inline void rand(std::uint32_t from, std::uint32_t scale) {
-    // LREG7 is both the mixer's +8 shift count and the salt's first count.
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_SHORT, 8);
     make_lane_salt();
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_SHORT, 8);
 
     // Load scale param to lreg5
     TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, scale & 0xFFFF);
