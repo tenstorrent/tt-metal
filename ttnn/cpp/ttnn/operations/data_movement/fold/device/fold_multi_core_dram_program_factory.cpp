@@ -18,6 +18,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -166,6 +167,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         return KernelSpec{
             .unique_id = id,
             .source = std::filesystem::path{COMPUTE_UNTILIZE},
+            // KernelSpec defaults to O2; compute kernels use O3 (legacy KernelDescriptor default).
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
