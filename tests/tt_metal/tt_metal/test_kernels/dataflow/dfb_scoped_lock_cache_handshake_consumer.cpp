@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Real producer<->consumer flow control: each round cacheable read at the LIVE get_read_ptr(). On a wrapped
+// Real producer<->consumer flow control: each round cacheable read at the live read pointer. On a wrapped
 // (reused) slot the consumer's own prior-round cached line is stale, so the acquire-invalidate must
 // discard it for each round to read fresh. One value per round is recorded to the scratch region (via the
 // uncached alias, so it lands in TL1 for the host to read).
@@ -27,7 +27,7 @@ void kernel_main() {
         dfb.wait_front(1);
         {
             auto lk = dfb.scoped_read_lock(lock_n);  // acquire invalidates the held entry
-            volatile uint32_t* entry = (volatile uint32_t*)(uintptr_t)dfb.get_read_ptr();
+            volatile uint32_t* entry = (volatile uint32_t*)(uintptr_t)lk.get_ptr().get_address();
             result_uncached[r] = entry[0];  // cacheable read -> record this round's value (fresh, or stale)
         }
         dfb.pop_front(1);

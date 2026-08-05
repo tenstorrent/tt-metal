@@ -668,7 +668,8 @@ void run_dfb_scoped_lock_test(
     uint32_t target_entry_index,
     bool write_after_unlock,
     ExpectedDfbIssue expected,
-    bool skip_lock = false) {
+    bool skip_lock = false,
+    NOC producer_noc = NOC::NOC_0) {
     const experimental::NodeCoord core = {0, 0};
     auto virtual_core = mesh_device->worker_core_from_logical_core(core);
 
@@ -694,10 +695,12 @@ void run_dfb_scoped_lock_test(
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
+    // The two DM kernels claim different NOCs, so the consumer takes whichever one the producer did not.
+    const NOC consumer_noc = (producer_noc == NOC::NOC_0) ? NOC::NOC_1 : NOC::NOC_0;
     const experimental::DataMovementHardwareConfig dm_producer_cfg =
-        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = producer_noc};
     const experimental::DataMovementHardwareConfig dm_consumer_cfg =
-        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = consumer_noc};
 
     experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,
@@ -1261,6 +1264,24 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteUnlockedEntryIssue
         }
         run_dfb_scoped_lock_test(
             this, mesh_device, /*target_entry_index=*/2, /*write_after_unlock=*/false, ExpectedDfbIssue::Unlocked);
+    }
+}
+
+// Same case as above, but the producer drives NOC_1 instead of NOC_0.
+TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessDFBWriteUnlockedEntryIssueNoc1) {
+    for (auto& mesh_device : devices_) {
+        log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
+        if (!this->dfb_scoped_lock_tracker_supported(mesh_device)) {
+            GTEST_SKIP() << "DFB scoped-lock tracker not yet brought up on this arch (#45918)";
+        }
+        run_dfb_scoped_lock_test(
+            this,
+            mesh_device,
+            /*target_entry_index=*/2,
+            /*write_after_unlock=*/false,
+            ExpectedDfbIssue::Unlocked,
+            /*skip_lock=*/false,
+            /*producer_noc=*/NOC::NOC_1);
     }
 }
 

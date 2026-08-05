@@ -111,8 +111,7 @@ struct LocalDFBInterface {
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
-    uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
-    uint8_t is_producer;
+    uint8_t broadcast_tc;   // DM-DM ALL producer: post to all TCs instead of round-robin
     uint8_t _tc_align_pad;  // pad bytes → keeps num_entries/tc_slots[] 4B-aligned
 
     uint16_t num_entries;
