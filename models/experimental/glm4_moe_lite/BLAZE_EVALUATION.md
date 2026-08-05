@@ -6,8 +6,8 @@ dense matmul set, not one op. But the per-call wins sum to more than the model's
 weight-bandwidth budget, so most of it cannot be on the critical path: the next milestone is a
 **step-level** measurement, not more cluster A/Bs. `glm_moe_router` and `glm_routed_expert` run
 on this grid at GLM-5 dims; at GLM-4.7-Flash dims the routed expert hangs, now localised to the
-gather (F11). Fused ops beyond that are blocked on layout assumptions in blaze, documented below
-with evidence.
+gather (F11). Fused ops beyond that are blocked on layout assumptions in blaze — narrowed to the shared
+expert's *down* projection (F4 revised) — documented below with evidence.
 
 **Hardware:** 32-chip Blackhole Galaxy, every chip 1x-harvested → **12x10 = 120 cores** per
 device, 8 DRAM banks. This matters throughout: blaze's model layouts are written for an
@@ -130,7 +130,7 @@ authoritative"). Easy silent precision loss.
 | `glm_moe_router` | FusedOp | **passes** with finding 5's remaps |
 | `glm_routed_expert` | FusedOp | **passes** with finding 5's remaps |
 | `pre_sdpa` / `post_sdpa` | FusedOp | pass for **kimi_k2**, fail for deepseek_v3 |
-| `shared_expert`, `glm_moe` | FusedOp | blocked, finding 4 |
+| `shared_expert`, `glm_moe` | FusedOp | blocked on the **down** projection only (F4 revised); gate/up solves to 48/48 |
 
 ## 4. Findings
 
@@ -168,25 +168,32 @@ both; 20 satisfies neither. Unblocking needs `_QB_GRID_ROWS` made config-driven 
 the 8 is a deliberate invariant (`n_sdpa_cores = heads//8`, *"derive such that
 heads_per_receiver = 8 (see PR #1063)"*).
 
-### F4 — shared-expert gate/up split only balances at 130 cores
+### F4 (revised) — gate/up is already solved upstream; only `down` is blocked
 
-`blaze/weights/moe_grid_layout.py` hardcodes `NUM_SHARED_GATE_UP_MM_CORES = 64`,
-`NUM_SHARED_DOWN_MM_CORES = 112`, and a fixed column pattern, with
-`assert len(gate_coords) == len(up_coords) == 64`:
+Earlier revisions said the shared-expert gate/up split "only balances at 130 cores" and would
+need upstream work. **Half of that is wrong.** Blaze already ships a general, grid-aware solver,
+`moe_grid_layout.solve_shared_gate_up_grid(gc, k_dim, n_dim)`, which derives
+`(k_parallel, n_parallel)` from the real dims and refuses to return an unbalanced split. On this
+12x10 grid (118 usable cores) it produces balanced splits for both models:
 
-| grid | gate | up | 64/64? |
-|---|---:|---:|---|
-| 13x10 = 130 (unharvested) | 64 | 64 | OK |
-| **12x10 = 120 (ours)** | 64 | **54** | fails |
+| model | k_dim x n_dim | k_par | n_par | gate | up |
+|---|---|---:|---:|---:|---:|
+| GLM-4.7-Flash shared expert | 2048 x 1536 | 1 | 48 | **48** | **48** |
+| GLM-5.1 / DSv3 (tp=8) | 6144 x 256 | 6 | 8 | 48 | 48 |
 
-The op requires matching `(k_parallel, n_parallel)`; observed error
-`gate=(8,8) up=(8,7)`. 64/64 needs 128 cores against **118 usable** (120 − sender − phantom).
-A balanced **56/56 = (8,7) is 112 cores and would fit**, so this is fixable upstream, not
-impossible — but the pattern must become grid-aware *and* `preprocess_gate_up`'s placement
-spec regenerated to match, since a mismatched layout "would feed gate-laid-out tiles to 'up'
-cores, producing garbage matmul output."
+So the 64/54 imbalance and the `gate=(8,8) up=(8,7)` error come from the **legacy hardcoded
+path** — `gate_up_coords_from_device`, with `NUM_SHARED_GATE_UP_MM_CORES = 64` and a fixed column
+pattern — which the GLM-5 config and test use instead of the solver. Routing through the solver
+is the fix, and it needs no new arithmetic.
 
-`glm_moe` is blocked **solely** by this; everything else in that composition works.
+**What IS still blocked is the down projection.** `NUM_SHARED_DOWN_MM_CORES = 112` is hardcoded
+and `shared_down_coords_from_device` returns `get_matmul_cores()[:112]`, but on this harvested
+grid that yields only **56** cores — short by half. Unlike gate/up there is no solver for it. So
+`shared_expert`, and therefore `glm_moe`, remain unreachable here, but for a narrower and more
+tractable reason than previously recorded.
+
+Our `GLM4_FLASH_BLAZE_CONFIG` consequently leaves all three shared-expert coord tuples empty and
+targets the routed path only, which `sanity_check_model_config` permits.
 
 ### F5 — column-12 assumptions, and they are remappable
 
