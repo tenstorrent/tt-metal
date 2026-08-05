@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.constraints import get_perf_fpu_math_fidelities
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
@@ -12,7 +13,6 @@ from quasar.test_eltwise_binary_reuse_dest_quasar import (
     INPUT_DIMENSIONS,
     REUSE_DEST_FORMATS,
     reuse_dest_dest_sync_modes,
-    reuse_dest_math_fidelities,
     reuse_dest_mathops,
 )
 from quasar.test_eltwise_binary_reuse_dest_quasar import (
@@ -28,7 +28,7 @@ from quasar.test_eltwise_binary_reuse_dest_quasar import (
 @parametrize(
     formats=REUSE_DEST_FORMATS,
     mathop=lambda formats: reuse_dest_mathops(formats, is_perf=True),
-    math_fidelity=lambda mathop: reuse_dest_math_fidelities(mathop, is_perf=True),
+    math_fidelity=lambda formats, mathop: get_perf_fpu_math_fidelities(formats, mathop),
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,

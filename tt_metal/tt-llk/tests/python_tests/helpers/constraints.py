@@ -16,6 +16,27 @@ from helpers.llk_params import (
 )
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 
+PERF_FPU_MATHOPS = [MathOperation.Elwadd, MathOperation.Elwmul]
+
+
+def get_perf_fpu_math_fidelities(formats, mathop):
+    """Return the minimal fidelity coverage for perf FPU binary operations.
+
+    Elwadd represents the equivalent LoFi Add/Sub performance path. Elwmul
+    covers LoFi plus each distinct multi-phase fidelity path. Int8 supports
+    only LoFi.
+    """
+    if mathop not in PERF_FPU_MATHOPS:
+        raise ValueError(f"Unsupported perf FPU math operation: {mathop}")
+    if mathop == MathOperation.Elwadd or formats.input_format == DataFormat.Int8:
+        return [MathFidelity.LoFi]
+    return [
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ]
+
 
 def get_valid_dest_accumulation_modes(formats):
     """
