@@ -4,7 +4,7 @@
 
 // Gather writer – streaming mode (BRISC).
 // For large Wt_input where the full input row cannot fit in L1 alongside a
-// Wt_index-deep output CB (see gather_interleaved_fits_l1).
+// Wt_index-deep output CB (see _interleaved_fits_l1).
 //
 // Work is split by Wt_index across cores. Each core processes a strided
 // subset of output columns across ALL Ht rows.
@@ -40,8 +40,9 @@ void kernel_main() {
 
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t n_chunks = (Wt_input + chunk_tiles - 1) / chunk_tiles;
-    // Same batch depth as the row-buffered writer's row load: enough NOC reads in flight to overlap,
-    // few enough that a batch never straddles the CB end (each block starts at the CB base).
+    // Same batch depth as the row-buffered writer's row load: enough NOC reads in flight
+    // to overlap, few enough that a batch never straddles the CB end (each block starts
+    // at the CB base).
     constexpr uint32_t READ_BATCH = 4;
 
     // Input tensor accessor (for DRAM reads)
@@ -73,9 +74,9 @@ void kernel_main() {
                     uint32_t l1_offset = 0;
                     for (uint32_t b = 0; b < batch; b++) {
                         const uint32_t w = chunk_first_tile + tiles_read + b;
-                        // A tail block is padded to full depth by repeating the last valid page: the
-                        // reader waits and pops a fixed chunk_tiles, and no index value can select a
-                        // padding slot, so the duplicate is never read.
+                        // A tail block is padded to full depth by repeating the last valid
+                        // page: the reader waits and pops a fixed chunk_tiles, and no index
+                        // value can select a padding slot, so the duplicate is never read.
                         const uint32_t page_w = (w < Wt_input) ? w : Wt_input - 1;
                         noc.async_read(
                             input_accessor,

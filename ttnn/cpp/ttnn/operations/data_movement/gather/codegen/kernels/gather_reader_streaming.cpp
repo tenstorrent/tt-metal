@@ -4,7 +4,7 @@
 
 // Gather reader – streaming mode (NCRISC).
 // For large Wt_input where the full input row cannot fit in L1 alongside a
-// Wt_index-deep output CB (see gather_interleaved_fits_l1).
+// Wt_index-deep output CB (see _interleaved_fits_l1).
 //
 // Work is split by Wt_index across cores (not Ht like the row-buffered mode).
 // Each core processes a strided subset of output columns across ALL Ht rows.
@@ -96,13 +96,14 @@ void kernel_main() {
 
             output_buffer.reserve_back(one_tile);
 
-            // Walk the input row one resident block at a time, gathering the elements that land in
-            // each block. The output tile stays reserved across all blocks: every element's index
-            // falls in exactly one block, so each output position is written exactly once.
+            // Walk the input row one resident block at a time, gathering the elements that
+            // land in each block. The output tile stays reserved across all blocks: every
+            // element's index falls in exactly one block, so each output position is
+            // written exactly once.
             for (uint32_t chunk = 0; chunk < n_chunks; chunk++) {
                 const uint32_t chunk_first_tile = chunk * chunk_tiles;
-                // The writer always pushes a full chunk_tiles-deep block (tail padded), so this
-                // matches its push cadence and leaves the CB empty for the next block.
+                // The writer always pushes a full chunk_tiles-deep block (tail padded), so
+                // this matches its push cadence and leaves the CB empty for the next block.
                 input_buffer.wait_front(chunk_tiles);
 
                 const uint32_t input_l1 = input_buffer.get_read_ptr();
