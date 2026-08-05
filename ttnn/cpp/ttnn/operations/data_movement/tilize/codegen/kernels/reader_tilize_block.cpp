@@ -8,6 +8,7 @@
 // Reads partial sticks starting at col_byte_offset within each stick.
 // Supports sub-block column chunking when block_Wt exceeds L1.
 #include <stdint.h>
+#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -45,11 +46,16 @@ void kernel_main() {
 
         for (uint32_t c = 0; c < num_col_chunks; ++c) {
             cb_in_buf.reserve_back(chunk_Wt);
+            // Hoist the CB write pointer out of the stick loop: a CB
+            // destination re-reads fifo_wr_ptr from L1 on every async_read
+            // (~17ns x 32 sticks per chunk). Pointer cannot move between
+            // reserve_back and push_back. Same addresses, same issue order.
+            const CoreLocalMem<uint8_t> dst(cb_in_buf.get_write_ptr());
             uint32_t l1_write_offset = 0;
             for (uint32_t h = 0; h < H_per_tile; ++h) {
                 noc.async_read(
                     s,
-                    cb_in_buf,
+                    dst,
                     chunk_read_bytes,
                     {.page_id = i_stick + h, .offset_bytes = src_byte_offset},
                     {.offset_bytes = l1_write_offset});

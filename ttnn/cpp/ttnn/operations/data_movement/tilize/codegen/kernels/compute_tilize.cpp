@@ -8,13 +8,16 @@
 // When num_col_chunks >  1: processes chunk_Wt tiles per chunk, repeated
 //   num_col_chunks times per tile-row. Total tiles = chunk_Wt * num_col_chunks.
 #include <cstdint>
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
+    // Host-gated bf16->bf16 selects the fast-tilize LLK datapath; fp32 input
+    // must stay on the standard path (fast tilize truncates fp32 to tf32).
+    constexpr bool use_fast = get_compile_time_arg_val(2) != 0;
 
     // Width and chunking are per-core runtime args so cores with different
     // block widths share one kernel binary (one program for ragged splits).
@@ -25,18 +28,33 @@ void kernel_main() {
     CircularBuffer cb_in_exp(cb_in);
     CircularBuffer cb_out_exp(cb_out);
 
-    unary_op_init_common(cb_in, cb_out);
-    tilize_init(cb_in, chunk_Wt, cb_out);
+    // Native's init shape: hw_startup only (no state_configure, no A2D unpack/math
+    // init) — tilize_init/fast_tilize_init below re-program all of it, so
+    // unary_op_init_common here was ~200-400ns of dead per-RISC register writes.
+    compute_kernel_hw_startup(cb_in, cb_out);
+    if constexpr (use_fast) {
+        fast_tilize_init(cb_in, chunk_Wt, cb_out);
+    } else {
+        tilize_init(cb_in, chunk_Wt, cb_out);
+    }
 
     for (uint32_t b = 0; b < num_tile_rows; ++b) {
         for (uint32_t c = 0; c < num_col_chunks; ++c) {
             cb_in_exp.wait_front(chunk_Wt);
             cb_out_exp.reserve_back(chunk_Wt);
 
-            tilize_block(cb_in, chunk_Wt, cb_out);
+            if constexpr (use_fast) {
+                fast_tilize_block(cb_in, chunk_Wt, cb_out);
+            } else {
+                tilize_block(cb_in, chunk_Wt, cb_out);
+            }
 
             cb_out_exp.push_back(chunk_Wt);
             cb_in_exp.pop_front(chunk_Wt);
         }
+    }
+
+    if constexpr (use_fast) {
+        fast_tilize_uninit(cb_in, cb_out, chunk_Wt);
     }
 }

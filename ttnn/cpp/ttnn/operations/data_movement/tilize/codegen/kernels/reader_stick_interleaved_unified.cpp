@@ -447,10 +447,15 @@ void kernel_main() {
         if (a->num_col_chunks == 1) {
             for (uint32_t tr = 0; tr < a->num_tile_rows; ++tr) {
                 cb.reserve_back(a->chunk_Wt);
+                // Hoist the CB write pointer out of the stick loop: a CB
+                // destination re-reads fifo_wr_ptr from L1 on every async_read
+                // (~17ns x 32 sticks per tile-row). Pointer cannot move between
+                // reserve_back and push_back. Same addresses, same issue order.
+                const CoreLocalMem<uint8_t> dst(cb.get_write_ptr());
                 uint32_t l1_offset = 0;
                 for (uint32_t h = 0; h < a->H_per_tile; ++h) {
                     noc.async_read(
-                        s, cb, chunk_read_bytes, {.page_id = i_stick, .offset_bytes = 0}, {.offset_bytes = l1_offset});
+                        s, dst, chunk_read_bytes, {.page_id = i_stick, .offset_bytes = 0}, {.offset_bytes = l1_offset});
                     l1_offset += chunk_read_bytes;
                     i_stick++;
                 }
