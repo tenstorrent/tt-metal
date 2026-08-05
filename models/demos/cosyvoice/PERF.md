@@ -76,6 +76,23 @@ from 98 to 42 and the step from 13.09 to 12.52 ms with bit-identical output.
 The same list points at what is left — the five-op `rel_shift` skew behind `slice` and `concat`, and
 flash attention to collapse the score chain.
 
+**The per-token tail outside the traced step is 0.352 ms — 2.7 %** — and its breakdown is what
+settled P4's on-device sampling item:
+
+| | ms | share of tail |
+|---|---:|---:|
+| output head matmul | `0.043` | 12 % |
+| logits device → host | `0.142` | 40 % |
+| RAS sampling on host | `0.075` | 21 % |
+| embedding row → device | `0.092` | 26 % |
+
+`ttnn.sampling` could remove at most the middle two — 0.217 ms, **1.7 % of a token** — and not even
+all of it, since RAS's repetition branch needs the emitted-token history and returns to the host
+whenever it fires. It would also give up exact agreement with the reference on two counts (`≤ p` vs
+CosyVoice's inclusion of the crossing token, and its own RNG seed). So sampling stays on the host and
+`nucleus_filter` was made fast instead: `0.245 → 0.075 ms`, bit-identical, verified against a literal
+transcription of upstream's loop.
+
 Tracing the flow decoder took removing a host→device write that **every convolution** was issuing.
 `ttnn.conv1d` and `ttnn.conv_transpose2d` prepare their weights — tilize, pad to the sharding
 scheme, move to device — on *every call*, which a trace cannot contain; a host-resident weight fails
@@ -121,5 +138,5 @@ Source suites: `tests/perf/`, `tests/e2e/`, `tests/pcc/`
 
 | Tier | Count | Hardware |
 |---|---:|---|
-| host | 85 | none |
+| host | 106 | none |
 | device | 41 | Blackhole `p150a` |
