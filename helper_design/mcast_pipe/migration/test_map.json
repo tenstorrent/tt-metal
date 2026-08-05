@@ -3,7 +3,7 @@
   "helper_version": 10,
   "baseline": "4a1d6a97ca9bd4efabd0ad6115fcb30538851c90",
   "machine": "single-chip Blackhole p100a",
-  "updated": "2026-08-03",
+  "updated": "2026-08-05",
   "mapping_rules": [
     "Run one compile-focused parameter before the complete mapped inventory.",
     "A passing operation test counts as kernel coverage only when JIT evidence identifies the named kernel path.",

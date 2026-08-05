@@ -1,5 +1,23 @@
 # mcast_pipe rollout report — API v10, self-describing wire verified 2026-08-05
 
+## Final release gate — 2026-08-05
+
+All mapped correctness inventories, the host build, helper host/device suites,
+and the 10-test opaque-boundary audit are green. Fresh artifacts cover all 13
+migrated kernels, all 12 required host bindings are build-covered, and no
+migrated row carries `needs_recheck`.
+
+All ten performance cases pass the 1.5% gate. The only apparent failure,
+legacy GroupNorm, was resolved with a controlled worktree comparison using
+independent builds and Python environments for the actual pre-migration
+baseline `4a1d6a97ca9`, previously passing migrated snapshot `28356d43846`,
+and current `2699996541a`. Their medians were `49,694.26516945126`,
+`49,850.05759004791`, and `49,836.38882787317 ns`, respectively. Current is
++0.285996% versus the freshly reproduced baseline and therefore passes. The
+older `48,593.7037037037 ns` artifact did not reproduce on either historical
+snapshot under the current firmware/profiler environment, so no production
+code change was warranted.
+
 ## API v10 update — 2026-08-05
 
 API-001 is implemented. `MCAST_PIPE_API_VERSION=10` adds `rotating_span` as the sixth uniform CT

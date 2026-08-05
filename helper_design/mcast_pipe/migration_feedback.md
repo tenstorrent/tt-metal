@@ -127,7 +127,7 @@ row-start readiness name and requires both configured channels in the factory.
 ## MIG-003 — Let `Mcast2D` own matmul-1D semaphores and splice opaque arg blocks
 
 - **Date:** 2026-08-04
-- **Status:** Open
+- **Status:** Implemented
 - **Host file:**
   `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp`
 - **Kernel files:** `reader_bmm_tile_layout_in1_sender_writer_padding.cpp`
@@ -208,6 +208,21 @@ must not restate the current helper RT width.
   as the same atomic unit and may repeat the pattern.
 - Rebuild host code, run one compile-focused 1D parametrization first, then run
   the mapped matmul inventory sequentially.
+
+### Resolution
+
+Implemented in Gates 2 and 3. Both matmul-1D/2D legacy and descriptor paths
+insert the helper's complete CT/RT ranges at one opaque ABI boundary. Sender
+and receiver kernels resume through `next_compile_time_args_offset()` and
+`next_runtime_args_offset()`, while cached output and bias patch indices are
+derived from the emitted range size.
+
+The helper now owns the in1 semaphore pair. Descriptor factories append all
+of `owned_semaphores()`, and the legacy `Program` bridge creates declarations
+in ID order and rejects an allocated ID that differs from the declaration.
+Matmul-2D also uses the single offset-aware `Mcast1D` described by API-004.
+The host build, `McastHostFixture` 25/25, focused 1D and both 2D orientations,
+and `MM-IN1-ALL` at 302 passed / 188 expected skips all passed.
 
 ## MIG-004 — Validate GroupNorm's fixed three-rectangle sender path
 
