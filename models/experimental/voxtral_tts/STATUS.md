@@ -823,7 +823,9 @@ honest reason is "slightly worse on a stable metric for 5 ms", not the dramatic 
 - Fused SiLU in Block 2's multiply (`input_tensor_a_activations`): no measurable gain. Block 1
   already fuses it via `activation="silu"`.
 - `ttnn.deallocate` on every intermediate (ign's style): no gain here.
-- Norm grids 8x2 / 8x4 / 8x8: all slower than 8x1 at our shapes. 8x8 will not even build.
+- ~~Norm grids 8x2 / 8x4 / 8x8: all slower than 8x1.~~ **WRONG, see §6.18** -- measured on the
+  isolated norm, which ranks grids backwards. 8x4 (32 cores) is the fastest end to end and now
+  ships. 8x8 genuinely cannot build: 3072/32 = 96 tiles and 96/64 is not an integer.
 - Row fold in Block 1 prefill (needs a 4x-tall mask, and prefill is ~1.3% of wall) and in the codec
   (it is MHA 8/8, no grouping to fold).
 
@@ -1416,6 +1418,69 @@ numerics changes the emitted codes, which changes trajectory LENGTH (case 2: 443
 Case 4 separately collapsed 73 → 8 frames — it is the chaotic one-word prompt. **Comparing RTF across
 builds requires excluding cases whose frame count moved, or the compile lands in the number.** Same
 family as the trap in §6.7 and the "case 0 RTF 1.89" one.
+
+### 6.18 — the sharded norm's grid: §6.9's "8x2/8x4 are slower" is WRONG, and 32 cores ships
+
+Prompted by "have we tried other `block_w` numbers, maybe smaller is faster?" -- which turned out to
+rest on a false premise and still find something.
+
+**`block_w` is not a free knob.** It is `DIM // cores // TILE`, so at 8 cores each core owns
+3072/8 = 384 columns = 12 tiles and the kernel must walk 12. It only moves when the core count does,
+and the two are the same decision.
+
+**`subblock_w` IS free, was hard-coded at 4 in both blocks since the sharded norm shipped, and had
+never been swept. It is inert.** Within a core count, 1/2/3/4 land within 0.02 ms/step of each
+other, and at 8x1 in Block 2 subblock_w 4 and 1 measure *byte-identical* (24.628 both). `>= 6` does
+not build at all -- a hard register-budget limit. So the knob nobody had tested turns out not to
+matter, which is worth knowing precisely so nobody tests it again.
+
+**What DOES matter is the core count, and more is monotonically better end to end** -- the opposite
+of what §6.9 recorded. Block 1, `_layer_step` x26:
+
+| grid | cores | block_w | isolated norm | **ms/step** |
+|---|---|---|---|---|
+| 2x1 | 2 | 48 | 43.5 µs | 25.53 |
+| 4x1 | 4 | 24 | 43.9 µs | 24.84 |
+| 8x1 ← was shipped | 8 | 12 | 45.6 µs | 24.57 |
+| 8x2 | 16 | 6 | 48.2 µs | 24.45 |
+| **8x4 ← ships** | **32** | **3** | **54.6 µs** | **24.41** |
+
+64 cores is impossible: 3072/32 = 96 tiles and 96/64 = 1.5.
+
+**THE ISOLATED NORM RANKS THESE BACKWARDS.** 8x4 is the SLOWEST in isolation (54.6 µs vs 43.5) and
+the FASTEST end to end. §6.9 concluded "the core count barely matters" and "8x2/8x4/8x8 are all
+slower" from isolated numbers plus a partial 2-vs-8 end-to-end check — and the isolated measurement
+is anti-correlated with the thing we care about. **A norm cannot be benchmarked alone**: it is ~16 µs
+of reduction inside ~28 µs of resharding, and the reshard's cost depends on what consumes it next.
+
+**Confirmed before believing it**: 7 interleaved rounds, round-robin so drift hits all arms equally.
+Spread 0.007-0.013 ms per config and the ordering identical in every round — 8x1 24.571, 8x2 24.451,
+8x4 24.407.
+
+**Accuracy — paired, same session, all 15 prompts.** The 26-layer output differs by 1.0 absolute
+between grids (a different cross-core reduce tree, amplified through 26 layers), which is the same
+order as the whole w2 precision argument in §6.16, so it needed the real gate rather than a shrug:
+
+| | 8x1 | **8x4** |
+|---|---|---|
+| mean worst-sample | 0.93% | **0.92%** |
+| p90 worst-sample | 1.35% | **1.28%** |
+| min PCC | 0.998969 | **0.999040** |
+| per-case p90 spread | 0.55 pp | **0.44 pp** |
+
+Better or equal on every column. Block 2 likewise: 24.628 → 24.465 ms/frame with acoustic codes
+16/576 → 15/576 and velocity PCC 0.9999851 → 0.9999848. Gates after shipping both: flow velocity PCC
+0.99998480, 2/74 codes, semantic exact, long-form WER **0 of 298**, 15/15 `[END_AUDIO]`, voice
+identity PASS, 122/122 tests.
+
+**Size, stated plainly.** Isolated: +0.163 ms/step in Block 1 and +0.163 ms/frame in Block 2, so
++0.33 ms/frame. End to end over 9 comparable cases: **−0.24 ms/frame**, ~0.5%. Same shortfall as
+§6.17 and still unexplained. Quote the pipeline number. It ships because it is free — faster on a
+stable measurement and no worse on any accuracy column — not because 0.5% matters.
+
+**The transferable bit:** a config value that was copied once and never questioned (`subblock_w=4`)
+turned out inert, while the one that *had* been measured and closed (the core count) was closed on
+the wrong measurement. Re-check closed doors when the thing you closed them with was a proxy.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
