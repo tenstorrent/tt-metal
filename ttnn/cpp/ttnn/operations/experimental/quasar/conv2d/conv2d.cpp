@@ -669,25 +669,25 @@ Result conv2d_L1(
         const uint64_t tilized_act_bytes =
             static_cast<uint64_t>(per_core_m_ntiles) * full_inner_dim_k_ntiles * out_tile_bytes;
         const uint64_t l1_bank = device->l1_size_per_core();
-        // Two independent ceilings on the per-core tilized activation, whichever is SMALLER:
-        //   (1) L1 fit: the tilized-activation output alone crowds the bank; reserve ~20 % for the
-        //       resident halo input, weights, matmul CBs and allocator fragmentation.
-        //   (2) uint16_t DFB ring extent: Program A's borrowed DFB_OUT holds the WHOLE per-core tilized
-        //       activation (M*full_K tiles, single-buffer, stride 1), so its ring_bytes == tilized_act_bytes.
-        //       dataflow_buffer.cpp requires ring_bytes/16 (L1 units) < 65536, i.e. tilized_act_bytes < 1 MB.
-        //       This is the STRICTER limit on the emulator (bank ~3.8 MB) and is what the stem hits first
-        //       (1.75 MB tilized -> 114688 ring units > 65536), even though it fits L1. Use 80 % of the 1 MB
-        //       ring cap for margin (ring formula stride*(cap-1)+1 + alignment rounding).
-        constexpr uint64_t kDfbL1Align = 16;  // Quasar L1 alignment == DFB ring unit
-        const uint64_t dfb_ring_limit_bytes = (static_cast<uint64_t>(65536) * kDfbL1Align * 80) / 100;  // ~0.84 MB
-        const uint64_t fit_threshold = std::min<uint64_t>((l1_bank * 80) / 100, dfb_ring_limit_bytes);
+        // Ceiling on the per-core tilized activation: L1 fit. The tilized-activation output alone crowds the
+        // bank, so reserve ~20 % for the resident halo input, weights, matmul CBs and allocator fragmentation.
+        // (A former uint16_t DFB ring-extent cap of ~1 MB -- Program A's borrowed DFB_OUT holds the WHOLE
+        // per-core tilized activation in one single-buffered ring -- used to be the stricter limit here and
+        // forced convs well under the bank onto the DRAM slice path. Main commit 6079b5f widened the DFB
+        // ring_size field to uint32_t, so the ring extent is no longer binding and only L1 fit matters. This
+        // also keeps such convs off the DRAM slice path, whose slice_write can't consume the per-core
+        // tile-padding a height-sharded conv output carries for non-tile-aligned per-core heights.)
+        const uint64_t fit_threshold = (l1_bank * 80) / 100;
         if (tilized_act_bytes > fit_threshold) {
             // Number of output-height slices so each slice's tilized activation ((per_core_M/num_slices)*full_K)
-            // stays under BOTH half the bank AND the uint16_t DFB ring cap, leaving ample room for the slice's
-            // halo input, weights and matmul CBs. num_slices >= 2 (a single slice does not fit or we would not
-            // be here). Clamp to the number of output image rows available to slice; run_sliced_op clamps
-            // further against its tile-row rounding.
-            const uint64_t tilized_budget = std::min<uint64_t>(l1_bank / 2, dfb_ring_limit_bytes);
+            // stays under half the bank, leaving ample room for the slice's halo input, weights and matmul CBs.
+            // num_slices >= 2 (a single slice does not fit or we would not be here). Clamp to the number of
+            // output image rows available to slice; run_sliced_op clamps further against its tile-row rounding.
+            // NOTE: slices that hit this path still produce a height-sharded output whose per-core tile-padding
+            // slice_write can't consume when per-core output height isn't tile-aligned (tracked separately);
+            // with the DFB ring cap gone, far fewer convs reach here on the 2-core emulator.
+            const uint64_t tilized_budget =
+                l1_bank / 2;  // half the bank per slice; DFB ring extent no longer caps it (6079b5f)
             uint32_t num_slices =
                 static_cast<uint32_t>(tt::div_up(tilized_act_bytes, std::max<uint64_t>(tilized_budget, 1)));
             num_slices = std::max<uint32_t>(num_slices, 2);
@@ -1411,17 +1411,8 @@ public:
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
 
-        // [#48552] Output ROW_MAJOR, not TILE. A TILE height-sharded slice output needs a tile-aligned
-        // per-core height, so a non-tile-aligned per-core output (e.g. a 14x28 slice on 2 cores = 196
-        // rows/core) is padded 196->224 PER CORE, and that per-core padding leaks into the tensor's logical
-        // height (2*224 = 448 vs the true 2*196 = 392). slice_write then rejects it ("Slice volume 392*C
-        // must match sharded input volume 448*C") and cannot express uniform per-core padding anyway.
-        // ROW_MAJOR sharding has no tile-alignment constraint, so the slice output is [196, C] x 2 = logical
-        // 392 with NO per-core padding, which slice_write's RM height-sharded path handles. The DRAM output
-        // tensor is RM to match (see dram_output_tensor in conv2d_DRAM); the DRAM result is resharded to the
-        // caller's target config afterwards, so this internal layout is not user-visible.
-        // (TILE was originally forced here to reduce CB memory; per-slice outputs are small, so RM is fine.)
-        conv_config_l1.output_layout = Layout::ROW_MAJOR;
+        // Force Conv2d_L1 to always output tiled layout to reduce CB Memory usage.
+        conv_config_l1.output_layout = Layout::TILE;
 
         auto conv2d_result = conv2d_L1(
             sliced_input_tensor,
@@ -1574,16 +1565,12 @@ Result conv2d_DRAM(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
 
-    // [#48552] The DRAM accumulator is ROW_MAJOR (not conv_config.output_layout). run_sliced_op derives its
-    // output_layout from this tensor's layout, and each per-slice conv output is RM to match (see run_L1_op):
-    // that keeps the sliced output un-padded (logical == real) so slice_write can write it. The DRAM result is
-    // resharded to the caller's target config after slicing, so RM here is internal-only.
     ttnn::Tensor dram_output_tensor = ttnn::create_device_tensor(
         tt::tt_metal::TensorSpec(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
             tt::tt_metal::TensorLayout(
                 output_dtype,
-                tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
+                tt::tt_metal::PageConfig(conv_config.output_layout),
                 MemoryConfig{
                     TensorMemoryLayout::INTERLEAVED,
                     BufferType::DRAM,
