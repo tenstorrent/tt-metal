@@ -21,12 +21,22 @@ Training hyperparameters and optimization settings.
 | `seed` | int | 5489 | Random seed for reproducibility |
 | `model_save_interval` | int | 500 | Save model every N steps |
 | `batch_size` | int | 4 | Batch size for training |
-| `num_epochs` | int | 1 | Number of training epochs |
-| `max_steps` | int | 1000 | Maximum number of training steps |
+| `num_epochs` | int | 0 | Epoch cap; 0 = uncapped. A run stops at whichever of `num_epochs`/`max_steps` comes first |
+| `max_steps` | int | 1000 | Step cap; 0 = uncapped. At least one of `max_steps`/`num_epochs` must be set |
 | `gradient_accumulation_steps` | int | 1 | Number of steps to accumulate gradients |
 | `model_config` | str | "" | Path to model configuration file |
 | `data_path` | str | "DATA_FOLDER/shakespeare.txt" | Path to training data |
 | `scheduler_type` | str | "identity" | Learning rate scheduler ("identity", "warmup_linear") |
+
+### LR Schedule Parameters
+Apply to `scheduler_type: warmup_linear`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `warmup_ratio` | float | 0.1 | Warmup length as a fraction of the schedule |
+| `warmup_steps` | int | 0 | Absolute warmup length; overrides `warmup_ratio` when non-zero |
+| `min_lr_ratio` | float | 0.01 | Final LR as a fraction of the peak LR |
+| `lr_schedule_steps` | int | 0 | Steps the LR curve is shaped over; 0 = the run length. Set larger than `max_steps` to run only a prefix of a longer curve |
 | `tokenizer_type` | str | "char" | Tokenizer type ("char" or "bpe") |
 
 ### Optimizer
@@ -47,7 +57,6 @@ training_config:
   seed: 5489
   batch_size: 8
   gradient_accumulation_steps: 8
-  num_epochs: 1
   max_steps: 5000
   optimizer:
     type: AdamW
@@ -251,6 +260,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 | `weight_decay` | float | 1e-2 | Weight decay coefficient |
 | `amsgrad` | bool | false | Use AMSGrad variant |
 | `stochastic_rounding` | bool | false | Enable stochastic rounding (AdamW only) |
+| `weight_decay_skip_1d` | bool | false | Skip weight decay on 1-D params (RMSNorm gains, biases) |
 | `kahan_summation` | bool | false | Enable Kahan summation (AdamWComposite only) |
 
 ### SGD Parameters
@@ -306,7 +316,6 @@ training_config:
   model_save_interval: 500
   batch_size: 8
   gradient_accumulation_steps: 8
-  num_epochs: 1
   max_steps: 5000
   optimizer:
     type: AdamW
