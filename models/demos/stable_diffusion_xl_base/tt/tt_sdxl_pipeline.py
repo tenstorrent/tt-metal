@@ -194,6 +194,11 @@ class TtSDXLPipeline(LightweightModule):
             lora_scale_unet = lora_scale
             if lora_scale_clip is None:
                 lora_scale_clip = lora_scale
+        # Callers that pass an optional scale positionally hand us None when it is unset
+        # (e.g. tt-inference-server's SDXL runners). Treat that as "full strength" rather
+        # than letting it reach the delta arithmetic as None.
+        if lora_scale_unet is None:
+            lora_scale_unet = 1.0
         if lora_scale_clip is None:
             lora_scale_clip = lora_scale_unet
 
