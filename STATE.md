@@ -4129,3 +4129,155 @@ untouched.
 Re-point `test_fused_conditioner_real_weights` at the production canvas (1344x768, natural image, tap
 at layer 49 via `build_minimax_h3_text_encoder` at 50 layers rather than the inline 64-layer
 construction) and set its bar from that measurement, then lift the `xfail`.
+
+---
+
+## Amendment 100 (2026-08-05) — RETRACTION of how amendments 97 and 98 presented the anchor PCC: the metric was confounded. Conditioning verified properly, and it works
+
+**What amendments 97 and 98 claimed.** That "decoded frame 0 vs keyframe PCC 0.9971" was the headline
+evidence that `fl2va` conditioning is correct end to end, with amendment 97 saying outright: *"0.9971
+against a provisional 0.3 floor says the conditioning path is not merely running but correct end to
+end ... A single wrong link in that chain moves this number to near zero."*
+
+**Why that was wrong.** The gated keyframe is **frame 0 of the t2va generation**. So a pipeline that
+ignored the keyframe entirely and merely re-ran t2va at the same prompt would decode a frame 0 close to
+t2va's frame 0 — which *is* the keyframe — and would score ~0.997 on that same check. The metric could
+not distinguish "follows the keyframe" from "reproduces t2va", and the sentence claiming a broken link
+moves it to near zero is false for the most important broken link there is. Raised by the user, who
+noticed the fl2va output looked exactly like the t2va fox — which it did, because the keyframe was the
+t2va fox.
+
+The keyframe choice was made for a good reason (amendment 87: tier 6's bars are calibrated to that
+content) and it remains right *for tier 6*. It was simply never adequate as a correctness signal, and
+presenting it as one was the error.
+
+**The correct reading, measured.** `test_fl2va_follows_the_keyframe` conditions on a **Mandelbrot
+fractal** — content the model cannot produce for a prompt about a fox in snow — and keeps the fox
+prompt, so the keyframe and the prompt actively disagree. Three numbers, and only the three together
+settle it:
+
+| claim | measured |
+|---|---|
+| frame 0 follows the **supplied** keyframe | **0.9964** |
+| frame 0 does **not** reproduce t2va's frame 0 | **0.4108** |
+| the clip leaves the keyframe behind (frame −1 vs keyframe) | **0.2704** |
+
+Visually unambiguous: frame 0 *is* the fractal, and frame 123 is the fox. The clip morphs from the
+keyframe to the prompt's content, which is what first-frame conditioning is supposed to do. `1 passed
+in 215 s`. Artifacts `~/h3_fl2va_artifacts/fl2va_fractal_frame_{0,17,62,123}.png`.
+
+So **the conditioning path is verified, and the verdict of amendments 97/98 stands — but on this
+evidence, not the evidence they cited.** The fractal case is now a permanent gate with all three
+assertions, and `_gated_keyframe`'s docstring says in the file that its own anchor number is confounded
+and names this test as the one that rules the confound out.
+
+**The method note, which is the reusable part.** *A conditioning test whose conditioning input is drawn
+from the unconditioned model's own output cannot detect that conditioning is a no-op.* The check has to
+use an input the model would not otherwise produce, and the discriminating comparison is not "does the
+output match the input" but "does it match the input **better than** it matches what the model produces
+without it". The repo already had the right tool for this — `create_fractal_image`, used by wan2.2's
+I2V seed test for exactly this out-of-distribution reason — and it was two directories away.
+
+Related: no canonical `fl2va` test image ships with diffusers. Its `MiniMaxH3ModularPipeline` docstring
+example is `t2va` only, the sole `load_image` call is a `"subject.png"` placeholder on the `ref2va`
+path, and there are no fast tests for this model in the pinned install. So there was nothing canonical
+to adopt; the fractal is the in-repo convention and is better suited anyway.
+
+---
+
+## Amendment 101 (2026-08-05) — the fused conditioner gate is repaired to production shape, content and tap. The cause is now established: massive-activation rows
+
+Amendment 99's next step was to re-point `test_fused_conditioner_real_weights` at production and set its
+bar. Done, and it turned up a real fidelity gap that the old configuration hid. The test stays
+`xfail(strict=True)` — but for a **named, reproducible reason** rather than "cause not established".
+
+### What was wrong with the gate, and is now fixed
+
+| | before | now |
+|---|---|---|
+| canvas | 448x448 (not a canvas `resolve_canvas_size` yields), 196 image tokens | **1344x768**, grid `[1, 48, 84]`, **1008** image tokens, seq 1019 |
+| content | `torch.rand` uniform noise | **frame 0 of the calibrated t2va generation**, put on the canvas by `prepare_keyframe_image` |
+| tap | `activation_layers=(50,)` over 64 layers + a forward hook on `layers[50]` = `hidden_states[51]` | **`hidden_states[50]`** via `output_hidden_states=True`, against `build_minimax_h3_text_encoder` at 50 layers — the production builder, so depth, tap and explicit `head_dim` are all gated too |
+| tower canvases | `448sq` and `1344x768` | **`1344x768` and `768x768`**, both real |
+
+The golden is now read by the index production reads (`outputs.hidden_states[TAP]`) instead of by a
+hook on a layer's output, which is the mechanism by which the old off-by-one arose at all.
+
+### The plumbing change is sound: measured, not assumed
+
+Switching shape, content and tap all at once risks confusing a port regression with a content effect, so
+the two were separated with `MINIMAX_H3_TEST_CONTENT=noise` (kept as a diagnostic escape hatch):
+
+| configuration | whole-tensor PCC |
+|---|---|
+| 448x448, noise, old tap (the historical number) | 98.6224 % |
+| **1344x768, noise, new tap** | **98.2098 %** |
+| **1344x768, natural photo, new tap** | **70.8949 %** |
+
+98.21 % is the same family as 98.62 %, so the new tap and builder are fine. **The content is what moved
+it**, by 27 points. And the vision *tower* on that same photo reads 99.6116 % against noise's 99.5953 %
+— the tower is content-insensitive here, so the drop is downstream of it.
+
+### The cause: three missing massive-activation rows
+
+Decomposing the tap by row (dumped once and analysed offline):
+
+| row class | n | median relative L2 error | max |
+|---|---|---|---|
+| text | 11 | **1.97 %** | 2.47 % |
+| ordinary vision | 1001 | **9.15 %** | 90.4 % |
+| massive (either side) | 8 | 17.8 % | **5350 %** |
+
+Row norms span **177 to 20612, a 79x spread**: a handful of rows carry massive activations. The
+reference has **7** such rows (norm > 10x median) at `[0, 59, 63, 102, 128, 177, 216]`; we produce **5**
+at `[0, 59, 109, 177, 216]`. Four agree at identical indices with relative error 0.4-17.7 %; **three are
+missing** (rows 63, 102, 128, where the reference has norms 17627 / 15280 / 11200 and we produce ~261,
+i.e. the median) and **one is spurious** (row 109).
+
+It is not a permutation or a scatter bug, and that was checked rather than assumed: the direction of
+golden row 102 appears in our row 109 at cos **1.0000**, which looks like a swap, but four of seven
+massive rows land at *identical* indices, the text rows are exact to 2 %, and a permutation would have
+been *more* visible under noise content, not less. The consistent reading is that massive activations
+are **emergent and threshold-like** — our ~9 % per-row error is enough to decide whether a
+near-threshold row blows up at all, and where. That is `layers/linear.py`'s bf16 accumulation
+(amendment 93), the same repo-wide lever, now with a much sharper symptom.
+
+**Why noise content hid it:** massive activations attach to particular semantic positions, and a uniform
+noise image evidently does not induce them the way a natural photograph does. The invented content was
+not merely unrepresentative — it suppressed the phenomenon the gate should have been measuring.
+
+### Whole-tensor PCC is the wrong statistic here, and is no longer gated
+
+Excluding the largest rows makes whole-tensor PCC **worse**, not better — 70.9 % → 57.4 % → 50.5 % →
+39.5 % as the top 1, 3 and 5 rows by norm are dropped — because the variance PCC normalizes by goes with
+them. A statistic that moves like that under a benign transformation is not measuring what it appears
+to. So the gate is now **per-row and split by row class**: text rows under 5 %, median row under 15 %,
+and massive-row agreement exact. The first two pass; the third is the `xfail`. `assert_quality` still
+logs the whole-tensor triple for continuity with the rest of the port, gating nothing.
+
+That is also the reason amendment 74's pairing of `relative_rmse` with PCC was right for the text
+conditioner and insufficient here: both are whole-tensor.
+
+### What this does and does not mean for `fl2va`
+
+It does **not** invalidate amendment 98 or 100. The end-to-end evidence is unchanged and was measured on
+this same content: the fractal case shows frame 0 following the supplied keyframe at 0.9964 while
+correlating only 0.4108 with t2va's own frame, CLIP is 36.6-37.3 across all three anchor modes, and the
+frames are clean on inspection. So the conditioner's fidelity gap is real, is now precisely
+characterised, and is **not visibly material downstream** — which is what amendment 95 predicted from
+the propagation measurement.
+
+**The method note.** *A metric whose value moves the wrong way when you remove its largest contributors
+is not measuring the thing you named it after.* Excluding the top rows was a two-line check and it
+converted "our conditioner scores 70.9 %" into "whole-tensor PCC cannot score this tensor", which is a
+different and actionable statement. And the broader one, twice over in this campaign: invented test
+inputs do not merely fail to represent production — they can **suppress the phenomenon** the gate exists
+to catch. 448x448 hid the shape, `torch.rand` hid the massive activations, and t2va's own frame 0 hid
+whether conditioning worked at all (amendment 100).
+
+### Next step
+
+`layers/linear.py`'s bf16 accumulation is now the named blocker for this gate, with a concrete symptom
+to verify against rather than a diffuse PCC shortfall: does raising the accumulation width recover rows
+63, 102 and 128? That is a bounded experiment on a shared file, and it should be scoped as its own task
+because it moves every tt_dit model.

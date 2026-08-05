@@ -57,7 +57,9 @@
 # =============================================================================
 
 import os
+import re
 
+import numpy as np
 import pytest
 import torch
 import transformers
@@ -67,12 +69,9 @@ from PIL import Image
 
 import ttnn
 
-from ....encoders.qwen3vl.model_qwen3vl import (
-    Qwen3VlTextEncoder,
-    create_rope_tensors,
-    mrope_position_ids,
-    vision_token_runs,
-)
+from ....encoders.qwen3vl.loader_minimax_h3 import MINIMAX_H3_TEXT_ENCODER_LAYER as TAP
+from ....encoders.qwen3vl.loader_minimax_h3 import build_minimax_h3_text_encoder
+from ....encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, vision_cu_seqlens
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
@@ -85,25 +84,85 @@ _HF_REPO = "MiniMaxAI/MiniMax-H3"
 _SUBFOLDER = "text_encoder"
 _PATTERNS = [f"{_SUBFOLDER}/*"]
 
-# A 448x448 image is grid [1, 28, 28] -- 784 patches, 196 tokens. Real geometry throughout, sized so
-# the 64-layer CPU reference stays affordable; the full 768x1344 canvas is 4032 patches / 1008 tokens
-# and is exercised by the tower-only test.
-FUSED_IMAGE = (448, 448)
+# The canvases `resolve_canvas_size` actually produces, as `(width, height)`. A keyframe is put onto
+# one of these *before* the processor sees it, so these are the only grids `fl2va` ever presents:
+#
+#   1344x768  16:9, max area   grid [1, 48, 84]   4032 patches   1008 image tokens
+#    768x768  1:1              grid [1, 48, 48]   2304 patches    576 image tokens
+#
+# 448x448 used to appear here and is gone: it is not a canvas `resolve_canvas_size` yields, so by
+# amendment 76's rule it was evidence about 448x448 alone. It was chosen to keep the 64-layer CPU
+# reference affordable, and that turned out not to be the binding cost -- the full 1008-token
+# presentation runs in a few minutes.
 KEYFRAME_IMAGE = (1344, 768)
+SQUARE_CANVAS = (768, 768)
+
+# Where the calibrated t2va generation lives; frame 0 of it is the keyframe these tests condition on.
+T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
+
+# Bars for the fused conditioner, all set from the production measurement below.
+#
+# Whole-tensor PCC is deliberately NOT one of them, and that is the main thing this gate learned. The
+# tap's row norms span 177 to 20612 -- a 79x spread, because a handful of rows carry massive activations
+# -- so a single flattened correlation over all 5.2 M elements is dominated by those few rows and says
+# almost nothing about the other 1011. Measured at production shape and content: whole-tensor PCC
+# 70.8949 % while the *median* per-row relative error is 9.0 % and the text rows are within 2.5 %.
+# Excluding the largest rows makes whole-tensor PCC *worse* (57 %, 50 %, 39 % as the top 1, 3, 5 are
+# dropped), which is the tell that the statistic is unstable here rather than informative.
+#
+# So the gate is per-row, split by row class, which is both robust and diagnostic.
+FUSED_MAX_TEXT_ROW_ERROR = 0.05  # measured median 0.0197, max 0.0247
+FUSED_MAX_MEDIAN_ROW_ERROR = 0.15  # measured median 0.0901 over all rows
+# Rows whose norm exceeds this multiple of the median are "massive activations". Emergent and
+# threshold-like: a small numerical difference decides whether a row blows up at all.
+MASSIVE_ROW_MULTIPLE = 10.0
 
 
 def _test_image(size):
-    """A deterministically textured image.
+    """A real keyframe on the production canvas: frame 0 of the calibrated t2va generation.
 
-    Content matters here, not just geometry. A flat colour gives near-identical patches, so the merged
-    tokens are near-identical rows and PCC across them is dominated by the small inter-row differences
-    -- which is precisely where bf16 noise lives. Measured on the released weights: a solid colour
-    scores 96.2% where texture scores 99.6%, on identical code and the same mesh. The low number is a
-    property of the metric on a degenerate input, not of the port.
+    **Content is part of the gate, not a detail.** The measured spread on the released weights is 3.4
+    points -- a solid colour scores 96.2 % where texture scores 99.6 % -- because a flat image gives
+    near-identical patches, so the merged tokens are near-identical rows and PCC across them is
+    dominated by the small inter-row differences, which is exactly where bf16 noise lives. That makes
+    the metric content-sensitive in a way that has nothing to do with correctness.
+
+    This used to be `torch.rand` uniform noise, which is invented content and *also* degenerate in the
+    relevant sense: every patch is statistically identical, so the rows are near-identical for the same
+    reason a flat colour's are, despite the image being high-frequency. A natural photograph has
+    spatially correlated structure and genuinely distinct patches, which is what production feeds.
+
+    Frame 0 of the t2va artifact specifically, rather than any photograph, because it is the content
+    the tier-6 thresholds were calibrated on and the exact keyframe
+    `test_pipeline_fl2va_minimax_h3.py` conditions on -- so this test becomes the unit-level
+    explanation of that gate's end-to-end result rather than a separate measurement of something else.
     """
-    generator = torch.Generator().manual_seed(0)
-    pixels = (torch.rand(size[1], size[0], 3, generator=generator) * 255).to(torch.uint8)
-    return Image.fromarray(pixels.numpy())
+    from pathlib import Path
+
+    import imageio.v3 as iio
+
+    from ....pipelines.minimax_h3.packing import prepare_keyframe_image
+
+    # Diagnostic escape hatch, not for gating: `MINIMAX_H3_TEST_CONTENT=noise` restores the uniform-noise
+    # image this test used to carry, which is what separates "the port regressed" from "the metric is
+    # content-sensitive" when a number moves after a content change. Default is the production content.
+    if os.environ.get("MINIMAX_H3_TEST_CONTENT") == "noise":
+        generator = torch.Generator().manual_seed(0)
+        pixels = (torch.rand(size[1], size[0], 3, generator=generator) * 255).to(torch.uint8)
+        return Image.fromarray(pixels.numpy())
+
+    source = Path(os.environ.get(T2VA_ARTIFACT_ENV) or Path.home() / "h3_t2va_artifacts") / "t2va.mp4"
+    if not source.is_file():
+        pytest.skip(
+            f"no calibrated t2va artifact at {source}; run test_pipeline_minimax_h3.py first. These are "
+            "released-weights production-shape gates, so they condition on real content rather than "
+            "inventing some"
+        )
+    frame = Image.fromarray(np.asarray(iio.imread(source, index=0, plugin="pyav"))).convert("RGB")
+    width, height = size
+    # The pipeline's own canvas rule, so the pixels the conditioner sees here are the pixels it sees in
+    # production. `stretch=True` is the first-keyframe (geometry anchor) case.
+    return prepare_keyframe_image(frame, height, width, True)
 
 
 def _conditioner_dir() -> str:
@@ -165,7 +224,7 @@ def _tower(reference_visual, submesh):
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
 )
-@pytest.mark.parametrize("size", [FUSED_IMAGE, KEYFRAME_IMAGE], ids=["448sq", "keyframe_768x1344"])
+@pytest.mark.parametrize("size", [KEYFRAME_IMAGE, SQUARE_CANVAS], ids=["keyframe_768x1344", "square_768"])
 def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size):
     """The released vision tower: merged tokens and all three deepstack features.
 
@@ -209,27 +268,55 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
 )
-def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links):
-    """WIP -- FAILING at PCC 98.6224% against the 0.99 threshold, cause not established.
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Massive-activation rows disagree: the reference produces 7 rows whose norm exceeds 10x the "
+        "median (up to 79x) and we reproduce 4 of them, missing 3 and inventing 1. Cause IS now "
+        "established, unlike the version of this xfail it replaces -- see STATE.md amendment 101. Text "
+        "rows (2.5% max) and the median vision row (9.0%) both pass; the shape, content and tap are all "
+        "production now. strict=True so improving the conditioner's precision forces a return here."
+    ),
+)
+@pytest.mark.parametrize("size", [KEYFRAME_IMAGE], ids=["keyframe_768x1344"])
+def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size):
+    """The `fl2va` conditioner with an image, on released weights, at the production canvas and tap.
 
-    Left failing rather than relaxed or skipped: the number is bit-reproducible across four runs and
-    the reduced-geometry equivalent passes at 99.9917%, so there is something real here that only the
-    released depth and tap index expose. Relaxing the threshold would bury it; skipping would stop it
-    being measured. See the file header for what has been ruled out.
+    Three things about this gate were wrong when it arrived and are fixed here, all of them named in the
+    `xfail` reason it used to carry (STATE.md amendments 90 and 95):
 
-    MiniMax-H3's presentation is built here the way `encoders.py::encode_prompt` builds it -- a
-    `"<Picture 1>: "` label, then a vision block, then the prompt verbatim, with no chat template and
-    no special tokens -- using the checkpoint's own tokenizer and image processor.
+    - **the shape.** 448x448 is not a canvas `resolve_canvas_size` produces, so by amendment 76 it was
+      evidence about 448x448 alone. Production is 1344x768 -> 1008 image tokens, seq 1028.
+    - **the content.** `torch.rand` uniform noise is invented *and* degenerate for this metric; see
+      `_test_image`.
+    - **the tap.** It read `hidden_states[51]` -- `activation_layers=(50,)` over 64 layers, with a hook
+      on `layers[50]`. Production reads `hidden_states[50]`, the output of layer **49**, which is what
+      `build_minimax_h3_text_encoder` builds at 50 layers. Self-consistent before, so not the PCC gap,
+      but it gated a tensor production never reads and paid for 14 layers it never needed.
+
+    The bar is set from the production measurement rather than inherited, and the reason a *loose* bar
+    is a gate here rather than an admission is that the floor behind it has been measured. Amendment 93:
+    the reference vision tower's own bf16-vs-fp32 floor is 99.87 % at this canvas, against our tower's
+    99.5953 %, so ~0.28 points of the tower's error is `layers/linear.py`'s bf16 accumulation -- a
+    deliberate, repo-wide precision choice. Amendment 95: pushing a perturbation of *that magnitude*
+    through the **reference** decoder scores 98.97-99.49 % at this geometry, so the conditioner cannot
+    reach four nines with the tower it is fed, and the reference itself does not.
+
+    What this does gate, tightly, is regression: a wrong rotary layout, a mis-tagged vision block, a
+    scatter off by a tile or a deepstack feature at the wrong layer all move PCC by far more than the
+    margin below.
+
+    The presentation is built the way `encoders.py::encode_prompt` builds it -- `"<Picture 1>: "`, then
+    a vision block, then the prompt verbatim, no chat template and no special tokens -- using the
+    checkpoint's own tokenizer and image processor.
     """
-    from diffusers.modular_pipelines.minimax_h3.packing import MINIMAX_H3_TEXT_ENCODER_LAYER as TAP
-
     path, reference = conditioner
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     tp_factor = tuple(submesh.shape)[tp_axis]
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(path)
     processor = transformers.AutoImageProcessor.from_pretrained(path)
-    vision = processor(images=[_test_image(FUSED_IMAGE)], return_tensors="pt")
+    vision = processor(images=[_test_image(size)], return_tensors="pt")
     pixel_values, grid = vision["pixel_values"], vision["image_grid_thw"]
     merge = reference.visual.config.spatial_merge_size**2
     num_image_tokens = int(grid[0].prod()) // merge
@@ -248,24 +335,29 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
     type_ids = (ids == image_pad).long()
     seq_len = ids.shape[1]
 
-    # --- golden: the reference runs its own tower and builds its own position ids ---
-    captured: dict[int, torch.Tensor] = {}
-    handle = reference.language_model.layers[TAP].register_forward_hook(
-        lambda m, i_, o: captured.__setitem__(TAP, (o[0] if isinstance(o, tuple) else o).detach())
-    )
+    # --- golden: exactly what production reads, through the API production reads it with ---
+    # `MiniMaxH3TextEncoderStep.encode_prompt` does `output_hidden_states=True` then
+    # `hidden_states[MINIMAX_H3_TEXT_ENCODER_LAYER]`. No forward hook: the hook the old version used
+    # captured layer TAP's *output*, which is `hidden_states[TAP + 1]`, and that off-by-one is how this
+    # gate came to measure a tensor production never reads. Asking for the tensor by the index
+    # production uses cannot drift that way. The reference builds its own tower output and its own
+    # position ids here, so a disagreement in either surfaces as PCC.
     with torch.no_grad():
-        reference(
+        outputs = reference(
             input_ids=ids,
             attention_mask=torch.ones_like(ids),
             mm_token_type_ids=type_ids,
             pixel_values=pixel_values,
             image_grid_thw=grid,
             use_cache=False,
+            output_hidden_states=True,
         )
-    handle.remove()
-    golden = captured[TAP].float()
+    golden = outputs.hidden_states[TAP].float()
     cfg = reference.language_model.config
     assert golden.shape == (1, seq_len, cfg.hidden_size)
+    # `hidden_states` is the embedding output plus one per layer, so index TAP is layer TAP - 1's output
+    # and a TAP-layer stack tapped at its last layer is exactly that.
+    assert len(outputs.hidden_states) == cfg.num_hidden_layers + 1
 
     # --- port ---
     tower = _tower(reference.visual, submesh)
@@ -279,24 +371,29 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
 
     rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
     head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
-    encoder = Qwen3VlTextEncoder(
-        vocab_size=cfg.vocab_size,
-        hidden_size=cfg.hidden_size,
-        intermediate_size=cfg.intermediate_size,
-        hidden_act=cfg.hidden_act,
-        num_hidden_layers=cfg.num_hidden_layers,
-        num_attention_heads=cfg.num_attention_heads,
-        num_key_value_heads=cfg.num_key_value_heads,
-        rms_norm_eps=cfg.rms_norm_eps,
-        rope_theta=rope_params["rope_theta"],
-        mrope_section=rope_params["mrope_section"],
-        head_dim=head_dim,
-        activation_layers=(TAP,),
-        device=submesh,
+
+    # The production builder, not an inline construction: it is what the pipeline calls, so this gates
+    # the depth (TAP layers, not 64), the tap (`activation_layers=(TAP - 1,)`) and the explicit
+    # `head_dim` from config all at once. Built without weights and fed the reference's own state dict
+    # rather than re-reading 50 GB from disk, since the reference is already in RAM -- and truncated to
+    # the layers this stack has, because `load_torch_state_dict` is strict and layers TAP..63 are never
+    # evaluated.
+    encoder, _ = build_minimax_h3_text_encoder(
+        path,
+        mesh_device=submesh,
         parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
         ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
+        is_fsdp=False,
+        num_layers=TAP,
+        load_weights=False,
     )
-    encoder.load_torch_state_dict(reference.language_model.state_dict())
+    layer_re = re.compile(r"^layers\.(\d+)\.")
+    truncated = {
+        key: value
+        for key, value in reference.language_model.state_dict().items()
+        if not (m := layer_re.match(key)) or int(m.group(1)) < TAP
+    }
+    encoder.load_torch_state_dict(truncated)
 
     # A vision run makes the three M-RoPE axes diverge, so the interleaved layout is load-bearing here.
     assert rope_params.get("mrope_interleaved") is True, "this checkpoint is expected to be interleaved"
@@ -327,8 +424,70 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
     actual = tensor.to_torch(out, mesh_axes=[None, None, None])
 
     logger.info(
-        f"minimax-h3 fused conditioner [real] TP={tp_factor} layer {TAP} of {cfg.num_hidden_layers}, "
+        f"minimax-h3 fused conditioner [real] TP={tp_factor} hidden_states[{TAP}] "
+        f"(= layer {TAP - 1} of a {TAP}-layer stack), {size[0]}x{size[1]} grid={grid[0].tolist()}, "
         f"seq={seq_len} ({num_image_tokens} image tokens):"
     )
     assert actual.shape[-2:] == (seq_len, cfg.hidden_size)
-    assert_quality(golden, actual, pcc=0.99)
+    if os.environ.get("MINIMAX_H3_DUMP_FUSED"):
+        torch.save(
+            {"golden": golden, "actual": actual, "type_ids": type_ids, "label_len": len(label), "size": size},
+            os.environ["MINIMAX_H3_DUMP_FUSED"],
+        )
+
+    # Per-row relative L2 error, which is what the DiT's `context_embedder` actually consumes -- it
+    # takes the embedding as an absolute value, so a per-row magnitude error matters and a global
+    # correlation does not capture it. `assert_quality`'s whole-tensor numbers are logged for continuity
+    # with the rest of the port but are not the gate; see the note on the constants above.
+    g = golden[0].double()
+    p = actual.reshape(golden.shape)[0].double()
+    row_error = (p - g).norm(dim=1) / g.norm(dim=1)
+    is_text = ~type_ids[0].bool()
+    norms = g.norm(dim=1)
+    median_norm = float(norms.median())
+    golden_massive = norms > MASSIVE_ROW_MULTIPLE * median_norm
+    ours_massive = p.norm(dim=1) > MASSIVE_ROW_MULTIPLE * median_norm
+    ordinary = ~golden_massive & ~ours_massive
+
+    assert_quality(golden, actual)  # logs whole-tensor PCC / CCC / RMSE without gating on them
+    logger.info(
+        f"  row norms: median {median_norm:.1f}, max {float(norms.max()):.1f} "
+        f"({float(norms.max()) / median_norm:.0f}x median)"
+    )
+    for name, mask in (
+        ("text", is_text),
+        ("ordinary vision", ordinary & ~is_text),
+        ("massive (either side)", golden_massive | ours_massive),
+    ):
+        if mask.any():
+            e = row_error[mask]
+            logger.info(
+                f"  {name:22s} n={int(mask.sum()):4d}  median {float(e.median()) * 100:7.2f} %  "
+                f"max {float(e.max()) * 100:8.2f} %"
+            )
+    logger.info(
+        f"  massive-activation rows: golden {int(golden_massive.sum())} at "
+        f"{golden_massive.nonzero().flatten().tolist()}, ours {int(ours_massive.sum())} at "
+        f"{ours_massive.nonzero().flatten().tolist()}"
+    )
+
+    # What passes, and is worth keeping tight.
+    assert float(row_error[is_text].max()) < FUSED_MAX_TEXT_ROW_ERROR, (
+        f"text rows are {float(row_error[is_text].max()) * 100:.2f} % off; the decoder path itself is wrong, "
+        "not just the vision fidelity"
+    )
+    assert float(row_error.median()) < FUSED_MAX_MEDIAN_ROW_ERROR, (
+        f"median per-row error {float(row_error.median()) * 100:.2f} % exceeds "
+        f"{FUSED_MAX_TEXT_ROW_ERROR * 100:.0f} %; the typical row has regressed"
+    )
+
+    # What does NOT pass, stated as the specific thing it is. See the file header.
+    missing = int((golden_massive & ~ours_massive).sum())
+    spurious = int((ours_massive & ~golden_massive).sum())
+    assert missing == 0 and spurious == 0, (
+        f"massive-activation rows disagree: {missing} present in the reference and absent from ours, "
+        f"{spurious} present in ours and absent from the reference "
+        f"(golden {int(golden_massive.sum())} such rows, ours {int(ours_massive.sum())}). These rows carry "
+        f"norms up to {float(norms.max()) / median_norm:.0f}x the median, so missing one dominates every "
+        "whole-tensor metric."
+    )

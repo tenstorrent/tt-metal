@@ -58,7 +58,7 @@ from PIL import Image
 
 import ttnn
 
-from ....pipelines.minimax_h3.packing import align_num_frames
+from ....pipelines.minimax_h3.packing import align_num_frames, prepare_keyframe_image
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ..wan2_2.common import check_output_sanity
 from .common_av import (
@@ -150,6 +150,13 @@ def _artifact_dir() -> Path:
 def _gated_keyframe() -> Image.Image:
     """Frame 0 of the calibrated t2va generation, at the production canvas.
 
+    **This keyframe cannot on its own show that conditioning works, and the anchor correlation it
+    produces is confounded.** It is taken from t2va's *own output*, so a pipeline that ignored the
+    keyframe entirely and merely re-ran t2va would also score ~0.997 against it. That is what
+    `test_fl2va_follows_the_keyframe` exists to rule out, with a keyframe the model would never
+    produce. What this one is for is tier 6: the CLIP and VBench bars were calibrated on this content
+    (amendment 87), so it is the only keyframe those bars legitimately apply to.
+
     Read from the t2va gate's artifact rather than generated here: a second generation would cost
     another 90 s of Galaxy time to produce content this file only needs to *read*, and reusing the
     calibrated one is the whole point (see the module docstring on tier 6).
@@ -164,6 +171,23 @@ def _gated_keyframe() -> Image.Image:
     frame = _first_frame(artifact)
     assert frame.size == (WIDTH, HEIGHT), f"t2va artifact is {frame.size}, expected {(WIDTH, HEIGHT)}"
     return frame
+
+
+def create_fractal_image(width: int, height: int) -> Image.Image:
+    """A Mandelbrot escape-time image, the repo's existing convention for an I2V seed.
+
+    Copied from `tests/models/wan2_2/test_pipeline_wan_i2v.py`, and it is the right tool for the
+    *discriminating* case for one reason: a fractal is content the model would never generate for this
+    prompt, so "decoded frame 0 resembles the keyframe" cannot be satisfied by a pipeline that ignores
+    the keyframe. See `test_fl2va_follows_the_keyframe`.
+    """
+    c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
+    z = np.zeros_like(c)
+    img = np.zeros(c.shape, dtype=np.uint8)
+    for i in range(32):
+        z = z * z + c
+        img[(img == 0) & (np.abs(z) > 2)] = 255 - 8 * i
+    return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
 
 
 def _first_frame(path: Path) -> Image.Image:
@@ -296,4 +320,75 @@ def test_fl2va_end_to_end(mesh_device, anchors, case, reset_seeds):
     logger.info(
         "REMINDER: read the artifact rubric against these frames -- seams and flicker are what every "
         "whole-tensor metric averages away, and both are parallelism bugs"
+    )
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
+    """The keyframe *drives* the generation -- it is not merely consistent with it.
+
+    This is the test that makes the anchor numbers mean something, and it exists because the gated
+    keyframe cannot do that job. That keyframe is frame 0 of the calibrated t2va generation, so a
+    pipeline that ignored keyframes altogether and just re-ran t2va would score ~0.997 against it. The
+    correlation is real but confounded, and reporting it alone overstates what has been shown.
+
+    Here the keyframe is a **Mandelbrot fractal** -- content the model will never produce for a prompt
+    about a fox in snow. Three claims, and only the three together are conclusive:
+
+    1. decoded frame 0 resembles the fractal. Impossible to satisfy by ignoring the keyframe.
+    2. decoded frame 0 resembles the fractal *much better* than it resembles t2va's own frame 0, which
+       is what it would resemble if conditioning were a no-op. This is the discriminating comparison.
+    3. the tail of the clip has left the fractal behind. A pipeline that pinned every frame rather than
+       just the anchor would also pass 1 and 2, and would not be generating a video at all.
+
+    The prompt deliberately still describes the fox. The keyframe and the prompt disagree, which is the
+    sharpest possible test of whether the conditioning rows are actually reaching the DiT: a no-op
+    keyframe leaves the prompt to win outright.
+    """
+    fractal = create_fractal_image(WIDTH, HEIGHT)
+    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    output = pipeline(
+        PROMPT,
+        image=fractal,
+        num_frames=NUM_FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        seed=SEED,
+    )
+    frames = (output.video[0].permute(1, 2, 3, 0).clamp(0, 1) * 255).round().to(torch.uint8).numpy()
+
+    def pcc(a, b):
+        a = np.asarray(a, dtype=np.float64).ravel()
+        b = np.asarray(b, dtype=np.float64).ravel()
+        return float(np.corrcoef(a, b)[0, 1])
+
+    prepared = np.asarray(prepare_keyframe_image(fractal, HEIGHT, WIDTH, True))
+    to_keyframe = pcc(frames[0], prepared)
+    to_t2va = pcc(frames[0], np.asarray(_gated_keyframe()))
+    tail = pcc(frames[-1], prepared)
+
+    logger.info(
+        f"fl2va keyframe-drives-generation: frame 0 vs fractal keyframe {to_keyframe:.4f}, "
+        f"frame 0 vs t2va's own frame 0 {to_t2va:.4f}, frame -1 vs fractal keyframe {tail:.4f}"
+    )
+    for index in (0, 17, 62, align_num_frames(NUM_FRAMES) - 1):
+        Image.fromarray(frames[index]).save(_artifact_dir() / f"fl2va_fractal_frame_{index}.png")
+
+    # (1) the anchor followed the supplied keyframe.
+    assert to_keyframe > ANCHOR_PCC_FLOOR, (
+        f"decoded frame 0 correlates only {to_keyframe:.3f} with the fractal keyframe it was "
+        "conditioned on; the keyframe is not reaching the DiT"
+    )
+    # (2) and it followed *that* keyframe rather than reproducing t2va. The margin is what rules out
+    # the confound; a no-op pipeline inverts this comparison.
+    assert to_keyframe > to_t2va + 0.30, (
+        f"frame 0 resembles the fractal keyframe ({to_keyframe:.3f}) barely more than it resembles "
+        f"t2va's own frame 0 ({to_t2va:.3f}); conditioning may be a no-op"
+    )
+    # (3) it is still a video, not 124 copies of the keyframe.
+    assert tail < to_keyframe - 0.20, (
+        f"the last frame still correlates {tail:.3f} with the keyframe against frame 0's "
+        f"{to_keyframe:.3f}; the clip may be pinned throughout rather than anchored at one end"
     )
