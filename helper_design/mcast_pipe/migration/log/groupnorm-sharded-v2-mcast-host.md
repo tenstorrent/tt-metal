@@ -1,7 +1,7 @@
 # groupnorm-sharded-v2-mcast-host
 
 - Kind: host integration
-- Helper API: `MCAST_PIPE_API_VERSION=9`
+- Helper API: `MCAST_PIPE_API_VERSION=10`
 - Bindings: legacy/Welford multicast and sender-only degenerate GroupNorm v2 paths
 - Status: migrated, fully end-to-end
 - Code commit: `0a796a025c9dc678387e2a7fa52518c898737dc9`
@@ -39,6 +39,11 @@ sender-only singleton, no receiver kernel is emitted, and the existing
 
 ## Validation
 
+- Gate 6 geometry classification found that every mapped production GroupNorm v2 configuration is
+  zero-edge. The factory's actual splitter has direct synthetic host coverage for zero-, one-, and
+  two-edge coordinate sequences: `GroupNormMcastGeometry` passed 3/3; `McastHostFixture` passed 25/25.
+- The supported zero-edge performance class retains its matched Blackhole p100a measurements:
+  legacy +0.248% and Welford -0.485% versus baseline, both within the 1.5% gate.
 - `./build_metal.sh`: passed.
 - Exact legacy 8x4 node under `scripts/run_safe_pytest.sh --dev`: passed.
   - sender JIT hash `665208170585676730`;

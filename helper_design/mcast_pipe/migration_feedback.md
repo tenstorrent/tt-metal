@@ -212,7 +212,7 @@ must not restate the current helper RT width.
 ## MIG-004 — Validate GroupNorm's fixed three-rectangle sender path
 
 - **Date:** 2026-08-04
-- **Status:** Open — rectangular SDXL coverage passed; wrapped shapes remain
+- **Status:** Implemented — production configurations are zero-edge; wrapped splitter paths have synthetic host coverage
 - **Host file:**
   `ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp`
 - **Sender kernels:** `reader_mcast_sender_unary_sharded_gn_v2.cpp` and
@@ -242,14 +242,23 @@ records per case, baseline `4a1d6a97ca9` and migrated `28356d43846` measured:
 These 8x8 block-sharded cases use rectangular column groups and execute two
 degenerate edge sends. No material regression was observed for that shape.
 
-### Remaining validation
+### Resolution
 
-- Identify supported shapes that create one edge rectangle and both edge
-  rectangles; confirm the shape class from host-generated geometry rather than
-  assuming it from tensor dimensions.
-- Compare legacy and Welford kernels against the pre-migration parent with the
-  same device, clock, build, inputs, and real-time-profiler protocol.
-- Preserve separate results for zero-, one-, and two-edge shape classes; do not
-  average them together.
-- If a regression appears, measure construction, degenerate calls, and real
-  sends separately before changing the helper or wire format.
+The supported production inventory generates only zero-edge rectangles. The
+factory requires the shard grid to merge to one dense rectangle, and its
+block-sharded sender boundaries align with the row/column traversal partitions
+enforced by the batch/group divisibility checks. The mapped height-sharded
+production case uses an 8x1 grid. Inspecting the host-generated groups for both
+orientations and every mapped GroupNorm v2 configuration found no first or last
+edge rectangle.
+
+One- and two-edge partitions remain valid defensive behavior for a wrapped
+coordinate sequence, but no mapped production configuration reaches them.
+`GroupNormMcastGeometry` now exercises the same production splitter directly
+with zero-edge, one-edge, and two-edge coordinate sequences; all three cases
+pass. `McastHostFixture` remains green at 25/25, and `./build_metal.sh` passes.
+
+The only supported production performance class is therefore the zero-edge
+class already measured above. Legacy is +0.248% and Welford is -0.485% versus
+the matched baseline, both within the 1.5% gate. No new wrapped baseline run or
+hot-path change is warranted.

@@ -6,6 +6,24 @@ feedback round lands.
 
 ---
 
+## Round 20 — GroupNorm production geometry classification (2026-08-05)
+
+- **Trigger (MIG-004):** the fixed three-block GroupNorm sender wire always executes middle, first,
+  and last Pipes, so absent edge rectangles add degenerate calls and wrapped groups needed explicit
+  performance classification.
+- **Classification:** the sharded-v2 factory requires one dense rectangular shard grid. Its mapped
+  block- and height-sharded production configurations generate rectangular groups only, so the
+  supported production class is zero-edge. No mapped production case reaches a one- or two-edge
+  wrapped partition.
+- **Coverage:** direct host tests exercise the production splitter with zero-, one-, and two-edge
+  coordinate sequences. `GroupNormMcastGeometry` passed 3/3, `McastHostFixture` passed 25/25, and
+  `./build_metal.sh` passed.
+- **Performance:** the supported zero-edge class reuses the matched SDXL measurements: legacy
+  +0.248% and Welford -0.485% versus baseline. Both pass the 1.5% gate; no helper or kernel change was
+  needed. API remains v10.
+
+---
+
 ## Round 19 — signal-only handshake policy and Sort channel split (2026-08-05)
 
 - **Trigger (API-003/MIG-002):** `send_signal()` and `receive_signal()` ignored the channel's

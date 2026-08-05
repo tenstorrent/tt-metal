@@ -27,6 +27,17 @@ The build, cold-cache helper suite (77/77), exact cold-JIT long Sort case, both 
 (2/2), and all long cases (7/7) passed. The median of three performance-run medians was
 `145,201,100.41355687 ns`, +1.195124% versus baseline and within the 1.5% gate.
 
+### GroupNorm three-rectangle performance follow-up
+
+MIG-004 is closed. The actual sharded-v2 host constraints and generated group partitions classify
+every mapped production configuration as zero-edge. The one- and two-edge wrapped partitions remain
+defensive splitter behavior and now have direct synthetic host coverage alongside zero-edge geometry;
+`GroupNormMcastGeometry` passed 3/3 and `McastHostFixture` passed 25/25 after a successful rebuild.
+
+The supported zero-edge class reuses the matched Blackhole p100a measurements already recorded for
+the SDXL `(1, 1920, 32, 32)` production shape: legacy +0.248% and Welford -0.485% versus baseline.
+Both are within the 1.5% gate, so no hot-path change was required.
+
 ## Prior v9 run header
 
 - Helper: `mcast_pipe`, `MCAST_PIPE_API_VERSION=9` (unchanged)
