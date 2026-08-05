@@ -58,17 +58,12 @@ _NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
 
 # NOTES.md [gpt-05] -- Decode runs in ttnn's DECODE-NATIVE head layout, [1...
 _QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
-# 48 CORES = 128 COLUMNS = EXACTLY ONE HEAD PER CORE, and that is load-bearing, not tidy. The count
-# itself is inert for speed (6 to 48 cores all land inside a 0.020 ms spread; see NOTES.md [gpt-05]),
-# but `overlap_qk_coregrid=False` in _layer_step asserts head_dim % shard_width == 0, and 48 is the
-# only feasible width that satisfies it -- the next one down, 64 columns, would need 96 cores.
-# That flag is what lets k and v land on different cores, which is what paged_fused_update_cache
-# demands, which is worth 0.454 ms/frame. Drop back to 8 cores and the whole chain fails to build.
-_QKV_GRID_X, _QKV_GRID_Y = 8, 6
-_QKV_CORES = _QKV_GRID_X * _QKV_GRID_Y
+# The core count is inert for speed -- 6 to 48 all land inside a 0.020 ms spread, NOTES.md [gpt-05].
+# One number, used twice: the literal 8 used to appear in both the shard width and the grid, and
+# changing one without the other yields a silently wrong shard rather than an error.
+_QKV_GRID_X = 8
 _QKV_SHARD = ttnn.create_sharded_memory_config(
-    (TILE, _QKV_WIDTH // _QKV_CORES),
-    core_grid=ttnn.CoreGrid(y=_QKV_GRID_Y, x=_QKV_GRID_X),
+    (TILE, _QKV_WIDTH // _QKV_GRID_X), core_grid=ttnn.CoreGrid(y=1, x=_QKV_GRID_X),
     strategy=ttnn.ShardStrategy.WIDTH, orientation=ttnn.ShardOrientation.ROW_MAJOR,
     use_height_and_width_as_shard_shape=True)
 # rotary_embedding_hf's decode mode requires cos/sin sharded as well as the input
@@ -76,16 +71,21 @@ _QKV_SHARD = ttnn.create_sharded_memory_config(
 _ROPE_SHARD = ttnn.create_sharded_memory_config(
     (TILE, HEAD_DIM), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT,
     orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True)
-# ...and a SECOND cos/sin pinned to core (1,0), because with overlap_qk_coregrid=False q stays on
-# (0,0) while k moves to (1,0), and rope reads its table from the tensor's OWN core. Feeding k the
-# (0,0) table does not fail -- it returns 3.4e38, uninitialised L1. These are built once per FRAME
-# alongside the q pair, not per layer, so it is ~4 extra launches against the 26 the fused cache
-# write saves. NOTES.md [gpt-05].
-_ROPE_SHARD_K = ttnn.create_sharded_memory_config(
-    (TILE, HEAD_DIM),
-    core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-    strategy=ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True)
+# V's parking space, core (1,0). paged_fused_update_cache writes both caches in one kernel but
+# refuses K and V on the same core, and nlp_create_qkv_heads_decode puts q, k and v all on (0,0), so
+# ONE of them has to move. MOVE V, NOT K -- the choice matters more than it looks:
+#   * moving K is what overlap_qk_coregrid=False does. It is 0.047 ms/frame faster, and it costs two
+#     coupling hazards: it asserts a whole head per core (pinning _QKV_SHARD to 48 cores, load-bearing
+#     and non-obvious), and K then goes through RoPE on a core whose cos/sin table is elsewhere --
+#     which does NOT raise, it returns 3.4e38 from uninitialised L1.
+#   * V never touches RoPE and imposes nothing on the shard width. One reshard per layer, 26 a frame,
+#     ~2.1 us each because it is an 8 KB hop between adjacent cores.
+# 0.405 vs 0.452 ms/frame -- 0.09% of a frame to delete a silent-garbage failure mode. Taken from
+# lserbedzija/xtts-gpt-ttnn, which does the same thing in xtts_v2/tt/ttnn_xtts_gpt.py.
+_V_SHARD = ttnn.MemoryConfig(
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+    ttnn.ShardSpec(ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
+                   (TILE, HEAD_DIM), ttnn.ShardOrientation.ROW_MAJOR))
 
 # NOTES.md [gpt-06] -- WEIGHT PRECISION -- load-bearing for CORRECTNESS, not...
 WEIGHT_DTYPE = ttnn.bfloat16          # w2 -- bf16 for ACCURACY (6.16), not for the hang (6.13)
@@ -260,7 +260,7 @@ class TtVoxtralGPT:
     # ----------------------------------------------------------------------------
     # DECODE PATH -- one frame at a time; THIS is the hot loop
     # ----------------------------------------------------------------------------
-    def _layer_step(self, x, w, cos, sin, cos_k, sin_k, cache, pos_t):
+    def _layer_step(self, x, w, cos, sin, cache, pos_t):
         """One decode position. x [1,1,3072] -> same, against `cache` written up to `pos_t`.
 
         See NOTES.md [gpt-16].
@@ -268,20 +268,18 @@ class TtVoxtralGPT:
         qkv = ttnn.linear(self._norm_dec(x, w["an"]), w["wqkv"],
                           compute_kernel_config=COMPUTE_CONFIG)
         qkv = ttnn.to_memory_config(ttnn.reshape(qkv, [1, 1, 1, _QKV_WIDTH]), _QKV_SHARD)
-        # overlap_qk_coregrid=False puts q on core (0,0) and k on (1,0). It is not free to choose:
-        # it needs _QKV_SHARD to be a whole head per core, and it forces k to use _ROPE_SHARD_K.
-        # The reason to pay all that is the single fused cache write below.
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(
-            qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS, overlap_qk_coregrid=False)
+            qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
         qh = ttnn.experimental.rotary_embedding_hf(qh, cos, sin, is_decode_mode=True,
                                                    compute_kernel_config=COMPUTE_CONFIG)
-        kh = ttnn.experimental.rotary_embedding_hf(kh, cos_k, sin_k, is_decode_mode=True,
+        kh = ttnn.experimental.rotary_embedding_hf(kh, cos, sin, is_decode_mode=True,
                                                    compute_kernel_config=COMPUTE_CONFIG)
-        # ONE fused write, not two. 26 launches a frame instead of 52, worth 0.454 ms/frame and
-        # bit-identical. It asserts k and v are on non-overlapping cores, which is the whole reason
-        # for overlap_qk_coregrid=False above.
-        ttnn.experimental.paged_fused_update_cache(cache[0], kh, cache[1], vh,
-                                                   update_idxs_tensor=pos_t)
+        # ONE fused write, not two: 26 launches a frame instead of 52, worth 0.405 ms and
+        # bit-identical. V is moved to core (1,0) first because the op refuses an overlap -- see
+        # _V_SHARD for why V and not K.
+        ttnn.experimental.paged_fused_update_cache(
+            cache[0], kh, cache[1], ttnn.to_memory_config(vh, _V_SHARD),
+            update_idxs_tensor=pos_t)
         o = ttnn.transformer.scaled_dot_product_attention_decode(
             qh, cache[0], cache[1], cur_pos_tensor=pos_t, scale=SCALE,
             compute_kernel_config=COMPUTE_CONFIG)
@@ -348,12 +346,10 @@ class TtVoxtralGPT:
         # paged_update_cache and sdpa_decode take the position as a tensor.
         cos = ttnn.to_memory_config(up(cosb.reshape(1, 1, 1, HEAD_DIM)), _ROPE_SHARD)
         sin = ttnn.to_memory_config(up(sinb.reshape(1, 1, 1, HEAD_DIM)), _ROPE_SHARD)
-        cos_k = ttnn.to_memory_config(up(cosb.reshape(1, 1, 1, HEAD_DIM)), _ROPE_SHARD_K)
-        sin_k = ttnn.to_memory_config(up(sinb.reshape(1, 1, 1, HEAD_DIM)), _ROPE_SHARD_K)
         pos_t = ttnn.from_torch(torch.tensor([pos], dtype=torch.int32), device=self.device)
         x = up(embed.reshape(1, 1, DIM))
         for i, w in enumerate(self.layers):
-            x = self._layer_step(x, w, cos, sin, cos_k, sin_k, self.caches[i], pos_t)
+            x = self._layer_step(x, w, cos, sin, self.caches[i], pos_t)
         x = self._norm_dec(x, self.norm)
         self.pos = pos + 1
         return ttnn.to_torch(x).float().reshape(1, 1, DIM)
