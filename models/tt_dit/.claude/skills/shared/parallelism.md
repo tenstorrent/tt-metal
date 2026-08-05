@@ -94,7 +94,10 @@ for core reservation, ping-pong buffers and the fused collective+compute ops.
 ## GroupNorm
 
 Sharded GroupNorm is the most common source of hangs in this tree. Read
-`known-issues.md` before wiring one — and prefer
-`ttnn.experimental.dit_fused_distributed_groupnorm`, which does PRE → all-gather
-→ POST in one dispatch and degenerates to a local norm when the axis has
-extent 1.
+`known-issues.md` before wiring one.
+
+Note there is **no fused distributed GroupNorm** — RMSNorm and LayerNorm have
+one (`dit_fused_distributed_{rmsnorm,layernorm}`), GroupNorm does not.
+`layers/normalization.py::GroupNorm3D` drives the local `ttnn.group_norm` with a
+grid pinned by `determine_expected_group_norm_dram_grid_size`; cross-device
+statistics are yours to assemble.

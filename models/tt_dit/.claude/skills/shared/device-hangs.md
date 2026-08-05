@@ -70,7 +70,7 @@ core, the last waypoint, and the running kernels. Log:
 |---|---|
 | Expecting trouble | `TT_METAL_WATCHER=10` up front |
 | Hang only reproduces **without** watcher (timing-sensitive) | Peel back the most invasive feature: `TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1`, then `..._DISABLE_WAYPOINT=1` |
-| Run wasn't watched, device already wedged | `./build_Release/tools/watcher_dump --devices=<ids>` then read the log. Needs the PCIe/ethernet link still up |
+| Run wasn't watched, device already wedged | `./build/tools/watcher_dump --devices=<ids>` then read the log. Needs the PCIe/ethernet link still up |
 | Know *which* core is stuck, not *where* in the kernel | `./tools/tt-triage.py --run=dump_callstacks` (add `--all-cores -vv`). Wraps `tt-exalens`; gives kernel ID/name, go message, waypoint, PC and callstack per core |
 
 **Watcher conflicts with the profiler and DPRINT** — `TT_METAL_WATCHER`,

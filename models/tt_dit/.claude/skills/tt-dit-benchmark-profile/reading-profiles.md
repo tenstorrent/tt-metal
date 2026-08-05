@@ -117,8 +117,8 @@ of FLOPs%.
 ## Peaks
 
 Let `tt-perf-report` compute `FLOPs %` / `DRAM %` — it knows the per-arch peaks
-and auto-detects on new reports (`--arch wormhole|blackhole|bh20|N1`). Do not
-hand-derive a ceiling.
+and auto-detects on new reports (`--arch blackhole`). Do not hand-derive a
+ceiling.
 
 Two facts you do need:
 
@@ -127,11 +127,21 @@ Two facts you do need:
   FLOPs% falling while throughput rises. **Compare absolute TFLOPs across a
   fidelity change, never FLOPs%.**
 
-For `CORE COUNT`, compare against the grid the device actually reports
-(`mesh_device.compute_with_storage_grid_size()`) — harvesting varies, so the
-SoC descriptor's nominal count (`tt_metal/soc_descriptors/`:
-`wormhole_b0_80_arch.yaml`, `blackhole_140_arch.yaml`) is an upper bound, not
-what you get.
+### What `CORE COUNT` should be compared against
+
+Not the SoC descriptor. `blackhole_140_arch.yaml` lists 140 functional workers,
+but that is the physical count — the usable compute-with-storage grid is **120**,
+and on a Blackhole Galaxy tt_dit clamps matmuls further:
+
+```python
+# utils/matmul.py
+_BH_GALAXY_MAX_CORE_GRID = (11, 10)   # 110 cores, power constraint at >= 32 devices
+```
+
+So on a Galaxy, an op on 110 cores is **fully parallel**, not under-parallelized.
+Read `CORE COUNT` against `mesh_device.compute_with_storage_grid_size()` and, for
+matmuls, against what `get_matmul_core_grid()` actually returns — otherwise every
+matmul on a Galaxy looks under-parallelized when it is at the ceiling.
 
 ## TT-DiT-specific patterns
 

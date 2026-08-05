@@ -60,8 +60,8 @@ compute" — LTX and Wan attention are the reference implementations.
 ## 2. Kernel research
 
 Start at `../tt-dit-benchmark-profile/existing-fast-paths.md` — it catalogues
-the DiT-specific fused ops ttnn already ships (distributed GroupNorm/RMSNorm/
-LayerNorm, matmul+all-gather, matmul+reduce-scatter, AdaLN
+the DiT-specific fused ops ttnn already ships (distributed RMSNorm and
+LayerNorm — **not GroupNorm**, matmul+all-gather, matmul+reduce-scatter, AdaLN
 `dit_minimal_matmul_addcmul_fused`, RMSNorm+activation, fused head ops,
 `neighbor_pad_async` for halo) with a "profile shows X → try Y" table.
 

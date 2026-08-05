@@ -25,11 +25,17 @@ normalization by hand, stop.
 
 | Op | Does | Used by |
 |---|---|---|
-| `ttnn.experimental.dit_fused_distributed_groupnorm` | GroupNorm over spatially sharded activations. Same contract as `ttnn.group_norm` plus a fabric all-gather of per-group stats on `cluster_axis` (PRE → AG → POST). **Degenerates to local PRE+POST with no fabric when mesh width on that axis is 1** — one code path for sharded and single-device. Optional Welford (`use_welford`), `persistent_output_buffer` | `layers/normalization.py` |
 | `ttnn.experimental.dit_fused_distributed_rmsnorm` (+ `_create_stats_buffer`) | Distributed RMSNorm, stats gathered across the mesh | `layers/normalization.py` |
 | `ttnn.experimental.dit_fused_distributed_layernorm` (+ `_create_stats_buffer`) | Distributed LayerNorm, same shape of contract | `layers/normalization.py` |
 | `ttnn.experimental.dit_layernorm_pre_allgather` / `dit_layernorm_post_allgather` | The two halves separately, when you need to place the all-gather yourself | `tests/unit/test_distributed_rmsnorm_fused.py` |
 | `ttnn.experimental.dit_rms_norm_unary_fused` | **RMSNorm + activation in one kernel pass.** Equivalent to `ttnn.silu(ttnn.rms_norm(x))` / `gelu`, without the intermediate write+read | `layers/normalization.py`, `encoders/gemma/` |
+
+**There is no fused distributed GroupNorm.** RMSNorm and LayerNorm have one;
+GroupNorm does not. `layers/normalization.py::GroupNorm3D` routes through the
+DRAM-interleaved `ttnn.group_norm` with the grid pinned by
+`determine_expected_group_norm_dram_grid_size`, which is local per device — any
+cross-device statistics have to be assembled by hand. Do not go looking for a
+`dit_fused_distributed_groupnorm`; it does not exist.
 
 **Workflow rule.** A profile showing `RMSNorm` immediately followed by `Silu` or
 `Gelu` means `dit_rms_norm_unary_fused` is not engaged. A profile showing
@@ -126,7 +132,7 @@ writing anything.
 |---|---|---|
 | `ttnn.experimental.rotary_embedding_llama` | Fused RoPE | Mochi, LTX, Ideogram attention and `rope_ltx.py` |
 | `ttnn.experimental.rotary_embedding_hf` | HF-convention RoPE | tt_dit transformers |
-| `ttnn.experimental.rotary_embedding_llama_fused_qk` | **RoPE applied to Q and K in one dispatch** | *bound, no tt_dit caller yet* — the obvious next fusion if RoPE shows two calls per layer |
+| `ttnn.experimental.rotary_embedding_llama_fused_qk` | RoPE on Q and K in one dispatch — but **decode-only**: the device op rejects anything but `seq_len=1` | **Not usable for DiT.** Listed so you don't rediscover it and lose an iteration |
 | `ttnn.experimental.rotate_half` | Primitive, if you must compose | — |
 
 ---
@@ -217,7 +223,7 @@ real shape rather than assuming the fused path wins.
 | `ttnn.experimental.slice_reshard_async` | Reshard fused with slice |
 | `ttnn.experimental.send_async` / `recv_async` | Point-to-point |
 | `ttnn.mesh_partition` | Partition a tensor across the mesh |
-| `ttnn.experimental.all_gather_concat_heads_fused` | In-tree C++, **not bound to Python** in this build — a binding-only change if you need it |
+| `ttnn.experimental.all_gather_concat` | All-gather fused with head concatenation. Bound and tested (`tests/ttnn/unit_tests/operations/ccl/fusion_subtests/concat_fuse_test.py`); the source directory is named `all_gather_concat_heads_fused`, the Python name is not |
 
 Prefer a fused collective+compute op over a bare collective adjacent to a
 matmul. If you must use a bare one, still give it a persistent buffer.
@@ -235,7 +241,7 @@ where the cheapest wins live.
 | `ttnn.matmul` | Fused activation via the program config |
 | `Conv3dConfig` | `T_out_block`, `H_out_block`, `W_out_block`, `C_in_block`, `C_out_block`, `compute_with_storage_grid_size` |
 | `init_device_compute_kernel_config` | `math_fidelity`, `fp32_dest_acc_en`, `packer_l1_acc`, `math_approx_mode` — fidelity is the 2× lever, `packer_l1_acc` frees accumulation pressure |
-| `dit_fused_distributed_groupnorm` | `use_welford`, `persistent_output_buffer`, `topology` |
+| `dit_fused_distributed_rmsnorm` / `_layernorm` | `persistent_output_buffer`, `topology`, plus the fold-ins above |
 | `neighbor_pad_async` | fused 2D (`dim=[2,3]`), `num_links`, `persistent_output_buffer` |
 | SDPA | chunk size — a ViT decoder measured 2.95× at `q=k=192` over defaults |
 
@@ -245,13 +251,13 @@ where the cheapest wins live.
 
 | Profile shows | Likely fast path |
 |---|---|
-| `Untilize` + `Tilize` around `GroupNorm` | Layout round-trip — compute stats in the neighbours' layout; `dit_fused_distributed_groupnorm` |
+| `Untilize` + `Tilize` around `GroupNorm` | Layout round-trip. No fused distributed GroupNorm exists — compute stats in the neighbours' layout instead of round-tripping |
 | `AllGather` between two norm halves | `dit_fused_distributed_{groupnorm,rmsnorm,layernorm}` |
 | `RMSNorm` → `Silu`/`Gelu` | `dit_rms_norm_unary_fused` |
 | `Matmul` → `BinaryNg` chain in an AdaLN block | `dit_minimal_matmul_addcmul_fused` |
 | `AllGather`/`ReduceScatter` adjacent to `Matmul` | `all_gather_minimal_matmul_async`, `minimal_matmul_strided_reduce_scatter_async` |
 | `Permute`/`Reshape`/`Transpose` around attention | `nlp_create_qkv_heads`, `nlp_concat_heads` |
-| Two RoPE dispatches per layer | `rotary_embedding_llama_fused_qk` |
+| Two RoPE dispatches per layer | No fusion available — `rotary_embedding_llama_fused_qk` is decode-only (`seq_len=1`) |
 | Hand-rolled halo slicing before a sharded conv | `neighbor_pad_async` (fused 2D) |
 | `Matmul` → `Silu`/`Gelu` | `fused_activation=` on the matmul |
 | A collective and a compute op whose durations **add up** instead of overlapping | Missing `ccl_core_grid_offset` — they're fighting for the same cores |

@@ -98,7 +98,7 @@ tt-perf-report --start-signpost start --end-signpost stop <csv>
 |---|---|
 | `--id-range 31-` / `-12` / `5-10` | Slice by op ID — the warm window when there are no signposts |
 | `--group-by op\|memory\|category` | `category` splits compute / data movement / tensor |
-| `--arch wormhole\|blackhole\|bh20\|N1` | Auto-detected on new reports; drives the FLOPs%/DRAM% denominators |
+| `--arch blackhole` | Auto-detected on new reports; drives the FLOPs%/DRAM% denominators |
 | `--csv <file>` / `--summary-file <file>` | Machine-readable output for a sweep |
 | `--tracing-mode` | Do not sort — for traced captures |
 | `--no-advice` | Table only |
