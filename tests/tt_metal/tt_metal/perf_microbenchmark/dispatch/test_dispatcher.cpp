@@ -384,7 +384,6 @@ public:
     // preserving bank order, and emits one paged-write command per chunk
     std::vector<HostMemDeviceCommand> generate_paged_write_commands(
         uint32_t page_size_bytes,
-        uint32_t page_size_alignment_bytes,
         uint32_t num_banks,
         uint32_t max_payload_per_cmd_bytes,
         tt::CoreType core_type,
@@ -425,7 +424,7 @@ public:
                     device_data,
                     bank_core,
                     bank_id,
-                    page_size_alignment_bytes,
+                    page_size_bytes,
                     is_dram_ ? tt::CoreType::DRAM : tt::CoreType::WORKER);
 
                 // Append page payload to chunk payload
@@ -433,8 +432,7 @@ public:
             }
 
             // Calculate base address for the command
-            const uint32_t bank_offset =
-                tt::align(page_size_bytes, page_size_alignment_bytes) * (absolute_start_page / num_banks);
+            const uint32_t bank_offset = page_size_bytes * (absolute_start_page / num_banks);
             const uint32_t base_addr = device_data.get_base_result_addr(core_type) + bank_offset;
             // Calculate start page for the command
             const uint16_t start_page_cmd = absolute_start_page % num_banks;
@@ -482,7 +480,6 @@ public:
             device_, worker_range, l1_base, dram_base, nullptr, true, dram_data_size_words, cfg_);
 
         const auto buf_type = is_dram ? BufferType::DRAM : BufferType::L1;
-        const uint32_t page_size_alignment_bytes = device_->allocator_impl()->get_alignment(buf_type);
         const uint32_t num_banks = device_->allocator_impl()->get_num_banks(buf_type);
         const tt::CoreType core_type = is_dram ? tt::CoreType::DRAM : tt::CoreType::WORKER;
 
@@ -505,7 +502,7 @@ public:
 
         // PHASE 1: Generate paged write command metadata
         auto commands_per_iteration = generate_paged_write_commands(
-            page_size_bytes, page_size_alignment_bytes, num_banks, max_payload_per_cmd_bytes, core_type, device_data);
+            page_size_bytes, num_banks, max_payload_per_cmd_bytes, core_type, device_data);
 
         // PHASE 2, 3, 4: Execute and Validate
         execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
