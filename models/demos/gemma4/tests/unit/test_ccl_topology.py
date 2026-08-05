@@ -159,6 +159,28 @@ def test_gate_up_prefill_progcfg_1d_matches_sweep_winner():
     assert interleaved_gate_up_prefill_config(2048, 5376, 5376) == (None, None, None)
 
 
+def test_down_proj_prefill_progcfg_1d_matches_sweep_winner():
+    """31B SharedMLP down_proj @ TP=8 → 1d_c42_bw4 (test_down_proj_matmul_sweep overall winner)."""
+    import ttnn
+    from models.demos.gemma4.tt.dram_sharded import interleaved_down_proj_prefill_config, prefill_progcfg_1d
+
+    # M=128 K=2688 N=5376 (intermediate/TP, hidden)
+    pc = prefill_progcfg_1d(m=128, k=2688, n=5376)
+    assert pc is not None
+    assert pc.in0_block_w == 4
+    assert pc.per_core_M == 4
+    assert pc.per_core_N == 4
+    grid = pc.compute_with_storage_grid_size
+    assert grid.x * grid.y == 42
+
+    prog, out_mc, ckc = interleaved_down_proj_prefill_config(128, 2688, 5376)
+    assert prog is not None
+    assert out_mc == ttnn.L1_MEMORY_CONFIG
+    assert ckc.math_fidelity == ttnn.MathFidelity.HiFi2
+    assert interleaved_down_proj_prefill_config(32, 2688, 5376) == (None, None, None)
+    assert interleaved_down_proj_prefill_config(2048, 2688, 5376) == (None, None, None)
+
+
 def test_weight_cache_path_qualified_by_mesh(tmp_path, monkeypatch):
     """TP=4 on 1x4 vs 2x4 must not share tensorbin directories when mesh dirs are used."""
     import ttnn
