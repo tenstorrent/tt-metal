@@ -586,7 +586,7 @@
   skus:
     bh_sc1_high_power:
       # Warm tilized-cache + chunked prefill (5120) x5 timed iters, no PCC; cold cache build will exceed this.
-      timeout: 60
+      timeout: 35
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
   sp_config: sc1
