@@ -28,7 +28,9 @@ import transformers
 
 import ttnn
 
-from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, Qwen3VlVisionPatchMerger
+from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, Qwen3VlVisionPatchMerger, resolve_vision_parallel
+from ....parallel.config import EncoderParallelConfig, ParallelFactor
+from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
@@ -75,7 +77,7 @@ def reference():
     return transformers.models.qwen3_vl.modeling_qwen3_vl.Qwen3VLVisionModel._from_config(_config()).eval()
 
 
-def _tower(reference, submesh):
+def _tower(reference, submesh, parallel_config=None, ccl_manager=None):
     tower = Qwen3VlVisionModel(
         hidden_size=HIDDEN_SIZE,
         num_heads=NUM_HEADS,
@@ -88,6 +90,8 @@ def _tower(reference, submesh):
         norm_eps=NORM_EPS,
         deepstack_visual_indexes=DEEPSTACK_INDEXES,
         mesh_device=submesh,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
     )
     tower.load_torch_state_dict(reference.state_dict())
     return tower
@@ -148,13 +152,67 @@ def test_prepare_pos_embeds_needs_loaded_weights(expect_error):
 
 # ------------------------------------------------------------------------- device
 
-_MESH = [pytest.param((1, 1), (1, 1), id="single")]
+# TP fractures heads/intermediate/merger; SP splits patch rows and ring-attends. Different axes, so
+# the 8x4 system gives TP=8 x SP=4. `device_params` is per-config: FABRIC_1D has no ethernet partner
+# on a 1x1 mesh and times out in router init.
+_L1_SMALL = 32768
+_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": _L1_SMALL}
+_NO_FABRIC = {"l1_small_size": _L1_SMALL}
+
+_MESH = [
+    pytest.param((1, 1), (1, 1), None, None, 1, _NO_FABRIC, id="single"),
+    pytest.param((8, 4), (8, 4), 0, None, 2, _FABRIC, id="tp8"),
+    pytest.param((8, 4), (8, 4), None, 1, 2, _FABRIC, id="sp4"),
+    pytest.param((8, 4), (8, 4), 0, 1, 2, _FABRIC, id="tp8_sp4"),
+]
+_PARAMS = pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "tp_axis", "sp_axis", "num_links", "device_params"),
+    _MESH,
+    indirect=["mesh_device", "device_params"],
+)
 
 
-@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+def _parallel_args(submesh, tp_axis, sp_axis, num_links):
+    """`(parallel_config, ccl_manager)` for `Qwen3VlVisionModel`, or `(None, None)` when replicated."""
+    if tp_axis is None and sp_axis is None:
+        return None, None
+    shape = tuple(submesh.shape)
+    cfg = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=shape[tp_axis] if tp_axis is not None else 1, mesh_axis=tp_axis),
+        sequence_parallel=(ParallelFactor(factor=shape[sp_axis], mesh_axis=sp_axis) if sp_axis is not None else None),
+    )
+    return cfg, CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear)
+
+
+def _skip_if_sp_misaligned(total, submesh, sp_axis):
+    """Ring SDPA needs `N_local_q % 32 == 0`, stricter than the merger's 4-row merge group.
+
+    The `small` grid (24 patches) cannot divide into 4 tile-aligned shards; it exists to keep the CPU
+    reference cheap, so it is a skip rather than a failure.
+    """
+    if sp_axis is None:
+        return
+    sp = tuple(submesh.shape)[sp_axis]
+    if total % (sp * 32) != 0:
+        pytest.skip(f"{total} patches do not divide into {sp} tile-aligned shards (needs a multiple of {sp * 32})")
+
+
+def _shard(x, submesh, sp_axis):
+    """Upload row-sharded on the SP axis; the tower gathers its own output, so only inputs shard."""
+    if sp_axis is None:
+        return bf16_tensor(x, device=submesh)
+    return bf16_tensor(x, device=submesh, mesh_axis=sp_axis, shard_dim=0)
+
+
+@_PARAMS
 @pytest.mark.parametrize("postshuffle", [False, True], ids=["output_merger", "deepstack_merger"])
-def test_merger_on_device(reference, mesh_device, submesh_shape, postshuffle):
+def test_merger_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, postshuffle):
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    parallel = (
+        None
+        if (tp_axis is None and sp_axis is None)
+        else resolve_vision_parallel(submesh, *_parallel_args(submesh, tp_axis, sp_axis, num_links))
+    )
     ref = reference.deepstack_merger_list[0] if postshuffle else reference.merger
 
     torch.manual_seed(0)
@@ -169,22 +227,25 @@ def test_merger_on_device(reference, mesh_device, submesh_shape, postshuffle):
         norm_eps=NORM_EPS,
         use_postshuffle_norm=postshuffle,
         mesh_device=submesh,
+        parallel=parallel,
     )
     merger.load_torch_state_dict(ref.state_dict())
-    out = merger.forward(bf16_tensor(x, device=submesh))
-    actual = tensor.to_torch(out, mesh_axes=[None, None])
+    # The merger does not gather across SP (only the tower does), so rows compose back here.
+    out = merger.forward(_shard(x, submesh, sp_axis))
+    actual = tensor.to_torch(out, mesh_axes=[sp_axis, None])
 
     assert actual.shape[-2:] == (16, OUT_HIDDEN_SIZE), f"{tuple(actual.shape)}"
     assert_quality(golden, actual, pcc=0.99)
 
 
-@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+@_PARAMS
 @pytest.mark.parametrize("name", list(GRIDS))
-def test_tower_on_device(reference, mesh_device, submesh_shape, name):
+def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name):
     """The full tower: merged output tokens and every deepstack feature."""
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     grid = torch.tensor(GRIDS[name], dtype=torch.long)
     total = sum(t * h * w for t, h, w in GRIDS[name])
+    _skip_if_sp_misaligned(total, submesh, sp_axis)
     patch_dim = 3 * 2 * 16 * 16
 
     torch.manual_seed(0)
@@ -195,13 +256,14 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, name):
     golden_deepstack = [f.float() for f in ref_out.deepstack_features]
     assert len(golden_deepstack) == len(DEEPSTACK_INDEXES), "reference did not emit one feature per index"
 
-    tower = _tower(reference, submesh)
+    tower = _tower(reference, submesh, *_parallel_args(submesh, tp_axis, sp_axis, num_links))
     cos, sin = tower.prepare_rope(grid)
     pos = tower.prepare_pos_embeds(grid)
+    # Inputs shard on rows under SP; the tower's outputs come back gathered and replicated.
     tokens, deepstack = tower.forward(
-        bf16_tensor(patches, device=submesh),
-        pos_embeds=bf16_tensor(pos, device=submesh),
-        rope=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
+        _shard(patches, submesh, sp_axis),
+        pos_embeds=_shard(pos, submesh, sp_axis),
+        rope=(_shard(cos, submesh, sp_axis), _shard(sin, submesh, sp_axis)),
     )
 
     merged = total // SPATIAL_MERGE_SIZE**2
@@ -216,8 +278,10 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, name):
         assert_quality(golden_feature, actual, pcc=0.99)
 
 
-@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
-def test_deepstack_features_are_taken_from_distinct_layers(reference, mesh_device, submesh_shape):
+@_PARAMS
+def test_deepstack_features_are_taken_from_distinct_layers(
+    reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links
+):
     """Each deepstack feature must come from its own layer, not the same one twice.
 
     Routing by list index is easy to get wrong in a way that still yields the right count and shapes,
@@ -226,15 +290,16 @@ def test_deepstack_features_are_taken_from_distinct_layers(reference, mesh_devic
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     grid = torch.tensor(GRIDS["small"], dtype=torch.long)
     total = sum(t * h * w for t, h, w in GRIDS["small"])
+    _skip_if_sp_misaligned(total, submesh, sp_axis)
 
     torch.manual_seed(0)
-    tower = _tower(reference, submesh)
+    tower = _tower(reference, submesh, *_parallel_args(submesh, tp_axis, sp_axis, num_links))
     cos, sin = tower.prepare_rope(grid)
     pos = tower.prepare_pos_embeds(grid)
     _, deepstack = tower.forward(
-        bf16_tensor(torch.randn(total, 3 * 2 * 16 * 16), device=submesh),
-        pos_embeds=bf16_tensor(pos, device=submesh),
-        rope=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
+        _shard(torch.randn(total, 3 * 2 * 16 * 16), submesh, sp_axis),
+        pos_embeds=_shard(pos, submesh, sp_axis),
+        rope=(_shard(cos, submesh, sp_axis), _shard(sin, submesh, sp_axis)),
     )
     a, b = (tensor.to_torch(f, mesh_axes=[None, None]) for f in deepstack)
     assert not torch.allclose(a, b, atol=1e-2), "deepstack features are identical; layer routing is wrong"
