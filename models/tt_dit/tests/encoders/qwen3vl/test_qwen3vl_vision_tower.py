@@ -5,7 +5,7 @@
 # =============================================================================
 # Qwen3-VL vision tower end to end, on device, against the HF reference.
 #
-# One test, parametrized over five grids and four parallel configurations. It runs
+# One test, parametrized over five grids and three parallel configurations. It runs
 # the assembled tower -- patch embed, interpolated position embeddings, every
 # block, the output merger and the deepstack mergers -- and checks both things the
 # decoder consumes:
@@ -21,10 +21,14 @@
 # concatenated group of four over `hidden_size * merge ** 2`, so the two compute
 # different statistics and cannot share weights.
 #
-# Depth is reduced -- 27 layers of a 4032-patch keyframe is a long CPU reference --
-# but `deepstack_visual_indexes` is exercised at more than one layer so the routing
-# is real, and the multi-reference grids make `cu_seqlens` blocking load-bearing.
-# Real geometry on the released weights lives in
+# Every shape here is one the model actually runs: depth 27 with deepstack taps at
+# 8/16/24, and patch grids of 48 on the short edge and at most 48x84, which is what
+# `resolve_canvas_size` produces at a 16-pixel patch. Nothing is scaled down -- the
+# tower is only 595M parameters, so a dummy-weight copy at full depth is cheap, and
+# a reduced one would exercise shapes that never occur.
+#
+# The multi-reference grids make `cu_seqlens` blocking load-bearing. The same paths
+# on the released weights live in
 # tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py.
 # =============================================================================
 
@@ -51,23 +55,28 @@ NUM_POSITION_EMBEDDINGS = 2304
 NORM_EPS = 1e-6
 HIDDEN_ACT = "gelu_pytorch_tanh"
 
-# Shallow enough for a CPU reference, deep enough that deepstack routing is non-trivial.
-DEPTH = 6
-DEEPSTACK_INDEXES = [1, 3]
+# The released tower: 27 blocks with deepstack taps at 8, 16 and 24. The whole 595M model, so a
+# dummy-weight copy is affordable and there is no reason to run a shallower one.
+DEPTH = 27
+DEEPSTACK_INDEXES = [8, 16, 24]
 
-# Grids, chosen for how many ATTENTION BLOCKS they produce rather than for size. `cu_seqlens =
-# repeat_interleave(h*w, t).cumsum()` makes an image one block and a video one block PER FRAME, and
-# attention must never cross a boundary -- which is the `ref2va` requirement.
+# Real patch grids only. `resolve_canvas_size` puts the short edge at 768 px and caps the area at
+# 768x1344, and the patch size is 16, so the canvas is 48 patches on the short edge and at most 48x84.
+# 48x48 is the 1:1 canvas, 48x64 a 4:3 one, and 48x84 the largest canvas MiniMax-H3
+# produces. Reference sizes are otherwise whatever the image processor resolves, not a fixed set.
 #
-# `two_images` and `video_3_frames` are the pair worth having: the first gets its blocks from separate
-# grid rows, the second from a single row with `t > 1`. Both paths must agree, and a tower that ignored
-# blocking entirely would still pass on the single-block grids.
+# Grids are chosen for how many ATTENTION BLOCKS they produce. `cu_seqlens =
+# repeat_interleave(h*w, t).cumsum()` makes an image one block and a video one block PER FRAME, and
+# attention must never cross a boundary -- the `ref2va` requirement. `two_images` and `video_3_frames`
+# are the pair worth having: the first gets its blocks from separate grid rows, the second from a single
+# row with `t > 1`. Both must agree, and a tower ignoring blocking would still pass the single-block
+# grids.
 GRIDS = {
-    "small": [[1, 4, 6]],  # one image, one block; keeps the CPU reference cheap
-    "square": [[1, 48, 48]],  # the 1:1 canvas, so the bilinear position table is live
-    "two_images": [[1, 4, 6], [1, 4, 4]],  # two blocks from two rows
-    "video_3_frames": [[3, 4, 4]],  # three blocks from ONE row
-    "images_and_video": [[1, 4, 6], [2, 4, 4], [1, 2, 2]],  # four blocks, three lengths
+    "square": [[1, 48, 48]],  # 2304 patches, the 1:1 canvas, bilinear position table live
+    "keyframe": [[1, 48, 84]],  # 4032, the largest canvas; NOT a multiple of 128, so SP=4 skips it
+    "two_images": [[1, 48, 48], [1, 48, 48]],  # 4608, two blocks from two rows
+    "video_3_frames": [[3, 48, 48]],  # 6912, three blocks from ONE row
+    "images_and_video": [[1, 48, 48], [2, 48, 48], [1, 48, 64]],  # 9984, four blocks, two lengths
 }
 
 
@@ -118,16 +127,20 @@ def _tower(reference, submesh, parallel_config=None, ccl_manager=None):
 # ------------------------------------------------------------------------- device
 
 # TP fractures heads/intermediate/merger; SP splits patch rows and ring-attends. Different axes, so
-# the 8x4 system gives TP=8 x SP=4. `device_params` is per-config: FABRIC_1D has no ethernet partner
-# on a 1x1 mesh and times out in router init.
+# the 8x4 system gives TP=8 x SP=4.
+#
+# Only TP=8 is deployed, with SP either off or 4, so the configs are named for both factors. SP alone
+# (TP=1) is not a configuration this model will ever run in and is not covered.
+#
+# `device_params` is per-config: FABRIC_1D has no ethernet partner on a 1x1 mesh and times out in
+# router init.
 _L1_SMALL = 32768
 _FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": _L1_SMALL}
 _NO_FABRIC = {"l1_small_size": _L1_SMALL}
 
 _MESH = [
     pytest.param((1, 1), (1, 1), None, None, 1, _NO_FABRIC, id="single"),
-    pytest.param((8, 4), (8, 4), 0, None, 2, _FABRIC, id="tp8"),
-    pytest.param((8, 4), (8, 4), None, 1, 2, _FABRIC, id="sp4"),
+    pytest.param((8, 4), (8, 4), 0, None, 2, _FABRIC, id="tp8_sp1"),
     pytest.param((8, 4), (8, 4), 0, 1, 2, _FABRIC, id="tp8_sp4"),
 ]
 _PARAMS = pytest.mark.parametrize(
@@ -152,8 +165,9 @@ def _parallel_args(submesh, tp_axis, sp_axis, num_links):
 def _skip_if_sp_misaligned(total, submesh, sp_axis):
     """Ring SDPA needs `N_local_q % 32 == 0`, stricter than the merger's 4-row merge group.
 
-    The `small` grid (24 patches) cannot divide into 4 tile-aligned shards; it exists to keep the CPU
-    reference cheap, so it is a skip rather than a failure.
+    At SP=4 that means a multiple of 128 patches. Every grid here satisfies it except `keyframe`
+    (48 x 84 = 4032 = 31.5 x 128), so the largest canvas cannot be sequence-parallel at this factor.
+    That is a property of the shape, not of the test.
     """
     if sp_axis is None:
         return
@@ -227,4 +241,7 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
         features.append(actual)
 
     # Routing by list index can yield the right count and shapes while tapping one layer twice.
-    assert not torch.allclose(features[0], features[1], atol=1e-2), "deepstack features are identical"
+    for i in range(len(features) - 1):
+        assert not torch.allclose(
+            features[i], features[i + 1], atol=1e-2
+        ), f"deepstack features {i} and {i + 1} are identical; layer routing is wrong"
