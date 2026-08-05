@@ -13,40 +13,56 @@ number is stated with the reason and the identified lever.
 RTF is compute-seconds per second of audio. Measured on the captured utterance —
 164 generated tokens producing **3.27 s** of audio at 22 050 Hz.
 
-| stage | cost | RTF | share |
-|---|---|---|---|
-| **LLM** (14-block AR decoder) | 34.66 ms/token × 164 | **1.736** | **81.9 %** |
-| flow decoder (10 Euler steps) | 1.183 s | 0.361 | 17.0 % |
-| HiFT vocoder (mel → 72 192 samples) | 0.074 s | 0.023 | 1.1 % |
-| **total** | **6.941 s** | **2.120** | |
+| stage | cost | RTF | share | traced? |
+|---|---|---|---|---|
+| **LLM** (14-block AR decoder) | 15.71 ms/token × 164 | **0.787** | **70.1 %** | yes, 2.22× |
+| flow decoder (10 Euler steps) | 1.053 s | 0.322 | 28.6 % | yes, 1.09× |
+| HiFT vocoder (mel → 72 192 samples) | 0.048 s | 0.015 | 1.3 % | no |
+| **total** | **3.677 s** | **1.123** | | |
 
-**Target: RTF < 0.5 (P5), < 0.2 (P6). Not met — measured 2.120.**
+**Target: RTF < 0.5 (P5), < 0.2 (P6). Not met — measured 1.123**, down from 2.120
+before either stage was traced.
 
 The split is the useful part. The vocoder — the stage the previous attempt left on
 the host, and the one this bring-up treated as the hard problem because TTNN has no
-FFT — is **1.1 %** of runtime. The LLM is 82 %, because it is the only stage whose
+FFT — is **1.3 %** of runtime. The LLM is 70 %, because it is the only stage whose
 cost scales with output length rather than being amortised over it: one forward
 pass per token, and a second of speech is 50 tokens.
 
-At roughly 280 ops per decode step and 34.66 ms, that is ~124 µs/op — **dispatch
-bound, not compute bound**.
+At roughly 280 ops per decode step and 34.66 ms untraced, that was ~124 µs/op —
+**dispatch bound, not compute bound**, which is what made tracing the right lever.
 
-### The identified lever
+### What trace capture actually bought
 
-**Trace capture.** `ttnn.begin_trace_capture` / `execute_trace` records the op graph
-once and replays it with a single host command, which is exactly the right medicine
-for a per-op-dispatch bottleneck (4× on a comparable model).
+`ttnn.begin_trace_capture` / `execute_trace` records the op graph once and replays it
+with a single host command. Applied to both stages, it produced very different
+numbers, and the difference is the transferable lesson:
 
-It requires an **in-place KV cache** first, and that is a real piece of work rather
-than a flag: a trace replays fixed device addresses, so the cache cannot be
-reallocated by `concat` on every step. It has to be a persistent buffer written with
-`ttnn.copy` at the end of the traced body, and the per-step mask has to become a
-preallocated tensor updated by `copy_host_to_device_tensor` rather than a fresh
-upload. The right-alignment constraint below still applies to that design.
+| stage | untraced | traced | speedup |
+|---|---|---|---|
+| AR decode step | 34.92 ms | 15.71 ms | **2.22×** |
+| flow decoder, 10 steps | 1.151 s | 1.053 s | **1.09×** |
 
-Secondary levers, in expected order of value: `bfloat8_b` weights for the AR
-decoder (halves weight bandwidth); flash attention via the additive-`attn_mask`
-identity already proven for rel-pos attention; sharding the flow decoder's UNet.
+**Tracing repays dispatch overhead, so it pays in proportion to how dispatch-bound a
+stage already is.** The AR decoder issues ~280 small ops per token at batch 1 and is
+almost pure overhead. The flow decoder runs 16 resnet and 64 transformer blocks over
+608 frames at batch 2 — enough arithmetic per op that removing the dispatch cost
+moves 9 %. Both are bit-exact against their untraced selves.
+
+Two prerequisites, one per stage. The AR decoder needed an **in-place KV cache**: a
+trace replays fixed device addresses, so the cache cannot be reallocated by `concat`
+every step. The flow decoder needed its **convolution weights prepared once** —
+`ttnn.conv1d` and `conv_transpose2d` otherwise tilize and upload their weights on
+every call, which is host traffic a trace cannot contain. Neither is a flag; both are
+described in `tt/llm/decoder.py` and `tt/hifigan/conv.py`.
+
+### Remaining levers
+
+RTF 1.123 needs a further 2.2× and the arithmetic now dominates the overhead, so the
+remaining levers reduce work rather than dispatch, in expected order of value:
+`bfloat8_b` weights for the AR decoder (halves weight bandwidth, ~70 % of the
+budget); flash attention via the additive-`attn_mask` identity already proven for
+rel-pos attention; sharding the flow decoder's UNet.
 
 ---
 
