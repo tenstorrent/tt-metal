@@ -16,7 +16,7 @@ on the host.
 | Sample rate | 22 050 Hz |
 | Languages | Chinese, English, Japanese, Cantonese, Korean |
 | Modes | SFT, zero-shot, cross-lingual, instruct |
-| Status | **P0 complete** — reference captured, goldens generated, iSTFT identity verified |
+| Status | **All three stages on device.** flow tokens->mel PCC 0.99920 · tokens->waveform 0.99514 · vocoder 0.99964 · LLM prefill 0.99974 |
 
 ---
 
@@ -99,12 +99,46 @@ Writes `tests/golden/*.npz` — one per module boundary, plus `manifest.json`.
 ### PCC tests
 
 ```bash
-# host tier: no device, no silicon, ~2 s
-pytest models/demos/cosyvoice/tests/pcc/ -k "not device"
+# host tier: no device, no silicon, ~40 s. 79 tests.
+pytest models/demos/cosyvoice/tests/ -k "not device"
 
-# device tier: needs /dev/tenstorrent (or ttsim)
-pytest models/demos/cosyvoice/tests/pcc/ -v
+# device tier: needs /dev/tenstorrent. 31 tests.
+pytest models/demos/cosyvoice/tests/pcc/ models/demos/cosyvoice/tests/e2e/ -v
+
+# performance -- see docs/perf.md for what the numbers mean
+pytest models/demos/cosyvoice/tests/perf/ -v -s
 ```
+
+### Demo
+
+```bash
+export PYTHONPATH=$TT_METAL_HOME
+python models/demos/cosyvoice/demo/demo.py --out out.wav
+```
+
+Runs all three stages on device and writes a 22.05 kHz wav. With no arguments it
+synthesises the captured golden utterance, which needs no front-end.
+
+The front-end — text normalisation, the Whisper-family tokenizer, and the two **ONNX**
+encoders (`speech_tokenizer_v1.onnx`, `campplus.onnx`) — is not ported: three of those
+four are ONNX blobs and none is on the bounty's critical path. It runs once in the
+CosyVoice venv via `scripts/prepare_inputs.py`, which writes a flat `.npz` the device
+side loads without importing cosyvoice or onnxruntime — the same boundary
+`export_weights.py` draws.
+
+### Weight export
+
+```bash
+export PYTHONPATH=/root/tt/CosyVoice:/root/tt/CosyVoice/third_party/Matcha-TTS
+for m in hift flow llm; do
+  /root/tt/cosyvoice_env/bin/python scripts/export_weights.py --module $m --fp16
+done
+```
+
+Flattens each submodule's `state_dict` into `tests/golden/<module>_weights.npz` with a
+JSON `__meta__` blob carrying the architectural constants that cannot be read off a
+tensor shape. `weight_norm` is folded at export (verified bit-exact) so the device never
+recomputes a constant normalisation.
 
 ### Reference baseline and scoring
 
@@ -137,7 +171,34 @@ it is never the accuracy gate.
 non-streamed audio for the same text and seed.
 
 **Perf targets are ordinary passing tests.** If a target is missed the number is reported
-and the gap explained; `xfail` reads as concealment.
+and the gap explained; `xfail` reads as concealment. The current end-to-end RTF is
+**2.120** against a target of 0.5 — see [`docs/perf.md`](docs/perf.md), which states the
+breakdown (the LLM is 81.9 % of it) and the identified lever (trace capture, which needs
+an in-place KV cache first).
+
+**Two things cannot be gated on exact agreement, and both say so explicitly.** RAS
+sampling is a multinomial draw, so the LLM is gated on its *logits* and the audio chain
+on the reference's *captured tokens*. And NSF excitation phase is chaotically sensitive
+to f0 — a 0.03 Hz error accumulates a tenth of a cycle over an utterance, finer than
+Tensix arithmetic delivers — so waveform *samples* are gated with the reference
+excitation injected (PCC 0.9951) and the *envelope* without it (0.9975).
+
+---
+
+## What runs where
+
+| stage | module | on device |
+|---|---|---|
+| text -> semantic tokens | `tt/llm/` — 6-block causal Conformer text encoder, 14-block AR decoder with a fixed-width KV cache, 4097-way head | yes |
+| semantic tokens -> mel | `tt/flow/` — Conformer encoder, length regulator, 10-step CFM solver over a 16-resnet/64-transformer UNet | yes |
+| mel -> waveform | `tt/hifigan/` — f0 predictor, NSF excitation, 40-odd convolutions, inverse STFT | yes |
+| RAS sampling | `tt/llm/sampling.py` | host (Stage 1) |
+| front-end (tokenizer, 2 ONNX encoders) | `scripts/prepare_inputs.py` | host, by design |
+
+`tt/flow/reference.py` and `tt/llm/reference.py` reimplement their stages in plain torch
+from the flat weight export alone — no cosyvoice, no diffusers, no device. Both reproduce
+the captured goldens to PCC 0.9999999, which is what lets a device bring-up start from
+"the graph is right" instead of bisecting eighty blocks on rented silicon.
 
 ### The trap: three modules draw from the RNG mid-forward
 
