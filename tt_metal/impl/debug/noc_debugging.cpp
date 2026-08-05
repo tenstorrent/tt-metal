@@ -34,19 +34,6 @@ inline bool wrap_ge(uint32_t a, uint32_t b) {
     return (diff << shift) >= 0;
 }
 
-// Paired acquire/release reference counting for the on-device scoped-lock and DFB-region events.
-template <typename Map, typename Key>
-void refcount_acquire(Map& counts, const Key& key) {
-    ++counts[key];
-}
-
-template <typename Map, typename Key>
-void refcount_release(Map& counts, const Key& key) {
-    if (auto it = counts.find(key); it != counts.end() && --it->second == 0) {
-        counts.erase(it);
-    }
-}
-
 NOCDebugState::LockedBufferInfo::LockType get_lock_type(NocDebuggingEventMetadata::NocDebugEventType event_type) {
     if (event_type == NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK ||
         event_type == NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK) {
@@ -253,15 +240,16 @@ void NOCDebugState::handle_scoped_lock_event(
     tt_cxy_pair core, int processor_id, uint64_t timestamp, ScopedLockEvent event) {
     CoreDebugState& state = get_state(core);
 
-    // Reference counting the DFB regions so write to unlocked DFBs can be flagged
+    // DFB region bookkeeping, so a write into an unlocked DFB can be flagged.
     using EventType = NocDebuggingEventMetadata::NocDebugEventType;
-    if (event.event_type == EventType::DFB_REGION_START || event.event_type == EventType::DFB_REGION_END) {
-        const L1Extent region{event.locked_address_base, event.num_bytes};
-        if (event.event_type == EventType::DFB_REGION_START) {
-            detail::refcount_acquire(state.dfb_region_refcount, region);
-        } else {
-            detail::refcount_release(state.dfb_region_refcount, region);
-        }
+    if (event.event_type == EventType::DFB_REGION_START) {
+        state.dfb_regions[processor_id].insert({event.locked_address_base, event.num_bytes});
+        update_latest_risc_timestamp(core, processor_id, timestamp);
+        return;
+    }
+    if (event.event_type == EventType::DFB_REGION_CLEAR) {
+        // Carries no extent; unregisters everything this RISC declared.
+        state.dfb_regions[processor_id].clear();
         update_latest_risc_timestamp(core, processor_id, timestamp);
         return;
     }
@@ -271,9 +259,9 @@ void NOCDebugState::handle_scoped_lock_event(
     auto& bufs = state.locked_buffers[processor_id];
     const LockedBufferInfo buf{{event.locked_address_base, event.num_bytes}, detail::get_lock_type(event.event_type)};
     if (event.is_lock()) {
-        detail::refcount_acquire(bufs, buf);
-    } else {
-        detail::refcount_release(bufs, buf);
+        ++bufs[buf];
+    } else if (auto it = bufs.find(buf); it != bufs.end() && --it->second == 0) {
+        bufs.erase(it);
     }
 
     update_latest_risc_timestamp(core, processor_id, timestamp);
@@ -556,13 +544,13 @@ bool NOCDebugState::CoreDebugState::write_into_unlocked_dfb(const NocWriteEvent&
     const uint32_t write_start = event.dst_addr;
     const uint32_t write_end = event.dst_addr + event.num_bytes;
 
-    bool write_into_dfb = false;
-    for (const auto& [region, count] : dfb_region_refcount) {
-        if (count > 0 && write_end > region.address && (region.address + region.size) > write_start) {
-            write_into_dfb = true;
-            break;
-        }
-    }
+    const auto overlaps_write = [&](const L1Extent& region) {
+        return write_end > region.address && (region.address + region.size) > write_start;
+    };
+    const bool write_into_dfb =
+        std::any_of(dfb_regions.begin(), dfb_regions.end(), [&](const std::set<L1Extent>& regions) {
+            return std::any_of(regions.begin(), regions.end(), overlaps_write);
+        });
     if (!write_into_dfb) {
         return false;
     }

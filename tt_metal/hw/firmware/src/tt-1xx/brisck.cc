@@ -17,6 +17,7 @@
 #include "internal/firmware_common.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
@@ -79,6 +80,9 @@ uint32_t _start() {
         WAYPOINT("K");
         kernel_main();
         WAYPOINT("KD");
+        // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
+        // DFBs stays trivially copyable.
+        RECORD_DFB_REGION_CLEAR();
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
             // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the

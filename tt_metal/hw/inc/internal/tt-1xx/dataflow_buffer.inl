@@ -28,10 +28,15 @@
 #if DFB_IS_COMPUTE_MATH
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {}
 #else
-inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) :
-    logical_dfb_id_(logical_dfb_id),
-    local_dfb_interface_(get_local_cb_interface(logical_dfb_id)),
-    region_tracker_(local_dfb_interface_.fifo_limit - local_dfb_interface_.fifo_size, local_dfb_interface_.fifo_size) {}
+inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
+    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_cb_interface(logical_dfb_id)) {
+    // Declare this DFB's L1 extent to the NOC-debug tracker so a write into it without holding the
+    // lock can be flagged.
+    RECORD_SCOPED_LOCK_EVENT(
+        NocDebuggingEventMetadata::NocDebugEventType::DFB_REGION_START,
+        address_units_to_bytes(local_dfb_interface_.fifo_limit) - get_ring_span_bytes(),
+        get_ring_span_bytes());
+}
 #endif
 
 inline uint32_t DataflowBuffer::get_entry_size() const {
