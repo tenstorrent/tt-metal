@@ -1088,3 +1088,103 @@ multicast, i.e. close to the structural floor of the current one-RISC-does-both 
   are compile-time; the op is compiled once for the 5K buffer and must serve any runtime
   token count. `chunk_M_tiles` being an op attribute means a caller *could* compile a
   short-sequence variant, at the cost of a second program-cache entry.
+
+## 14. Where the time ACTUALLY goes: differential ablation (2026-08-05)
+
+Method: temporary env-gated kernel defines that drop ONE component while leaving every
+barrier, CB and semaphore intact, so the kernel still completes and timing stays comparable
+(`DS_NO_IN1_MCAST`, `DS_NO_IN0_MCAST`, `DS_NO_ACT_MCAST`, `DS_NO_W_READ`, `DS_NO_X_READ`,
+`DS_NO_OUT_WRITE`), plus `DS_SKIP_PCC` in the worker so a deliberately wrong result still
+reports device time (the perf harness runs the worker with `--check-exit-code`). All hooks
+reverted afterwards; 72/72 functional tests pass on the restored tree.
+
+**This is a better instrument than the per-block cycle sums used in sections 3/7/13b.** Those
+sums attribute CB waits and handshake stalls to whatever code they sit in, so they
+systematically over-credit the read. The differential cost of a component is what actually
+disappears when you remove it.
+
+### 14a. Full decomposition, kimi isl-128, x_rm + interleaved
+
+| variant | us | marginal cost | share |
+|---|---|---|---|
+| base | 146.7 | — | |
+| no weight mcast | 127.0 | **19.7** | 13% |
+| no weight DRAM read | 115.5 | **31.2** | 21% |
+| no x DRAM read | 144.0 | 2.9 | 2% |
+| no output DRAM write | 143.9 | 3.0 | 2% |
+| no activated mcast | 145.5 | 1.1 | 1% |
+| **all DRAM + all mcast removed** | **84.7** | — | **58% is neither** |
+
+The weight read is **31 us, not the 67-100 us** section 7/13 inferred from instrumented
+per-block timing. Most of what those attributed to "read" was waiting.
+
+### 14b. The floor is compute, and it is CONSTANT below isl-256
+
+| isl | per_core_M | base us | floor us (no DRAM, no mcast) |
+|---|---|---|---|
+| 64 | 1 | 142.7 | **84.745** |
+| 128 | 1 | 146.7 | **84.687** |
+| 256 | 1 | 156.8 | **84.725** |
+| 512 | 2 | 204.5 | 146.2 |
+| 1024 | 4 | 309.8 | 272.9 |
+| 2048 | 4 (x2 chunks) | 591.1 | 541.4 |
+
+Identical to **0.05%** across isl 64/128/256 — because `per_core_M = ceil(m_tiles/GRID_Y)` is 1
+for all of them. Fits `floor ~= 23 us fixed + 61 us per per_core_M unit`.
+
+**No amount of DRAM or multicast work can take isl <= 256 below 84.7 us.** At isl-64 the op
+performs exactly the same compute as at isl-256 while carrying 4x fewer real tokens: 2 of the
+8 M-rows hold tokens, the other 6 compute padding. That waste is in FLOPs, NOT in latency —
+every core runs per_core_M=1 either way, so skipping idle cores' math would not shorten the
+critical path. (The down phase already skips MAC and pack for OOB rows; section 13's ring fix.)
+
+Per-core tile-MACs at per_core_M=1: gate 1x224x6 = 1344, up 1344, down 1x66x21 = 1386 =
+**4074**. 84.7 us x 1.35 GHz / 4074 = **28 cy per tile-matmul**, against a bf16 tile-matmul
+issue rate of roughly 16-19 cy. So the floor is within ~1.5-1.75x of the FPU limit: this is a
+compute-bound regime, not a bandwidth-bound one.
+
+### 14c. Answers to the six proposed experiments
+
+**(a)/(c) Comment out the multicast — refuted.** Predicted isl-128 ~80 us with mcast gone;
+measured **127.0 us**. Multicast is 13% of device time (19.7 us weights + 1.1 us activated +
+~0 for x). We are NOT primarily waiting for the multicast to complete. The ~80 us figure turns
+out to be almost exactly the floor with the multicast AND the weight read AND every other DRAM
+access removed (84.7 us) — the right number attached to the wrong cause.
+
+**(d) Other RISC/NoC for an overlapped weight mcast — already built and RETIRED.**
+`program_factory.cpp:483` documents it as `UP_WRITER_MCAST` (mode 1): the writer NoC-1
+multicasts `up` down its column. "Bandwidth-optimal, but the NoC-1 worker multicast + posted
+atomics collide with fabric CCL ops on NoC 1 and hang the run ... so this scheme is retired."
+The perf test runs without fabric, so re-enabling it would look green here and hang in a real
+fabric run. Its ceiling is 19.7 us regardless.
+
+**(e) Replace mcast with unicast — refuted twice over.** The premise ("mcast NoC is slow over
+10 cores") does not hold: the ACTIVATED mcast spans **11** cores along the M-row and costs
+**1.1 us**, while the weight mcast spans 8 and costs 16-17 us — the difference tracks payload
+(2.35 MB vs ~135 KB per chunk), not span. And unicast to a column of 8 means 8x the bytes out
+of one core's port (8 x 2.35 MB = 18.8 MB) to attack a 19.7 us component.
+
+**(f) Gather >= 8 KB before multicasting — already far above that.** `gate_block_bytes =
+in0_block_w_gu * per_core_N_gu * 576`; at w=16 that is 96 tiles = **55,296 B = 54 KB** per
+gate block, 54 KB for up, and 71 KB per down block (126 tiles) — 2.35 MB per sender per chunk.
+6.75x the proposed threshold already. Section 13d also measured that making blocks *wider*
+still (w=28 -> 96 KB, w=56 -> 192 KB) buys ~2 us and then nothing.
+
+### 14d. What this implies for the next lever
+
+The binding constraint at isl <= 256 is per-core tile-MACs, and the grid is badly balanced for
+it: `per_core_N_gu = 6` of 64 hidden tiles splits N across GRID_X=11, K is reduced **entirely
+within one core** (224 tiles), and M is split across GRID_Y=8 where only 2-8 rows hold real
+tokens. So at isl-64, 6 of 8 core-rows do padding work while the 2 real rows each serialise a
+224-deep K reduction.
+
+**Split-K across the idle M-rows** is therefore the lever with real headroom: give each of the
+idle rows a slice of K, then reduce partials across the column. That attacks the 61 us/M term
+directly, up to ~4x at isl-64 where 6 of 8 rows are idle. It needs cross-core partial
+reduction, which is a genuine restructure (new reduction phase + semaphores), not a tuning
+change — and it is the only remaining idea measured to have multiple-x headroom rather than
+the 13-21% that traffic-side changes are bounded by.
+
+Secondary, smaller: the floor's 23 us fixed term is ~31k cy/chunk of pure orchestration across
+25 block iterations (~1240 cy each), and the 28 vs 16-19 cy/tile-matmul gap suggests ~1.5x in
+subblock sizing / reconfig / SFPU overlap. Both are LLK-level work.
