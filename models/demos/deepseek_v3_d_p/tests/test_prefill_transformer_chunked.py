@@ -313,10 +313,8 @@ def _record_kv_cache_pcc(
     is asserted >= `assert_threshold`; pass None to make the check record-only. With
     `assert_layer_depth` set, only layers 0..assert_layer_depth (inclusive) are asserted — deeper
     layers are recorded only, mirroring the decoder-output GATED_LAYER_DEPTH policy (deep KV PCC
-    drifts under bf8_b).
-
-    When tp_shard_kv, the cache is SP×TP-deduped, so the gather flattens the TP replicas into
-    linear chip order and the un-rotation runs over sp*tp stripes."""
+    drifts under bf8_b). Under tp_shard_kv the gather flattens the TP shards into linear chip order and
+    the un-rotation runs over sp*tp stripes."""
     logger.info("Device KV cache vs golden kv_post_transform:")
     cache_full, stripes = gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv)  # [layers, S, kvpe]
     p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
@@ -430,10 +428,8 @@ def _preload_kvpe_prefix_from_trace(
     # Build the replicated host cache in bf16 (the sparse KVPE cache dtype), not float32: at num_layers=78
     # x SEQ_CACHE_NOPCC the float32 tensor would be ~19 GB. Per-layer transients (randn/blockcyclic) are
     # freed each iteration, so the peak is this one bf16 tensor plus a single layer's working set.
-    # SP-only: sp stripes, [layers, 1, seq, D] TP-replicated. TP-sharded (GLM-5.2 dedup): sp*tp stripes, and
-    # the device cache is ND-sharded so chip (s, t) owns a DISTINCT 1/(sp*tp) block-cyclic slice. The host
-    # cache is laid out as [layers, tp, seq/tp, D] and sharded SP on the seq dim (2) + TP on dim 1 -- the
-    # inverse of the ConcatMesh2dToTensor(dims=(2,1)) readback -- so each (s, t) chip receives its own slice.
+    # TP-sharded: lay the host cache out as [layers, tp, seq/tp, D] and shard SP on dim 2 + TP on dim 1 --
+    # the inverse of the ConcatMesh2dToTensor(dims=(2,1)) readback -- so each chip gets its own slice.
     tp_axis = 1 - sp_axis
     tp = mesh_device.shape[tp_axis]
     stripes = sp * tp if tp_shard_kv else sp
@@ -1185,10 +1181,8 @@ def test_kimi_prefill_transformer_chunked_padded(
     ],
     indirect=["mesh_device", "device_params"],
 )
-# GLM-5.2 KV dedup: exercises tp_shard_kv end-to-end through the FULL chunked transformer
-# (norm -> sparse MLA -> residual -> FFN/MoE across num_layers), not just the isolated block. The
-# tp_sharded run must match the sp_only golden PCC — the SPxTP-deduped caches reconstruct the exact
-# SP-only block-cyclic buffer via the TP-inner all-gather (already proven bit-equivalent at block level).
+# KV dedup end-to-end through the full chunked transformer: tp_sharded must match the sp_only PCC, since
+# the deduped caches reconstruct the same block-cyclic buffer via the TP-inner all-gather.
 @pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")

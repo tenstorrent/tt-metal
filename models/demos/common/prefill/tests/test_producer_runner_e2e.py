@@ -162,19 +162,8 @@ SCENARIOS = {
         "producer_timeout_s": 7200,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
     },
-    # 5) Same run as (4) but with the GLM-5.2 SPxTP KV dedup on (PREFILL_TP_SHARD_KV=1): the KVPE and
-    #    index caches are sequence-sharded across BOTH mesh axes, so each of the 32 devices holds a
-    #    distinct 1/(sp*tp) slice (1760 tokens instead of 7040) and the migration table addresses each
-    #    (row, col) device with a singleton group. This is the only end-to-end gate that the allocator,
-    #    the TP-sharded write op, the TP-inner/SP-outer read gather and the table all agree byte-for-byte.
-    #
-    #    ACCEPTANCE IS A DIFF, NOT A THRESHOLD. TP dedup is pure storage dedup — bit-identical by design —
-    #    so the check that means something is "per-layer nope/pe/index PCC equals the SP-only baseline from
-    #    (4), layer for layer", not "above some absolute number". PREFILL_STANDALONE_CHUNKED_PCC is lowered
-    #    to a floor just under the known SP-only minimum (0.8608 on nope @ layer 75) so this scenario does
-    #    NOT re-fail on that pre-existing full-depth KVPE issue and still prints every per-layer line for
-    #    the diff. A genuinely broken TP layout reads the wrong device or the wrong 1/tp window and lands
-    #    near zero, far below the floor.
+    # 5) Scenario (4) + SPxTP KV dedup: each of the 32 devices holds a distinct 1/(sp*tp) slice. Storage
+    #    only, so acceptance is per-layer PCC EQUAL to (4); the floor just clears (4)'s 0.8608 nope minimum.
     "glm52_full_depth_kv_table_tp_sharded": {
         "users": 1,
         "layers": 78,
@@ -182,9 +171,7 @@ SCENARIOS = {
         "env": {
             "PREFILL_MODEL": "glm_5_2",
             "PREFILL_TRACE_DIR": GLM52_TRACE,
-            # Required by PREFILL_TP_SHARD_KV: the kv-only last layer has no TP-sharded write path (and
-            # the table describes all 78 layers, so layer 77 must still write its KV).
-            "PREFILL_KV_ONLY_LAST_LAYER": "0",
+            "PREFILL_KV_ONLY_LAST_LAYER": "0",  # match (4): the table covers all 78 layers
             "PREFILL_TP_SHARD_KV": "1",
             "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
         },

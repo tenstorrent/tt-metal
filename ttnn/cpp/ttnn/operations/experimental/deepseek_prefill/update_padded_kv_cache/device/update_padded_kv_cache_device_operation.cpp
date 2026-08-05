@@ -80,6 +80,13 @@ void validate_runtime_args(
             "tp_axis ({}) must differ from cluster_axis ({})",
             tp_axis,
             *args.cluster_axis);
+        // The reader picks this chip's 1/tp source window from the HOST kv_actual_global (common arg), while
+        // on the metadata path the writer reads the real value on-device and the host scalar is always 0. The
+        // two would silently disagree for any chunk start that is not window-aligned, so reject the combo.
+        TT_FATAL(
+            !tensor_args.slot_idx.has_value(),
+            "tp_axis is only supported on the SCALAR path: the reader's source-row mapping needs a host "
+            "kv_actual_global, which the metadata (traceable) path does not provide.");
     }
     TT_FATAL(
         args.layer_idx < args.num_layers,
@@ -228,9 +235,8 @@ void validate_runtime_args(
 
         const uint32_t input_seq = tensor_args.input.padded_shape()[-2];
         if (tp_factor > 1) {
-            // The input is TP-replicated; each chip persists only its own contiguous 1/tp window of the
-            // input rows. That window offset is contiguous in the flattened (head, seq) page space only
-            // for a single head, which is what both GLM KV caches (KVPE width 576, index width 128) use.
+            // A chip's 1/tp window is contiguous in the flattened (head, seq) page space only for a single
+            // head -- which is what both GLM KV caches (KVPE width 576, index width 128) are.
             TT_FATAL(
                 tensor_args.input.padded_shape()[1] == 1,
                 "TP-sharding (tp_axis set) requires a single head dim (got {})",
@@ -323,9 +329,8 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     // row, so input/cache seq must be 32-aligned regardless of layout.
     TT_FATAL(input_seq % TILE_HEIGHT == 0, "input seq dim ({}) must be tile-aligned", input_seq);
     TT_FATAL(cache_seq % TILE_HEIGHT == 0, "cache seq dim ({}) must be tile-aligned", cache_seq);
-    // With TP-sharding the input is TP-replicated: only input_seq/tp rows are actually WRITTEN per chip
-    // (each chip persists its own 1/tp window), so the block-cyclic invariant is on the written chunk.
-    // tp_factor==1 (no tp_axis) reduces this to the original cache_seq % input_seq == 0.
+    // The input is TP-replicated, so only input_seq/tp rows are WRITTEN per chip: the block-cyclic invariant
+    // is on that written chunk. tp_factor==1 reduces this to the original cache_seq % input_seq == 0.
     const auto& mesh_view = cache.device()->get_view();
     const uint32_t tp_factor =
         args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
@@ -349,10 +354,9 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
         "cache batch dim ({}) must be a multiple of num_layers ({})",
         cache_shape[0],
         args.num_layers);
-    // The 2D-mesh and cluster_axis/tp_axis/layer_idx structural checks are enforced by
-    // validate_runtime_args, run on both the cache-miss and cache-hit paths. slot_idx / kv_actual_global
-    // value checks (range, tile-alignment, capacity) now live in the metadata tensor and are the
-    // caller's responsibility.
+    // The 2D-mesh and cluster/tp_axis/layer_idx structural checks are enforced by validate_runtime_args,
+    // run on both the cache-miss and cache-hit paths. slot_idx / kv_actual_global value checks (range,
+    // tile-alignment, capacity) now live in the metadata tensor and are the caller's responsibility.
     validate_runtime_args(args, tensor_args);
 }
 
@@ -492,12 +496,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // On the metadata path slot_idx and kv_actual_global are not host values — the writer kernel reads
     // element [0] of each per-element tensor and divides kv_actual_global by TILE_HEIGHT on-device.
 
-    // TP-sharding (GLM-5.2 KV dedup): linearize the sp and tp axes into ONE block-cyclic axis of size
-    // sp*tp, ordered linear = sp_coord*tp + tp_coord. The input is TP-replicated, so each chip persists
-    // only its own contiguous 1/tp window of the input's seq rows. Feeding the writer the linearized
-    // triple (linear_factor = sp*tp, chunk_local_t = input_Ht/tp, linear_coord) makes ALL of its
-    // per-chip offset math correct with no kernel change. tp_axis==nullopt => tp_factor=1, which
-    // collapses every quantity below to the pure SP-only values (bit-identical to before).
+    // KV dedup: linearize sp and tp into ONE block-cyclic axis of size sp*tp (linear = sp_coord*tp + tp_coord).
+    // The writer's offset math then needs no change. tp_axis==nullopt => tp_factor=1 collapses all of this.
     const uint32_t tp_factor =
         args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
     const uint32_t tp_coord = args.tp_axis.has_value() ? ::ttnn::ccl::get_linearized_index_from_physical_coord(
@@ -507,8 +507,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     const uint32_t linear_coord = sp_coord * tp_factor + tp_coord;  // this chip's position in that order
     const uint32_t chunk_local_t = input_Ht / tp_factor;            // tile-rows THIS chip actually writes
 
-    // Work split: one tile per "block". num_blocks_of_work = input_C * chunk_local_t (= num_heads *
-    // written seq_tiles). At tp_factor=1, chunk_local_t == input_Ht (unchanged).
+    // Work split: one tile per "block", over the rows this chip WRITES (chunk_local_t == input_Ht at tp=1).
     const uint32_t num_blocks_of_work = input_shape[1] * chunk_local_t;
 
     const auto compute_grid = device->compute_with_storage_grid_size();
@@ -542,9 +541,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         });
     }
 
-    // Reader kernel descriptor. tile_height leads (the reader divides kv_actual_global by it, same as
-    // the writer, to locate the boundary chip under a sub-stripe chunk start) so the tensor accessor
-    // args start at index 1.
+    // Reader kernel descriptor. tile_height leads (the reader divides kv_actual_global by it, as the writer
+    // does), so the tensor accessor args start at index 1.
     KernelDescriptor::CompileTimeArgs reader_compile_args = {writer_tile_height};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
 
@@ -583,9 +581,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     writer_kernel.config = WriterConfigDescriptor{};
 
     // Common rt-args: per-chip kernel inputs for on-device update_idxt + start_id derivation. Indices
-    // 0-7 are structural (constant for this cached program): linear_coord/linear_factor/chunk_local_t
-    // linearize the sp and tp axes into one block-cyclic axis (tp_axis==nullopt collapses these to the
-    // pure SP-only my_sp_coord/sp_factor/input_Ht), layer_idx is hashed. Indices 8 and 9 carry the
+    // 0-7 are structural (constant for this cached program): linear_coord/linear_factor/chunk_local_t are
+    // this chip's position on the linearized sp*tp axis, layer_idx is hashed. Indices 8 and 9 carry the
     // per-call values that override_runtime_arguments patches on cache hits (the buffer-binding fast
     // path leaves them stale otherwise): metadata path -> [8]=slot_idx tensor's raw DRAM address,
     // [9]=kv_actual_global tensor's raw DRAM address; scalar path -> [8]=slot_idx, [9]=kv_actual_global.
@@ -625,12 +622,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         });
     }
 
-    // Reader common args: the structural TP-linearization quantities its source-row mapping needs,
-    // plus the per-call kv_actual_global (index 7, patched on cache hits alongside the writer's) --
-    // which rows this chip owns depends on the chunk start (sub-stripe rotation), not just its mesh
-    // position. Scalar-path only: the reader has no metadata-tensor awareness (only the writer needs
-    // slot_idx/kv_actual_global as tensors; the reader only needs the SCALAR kv_actual_global for its
-    // source-row mapping, which is always a host-computed common arg).
+    // Reader common args: the TP-linearization quantities its source-row mapping needs, plus the per-call
+    // kv_actual_global at index 7 (patched on cache hits) -- which rows this chip owns depends on the start.
     reader_kernel.emplace_common_runtime_args({
         linear_coord,
         linear_factor,
@@ -659,9 +652,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         const CoreCoord& core = cores.at(i);
         const uint32_t num_blocks_per_core = (i < g1_numcores) ? num_blocks_per_core_g1 : num_blocks_per_core_g2;
 
-        // Reader: (src_addr, num_pages, core_blocks_written) -- it derives which input rows this chip
-        // owns from the common args + kv_actual_global, because a TP-sharded chip's source rows depend
-        // on the chunk start (a sub-stripe start offset shears the naive contiguous 1/tp slice).
+        // Reader: (src_addr, num_pages, core_blocks_written) -- it derives its source rows from the common
+        // args, since a TP-sharded chip's rows depend on the chunk start, not just its mesh position.
         reader_kernel.emplace_runtime_args(core, {src_buffer, num_blocks_per_core * Wt, num_blocks_written});
 
         // Writer: (dst_addr, num_pages, core_blocks_written) — kernel derives update_idxt + head
@@ -702,8 +694,8 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     constexpr uint32_t kArg8 = 8;
     constexpr uint32_t kArg9 = 9;
     constexpr uint32_t kArg10 = 10;
-    // The READER also derives from kv_actual_global (its source-row mapping depends on the chunk start),
-    // so its copy must be patched too or a cache hit at a new chunk start reads the previous call's rows.
+    // The reader derives its source rows from kv_actual_global too, so patch its copy or a cache hit at a
+    // new chunk start would re-read the previous call's rows.
     constexpr uint32_t kReaderKvActualGlobalCommonArgIdx = 7;
     const bool has_metadata = tensor_args.slot_idx.has_value();
     const uint32_t arg8 = has_metadata ? tensor_args.slot_idx->buffer()->address() : args.slot_idx;
