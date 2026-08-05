@@ -1900,3 +1900,145 @@ Process lesson, third instance this session: two of the three wrong calls here c
 reading an indirect signal (a `-q` summary line; a timeout log) as a conclusion. The cheap
 check that would have caught both: confirm no other process holds the chip BEFORE trusting any
 hang, and read the actual error text BEFORE naming a mechanism.
+
+### 22d-BUILT: stage 1 implemented and PCC-verified (2026-08-05)
+
+**118/118 functional pass, PCC 0.980–1.000** — identical to the stage-0 baseline, including
+every isl >= 2048 multi-chunk case (the only ones that expose a cross-RISC counter mistake,
+per section 19).
+
+What landed, beyond the 22d spec:
+
+* **Two half-specialised compute kernels** over the two row bands, selected by a `GATE_HALF`
+  define. Each binary contains ONE `matmul_block` sequence, so `in1_num_subblocks` stays 1 and
+  `out_subblock_w` stays 6 — the 14f property — while the tile_regs handshakes and packs halve
+  along with the MACs, which is the part that actually pays here.
+* **One weight CB, not two.** Each core now stages only its own half's tensor, so `CB_IN1_UP`
+  (c_2) is gone: **~110 KB of L1 per core returned**. That is a large unexploited lever —
+  `in0_block_w_gu` is currently 16 with 224 K-tiles, so 28 or 32 would now fit. Not attempted
+  here (it changes `num_blocks_gu` and would confound the stage-1 measurement).
+  Requires gate and up to share a dtype; validation now enforces that explicitly.
+* **UP_SPLIT retired.** It existed only because every core fetched two weight blocks per
+  K-block; with one block per sender the second read engine has nothing to do. 22 senders x 1
+  stream replaces 11 senders x 2, same total DRAM bytes. `up_go`/`up_done` now serve DOWN_SPLIT
+  alone, and both RISCs stopped advancing `up_seq` in phase 3 simultaneously — which is what
+  keeps the section-19 rule intact (a counter advances once per event it guards).
+* **The join.** The upper half's writer NoC-1 unicasts its `cb_mm_partials_up` block to the
+  partner and bumps `gu_join_valid`; the partner's READER does the `cb_push_back`, so the
+  multiply/activation phase needed no change at all. Ordering is write -> **write BARRIER** ->
+  remote atomic: a flush would only prove the packet left this core, and unlike the multicast
+  paths there is no `linked=true` to lean on, but unlike them the write is unicast and
+  non-posted so the destination ack exists to wait on.
+* **Whole-ring push/pop granularity on `cb_mm_partials_up`.** This is the trick that made the
+  join cheap: because the CB is exactly one block long and is always pushed/popped as one unit,
+  it never leaves its base address, and one `CircularBufferConfig` covers the whole grid, so
+  every core's copy lives at the SAME L1 address. The sender therefore needs no knowledge of
+  the receiver's ring position — no cadence counter, no address exchange. The runtime
+  `per_core_M` prefix is all that is transferred; the tail tiles are never read.
+* Retired CT-arg slots (reader 24; writer 25, 36) are kept as explicit RESERVED zeros rather
+  than deleted, so no index below them — nor any `TensorAccessorArgs` offset — shifts. An
+  off-by-one there is silent and, per section 19, would only surface at isl >= 2048.
+
+Also fixed in passing: `override_runtime_arguments` wrote `start_addr` at
+`size() - 1 - (bias ? 3 : 0)`, an index that stopped being start_addr once the
+IN1_WRITER_MCAST sems and the COUNTS_BCAST block were appended after it. On every
+program-cache HIT it clobbered the last COUNTS_BCAST arg (the multicast receiver count) with a
+DRAM address. Harmless only by luck — nothing waits on the write-ack tally it inflates — but
+any barrier added to that path would have hung. Now counted back from the end explicitly.
+
+### 22d-PROCESS: the "hang" was a stale host binary, not a sync bug
+
+Stage 1 appeared to deadlock all 88 cores on the first run. It did not: **`cmake --build build
+--target ttnn` does not refresh the `.so` that pytest imports.** Tests load
+`ttnn/ttnn/_ttnn.so`, a copy placed there by the `install` step; only
+`cmake --build build --target install` updates it. So the run was **new JIT-built kernels
+against the stage-0 host binary** — a combination with no single-file bug to find:
+
+* the writer read `is_gate_half` from RT arg 19, past the end of the old 19-arg vector;
+* the compute kernel's `#ifndef GATE_HALF` fallback silently made BOTH halves the gate half,
+  so nothing ever produced the `up` accumulator.
+
+Two consequences worth keeping:
+
+1. **`GATE_HALF` now has no default — a missing define is a build error.** A define that
+   silently selects a behaviour is a hazard, not a convenience.
+2. **Verify the artifact before diagnosing the symptom.** `ls -l ttnn/ttnn/_ttnn.so` would have
+   ended this in seconds. This is the fourth time this session that an indirect signal was read
+   as a conclusion (see 22c-RESOLVED); the pattern is always the same shape.
+
+Two symbolization traps also cost time here, both worth knowing before trusting a callstack:
+`triage.py` resolves every core's PC against ONE ELF per kernel NAME, so with two binaries
+compiled from the same file the second half's frames are attributed to the first half's source;
+and identical inlined waits (`noc_semaphore_wait_min` at two call sites, `cb_wait_front` at two
+call sites) are merged by the compiler and reported at a single arbitrary line. A stuck core's
+reported line is a hypothesis, not evidence. Watcher, which would have disambiguated via
+WAYPOINTs, aborts on this build before the op runs ("watcher data corruption, unexpected drisc
+kernel id" on a dispatch core).
+
+### 22f. MEASURED: ROW_SPLIT does not pay. 36 cases, x_rm, both weight layouts
+
+Stage 1 measured against the pre-ROW_SPLIT baselines. Ratios are stage1 / baseline, so
+**> 1.00 is slower**:
+
+| isl | interleaved kimi | interleaved glm | ndshard kimi | ndshard glm |
+|-----|-----|-----|-----|-----|
+| 0    | 0.98 | 0.95 | 0.98 | 0.90 |
+| 64   | 0.95 | 0.97 | 1.02 | 0.99 |
+| 128  | 1.01 | 1.01 | 1.03 | 1.04 |
+| 256  | 1.20 | 1.19 | 1.21 | 1.22 |
+| 512  | 1.40 | 1.39 | 1.39 | 1.39 |
+| 1024 | 1.46 | 1.47 | 1.44 | 1.44 |
+| 2048 | 1.49 | 1.50 | 1.46 | 1.45 |
+| 4096 | 1.50 | 1.49 | 1.47 | 1.47 |
+| 5120 | 1.50 | 1.50 | 1.47 | 1.47 |
+
+**Flat at isl <= 128 — the range this whole idea existed for — and a saturating 1.5x
+regression above it.** No layout, no model, no ISL shows a win.
+
+**Why there is no low-ISL win, and why section 14b already said so.** The premise was section
+14e's per-core work count: 4074 tile-MACs -> 2730, so ~1.49x. But section 14b measured the
+op's floor as `23 us + 61 us * per_core_M`, invariant to 0.05% across isl 64/128/256. That
+floor scales with **per_core_M**, and ROW_SPLIT does not change per_core_M — it trades M-rows
+for weight-halves, so a chunk covers 4 rows x per_core_M instead of 8 x per_core_M at the same
+per_core_M. At isl-128 (count_tiles 4, per_core_M 1) the floor is 84 us of a ~97 us op: ~85% of
+the op is work the floor model says is indifferent to how many matmuls each row runs. Halving
+the gate/up MACs halved something the floor was already hiding. **The arithmetic in 14e counted
+work; the floor in 14b counted time. When those two disagree, 14b is the one that was measured
+against the clock.**
+
+**Why the long-ISL regression is 1.5x and structural.** `kMaxChunkMTiles` had to halve with
+`kGridY` (32 -> 16) to keep per_core_M_max at 4 and L1 unchanged, so a chunk now spans 16
+tile-rows instead of 32 and there are **2x as many chunks**. Every chunk re-reads the full
+gate/up/down weights — the dominant DRAM cost, and the reason the chunk picker maximises
+per_core_M in the first place. Per-core work per chunk fell 4074 -> 2730, but at 2x the chunks
+that is 5460 vs 4074 = 1.34x, and the doubled weight re-read supplies the rest.
+
+**Stage 2 cannot recover this.** Its ceiling is exact parity, not a win: it balances the halves
+(gate-half 1344+1386 vs up-half 1344 today, so the up half idles) down to 2037 each, and
+2037 x 2 chunks = 4074 = precisely the pre-ROW_SPLIT per-core work. So Stage 2 buys back the
+long-ISL regression and lands at ~1.0x, while low ISL stays floor-bound at ~1.0x. The honest
+projected end state of the whole ROW_SPLIT program is **neutral everywhere**, not 1.97x.
+
+**Could the freed L1 rescue it?** Dropping cb_in1_up returned ~110 KB/core, which is enough to
+ask for per_core_M_max = 8 (restoring the 32-tile-row chunk span and the original chunk count).
+It does not fit: at M=8, w_gu=16 the footprint is ~1.68 MB against a ~1.38 MB budget (cb_x_rm
+alone is 524 KB and partials_d 344 KB, both scaling with M). The L1 guard would narrow
+in0_block_w_gu to 8, doubling the K-block count — the exact trade the kMaxChunkMTiles comment
+already resolved in favour of width 16. So no.
+
+**Conclusion: shelve ROW_SPLIT.** Stage 1 is correct (118/118 PCC) and the mechanism works, but
+it optimises a quantity this op is not bound by. Stage 1 lives on branch
+`mbezulj/row-split-shelved` (commit 0ee48053522) for reference; stage 0 is reverted on the
+working branch, keeping the ND-shard height knob it was committed alongside.
+
+Exactly ONE piece of the work is independently worth keeping: the
+`override_runtime_arguments` start_addr index fix (a live latent bug — see 22d-BUILT). The
+gate/up dtype validation is NOT: it existed only because stage 1 staged both tensors through
+one weight CB. With gate and up back in separate CBs, each configured from its own dtype, that
+TT_FATAL would impose a restriction with nothing behind it, so it was dropped with the rest.
+
+**Reusable lesson.** Before trading work for parallelism again in this op, check the candidate
+against the 14b floor first: if the change does not reduce `per_core_M` or the number of
+chunks, it cannot move the low-ISL number no matter how much per-core arithmetic it removes.
+That test would have rejected ROW_SPLIT on paper, in one line, before any of it was built —
+and it is the same test that should be applied to the next idea.
