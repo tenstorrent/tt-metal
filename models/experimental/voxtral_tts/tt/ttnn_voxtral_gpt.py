@@ -58,8 +58,11 @@ _NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
 
 # NOTES.md [gpt-05] -- Decode runs in ttnn's DECODE-NATIVE head layout, [1...
 _QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
+# One number, used twice: the literal 8 used to appear in both the shard width and the grid, and
+# changing one without the other yields a silently wrong shard rather than an error.
+_QKV_GRID_X = 8
 _QKV_SHARD = ttnn.create_sharded_memory_config(
-    (TILE, _QKV_WIDTH // 8), core_grid=ttnn.CoreGrid(y=1, x=8),
+    (TILE, _QKV_WIDTH // _QKV_GRID_X), core_grid=ttnn.CoreGrid(y=1, x=_QKV_GRID_X),
     strategy=ttnn.ShardStrategy.WIDTH, orientation=ttnn.ShardOrientation.ROW_MAJOR,
     use_height_and_width_as_shard_shape=True)
 # rotary_embedding_hf's decode mode requires cos/sin sharded as well as the input
