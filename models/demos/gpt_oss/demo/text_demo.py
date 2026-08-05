@@ -192,7 +192,9 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
-            True,  # enable_decode_trace
+            # EXPERIMENT ONLY (#52176) — do not merge. Decode trace off to test whether the
+            # Blackhole garbage output comes from the split decode/sampling trace.
+            False,  # enable_decode_trace
             True,  # enable_prefill_trace
             False,  # warmup_prefill
             False,  # users_row_sharded
