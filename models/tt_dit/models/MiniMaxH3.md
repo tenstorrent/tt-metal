@@ -12,7 +12,7 @@ models/tt_dit/
 │   ├── vae/minimax_h3/               # video VAE (AutoencoderKLMiniMaxH3)
 │   └── audio_vae/minimax_h3/         # audio VAE (AutoencoderKLMiniMaxH3Audio)
 ├── encoders/qwen3vl/                 # text encoder — shared; loader_minimax_h3.py wires H3's 50-layer tap
-└── pipelines/minimax_h3/             # t2va pipeline + host-side packing, scheduler, conditioning
+└── pipelines/minimax_h3/             # t2va + fl2va pipeline, host-side packing, scheduler, conditioning
 ```
 
 There is no `__init__.py`: `tt_dit` uses namespace packages, matching `transformers/wan2_2/` and
@@ -177,6 +177,44 @@ Artifacts land in `$MINIMAX_H3_ARTIFACT_DIR` (default `~/h3_t2va_artifacts`): `t
 `t2va_silent.mp4`, `t2va.wav`.
 
 `RUN_VBENCH=0` / `RUN_CLIP=0` skip the tier-6 quality gates, which default **on**.
+
+## Running `fl2va` end to end
+
+Same command shape, plus a keyframe. `image=` is `fl2va`, `last_image=` is `fl2va_last_frame`, and
+both together anchors each end of the clip:
+
+```bash
+export MINIMAX_H3_DIFFUSERS_DIR=/data/cglagovich/MiniMax-H3-diffusers
+export TT_DIT_CACHE_DIR=/data/kevinmi/tt_dit_cache
+export MINIMAX_H3_ARTIFACT_DIR=~/h3_fl2va_artifacts
+scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_pipeline_fl2va_minimax_h3.py
+```
+
+Artifacts land as `fl2va_<case>.mp4` / `_silent.mp4` / `.wav` plus four inspection PNGs per case.
+
+**The gated keyframe is frame 0 of the calibrated `t2va` artifact**, read from
+`MINIMAX_H3_T2VA_ARTIFACT_DIR` (default `~/h3_t2va_artifacts`), so run the `t2va` gate first — this one
+skips rather than inventing content. The reason is amendment 87: a keyframe forces the content, and
+`imaging_quality` is a no-reference IQA metric, so an arbitrary photograph would invalidate the
+tier-6 calibration outright. Tier-6 numbers are therefore **recorded, not gated**, for `fl2va`.
+
+A keyframe enters at two independent places, and both matter:
+
+| | |
+|---|---|
+| the conditioner | `"<Picture 1>: "` + `<|vision_start|>` + 1008 x `<|image_pad|>` + `<|vision_end|>` + the prompt. The **whole vision block is video-tagged**, which is what the DiT's AdaLN keys off |
+| the video VAE | `encode_clip` at `temporal_taps=1`, sampled posterior at seed **42**, rounded through **float16** before normalizing, then `scale_noise(rows, 0.999, noise)` |
+
+The two read the same `(H/32) x (W/32)` grid: at 1344x768 that is 1008 image tokens **and** 1008
+conditioning rows. Packed sequence 39746 -> 39936 padded for one anchor, 41756 -> 41984 for two.
+
+Measured, all three cases green (STATE.md amendment 97):
+
+| case | decoded anchor frame vs keyframe |
+|---|---|
+| `first` | frame 0, **PCC 0.9971** |
+| `last` | frame -1, **PCC 0.9943** |
+| `first`+`last` | frame 0 **0.9971**, frame -1 **0.9946** |
 
 CLIP runs in-process (`open_clip` is already installed). **VBench does not, and cannot**: it pins
 numpy < 2 and transformers 4.33, so installing it into `python_env` would downgrade numpy

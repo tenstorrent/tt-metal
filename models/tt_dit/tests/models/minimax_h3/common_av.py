@@ -24,6 +24,8 @@ import numpy as np
 import torch
 from loguru import logger
 
+from ....pipelines.minimax_h3.packing import prepare_keyframe_image
+
 
 def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seconds=0.05):
     """Guard against a soundtrack that is silent, clipped, constant, or the wrong length.
@@ -220,3 +222,48 @@ def log_spectral_flatness(audio, *, sampling_rate, num_bands=64):
         f"band dB range=[{10 * np.log10(bands.min() + 1e-20):.1f}, {10 * np.log10(bands.max() + 1e-20):.1f}]"
     )
     return {"flatness": flatness, "bands_db": 10 * np.log10(bands + 1e-20)}
+
+
+def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pcc_floor=0.3):
+    """A decoded frame must correlate with the keyframe that anchored it.
+
+    The `fl2va` analogue of `wan2_2.common.check_first_frame_matches_seed`, and it exists separately
+    because that helper resizes the seed with a plain `PIL.resize`, i.e. a **stretch**. That is right
+    for MiniMax-H3's *first* keyframe and wrong for any other: `prepare_keyframe_image` stretches only
+    the geometry anchor (the first keyframe given) and **cover-crops** every later one -- scale by
+    `max(W/w, H/h)`, then centre-crop. Comparing a cover-cropped keyframe against a stretched
+    reference would fail on a correct pipeline.
+
+    So the canvas rule is applied here rather than assumed, by calling `prepare_keyframe_image`
+    itself. That also means this helper cannot drift from the pipeline's own preparation.
+
+    This is a real correctness signal rather than a formality: the anchors are noised only to
+    `t = 0.999`, so `0.999 * x0 + 0.001 * noise` is essentially the clean VAE latent of the keyframe,
+    and a decoded anchor frame that does not resemble it means the conditioning path is broken --
+    wrong rows written, anchors overwritten during denoising, or the conditioning block placed at the
+    wrong sequence position.
+
+    Args:
+        frames: decoded video, `(F, H, W, 3)`, batch dim removed.
+        keyframe: the PIL keyframe *as supplied to the pipeline*, before preparation.
+        index: which decoded frame to compare -- `0` for a `first` anchor, `-1` for a `last` one.
+        stretch: how the pipeline prepared this keyframe. `True` for the first keyframe given.
+        pcc_floor: minimum Pearson correlation. Provisional; tighten once real values are recorded.
+    """
+    frame = frames[index]
+    if isinstance(frame, torch.Tensor):
+        frame = frame.cpu().numpy()
+    frame = np.asarray(frame).astype(np.float64)
+
+    prepared = prepare_keyframe_image(keyframe.convert("RGB"), height, width, stretch)
+    expected = np.asarray(prepared).astype(np.float64)
+    assert frame.shape == expected.shape, f"frame {index} shape {frame.shape} != keyframe {expected.shape}"
+
+    pcc = float(np.corrcoef(frame.ravel(), expected.ravel())[0, 1])
+    label = "first" if index == 0 else "last"
+    logger.info(f"fl2va {label}-keyframe anchor: decoded frame {index} vs keyframe PCC = {pcc:.4f}")
+    assert pcc > pcc_floor, (
+        f"decoded frame {index} barely correlates with the {label} keyframe (PCC={pcc:.3f}); "
+        "the fl2va conditioning path is likely broken"
+    )
+    return pcc

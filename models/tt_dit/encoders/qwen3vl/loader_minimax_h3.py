@@ -17,6 +17,13 @@ and mRoPE degenerates: all three position axes carry the same ``arange``, which 
 checkpoint's ``mrope_interleaved: true`` indistinguishable from the chunked section split
 ``create_rope_tensors`` implements. That is measured, not assumed --
 ``test_mrope_is_permutation_invariant_for_text_only``.
+
+FL2VA needs the tower, and **that degeneracy is void the moment an image enters the prompt**: a
+vision block carries genuinely different t/h/w positions, so ``mrope_interleaved`` becomes
+load-bearing and callers must pass ``position_ids=mrope_position_ids(...), interleaved=True``.
+``build_minimax_h3_vision_tower`` and ``load_minimax_h3_vision_state_dict`` below serve that path;
+the tower is ~595 M parameters against the conditioner's 32 B, and is replicated rather than
+tensor-parallel.
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ from safetensors import safe_open
 
 from ...parallel.manager import CCLManager
 from .model_qwen3vl import Qwen3VlTextEncoder
+from .vision_qwen3vl import Qwen3VlVisionModel
 
 # H3 reads `hidden_states[50]`; `hidden_states[0]` is the embedding output, so index 50 is the
 # output of decoder layer 49 and a 50-layer stack tapped at its last layer is exactly that.
@@ -154,3 +162,87 @@ def build_minimax_h3_text_encoder(
         del state
 
     return encoder, config
+
+
+_VISION_PREFIX = "model.visual."
+
+
+def minimax_h3_vision_config(weights_dir: str | os.PathLike) -> dict:
+    """Read `text_encoder/config.json`'s `vision_config` as plain JSON.
+
+    Released values: depth 27, hidden 1152, 16 heads, intermediate 4304, patch 16,
+    `spatial_merge_size` 2, `temporal_patch_size` 2, `num_position_embeddings` 2304 (= 48^2),
+    `out_hidden_size` 5120, `deepstack_visual_indexes` [8, 16, 24].
+    """
+    return json.loads((Path(weights_dir) / "config.json").read_text())["vision_config"]
+
+
+def load_minimax_h3_vision_state_dict(weights_dir: str | os.PathLike) -> dict[str, torch.Tensor]:
+    """The `model.visual.*` sub-tree, prefix stripped. ~595 M parameters, ~1.2 GB bf16.
+
+    Reads only the shards holding vision tensors, the mirror of
+    :func:`load_minimax_h3_text_state_dict`'s treatment of the decoder.
+    """
+    directory = Path(weights_dir)
+    index_path = directory / "model.safetensors.index.json"
+    if not index_path.is_file():
+        raise FileNotFoundError(f"no model.safetensors.index.json under {directory}")
+    weight_map = json.loads(index_path.read_text())["weight_map"]
+
+    by_shard: dict[str, list[str]] = {}
+    for key, shard in weight_map.items():
+        if key.startswith(_VISION_PREFIX):
+            by_shard.setdefault(shard, []).append(key)
+    if not by_shard:
+        raise ValueError(f"no {_VISION_PREFIX}* tensors in {index_path}; this checkpoint has no vision tower")
+
+    state: dict[str, torch.Tensor] = {}
+    for shard, keys in sorted(by_shard.items()):
+        with safe_open(str(directory / shard), framework="pt", device="cpu") as handle:
+            for key in keys:
+                state[key[len(_VISION_PREFIX) :]] = handle.get_tensor(key)
+    logger.info(
+        f"MiniMax-H3 vision tower: {len(state)} tensors from {len(by_shard)} of "
+        f"{len(set(weight_map.values()))} shards, {sum(t.numel() for t in state.values()) * 2 / 1e9:.2f} GB bf16"
+    )
+    return state
+
+
+def build_minimax_h3_vision_tower(
+    weights_dir: str | os.PathLike,
+    *,
+    mesh_device,
+    load_weights: bool = True,
+) -> tuple[Qwen3VlVisionModel, dict]:
+    """Build the released vision tower and load its weights. Returns `(tower, vision_config)`.
+
+    No parallel config: the tower is **replicated**, not tensor-parallel. At ~1.2 GB bf16 against the
+    conditioner's ~50 GB it is not worth sharding, and it runs once per request outside the denoise
+    loop. Every config value is read from the checkpoint rather than defaulted, because two of them are
+    load-bearing and easy to get wrong silently -- `head_dim` is `1152 // 16 = 72`, which is not tile
+    aligned and is padded to 96 internally with the softmax `scale` passed explicitly as `72 ** -0.5`,
+    and `num_position_embeddings` is 2304 = 48^2, smaller than any production patch grid, so the
+    bilinear interpolation of the position table is the common path rather than an edge case.
+    """
+    config = minimax_h3_vision_config(weights_dir)
+    tower = Qwen3VlVisionModel(
+        hidden_size=config["hidden_size"],
+        num_heads=config["num_heads"],
+        depth=config["depth"],
+        intermediate_size=config["intermediate_size"],
+        in_channels=config.get("in_channels", 3),
+        patch_size=config["patch_size"],
+        temporal_patch_size=config.get("temporal_patch_size", 2),
+        spatial_merge_size=config["spatial_merge_size"],
+        num_position_embeddings=config["num_position_embeddings"],
+        out_hidden_size=config["out_hidden_size"],
+        hidden_act=config.get("hidden_act", "gelu_pytorch_tanh"),
+        norm_eps=config.get("rms_norm_eps", 1e-6),
+        deepstack_visual_indexes=config["deepstack_visual_indexes"],
+        mesh_device=mesh_device,
+    )
+    if load_weights:
+        # Strict: `pos_embed.weight` is popped to the host by `_prepare_torch_state` and every other
+        # key must map, so an unconsumed one is a real mapping bug.
+        tower.load_torch_state_dict(load_minimax_h3_vision_state_dict(weights_dir))
+    return tower, config
