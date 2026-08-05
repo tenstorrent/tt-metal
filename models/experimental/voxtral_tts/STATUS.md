@@ -1948,6 +1948,50 @@ a `[1,3072]` row vector, exactly a bias. It works, and it is worth almost nothin
 (0.104 ms/frame), and only in the form that loses bit-exactness. Not taken. This is also the clearest
 demonstration of why the isolated map overstates: the same op costs 28.9 µs alone and 0 µs in place.
 
+### 6.28 — the DRAM-sharded matmul, re-opened with tuned blocking: §6.9's rejection HOLDS
+
+The last lead from §6.27's overhead map. The norm emits a width-sharded activation and the shipped path
+immediately unshards it (11.7 µs/layer, 0.30 ms/frame) so an ordinary matmul can take it.
+`MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig` is the one config that wants the sharded form
+directly. §6.9 rejected it at 125.4 µs against 100.9 — **with untuned blocking**, and §6.25 had since
+shown blocking is worth 1.2x on `wo`. So the rejection looked like it might be an artifact.
+
+**It is not. Measured from `hs` to the tensor `nlp_create_qkv_heads_decode` consumes, so each path
+carries everything it needs:**
+
+| weight placement | in0_block_w | µs | vs shipped | numerics |
+|---|---|---|---|---|
+| **Path A — unshard + normal matmul (ships)** | — | **108.6** | **1.000x** | — |
+| 8c DRAM-sharded | 1 | 303.7 | 0.357x | 3.0e-03 rel |
+| 8c DRAM-sharded | **6** | **180.7** | **0.601x** | 3.0e-03 rel |
+| 8c DRAM-sharded | 12 | 181.7 | 0.598x | 3.0e-03 rel |
+| 8c L1-sharded | — | — | **Out of Memory** | — |
+| 32c DRAM-sharded | — | — | TT_FATAL on the weight reshard | — |
+| 32c L1-sharded | 3 | 138.4 | 0.784x | **1.4e+14 — silently WRONG** |
+
+**Tuning `in0_block_w` was worth 1.68x** (303.7 → 180.7), so the premise was right — §6.9 did leave it
+untuned. **The conclusion was still wrong: even fully tuned it is 1.66x SLOWER.** §6.9's axis argument
+survives intact — width-sharding in0 splits the matmul's CONTRACTION dimension, so each core forms only a
+partial sum and a cross-core reduce over the full 6144-wide output follows. Better blocking makes that
+reduce cheaper; it does not remove it.
+
+**Two incidental findings, both silent failure modes:**
+- an **L1-resident** width-sharded weight is Out of Memory at 8 cores — 13.4 MB over 8 shards is 1.7 MB
+  per core. This confirms §6.9's note that an L1 weight "would be capped anyway", with the actual error.
+- the **32-core L1** variant BUILDS, RUNS, and returns **1.4e+14** — garbage, no exception. Another entry
+  for the list of ttnn configurations that are silently wrong rather than loud.
+
+**So the norm's reshard pair is now closed three ways** — sharded straight to a normal matmul (8.94 vs
+5.32 ms, §6.9), weight-only sharding (not expressible, §6.9), and this config tuned (1.66x slower). The
+11.7 µs unshard stays.
+
+**Process note, since it took four probe iterations and two were my own fault.** Attempt 1 passed no
+output `memory_config` → *"Output memory config must be sharded"*, and I wrote **"§6.9's rejection
+holds"** on the strength of it. It had not been tested at all. Attempt 2 left the weight interleaved →
+*"Input B memory layout must be WIDTH_SHARDED"*. Only attempt 3 measured anything. **A config that fails
+to BUILD has told you nothing about whether it is fast** — and I recorded the opposite once already
+today (§6.27's `to_memory_config` reading). Read the assertion before writing the conclusion.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
