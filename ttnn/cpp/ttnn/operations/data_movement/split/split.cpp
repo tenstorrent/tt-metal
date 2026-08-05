@@ -26,11 +26,8 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_ten
 }
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    // Collapse/expand must keep logical and padded shapes distinct. The span overload of
-    // reshape_on_device passes the inferred logical shape as the padded shape too, so for
-    // logical [2,1,100,128] / padded [2,1,128,128] it would produce metadata [1,2,100,128]
-    // instead of preserving padded height 128 — and the split factory then counts
-    // num_tiles_dim_2 = 100/32 = 3 instead of 128/32 = 4.
+    // Use the (logical, padded) reshape overload so TILE padding is preserved across the
+    // batch collapse/expand.
     const auto& logical = input_tensor.logical_shape();
     const auto& padded = input_tensor.padded_shape();
     const bool pre_post_reshape = logical[0] > 1;
@@ -368,11 +365,8 @@ std::vector<ttnn::Tensor> split(
     // Guard against grid_dim_y/num_chunks == 0 (invalid CoreRange in program factory).
     bool chunks_fit_in_y_grid = (num_chunks <= grid_dim_y);
 
-    // The native TILE kernel splits padded tiles; when the logical last dim is not tile-aligned
-    // (e.g. logical 100, padded 128, split 2 → kernel gives two [64] but user wanted two [50]),
-    // the padded split boundary does not coincide with the logical one → wrong data. Cases this
-    // newly excludes were never a correct fast path — they produced wrong chunk widths — so this
-    // is not a perf regression.
+    // TILE kernel splits on padded boundaries; require logical last-dim tile alignment so those
+    // match the caller's chunk widths.
     bool logical_last_dim_tile_aligned = (input_shape[-1] % tt::constants::TILE_WIDTH == 0);
 
     bool can_use_tile_kernel = is_equal_n_way_split && normalized_dim == static_cast<int64_t>(input_shape.rank()) - 1 &&
