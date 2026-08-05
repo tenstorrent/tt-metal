@@ -254,23 +254,62 @@ Note the video VAE tiles this canvas **4x6 = 24** ways, and `test_performance_va
 ## Fully-warm latency
 
 Measured by `pipelines/ltx`'s method so the two are comparable: warmup pass first, prepares and
-export excluded, `Total (compute)` = sum of the stage rows.
+export excluded, `Total (compute)` = sum of the stage rows. Both tasks are measured in the same
+process, minutes apart, so they are directly comparable.
 
 ```bash
 scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_performance_pipeline_minimax_h3.py
 ```
 
-4x8 Blackhole, TP=4/SP=8, ring, 2 links · 1344x768, 124 frames @ 24 fps · 49 forwards:
+4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, 2 links · 1344x768, 124 frames @ 24 fps · 49 forwards.
+`fl2va` is one `first` anchor, packed length 39936 padded against t2va's 37888:
 
-| row | seconds |
-|---|---|
-| Encoder (cache) | 0.0 |
-| Denoise | 61.7 |
-| VAE decode | 17.6 |
-| Audio decode | 1.8 |
-| **Total (compute)** | **81.1** |
+| stage | t2va | `fl2va` | what it is |
+|---|---|---|---|
+| Encoder (cache) | 0.0 s | 0.0 s | prompt embeddings from disk; a *miss* pays a full device conditioner encode here, and for `fl2va` that includes the vision tower |
+| Keyframe encode | — | **0.1 s** | keyframe -> VAE moments -> posterior sample -> fp16 round trip -> normalize -> patchify -> `scale_noise` at t = 0.999 |
+| Denoise | 67.0 s | 58.0 s | 49 forwards of the 50-layer DiT over the packed sequence |
+| VAE decode | 4.0 s | 4.1 s | 196 work units in 7 waves of 28 across 32 devices |
+| Audio decode | 1.7 s | 1.7 s | one pass over 207 latents x 2 channels |
+| **Total (compute)** | **72.7 s** | **63.9 s** | |
+| per forward | 1366.5 ms | 1183.2 ms | |
+| realtime factor | 14.1x | 12.4x | compute / video seconds |
 
-1259.9 ms per forward; realtime factor 15.7x. No tuning has been done.
+**Do not read this as `fl2va` being faster than `t2va`.** It is one run of each, and run-to-run variance
+at identical shape and seed is **±8 %** (STATE.md amendment 82 measured denoise between 56.6 and 71.3 s).
+What the numbers do establish is that `fl2va` is **not materially slower** despite a 5.4 % longer packed
+sequence. Claiming a direction needs repeats.
 
-**Always warm up before quoting a number.** A first call reports ~1.4x this total (denoise 104.7 s
-vs 61.7 s), and the mp4 write and every weight load are excluded from the rows by design.
+Where the time goes, from the Tracy captures in STATE.md amendment 103:
+
+| stage | device FW | dominated by |
+|---|---|---|
+| VAE decode, per work unit | 189.3 ms over 940 ops | matmul 36.6 %, SDPA 30.7 % (1.24 ms each). Most matmuls run at 26-52 % of peak with input 0 in DRAM and no `program_config` |
+| Audio decode, whole stage | 1506.2 ms over 6449 ops | **layout, not arithmetic** — `Conv2d` is 4.0 % while concat/untilize/slice/tilize/permute together are ~70 % |
+
+Op-to-op gap is 32.1 % of window wall for the video unit and 25.5 % for audio. No tuning has been done
+on either.
+
+**Always warm up before quoting a number.** A first call reports ~1.4x the total (denoise 104.7 s
+against 61.7 s in an earlier measurement), and the mp4 write and every weight load are excluded from the
+rows by design. `warmup()` must be given the **real prompt and the real keyframes** — every program in
+the 50-block stack is keyed on the padded packed length, so warming a different one warms nothing.
+`test_performance_pipeline_minimax_h3.py` asserts the warm and measured lengths agree; t2va only ever
+got away without that by luck, since 1 and 39 tokens both round up to 37888.
+
+## Precision
+
+`TT_DIT_LINEAR_PRECISION` (in `layers/linear.py`, shared by every tt_dit model) raises the math fidelity
+of every linear. Unset keeps the long-standing config. Measured on the `fl2va` conditioner:
+
+| | fused conditioner PCC | massive-activation rows (reference has 7) | per forward |
+|---|---|---|---|
+| unset | 70.89 % | 5 | 1183.2 ms |
+| `hifi4` | **85.82 %** | **7** | 1184.2 ms |
+| `max` | identical to `hifi4` | identical | — |
+
+So it is free at this shape, `packer_l1_acc` has no effect, and the vision tower is unchanged — the gain
+is all in the 50-layer decoder. **The default is deliberately left alone**: one model's measurement is
+not evidence about LTX, Wan or Ideogram-4. And it changes the video not at all (40-48 dB PSNR
+frame-to-frame, identical anchor and CLIP numbers), so this is a conditioner-fidelity knob rather than a
+quality one. See STATE.md amendments 101-102.
