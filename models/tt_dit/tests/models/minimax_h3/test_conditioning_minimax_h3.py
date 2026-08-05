@@ -14,18 +14,26 @@ The float16 round trip in particular looks like a precision bug and is not, so
 output -- a refactor that "cleans it up" has to fail here.
 """
 
+import os
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 import torch
+import transformers
 from PIL import Image
 
 from ....pipelines.minimax_h3 import conditioning as c
 from ....pipelines.minimax_h3.packing import (
     MINIMAX_H3_KEYFRAME_NOISE_AUG,
+    MINIMAX_H3_TEXT_TAG,
+    MINIMAX_H3_VIDEO_TAG,
     build_packed_sequence,
     patchify_video_latents,
+    prepare_keyframe_image,
+    resolve_canvas_size,
 )
-from ....pipelines.minimax_h3.pipeline_minimax_h3 import draw_request_latents
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline, draw_request_latents
 from ....pipelines.minimax_h3.scheduler import MiniMaxH3Scheduler
 
 LATENT_CHANNELS = 24
@@ -305,3 +313,108 @@ def test_keyframe_rows_per_anchor_match_the_layout():
 
         condition_noise, _, _ = _draw(len(anchors))
         assert condition_noise.shape[0] == layout.num_condition_video_rows
+
+
+# --- fl2va presentation ---------------------------------------------------------------------------
+# Relocated here from `test_text_encoder_minimax_h3.py`, whose other five tests were redundant once
+# jonathansu's consolidated conditioner test landed (it covers both the tap comparison and the
+# post-norm assertion) and the nine dedicated mrope tests live in `test_qwen3vl_mrope.py`. This one
+# had no equivalent anywhere, and it is host-only, so it belongs in the fast suite rather than behind
+# a device fixture.
+
+PROMPT = (
+    "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "
+    "The low sun throws long blue shadows behind it, and loose snow lifts from each footfall."
+)
+
+
+def _weights_dir() -> str:
+    """The text-encoder weights directory, as the device conditioner gates resolve it."""
+    base = os.environ.get("MINIMAX_H3_MODEL_PATH") or os.environ.get(
+        "MINIMAX_H3_DIFFUSERS_DIR", "/data/cglagovich/MiniMax-H3-diffusers"
+    )
+    return os.path.join(base, "text_encoder")
+
+
+def _snapshot_root() -> str:
+    """The snapshot directory, i.e. `_weights_dir()`'s parent. Tokenizer and processor live under it."""
+    return os.path.dirname(_weights_dir())
+
+
+def _presentation(prompt, keyframes):
+    """`MiniMaxH3Pipeline._build_presentation` called unbound, so no mesh is needed.
+
+    It touches only `self.tokenizer` and `self.image_processor`, so a stub carrying those is enough.
+    Calling the real method rather than reimplementing it is the point: a reimplementation here would
+    gate a second copy of the presentation and pass while the pipeline's copy was wrong.
+    """
+    root = _snapshot_root()
+    stub = SimpleNamespace(
+        tokenizer=transformers.AutoTokenizer.from_pretrained(root, subfolder="tokenizer"),
+        image_processor=transformers.AutoImageProcessor.from_pretrained(root, subfolder="text_encoder"),
+    )
+    return MiniMaxH3Pipeline._build_presentation(stub, prompt, keyframes), stub
+
+
+@pytest.mark.parametrize("num_keyframes", [1, 2], ids=["first", "first_and_last"])
+def test_fl2va_presentation_matches_the_reference(num_keyframes):
+    """Token ids, H3 row tags and `mm_token_type_ids` all match the diffusers reference.
+
+    At the production canvas: a 16:9 source resolves to 1344x768, whose patch grid is [1, 48, 84] =
+    1008 merged vision patches, so one keyframe is a 1010-row vision block inside a 1028-row
+    presentation. Note that 1008 is also `rows_per_frame` -- the same (H/32) x (W/32) grid is read by
+    the conditioner as image tokens and by the DiT as conditioning rows.
+
+    Three things are checked because each fails silently on its own:
+
+    - the token ids, including that there is no chat template and no BOS/EOS;
+    - **H3's** `token_tags`, where the whole vision block (start/end sentinels included) is
+      video-tagged. That tag is what the DiT's AdaLN keys off, so text-tagging it mis-modulates 1010
+      rows and no PCC gate anywhere would see it;
+    - **Qwen3-VL's** `mm_token_type_ids`, a *different* tagging over the same tokens, which marks only
+      the `<|image_pad|>` run. Conflating the two is the easy mistake and this pins both.
+    """
+    source = Image.fromarray(
+        (torch.rand(720, 1280, 3, generator=torch.Generator().manual_seed(0)) * 255).to(torch.uint8).numpy()
+    )
+    height, width = resolve_canvas_size(*source.size)
+    assert (height, width) == (768, 1344), f"expected the production canvas, got {width}x{height}"
+    keyframes = [prepare_keyframe_image(source, height, width, stretch=(index == 0)) for index in range(num_keyframes)]
+
+    (input_ids, tags, type_ids, pixel_values, grid_thw), stub = _presentation(PROMPT, keyframes)
+    tokenizer, processor = stub.tokenizer, stub.image_processor
+    merge = processor.merge_size**2
+
+    # --- the reference's builder, `encoders.py::MiniMaxH3TextEncoderStep.encode_prompt` ---
+    ref_ids, ref_tags = [], []
+    for index in range(num_keyframes):
+        num_image_tokens = int(grid_thw[index].prod()) // merge
+        label = tokenizer(f"<Picture {index + 1}>: ", add_special_tokens=False)["input_ids"]
+        block = (
+            [tokenizer.convert_tokens_to_ids("<|vision_start|>")]
+            + [tokenizer.convert_tokens_to_ids("<|image_pad|>")] * num_image_tokens
+            + [tokenizer.convert_tokens_to_ids("<|vision_end|>")]
+        )
+        ref_ids += label + block
+        ref_tags += [MINIMAX_H3_TEXT_TAG] * len(label) + [MINIMAX_H3_VIDEO_TAG] * len(block)
+    prompt_ids = tokenizer(PROMPT, add_special_tokens=False)["input_ids"]
+    ref_ids += prompt_ids
+    ref_tags += [MINIMAX_H3_TEXT_TAG] * len(prompt_ids)
+
+    assert input_ids.shape == (1, len(ref_ids)), f"{tuple(input_ids.shape)} vs {(1, len(ref_ids))}"
+    assert input_ids[0].tolist() == ref_ids, "token ids differ from the reference presentation"
+    assert tags.tolist() == ref_tags, "H3 row tags differ from the reference presentation"
+
+    # `mm_token_type_ids` is Qwen3-VL's own tagging and marks ONLY the image pads -- the vision
+    # start/end sentinels are text there, while H3 tags them video. Checked against the processor's own
+    # `create_mm_token_type_ids` rather than against our derivation of it.
+    full_processor = transformers.AutoProcessor.from_pretrained(_snapshot_root(), subfolder="processor")
+    expected_type_ids = torch.tensor(full_processor.create_mm_token_type_ids([input_ids[0].tolist()]))
+    assert torch.equal(type_ids, expected_type_ids), "mm_token_type_ids differ from the processor's own"
+    assert int(type_ids.sum()) == num_keyframes * 1008
+
+    # The vision block is video-tagged but is NOT the same set of rows as the image pads: it also
+    # covers the two sentinels. If these ever coincided, one of the two taggings would be wrong.
+    assert int((tags == MINIMAX_H3_VIDEO_TAG).sum()) == num_keyframes * (1008 + 2)
+    assert grid_thw.shape[0] == num_keyframes
+    assert pixel_values.shape[0] == num_keyframes * 1008 * merge
