@@ -64,11 +64,12 @@ models/experimental/glm4_moe_lite/
    - [Batch & ISL Sweep](#batch--isl-sweep)
 2. [Performance](#performance)
 3. [Blackhole Galaxy](#blackhole-galaxy)
-4. [Testing](#testing)
+4. [tt-blaze evaluation](#tt-blaze-evaluation)
+5. [Testing](#testing)
    - [Full-model smoke test (start here)](#full-model-smoke-test-start-here)
    - [Component tests](#component-tests)
-4. [Script & CLI Options](#script--cli-options)
-5. [Environment Variables](#environment-variables)
+6. [Script & CLI Options](#script--cli-options)
+7. [Environment Variables](#environment-variables)
    - [Default-On Optimizations](#default-on-optimizations)
    - [Feature Toggles](#feature-toggles)
    - [Performance Tuning](#performance-tuning)
@@ -378,6 +379,44 @@ Two caveats, so this is not over-read:
 - **SDPA's CB is not strictly core-count-independent.** `intermed_output_tiles` scales with
   cores per head, so on a 12-wide grid it may exceed the 1,033,568 B measured on WH and eat
   the headroom. Measure before relying on the table above; `sub_core_grids` can confine it.
+
+---
+
+## tt-blaze evaluation
+
+Full write-up, with evidence and reproduction steps: **[BLAZE_EVALUATION.md](BLAZE_EVALUATION.md)**.
+
+[tt-blaze](https://github.com/tenstorrent/tt-blaze) is Blackhole-only and has ~235 ops
+covering this model's whole decode stack, so the BH port is what made it usable here at all.
+One op has been measured, correctness-gated, and is adoption-ready:
+
+| cluster | ttnn | blaze | speedup | verdict |
+|---|---:|---:|---:|---|
+| **o_proj** 5120x2048 bf8, bs=1 | 58.4 µs (80 cores, 32 rows) | **23.8 µs** (8 cores, 1 row) | **2.45x** | ADOPT — both sides PCC 0.9999 |
+| rmsnorm 2048, correct precision | 23.3 µs | 25.2 µs | 0.92x | REGRESSION — do not adopt |
+
+**How much this is worth at the model level:** o_proj runs once per layer, so 34.6 µs saved
+x 47 layers ≈ **1.6 ms/token, ~5% of the 33.2 ms step** — an upper bound, and unverified.
+A cluster win is not a step win; this model already measured removing 23% of its ops for
+**0.0 ms** under trace.
+
+Two constraints frame everything else:
+
+- **Weight streaming is capped at ~12% on BH.** `DENSE_TT_DTYPE=bf16` costs only **+3.9 ms**
+  here versus +9.8 ms on WH, so exposed weight-read time is ~3.9 ms of the step. BH's 2x DRAM
+  bandwidth already collected most of what WH left behind. Blaze's remaining leverage is L1
+  residency and phase overlap, not streaming.
+- **Blaze's model layouts assume an unharvested 13x10 (130-core) Blackhole.** Every chip in
+  this Galaxy is 1x-harvested → 12x10 = 120. Three of four fused-op clusters dead-end on
+  that: MLA needs `n_heads_per_device % 8 == 0` (GLM has 20, no TP divisor works), and the
+  shared expert needs a 64/64 gate/up split = 128 cores against 118 usable.
+
+`glm_moe_router` and `glm_routed_expert` — both real FusedOps — **do** run on 12x10 after two
+config remaps. Finishing that A/B at GLM's dims needs a `GLM4_FLASH_BLAZE_CONFIG`; the model
+config is drafted at [`blaze_eval/glm4_flash.model_config.json`](blaze_eval/glm4_flash.model_config.json).
+
+> **Hazard.** Driving a blaze op at dims its config does not match **hangs the device with no
+> error** — `num_gate_mm_cores` must equal `num_experts / 32`. Use short timeouts. See F6.
 
 ---
 
