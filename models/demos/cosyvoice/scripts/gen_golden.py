@@ -39,6 +39,7 @@ from collections import defaultdict
 
 import numpy as np
 import torch
+from torch.distributions.uniform import Uniform
 
 DEFAULT_COSYVOICE = os.environ.get("COSYVOICE_ROOT", "/root/tt/CosyVoice")
 SEED = 1986  # the seed cosyvoice.yaml itself sets, kept for continuity
@@ -246,9 +247,27 @@ def install_rng_capture(rec: Recorder, cosyvoice_pkg) -> None:
     def sine_wrapper(self, f0):
         state = torch.random.get_rng_state()
         out = sine_forward(self, f0)
+
+        # `phase_vec` never leaves SineGen.forward, but the device needs it: without
+        # it the harmonic bank is phase-shifted per harmonic and no amount of
+        # correct arithmetic reproduces the reference. It is the FIRST draw the
+        # forward pass makes (Uniform, before the randn for noise), so rewinding
+        # and replaying that one sample recovers exactly the value used.
+        torch.random.set_rng_state(state)
+        phase_vec = Uniform(low=-np.pi, high=np.pi).sample(sample_shape=(f0.size(0), self.harmonic_num + 1, 1))
+        phase_vec[:, 0, :] = 0  # the fundamental is unshifted, as upstream
+
         torch.random.set_rng_state(state)
         out2 = sine_forward(self, f0)  # identical draw, used to expose internals
-        rec.add("hift.sinegen", in_f0=f0, out_sine=out2[0], out_uv=out2[1], out_noise=out2[2])
+        rec.add(
+            "hift.sinegen",
+            in_f0=f0,
+            # transposed to the [B, 1, H+1] the channels-last device layout wants
+            in_phase_vec=phase_vec.transpose(1, 2),
+            out_sine=out2[0],
+            out_uv=out2[1],
+            out_noise=out2[2],
+        )
         return out
 
     SineGen.forward = sine_wrapper
