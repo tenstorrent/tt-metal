@@ -37,6 +37,7 @@ from .fpu.matmul import MatmulFpu
 from .fpu.reduce import ReduceFpu
 from .packer.matmul import MatmulPacker
 from .packer.packer import Packer
+from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
@@ -226,9 +227,20 @@ _l1_acc_format = (
     "Output data format does not support L1 accumulation",
 )
 
+_untilize_full_tile = (
+    lambda s, output: output.tile_shape.total_num_faces() != 4,
+    "PackUntilize supports only 32x32 output tiles, tiny tiles need strided pack",
+)
+
+_untilize_no_l1_acc = (
+    lambda s, output: s.pack_l1_accumulation == L1Accumulation.Yes,
+    "PackUntilize does not support L1 accumulation",
+)
+
 PACKER_MAP = {
     "Packer": (Packer, [_l1_acc_format]),
     "MatmulPacker": (MatmulPacker, [_l1_acc_format]),
+    "PackUntilize": (PackUntilize, [_untilize_full_tile, _untilize_no_l1_acc]),
 }
 
 _eltwise_dims = lambda a, b: (min(a[0], b[0]), min(a[1], b[1]))
