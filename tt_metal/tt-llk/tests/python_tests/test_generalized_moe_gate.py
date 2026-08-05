@@ -901,7 +901,7 @@ def test_generalized_moe_gate_copy4rows(src_dst, srcb):
 # for both sections and the comparison is vacuous, which is why dest_sync is not an axis here.
 @parametrize(
     what=[
-        (MODE_MOVE, MOVE_COPY4ROWS),  # a MOP runner, so it exercises the DEST-offset setup
+        (MODE_MOVE, MOVE_COPY4ROWS),  # a MOP runner: exercises the DEST-offset setup
         (
             MODE_RUN,
             RUN_PLACE_FIELD,
