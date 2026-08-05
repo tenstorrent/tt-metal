@@ -18,6 +18,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -44,11 +45,14 @@ int main(int argc, char** argv) {
         }
     }
 
+    // TT_METAL_SLOW_DISPATCH_MODE=1 takes the whole run off the command queue. Needed by the Tensix-BRISC
+    // drainer control (TT_METAL_PERF_DEBUG_DRAIN_TENSIX), which parks a resident program on a worker core --
+    // something fast dispatch will not allow. The workload itself is unchanged; only how it is launched is.
+    const char* sd = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    const bool slow_dispatch = sd != nullptr && *sd != '\0' && *sd != '0';
+
     int device_id = 0;
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(mesh_device->shape());
     Program program = CreateProgram();
 
     // Clamp the requested grid to the device's compute grid; --gx 0 / --gy 0 (or an over-large value)
@@ -81,7 +85,6 @@ int main(int argc, char** argv) {
     // TRISC0/1/2: the compute zone kernel (tags T0_/T1_/T2_).
     CreateKernel(program, kdir + "zones_compute.cpp", cores, ComputeConfig{.defines = defs});
 
-    workload.add_program(device_range, std::move(program));
     // Report the offered load so a knee sweep is self-documenting: 2 markers per zone (START+END), 10 zones
     // per iteration, 5 RISCs per core. Rate uses the ~1.35 GHz boosted aiclk the spin loop counts against.
     const uint32_t lanes = gx * gy * 5;
@@ -106,8 +109,19 @@ int main(int argc, char** argv) {
             "--proddelay; 0 = max rate)\n",
             zone_cyc);
     }
-    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
-    distributed::Finish(cq);
+    if (slow_dispatch) {
+        IDevice* device = mesh_device->get_devices().front();
+        detail::CompileProgram(device, program);
+        detail::WriteRuntimeArgsToDevice(device, program);
+        detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    } else {
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinateRange device_range(mesh_device->shape());
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        distributed::Finish(cq);
+    }
     printf("[perf-debug zones] workload done; closing device.\n");
     mesh_device->close();
     return 0;

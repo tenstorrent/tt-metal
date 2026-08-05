@@ -182,6 +182,7 @@ private:
             uint64_t iters = 0, pages = 0, emit = 0, stall = 0;
             uint32_t quiesce = 0;
             bool done = false;
+            bool overflow_reported = false;  // one-shot: pages_available() exceeded the FIFO (see drain_pass)
         };
         SockState sock_state[kNSockets];
         std::vector<std::vector<HZMark>> hz_raw;  // sized kNRead + kNRelay when enabled
@@ -213,6 +214,10 @@ private:
     bool boot_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
     // ONE read+decode pass over (ctx, sock): pages -> decode -> records -> ring. Returns true if it moved data.
     bool drain_pass(DeviceCtx& ctx, uint32_t sock_idx);
+    // Read the drainer's LIVE state (done word, heartbeat, phase) mid-run and log it. Distinguishes
+    // "kernel exited" from "kernel blocked in the credit wait" from "kernel sweeping with nothing to do" --
+    // states the end-of-run results block cannot tell apart because it is only published on exit.
+    void dump_drainer_state(DeviceCtx& ctx, uint32_t d, const char* why);
     void writer_thread(uint32_t sock_idx);   // one reader per socket: poll -> read -> ack -> enqueue
     // One decoder per socket -- decode state is sequential per stream. Owns decode+publish; see
     // decode_and_publish for why that work is off the reader thread.

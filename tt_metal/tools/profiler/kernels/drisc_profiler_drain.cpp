@@ -45,12 +45,20 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/socket_api.h"
-#include "experimental/drisc_mode.h"
 #include "hostdevcommon/profiler_common.h"
 #include "internal/tt-1xx/risc_common.h"
 
+// DRAIN_ON_TENSIX builds this same drain loop for a Tensix BRISC instead of a DRAM DRISC. It is a CONTROL,
+// not a product path: the loop body, the staging layout and the socket protocol are byte-identical, so a
+// behavioural difference between the two is attributable to the core the egress originates from and nothing
+// else. Only the three DRISC-specific pieces are compiled out -- the NIU mode flip (a Tensix NIU is already
+// a NoC master), the cb_interface shim (Tensix firmware defines it) and the NIU-restore tail.
+#ifndef DRAIN_ON_TENSIX
+#include "experimental/drisc_mode.h"
+
 // DRISC firmware doesn't define cb_interface (no CB infra on DRAM cores).
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+#endif
 
 // D2H: write L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks.
 inline void write_to_host_chunked(uint32_t pcie_xy_enc, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
@@ -109,6 +117,12 @@ void kernel_main() {
     //
     // Both NIUs are already live: DRISC firmware runs noc_local_state_init() for every NOC, and
     // drisc_set_stream_mode_all() puts BOTH into stream mode.
+#ifdef DRAIN_ON_TENSIX
+    // Tensix BRISC firmware inits ONLY its own noc_index (brisc.cc:385), so the read NoC's local state --
+    // the transaction-id counters noc_async_read_barrier() waits on -- is uninitialized here. Without this
+    // the read barrier compares against stale counters and returns early.
+    noc_local_state_init(kReadNoc);
+#endif
     Noc noc{kReadNoc};
     UnicastEndpoint src;
 
@@ -119,6 +133,19 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr);
     *stop = 0;
+
+    // ---- live liveness window, readable by the host WHILE the loop runs ----
+    //
+    // The results block is only published after the loop exits, so a drainer that stops draining mid-run is
+    // invisible: the host cannot tell "kernel exited" from "kernel blocked" from "kernel spinning with
+    // nothing to do". These two words close that gap. `hb` advances once per sweep; `phase` records where
+    // the kernel is, so a drainer parked in the unbounded credit wait (socket_reserve_pages) reads as
+    // PHASE_RESERVE with a frozen hb. Both live in the 64 B pad between done and stop.
+    volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 4);
+    volatile tt_l1_ptr uint32_t* phase = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 8);
+    constexpr uint32_t kPhaseInit = 1, kPhasePoll = 2, kPhaseReserve = 3, kPhaseWrite = 4, kPhaseExit = 5;
+    *hb = 0;
+    *phase = kPhaseInit;
 
     // Every frame's prefix is IDENTICAL and the bulk read lands past it (at slot + 16 words), so it is
     // written once here and never touched again. It used to be 16 stores per core per visit.
@@ -174,7 +201,9 @@ void kernel_main() {
         const uint32_t nbytes = count * kSlotBytes;
         const uint32_t npages = count * kPagesPerSlot;
         const uint64_t t0 = get_timestamp();
+        *phase = kPhaseReserve;  // if the host sees this stuck, the credit wait is the deadlock
         socket_reserve_pages(sender, npages);
+        *phase = kPhaseWrite;
         const uint64_t t1 = get_timestamp();
         c_reserve += t1 - t0;
         if (static_cast<uint32_t>(t1 - t0) > max_reserve) {
@@ -205,6 +234,8 @@ void kernel_main() {
     const uint64_t t_start = get_timestamp();
     while (sweeps < kMaxSweeps && *stop == 0) {
         sweeps++;
+        *hb = sweeps;
+        *phase = kPhasePoll;
         const uint64_t t_sweep0 = get_timestamp();
         const uint32_t frames_at_sweep_start = frames;
 
@@ -393,12 +424,14 @@ void kernel_main() {
     out[31] = static_cast<uint32_t>(c_wr_notify & 0xFFFFFFFFu);
     out[32] = static_cast<uint32_t>(c_wr_notify >> 32);
 
+    *phase = kPhaseExit;
     update_socket_config(sender);
 
     // Published last, after the socket barrier, so the host only sees `done` once every page is out.
     volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr);
     *done = 0xD09E0000u | (frames & 0xFFFFu);
 
+#ifndef DRAIN_ON_TENSIX
     // -------- NIU restore, on the host's word --------
     //
     // NIU_CFG_0 persists until a chip reset, so whoever set stream mode owns putting it back. It must
@@ -409,4 +442,5 @@ void kernel_main() {
         invalidate_l1_cache();
     }
     experimental::drisc_set_noc2axi_mode_all();
+#endif
 }
