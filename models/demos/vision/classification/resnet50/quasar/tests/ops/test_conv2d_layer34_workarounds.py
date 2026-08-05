@@ -163,7 +163,9 @@ _LAYER3_HS = [
     (256, 1024, 14, 14, (1, 1), 1, 0),  # layer3.conv3 (expand)
     (1024, 256, 14, 14, (1, 1), 1, 0),  # layer3.conv1 (modules 2-6)
     (256, 256, 14, 14, (3, 3), 1, 1),   # layer3.conv2 (modules 2-6)
-    (512, 1024, 28, 28, (1, 1), 2, 0),  # layer3_module1.downsample (28->14) -- was forced BLOCK; now HS on quasar
+    # NOTE: layer3_module1.downsample (512->1024 s2 @28x28) is NOT here -- HEIGHT_SHARDED N-HALVES it (device out
+    # = 512 ch, not 1024): the stride-2 1x1 downsample N-halving bug (NOT a DFB-ring overflow; ring is uint32 and
+    # its weights are ~1MB). It stays BLOCK_SHARDED in the model; validated separately below.
 ]
 # fmt: on
 
@@ -189,6 +191,27 @@ def test_quasar_conv2d_layer3_hs(mesh_device, cfg):
         stride=s,
         padding=p,
         shard_layout=HS,
+        input_in_dram=False,
+    )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_quasar_conv2d_layer3_downsample_bs(mesh_device):
+    """layer3_module1 downsample (512->1024 s2 @28x28) BLOCK_SHARDED -- the ONLY layer3 conv that can't be HS
+    (HS N-halves it). Its weights fit block-sharded on 2 cores (~512 KB). This validates whether block-sharded
+    produces CORRECT output (1024 ch) without hitting the fused conv_bmm 0x19. If it PASSES, layer3 is fully
+    functional (5 HS convs + this 1 block downsample). If it hangs/N-halves, the downsample needs option A."""
+    _run_conv(
+        mesh_device,
+        in_channels=512,
+        out_channels=1024,
+        input_height=28,
+        input_width=28,
+        kernel_size=(1, 1),
+        stride=2,
+        padding=0,
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         input_in_dram=False,
     )
 

@@ -446,11 +446,12 @@ class resnet50Bottleneck:
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     shard_layout=(
                         ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                        # [#48552] Quasar: keep the layer3_module1 downsample (512->1024 s2 @28x28) HEIGHT_SHARDED
-                        # like the rest of layers 1-3, so it routes to the split path (TT_METAL_QSR_CONV_SPLIT_PROGRAM)
-                        # and off the fused conv_bmm_tilize_metal2 bank-reuse 0x19. WH/BH keep the input_height!=28
-                        # block-shard exception (they don't hit the fused-hang and block-shard layer3 anyway).
-                        if height_sharding and (is_quasar() or input_height != 28)
+                        # [#48552] Quasar: the layer3_module1 downsample (512->1024 s2 @28x28) STAYS block-sharded.
+                        # HEIGHT_SHARDED N-HALVES it (device out = 512 ch, not 1024) -- the stride-2 1x1 downsample
+                        # N-halving bug, NOT a DFB-ring overflow (ring is uint32; 512->1024 weights are only ~1MB).
+                        # So it cannot go HS; block-sharded is the only fit here (its correctness/hang on the fused
+                        # path is tracked separately).
+                        if height_sharding and input_height != 28
                         else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                     ),
                     deallocate_activation=True,
