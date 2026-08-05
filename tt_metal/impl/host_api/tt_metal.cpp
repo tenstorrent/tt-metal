@@ -1551,7 +1551,8 @@ KernelHandle CreateKernel(
 
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    KernelSource kernel_src(
+        resolve_kernel_file_path(file_name, program.impl().get_context_id()).string(), KernelSource::FILE_PATH);
     KernelHandle kernel = std::visit(
         [&](const auto& cfg) -> KernelHandle {
             using T = std::decay_t<decltype(cfg)>;
@@ -1578,7 +1579,8 @@ KernelHandle CreateKernel(
     const EthernetConfig& config) {
     ValidateKernelConfigDefines(config.defines);
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    KernelSource kernel_src(
+        resolve_kernel_file_path(file_name, program.impl().get_context_id()).string(), KernelSource::FILE_PATH);
     return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
 
@@ -1633,7 +1635,8 @@ KernelHandle CreateKernel(
     const DramConfig& config) {
     ValidateKernelConfigDefines(config.defines);
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    KernelSource kernel_src(
+        resolve_kernel_file_path(file_name, program.impl().get_context_id()).string(), KernelSource::FILE_PATH);
     return CreateDramKernel(program, kernel_src, core_ranges, config);
 }
 

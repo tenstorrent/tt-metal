@@ -218,7 +218,8 @@ void CompileKernelOffline(
             // The kernel's content (source, compile args, defines) is identical per config; the
             // per-config state (build options, full name, hash) is stored on JitBuildOptions and
             // refreshed on the kernel via set_full_name() each iteration.
-            const KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+            const KernelSource kernel_src(
+                resolve_kernel_file_path(file_name, DEFAULT_CONTEXT_ID).string(), KernelSource::FILE_PATH);
             const CoreRangeSet placeholder_core_range_set(CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}});
             const std::shared_ptr<Kernel> kernel = make_offline_kernel(kernel_src, placeholder_core_range_set, config);
 

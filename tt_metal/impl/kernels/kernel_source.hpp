@@ -9,9 +9,16 @@
 #include <sstream>
 #include <string>
 
+#include <impl/context/context_types.hpp>
 #include <tt_stl/unreachable.hpp>
 
 namespace tt::tt_metal {
+
+// Resolve a relative kernel file path using rtoptions from the given context.
+// Absolute paths are returned unchanged. KernelSource itself does not store a ContextId;
+// Program-backed factories should call this before constructing a FILE_PATH KernelSource.
+std::filesystem::path resolve_kernel_file_path(
+    const std::filesystem::path& given_file_name, ContextId context_id = DEFAULT_CONTEXT_ID);
 
 struct KernelSource {
     enum SourceType { FILE_PATH, SOURCE_CODE };
