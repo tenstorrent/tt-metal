@@ -235,9 +235,26 @@ def precompute_adaln_table(
     from safetensors import safe_open
 
     checkpoint_dir = Path(checkpoint_dir)
-    shards = sorted(checkpoint_dir.glob("model-*.safetensors"))
+    # Both layouts in circulation: the original MiniMax release names its shards `model-*` while the
+    # diffusers conversion names them `diffusion_pytorch_model-*`. Single-file variants of each are
+    # accepted too. Only globbing `model-*` silently missed the diffusers snapshot this pipeline
+    # actually loads, which surfaced as "no model-*.safetensors" against a directory full of weights.
+    shards = sorted(
+        {
+            shard
+            for pattern in (
+                "model-*.safetensors",
+                "diffusion_pytorch_model-*.safetensors",
+                "model.safetensors",
+                "diffusion_pytorch_model.safetensors",
+            )
+            for shard in checkpoint_dir.glob(pattern)
+        }
+    )
     if not shards:
-        raise FileNotFoundError(f"no model-*.safetensors under {checkpoint_dir}")
+        raise FileNotFoundError(
+            f"no model-*.safetensors or diffusion_pytorch_model-*.safetensors under {checkpoint_dir}"
+        )
 
     location: dict[str, Path] = {}
     handles = {}
@@ -253,10 +270,24 @@ def precompute_adaln_table(
                 raise KeyError(f"{key} not present in {checkpoint_dir}")
             return handles[location[key]].get_tensor(key)
 
-        proj_in_weight = get("time_embedder.proj_in.weight").to(device)
-        proj_in_bias = get("time_embedder.proj_in.bias").to(device)
-        proj_out_weight = get("time_embedder.proj_out.weight").to(device)
-        proj_out_bias = get("time_embedder.proj_out.bias").to(device)
+        def get_any(*candidates: str) -> torch.Tensor:
+            """First candidate key that exists.
+
+            The two checkpoint layouts name every AdaLN surface differently: the original MiniMax
+            release uses `time_embedder.proj_in` / `blocks.N` / `final_layer.adaln_proj`, while the
+            diffusers conversion this pipeline loads uses `time_embedder.linear_1` /
+            `transformer_blocks.N` / `norm_out.linear`. Resolving by candidate keeps one builder for
+            both instead of a layout flag threaded through every caller.
+            """
+            for candidate in candidates:
+                if candidate in location:
+                    return get(candidate)
+            raise KeyError(f"none of {candidates} present in {checkpoint_dir}")
+
+        proj_in_weight = get_any("time_embedder.proj_in.weight", "time_embedder.linear_1.weight").to(device)
+        proj_in_bias = get_any("time_embedder.proj_in.bias", "time_embedder.linear_1.bias").to(device)
+        proj_out_weight = get_any("time_embedder.proj_out.weight", "time_embedder.linear_2.weight").to(device)
+        proj_out_bias = get_any("time_embedder.proj_out.bias", "time_embedder.linear_2.bias").to(device)
         step_temb = [
             time_embedding(
                 levels.to(device), proj_in_weight, proj_in_bias, proj_out_weight, proj_out_bias, freq_dim=freq_dim
@@ -266,9 +297,9 @@ def precompute_adaln_table(
 
         block_params = None
         for layer in range(num_layers):
-            prefix = f"blocks.{layer}.adaln_proj.linear"
-            weight = get(f"{prefix}.weight").to(device)
-            bias = get(f"{prefix}.bias").to(device)
+            prefixes = (f"blocks.{layer}.adaln_proj.linear", f"transformer_blocks.{layer}.adaln_proj.linear")
+            weight = get_any(*(f"{prefix}.weight" for prefix in prefixes)).to(device)
+            bias = get_any(*(f"{prefix}.bias" for prefix in prefixes)).to(device)
             params = torch.cat(
                 [project_block_adaln(temb, weight, bias, hidden_size) for temb in step_temb],
                 dim=0,
@@ -278,8 +309,8 @@ def precompute_adaln_table(
                 block_params = torch.empty((num_layers, *params.shape), dtype=params.dtype, device=device)
             block_params[layer] = params
 
-        final_weight = get("final_layer.adaln_proj.linear.weight").to(device)
-        final_bias = get("final_layer.adaln_proj.linear.bias").to(device)
+        final_weight = get_any("final_layer.adaln_proj.linear.weight", "norm_out.linear.weight").to(device)
+        final_bias = get_any("final_layer.adaln_proj.linear.bias", "norm_out.linear.bias").to(device)
         finals = [project_final_adaln(temb, final_weight, final_bias) for temb in step_temb]
         shift = torch.cat([pair[0] for pair in finals], dim=0)
         scale = torch.cat([pair[1] for pair in finals], dim=0)
