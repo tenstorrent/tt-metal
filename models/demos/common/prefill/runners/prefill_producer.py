@@ -605,6 +605,21 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     cache). Returns the min PCC across layers."""
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name == "gpt_oss_d_p":
+        # GPT-OSS is dense GQA (no index_k). Read-back lives in the model carveout; feed it the
+        # producer's private helpers as callables so it stays a one-way dependency.
+        from models.demos.gpt_oss_d_p.tt.runners.prefill_kv_validation import read_slot_kv_and_check_pcc
+
+        return read_slot_kv_and_check_pcc(
+            table=table,
+            device_map=device_map,
+            slot_id=slot_id,
+            real_len=real_len,
+            trace_dir=trace_dir,
+            num_layers=NUM_LAYERS,
+            read_kv_slice=_read_kv_slice,
+            decode_bfp8_chunk=_decode_bfp8_chunk,
+        )
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
