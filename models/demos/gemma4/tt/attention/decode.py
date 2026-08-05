@@ -99,7 +99,7 @@ def decode_forward(
     # CopyDeviceOperation per layer (60 ops / ~0.18 ms per decode step on 31B)
     # plus a full DRAM round-trip of the fused QKV. At decode M=32 the tensor is
     # tiny (2048-3072 cols bf16 = 128-192 KB across the grid).
-    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=ttnn.L1_MEMORY_CONFIG)
+    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=ttnn.L1_MEMORY_CONFIG, decode=True)
 
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(

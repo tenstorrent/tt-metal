@@ -93,26 +93,41 @@ def prefill_tilize_memcfg(seq_len: int, hidden_size: int, dtype_bytes: int = 2) 
     return prefill_tensor_memcfg(int(seq_len) * int(hidden_size), dtype_bytes=dtype_bytes)
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None):
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, decode=False):
     """Fused QKV matmul (no bias for Gemma4).
 
     ``memory_config`` lets the packed-verify decode keep the projection output
-    resident on L1; ``None`` defers to ``interleaved_prefill_config`` and then to
-    the op default (DRAM).
+    resident on L1; ``None`` defers to the tuned config below and then to the op
+    default (DRAM).
 
-    On the interleaved-weight path (everything off Blackhole) prefill gets an
-    explicit program config instead of ttnn's auto selection — see
-    ``interleaved_prefill_config``. This adds no ops: the config and the output
-    memory config are arguments to the same single ``ttnn.linear``, and in0 is
-    already L1-interleaved here, so nothing is resharded. Prefill output defaults
-    to L1 *block-sharded* (QKV sweep winner); callers that reshape / split heads
-    should run ``interleave_qkv_if_sharded`` first.
+    Two INDEPENDENT tuned paths, picked by row count:
+
+    * **decode** (``decode=True`` and M<=32): ``weights.qkv_decode_config``, the
+      swept narrow-N 1D-mcast program + compute-kernel config (see
+      ``dram_sharded.decode_1d_matmul_config``). auto spreads this shape one
+      N-tile per core and collapses the output subblock to 1x1, running at 33% of
+      DRAM peak; fewer cores with a larger ``per_core_N`` fixes it.
+    * **prefill** (everything else): ``interleaved_prefill_config``. Adds no ops --
+      the config and the output memory config are arguments to the same single
+      ``ttnn.linear``, and in0 is already L1-interleaved, so nothing is resharded.
+      Prefill output defaults to L1 *block-sharded* (QKV sweep winner); callers
+      that reshape / split heads should run ``interleave_qkv_if_sharded`` first.
+
+    NOTE the decode config is NOT bit-exact against auto (maxabs ~7 on the
+    [32,2048] output), though it IS closer to an fp32 reference than auto is
+    (PCC 0.999994 vs 0.999922). It changes generated text by forking greedy
+    decoding, so it is gated by ``GEMMA4_QKV_DECODE_PROGCFG``.
     """
     if isinstance(weights.wqkv, DramShardedLinear):
         return weights.wqkv(hidden_states, out_memory_config=memory_config)
-    program_config, tuned_out_memcfg, compute_kernel_config = interleaved_prefill_config(
-        matmul_rows(hidden_states), int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
-    )
+
+    tuned_out_memcfg = None
+    if decode and weights.qkv_decode_config is not None and matmul_rows(hidden_states) <= ttnn.TILE_SIZE:
+        program_config, compute_kernel_config = weights.qkv_decode_config
+    else:
+        program_config, tuned_out_memcfg, compute_kernel_config = interleaved_prefill_config(
+            matmul_rows(hidden_states), int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
+        )
     return ttnn.linear(
         hidden_states,
         weights.wqkv,
