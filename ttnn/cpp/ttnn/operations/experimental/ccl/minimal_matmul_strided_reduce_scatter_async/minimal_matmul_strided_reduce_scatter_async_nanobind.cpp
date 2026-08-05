@@ -36,7 +36,13 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             [1] reduce-scatter output (final result)
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): multi-device input activations tensor
+            * :attr:`input_tensor` (ttnn.Tensor | list[ttnn.Tensor]): input activations. Pass a single
+              tensor for a standard matmul, or exactly 2 tensors [prefix, suffix] for fused concat over
+              in0's K (concat-free, no host concat). Concatenation is on the channel (K, last) axis ONLY —
+              the two must be identical on every other axis. Any per-segment channel count is allowed
+              (the seam lands on the prefix's padded-K tile boundary); the weight must be per-segment
+              tile-padded (see prepare_weight_for_concatenated_input in models/tt_dit/utils/tensor.py)
+              so that prefix_padded_K + suffix_padded_K == weight_padded_K.
             * :attr:`weight_tensor` (ttnn.Tensor): multi-device weight tensor
             * :attr:`dim` (int): scatter dimension for reduce-scatter
             * :attr:`multi_device_global_semaphore`: global semaphores for reduce-scatter
