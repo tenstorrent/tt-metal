@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import torch
 
@@ -17,6 +18,50 @@ MATH_FIDELITY = {
     ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
+
+# `TT_DIT_LINEAR_PRECISION` raises the precision of every linear in tt_dit. Unset (the default) keeps
+# the long-standing config exactly; this exists so an A/B is one env var rather than a rebuild, and
+# because the file is shared by every model here, so the default must not move without evidence.
+#
+#   unset / "default"  HiFi2 for bf16, fp32 DEST accumulate, packer L1 accumulate.
+#   "hifi4"            math_fidelity=HiFi4. More passes over the mantissa per tile.
+#   "no_packer_l1"     packer_l1_acc=False, so block partials round-trip through DEST rather than
+#                      accumulating in L1 at the output dtype.
+#   "max"              both of the above.
+#
+# What prompted it: STATE.md amendment 101. The MiniMax-H3 fl2va conditioner reproduces 4 of the
+# reference's 7 massive-activation rows at production shape and content, and the ~9 % per-row error that
+# decides which near-threshold rows blow up is attributable here. Note `fp32_dest_acc_en` is *already*
+# on, so the "bf16 acc" the comment below refers to is the packer's L1 accumulation at the output dtype,
+# not the DEST register.
+_PRECISION = os.environ.get("TT_DIT_LINEAR_PRECISION", "default").strip().lower()
+_VALID_PRECISION = ("default", "hifi4", "no_packer_l1", "max")
+if _PRECISION not in _VALID_PRECISION:
+    msg = f"TT_DIT_LINEAR_PRECISION must be one of {_VALID_PRECISION}, got {_PRECISION!r}"
+    raise ValueError(msg)
+
+
+def linear_compute_config(mesh_device, dtype):
+    """The compute kernel config every linear in tt_dit uses.
+
+    NOTE: the default is the special config which attains good correctness --
+    HiFi2 + packer_l1_acc + bf16 acc in a fused linear (matmul + bias) with unfused non-approx
+    activation. `TT_DIT_LINEAR_PRECISION` overrides it; see the note on that constant.
+    """
+    math_fidelity = MATH_FIDELITY[dtype]
+    packer_l1_acc = True
+    if _PRECISION in ("hifi4", "max"):
+        math_fidelity = ttnn.MathFidelity.HiFi4
+    if _PRECISION in ("no_packer_l1", "max"):
+        packer_l1_acc = False
+    return ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=packer_l1_acc,
+    )
+
 
 # Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
 # mapped to the values the matmul fused-activation path expects. Each value is
@@ -64,17 +109,7 @@ class Linear(Module):
             self.activation_fn = None
         self.mesh_device = mesh_device
 
-        """
-        NOTE: This is the special config which attains good correctness
-        HiFi2 + packer_l1_acc + bf16 acc in a fused linear (matmul + bias) with unfused non-approx activation
-        """
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self.compute_config = linear_compute_config(mesh_device, dtype)
 
         self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device, dtype=dtype)
         self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device, dtype=dtype) if bias else None
@@ -167,13 +202,7 @@ class ColParallelLinear(Module):
             assert self.mesh_axis != self.fsdp_mesh_axis
             assert self.ccl_manager is not None
 
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self.compute_config = linear_compute_config(mesh_device, dtype)
 
         self.weight = Parameter(
             total_shape=[self.in_features, self.out_features],
@@ -361,13 +390,7 @@ class RowParallelLinear(Module):
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
 
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY[dtype],
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self.compute_config = linear_compute_config(mesh_device, dtype)
 
         ndev = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
 

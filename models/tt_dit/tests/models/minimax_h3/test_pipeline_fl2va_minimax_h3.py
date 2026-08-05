@@ -66,6 +66,7 @@ from .common_av import (
     check_av_sync,
     check_keyframe_anchor,
     check_spatial_seams,
+    check_tile_boundary_gradient,
     log_spectral_flatness,
 )
 
@@ -250,6 +251,9 @@ def test_fl2va_end_to_end(mesh_device, anchors, case, reset_seeds):
     ratio = pipeline.vae_config.spatial_compression_ratio
     (y_starts, _, _), (x_starts, _, _) = pipeline.vae.decode_tile_grid(HEIGHT // ratio, WIDTH // ratio)
     check_spatial_seams(frames, vertical_boundaries=x_starts[1:], horizontal_boundaries=y_starts[1:])
+    # The sensitive complement: block-mean seam ratios cannot see a one-pixel discontinuity, and the
+    # tiled VAE decode leaves one at ~0.12 % of full scale. Sub-visible, and gated so it stays that way.
+    check_tile_boundary_gradient(frames, vertical_boundaries=x_starts[1:], horizontal_boundaries=y_starts[1:])
 
     # ---- fl2va-specific: the anchors ----
     # `stretch` follows the pipeline's rule: the FIRST keyframe given is the geometry anchor.

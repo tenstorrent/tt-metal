@@ -267,3 +267,61 @@ def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pc
         "the fl2va conditioning path is likely broken"
     )
     return pcc
+
+
+def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boundaries, max_ratio=3.0):
+    """One-pixel gradient at each tile boundary against its own neighbourhood.
+
+    The sensitive complement to :func:`check_spatial_seams`, which compares *block-mean* activity either
+    side of a boundary and therefore cannot see a seam narrower than its blocks. Measured on a clean
+    production frame: `check_spatial_seams` reports 1.03 while every one of the six vertical boundaries
+    carries a per-column gradient 1.2-1.5x its neighbourhood. Both numbers are correct; they measure
+    different things, and only this one would notice a one-pixel discontinuity from the tiled VAE decode.
+
+    A control matters here and is built in: non-boundary columns are measured the same way and must sit
+    near 1.0, otherwise the statistic is picking up ordinary image structure rather than a seam.
+
+    The bar is deliberately loose (3.0) because a ratio of 1.2-1.5 is the *known good* state, not a
+    defect: linear cross-fading two independently decoded tiles leaves a derivative discontinuity at the
+    ends of the blend, and at production geometry that measures ~0.3/255 of luma step -- 0.12 % of full
+    scale, invisible at 8x zoom, and identical in `t2va`. This gate exists to catch that becoming
+    *visible*, which is a several-fold change, not to police the floor.
+    """
+    frames = np.asarray(frames)
+    luma = frames.astype(np.float64).mean(-1) if frames.ndim == 4 else frames.astype(np.float64)
+    gx = np.abs(np.diff(luma, axis=2)).mean(axis=(0, 1))
+    gy = np.abs(np.diff(luma, axis=1)).mean(axis=(0, 2))
+
+    def ratio(profile, index):
+        near = np.concatenate([profile[index - 12 : index - 3], profile[index + 3 : index + 12]])
+        return float(profile[index - 1] / max(float(np.median(near)), 1e-9))
+
+    results = {}
+    for name, profile, boundaries in (("vertical", gx, vertical_boundaries), ("horizontal", gy, horizontal_boundaries)):
+        ratios = {int(b): ratio(profile, int(b)) for b in boundaries if 12 < int(b) < len(profile) - 12}
+        results[name] = ratios
+        if ratios:
+            logger.info(
+                f"{name} tile-boundary gradient ratios (1.0 = no seam): "
+                + ", ".join(f"x={b}:{r:.3f}" if name == "vertical" else f"y={b}:{r:.3f}" for b, r in ratios.items())
+            )
+
+    # Control: columns that are not boundaries must read ~1.0, or the measurement is meaningless.
+    generator = np.random.default_rng(0)
+    candidates = generator.integers(30, len(gx) - 30, 24)
+    control = [c for c in candidates if all(abs(int(c) - int(b)) > 16 for b in vertical_boundaries)][:12]
+    control_ratios = [ratio(gx, int(c)) for c in control]
+    mean_control = float(np.mean(control_ratios))
+    logger.info(f"control non-boundary columns: mean ratio {mean_control:.3f}, max {max(control_ratios):.3f}")
+    assert mean_control < 1.15, (
+        f"control columns average {mean_control:.3f}; this statistic is tracking image structure rather "
+        "than tile boundaries, so its boundary numbers mean nothing"
+    )
+
+    worst = max((r, f"{n} {b}") for n, rs in results.items() for b, r in rs.items())
+    assert worst[0] < max_ratio, (
+        f"tile-boundary gradient at {worst[1]} is {worst[0]:.2f}x its neighbourhood (control "
+        f"{mean_control:.2f}); a visible seam. See the artifact rubric"
+    )
+    results["control"] = mean_control
+    return results
