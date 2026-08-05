@@ -86,6 +86,9 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
+      # Per-job NFS scratch for launch.log + --output-filename ranklogs (kimi pattern).
+      # Keeps 64-rank tagged stdout off the 4Gi Actions runner; uploaded then removed.
+      PIPELINE_DIR: /ci/demo-sp-${{ github.run_id }}-${{ strategy.job-index }}
     strategy:
       fail-fast: false
       matrix:
@@ -180,6 +183,11 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
+          # Per-job NFS scratch (ranklogs, automapper cwd). Do NOT copy the full
+          # tt-metal tree here — that OOMs the 4Gi Actions runner.
+          mkdir -p "$PIPELINE_DIR"
+
+          # Workers + runner local copy for Phase 2 --wdir / runtime (local disk).
           sudo rm -rf /home/user/tt-metal
           sudo mkdir -p /home/user
           sudo chown "$(id -u):$(id -g)" /home/user
@@ -217,21 +225,22 @@ jobs:
               echo "$(hostname): Driver=${driver} tt_smi=${tt_smi}"
             ' || true
 
+          # Logs must land on shared NFS ($PIPELINE_DIR): mpirun --pernode runs on
+          # workers, and upload-artifact only sees the Actions runner filesystem.
           run_cluster_validation() {
-            mpirun --pernode --tag-output \
+            local attempt="$1"
+            mpirun --pernode --tag-output bash -lc "
+              out=\"${PIPELINE_DIR}/cluster_validation_logs/\$(hostname)/attempt_${attempt}\"
+              mkdir -p \"\$out\"
               /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
-              --send-traffic \
-              --hard-fail \
-              --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
-              --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-              --num-iterations 5
+                --send-traffic \
+                --hard-fail \
+                --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+                --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+                --num-iterations 5 \
+                --output-path \"\$out\"
+            "
           }
-
-          echo "--- Checking cluster health before reset ---"
-          if run_cluster_validation; then
-            echo "SUCCESS: Cluster validation passed without reset"
-            exit 0
-          fi
 
           for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
             echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
@@ -250,7 +259,7 @@ jobs:
               sleep 5
 
               echo "--- Running cluster validation ---"
-              if run_cluster_validation; then
+              if run_cluster_validation "$attempt"; then
                 validation_success=true
               else
                 echo "WARNING: Validation failed on attempt $attempt"
@@ -291,8 +300,8 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        # Keep runtime compilation and tt-run working directory on a single source root.
-        # Avoid mixing /ci/tt-metal and /home/user/tt-metal include paths in one run.
+        # SC4 (legacy rank-binding) stays on local /home/user/tt-metal.
+        # SC16 automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
         working-directory: /home/user/tt-metal
         run: |
           # Store command safely using heredoc
@@ -304,6 +313,18 @@ jobs:
           echo "Running: ${{ matrix.test-group.name }}"
           echo "$CMD"
           eval "$CMD"
+
+      # MUST precede teardown: NFS staging stays until workers are reclaimed.
+      # Cluster validation logs are written per-host under
+      # $PIPELINE_DIR/cluster_validation_logs/<hostname>/ (not runner-local /tmp).
+      - name: Upload launch + per-rank logs and automapper outputs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: demo-sp-${{ inputs.sp-config }}-${{ strategy.job-index }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: ${{ env.PIPELINE_DIR }}/
 
       - name: Delete test environment
         if: always()
@@ -318,6 +339,12 @@ jobs:
         with:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
+
+      - name: Clean up shared staging dir
+        if: always()
+        run: |
+          # Per-job NFS scratch; logs already uploaded as an artifact above.
+          rm -rf "$PIPELINE_DIR"
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

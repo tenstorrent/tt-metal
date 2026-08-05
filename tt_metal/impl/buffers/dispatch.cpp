@@ -698,7 +698,9 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
 
     // Build sub-commands on the fly with coalescing
     std::vector<CQDispatchWritePackedLargeUnicastSubCmd> write_sub_cmds;
+    write_sub_cmds.reserve(CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
     std::vector<CQPrefetchRelayLinearPackedSubCmd> relay_sub_cmds;
+    relay_sub_cmds.reserve(CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS);
     uint32_t relay_stream_offset = 0;
 
     const CoreCoord virtual_core = buffer.device()->virtual_core_from_logical_core(core, buffer.core_type());
