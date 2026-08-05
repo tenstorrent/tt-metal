@@ -50,21 +50,35 @@ def ccl_persistent_buffers_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_PERSISTENT_BUF", "1").lower() not in ("0", "false", "no")
 
 
-def default_ccl_topology(mesh_device=None):
+def default_ccl_topology(mesh_device=None, is_moe: bool = False):
     """Default CCL topology for Gemma4 TP collectives.
 
     Override with ``GEMMA4_CCL_TOPOLOGY=ring|linear``.
 
     Policy (when env unset):
-      * **Ring** only on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
+      * **Ring** on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
         sweep: Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
-      * **Linear** everywhere else — including Wormhole T3K 1x8. Ring on WH
-        drops 26B-A4B ``test_full_model`` PCC below the TEMP 0.76 gate
-        (~0.7505 vs ~0.77/0.94 with Linear / main). Ring on 4-device BH also
-        drops 12B full-model PCC (~0.97 → ~0.90).
+      * **Ring** on **Wormhole** meshes with **≥8 devices** for **dense**
+        models. Trace-replay sweep of the 31B decode all-reduce
+        ([1,1,32,5376] bf16, 2/layer x 60 layers) on a 1x8 WH LoudBox:
 
-    Async RS+AG is correct but slower than sync on P150x8 — keep
-    ``GEMMA4_CCL_ASYNC=0`` unless re-swept.
+            sync all_reduce  Linear  114.4 us  -> 13.73 ms/step  (was default)
+            sync all_reduce  Ring     96.2 us  -> 11.55 ms/step  <-- now default
+            async RS+AG      Linear  131-142us -> 15.7-17.0 ms/step
+            async RS+AG      Ring    101-127us -> 12.2-15.2 ms/step
+
+        i.e. Ring is worth ~2.2 ms/step (~4% of a 50.6 ms decode step) and
+        sync beats async in every arm. Opening the mesh with
+        ``FABRIC_1D_RING`` instead of ``FABRIC_1D`` buys only a further
+        93.1 vs 96.2 us, so the topology is taken under plain ``FABRIC_1D``
+        and no harness device_params change is needed. ``num_links=2`` is NOT
+        usable here — it raises "Event Order Issue: expected to read back
+        completion signal for event 27 but got 14" (see default_num_links).
+      * **Linear** for **MoE** models on WH: Ring drops 26B-A4B
+        ``test_full_model`` PCC below the TEMP 0.76 gate (~0.7505 vs
+        ~0.77/0.94 with Linear / main).
+      * **Linear** everywhere else. Ring on 4-device BH drops 12B full-model
+        PCC (~0.97 → ~0.90).
     """
     override = os.environ.get("GEMMA4_CCL_TOPOLOGY", "").strip().lower()
     if override in ("ring", "r"):
@@ -73,10 +87,8 @@ def default_ccl_topology(mesh_device=None):
         return ttnn.Topology.Linear
 
     n = mesh_device.get_num_devices() if mesh_device is not None else 0
-    # Ring TTFT win was swept on BH P150x8 only. WH T3K is also n=8 but must
-    # stay Linear for MoE PCC (matches main's hardcoded Linear all-reduce).
     if n:
-        if n >= 8 and is_blackhole():
+        if n >= 8 and (is_blackhole() or not is_moe):
             return ttnn.Topology.Ring
         return ttnn.Topology.Linear
 
@@ -114,11 +126,11 @@ class CCLManager:
     so repeated collectives of the same activation shape skip realloc+barrier.
     """
 
-    def __init__(self, mesh_device, num_links=None, topology=None):
+    def __init__(self, mesh_device, num_links=None, topology=None, is_moe: bool = False):
         if num_links is None:
             num_links = default_num_links()
         if topology is None:
-            topology = default_ccl_topology(mesh_device)
+            topology = default_ccl_topology(mesh_device, is_moe=is_moe)
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
