@@ -129,7 +129,7 @@ def synth(device, models, case, meta, seed, max_tokens):
     phase[0, 0, 0] = 0.0  # the fundamental is unshifted, as upstream
     noise_unit = torch.randn(1, audio_len, HARMONICS)
     t0 = time.perf_counter()
-    wav, n_samples = hift.inference(
+    wav, n_samples, src = hift.inference(
         mel,
         mel_len2,
         phase_vec=dev(phase, dtype=ttnn.float32),
@@ -137,8 +137,8 @@ def synth(device, models, case, meta, seed, max_tokens):
     )
     hift_s = time.perf_counter() - t0
     out = ttnn.to_torch(wav).float().reshape(1, -1)
-    ttnn.deallocate(mel)
-    ttnn.deallocate(wav)
+    for _t in (mel, wav, src):
+        ttnn.deallocate(_t)
 
     seconds = n_samples / SAMPLE_RATE
     return out, {
