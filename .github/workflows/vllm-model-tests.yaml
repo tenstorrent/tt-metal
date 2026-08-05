@@ -44,8 +44,20 @@ on:
           - "1"
           - "2"
           - "3"
+      vllm-source:
+        description: "Where the TT backend comes from"
+        required: false
+        type: choice
+        default: plugin
+        options:
+          - "plugin"
+          - "fork"
+      vllm-tt-plugin-ref:
+        description: "tenstorrent/vllm-tt-plugin branch or sha (vllm-source=plugin)"
+        required: false
+        default: main
       vllm-commit:
-        description: "vLLM branch or sha"
+        description: "tenstorrent/vllm branch or sha (vllm-source=fork)"
         required: false
         default: dev
       platform:
@@ -162,5 +174,7 @@ jobs:
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ needs.resolve-skus.outputs.model }}
       tier: ${{ needs.resolve-skus.outputs.tier }}
+      vllm-source: ${{ inputs.vllm-source || 'plugin' }}
+      vllm-tt-plugin-ref: ${{ inputs.vllm-tt-plugin-ref || 'main' }}
       vllm-commit: ${{ inputs.vllm-commit || 'dev' }}
       mlperf-read-only: ${{ inputs.mlperf-write-access != true }}
