@@ -13,11 +13,13 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter, load_drafter_state_dict
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, allocate_dflash_kv_cache
 
 
 @dataclass
@@ -198,13 +200,6 @@ class TtPrefillRuntime:
         caches that the readback (PCC vs the HF drafter) / migration consumer reads. The drafter checkpoint
         (config + weights) comes from ``$DFLASH_HF_MODEL`` — the same source the standalone/integration
         tests use, so the device drafter and the HF reference stay in lockstep."""
-        from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
-        from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import (
-            TtDFlashDrafter,
-            load_drafter_state_dict,
-        )
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_dflash_kv_cache
-
         path = os.environ.get("DFLASH_HF_MODEL")
         assert path, (
             "PREFILL_DFLASH=1 requires DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash "

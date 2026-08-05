@@ -466,7 +466,7 @@ def _d2d_recv(inbound) -> tuple:
     return act, meta
 
 
-def _d2d_send(outbound, activation: ttnn.Tensor, meta: dict) -> None:
+def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
     """Push this rank's output hidden state + metadata to the downstream rank's receiver, then free it.
     The model already emits the activation in the sender backing's spec, and outbound_socket_service_sync
     TT_FATALs on any spec mismatch, so no host-side relayout is needed."""
@@ -490,7 +490,7 @@ def _d2d_send(outbound, activation: ttnn.Tensor, meta: dict) -> None:
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
     ttnn.deallocate(activation)
     logger.info(
-        f"[pp] SEND-d2d [{meta['actual_start']},{meta['actual_end']}) "
+        f"[pp rank {rank}] SEND-d2d [{meta['actual_start']},{meta['actual_end']}) "
         f"[xfer] push={(time.perf_counter() - t0) * 1000.0:.2f}ms"
     )
 
@@ -517,7 +517,7 @@ def _forward_shutdown(d2d_out, rank: int, hidden_size: int) -> None:
         "actual_start": SHUTDOWN_METADATA_WORD,
         "actual_end": SHUTDOWN_METADATA_WORD,
     }
-    _d2d_send(d2d_out, dummy, sentinel)  # ships + frees the dummy
+    _d2d_send(d2d_out, dummy, rank, sentinel)  # ships + frees the dummy
     d2d_out.release_fabric_links()
     logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
 
@@ -559,7 +559,7 @@ def _compute_and_send(runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2
         ttnn.synchronize_device(runtime.mesh_device)
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
     if not runtime.config.is_last_rank:
-        _d2d_send(d2d_out, out, meta)  # push + free; the grant below forwards it over fabric
+        _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it over fabric
     if d2d_out is not None:
         d2d_out.release_fabric_links()
     return t_start
@@ -764,7 +764,6 @@ def _print_config() -> None:
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
         ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
         ("PREFILL_DFLASH", str(DFLASH_ENABLED)),
-        ("DFLASH_HF_MODEL", os.environ.get("DFLASH_HF_MODEL", "<unset>")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_STANDALONE_NCHUNKS", str(NUM_CHUNKS)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
