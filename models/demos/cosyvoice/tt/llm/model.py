@@ -157,21 +157,46 @@ class TtTransformerLM:
         ttnn.deallocate(logits)
         return out
 
-    def prefill(self, prefix):
-        """Run the whole prompt through the decoder with a causal mask."""
-        length = prefix.shape[1]
-        ys, caches = self.decoder.forward_chunk(prefix, caches=None, mask=self.causal_mask(length))
-        return ys, caches
+    @staticmethod
+    def cache_width(prefix_len: int, max_tokens: int, bucket: int = 128) -> int:
+        """How wide the KV cache buffer must be, rounded up to a bucket.
 
-    def decode_step(self, token_id: int, caches):
-        """One token in, one `[1, 1, 1024]` hidden state out. No mask needed: every
-        cached position is real history, and upstream's `[1, 1, 1]` all-true mask
-        gets sliced to the score width and masks nothing."""
+        The rounding is not cosmetic. Every distinct width is a separate kernel
+        compile, so sizing the buffer exactly to each utterance would put a compile
+        at the start of every request; bucketing to 128 means a handful of widths
+        cover every utterance the model will ever see, and they are warm after the
+        first few. Attention then runs over at most 127 slots more than it needs.
+        """
+        need = prefix_len + max_tokens + 1
+        return ((need + bucket - 1) // bucket) * bucket
+
+    def prefill(self, prefix, max_len: int):
+        """The whole prompt in one chunk, right-aligned in a `max_len` buffer."""
+        from .decoder import right_aligned_bias
+
+        length = prefix.shape[1]
+        caches = self.decoder.empty_cache(max_len, length)
+        mask = self._dev_mask(right_aligned_bias(max_len, length, length, causal=True))
+        return self.decoder.forward_chunk_fixed(prefix, caches, max_len, valid=length, mask=mask)
+
+    def decode_step(self, token_id: int, caches, max_len: int, valid: int):
+        """One token in, one `[1, 1, 1024]` hidden state out.
+
+        The mask suppresses the padding slots at the front of the buffer; its
+        *values* change every step but its *shape* does not, which is the entire
+        point -- see `forward_chunk_fixed`.
+        """
+        from .decoder import right_aligned_bias
+
         row = self.speech_embedding_host[token_id].reshape(1, 1, -1)
         x = ttnn.from_torch(row, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
-        ys, caches = self.decoder.forward_chunk(x, caches=caches, mask=None)
+        mask = self._dev_mask(right_aligned_bias(max_len, min(valid, max_len), 1))
+        ys, caches = self.decoder.forward_chunk_fixed(x, caches, max_len, valid=valid, mask=mask)
         ttnn.deallocate(x)
         return ys, caches
+
+    def _dev_mask(self, m):
+        return ttnn.from_torch(m, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
 
     # ----------------------------------------------------------------------
     def generate(
@@ -203,7 +228,9 @@ class TtTransformerLM:
         min_len = int(n_text * self.meta.get("min_token_text_ratio", 2))
         cap = max_tokens or int(n_text * self.meta.get("max_token_text_ratio", 20))
 
-        ys, caches = self.prefill(prefix)
+        prefix_len = prefix.shape[1]
+        max_len = self.cache_width(prefix_len, cap)
+        ys, caches = self.prefill(prefix, max_len)
         ttnn.deallocate(prefix)
 
         out: list[int] = []
@@ -229,7 +256,7 @@ class TtTransformerLM:
             if token == self.eos_token:
                 break
             out.append(token)
-            ys, caches = self.decode_step(token, caches)
+            ys, caches = self.decode_step(token, caches, max_len, prefix_len + len(out))
 
         ttnn.deallocate(ys)
         TtARDecoder.free_caches(caches)
