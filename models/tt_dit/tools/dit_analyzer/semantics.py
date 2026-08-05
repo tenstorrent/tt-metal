@@ -761,6 +761,44 @@ def _suffix_preserved_map(src: Sequence[int], dst: Sequence[int]) -> Dict[int, i
     return m
 
 
+def _suffix_product(shape: Sequence[int], axis: int) -> int:
+    p = 1
+    for d in shape[axis + 1 :]:
+        p *= d
+    return p
+
+
+def _reshape_local_dist(xs_shape, dist: Dist, ys_shape, mesh) -> Optional[Dist]:
+    """Output dist of a reshape that ttnn applies **per device** (each device
+    reshapes its own local block; it is not a global element permutation).
+
+    Each sharded mesh axis moves onto the output axis carrying its factor: the one
+    divisible by the factor with the same number of trailing elements as the input's
+    sharded axis (so an innermost split ``[.., A*B] -> [.., A, B]`` keeps the shard on
+    ``B``). Returns ``None`` if any shard can't be placed uniquely -- the caller then
+    falls back to the opaque path. This is the general form of the MiniMax-H3 AdaLN
+    modulation fold ``[1,1,T,M*P*H] -> [1,1,T*M,P*H]`` (blocker 17).
+    """
+    new_shard = list(dist.shard)
+    used: set = set()
+    for m, a in enumerate(dist.shard):
+        if a is None:
+            continue
+        ai = _axis(a, len(xs_shape))
+        n = mesh.size(m)
+        want = _suffix_product(xs_shape, ai)
+        cands = [
+            ao
+            for ao in range(len(ys_shape))
+            if ao not in used and ys_shape[ao] % n == 0 and _suffix_product(ys_shape, ao) == want
+        ]
+        if len(cands) != 1:
+            return None
+        new_shard[m] = cands[0]
+        used.add(cands[0])
+    return Dist(tuple(new_shard), dist.partial)
+
+
 def _identity_apply(c: ApplyCtx) -> None:
     x = c.in_state(0)
     ys = c.out_sym(0)
@@ -792,6 +830,19 @@ def _identity_apply(c: ApplyCtx) -> None:
                             box = box.replace_axis(da, *b)
                     regions[d] = RegionSet.of(box)
                 c.define(0, dist, regions, x.value_id, x.tainted)
+                return
+            do = _reshape_local_dist(xs.shape, x.dist, ys.shape, c.mesh)
+            if do is not None:
+                # A per-device local reshape: each device holds its full shard of the
+                # re-fractured tensor. Value and taint carry through unchanged -- this
+                # is tracked, not opaque (MiniMax-H3 AdaLN modulation fold).
+                from .state import device_region
+
+                regions = {
+                    d: (RegionSet.empty(ys.ndim) if x.regions[d].is_empty else device_region(c.mesh, ys, do, d))
+                    for d in c.mesh.devices()
+                }
+                c.define(0, do, regions, x.value_id, x.tainted)
                 return
             c.warn("OPAQUE_RESHAPE", "cannot track regions through reshape %s -> %s" % (c.in_sym(0).shape, ys.shape))
             regions = {
@@ -829,6 +880,14 @@ def _identity_demand(c: DemandCtx) -> None:
                     if b is not None:
                         box = box.replace_axis(sa, *b)
                 c.need(xid, dev, RegionSet.of(box))
+            return
+        xin = c.before.get(xid)
+        if xin is not None and _reshape_local_dist(xs.shape, xin.dist, ys.shape, c.mesh) is not None:
+            # per-device local reshape (see _identity_apply): a device's output shard
+            # is exactly its input shard reshaped, so it needs that whole shard.
+            for dev in c.mesh.devices():
+                if not dem[dev].is_empty:
+                    c.need(xid, dev, xin.regions[dev])
             return
     for dev in c.mesh.devices():
         if dem[dev].is_empty:

@@ -268,6 +268,27 @@ def test_embedding_output_is_hidden_fractured_like_the_weight():
         assert st.regions[dev].bounds(2) == (8 * t, 8 * t + 8), dev  # 32 / 4 hidden per device
 
 
+def test_fold_reshape_tracks_the_shard_without_tainting():
+    """A per-device local reshape that folds a feature sub-axis into rows keeps the
+    shard on the inner axis and stays *tracked* (not opaque, not tainted).
+
+    Models the MiniMax-H3 AdaLN modulation fold [1,1,T,M*P*H] -> [1,1,T*M,P*H]:
+    here [1,1,1,24] with the last axis TP(4)-fractured -> [1,1,3,8], shard staying on
+    the new last axis (24 = 3 rows x 8, and 8 is the TP-fractured P*H)."""
+    b = GraphBuilder("fold", MESH)
+    x = b.input("x", [1, 1, 1, 24], shard={TP: 3})  # last axis TP(4)-fractured, local 6
+    y = b.view(x, [1, 1, 3, 8])  # fold factor 3 into rows; inner 8 stays TP-fractured
+    fwd = run_forward(b.finish([y]))
+    st = fwd.final[y.id]
+    assert st.dist.shard[TP] == 3 and st.dist.shard[SP] is None  # shard on the new last axis
+    assert not st.tainted  # tracked exactly -- no OPAQUE_RESHAPE fallback
+    assert not any(d.code == "OPAQUE_RESHAPE" for d in fwd.diagnostics)
+    for dev in MESH.devices():
+        t = MESH.index_in_group(dev, TP)
+        assert st.regions[dev].bounds(2) == (0, 3), dev  # full folded rows
+        assert st.regions[dev].bounds(3) == (2 * t, 2 * t + 2), dev  # 8 / 4 hidden per device
+
+
 def test_mesh_partition_scatters_a_replicated_tensor_onto_a_mesh_axis():
     """Dual of all_gather: each device keeps its own shard of the given dim (MiniMax-H3
     fractures the assembled packed sequence onto SP this way)."""

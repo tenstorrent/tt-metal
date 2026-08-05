@@ -469,11 +469,19 @@ generator (phase 8) already emits both halves for a new such op.
   row-sharding as well as the weight's hidden-sharding (SP-fractured AdaLN indices ×
   TP-fractured table). **Still open (residual blocker 17):** the modulation *fold*
   reshape `[1,1,T, M*P*H] -> [1,1, T*M, P*H]` (a feature sub-axis folded into rows)
-  is still `OPAQUE_RESHAPE` → taints the modulation tables; a few `LAYOUT_MISMATCH`
-  remain. The findings so far point at the **SP-replicated token refiner** (computed
-  on all 8 SP positions, consumed only on the ~2 holding text rows — the
-  assemble-then-partition pattern); real-looking but the "delete the collective" fix
-  is wrong (it's structural), so these want device conformance before acting.
+  is now **tracked** (`_reshape_local_dist`): ttnn reshapes each device's *local*
+  block, so the shard moves onto the output axis carrying its factor (matched by
+  trailing-element count) and each device keeps its full shard — not a global
+  element permutation. `OPAQUE_RESHAPE` and `LAYOUT_MISMATCH` are now **0**; only the
+  expected `K_COVERAGE` taints on batched-attention matmuls remain. With the analysis
+  clean, the findings persisted unchanged — confirming they were never caused by the
+  reshape/layout gaps. They reflect a **real structural property**: the packed
+  sequence is `[text | audio | video]` but only video+audio are outputs, so text
+  rows' *output-side* compute (attention output, MLP) is unconsumed (text is still
+  needed as K/V), and the SP-replicated token refiner is consumed only where text
+  lands. Plausibly real optimizations (skip FFN/output on conditioning-only tokens),
+  but they still want device conformance before acting — the "delete the collective"
+  fix wording is wrong (it's structural).
 - **Grouped-query attention** — `nlp_create_qkv_heads` now branches on its call
   shape: `num_kv_heads == 0` (LTX / Ideogram / Wan, `out, _, _ = …`) is the plain
   single-tensor head split; `num_kv_heads > 0` (Qwen3-VL / Gemma / **MiniMax-H3**,
