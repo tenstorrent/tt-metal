@@ -180,6 +180,35 @@ class TtHiFTGenerator:
         ]
         self.conv_post = build_conv1d(device, bag.sub("conv_post"), padding=3, dtype=dtype)
 
+        # The source branch is optional so `decode()` alone stays usable when the
+        # excitation is being injected from a golden.
+        self.f0_predictor = self.m_source = None
+        if bag.sub("f0_predictor").count("condnet"):
+            from ..weights import build_f0_predictor
+
+            # fp32, deliberately, and not because the convolutions are delicate.
+            # f0 error *integrates* into phase: a 15 Hz error over 72192 samples at
+            # 22.05 kHz is 49 whole cycles. Holding phase error under 0.1 cycle
+            # needs dF0 < 0.03 Hz, i.e. ~13 mantissa bits at 200 Hz -- bfloat16 has
+            # 8. PCC hides this completely, being scale-relative where the
+            # consequence is absolute.
+            self.f0_predictor = build_f0_predictor(device, bag.sub("f0_predictor"), dtype=ttnn.float32)
+            src = bag.sub("m_source")
+            if src.sub("l_linear").has("weight"):
+                from .source import TtSourceModuleHnNSF
+
+                lw = src.sub("l_linear").tensor("weight")  # [1, H+1]
+                self.m_source = TtSourceModuleHnNSF(
+                    device,
+                    lw,
+                    src.sub("l_linear").tensor("bias"),
+                    sampling_rate=meta.get("sampling_rate", 22050),
+                    # H+1 comes off the merge layer's input width, so nb_harmonics
+                    # never has to be carried in the metadata.
+                    harmonic_num=int(lw.shape[1]) - 1,
+                    dtype=ttnn.float32,  # the whole excitation path stays wide
+                )
+
         # The window travels in the export rather than being recomputed, so the
         # device cannot disagree with the reference about it.
         window = bag.window
@@ -191,6 +220,58 @@ class TtHiFTGenerator:
         from ..weights import WeightBag, default_weights_path
 
         return cls(device, WeightBag.load(path or default_weights_path()), **kw)
+
+    # ----------------------------------------------------------------------
+    def upsample_f0(self, f0, mel_frames: int, batch_size: int = 1):
+        """`nn.Upsample(scale_factor=hop, mode='nearest')` on `[B, T_mel, 1]`.
+
+        Nearest-neighbour upsampling by an integer factor is a **broadcast multiply
+        followed by a reshape**: broadcasting `[B, T, 1]` against a row of `n` ones
+        gives `[B, T, n]`, and reinterpreting that as `[B, T*n, 1]` lays each
+        value's `n` copies down contiguously -- which is the definition.
+
+        `ttnn.upsample` is the obvious candidate and does not apply: it requires a
+        tile-aligned tiled input, and this tensor's channel dimension is 1. The
+        broadcast form has no alignment constraint because the axis that has to be
+        a multiple of 32 is the *repeat count*, which is 256.
+        """
+        total = self.upsample_rates[0] * self.upsample_rates[1] * self.hop_len
+        ones = ttnn.ones((1, 1, total), dtype=f0.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+        spread = ttnn.multiply(f0, ones)  # [B, T_mel, total]
+        ttnn.deallocate(ones)
+        out = ttnn.reshape(spread, (batch_size, mel_frames * total, 1))
+        return out, mel_frames * total
+
+    def inference(self, mel, mel_frames: int, phase_vec=None, sine_noise=None, batch_size: int = 1):
+        """`HiFTGenerator.inference`: mel in, waveform out, source branch included.
+
+        mel is `[B, T_mel, 80]` channels-last; the result is `[B, T_audio, 1]`.
+
+        `phase_vec` and `sine_noise` are `SineGen`'s two draws. The reference makes
+        both **unconditionally** -- there is no `if self.training` guard on either --
+        so a vocoder that ignores them is not merely unseeded, it is a different
+        function. Pass the captured arrays to reproduce a reference run; pass None
+        to get the deterministic zero-phase, zero-noise excitation.
+        """
+        if self.f0_predictor is None or self.m_source is None:
+            raise RuntimeError("this generator was built without the source branch; use decode()")
+        f0 = self.f0_predictor(mel, mel_frames, batch_size)
+        up, audio_len = self.upsample_f0(f0, mel_frames, batch_size)
+        ttnn.deallocate(f0)
+        s, _, _ = self.m_source(up, phase_vec=phase_vec, sine_noise=sine_noise)
+        ttnn.deallocate(up)
+        # SineGen accumulates its phase in fp32 on purpose -- the cumsum runs over
+        # 72k samples and bfloat16 there is catastrophic (see tt/hifigan/source.py).
+        # The rest of the vocoder is bfloat16, so the excitation is cast back at
+        # this boundary; leaving it wide makes the first concat inside decode()
+        # fail on mixed dtypes, several ops away from the cause.
+        if s.dtype != self.dtype:
+            cast = ttnn.typecast(s, self.dtype)
+            ttnn.deallocate(s)
+            s = cast
+        wav = self.decode(mel, s, mel_frames, batch_size)
+        ttnn.deallocate(s)
+        return wav, audio_len
 
     def decode(self, mel, s, mel_frames: int, batch_size: int = 1):
         """mel: ttnn [B, T_mel, 80]; s: ttnn [B, T_audio, 1] -> [B, L, 1] waveform."""
