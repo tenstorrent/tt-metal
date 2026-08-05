@@ -32,7 +32,9 @@ FLOW_WEIGHTS = HIFT_WEIGHTS.replace("hift_", "flow_")
 LLM_WEIGHTS = HIFT_WEIGHTS.replace("hift_", "llm_")
 SAMPLE_RATE = 22050
 
-needs_l1_small = pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+needs_l1_small = pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 131072, "trace_region_size": 67108864}], indirect=True
+)
 needs_all = pytest.mark.skipif(
     not all(os.path.exists(p) for p in (HIFT_WEIGHTS, FLOW_WEIGHTS, LLM_WEIGHTS)),
     reason="export hift, flow and llm weights first",
@@ -92,22 +94,23 @@ def test_device_end_to_end_rtf(device):
         ttnn.deallocate(ys)
         return c
 
-    caches = prefill()  # warm-up compiles both shapes
-    ys, caches = dec.forward_chunk_fixed(
-        dev(step_in), caches, max_len, prefix_len + 1, dev(right_aligned_bias(max_len, prefix_len + 1, 1))
-    )
-    ttnn.deallocate(ys)
+    # Traced decode -- the path `generate()` now takes by default.
+    from models.demos.cosyvoice.tt.llm.decoder import TracedDecodeStep
+
+    caches = prefill()
+    traced = TracedDecodeStep(dec, max_len).capture()
+    traced.seed(caches)
+    TtARDecoder.free_caches(caches)
+    for i in range(2):
+        traced.step(step_in, prefix_len + 1 + i)
     ttnn.synchronize_device(device)
 
     t0 = time.perf_counter()
     for i in range(16):
-        ys, caches = dec.forward_chunk_fixed(
-            dev(step_in), caches, max_len, prefix_len + 2 + i, dev(right_aligned_bias(max_len, prefix_len + 2 + i, 1))
-        )
+        traced.step(step_in, prefix_len + 3 + i)
         ttnn.synchronize_device(device)
-        ttnn.deallocate(ys)
     llm_step_ms = (time.perf_counter() - t0) / 16 * 1e3
-    TtARDecoder.free_caches(caches)
+    traced.release()
     llm_total_s = llm_step_ms * n_generated / 1e3
 
     # --------------------------------------------------------------- flow
