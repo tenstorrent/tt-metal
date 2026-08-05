@@ -112,7 +112,41 @@ def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
     )
 
 
-def create_rope_caches(mesh_device, hf_config, max_seq_len, mesh_config=None):
+def _cp_chunk_major_row_order(max_seq_len, cp, chunk_size):
+    """Row permutation putting each CP rank's positions in chunk order.
+
+    Multi-chunk CP prefill has a problem the single-chunk case hides. For chunk ``n``
+    rank ``r`` owns global positions ``[n*C + r*L, +L)`` with ``L = C/cp``. If the
+    RoPE cache is sharded by position, rank ``r`` holds ``[r*max/cp, ...)``, so the
+    local index it needs is ``n*C - r*(C - L)`` — rank-dependent, and the model
+    slices with a mesh-wide scalar that cannot vary per device.
+
+    Permuting fixes it. Lay row ``m`` out as::
+
+        m = r*(max_seq_len/cp) + n*L + j   holding global position   n*C + r*L + j
+
+    so that a contiguous shard across the CP axis hands rank ``r`` exactly its own
+    positions, ordered by chunk. The slice for chunk ``n`` is then ``[n*L, +L)`` on
+    every rank — a uniform scalar, which is ``chunk_start_idx // cp``.
+
+    Returns the index array to gather rows by, or None when there is nothing to do.
+    """
+    if cp <= 1 or not chunk_size:
+        return None
+    slab = chunk_size // cp
+    if slab == 0 or max_seq_len % chunk_size != 0 or chunk_size % cp != 0:
+        return None
+    num_chunks = max_seq_len // chunk_size
+    order = torch.empty(max_seq_len, dtype=torch.long)
+    for rank in range(cp):
+        for chunk in range(num_chunks):
+            local_base = rank * (max_seq_len // cp) + chunk * slab
+            global_base = chunk * chunk_size + rank * slab
+            order[local_base : local_base + slab] = torch.arange(global_base, global_base + slab)
+    return order
+
+
+def create_rope_caches(mesh_device, hf_config, max_seq_len, mesh_config=None, prefill_chunk_size=None):
     """Create HF-format cos/sin caches for both sliding and global layer types.
 
     Returns:
@@ -138,10 +172,14 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len, mesh_config=None):
     is_mesh = hasattr(mesh_device, "shape")
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
     cp = cp_degree(mesh_config) if (is_mesh and mesh_config is not None) else 1
+    row_order = None
     if cp > 1:
         assert max_seq_len % cp == 0, f"max_seq_len {max_seq_len} must be divisible by CP degree {cp}"
         shard_dims = (-2, None) if mesh_config.sp_axis == 0 else (None, -2)
         prefill_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=shard_dims)
+        # Multi-chunk needs the rows reordered so one scalar slice serves every rank;
+        # single-chunk (max_seq_len == chunk) is already correct without it.
+        row_order = _cp_chunk_major_row_order(max_seq_len, cp, prefill_chunk_size)
     else:
         prefill_mapper = replicate
 
@@ -162,15 +200,19 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len, mesh_config=None):
 
         # 4D for prefill: [1, 1, max_seq_len, head_dim].
         # Sharded along positions under CP (see docstring), replicated otherwise.
+        cos_prefill, sin_prefill = cos, sin
+        if row_order is not None:
+            cos_prefill = cos[:, row_order, :]
+            sin_prefill = sin[:, row_order, :]
         cos_4d = ttnn.from_torch(
-            cos.unsqueeze(0),
+            cos_prefill.unsqueeze(0),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             mesh_mapper=prefill_mapper,
         )
         sin_4d = ttnn.from_torch(
-            sin.unsqueeze(0),
+            sin_prefill.unsqueeze(0),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
@@ -284,11 +326,16 @@ class Gemma4Model:
         create_kv_cache=True,
         precision=None,
         bounded_sliding_kv_cache: bool = False,
+        # Global prefill chunk size. Only needed under context parallelism with more
+        # than one chunk: it sets the RoPE cache's chunk-major row order and sizes the
+        # ring KV cache slabs. None means single-chunk prefill.
+        prefill_chunk_size=None,
         # Legacy parameters — ignored
         transformation_mats=None,
     ):
         self.mesh_device = mesh_device
         self.hf_config = hf_config
+        self.prefill_chunk_size = prefill_chunk_size
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
@@ -350,7 +397,11 @@ class Gemma4Model:
         hf_text_config = getattr(hf_config, "_hf_text_config", None)
         if hf_text_config is not None:
             self.rope_caches, self.rope_caches_2d = create_rope_caches(
-                mesh_device, hf_text_config, max_seq_len, mesh_config=self.mesh_config
+                mesh_device,
+                hf_text_config,
+                max_seq_len,
+                mesh_config=self.mesh_config,
+                prefill_chunk_size=prefill_chunk_size,
             )
         else:
             # Fallback: no automatic RoPE — caller must pass rope_mats explicitly
@@ -486,6 +537,7 @@ class Gemma4Model:
                 max_seq_len=max_seq_len,
                 max_local_batch_size=max_local_batch_size,
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+                ring_prefill_chunk_size=prefill_chunk_size,
             )
             # Create KV cache for non-shared layers only
             # Shared layers will use their source layer's KV cache
@@ -966,6 +1018,13 @@ class Gemma4Model:
                     )
                 else:
                     rope_start_pos = int(chunk_start_idx) if chunk_start_idx is not None else 0
+                    # CP RoPE rows are chunk-major per rank, so scalar host slices
+                    # advance by a per-rank slab rather than the global chunk.
+                    from models.demos.gemma4.tt.ccl import cp_degree
+
+                    cp = cp_degree(self.mesh_config)
+                    if cp > 1:
+                        rope_start_pos //= cp
                     layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len, start_pos=rope_start_pos)
 
             # Convert per-layer input to device tensor if available

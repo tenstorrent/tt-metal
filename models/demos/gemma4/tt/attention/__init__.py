@@ -21,6 +21,7 @@ from .kv_cache import init_kv_cache
 from .decode import decode_forward, packed_decode_forward
 from .operations import build_cp_prefill_mask
 from .prefill import flush_deferred_bounded_fills, prefill_forward
+from .ring_prefill import init_ring_kv_cache
 
 
 class Gemma4AttentionConfig:
@@ -80,6 +81,9 @@ class Gemma4Attention:
         max_seq_len=131072,
         weight_dtype=ttnn.bfloat16,
         bounded_sliding_kv_cache: bool = False,
+        # Global prefill chunk size; enables the ring KV cache when CP is on and
+        # prefill is chunked. None means single-chunk prefill.
+        ring_prefill_chunk_size=None,
         # Legacy parameter — ignored (no longer needed with HF-style RoPE)
         transformation_mats=None,
     ):
@@ -120,6 +124,25 @@ class Gemma4Attention:
             )
         else:
             self.kv_cache = None
+
+        # Ring cache for cross-chunk prefill under context parallelism. Contiguous and
+        # CP-sharded along the sequence, which is what ring_joint reads (it takes the
+        # cache directly, with no page table). Allocated only when multi-chunk CP
+        # prefill is actually in play; the paged cache above is untouched.
+        self.ring_kv_cache = None
+        self.ring_max_seq_len = None
+        if create_kv_cache and cp_degree(mesh_config) > 1 and ring_prefill_chunk_size:
+            num_local_kv_heads = 1 if self.weights.kv_replicated else config.num_key_value_heads // mesh_config.tp
+            self.ring_kv_cache = init_ring_kv_cache(
+                mesh_device=mesh_device,
+                mesh_config=mesh_config,
+                num_local_kv_heads=num_local_kv_heads,
+                head_dim=config.head_dim,
+                max_seq_len=max_seq_len,
+                num_layers=1,
+                num_users=max_batch_size,
+            )
+            self.ring_max_seq_len = max_seq_len
 
         # Fallback CP mask cache for callers that pass no ccl_manager; the shared
         # one on CCLManager is preferred so a 60-layer stack holds two masks, not 60.
@@ -254,6 +277,8 @@ class Gemma4Attention:
                 chunk_page_table=chunk_page_table,
                 sliding_tail_in=getattr(self, "_sliding_prefill_tail", None),
                 cp_attn_mask=self._cp_attn_mask(hidden_states.shape[-2]),
+                ring_kv_cache=self.ring_kv_cache,
+                ring_max_seq_len=self.ring_max_seq_len,
             )
             # prefill_forward consumed (deallocated) the incoming tail; stash the
             # new one for the next chunk.

@@ -617,13 +617,18 @@ def test_prefill_layer(mesh_device, layer_type, chunk, traced, reset_seeds, requ
 # ── Tests 2 and 3: the full 60-layer stack ────────────────────────────────────
 
 
-def _build_prefill_model(mesh_device, model_path, chunk):
-    """Create the full model from cache, sized for a single ``chunk``-token prefill.
+def _build_prefill_model(mesh_device, model_path, chunk, context_len=None):
+    """Create the full model from cache, sized for a ``context_len``-token prefill.
+
+    ``context_len`` defaults to a single ``chunk``. When larger, prefill runs as
+    ``context_len / chunk`` chunks and the model is told the chunk size so it can lay
+    the RoPE cache out chunk-major per CP rank and size the ring KV cache slabs.
 
     Returns ``(model_args, model, kv_cache, page_table_tt)``.
     """
     tp = mesh_device.shape[1]
-    max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", chunk))
+    context_len = context_len or chunk
+    max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", context_len))
     paged_config = PagedAttentionConfig(
         block_size=PAGE_BLOCK_SIZE,
         max_num_blocks=max(1, max_seq_len // PAGE_BLOCK_SIZE),
@@ -645,6 +650,7 @@ def _build_prefill_model(mesh_device, model_path, chunk):
         model_path=model_path,
         create_kv_cache=True,
         paged_attention_config=paged_config,
+        prefill_chunk_size=chunk if context_len > chunk else None,
     )
     logger.info(f"Model ready in {time.time() - t0:.1f}s")
 
@@ -1026,3 +1032,107 @@ def test_prefill_kv_cache_covers_sequence(mesh_device, reset_seeds, request):
                 f"which is the replicated-page-table bug"
             )
         logger.info(f"[kv_cache] all {cp} CP shards differ, as expected")
+
+
+# ── Test 6: long-context prefill as a chunk sequence under CP ─────────────────
+
+# Context lengths to walk, each prefilled as context/4096 chunks of 4096. 4096 is
+# the chunk the CP ring path supports: the 1024-token sliding window rounds to a
+# 32-tile halo, which exactly fills the 1024-token per-rank slab at CP=4. Smaller
+# chunks would need a multi-hop halo, which the op rejects.
+LONG_CONTEXT_LENGTHS = [32768, 65536, 131072, 262144]
+LONG_CONTEXT_CHUNK = 4096
+
+
+@parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
+@pytest.mark.parametrize("context_len", LONG_CONTEXT_LENGTHS, ids=[f"ctx_{c // 1024}k" for c in LONG_CONTEXT_LENGTHS])
+def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, request):
+    """Prefill ``context_len`` tokens as a sequence of 4096-token chunks under CP.
+
+    This is the disaggregated-prefill target: the KV cache stays CP-sharded (no
+    gather for the fill), and chunks after the first read history back through
+    ring_joint SDPA, which gathers the prefix around the CP ring internally.
+
+    Chunk 0 goes through the mask-based CP path — the chunked ring mode needs a
+    complete predecessor Q group and chunk 0 has none — but still writes the ring
+    cache so chunk 1 has history to read.
+
+    Smoke-level assertions: there is no host reference at these lengths (the CPU
+    reference tops out around 4k). Each chunk's output must be finite and
+    non-degenerate, and the last chunk's statistics must be in the same range as the
+    first, which is what breaks if the ring read drifts as the prefix grows.
+    """
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    chunk = LONG_CONTEXT_CHUNK
+    _guard_chunk(request, chunk)
+    mesh_config = _mesh_config(mesh_device)
+    cp = cp_degree(mesh_config)
+    if cp <= 1:
+        pytest.skip(f"long-context chunked prefill targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+    assert context_len % chunk == 0, f"context {context_len} must be a multiple of chunk {chunk}"
+
+    model_path = _model_path()
+    n_chunks = context_len // chunk
+    model_args, model, kv_cache, page_table_tt = _build_prefill_model(
+        mesh_device, model_path, chunk, context_len=context_len
+    )
+    logger.info(f"[long_ctx] {context_len} tokens = {n_chunks} x {chunk}, CP={cp}, layers={len(model.layers)}")
+
+    # Real prompt text for the first chunk; the remainder is deterministic filler.
+    # Content does not matter for these assertions, position handling does.
+    tokens_first, _tokenizer, _prompt_len = _prompt_tokens(model_path, chunk)
+    torch.manual_seed(1234)
+
+    stats = []
+    t_start = time.time()
+    for chunk_idx in range(n_chunks):
+        chunk_start = chunk_idx * chunk
+        tokens = (
+            tokens_first if chunk_idx == 0 else torch.randint(0, model_args.vocab_size, (1, chunk), dtype=torch.int32)
+        )
+        host_input = _host_tensor(
+            mesh_device, tokens, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_config=mesh_config, seq_dim=-1
+        )
+        device_input = ttnn.to_device(host_input, device=mesh_device)
+
+        with _lm_head_deferred(model):
+            embeds, page_table, chunk_page_table, _ = model.transform_and_embed_prefill_inputs_device(
+                device_input, page_table_tt, None, None
+            )
+            out = model.ttnn_prefill_forward(
+                x=embeds,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start,
+                kv_cache=kv_cache,
+                get_last_token=-1,
+                user_id=0,
+            )
+        ttnn.synchronize_device(mesh_device)
+
+        hidden = _cp_gather_torch(out, mesh_device, mesh_config)
+        out.deallocate(True)
+        finite = bool(torch.isfinite(hidden).all())
+        std = float(hidden.std())
+        absmax = float(hidden.abs().max())
+        stats.append((chunk_idx, finite, std, absmax))
+        logger.info(
+            f"[long_ctx] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk}) "
+            f"finite={finite} std={std:.4f} absmax={absmax:.2f}"
+        )
+        assert finite, f"chunk {chunk_idx} at [{chunk_start}, {chunk_start + chunk}) produced non-finite output"
+        assert std > 0.01, f"chunk {chunk_idx} output is degenerate (std={std})"
+
+    elapsed = time.time() - t_start
+    tok_s = context_len / elapsed if elapsed > 0 else 0
+    logger.info(f"[long_ctx] {context_len} tokens in {elapsed:.1f}s ({tok_s:.0f} tok/s)")
+
+    # The ring read must not drift as the prefix grows: a halo pointing at the wrong
+    # predecessor slab, or a cache offset walking off, shows up as the last chunk's
+    # scale departing from the first's rather than as an outright failure.
+    first_std, last_std = stats[0][2], stats[-1][2]
+    assert last_std / first_std < 5.0 and first_std / last_std < 5.0, (
+        f"output scale drifted across chunks: first std={first_std:.4f}, last std={last_std:.4f} — "
+        f"suspect the ring history read"
+    )

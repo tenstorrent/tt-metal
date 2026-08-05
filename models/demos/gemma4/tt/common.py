@@ -54,6 +54,7 @@ def create_tt_model(
     create_kv_cache=True,
     model_path=None,
     bounded_sliding_kv_cache: bool = False,
+    prefill_chunk_size=None,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -146,6 +147,7 @@ def create_tt_model(
         tensor_cache_path=tensor_cache_path,
         mesh_config=mesh_config,
         max_seq_len=max_seq_len,
+        prefill_chunk_size=prefill_chunk_size,
         max_local_batch_size=max_batch_size,
         num_layers=num_layers,
         paged_attention_config=paged_attention_config,
