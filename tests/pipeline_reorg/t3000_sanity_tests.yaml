@@ -17,7 +17,7 @@
 #   skus:
 #     wh_llmbox:
 #       timeout: 15
-#   owner_id: UBHPP2NDP # Joseph Chu
+#   owner_id: U07D5N7QL4U # Joseph Chu
 #   team: ttnn
 
 - name: t3k_ttnn_ccl_tests
@@ -37,6 +37,6 @@
   skus:
     wh_llmbox:
       timeout: 20
-  owner_id: ULMEPM2MA # Sean Nijjar
+  owner_id: U06US5C7M7X # Sean Nijjar
   team: scaleout
   upload_benchmarks: true
