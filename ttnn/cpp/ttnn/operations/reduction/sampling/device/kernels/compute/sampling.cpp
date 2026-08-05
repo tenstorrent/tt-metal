@@ -28,9 +28,10 @@ void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     DataflowBuffer dfb_obj(dfb_id);
 
-    // Keep the random threshold below 1.0 so the strict cumulative-probability
-    // comparison always selects a token.
-    constexpr uint32_t rand_scale = 0x3F7FFFFFU;
+    // The random tile is packed to BF16 before the strict cumulative-probability
+    // comparison. Keep the FP32 endpoint below the BF16 midpoint to 1.0 so the
+    // packed threshold remains strictly less than 1.0.
+    constexpr uint32_t rand_scale = 0x3F7F7FFFU;
     constexpr uint32_t rand_from = 0;
 
     if (seed != 0) {
