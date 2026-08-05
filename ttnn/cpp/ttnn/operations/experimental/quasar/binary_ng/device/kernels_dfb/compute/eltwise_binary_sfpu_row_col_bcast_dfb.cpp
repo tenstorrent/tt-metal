@@ -113,7 +113,7 @@ ALWI void process_tile(
         // llk_post with pack_init so pack_tile writes there.
         pack_init(dfb_llk_post_id);
 #endif
-        reconfig_data_format_srca(dfb_raw_row_id);
+        reconfig_data_format(dfb_raw_row_id, dfb_raw_row_id);
         unary_bcast_init<BroadcastType::ROW>(dfb_raw_row_id);
 
         tile_regs_acquire();

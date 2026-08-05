@@ -65,7 +65,10 @@ void kernel_main() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
 
-    // LLK setup - one compute_kernel_hw_startup at the start, then full inits.
+    // LLK setup. The IS_ROW_MAJOR path re-inits for the transposed CB, so it issues a
+    // second compute_kernel_hw_startup; each preserves the pre-cleanup binary_op_init_common
+    // re-init (compute_kernel_hw_startup is documented call-once, but the pre-existing
+    // mid-kernel re-init pattern is preserved as-is by the init-cleanup rename).
 #ifdef IS_ROW_MAJOR
     compute_kernel_hw_startup(dfb::rm_input, dfb::index_tensor, dfb::input_tensor);
     compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);

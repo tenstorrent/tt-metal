@@ -60,7 +60,7 @@ void kernel_main() {
         {
             dfb_pre_a.wait_front(num_tiles_per_cycle);
             dfb_bcast_a.reserve_back(num_tiles_per_cycle);
-            reconfig_data_format_srca(dfb_pre_a.get_id());
+            reconfig_data_format(dfb_pre_a.get_id(), dfb_pre_a.get_id());
             pack_reconfig_data_format(dfb_bcast_a.get_id());
             unary_bcast_init<BroadcastType::ROW>(dfb_pre_a.get_id());
 
@@ -81,7 +81,7 @@ void kernel_main() {
         {
             dfb_pre_b.wait_front(num_tiles_per_cycle);
             dfb_bcast_b.reserve_back(num_tiles_per_cycle);
-            reconfig_data_format_srca(dfb_pre_b.get_id());
+            reconfig_data_format(dfb_pre_b.get_id(), dfb_pre_b.get_id());
             pack_reconfig_data_format(dfb_bcast_b.get_id());
             unary_bcast_init<BroadcastType::ROW>(dfb_pre_b.get_id());
 
@@ -102,7 +102,7 @@ void kernel_main() {
         {
             dfb_pre_c.wait_front(num_tiles_per_cycle);
             dfb_bcast_c.reserve_back(num_tiles_per_cycle);
-            reconfig_data_format_srca(dfb_pre_c.get_id());
+            reconfig_data_format(dfb_pre_c.get_id(), dfb_pre_c.get_id());
             pack_reconfig_data_format(dfb_bcast_c.get_id());
             unary_bcast_init<BroadcastType::ROW>(dfb_pre_c.get_id());
 

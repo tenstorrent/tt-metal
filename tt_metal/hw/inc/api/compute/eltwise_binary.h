@@ -456,8 +456,8 @@ ALWI void mul_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32
 // The functions below implement the old eltwise-binary programming model. The new model is:
 //   compute_kernel_hw_startup(icb0, icb1, ocb);   // once at the start of MAIN
 //   add_init(icb0, icb1);   // (or sub_init / mul_init) before add_tiles / sub_tiles / mul_tiles
-// The dest-reuse init is folded into the per-op inits via the binary_reuse_dest template param, e.g.
-//   add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb, in_cb);
+// The dest-reuse op (one operand from DST) uses the per-op reuse_dest init, e.g.
+//   add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(in_cb);
 // Generic data-format reconfiguration is done via reconfig_data_format_srca / reconfig_data_format
 // (from reconfig_data_format.h).
 // =====================================================================================================================

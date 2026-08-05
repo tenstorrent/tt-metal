@@ -54,7 +54,7 @@ void kernel_main() {
 
         exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
-        reconfig_data_format_srca(cb_bcast);
+        reconfig_data_format(cb_bcast, cb_bcast);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast);
 
         tile_regs_acquire();

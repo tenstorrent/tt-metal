@@ -55,7 +55,7 @@ ALWI void process_tile(
         exp_dfb_other.wait_front(num_tiles_per_cycle);
         exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
-        reconfig_data_format_srca(CB_OTHER);
+        reconfig_data_format(CB_OTHER, CB_OTHER);
         unary_bcast_init<BroadcastType::ROW>(CB_OTHER);
 
         tile_regs_acquire();

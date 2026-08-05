@@ -57,8 +57,8 @@ void kernel_main() {
 #endif
 
 #ifdef ELTWISE_DEST_REUSE_TYPE
-        // Dest-reuse init is folded into the per-op inits via the binary_reuse_dest template param;
-        // dispatch on the compile-time op type since there is no generic binary_init.
+        // Dest-reuse init is the per-op {add,sub,mul}_reuse_dest_init<reuse_dest>; dispatch on the
+        // compile-time op type since there is no generic binary_init.
         if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWADD) {
             add_reuse_dest_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
         } else if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWSUB) {
