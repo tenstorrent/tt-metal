@@ -117,7 +117,8 @@ KernelSource::KernelSource(std::string source, SourceType source_type, fs::path 
 
 KernelSource KernelSource::from_path(ContextId context_id, const fs::path& path) {
     auto resolved = resolve_path(path, context_id);
-    return KernelSource(resolved.string(), FILE_PATH, std::move(resolved));
+    // Keep source_ as the caller-supplied path (metadata/watcher/hash); path_ is the resolved file.
+    return KernelSource(path.string(), FILE_PATH, std::move(resolved));
 }
 
 KernelSource KernelSource::from_source(const std::string& source_code) {
