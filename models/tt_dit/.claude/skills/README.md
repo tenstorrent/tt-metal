@@ -10,6 +10,10 @@ any of them can be resumed cold or run unattended.
 | `tt-dit-benchmark-profile` | Where does the time actually go? | Green; needs numbers or a profile read | Changes code |
 | `tt-dit-performance` | How do we make it faster, provably? | Green and profiled; too slow | Guesses without a profile |
 | `tt-dit-kernel-research` | Does the op already exist, and can it be made to fit? | A lever needs an op that may not exist | Writes a kernel before checking |
+| **`tt-dit-campaign`** | How do we drive this to the goal over many sessions? | Any — it is the **outer loop** invoking the four above | Does the work itself |
+
+`tt-dit-campaign` is scoped by *duration*, not phase: multi-round, unattended,
+cross-session. A single-phase question goes straight to one of the four.
 
 **Where the vocabulary overlaps, these are separated by component state, not
 topic.** PCC, shapes, conv3d, meshes and collectives appear in `add-model`,
@@ -33,7 +37,7 @@ overlap an existing skill's terms, add a state boundary and name the sibling.
 | `shared/known-issues.md` | Any unexplained hang, allocation failure or precision surprise |
 | `shared/reference-models.md` | Before writing any new layer |
 | `shared/parallelism.md` | Choosing how to spread work across the mesh |
-| `shared/journal-protocol.md` | Every phase boundary and every iteration |
+| `shared/journal-protocol.md` | Recording that a measurement contradicted the plan |
 
 Two lookup tables carry most of the discovery value:
 `tt-dit-benchmark-profile/existing-fast-paths.md` (which fused ttnn op already

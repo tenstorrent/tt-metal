@@ -145,6 +145,10 @@ FLOPs has not fixed the op.
 No hard iteration cap. Journal and commits are current after every iteration, so
 an interrupt costs nothing.
 
+**Multi-round campaigns** — work that spans sessions and needs a durable
+checkpoint, ledgers and stop gates — are driven by `../tt-dit-campaign/`. This
+skill supplies the lever ordering and per-iteration discipline it calls into.
+
 ## The stall prompt
 
 ```

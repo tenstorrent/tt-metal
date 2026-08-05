@@ -1,38 +1,16 @@
-# The journal
+# Amendments and retractions
 
-One markdown file per campaign (`STATE.md`, or `models/<Model>_STATE.md`),
-append-only, newest at the bottom.
+The entry format for recording that a measurement contradicted what you
+believed. Used by every skill; the campaign loop that owns *when* to write them
+and where they accumulate is `../tt-dit-campaign/`.
 
-Campaigns outlive a context window. Everything known at iteration 40 — levers
-tried, measurements that turned out wrong, which device shape ships — is gone at
-the next compaction unless written down. It is also the only defence against the
-most expensive failure mode in perf work: **acting on a measurement that was
-wrong and never noticing.** Recording what was measured *and how* makes a bad
-measurement findable later; recording only conclusions does not.
+## Every recorded measurement carries
 
-## Sections
+Command · mesh shape · input shape · warm-window method · device vs wall time ·
+commit SHA.
 
-| Section | Holds |
-|---|---|
-| **Scope** | What is in, what is explicitly out |
-| **Plan** | Path to the plan doc. Re-read every iteration |
-| **Branch** | Where work lands, what it was cut from, what it must never touch |
-| **References in priority order** | Reference impl (pinned commit) → upstream PRs → raw checkpoint |
-| **Current milestone** | Where you are |
-| **Gate evidence** | What passes, with numbers and the command |
-| **Measurements recorded** | Every number, with shape and mesh |
-| **Amendments** | Below |
-| **Hangs / resets** | What hung, what fixed it |
-| **Failed attempts** | What was tried, didn't work, and why |
-| **Next step** | One concrete action for a cold start |
-
-`Failed attempts` and `Hangs / resets` earn their place: without them successive
-agents re-run the same dead ends and re-hang the same shapes.
-
-**Every recorded measurement carries** command · mesh shape · input shape ·
-warm-window method · device vs wall time · commit SHA. A number without those is
-not a measurement — if you cannot supply them, "incidental timing, not a
-measurement" is the honest entry.
+A number without those is not a measurement. If you cannot supply them,
+"incidental timing, not a measurement" is the honest entry.
 
 ## Amendments
 
@@ -46,11 +24,14 @@ marks which parts of the plan were guesses.
 <What was assumed. What was measured. The evidence. What changes.>
 ```
 
+Numbering is monotonic and continues across file rollovers — an amendment number
+is a permanent citation, so `am. 76` must mean one thing forever.
+
 ## Retractions are first-class
 
 When a later measurement shows an earlier amendment wrong, write a **retraction
-amendment**. Do not delete the original — that it was believed, and for how
-long, is part of the record.
+amendment**. Do not delete or edit the original: that it was believed, and for
+how long, is part of the record.
 
 | A retraction states | |
 |---|---|
@@ -59,17 +40,25 @@ long, is part of the record.
 | The correct reading | With the evidence |
 | **The method note** | The rule that would have caught it — this is the valuable part |
 
-Worked example: amendment 49 quoted `tt-perf-report`'s "running with tracing
+**Worked example.** Amendment 49 quoted `tt-perf-report`'s "running with tracing
 could save 47463439 µs (97.1% of overall time)" and made trace the top priority.
 Amendment 51 retracted it — the report had analysed the whole CSV including
-weight upload; median op-to-op gap was 0.6 µs against a mean of 18425.9 µs, and
-on a warm 300-op window the gap share was 16.2%. Device time was the bottleneck
-all along. That method note is now a rule in
-`../tt-dit-benchmark-profile/reading-profiles.md` — a wrong number became a
-guardrail.
+weight upload; the median op-to-op gap was 0.6 µs against a mean of 18425.9 µs,
+and on a warm 300-op window the gap share was 16.2%. Device time was the
+bottleneck all along.
 
-## Discipline
+That method note is now a rule in
+`../tt-dit-benchmark-profile/reading-profiles.md`. A wrong number became a
+guardrail — which is the point of keeping retractions rather than quietly
+fixing the original.
 
-Write the entry **before** advancing, not batched at the end: an agent that runs
-out of context mid-iteration leaves a complete record if it journals as it goes.
-Anything reported in chat also lands here.
+## Where they live
+
+In a campaign, amendments accumulate in `ledgers/amendments.md` and only the
+latest appears in `CAMPAIGN.md` — see `../tt-dit-campaign/ledgers.md`. Outside a
+campaign, append them to whatever state file the work already keeps.
+
+Either way: **append-only, and never summarised away.** A predecessor journal
+that reached 4972 lines had to be compacted to stay readable, and the forensic
+record went with it. Roll over to a new file instead; the campaign layout exists
+so that never has to happen again.

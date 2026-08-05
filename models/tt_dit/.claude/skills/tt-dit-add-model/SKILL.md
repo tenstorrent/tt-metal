@@ -60,7 +60,9 @@ encoder never produces.
 | Parallelize | Wire the config; re-gate sharded against unsharded | `../shared/parallelism.md` |
 | Hand off | One baseline measurement per component | `tt-dit-benchmark-profile` |
 
-Journal at every phase boundary (`../shared/journal-protocol.md`).
+Journal at every phase boundary (`../shared/journal-protocol.md`). A bringup
+spanning many sessions should run under `../tt-dit-campaign/`, which owns the
+checkpoint, ledgers and resume path.
 
 ## Orient
 
