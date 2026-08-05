@@ -1003,24 +1003,24 @@ def test_sparse_matmul_compact_optional_output(device):
     expected_expanded_shape = (1, num_blocks, 1, num_experts, m, n)
     actual_compact_shape = tuple(output.shape)
     actual_expanded_shape = tuple(expanded.shape)
-    assert actual_compact_shape == expected_compact_shape, (
-        f"compact output shape mismatch: expected {expected_compact_shape}, got {actual_compact_shape}"
-    )
+    assert (
+        actual_compact_shape == expected_compact_shape
+    ), f"compact output shape mismatch: expected {expected_compact_shape}, got {actual_compact_shape}"
     compact_sentinel_count = int((output_torch == compact_sentinel).sum().item())
-    assert compact_sentinel_count == 0, (
-        f"compact output left {compact_sentinel_count} values at sentinel {compact_sentinel}"
-    )
+    assert (
+        compact_sentinel_count == 0
+    ), f"compact output left {compact_sentinel_count} values at sentinel {compact_sentinel}"
     cached_sentinel_count = int((cached_output_torch == cached_sentinel).sum().item())
-    assert cached_sentinel_count == 0, (
-        f"cached compact output left {cached_sentinel_count} values at sentinel {cached_sentinel}"
-    )
-    assert actual_expanded_shape == expected_expanded_shape, (
-        f"expanded output shape mismatch: expected {expected_expanded_shape}, got {actual_expanded_shape}"
-    )
+    assert (
+        cached_sentinel_count == 0
+    ), f"cached compact output left {cached_sentinel_count} values at sentinel {cached_sentinel}"
+    assert (
+        actual_expanded_shape == expected_expanded_shape
+    ), f"expanded output shape mismatch: expected {expected_expanded_shape}, got {actual_expanded_shape}"
     expanded_sentinel_count = int((expanded_torch == expanded_sentinel).sum().item())
-    assert expanded_sentinel_count == 0, (
-        f"expanded output left {expanded_sentinel_count} values at sentinel {expanded_sentinel}"
-    )
+    assert (
+        expanded_sentinel_count == 0
+    ), f"expanded output left {expanded_sentinel_count} values at sentinel {expanded_sentinel}"
     torch.testing.assert_close(output_torch, reference, rtol=0.1, atol=1.5)
     torch.testing.assert_close(cached_output_torch, reference, rtol=0.1, atol=1.5)
     torch.testing.assert_close(expanded_torch, expanded_reference, rtol=0.1, atol=1.5)
