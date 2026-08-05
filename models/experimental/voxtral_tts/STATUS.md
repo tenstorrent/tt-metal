@@ -1727,6 +1727,56 @@ keeps `_hf_rope_decode` and `_mllama_rope_fused_qk_decode` as separate paths for
 the fused variant sits only on the llama side. If our weights were ever left un-permuted for another
 reason, this becomes free money; until then it is not.
 
+### 6.24 — fusing w1 and w3 is 4x SLOWER: matmul bandwidth collapses past ~9216 output columns
+
+Asked whether `h@w1` and `h@w3` should be one matmul, the way qkv is. It should not, and the reason
+turned out to be much bigger than the one on record.
+
+**The prize was small before measuring anything.** w1 and w3 are each 3072x9216 BFP8 = 28.7 MB and run
+at **190 GB/s — 98% of this device's 194 GB/s ceiling**. Together they read 57.4 MB, which at the
+ceiling is 310.1 µs against the 316.5 they take. **The entire theoretical gain from removing one launch
+is 6.4 µs/layer = 0.17 ms/frame.** Contrast the qkv fusion, which paid 1.449x because `wkv` alone was
+2048 wide and cost the same as the 4096-wide `wq` — there was launch overhead to reclaim. Fusing pays
+when one of the pair is too NARROW to earn its launch, and 9216 is not narrow.
+
+**Measured, one layer's MLP, same 57.4 MB of weight either way:**
+
+| | ops | µs | vs A | result |
+|---|---|---|---|---|
+| A — `linear(w1, silu)` + `linear(w3)` + multiply ← ships | 3 | **313.9** | 1.000x | — |
+| B — fused + 2 slices + silu + multiply | 5 | 1253.3 | **0.250x** | same values |
+| C — fused + `ttnn.swiglu` | 2 | 1253.8 | **0.250x** | same values |
+
+**Both fused forms are 4x slower, and C has one op FEWER than what ships** — so this is not about op
+count at all. The fused matmul itself is the problem:
+
+| | MB read | µs | GB/s | % of ceiling |
+|---|---|---|---|---|
+| two separate 3072x9216 | 57.4 | 313.9 | **192** | **99%** |
+| one fused 3072x18432 | 57.4 | 1253.5 | **48** | **25%** |
+
+**Identical bytes, 4x the time. Matmul efficiency collapses somewhere between 9216 and 18432 output
+columns**, and that is the transferable result: 3072 (w2), 6144 (wqkv) and 9216 (w1/w3) all hold the
+ceiling; 18432 does not. **Any future fusion that pushes N past ~9216 should be assumed to collapse
+until measured.** This also retro-explains why the qkv fusion was safe — it lands at 6144.
+
+**Note this contradicts the recorded Block 2 number** (0.998x, and 0.951x charging the output split),
+which is far milder than 0.250x at the same weight shapes. Block 2's measurement was on the whole
+block rather than the MLP alone, so the fused matmul's cost was diluted; either way the direction is
+the same and the isolated figure is the honest one for this decision.
+
+**Two incidental findings about `ttnn.swiglu`**, since it looked like the elegant answer (one matmul
+plus one fused SwiGLU = 2 ops, no split, no separate silu):
+- it needs a **4-D** tensor. On `[1,1,18432]` it throws `ShapeBase[] index out of range. 3 not in [...]`
+  from `shape_base.cpp:16` — it indexes `shape[3]` unconditionally.
+- it applies SiLU to the **second** half and multiplies by the first, so our MLP needs the fused weight
+  ordered `[w3 | w1]`, not `[w1 | w3]`. Both orders were measured; both collapse.
+- and it operates on the PHYSICAL tile rows, so a `[1,1,1,18432]` input yields `[1,1,32,9216]` — the
+  31 padding rows come through and would need slicing off.
+
+Also worth stating: the fused weight is a **duplicate** of w1 and w3 concatenated — 57 MB/layer,
+**1.46 GB over 26 layers** against a 3.9 GB working set. Even at parity it would be a poor trade.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
