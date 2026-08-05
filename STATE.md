@@ -4081,3 +4081,51 @@ and natural content and set its bar from that, which the e2e results above sugge
 comfortable. The conditioner's absolute fidelity is bounded by `layers/linear.py`'s bf16 accumulation
 (amendment 93), and the e2e evidence is that it does not matter downstream: anchor PCC 0.9971 and CLIP
 37.0 say the video follows both the keyframe and the prompt.
+
+---
+
+## Amendment 99 (2026-08-05) — final verification after reformatting, and where the campaign stands
+
+Both e2e gates re-run after `black`/`isort` reformatted the new files and after tier 6 was switched
+from recording to gating, so the committed tree is what was measured.
+
+| gate | result |
+|---|---|
+| `test_pipeline_fl2va_minimax_h3.py` | **3 passed** in 449 s. Anchors 0.9971 / 0.9943 / 0.9971+0.9946, temporal seams 0.996 / 0.998 / 0.983, CLIP 36.63 / 37.30 / 37.00 — every number reproduced exactly |
+| `test_pipeline_minimax_h3.py` (t2va) | **1 passed** in 157 s. std **46.05**, frame delta **9.88**, audio peak **0.076**, seams 1.016 / 0.692, temporal 0.994, CLIP **37.37** — unchanged to every digit from amendment 78/86 |
+| host suite | **104 passed** (100 before this campaign) |
+| qwen3vl + minimax_h3 host | **38 passed** |
+| `test_performance_pipeline_minimax_h3.py` | **2 passed**, both warm latency rows |
+
+Branch `kevinmi/minimax-h3-fl2va`, four commits on top of `18a71579f49`:
+`42d90afafe9` (merge), `5aa8c47872f` (scatter tile gate), `676b73993c8` (condition stream + host
+plumbing), `e66a79c9500` (e2e + latency).
+
+### Scope status
+
+**Done.** `fl2va`, `fl2va_last_frame` and both-anchors run end to end at the production working point
+with the keyframe anchor verified at PCC 0.9943-0.9971, the artifact rubric read by eye, tier 6 gated
+from measurement, and a fully-warm latency number by the same method as t2va. `t2va` is provably
+untouched.
+
+**Open, and each is a bounded next step rather than a gap in what shipped:**
+
+1. `test_fused_conditioner_real_weights` is still `xfail` at 98.6224 %, at an invented 448x448 shape
+   with a `torch.rand` image and a tap one layer deeper than production reads. Amendment 95 established
+   this is not a downstream defect. The work is to re-point it at the production canvas with natural
+   content and set its bar from that; the e2e results suggest it will be comfortable.
+2. The latency comparison is one run of each. Amendment 82's ±8 % run-to-run means the direction of the
+   t2va-vs-fl2va difference is not established, only that fl2va is not materially slower.
+3. `measured_sdpa_chunk_sizes` is dead at every shipping shape (amendment 96 note): it keys on
+   `seq_local ∈ {4768, 9216, 13632}` while production t2va is 4736 and fl2va is 4992/5248. The tuned
+   `(320, 384)`, measured at −13 % on `to_qkv`, has never run in either pipeline. A free perf lever,
+   deliberately not pulled here because it would have invalidated the comparison above.
+4. `_prepare_vae` reads 10.4 GB of safetensors eagerly even on a full cache hit. Outside every timed
+   row, so it appears in no published number, but it is real wall time on every process.
+5. `stitch_device_minimax_h3.py` remains uncommitted and unwired, as amendment 89 decided.
+
+### Next step
+
+Re-point `test_fused_conditioner_real_weights` at the production canvas (1344x768, natural image, tap
+at layer 49 via `build_minimax_h3_text_encoder` at 50 layers rather than the inline 64-layer
+construction) and set its bar from that measurement, then lift the `xfail`.
