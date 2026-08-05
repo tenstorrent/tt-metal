@@ -545,6 +545,20 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             // -- take the allocator's base instead and run to the top of L1. Safe to carve raw here because
             // the drainer core is outside the producer grid and this workload allocates no L1 buffers; a
             // workload that did would need a real sharded allocation on this core.
+            // ZERO THE DRAINER CORE'S OWN PROFILER RING. The drain kernel is built with PROFILE_KERNEL=1
+            // like any Tensix kernel, so BRISC firmware writes ~7 words of its own zone markers per launch
+            // into this core's profiler ring -- and this core is deliberately NOT in the drained core set,
+            // so nothing ever empties it. The ring is 512 words (PROFILER_L1_VECTOR_SIZE), and the SPSC
+            // backend BLOCKS on a full ring rather than dropping, so after ~74 launches (512/7) BRISC
+            // wedges in firmware init BEFORE kernel_main and the drainer never starts -- silently, because
+            // a fire-and-forget launch has nothing to report it. Measured exactly: 6 for 6 at launch 74,
+            // across two hosts and two cards. Zeroing the control vector here resets head/tail so each run
+            // starts with an empty ring; one run's own FW markers are nowhere near 512 words.
+            cluster.write_core(
+                zero_ctrl.data(),
+                (uint32_t)zero_ctrl.size(),
+                tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
+                prof_l1);
             ctx.drisc_l1_base[d] = ctx.device->allocator()->get_base_allocator_addr(HalMemType::L1);
             ctx.drisc_l1_noc[d] = ctx.drisc_l1_base[d];  // worker L1 is addressed directly, no DRAM-view offset
             region = ctx.device->l1_size_per_core() - static_cast<uint32_t>(ctx.drisc_l1_base[d]);
