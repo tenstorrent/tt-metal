@@ -219,6 +219,10 @@ def test_reduce_scatter_minimal_direct_2d_torus(
     if len(mesh_shape) != 2:
         pytest.skip(f"2D-fabric test needs a 2D system mesh, got {mesh_shape}")
     num_devices = mesh_shape[cluster_axis]
+    if num_devices < 2:
+        # A one-device axis is not a ring to scatter over, and the split check below cannot catch it:
+        # every dim divides by 1. skip_for_n_or_less_dev counts the whole mesh, so it passes here.
+        pytest.skip(f"cluster axis {cluster_axis} of mesh {mesh_shape} has {num_devices} device")
     if rs_input_shape[dim] % num_devices:
         pytest.skip(f"scatter dim {dim} (size {rs_input_shape[dim]}) does not split across {num_devices} devices")
 
