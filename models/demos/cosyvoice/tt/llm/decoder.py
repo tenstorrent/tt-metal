@@ -55,14 +55,16 @@ def causal_bias(size: int, dtype=torch.float32) -> torch.Tensor:
 class TtTransformerLayer:
     """`x = x + attn(norm1(x))`, `x = x + ff(norm2(x))`, with an optional KV cache."""
 
-    def __init__(self, device, bag, meta, dtype=ttnn.bfloat16, cc=None):
+    def __init__(self, device, bag, meta, dtype=ttnn.bfloat16, cc=None, weights_dtype=None):
         self.device, self.dtype = device, dtype
         self.cc = accurate_compute_config(device) if cc is None else cc
         self.eps = meta["layer_norm_eps"]
         self.ffn_act = ttnn.relu if meta.get("ffn_activation", "relu") == "relu" else ttnn.silu
-        self.attn = TtRelPosAttention(device, bag.sub("self_attn"), meta["n_head"], meta["d_k"], dtype, self.cc)
-        self.w1, self.b1 = _linear(device, bag, "feed_forward.w_1", dtype)
-        self.w2, self.b2 = _linear(device, bag, "feed_forward.w_2", dtype)
+        self.attn = TtRelPosAttention(
+            device, bag.sub("self_attn"), meta["n_head"], meta["d_k"], dtype, self.cc, weights_dtype
+        )
+        self.w1, self.b1 = _linear(device, bag, "feed_forward.w_1", dtype, weights_dtype)
+        self.w2, self.b2 = _linear(device, bag, "feed_forward.w_2", dtype, weights_dtype)
         self.g1, self.bt1 = _layernorm_weights(device, bag, "norm1", dtype)
         self.g2, self.bt2 = _layernorm_weights(device, bag, "norm2", dtype)
 
@@ -89,7 +91,7 @@ class TtTransformerLayer:
 class TtARDecoder:
     """`TransformerEncoder.forward_chunk` -- prefill and one-token decode alike."""
 
-    def __init__(self, device, bag, meta, dtype=ttnn.bfloat16):
+    def __init__(self, device, bag, meta, dtype=ttnn.bfloat16, weights_dtype=None):
         self.device, self.dtype, self.meta = device, dtype, meta
         self.cc = accurate_compute_config(device)
         self.d_model = meta["d_model"]
@@ -100,7 +102,8 @@ class TtARDecoder:
         self.w_in, self.b_in = _linear(device, bag, "embed.out.0", dtype)
         self.g_in, self.bt_in = _layernorm_weights(device, bag, "embed.out.1", dtype)
         self.layers = [
-            TtTransformerLayer(device, bag.sub(f"encoders.{i}"), meta, dtype, self.cc) for i in range(meta["n_layers"])
+            TtTransformerLayer(device, bag.sub(f"encoders.{i}"), meta, dtype, self.cc, weights_dtype)
+            for i in range(meta["n_layers"])
         ]
         self.g_after, self.bt_after = _layernorm_weights(device, bag, "after_norm", dtype)
         self._pos_cache: dict[int, object] = {}

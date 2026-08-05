@@ -56,13 +56,37 @@ every step. The flow decoder needed its **convolution weights prepared once** �
 every call, which is host traffic a trace cannot contain. Neither is a flag; both are
 described in `tt/llm/decoder.py` and `tt/hifigan/conv.py`.
 
-### Remaining levers
+### `bfloat8_b` weights: no speedup, and the reason is the useful part
 
-RTF 1.123 needs a further 2.2× and the arithmetic now dominates the overhead, so the
-remaining levers reduce work rather than dispatch, in expected order of value:
-`bfloat8_b` weights for the AR decoder (halves weight bandwidth, ~70 % of the
-budget); flash attention via the additive-`attn_mask` identity already proven for
-rel-pos attention; sharding the flow decoder's UNet.
+The obvious next lever was narrower weights for the AR decoder. At batch 1 an
+autoregressive step reads every matrix from DRAM to produce one token, with no reuse
+to amortise it against, so halving the weight width should halve the traffic.
+
+Measured, it does nothing:
+
+| weights | ms/step | tok/s | speedup |
+|---|---:|---:|---:|
+| `bfloat16` | 13.09 | 76.4 | — |
+| `bfloat8_b` | 13.12 | 76.2 | **1.00×** |
+
+Accuracy is fine — hidden-state PCC `0.9997040033` after 14 blocks — so the option is
+kept. It is a **memory** option, not a speed one: 352 MB of weights become 176 MB.
+
+The reason it buys no time is worth stating, because it redirects everything after
+it. The AR decoder's linears are 176 M parameters, so a `bfloat16` step moves 352 MB.
+At 13.09 ms that is **27 GB/s effective**, against a device that does several hundred.
+The bandwidth floor for this step is ~0.88 ms; it takes 13.09. **The step is ~15×
+away from being bandwidth-bound**, so halving the bandwidth requirement is invisible.
+
+What it is bound by is per-op cost on tensors one row tall. A decode step issues
+roughly 500 ops, which puts it near 26 µs/op — and a trace has already removed the
+*host* side of that. So the remaining lever is **fewer, larger ops**, not narrower
+ones: fusing the per-block q/k/v projections into one matmul, and collapsing the
+five-op `rel_shift` skew. Flash attention via the additive-`attn_mask` identity is
+the same kind of change — it replaces a chain with one kernel.
+
+This is also the honest reading of the 2.22× the trace bought: it removed host
+dispatch and left device-side per-op cost, which is now the binding constraint.
 
 ---
 

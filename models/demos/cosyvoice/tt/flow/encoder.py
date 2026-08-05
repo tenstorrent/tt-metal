@@ -74,10 +74,22 @@ def espnet_rel_positional_encoding(size: int, d_model: int) -> torch.Tensor:
     return pe[:, mid - size + 1 : mid + size]
 
 
-def _linear(device, bag, name, dtype):
-    """Weights arrive as torch [out, in]; ttnn.linear wants [in, out]."""
+def _linear(device, bag, name, dtype, weights_dtype=None):
+    """Weights arrive as torch [out, in]; ttnn.linear wants [in, out].
+
+    `weights_dtype` is separate from `dtype` so the matrix can be stored narrower
+    than the activations flowing through it -- `bfloat8_b` weights with `bfloat16`
+    activations halves what DRAM has to deliver. The bias stays at `dtype`: it is
+    one row against a full matrix, so narrowing it buys no bandwidth and only
+    costs accuracy.
+    """
     sub = bag.sub(name)
-    w = ttnn.from_torch(sub.tensor("weight").t().contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    w = ttnn.from_torch(
+        sub.tensor("weight").t().contiguous(),
+        dtype=weights_dtype or dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
     b = None
     if sub.has("bias"):
         b = ttnn.from_torch(sub.tensor("bias").reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -101,17 +113,17 @@ def _layernorm_weights(device, bag, name, dtype):
 class TtRelPosAttention:
     """ESPnet RelPositionMultiHeadedAttention, explicit-matmul form."""
 
-    def __init__(self, device, bag, n_head: int, d_k: int, dtype=ttnn.bfloat16, cc=None):
+    def __init__(self, device, bag, n_head: int, d_k: int, dtype=ttnn.bfloat16, cc=None, weights_dtype=None):
         self.device, self.h, self.d_k, self.dtype = device, n_head, d_k, dtype
         # HiFi4 + fp32 accumulation: see F20 in the notes. The flow encoder is 6
         # blocks and the AR decoder is 14, and the decoder runs hundreds of times.
         self.cc = accurate_compute_config(device) if cc is None else cc
         self.scale = 1.0 / math.sqrt(d_k)
-        self.wq, self.bq = _linear(device, bag, "linear_q", dtype)
-        self.wk, self.bk = _linear(device, bag, "linear_k", dtype)
-        self.wv, self.bv = _linear(device, bag, "linear_v", dtype)
-        self.wo, self.bo = _linear(device, bag, "linear_out", dtype)
-        self.wp, _ = _linear(device, bag, "linear_pos", dtype)  # bias=False upstream
+        self.wq, self.bq = _linear(device, bag, "linear_q", dtype, weights_dtype)
+        self.wk, self.bk = _linear(device, bag, "linear_k", dtype, weights_dtype)
+        self.wv, self.bv = _linear(device, bag, "linear_v", dtype, weights_dtype)
+        self.wo, self.bo = _linear(device, bag, "linear_out", dtype, weights_dtype)
+        self.wp, _ = _linear(device, bag, "linear_pos", dtype, weights_dtype)  # bias=False upstream
         # [h, d_k] -> [1, h, 1, d_k] so it broadcasts over time
         self.bias_u = ttnn.from_torch(
             bag.tensor("pos_bias_u").reshape(1, n_head, 1, d_k), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
