@@ -39,53 +39,51 @@ inline void make_lane_salt() {
     // rand_tile is a shared API and other SFPU operations may clobber every
     // mutable LREG between calls. Reconstruct a lane-specific salt from the
     // read-only lane ID at the start of each tile instead of carrying it in an
-    // LREG. LTILEID is the ISA-defined LREG15, whose lane i contains 2*i; use
-    // it directly as the first shift and xor source. This invertible xorshift
-    // transformation leaves the result in LREG3.
-    TTI_SFPSHFT(14, p_sfpu::LTILEID, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPXOR(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
-    TTI_SFPSHFT((-17) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG3, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPXOR(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);
-    TTI_SFPSHFT(5, p_sfpu::LREG0, p_sfpu::LREG3, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    // LREG. Offset LTILEID first so lane zero also receives a nonzero salt.
+    TTI_SFPIADD(407, p_sfpu::LTILEID, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSHFT(14, p_sfpu::LREG4, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
+    TTI_SFPSHFT(6, p_sfpu::LREG5, p_sfpu::LREG3, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG3, 0);
 }
 
-inline void begin_mix_uint32_fast() {
-    // A shorter bijective ARX permutation. The two modular additions provide
-    // the nonlinearity that a pure xorshift lacks, while alternating right
-    // and left shifts diffuses the low 31 bits retained by SFPCAST.
-    TTI_SFPSHFT((-17) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+inline void begin_mix_uint32_mul24() {
+    TTI_SFPSHFT((-8) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);
 }
 
-inline void finish_mix_uint32_fast() {
-    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT(14, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPSHFT((-7) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT(5, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
-    TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPSHFT((-18) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG0, sfpshft_mod1_arg_imm_use_vc);
+inline void finish_mix_uint32_mul24() {
     TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG0, 0);
+    TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
+
+    // Multiply the low 23 bits modulo 2^23 by the low 23 bits of
+    // LCONST_0_8373. Preserve the mixed input's upper nine bits.
+    TTI_SFPMUL24(p_sfpu::LREG5, p_sfpu::LCONST_0_8373, p_sfpu::LCONST_0, p_sfpu::LREG4, sfpi::SFPMUL24_MOD1_LOWER);
+    // This independent PRNG read fills SFPMUL24's dependency slot.
+    rand_prng<p_sfpu::LREG0>();
+    TTI_SFPSETMAN(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+
+    TTI_SFPSHFT(8, p_sfpu::LREG4, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+    TTI_SFPSHFT((-14) & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);
+    TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
 }
 
 inline void rand_row() {
-    finish_mix_uint32_fast();
+    finish_mix_uint32_mul24();
     // SFPCAST converts the low 31 bits as a sign-magnitude integer and rounds
     // directly to FP32. Clear its arbitrary sign, then normalise by 2^-31.
     // This gives a correctly rounded 31-bit uniform grid, including both
     // mantissa parities and the half-width upper-bound rounding basin.
-    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG6, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+    TTI_SFPCAST(p_sfpu::LREG4, p_sfpu::LREG6, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
     TTI_SFPSETSGN(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpsetsgn_mod1_arg_imm);
     TTI_SFPMULI(one_over_2_pow_31_bf16, p_sfpu::LREG6, 0);
-    // Advance the PRNG while SFPMULI's result becomes available.
-    rand_prng<p_sfpu::LREG5>();
-    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG6, 0);
     // Prime the following row's mixer in SFPMAD's dependency slot. This reads
-    // LREG5 and writes LREG0, independently of SFPMAD's LREG6 result. The
+    // LREG0 and writes LREG5, independently of SFPMAD's LREG6 result. The
     // speculative prime after the final row is harmless.
-    begin_mix_uint32_fast();
+    begin_mix_uint32_mul24();
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
     dst_reg++;
 }
@@ -101,9 +99,9 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, from >> 16);
 
     make_lane_salt();
-    rand_prng<p_sfpu::LREG5>();
-    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);
-    begin_mix_uint32_fast();
+    rand_prng<p_sfpu::LREG0>();
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+    begin_mix_uint32_mul24();
 
     // One row fits in the 32-entry replay buffer. Record and execute it once,
     // then replay it for the remaining rows without scalar loop-control gaps.
