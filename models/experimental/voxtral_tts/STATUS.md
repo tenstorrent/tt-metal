@@ -17,7 +17,7 @@ Branch: `lserbedzija/voxtral-tts-ttnn` (pushed). All work is under
 | Block 3 — codec decoder on TTNN | **CLOSED**, 242x real-time, see §4 |
 | Block 1 — 3.4B AR backbone on TTNN | **done — OURS** (`tt/ttnn_voxtral_gpt.py`), the default |
 | Block 2 — flow-matching transformer on TTNN | **done** — velocity PCC 0.9999989 |
-| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works**, 0 long-form WER errors of 298 words, RTF 0.64-0.69 |
+| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works**, 0 long-form WER errors of 298 words, long-form RTF 0.61-0.65 |
 | Codec **encoder** | **impossible** — weights absent from the public release |
 
 **Block 1 now runs on our own implementation, not `tt_transformers`.** The wrapper is DELETED, not
@@ -33,7 +33,7 @@ on the 15-case fixture:
 | decode ms/frame | 34.9 | 48 |
 | natural-text WER | 0.88% | 1.17% |
 
-**Performance: 83.7 → ~50 ms/frame, RTF 0.64-0.69** (15 cases, all terminating on `[END_AUDIO]`). It touched 47.5 ms / RTF 0.60-0.65 with w2 in BFP8, and 2.5 ms of that was handed back deliberately: w2 cost 77% of the precision stack's accuracy for 15% of its speed (§6.16). Accuracy: Block 1 mean/p90 worst-sample **0.93% / 1.35%**, min PCC 0.998969; long-form WER **0 wrong words of 298**.
+**Performance: 83.7 → ~50 ms/frame, long-form RTF 0.61-0.65** (15 cases, all terminating on `[END_AUDIO]`; see §6.21 for why long-form is the number to quote). It touched 47.5 ms / RTF 0.60-0.65 with w2 in BFP8, and 2.5 ms of that was handed back deliberately: w2 cost 77% of the precision stack's accuracy for 15% of its speed (§6.16). Accuracy: Block 1 mean/p90 worst-sample **0.92% / 1.28%**, min PCC 0.999040 (the 8x4 norm grid, §6.18); long-form WER **0 wrong words of 298**.
 Per frame: Block 1 ~23 ms, Block 2 ~23 ms, host 0.2 ms. w2 is in BFP8 as of §6.13 — the hang that
 blocked it is fixed, by not calling `ttnn.conv1d` in the codec.
 goes" map at the top with the ceiling for each line item. Two sweeps got here — §6.6 (GQA row fold,
@@ -1284,7 +1284,7 @@ session**. Anything else in this port has been over-read.
 read 69 ms for BFP8 against 59 for bf16 — i.e. BFP8 "slower", which is backwards. It runs a 3.4B
 fp32 reference step on the CPU between device steps, starving host dispatch. **The accuracy columns
 are what this gate is for; its timings are host-contended.** Real numbers come from the pipeline:
-0.05 s/frame, RTF 0.60–0.65.
+0.05 s/frame, long-form RTF 0.61–0.65 (§6.21).
 
 ### 6.16 — the precision stack re-gated on all 15 prompts: w2 is 77% of the cost for 15% of the win
 
@@ -1586,10 +1586,16 @@ unblock it, each link forced by the next:
 | overlap=False + k-rope, 2x update | 24.388 | +0.017 | **bit-exact** |
 | **overlap=False + k-rope, 1x fused update** | **23.952** | **+0.454** | **bit-exact** |
 
-Spread 0.004–0.014 ms, so 0.454 is ~30x the noise. **Bit-exactness verified at the gate**: all six
-columns of `--gate decode` on 15 prompts are byte-identical to before — mean 0.92%, p90 1.28%, max
-3.05%, min PCC 0.999040, both spreads. Pipeline: **−0.44 ms/frame** over 12 comparable cases, RTF
-0.61–0.71, long-form WER 0 of 298, 15/15 `[END_AUDIO]`, voice identity PASS, 122/122 tests.
+Spread 0.004–0.014 ms, so 0.454 is ~30x the noise. Pipeline: **−0.44 ms/frame**, long-form RTF
+**0.61–0.65**, WER 0 of 298, 15/15 `[END_AUDIO]`, voice identity PASS, 122/122 tests. Per case, on the
+14 whose frame count is unchanged, **14 improved and 0 got worse** — deltas −0.00 to −0.04 RTF.
+
+**Bit-exactness, and how far the evidence actually goes.** `--gate decode` on 15 prompts prints
+byte-identical stats, but those are ROUNDED, so that is equality to 2-3 significant figures, not proof.
+The real evidence is three direct comparisons: the fused cache write is identical at **18 positions**
+(0, tile boundaries 31/32/33, 63/64, 127/128, 200, 311/312/313, 511/512, 767, 1023); Block 1 decode is
+identical at **every one of 64 sequential steps** with a growing cache; and case 10's real frame loop
+is identical **frame-for-frame over 221 frames**, hidden state and codes both.
 
 **AND THE ISOLATED AND PIPELINE NUMBERS AGREE FOR ONCE** — 0.454 against 0.44, where §6.17 and §6.18
 each showed a factor of ~3 shortfall. The difference is what the change *does*: removing launches is
@@ -1600,6 +1606,41 @@ every consumer receives its data, which is exactly why they measure differently 
 **load-bearing**, not cosmetic — drop it back to 8 and `overlap_qk_coregrid=False` fails to build and
 the chain collapses. And rope reading the wrong core does **not raise**; it returns ~FLT_MAX, so any
 future change to head placement must re-check the rope tables rather than trust a clean run.
+
+### 6.21 — how to quote RTF, and a harness confound that cost an hour
+
+Asked why RTF read 0.61–0.71 when it had been 0.64–0.69. **Both numbers were badly derived by me, in
+different ways, and neither was comparable to the other:**
+
+- **0.64–0.69** was eyeballed off a `tail -20` that showed only 10 of the 15 cases. The real range for
+  that build, excluding case 0, was 0.62–0.69.
+- **0.61–0.71** came from a filter `rtf < 1.2`, which dropped case 0's first-call compile but kept
+  case 4 — the chaotic one-word prompt at 43 frames — as the top end.
+
+So the "widening" was two inconsistent filters, not the model. Like for like, **14 of 14 comparable
+cases improved and none got worse.**
+
+**RTF is dominated by utterance LENGTH, not by compute speed**, because it is wall/audio and the fixed
+costs (prefill, codec, first-call compiles) amortise over however much audio there is:
+
+| bucket | frames | RTF |
+|---|---|---|
+| long-form | >= 100 | **0.61–0.65** |
+| short | 20–99 | 0.62–0.71 |
+| case 0 | any | 1.61 — carries the first-call compile |
+
+**THE CONVENTION, from here on: quote long-form RTF (>= 100 frames).** It is the only bucket where
+fixed costs are amortised enough to reflect per-frame speed. Quote short and case-0 numbers separately
+or not at all, and never mix filters between two builds.
+
+**And a harness confound worth more than the reporting fix.** Case 10's frame count moved 207 → 220
+between two builds, reproducibly, which looked like a real numerical divergence and took an hour to
+chase. It is not: **run case 10 ALONE and both builds give 220.** Its length depends on what ran
+before it in the same process. `generate()` reseeds per call, so it is not RNG — the pipeline object
+and its KV cache are reused across cases. **Determinism is not independence:** two runs of one build
+match exactly (verified, 0 of 15 cases differ), which is what made the artifact look trustworthy.
+**So a changed frame count in a multi-case run is not evidence of a changed model.** Confirm it by
+running that case alone before believing it.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
