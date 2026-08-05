@@ -1681,6 +1681,52 @@ broke it in the next measurement.**
 Gates: `--gate decode` byte-identical on all six columns, long-form WER 0 of 298, 15/15
 `[END_AUDIO]`, voice identity PASS, 122/122 tests, long-form RTF 0.61–0.66.
 
+### 6.23 — `rotary_embedding_llama_fused_qk`: REJECTED, wrong rotation convention for our weights
+
+The two `rotary_embedding_hf` calls are 52 launches a frame, so a fused q+k pair was the obvious next
+target after §6.20/§6.22. It exists, it is faster, and **it cannot be used without undoing a
+deliberate weight decision.**
+
+**IT IMPLEMENTS THE INTERLEAVED CONVENTION; WE USE HALF-SPLIT.** `get_rot_transformation_mat`'s own
+docstring gives it away — the trans_mat "pairs ADJACENT dimensions ... [0,1] -> +1 at (0,1), -1 at
+(1,0)", i.e. interleaved-pair rotation on `(r0,i0,r1,i1,...)`. Confirmed numerically rather than read
+off a comment, by feeding one vector written both ways and comparing against explicit torch
+references for each convention:
+
+| fused op output vs | max diff |
+|---|---|
+| torch **interleaved-pair** reference | **9.6e-03** (bf16-level — correct) |
+| torch **half-split** reference | **3.67** (wrong) |
+
+Our checkpoint is Mistral-native and therefore interleaved, but `interleaved_to_halfsplit` permutes
+wq/wk ONCE at load so the easy `rotate_half` form applies (module docstring / NOTES.md [gpt-01]).
+Using the fused op means **reverting that permute** — and rope getting this wrong does not raise, it
+produces fluent nonsense.
+
+**What it would buy, measured at our shapes:**
+
+| | µs/layer | ms/frame |
+|---|---|---|
+| 2 x `rotary_embedding_hf` (ships) | 33.5 | 0.871 |
+| 1 x `rotary_embedding_llama_fused_qk` | 24.4 | 0.635 |
+| | | **+0.236 (1.373x on this pair)** |
+
+**What it would cost.** Un-permuting wq/wk, the riskiest class of change in this port. q and k back on
+**disjoint cores** — the exact coupling §6.22 just removed. cos/sin rebuilt per frame as
+`[1, 2*batch, 32, head_dim]`, height-sharded across both cores (it must be HEIGHT_SHARDED — it asserts).
+A trans_mat sharded over >= q_cores + k_cores with (32,32) shards. And it is **not bit-exact**: the
+rotation runs through a tile matmul.
+
+**0.236 ms/frame is 0.46% of a frame. Not worth any of that**, and notably worse value than the fused
+cache write, which bought 0.405 ms bit-exactly for one inline reshard and no convention change.
+
+**Recorded because the convention table is the useful part**, and it is not written down anywhere
+obvious: `rotary_embedding_hf` wants **half-split**, `rotary_embedding_llama` and
+`rotary_embedding_llama_fused_qk` want **interleaved** via a trans_mat. `tt_transformers/tt/attention.py`
+keeps `_hf_rope_decode` and `_mllama_rope_fused_qk_decode` as separate paths for exactly this reason —
+the fused variant sits only on the llama side. If our weights were ever left un-permuted for another
+reason, this becomes free money; until then it is not.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
