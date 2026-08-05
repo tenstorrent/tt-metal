@@ -27,8 +27,7 @@ void kernel_main() {
         dfb.wait_front(1);
         {
             auto lk = dfb.scoped_read_lock(lock_n);  // acquire invalidates the held entry
-            volatile uint32_t* entry = (volatile uint32_t*)(uintptr_t)lk.get_ptr().get_address();
-            result_uncached[r] = entry[0];  // cacheable read -> record this round's value (fresh, or stale)
+            result_uncached[r] = lk.get_ptr<volatile uint32_t>()[0];  // cacheable read -> this round's value
         }
         dfb.pop_front(1);
     }
