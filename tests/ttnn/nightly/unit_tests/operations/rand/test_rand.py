@@ -310,10 +310,11 @@ def test_rand_rejects_invalid_range(device, expect_error, low, high, error):
 
 
 def test_rand_all_ones_seed_does_not_lock_prng(device):
-    data = ttnn.to_torch(ttnn.rand((256, 256), device=device, dtype=ttnn.float32, seed=0xFFFFFFFF)).float()
+    data = ttnn.to_torch(ttnn.rand((32, 32), device=device, dtype=ttnn.float32, seed=0xFFFFFFFF)).float()
 
-    # An XNOR LFSR left in the all-ones lock state repeats its lane values.
-    assert torch.unique(data).numel() > 1024
+    # A single tile runs on one core, so other cores cannot mask an XNOR LFSR
+    # left in the all-ones lock state repeating the same lane row.
+    assert torch.unique(data, dim=0).shape[0] > 1
 
 
 def test_rand_fp32_uses_both_mantissa_parities(device):
