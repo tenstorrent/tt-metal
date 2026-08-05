@@ -723,6 +723,17 @@ void kernel_main() {
                                 (uint32_t)in0_block_w));
                         }
                         for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
+                            // [#48552 DIAG - remove after] per-K-tile probe for the hanging 3rd subblock. If the
+                            // hang is at idx=0 the very first MVMUL of subblock 2 stalls (SrcA/SrcB unpack for
+                            // that DEST section never validated); if idx>0 it stalls mid-K accumulation. Prints
+                            // the mm_in0 / in1 tile indices being read (to check for an OOB read too).
+                            if (in0_block_h_i == 0 && in0_subblock_i == 2) {
+                                MATH(DPRINT(
+                                    "MMK idx={} in0={} in1={}\n",
+                                    (uint32_t)inner_dim_idx,
+                                    (uint32_t)in0_index,
+                                    (uint32_t)in1_index));
+                            }
                             matmul_block(
                                 mm_in0_cb_id,
                                 in1_cb_id,
