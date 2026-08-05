@@ -10,8 +10,8 @@ from typing import Dict
 
 from helpers.chip_architecture import ChipArchitecture
 
-from .fused_operand import OperandRegistry
 from .fuser_config import FuserConfig
+from .operand import OperandRegistry
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 

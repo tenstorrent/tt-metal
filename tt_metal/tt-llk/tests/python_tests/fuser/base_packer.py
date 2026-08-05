@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, List
 import torch
 
 if TYPE_CHECKING:
-    from .fused_operation import FusedOperation
+    from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
     from .block_data import BlockData
     from .pack_node import PackNode
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 from helpers.golden_generators import PackGolden, UntilizeGolden, get_golden_generator
 from helpers.tilize_untilize import tilize_block, untilize_block
 
-from .fused_loop import FusedLoop
+from .tile_loop import TileLoop
 
 
 class Packer:
@@ -24,7 +24,7 @@ class Packer:
     Subclasses override methods to emit the C++ LLK calls that configure and
     drive the Pack thread, plus a Python golden function for test validation.
 
-    The pack lifecycle is driven by FusedLoop.pack_loop(), which iterates
+    The pack lifecycle is driven by TileLoop.pack_loop(), which iterates
     over tiles in the block and calls pack() for each one:
         init() -> pack_loop() [which calls pack()] -> uninit()
 
@@ -37,7 +37,7 @@ class Packer:
     """
 
     # Controls the tile iteration pattern for the pack loop.
-    loop: FusedLoop = FusedLoop()
+    loop: TileLoop = TileLoop()
 
     # Set `per_block_init = True` if init() needs block dimensions and must
     # be called per-block inside the batch loop rather than hoisted out.
@@ -63,7 +63,7 @@ class Packer:
     def _l1_acc_golden(
         tensor: torch.Tensor,
         pack_node: "PackNode",
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
         """Golden helper: simulate L1 accumulation across blocks."""
@@ -136,7 +136,7 @@ class Packer:
         self,
         tensor: torch.Tensor,
         pack_node: "PackNode",
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
         """Compute the golden pack result in Python.
@@ -150,7 +150,7 @@ class Packer:
     def init(
         self,
         pack_node: "PackNode",
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: "BlockData",
     ) -> str:
@@ -164,13 +164,13 @@ class Packer:
     def pack(
         self,
         pack_node: "PackNode",
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: "BlockData",
     ) -> str:
         """Return C++ code that packs a single tile from dest to L1.
 
-        Called inside the tile loop by FusedLoop.pack_loop(). Use
+        Called inside the tile loop by TileLoop.pack_loop(). Use
         block.tile_id_block for the dest register index and
         block.tile_id_global for the L1 output buffer index.
         Override to emit the _llk_pack_<>() call.
@@ -180,7 +180,7 @@ class Packer:
     def uninit(
         self,
         pack_node: "PackNode",
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: "BlockData",
     ) -> str:

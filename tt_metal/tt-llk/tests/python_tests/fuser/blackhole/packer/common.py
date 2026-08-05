@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from fuser.fused_operand import Operand
+from fuser.operand import Operand
 from fuser.wormhole.packer.common import (  # noqa: F401
     configure_pack,
     l1_accumulation_config,

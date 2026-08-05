@@ -5,16 +5,16 @@
 from typing import List
 
 from fuser.block_data import BlockData
-from fuser.fused_loop import FusedLoop, LoopBlock
-from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
+from fuser.tile_loop import LoopBlock, TileLoop
 
 from .packer import Packer
 
 
 class MatmulPacker(Packer):
-    loop: FusedLoop = LoopBlock()
+    loop: TileLoop = LoopBlock()
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -26,7 +26,7 @@ class MatmulPacker(Packer):
     def init(
         self,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
@@ -39,7 +39,7 @@ class MatmulPacker(Packer):
     def pack(
         self,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         block: BlockData,
     ) -> str:

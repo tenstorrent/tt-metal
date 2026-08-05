@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .fpu_node import FpuNode
-    from .fused_operation import FusedOperation
+    from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
     from .block_data import BlockData
     from .pack_node import PackNode
@@ -14,10 +14,10 @@ if TYPE_CHECKING:
 from helpers.llk_params import L1Accumulation, PerfRunType
 
 
-class FusedLoop:
+class TileLoop:
     def unpack_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -26,7 +26,7 @@ class FusedLoop:
 
     def math_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -35,7 +35,7 @@ class FusedLoop:
 
     def pack_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         pack_node: "PackNode",
         block: "BlockData",
@@ -65,10 +65,10 @@ class FusedLoop:
         return code
 
 
-class LoopBlock(FusedLoop):
+class LoopBlock(TileLoop):
     def unpack_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -92,7 +92,7 @@ class LoopBlock(FusedLoop):
 
     def math_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -114,7 +114,7 @@ class LoopBlock(FusedLoop):
 
     def pack_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         pack_node: "PackNode",
         block: "BlockData",
@@ -133,10 +133,10 @@ class LoopBlock(FusedLoop):
         return code
 
 
-class LoopBlockRow(FusedLoop):
+class LoopBlockRow(TileLoop):
     def unpack_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -159,7 +159,7 @@ class LoopBlockRow(FusedLoop):
 
     def math_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -186,7 +186,7 @@ class LoopBlockRow(FusedLoop):
 
     def pack_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         pack_node: "PackNode",
         block: "BlockData",
@@ -207,10 +207,10 @@ class LoopBlockRow(FusedLoop):
         return code
 
 
-class LoopTileByTile(FusedLoop):
+class LoopTileByTile(TileLoop):
     def unpack_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -238,7 +238,7 @@ class LoopTileByTile(FusedLoop):
 
     def math_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",

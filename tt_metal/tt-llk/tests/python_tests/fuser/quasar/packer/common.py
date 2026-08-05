@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from fuser.fused_operand import Operand
+from fuser.operand import Operand
 from helpers.format_config import DataFormat
 from helpers.llk_params import L1Accumulation
 

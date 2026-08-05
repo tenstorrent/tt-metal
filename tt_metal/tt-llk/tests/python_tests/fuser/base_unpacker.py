@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING, List, Tuple
 import torch
 
 if TYPE_CHECKING:
-    from .fused_operation import FusedOperation
+    from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
     from .fpu_node import FpuNode
     from .block_data import BlockData
 
-from .fused_loop import FusedLoop
+from .tile_loop import TileLoop
 
 
 class Unpacker:
@@ -25,7 +25,7 @@ class Unpacker:
     The lifecycle called by the pipeline is:
         init() -> loop.unpack_loop() [which calls unpack()] -> uninit()
 
-    Override `loop` with an appropriate FusedLoop subclass to control
+    Override `loop` with an appropriate TileLoop subclass to control
     the tile iteration pattern used by the unpack phases.
 
     Set `per_block_init = True` if init() needs block dimensions and must
@@ -33,7 +33,7 @@ class Unpacker:
 
     To create a new unpacker:
         1. Subclass Unpacker
-        2. Set `loop` to the desired FusedLoop variant
+        2. Set `loop` to the desired TileLoop variant
         3. Override get_headers() with the required LLK header files
         4. Override init(), unpack(), uninit() to emit the C++ LLK calls
         5. Override golden() to compute the expected unpack transformation
@@ -41,12 +41,12 @@ class Unpacker:
     """
 
     # Controls the tile iteration pattern for unpack and math loops.
-    loop: FusedLoop = FusedLoop()
+    loop: TileLoop = TileLoop()
     per_block_init: bool = False
 
     def init(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -62,14 +62,14 @@ class Unpacker:
 
     def unpack(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         """Return C++ code that unpacks a single tile (or tile group).
 
-        Called inside the tile loop by FusedLoop.unpack_loop(). Use block.tile_id_global
+        Called inside the tile loop by TileLoop.unpack_loop(). Use block.tile_id_global
         for the L1 buffer index and block.tile_id_block for the dest register index.
         Override to emit the _llk_unpack_*_<>() call that moves data from L1 into
         source register files.
@@ -78,7 +78,7 @@ class Unpacker:
 
     def uninit(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -94,7 +94,7 @@ class Unpacker:
 
     def perf_set_valid(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -108,7 +108,7 @@ class Unpacker:
 
     def perf_clear_valid(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode",
         block: "BlockData",
@@ -133,7 +133,7 @@ class Unpacker:
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "FpuNode" = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:

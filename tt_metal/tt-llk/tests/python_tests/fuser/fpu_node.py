@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Tuple
 import torch
 
 if TYPE_CHECKING:
-    from .fused_operation import FusedOperation
+    from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
 from helpers.llk_params import (
@@ -22,10 +22,10 @@ from helpers.llk_params import (
     UnpackToDest,
 )
 
+from .base_fpu import Fpu
+from .base_unpacker import Unpacker
 from .block_data import BlockData
-from .fused_fpu import Fpu
-from .fused_operand import Operand
-from .fused_unpacker import Unpacker
+from .operand import Operand
 
 
 class FpuNode:
@@ -77,7 +77,7 @@ class FpuNode:
 
     def unpack_reconfig(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ):
         if self.unpacker is None or config.skip_unpack_init:
@@ -86,7 +86,7 @@ class FpuNode:
 
     def unpack_init(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -96,7 +96,7 @@ class FpuNode:
 
     def unpack_run(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -106,7 +106,7 @@ class FpuNode:
 
     def unpack_uninit(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -116,7 +116,7 @@ class FpuNode:
 
     def math_reconfig(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ):
         if config.skip_math_init:
@@ -125,7 +125,7 @@ class FpuNode:
 
     def fpu_init(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -135,7 +135,7 @@ class FpuNode:
 
     def fpu_run(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -143,7 +143,7 @@ class FpuNode:
 
     def fpu_uninit(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ):
@@ -158,7 +158,7 @@ class FpuNode:
         tensor_a,
         tensor_b,
         tensor_dst,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.unpacker is not None:

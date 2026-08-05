@@ -7,16 +7,16 @@ from typing import TYPE_CHECKING, List
 import torch
 
 if TYPE_CHECKING:
-    from .fused_operation import FusedOperation
+    from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
 from helpers.golden_generators import PackGolden
 from helpers.llk_params import L1Accumulation, PackerReluType
 
 from .arch_common import pack_common
+from .base_packer import Packer
 from .block_data import BlockData
-from .fused_operand import Operand
-from .fused_packer import Packer
+from .operand import Operand
 
 
 class PackNode:
@@ -55,14 +55,14 @@ class PackNode:
 
     def reconfig(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ) -> str:
         return config.sentinel.configure_pack(config, operation, self)
 
     def configure(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ) -> str:
@@ -73,7 +73,7 @@ class PackNode:
 
     def pack_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ) -> str:
@@ -81,7 +81,7 @@ class PackNode:
 
     def uninit(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ) -> str:
         return self.packer.uninit(self, operation, config, None)
@@ -89,7 +89,7 @@ class PackNode:
     def golden(
         self,
         tensor: torch.Tensor,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
         return self.packer.golden(tensor, self, operation, config)

@@ -6,17 +6,17 @@ from typing import List
 
 import torch
 from fuser.block_data import BlockData
-from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
+from fuser.tile_loop import LoopBlockRow, TileLoop
 from helpers.llk_params import PackerReluType
 
 from .packer import Packer
 
 
 class PackUntilize(Packer):
-    loop: FusedLoop = LoopBlockRow()
+    loop: TileLoop = LoopBlockRow()
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -29,7 +29,7 @@ class PackUntilize(Packer):
         self,
         tensor: torch.Tensor,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
     ) -> torch.Tensor:
         if pack_node.pack_relu != PackerReluType.NoRelu:
@@ -40,7 +40,7 @@ class PackUntilize(Packer):
     def init(
         self,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
@@ -54,7 +54,7 @@ class PackUntilize(Packer):
     def pack(
         self,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         block: BlockData,
     ) -> str:

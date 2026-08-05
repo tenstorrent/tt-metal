@@ -7,17 +7,17 @@ from typing import TYPE_CHECKING, List, Union
 import torch
 
 if TYPE_CHECKING:
-    from .fused_operation import FusedOperation
+    from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
 from helpers.llk_params import GoldenType
 
 from .arch_common import fpu_common, pack_common, unpack_common
+from .base_fpu import Fpu
+from .base_sfpu import Sfpu
+from .base_unpacker import Unpacker
 from .block_data import BlockData
 from .fpu_node import FpuNode
-from .fused_fpu import Fpu
-from .fused_sfpu import Sfpu
-from .fused_unpacker import Unpacker
 from .pack_node import PackNode
 from .sfpu_node import SfpuNode
 
@@ -68,7 +68,7 @@ class ComputePipeline:
 
     def _batch_loop(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         body_fn,
         init_fn=None,
@@ -188,12 +188,12 @@ class ComputePipeline:
 
     def unpacker_sync_with_packer(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ) -> str:
         return unpack_common.sync_with_packer(operation.needs_pack_sync)
 
-    def unpack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+    def unpack_body(self, operation: "L1Operation", config: "GlobalConfig") -> str:
         unpack_ops = [
             cu
             for cu in self.math_nodes
@@ -251,7 +251,7 @@ class ComputePipeline:
         return code
 
     def _math_wait_for_dest(
-        self, operation: "FusedOperation", config: "GlobalConfig"
+        self, operation: "L1Operation", config: "GlobalConfig"
     ) -> str:
         if config.skip_sync:
             return ""
@@ -261,7 +261,7 @@ class ComputePipeline:
         )
 
     def _math_dest_section_done(
-        self, operation: "FusedOperation", config: "GlobalConfig"
+        self, operation: "L1Operation", config: "GlobalConfig"
     ) -> str:
         if config.skip_sync:
             return ""
@@ -272,7 +272,7 @@ class ComputePipeline:
         )
 
     def _math_pack_sync_init(
-        self, operation: "FusedOperation", config: "GlobalConfig"
+        self, operation: "L1Operation", config: "GlobalConfig"
     ) -> str:
         if not config.quasar_use_dvalid and operation.stage_id != 1:
             return ""
@@ -282,12 +282,10 @@ class ComputePipeline:
             quasar_use_dvalid=config.quasar_use_dvalid,
         )
 
-    def _math_constants(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
+    def _math_constants(self, operation: "L1Operation", config: "GlobalConfig") -> str:
         return f"// Operation {operation.stage_id}: Math Setup\n"
 
-    def math_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+    def math_body(self, operation: "L1Operation", config: "GlobalConfig") -> str:
         code = self._math_constants(operation, config)
         fpu_ops = [cu for cu in self.math_nodes if isinstance(cu, FpuNode)]
         hoist = len(fpu_ops) == 1
@@ -346,7 +344,7 @@ class ComputePipeline:
         )
 
     def _packer_dest_section_done(
-        self, operation: "FusedOperation", config: "GlobalConfig"
+        self, operation: "L1Operation", config: "GlobalConfig"
     ) -> str:
         if config.skip_sync:
             return ""
@@ -358,7 +356,7 @@ class ComputePipeline:
 
     def _pack_dest_init(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         pack_nodes: List[PackNode],
     ) -> str:
@@ -371,15 +369,13 @@ class ComputePipeline:
             pack_mode=pack_nodes[0].packer.pack_mode,
         )
 
-    def _pack_constants(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
+    def _pack_constants(self, operation: "L1Operation", config: "GlobalConfig") -> str:
         stage = operation.stage_id
         return f"// Operation {stage}: Packer\n"
 
     def packer_sync_with_unpacker(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
     ) -> str:
         return pack_common.packer_sync_with_unpacker(operation.has_pack_consumer)
@@ -391,7 +387,7 @@ class ComputePipeline:
         first_fmt = pack_only[0].output.data_format
         return all(pn.output.data_format == first_fmt for pn in pack_only[1:])
 
-    def pack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
+    def pack_body(self, operation: "L1Operation", config: "GlobalConfig") -> str:
         code = self._pack_constants(operation, config)
         pack_only = self._get_pack_nodes()
         hoist = len(pack_only) == 1 and len(self.pack_nodes) == 1
@@ -453,7 +449,7 @@ class ComputePipeline:
 
     def golden(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         golden_type: GoldenType,
     ):

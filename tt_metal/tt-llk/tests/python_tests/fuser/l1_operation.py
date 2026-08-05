@@ -15,11 +15,11 @@ from helpers.llk_params import (
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.tile_shape import TileShape, construct_tile_shape
 
-from .fused_math import ComputePipeline
+from .compute_pipeline import ComputePipeline
 
 
 @dataclass
-class FusedOperation:
+class L1Operation:
     math: ComputePipeline
     max_output_dimensions: Tuple[int, int]
     tile_shape: TileShape = construct_tile_shape(

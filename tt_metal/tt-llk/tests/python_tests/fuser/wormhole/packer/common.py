@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from fuser.block_data import BlockData
-from fuser.fused_operand import Operand
+from fuser.operand import Operand
 from helpers.format_config import DataFormat
 from helpers.llk_params import L1Accumulation
 
@@ -76,7 +76,7 @@ def packer_sync_with_unpacker(has_pack_consumer: bool) -> str:
     return ""
 
 
-def pack_reduce_mask_config(operation: "FusedOperation") -> str:
+def pack_reduce_mask_config(operation: "L1Operation") -> str:
     if operation.reduce_dim is None:
         return ""
     reduce_dim = operation.reduce_dim.cpp_enum_value

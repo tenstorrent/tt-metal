@@ -5,10 +5,10 @@
 from typing import List
 
 import torch
+from fuser.base_sfpu import Sfpu
 from fuser.block_data import BlockData
-from fuser.fused_operation import FusedOperation
-from fuser.fused_sfpu import Sfpu
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
 from fuser.sfpu_node import SfpuNode
 from helpers.golden_generators import (
     UnarySFPUGolden,
@@ -49,7 +49,7 @@ class UnarySfpu(Sfpu):
     def golden(
         self,
         tensor: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: SfpuNode,
         batch_dims: tuple,
@@ -76,7 +76,7 @@ class UnarySfpu(Sfpu):
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: SfpuNode,
         block: BlockData,
@@ -93,7 +93,7 @@ class UnarySfpu(Sfpu):
 
     def calculate(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: SfpuNode,
         block: BlockData,

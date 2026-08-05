@@ -23,8 +23,8 @@ from pydantic import (
     model_validator,
 )
 
-from .fused_operand import OperandRegistry
 from .fuser_config import FuserConfig, GlobalConfig
+from .operand import OperandRegistry
 from .validator import PackSchema
 
 FUSER_CONFIG_DIR = (
@@ -185,7 +185,7 @@ class FuserConfigSchema(BaseModel):
             )
 
         pipeline = [
-            op.to_fused_operation(operands, dest_acc=self.dest_acc.value)
+            op.to_l1_operation(operands, dest_acc=self.dest_acc.value)
             for op in self.operations
         ]
 

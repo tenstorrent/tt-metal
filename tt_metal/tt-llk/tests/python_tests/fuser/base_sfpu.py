@@ -8,8 +8,8 @@ import torch
 
 if TYPE_CHECKING:
     from .block_data import BlockData
-    from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
+    from .l1_operation import L1Operation
     from .sfpu_node import SfpuNode
 
 
@@ -38,7 +38,7 @@ class Sfpu:
 
     def init(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "SfpuNode",
         block: "BlockData",
@@ -52,7 +52,7 @@ class Sfpu:
 
     def calculate(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "SfpuNode",
         block: "BlockData",
@@ -66,7 +66,7 @@ class Sfpu:
 
     def uninit(
         self,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "SfpuNode",
         block: "BlockData",
@@ -81,7 +81,7 @@ class Sfpu:
     def golden(
         self,
         tensor: torch.Tensor,
-        operation: "FusedOperation",
+        operation: "L1Operation",
         config: "GlobalConfig",
         compute_unit: "SfpuNode",
         batch_dims: tuple,

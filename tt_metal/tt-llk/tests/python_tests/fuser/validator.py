@@ -16,9 +16,9 @@ construction. The dicts are:
 
 from typing import Annotated, ClassVar, List, Literal, Optional, Tuple
 
+from fuser.compute_pipeline import ComputePipeline
 from fuser.fpu_node import FpuNode
-from fuser.fused_math import ComputePipeline
-from fuser.fused_operation import FusedOperation
+from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
 from fuser.sfpu_node import SfpuNode
 from helpers.llk_params import (
@@ -325,7 +325,7 @@ class OperationSchemaBase(BaseModel):
 
     Each architecture subclass adds its own math and pack list fields.
     Blackhole also overrides _arch_validate() for tilize detection and _arch_kwargs()
-    to forward the bh_tilize flag to FusedOperation.
+    to forward the bh_tilize flag to L1Operation.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -404,7 +404,7 @@ class OperationSchemaBase(BaseModel):
 
         return first
 
-    def to_fused_operation(self, operands, dest_acc=False):
+    def to_l1_operation(self, operands, dest_acc=False):
         tile_shape = self._resolve_output_tile_shape(operands)
 
         tile_r = tile_shape.total_row_dim()
@@ -466,7 +466,7 @@ class OperationSchemaBase(BaseModel):
         }
         kwargs.update(self._arch_kwargs())
 
-        return FusedOperation(
+        return L1Operation(
             math=ComputePipeline(math_ops, pack_nodes),
             max_output_dimensions=max_out_dims,
             **kwargs,
