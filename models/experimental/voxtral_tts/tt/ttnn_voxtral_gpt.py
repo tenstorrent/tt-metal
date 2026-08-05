@@ -87,6 +87,36 @@ _V_SHARD = ttnn.MemoryConfig(
     ttnn.ShardSpec(ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
                    (TILE, HEAD_DIM), ttnn.ShardOrientation.ROW_MAJOR))
 
+# wo's DECODE program config, and it is the only linear that needs one. Each decode linear splits
+# into bytes/ceiling plus overhead, and only wo carried any: 85.9 us against a 68.9 floor, 20% of its
+# time, where wqkv/w1/w3/w2 all sit at 98-103% of the ceiling with nothing to reclaim.
+#
+# THE KNOB IS in0_block_w, i.e. how many of K's 128 tiles are loaded per inner iteration. The default
+# picks something that runs at 162 GB/s; 4 runs at 196, which is the ceiling. Both directions lose:
+#
+#     in0_block_w    1      2      4      8     16     32
+#     us           152.0   83.2   68.1   73.7   80.5   89.4
+#     GB/s           88    161    196    182    166    150
+#
+# THE BIT-EXACT ONE SHIPS. in0_block_w=2 at 8x4 is 74.7 us (1.102x, +0.196 ms/frame) and byte-identical
+# to the default on all six decode-gate columns. in0_block_w=4 is faster still -- 68.1 us, 1.209x,
+# +0.370 -- but not bit-exact: mean/p90 worst-sample +0.02/+0.01 pp and max 3.05% -> 4.76%, which is
+# 0.054 pp of mean per ms, the same ballpark as the w2 trade rejected in STATUS.md 6.16. Change the two
+# numbers below to take it. The core count barely matters either way (8x8 68.2, 8x6 68.1, 8x4 68.5);
+# my original theory was that N=3072 splitting 1.5 tiles per core over 64 cores was the problem, and
+# the sweep says otherwise.
+#
+# DECODE ONLY. per_core_M=1 assumes M is a single tile, which is true of one decode position and false
+# of prefill's S rows -- see _layer, which deliberately has no program config.
+#
+# The earlier "hand-tuned matmul program configs measured SLOWER (169 vs 193 GB/s)" finding stands: it
+# was measured on wq, which is already at 94% of its floor. Sweeping an op with no headroom finds none.
+_WO_GRID = (8, 4)
+_WO_PRG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=_WO_GRID, in0_block_w=2, out_subblock_h=1, out_subblock_w=1,
+    per_core_M=1, per_core_N=(DIM // TILE) // (_WO_GRID[0] * _WO_GRID[1]),
+    fuse_batch=True, fused_activation=None, mcast_in0=True)
+
 # NOTES.md [gpt-06] -- WEIGHT PRECISION -- load-bearing for CORRECTNESS, not...
 WEIGHT_DTYPE = ttnn.bfloat16          # w2 -- bf16 for ACCURACY (6.16), not for the hang (6.13)
 FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # FF1 and FF3
@@ -295,7 +325,7 @@ class TtVoxtralGPT:
         # the reason is worth reading before trying it: NOTES.md [gpt-03].
         a = ttnn.reshape(o, [1, 1, Q_WIDTH])
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
-                                    memory_config=_L1), memory_config=_L1)
+                                    memory_config=_L1, program_config=_WO_PRG), memory_config=_L1)
         return self._mlp(x, self._norm_dec(x, w["fn"]), w, _L1)
 
     @torch.no_grad()
