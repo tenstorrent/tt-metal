@@ -78,8 +78,14 @@ def test_quasar_tilize_width(mesh_device, width_tiles, height_tiles):
 _SHARDED_CASES = [
     (49, 8, "h49_w8_FAILCONFIG"),  # 256ch activation, 56x56/2-core: the exact failing tilize
     (49, 4, "h49_w4"),  # same block count, narrower -> isolates width-8 vs block-count
-    (8, 8, "h8_w8"),  # width-8 but few blocks -> isolates block-count
+    (8, 8, "h8_w8"),  # 64 tiles/core -> PASSES; last-known-good
     (1, 8, "h1_w8"),  # single block control
+    # Bracket the corruption threshold (h8=64 tiles passes, h49=392 fails; PCC math => ~64 tiles correct).
+    # per-core tile count = h*w; find where it breaks to identify the borrowed-DFB credit/tile-counter field:
+    (9, 8, "h9_w8_72tiles"),  # 72 tiles -> just over 64
+    (16, 8, "h16_w8_128tiles"),  # 128 tiles = 2*64
+    (32, 8, "h32_w8_256tiles"),  # 256 tiles = 4*64
+    (8, 16, "h8_w16_128tiles"),  # 128 tiles but only 8 blocks -> tiles-vs-blocks discriminator
 ]
 
 
