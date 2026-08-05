@@ -622,6 +622,7 @@ class TestConfig:
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
+        expected_nondeterministic: bool = False,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -654,6 +655,7 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
+        self.expected_nondeterministic = expected_nondeterministic
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -873,6 +875,8 @@ class TestConfig:
             "passed_runtimes",
             "current_run_type",
             "temp_elfs",
+            # Host-side determinism-check opt-out; does not affect the compiled kernel.
+            "expected_nondeterministic",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -1707,6 +1711,13 @@ class TestConfig:
             # accumulates onto the previous one. Re-runs are legitimately
             # expected to differ and comparing them would be meaningless.
             return "L1 accumulation makes every run add onto the previous result"
+        if self.expected_nondeterministic:
+            # Negative controls that deliberately run with a corrupt HW config
+            # (e.g. a zeroed addrmod) leave DEST addressing undefined, so the
+            # result is not bit-reproducible by contract. The functional check
+            # (expect_mismatch) still validates the single run; only the
+            # bit-exact re-run comparison is meaningless here.
+            return "variant intentionally exercises undefined hardware state"
         return None
 
     def _bit_exact_check_applies(self) -> bool:
