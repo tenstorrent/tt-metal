@@ -13,7 +13,7 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
 Iteratively accumulates probabilities, comparing them against the nucleus threshold p to determine the smallest set of
@@ -102,10 +102,7 @@ void kernel_main() {
     // Index into the chunk to get this core's value
     uint16_t temp = temp_ptr[core_id];
     uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
-    // This donor takes a CircularBuffer by value, so the buffer handle is wrapped at the call site
-    // rather than passed straight through. The header is shared by several op families, so its
-    // signature is not this op's to change.
-    generate_bcast_unary_scalar(CircularBuffer(dfb::temp), temp_packed);
+    generate_bcast_unary_scalar(dfb_temp, temp_packed);
     // generate the top-k mask
     constexpr uint32_t one = 1;
     generate_mask<dfb::mask, one>(one, ids_per_batch / 32, k - 1);

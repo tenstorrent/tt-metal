@@ -161,6 +161,7 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/compute/tilize.cpp
     cpp/ttnn/kernel/compute/transpose_wh.cpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
+    cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp
     cpp/ttnn/kernel/dataflow/generate_mm_scaler.hpp
     cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp
     cpp/ttnn/kernel/dataflow/moreh_common.hpp
