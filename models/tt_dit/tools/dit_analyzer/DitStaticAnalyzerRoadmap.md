@@ -522,15 +522,25 @@ findings that read exactly as convincingly as the 6 real ones.
   The diff is on (op, mesh-axis) counts plus the ordered log for inspection; a
   strict per-collective shape/source diff (logical↔per-device reconciliation) is a
   refinement. The 4×8 Ring log needs a Galaxy.
-- Buffer liveness: record persistent-buffer identity and semaphore IDs, and
-  suppress a `duplicate_gather` CSE recommendation when the earlier result's slot
-  is reused before the candidate site — with the reason stated.
-- Barrier/sync intent: flag collectives whose removal changes synchronisation and
-  demote them to "needs review".
-- Live-bytes tracking so a recommendation can say whether keeping the earlier
-  result actually fits.
-- **Acceptance:** conformance green for every registered op; the 6 LTX findings
-  each carry a buffer-liveness verdict and a memory-feasibility note.
+- **11c — soundness gates · parked (needs new capture + a memory model).** Assessed
+  and deliberately deferred rather than faked:
+  - *Buffer liveness* (suppress a `duplicate_gather` CSE when the earlier result's
+    persistent ping-pong slot is reused before the candidate) needs **buffer
+    identity** (blocker 29). Modelling the ping-pong allocation in the shim is
+    possible, but a soundness verdict built on shim-modelled buffers is itself
+    "the shim believes" — the device half that would confirm it (recording real
+    buffer/semaphore identity) is the missing capture. Until then the honest
+    verdict degrades to "value identity confirmed via SSA; physical slot reuse
+    unobserved → needs review", which the global trust banner already says.
+  - *Barrier/sync intent* is cleanly implementable (the shim sees `use_barrier`),
+    but the block's gathers take the persistent-buffer, no-barrier path, so it does
+    **not fire on the LTX/SD3.5 findings** — only the VAE class.
+  - *Live-bytes / memory feasibility* needs an L1/DRAM residency model (blocker 30)
+    that does not exist; first-order it emits "unknown".
+- **Acceptance (partial, honestly):** per-op + collective conformance green on 2×4
+  (11a/11b); the buffer-liveness and memory verdicts remain "needs review / not
+  modelled", surfaced by the per-graph trust banner rather than a fake per-finding
+  gate. Full 11c awaits buffer-identity capture and a memory model.
 
 ### Phase 12 — Branch and shape coverage (1 week) · closes 31, 32, 39
 
