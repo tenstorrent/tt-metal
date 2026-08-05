@@ -5,6 +5,7 @@
   https://github.com/tenstorrent/tt-metal/tree/nkira/hunyuanimage3-bringup_bh_glx
   (native-TTNN model dir + README + `UNIFIED_STACK.md` lever ladder; 31 commits, all authored by Nadim)
 - **Working branch (box):** `hunyuan-image3-unified` @ `~/nkira/tt-metal-xtts` — its own `build_Release` + `python_env` (run `./python_env/bin/python`).
+  - **Box:** `bh-glx-exp-b04u14` (alias `galaxy-home`) — a Blackhole 6U Galaxy: 32 chips, `MeshShape(8,4)`, FABRIC_1D. Reach via `ssh tt-admin@100.89.226.88`. Fabric is recovered/durable (survives reset).
 
 ## Model
 `tencent/HunyuanImage-3.0` (`HunyuanImage3ForCausalMM`, `model_type=hunyuan_image_3_moe`) — ~80B-total / ~13B-active MoE **text→image**.
