@@ -315,12 +315,18 @@ inline void _llk_pack_dest_semaphore_section_done_()
 
     if constexpr (DST == DstSync::SyncFull)
     {
-        TTI_ZEROACC(p_zeroacc::CLR_ALL, EN_32BIT_DEST, 0, ADDR_MOD_7, 0);
+        // [#48552 DIAG - REVERT AFTER] ZEROACC disabled to test the pack-ZEROACC-vs-MATH-MVMUL DEST-bank
+        // collision theory: if the block-sharded conv 0x0119 HANG DISAPPEARS with the ZEROACC gone (PCC will be
+        // wrong from un-zeroed DEST, but no hang) -> the collision is confirmed and we tune the drain resource;
+        // if it STILL hangs -> the ZEROACC is not the culprit and the fault is elsewhere (fused tilize->matmul
+        // transition / bank-parity). MUST be reverted -- disabling ZEROACC corrupts every semaphore-scheme pack.
+        // TTI_ZEROACC(p_zeroacc::CLR_ALL, EN_32BIT_DEST, 0, ADDR_MOD_7, 0);
     }
     else
     {
         static_assert(DST == DstSync::SyncHalf);
-        TT_ZEROACC(p_zeroacc::CLR_HALF, EN_32BIT_DEST, 0, ADDR_MOD_7, dest_register_offset != 0);
+        // [#48552 DIAG - REVERT AFTER] see the SyncFull branch above; this is the active Quasar (SyncHalf) path.
+        // TT_ZEROACC(p_zeroacc::CLR_HALF, EN_32BIT_DEST, 0, ADDR_MOD_7, dest_register_offset != 0);
     }
 
     // Tell math that it can write again.
