@@ -62,18 +62,13 @@ jobs:
           # Do not set NO_PROXY here. A previous value of "tenstorrent.net"
           # matched harbor.ci.tenstorrent.net. That made the builder skip
           # the proxy and connect to Harbor directly, which times out.
-          # Root cause: MINFRA-1408. Routing through the proxy works, the
-          # same way the runner's own docker daemon already reaches Harbor.
-          # See run 31018713433, job 92352981018 for the failure this avoids.
           echo "PROXY_HTTP=${HTTP_PROXY:-${http_proxy:-}}" >> "$GITHUB_ENV"
           echo "PROXY_HTTPS=${HTTPS_PROXY:-${https_proxy:-}}" >> "$GITHUB_ENV"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
           # network=host: builder uses the runner's own network namespace
-          # instead of the docker-container driver's default bridge. Does
-          # not fix the Harbor timeout above. Confirmed by reproducing the
-          # same failure with this option set. Kept as a small simplification.
+          # instead of the docker-container driver's default bridge.
           driver-opts: |
             network=host
             env.HTTP_PROXY=${{ env.PROXY_HTTP }}
@@ -131,9 +126,6 @@ jobs:
           set -euo pipefail
           TARGET="${{ inputs.image }}"
           # Tool list comes from docker-bake.hcl via get-target-tools.sh
-          # instead of a hardcoded list. A new tool (e.g. curl, oras) is
-          # picked up automatically. build-docker-artifact.yaml already
-          # uses this script.
           TOOLS=($(.github/scripts/get-target-tools.sh "$TARGET"))
           SET=""
           for tool in "${TOOLS[@]}"; do
