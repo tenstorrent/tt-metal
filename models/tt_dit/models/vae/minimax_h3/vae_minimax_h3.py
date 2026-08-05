@@ -216,6 +216,10 @@ class MiniMaxH3Vae(Module):
         # Defaults to a plain strict load, which is what every existing test does.
         self._weight_loader = weight_loader
         self._encoders: dict[tuple[int, int, int, int], MiniMaxH3Encoder3d] = {}
+        self._stitcher = None
+        # Unproven, so it defaults to the host path. Amendment 84 projected the stage at 4.3 -> ~2.9 s
+        # from this; `MINIMAX_H3_VAE_DEVICE_STITCH=1` is the A/B.
+        self.device_stitch = os.environ.get("MINIMAX_H3_VAE_DEVICE_STITCH", "0") == "1"
         self._encoder_state: dict[str, torch.Tensor] | None = None
         self._decoders: dict[tuple[int, int, int], object] = {}
         self._decoder_state: dict[str, torch.Tensor] | None = None
@@ -637,6 +641,105 @@ class MiniMaxH3Vae(Module):
             results.extend(read_wave(*pending))
         return results
 
+    def _decode_clip_device_stitched(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
+        """One clip, decoded and stitched entirely on device, read back as the assembled canvas.
+
+        The win is transfer volume, not compute. The host path reads back **overlapping** tiles --
+        28 of 256x256 against a 768x1344 canvas, 2.51 GB over the whole video -- and then blends them
+        on host. Blending first and reading back the canvas moves ~0.77 GB instead, and amendment 84
+        measured the two-axis all-gather that co-locates the neighbours at 4-8 ms against a 91-231 ms
+        readback, so the collective is nearly free.
+
+        The tile -> gathered-position map comes from `gathered_tile_order`'s inverse and is **not**
+        row-major: amendment 105 pinned the two-axis gather as transposing dim 0, so position
+        `c * rows + r` holds shard `r * cols + c`. Assuming row-major here puts tiles in the wrong
+        place, which the seam gate catches loudly -- but only because something finally reads them.
+        """
+        from .decoder_minimax_h3 import unpatchify  # noqa: F401  (host fallback parity)
+        from .stitch_device_minimax_h3 import DeviceTileStitcher, unpatchify_device
+
+        (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
+            z_BCTHW.shape[-2], z_BCTHW.shape[-1]
+        )
+        grid_rows, grid_cols = len(y_lengths), len(x_lengths)
+
+        mark = time.perf_counter()
+        units = self._latent_tiles(z_BCTHW)
+        self._profile["tiling"] += time.perf_counter() - mark
+        assert len(units) == grid_rows * grid_cols, f"{len(units)} tiles for a {grid_rows}x{grid_cols} grid"
+
+        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
+        wave_size = self.mesh_device.get_num_devices()
+        assert (
+            len(units) <= wave_size
+        ), f"a device-stitched clip must fit one wave; {len(units)} tiles against {wave_size} devices"
+        _, _, num_frames, height, width = units[0].shape
+        decoder = self._decoder_for(num_frames, height, width)
+        profile = self._profile
+
+        mark = time.perf_counter()
+        wave = [unit.permute(0, 2, 3, 4, 1).reshape(1, num_frames * height * width, -1) for unit in units]
+        # Pad to the mesh with repeats of the last tile, as the host path does. The padding lands on
+        # devices whose gathered positions map outside the grid and is never indexed.
+        batch = torch.cat(wave + [wave[-1]] * (wave_size - len(wave)), dim=0)
+        profile["host_prep"] += time.perf_counter() - mark
+
+        mark = time.perf_counter()
+        tokens = ttnn.from_torch(
+            batch,
+            dtype=ttnn.bfloat16,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+        )
+        profile["upload"] += time.perf_counter() - mark
+
+        mark = time.perf_counter()
+        decoded = decoder(tokens)
+        pixels = unpatchify_device(
+            decoded,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            out_channels=self.config.out_channels,
+            patch_size=self.config.spatial_compression_ratio,
+            patch_size_t=self.config.temporal_compression_ratio,
+        )
+        # Co-locate every tile on every device. Two gathers, one per mesh axis.
+        gathered = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
+        gathered = ttnn.all_gather(gathered, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
+
+        # Position of shard k in the gathered tensor: the inverse of the transpose.
+        order = [r * mesh_cols + c for c in range(mesh_cols) for r in range(mesh_rows)]
+        position = {shard: index for index, shard in enumerate(order)}
+        if self._stitcher is None:
+            self._stitcher = DeviceTileStitcher(self.mesh_device)
+        # `ttnn.Shape` does not support slicing, so materialize it as a list once.
+        gathered_shape = list(gathered.shape)
+
+        def tile_at(row: int, col: int) -> ttnn.Tensor:
+            index = position[row * grid_cols + col]
+            return ttnn.slice(gathered, [index, 0, 0, 0, 0], [index + 1, *gathered_shape[1:]])
+
+        rows = [[tile_at(i, j) for j in range(grid_cols)] for i in range(grid_rows)]
+        canvas = self._stitcher.stitch(rows, y_overlaps, x_overlaps)
+        elapsed = time.perf_counter() - mark
+        profile["device"] += elapsed
+        profile["device_each"].append(elapsed)
+
+        mark = time.perf_counter()
+        # One replica: the gather made every device identical, which amendment 105 asserts.
+        out = ttnn.to_torch(ttnn.get_device_tensors(canvas)[0]).float()
+        elapsed = time.perf_counter() - mark
+        profile["readback"] += elapsed
+        profile["readback_each"].append(elapsed)
+        profile["shape"] = tuple(canvas.shape)
+        profile["dtype"] = str(canvas.dtype)
+        profile["readback_mb"] += out.numel() * out.element_size() / 1e6
+        profile["waves"] += 1
+        profile["units"] += len(units)
+        return out
+
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
         """Decode one temporal clip, spatially tiled -- the reference ``_decode_clip``.
 
@@ -645,6 +748,9 @@ class MiniMaxH3Vae(Module):
         """
         if not self.use_tiling:
             return self._run_decoder(z_BCTHW)
+
+        if self.device_stitch:
+            return self._decode_clip_device_stitched(z_BCTHW)
 
         mark = time.perf_counter()
         units = self._latent_tiles(z_BCTHW)
@@ -719,7 +825,12 @@ class MiniMaxH3Vae(Module):
             z_BCTHW[:, :, i * chunk_size : i * chunk_size + chunk_size + config.token_overlap]
             for i in range(num_chunks)
         ]
-        if self.use_tiling and chunk_latents:
+        if self.use_tiling and self.device_stitch and chunk_latents:
+            # Device path: each chunk's tile grid is decoded, unpatchified, all-gathered and blended on
+            # device, and only the assembled canvas is read back. One chunk at a time, which is what
+            # the host path's grouping already reduces to at 768P (32 devices // 28 tiles == 1).
+            clips = [self._decode_clip_device_stitched(latents) for latents in chunk_latents]
+        elif self.use_tiling and chunk_latents:
             latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
             tiles_per_chunk = len(self._latent_tiles(chunk_latents[0]))
             wave_size = self.mesh_device.get_num_devices()

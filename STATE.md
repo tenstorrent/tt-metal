@@ -4590,3 +4590,82 @@ Three things gated, and the first is the one that matters:
 Note the API: `ttnn.all_gather(tensor, dim, cluster_axis=..., topology=...)` takes **no `mesh_device`
 keyword**. Passing one raises a `TypeError` listing the whole accepted signature, which is a good error
 but costs a run to find.
+
+---
+
+## Amendment 106 (2026-08-05) — iteration 1 FORENSIC: the device stitch is wired and correct, and it is a **wash**. The readback is 3.2x slower per byte
+
+Wired `stitch_device_minimax_h3.py` into the decode path behind
+`MINIMAX_H3_VAE_DEVICE_STITCH=1` (default off). It is **correct** — and it does not win.
+
+### Correctness first, per amendment 86's rule
+
+The gate for this iteration had to be the **e2e CLIP number**, because amendment 86's readback bug
+passed every per-shard test and only CLIP caught it (37.37 -> 19.58). Measured with the device path on:
+
+| | host | device stitch |
+|---|---|---|
+| CLIP mean | 37.37 | **37.34** |
+| frame std | 46.05 | 46.08 |
+| mean frame delta | 9.88 | 9.88 |
+| spatial seam v / h | 1.016 / 0.692 | 1.014 / 0.692 |
+| temporal seam @ 17 | 0.994 | 0.994 |
+
+Equivalent. The tiny drift is the device fp32 blend against the host fp32 blend, not a placement error —
+which is what `gathered_tile_order` from amendment 105 was for, and it held.
+
+### And it is 11x slower
+
+| | host | device stitch |
+|---|---|---|
+| **VAE decode stage** | **4.0 s** | **44.6 s** |
+| device | 1.07 s, 153 ms/wave | 41.02 s — **first wave 39738 ms**, rest 207-227 ms |
+| readback | 1.37 s, 196 ms/wave | 2.13 s, **304 ms/wave** |
+| stitch | 0.88 s | **0.00 s** |
+| unpatchify | 0.30 s | **0.00 s** |
+
+Three separate problems, and only the first is a one-off:
+
+1. **A 39.7 s first-wave JIT compile.** The device stitch introduces a large number of new op shapes —
+   the blend is ~28 tiles x several `slice`/`multiply`/`add`/`concat` each — and every one compiles.
+   In a warmed pipeline this is absorbed by `warmup()`, so it is not the interesting number, but it is
+   why the e2e gate's stage row reads 44.6 s.
+2. **The readback is 3.2x slower per byte.** The transfer volume *did* halve as amendment 84 predicted
+   — a bf16 canvas is 173 MB/chunk against 358 MB of overlapping bf16 tiles — but it takes **304 ms
+   against 196 ms**. That is 570 MB/s for the canvas against 1.83 GB/s for the tiles. Halving the bytes
+   and still losing time means the bottleneck was never bytes on this path. Candidates, untested:
+   `ttnn.to_torch(get_device_tensors(canvas)[0])` on a single device may not use the same fast path as
+   `ConcatMeshToTensor` over 32; and the canvas is the output of a long `slice`/`concat` chain, so its
+   layout may be worse to read than a freshly-written decoder output.
+3. **On-device stitch costs ~60 ms/wave** (207-227 ms against 153 ms). Amendment 84 measured the
+   all-gather itself at 4.4 ms in bf16, so the ~55 ms balance is `unpatchify_device` plus the blend's
+   op count.
+
+**Net, excluding compile: device +0.4 s, non-device −0.42 s. A wash.** The 1.18 s of host stitch and
+unpatchify really did disappear; it was spent again on the device side and in a slower readback.
+
+### What this does and does not retract
+
+Amendment 84's *projection* — "stage 4.3 -> ~2.9 s if the device stitch itself is cheap" — is
+**not met**, and its own conditional is where it fails: the device stitch is not cheap (60 ms/wave), and
+the readback did not scale with bytes. The all-gather measurement (4.4 ms) stands and was never the
+problem. Amendment 105's permutation stands and was necessary — without it this would have been
+spectacularly wrong rather than merely slow.
+
+### Next experiments, cheapest first
+
+1. **Why is the canvas readback 570 MB/s?** Try `ConcatMeshToTensor` over a *replicated* canvas, or read
+   a canvas that has been re-materialized (`ttnn.clone` / `to_memory_config`) so it is not the tail of a
+   concat chain. If the canvas reads at tile speed, the stage lands at ~2.6 s and the iteration wins.
+2. **Cut the blend's op count.** The reference order forces tile-by-tile sequencing, but the trims and
+   the per-tile `slice` calls may be foldable into fewer, larger ops.
+3. If neither moves it, this line is closed and the honest conclusion is that the host stitch is
+   already near the floor for this geometry — leaving the readback's *own* 2x anomaly (amendment 84's
+   second loose end: 172 ms/wave in-pipeline against 90.9 ms standalone for the same bytes) as the
+   better target, worth 0.57 s and much cheaper to chase.
+
+**Method note.** *Halving the bytes is not halving the transfer.* The projection assumed readback time
+scales with volume; measured, the canvas moves half the bytes at a third of the bandwidth. And the
+reason this was visible at all is that the profile counts **volume and per-wave time separately** — a
+single "readback: 2.13 s" row would have looked like a modest regression rather than a bandwidth
+anomaly with a specific cause to chase.
