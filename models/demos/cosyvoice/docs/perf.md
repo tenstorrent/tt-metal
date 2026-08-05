@@ -15,12 +15,12 @@ RTF is compute-seconds per second of audio. Measured on the captured utterance �
 
 | stage | cost | RTF | share | traced? |
 |---|---|---|---|---|
-| **LLM** (14-block AR decoder) | 15.71 ms/token × 164 | **0.787** | **70.1 %** | yes, 2.22× |
-| flow decoder (10 Euler steps) | 1.053 s | 0.322 | 28.6 % | yes, 1.09× |
-| HiFT vocoder (mel → 72 192 samples) | 0.048 s | 0.015 | 1.3 % | no |
-| **total** | **3.677 s** | **1.123** | | |
+| **LLM** (14-block AR decoder) | 15.19 ms/token × 164 | **0.761** | **69.4 %** | yes, 2.22× |
+| flow decoder (10 Euler steps) | 1.049 s | 0.320 | 29.2 % | yes, 1.09× |
+| HiFT vocoder (mel → 72 192 samples) | 0.048 s | 0.015 | 1.4 % | no |
+| **total** | **3.588 s** | **1.096** | | |
 
-**Target: RTF < 0.5 (P5), < 0.2 (P6). Not met — measured 1.123**, down from 2.120
+**Target: RTF < 0.5 (P5), < 0.2 (P6). Not met — measured 1.096**, down from 2.120
 before either stage was traced.
 
 The split is the useful part. The vocoder — the stage the previous attempt left on
