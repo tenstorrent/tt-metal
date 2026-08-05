@@ -42,7 +42,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     )
 
 
-def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None) -> MLPWeights:
+def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None, use_gateup_agmm=True) -> MLPWeights:
     """Per-layer MLP state: gate_proj, down_proj, up_proj weights."""
     tp = getattr(args, "num_devices", 1) if args is not None else 1
 
@@ -73,7 +73,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 tp,
                 cache("gate_up", ".swiglu"),
             )
-            if tpc.mlp_gateup_agmm_enabled(tp)
+            if tpc.mlp_gateup_agmm_enabled(tp) and use_gateup_agmm
             else None
         )
 
@@ -157,7 +157,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
 class Qwen36MLP:
     """SwiGLU feed-forward network for Qwen3.5."""
 
-    def __init__(self, mesh_device, state_dict, tensor_cache_path=None, args=None, tt_ccl=None):
+    def __init__(self, mesh_device, state_dict, tensor_cache_path=None, args=None, tt_ccl=None, use_gateup_agmm=True):
         self.device = mesh_device
         self.args = args
         self.tt_ccl = tt_ccl
@@ -175,8 +175,10 @@ class Qwen36MLP:
         # Prefill fused-swiglu AGMM (ff_norm skips its AG; layer.py sets _fuse_ff_agmm to match).
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-        self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices)
-        self.weights = load_mlp_weights(mesh_device, state_dict, tensor_cache_path, args=args)
+        self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and use_gateup_agmm
+        self.weights = load_mlp_weights(
+            mesh_device, state_dict, tensor_cache_path, args=args, use_gateup_agmm=use_gateup_agmm
+        )
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
         )

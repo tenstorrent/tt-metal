@@ -305,6 +305,22 @@ class Qwen36ModelArgs(ModelArgs):
             return False
         return (layer_idx + 1) % self.moe_decoder_sparse_step == 0
 
+    def is_distributed_norm(self, mode):
+        """Force the distributed-norm path for multi-device prefill.
+
+        The prefill norm-all-gather fusion (all_gather_minimal_matmul_async in-proj) needs the norm
+        to honor enable_all_gather and leave its output hidden-fractured for the fused matmul to
+        gather. The base enables the distributed-norm path only for dim>4096 (an L1 heuristic the
+        27B's 5120 hits but the 35B-A3B's 2048 misses) — on the miss it force-gathers the norm output,
+        so the AGMM in-proj double-gathers (K mismatch). Forcing it on for multi-device prefill routes
+        every Qwen3.5/3.6 config through the same path 27B already uses; decode is unchanged.
+        """
+        from models.tt_transformers.tt.common import Mode
+
+        if self.is_multichip and mode == Mode.PREFILL:
+            return True
+        return super().is_distributed_norm(mode)
+
     def weight_cache_path(self, dtype=None):
         """Weight tensor cache dir, rooted at model_cache_path (TT_CACHE_PATH + device), NOT the HF
         snapshot (often read-only in CI -> caching there silently never persists); falls back to the

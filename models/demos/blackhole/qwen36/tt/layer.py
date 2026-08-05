@@ -63,7 +63,9 @@ class Qwen36DecoderLayer:
         # Prefill: ff_norm skips AG (fused into gate/up AGMM); decode gathers pre-norm so this is a no-op there.
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-        self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices)
+        # MoE layers gather in the norm (the sparse MoE + shared expert need full/replicated
+        # hidden and do NOT run the fused gate/up AGMM), so only fuse for the dense MLP.
+        self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and not args.is_moe_layer(layer_num)
         self.ffn_norm = self._make_norm(
             mesh_device,
             args,
