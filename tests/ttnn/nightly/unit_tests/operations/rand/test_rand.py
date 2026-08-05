@@ -204,24 +204,35 @@ def test_rand_different_seed_values(device):
     device.disable_and_clear_program_cache()
 
 
-def test_rand_tile_means_have_iid_dispersion(device):
-    """Guard against correlated SFPU lanes inflating random-tensor mean variance."""
-    shape = (256, 256)
+def test_rand_tiles_have_iid_dispersion_and_low_lane_correlation(device):
+    """Guard against correlated SFPU lanes distorting within-tile statistics."""
+    shape = (1024, 1024)
     data = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=1)).float()
     assert torch.isfinite(data).all()
     assert abs(data.mean().item() - 0.5) < 0.01
 
-    tiles = data.unfold(0, 32, 32).unfold(1, 32, 32).reshape(-1, 32 * 32)
-    tile_means = tiles.mean(dim=1)
+    tiles = data.unfold(0, 32, 32).unfold(1, 32, 32).reshape(-1, 32, 32)
+    tile_means = tiles.mean(dim=(1, 2))
     observed_std = tile_means.std(unbiased=False).item()
     iid_std = 1.0 / math.sqrt(12 * 32 * 32)
 
-    assert observed_std < 3 * iid_std, (
-        f"tile-mean std {observed_std:.6f} exceeds three times the IID expectation {iid_std:.6f}; "
-        "random elements remain correlated within tiles"
+    assert 0.75 * iid_std < observed_std < 1.25 * iid_std, (
+        f"tile-mean std {observed_std:.6f} is not close to the IID expectation {iid_std:.6f}; "
+        "random elements may remain correlated within tiles"
     )
 
-    assert torch.unique(tiles, dim=0).shape[0] == tiles.shape[0], "different cores emitted duplicate RNG streams"
+    adjacent_lane_correlations = torch.stack(
+        [
+            torch.corrcoef(torch.stack((tiles[:, :, lane].flatten(), tiles[:, :, lane + 1].flatten())))[0, 1]
+            for lane in range(31)
+        ]
+    )
+    worst_lane_correlation = adjacent_lane_correlations.abs().max().item()
+    assert worst_lane_correlation < 0.06, f"worst adjacent-lane correlation {worst_lane_correlation:.6f} exceeds 0.06"
+
+    assert (
+        torch.unique(tiles.reshape(-1, 32 * 32), dim=0).shape[0] == tiles.shape[0]
+    ), "different cores emitted duplicate RNG streams"
 
 
 @pytest.mark.parametrize("low, high", [(0.0, 5e-7), (2.0, 2.0000005), (-1.0, 0.0)])
