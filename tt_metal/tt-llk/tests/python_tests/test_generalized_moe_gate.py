@@ -25,10 +25,8 @@ The gate reads instance 0, which is why a run's other 56 cells look like residue
 tests drive all eight, since they are the same network over different columns.
 
 Where a MOP's DEST layout is derivable from its instruction sequence, the test pins it outright
-(step0, step2) rather than comparing two runs of the same op. A differential cannot catch an op that
-is wrong the same way at every parameter value, which is exactly what a reference configuration
-shares with its subject. step1_hi is the exception and stays differential: its run occupies eight
-rows of which only columns 0-3 and 12-15 are defined, so there is no full layout to pin.
+(step0, step2). step1_hi is the exception and stays differential: its run occupies eight rows of
+which only columns 0-3 and 12-15 are defined, so there is no full layout to pin.
 
 The transpose MOP runners take no dst_index, so what tile they address depends on the DEST offset
 left by whatever ran before them; the after_mop axis on relocate_run and place_field sequences an
@@ -279,6 +277,12 @@ def _payload_tile(payload):
     return payload.t().contiguous()
 
 
+def _gate_tiles(payload, ids):
+    """The four DEST tiles a gate run starts from: the payload in the frame L1 has to hold, the ids
+    untransposed alongside it, and the key and scratch regions the op fills itself."""
+    return [_payload_tile(payload), _id_tile(ids), _zeros(), _zeros()]
+
+
 def _gate_stimuli(seed):
     """A payload/bias pair whose bf16 sum hits 256 distinct keys.
 
@@ -310,6 +314,15 @@ def _tagged_words(base):
     """
     tags = base + torch.arange(256)
     return ((((tags // 200) % 128) << 8) | (tags % 200 + 20)).reshape(16, 16)
+
+
+def _tag_tiles():
+    """The four tagged DEST regions, as the word images to check against and the tiles to upload.
+
+    The bases are 1000 apart so a datum that crosses regions is traceable to the one it came from.
+    """
+    tags = [_tagged_words(base) for base in (0, 1000, 2000, 3000)]
+    return tags, [_word_tile(t) for t in tags]
 
 
 def _gate_output(faces):
@@ -359,8 +372,7 @@ def _assert_gate_output(faces, golden, topk, ordered=True, **tolerance):
 
 # topk is {4, 6, 8} and not a free parameter: finalize_ungrouped static_asserts it, because its
 # rank-mask is only correct for those three. 1-3 would fall into the `topk <= 4` branch and silently
-# keep four ranks, and 5/7 take the masked branch untested. So there is no top-1 or top-2 gate here
-# to cover, which is a limitation of the op rather than a hole in the tests.
+# keep four ranks, and 5/7 take the masked branch untested.
 #
 # Approximation mode reaches only the normalization tail, so it is crossed with softmax (whose exp it
 # changes) rather than with every topk.
@@ -386,7 +398,7 @@ def test_generalized_moe_gate(topk, softmax, approx):
                 eps=_bits(EPS),
                 scale=_bits(SCALE),
             ),
-            [_payload_tile(payload), _id_tile(ids), _zeros(), _zeros()],
+            _gate_tiles(payload, ids),
             src_b=bias,
             approx=approx,
         )
@@ -488,9 +500,7 @@ def test_generalized_moe_gate_sigmoid(grouped, topk):
 
 
 # The grouped answer is well defined only when the eight group top-2 sums are pairwise distinct, so
-# that which four groups survive is unambiguous. Most seeds tie somewhere; 128 does not. One seed is
-# enough: the knobs here are the selection path and approximation mode, and a second stimulus draw
-# adds no knob value (10 and 86 also work, if a wider draw is ever wanted).
+# that which four groups survive is unambiguous. Most seeds tie somewhere; 128 does not.
 @parametrize(seed=[128], approx=[ApproximationMode.No, ApproximationMode.Yes])
 def test_generalized_moe_gate_grouped(seed, approx):
     payload, bias, keys = _gate_stimuli(seed=seed)
@@ -501,7 +511,7 @@ def test_generalized_moe_gate_grouped(seed, approx):
             GENERALIZED_MOE_GATE(
                 mode=MODE_GATE, grouped=True, eps=_bits(EPS), scale=_bits(SCALE)
             ),
-            [_payload_tile(payload), _id_tile(ids), _zeros(), _zeros()],
+            _gate_tiles(payload, ids),
             src_b=bias,
             approx=approx,
         )
@@ -525,7 +535,7 @@ def test_generalized_moe_gate_shipping_config(dest_sync, num_faces):
     faces = _run(
         _config(
             GENERALIZED_MOE_GATE(mode=MODE_GATE, eps=_bits(EPS), scale=_bits(SCALE)),
-            [_payload_tile(payload), _id_tile(ids), _zeros(), _zeros()],
+            _gate_tiles(payload, ids),
             src_b=bias,
             dest_sync=dest_sync,
             num_faces=num_faces,
@@ -556,7 +566,7 @@ def test_generalized_moe_gate_normalization(norm, softmax):
                 eps=_bits(eps),
                 scale=_bits(scale),
             ),
-            [_payload_tile(payload), _id_tile(ids), _zeros(), _zeros()],
+            _gate_tiles(payload, ids),
             src_b=bias,
         )
     )
@@ -602,7 +612,7 @@ def test_generalized_moe_gate_softmax_logits():
                 mode=MODE_GATE, softmax=True, eps=_bits(0.0), scale=_bits(1.0)
             ),
             # src_b defaults to zero: with no bias the sort key is the logit itself.
-            [_payload_tile(payload), _id_tile(ids), _zeros(), _zeros()],
+            _gate_tiles(payload, ids),
         )
     )
 
@@ -632,12 +642,7 @@ def test_generalized_moe_gate_ties():
     faces = _run(
         _config(
             GENERALIZED_MOE_GATE(mode=MODE_GATE, eps=_bits(EPS), scale=_bits(SCALE)),
-            [
-                _payload_tile(payload.reshape(16, 16).to(torch.bfloat16)),
-                _id_tile(ids),
-                _zeros(),
-                _zeros(),
-            ],
+            _gate_tiles(payload.reshape(16, 16).to(torch.bfloat16), ids),
             src_b=(key - payload).reshape(16, 16).to(torch.bfloat16),
         )
     )
@@ -684,7 +689,7 @@ def test_generalized_moe_gate_produce_run(store, idx_offset):
                 eps=_bits(EPS),
                 scale=_bits(SCALE),
             ),
-            [_payload_tile(payload), _id_tile(ids), _zeros(), _zeros()],
+            _gate_tiles(payload, ids),
             src_b=bias,
         )
     )
@@ -862,8 +867,7 @@ def test_generalized_moe_gate_binary_num_faces(num_faces):
 def test_generalized_moe_gate_copy4rows(src_dst, srcb):
     # Two argnames, so pytest passes the tuple through as-is -- no _one() unwrap.
     src, dst = src_dst
-    tags = [_tagged_words(base) for base in (0, 1000, 2000, 3000)]
-    tiles = [_word_tile(t) for t in tags]
+    tags, tiles = _tag_tiles()
 
     faces = _run(
         _config(
@@ -914,7 +918,7 @@ def test_generalized_moe_gate_copy4rows(src_dst, srcb):
 )
 def test_generalized_moe_gate_dest_sections(what):
     mode, sub_op = _one(what)
-    tags = [_tagged_words(base) for base in (0, 1000, 2000, 3000)]
+    tags, tiles = _tag_tiles()
     payload, bias, keys = _gate_stimuli(seed=61)
     ids = _ids_face()
 
@@ -930,11 +934,7 @@ def test_generalized_moe_gate_dest_sections(what):
                 eps=_bits(EPS),
                 scale=_bits(SCALE),
             ),
-            (
-                [_payload_tile(payload), _id_tile(ids), _zeros(), _zeros()]
-                if gate
-                else [_word_tile(t) for t in tags]
-            ),
+            (_gate_tiles(payload, ids) if gate else tiles),
             src_b=bias if gate else None,
         ),
         view=_sections,
@@ -981,8 +981,7 @@ def test_generalized_moe_gate_dest_sections(what):
 
 
 def test_generalized_moe_gate_copy4rows_back_to_back():
-    tags = [_tagged_words(base) for base in (0, 1000, 2000, 3000)]
-    tiles = [_word_tile(t) for t in tags]
+    tags, tiles = _tag_tiles()
 
     faces = _run(
         _config(
@@ -1020,8 +1019,7 @@ def test_generalized_moe_gate_step1_hi(knobs):
     shifted to match.
     """
     d2b_dst, b2d_base = _one(knobs)
-    tags = [_tagged_words(base) for base in (0, 1000, 2000, 3000)]
-    tiles = [_word_tile(t) for t in tags]
+    tags, tiles = _tag_tiles()
     shifted = [_word_tile(torch.roll(t, shifts=-d2b_dst, dims=0)) for t in tags]
 
     faces, reference = _run(
@@ -1073,8 +1071,7 @@ def test_generalized_moe_gate_step1_hi(knobs):
 # would notice if one were edited and the other left behind. That equivalence is the claim here, and
 # it is also what lets the step1_hi test above stand as step1's layout cover.
 def test_generalized_moe_gate_step1_matches_step1_hi():
-    tags = [_tagged_words(base) for base in (0, 1000, 2000, 3000)]
-    tiles = [_word_tile(t) for t in tags]
+    tags, tiles = _tag_tiles()
 
     step1, step1_hi = _run(
         _config(GENERALIZED_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP1), tiles),
@@ -1111,13 +1108,10 @@ def test_generalized_moe_gate_step0():
     transpose found in the window rows nothing wrote, so they carry no claim -- that is where the
     gate's residue in columns 8-15 comes from.
     """
-    tags = [_tagged_words(base) for base in (0, 1000, 2000, 3000)]
+    tags, tiles = _tag_tiles()
 
     faces = _run(
-        _config(
-            GENERALIZED_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP0),
-            [_word_tile(t) for t in tags],
-        )
+        _config(GENERALIZED_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP0), tiles)
     )
 
     # num_tiles=4, so unlike every other MOP here this one does reach the scratch region.
@@ -1138,13 +1132,10 @@ def test_generalized_moe_gate_step2():
     num_tiles=3, so the scratch region is untouched; the gate needs the bias transposed too, which
     is what makes it 3 rather than 2.
     """
-    tags = [_tagged_words(base) for base in (0, 1000, 2000, 3000)]
+    tags, tiles = _tag_tiles()
 
     faces = _run(
-        _config(
-            GENERALIZED_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP2),
-            [_word_tile(t) for t in tags],
-        )
+        _config(GENERALIZED_MOE_GATE(mode=MODE_MOVE, sub_op=MOVE_STEP2), tiles)
     )
 
     for region in (SCORES, IDS, KEYS):
@@ -1226,15 +1217,10 @@ def _stored_run(faces, store_lo, store_hi):
 
 # merge4_top8 is the gate's second merge stage, and the gate calls it only at read_base 0 storing
 # to {0,2}. What it selects is covered there, against exact goldens; what has no cover at all is
-# that its two parameters are honest, and that the idx|score concat survives the round trip.
-#
-# Those are the claims made here, and deliberately not which eight of the sixteen it keeps. The
-# stimulus does commit to a layout -- four quarters at {0,2,4,6}, each sorted descending down its
-# four rows -- so that part could be pinned. What is not established is the direction convention: a
-# bitonic merge network generally wants its inputs in alternating directions, and which of the four
-# quarters this one expects ascending is not written down outside the instruction sequence. Get that
-# wrong and the output is deterministic but meaningless, which a differential does not care about and
-# a selection golden would enshrine.
+# that its two parameters are honest, and that the idx|score concat survives the round trip. Those
+# are the claims here, and not which eight of the sixteen it keeps: the direction convention a
+# bitonic merge wants for its four input quarters is not written down outside the instruction
+# sequence, so a selection golden would enshrine whatever the op does today.
 def test_generalized_moe_gate_merge4_top8():
     keys, ids, scores = _merge4_stimuli(seed=57)
     shifted = [torch.roll(t, shifts=8, dims=0) for t in (keys, ids, scores)]
@@ -1278,8 +1264,7 @@ def test_generalized_moe_gate_merge4_top8():
 )
 def test_generalized_moe_gate_relocate_run(placement, after_mop):
     from_lo, from_hi, to_lo, to_hi = placement
-    tags = [_tagged_words(base) for base in (0, 1000, 2000, 3000)]
-    tiles = [_word_tile(t) for t in tags]
+    tags, tiles = _tag_tiles()
 
     faces = _run(
         _config(
@@ -1325,8 +1310,7 @@ def test_generalized_moe_gate_relocate_run(placement, after_mop):
 def test_generalized_moe_gate_place_field(field, src, dst, after_mop):
     src_lo, src_hi = src
     dst_lo, dst_hi = dst
-    tags = [_tagged_words(base) for base in (0, 1000, 2000, 3000)]
-    tiles = [_word_tile(t) for t in tags]
+    tags, tiles = _tag_tiles()
     home = {0: KEYS, 1: IDS, 2: SCORES}[field]
 
     faces = _run(
@@ -1367,18 +1351,23 @@ def test_generalized_moe_gate_place_field(field, src, dst, after_mop):
         ), f"field {field} also wrote region {region}"
 
 
-def _combine_stimuli(seed):
+def _combine_stimuli(seed, score_divisor=8.0):
     """The merge input as it stands once both runs are in place: key, id and score for DEST rows
     0-7 of every column.
 
     Rows 0-3 are the run already resident at {0,2}; rows 4-7 are the run that arrives field by field
     through the intermediate region. Keys are distinct so the top-8 is unambiguous, and the scores
     are unrelated to the keys so a sort whose payload desynced from its key gets caught.
+
+    score_divisor holds the scores inside one octave for finalize, which exponentiates their
+    differences on the softmax path and needs a spread exp and a bf16 sum can both hold.
     """
     generator = torch.Generator().manual_seed(seed)
     keys = (torch.randperm(128, generator=generator) + 1).to(torch.float32) / 8.0
     ids = torch.randperm(128, generator=generator).to(torch.int32)
-    scores = (torch.randperm(128, generator=generator) + 1).to(torch.float32) / 8.0
+    scores = (torch.randperm(128, generator=generator) + 1).to(
+        torch.float32
+    ) / score_divisor
     return keys.reshape(8, 16), ids.reshape(8, 16), scores.reshape(8, 16)
 
 
@@ -1406,29 +1395,22 @@ def _assert_combined(faces, keys, ids, scores, store_lo, store_hi, idx_offset):
         ] == want_scores.tolist(), f"instance {instance} carried the wrong scores"
 
 
-# The multi-block combine tail: a block's run reaches its home regions through place_field, and the
-# merge then has to accept it as an equal of the run already sitting there. That the placed cells
-# form a run a merge can consume is the run format's whole contract, and nothing else checks it.
-#
-# Rows 4-7 start out holding keys far above anything real, so a placement that silently does not
-# land leaves poison the merge would rank first.
-#
-# The merge16 idx_offset add is not swept here: it is covered on its own in the idx_offset test
-# below and at gate level in produce_run, so a sweep here would only duplicate those.
 IDX_OFFSET_NONE = 0
 
 
-@parametrize(store=[(8, 10), (12, 14)])
-def test_generalized_moe_gate_combine(store):
-    store_lo, store_hi = _one(store)
-    keys, ids, scores = _combine_stimuli(seed=404)
-    poison = torch.full((4, 16), 4096.0)
+def _combine_tiles(keys, ids, scores):
+    """The four DEST tiles a combine starts from.
 
+    Rows 0-3 of each data region hold the resident run. Rows 4-7 are the merge slot the arriving run
+    has to land in, seeded with keys far above anything real so a placement that silently does not
+    land leaves poison the merge would rank first. The arriving run itself waits in the intermediate
+    region, one field per four-row band, which is where place_field reads it from.
+    """
     resident = slice(0, 4)
     arriving = slice(4, 8)
+    poison = _to_dst(torch.full((4, 16), 4096.0))
 
     def region(rows_0_3, poisoned):
-        """A DEST face holding the resident run at rows 0-3 and poison where the run should land."""
         face = torch.zeros(16, 16, dtype=torch.int32)
         face[resident] = rows_0_3
         face[arriving] = poisoned
@@ -1439,6 +1421,22 @@ def test_generalized_moe_gate_combine(store):
     intermediate[4:8] = ids[arriving]
     intermediate[8:12] = _to_dst(scores[arriving])
 
+    return [
+        _word_tile(region(_to_dst(scores[resident]), poison)),
+        _word_tile(region(ids[resident], torch.full((4, 16), 900))),
+        _word_tile(region(_to_dst(keys[resident]), poison)),
+        _word_tile(intermediate),
+    ]
+
+
+# The multi-block combine tail: a block's run reaches its home regions through place_field, and the
+# merge then has to accept it as an equal of the run already sitting there. That the placed cells
+# form a run a merge can consume is the run format's whole contract, and nothing else checks it.
+@parametrize(store=[(8, 10), (12, 14)])
+def test_generalized_moe_gate_combine(store):
+    store_lo, store_hi = _one(store)
+    keys, ids, scores = _combine_stimuli(seed=404)
+
     faces = _run(
         _config(
             GENERALIZED_MOE_GATE(
@@ -1448,12 +1446,7 @@ def test_generalized_moe_gate_combine(store):
                 to_hi=store_hi,
                 idx_offset=IDX_OFFSET_NONE,
             ),
-            [
-                _word_tile(region(_to_dst(scores[resident]), _to_dst(poison))),
-                _word_tile(region(ids[resident], torch.full((4, 16), 900))),
-                _word_tile(region(_to_dst(keys[resident]), _to_dst(poison))),
-                _word_tile(intermediate),
-            ],
+            _combine_tiles(keys, ids, scores),
         )
     )
 
@@ -1463,8 +1456,6 @@ def test_generalized_moe_gate_combine(store):
 # Same combine, except the arriving run is already sitting in DEST at {8,10} and reaches the merge
 # slot by relocation. copy_topk_run's own test only checks that the cells moved; that what lands is
 # still a run a merge will accept is a separate claim, and this is what makes it.
-#
-# idx_offset is not swept here for the same reason as the combine above.
 def test_generalized_moe_gate_combine_relocated():
     keys, ids, scores = _combine_stimuli(seed=404)
     poison = torch.full((4, 16), 4096.0)
@@ -1503,19 +1494,6 @@ def test_generalized_moe_gate_combine_relocated():
     _assert_combined(faces, keys, ids, scores, store_lo, store_hi, IDX_OFFSET_NONE)
 
 
-def _finalize_stimuli(seed):
-    """Two runs' worth of candidates, with scores held inside one octave.
-
-    Same shape as _combine_stimuli, but finalize exponentiates the score differences on the softmax
-    path, so the spread has to stay somewhere exp and a bf16 sum both hold.
-    """
-    generator = torch.Generator().manual_seed(seed)
-    keys = (torch.randperm(128, generator=generator) + 1).to(torch.float32) / 8.0
-    ids = torch.randperm(128, generator=generator).to(torch.int32)
-    scores = (torch.randperm(128, generator=generator) + 1).to(torch.float32) / 128.0
-    return keys.reshape(8, 16), ids.reshape(8, 16), scores.reshape(8, 16)
-
-
 # generalized_moe_gate_combine_finalize: the >256 path's actual output. The arriving run is placed
 # at {4,6}, then finalize sorts the pair at {0,2}+{4,6}, normalizes and step2 transposes to the
 # output layout. finalize runs its own merge, so unlike the RUN_COMBINE tail no merge16 precedes it.
@@ -1523,22 +1501,7 @@ def _finalize_stimuli(seed):
 # but carries the wrong payload would still show up.
 @parametrize(topk=[4, 6, 8], softmax=[False, True])
 def test_generalized_moe_gate_combine_finalize(topk, softmax):
-    keys, ids, scores = _finalize_stimuli(seed=404)
-    poison = torch.full((4, 16), 4096.0)
-
-    resident = slice(0, 4)
-    arriving = slice(4, 8)
-
-    def region(rows_0_3, poisoned):
-        face = torch.zeros(16, 16, dtype=torch.int32)
-        face[resident] = rows_0_3
-        face[arriving] = poisoned
-        return face
-
-    intermediate = torch.zeros(16, 16, dtype=torch.int32)
-    intermediate[0:4] = _to_dst(keys[arriving])
-    intermediate[4:8] = ids[arriving]
-    intermediate[8:12] = _to_dst(scores[arriving])
+    keys, ids, scores = _combine_stimuli(seed=404, score_divisor=128.0)
 
     faces = _run(
         _config(
@@ -1550,12 +1513,7 @@ def test_generalized_moe_gate_combine_finalize(topk, softmax):
                 eps=_bits(EPS),
                 scale=_bits(SCALE),
             ),
-            [
-                _word_tile(region(_to_dst(scores[resident]), _to_dst(poison))),
-                _word_tile(region(ids[resident], torch.full((4, 16), 900))),
-                _word_tile(region(_to_dst(keys[resident]), _to_dst(poison))),
-                _word_tile(intermediate),
-            ],
+            _combine_tiles(keys, ids, scores),
         )
     )
 
@@ -1576,8 +1534,7 @@ def test_generalized_moe_gate_combine_finalize(topk, softmax):
 # a regression in the offset add before silicon does. Comparing two runs of the same stimulus needs
 # no golden and no knowledge of where in the run a rank lands.
 def test_generalized_moe_gate_idx_offset():
-    tags = [_tagged_words(base) for base in (0, 1000, 2000, 3000)]
-    tiles = [_word_tile(t) for t in tags]
+    tags, tiles = _tag_tiles()
 
     def config(idx_offset):
         return _config(
