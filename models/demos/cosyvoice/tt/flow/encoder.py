@@ -133,7 +133,13 @@ class TtRelPosAttention:
         first row, reinterpret back, keep the left half. Every step is a reshape
         or a slice -- no gather op needed.
         """
-        zero = ttnn.zeros((b, h, t1, 1), dtype=x.dtype, layout=x.layout, device=x.device())
+        # A zero column, made by zeroing a slice of `x` rather than with
+        # `ttnn.zeros`. `ttnn.zeros(device=...)` is a host->device *write*, and
+        # writes are illegal inside a trace capture -- "Writes are not supported
+        # during trace capture", raised from `enqueue_write_tensor`, several frames
+        # from this line. Multiplying a slice by zero is a pure device op and needs
+        # no shape bookkeeping.
+        zero = ttnn.multiply(ttnn.slice(x, [0, 0, 0, 0], [b, h, t1, 1]), 0.0)
         padded = ttnn.concat([zero, x], dim=-1)  # [B, h, T1, N+1]
         ttnn.deallocate(zero)
         padded = ttnn.reshape(padded, (b, h, n + 1, t1))
