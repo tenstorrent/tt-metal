@@ -1258,7 +1258,7 @@ def read_prompt_kv_cache_by_layer(
         )
 
     # Only forward the kwarg when borrowing is actually requested: ``read_fn`` is a documented
-    # injection point and existing test doubles / demo/replay_hf_tt.py monkeypatches accept only
+    # injection point and existing test doubles / reference/replay_hf_tt.py monkeypatches accept only
     # (kv_cache, *, prompt_len, seq_len_start).
     extra = {"borrow_full_span": True} if borrow_full_span else {}
     if layer_idx is not None:

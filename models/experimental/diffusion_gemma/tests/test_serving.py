@@ -8,7 +8,7 @@ session validation) that ``tt/generator_vllm.py`` delegates to, plus the wrapper
 contract, hybrid KV cache spec and per-request failure cleanup.
 
 The device test (``DG_RUN_DEVICE=1``) runs the reduced-surface serving driver
-``demo/serving_smoke.py`` — prefill + N committed 256-token blocks with a non-256-aligned
+``tests/serving_smoke.py`` — prefill + N committed 256-token blocks with a non-256-aligned
 prompt — and asserts the block-granular contract: number of blocks, tokens emitted, position
 advancement by ``canvas_length``, and that a per-block metrics dict (TTFT, per-block latency,
 tokens-per-block) was produced. RUN-first: text quality is NOT gated (degenerate output expected
@@ -361,7 +361,7 @@ def test_vllm_decode_failure_releases_registered_session(expect_error):
 @pytest.mark.skipif(not DEVICE_GATED, reason="device serving smoke requires DG_RUN_DEVICE=1")
 @pytest.mark.skipif(not os.path.isdir(DG_CKPT), reason=f"checkpoint not available at {DG_CKPT}")
 def test_serving_smoke_emits_blocks_and_advances_position():
-    from models.experimental.diffusion_gemma.demo.serving_smoke import build_arg_parser, run
+    from models.experimental.diffusion_gemma.tests.serving_smoke import build_arg_parser, run
 
     num_layers = os.environ.get("DG_VLLM_SMOKE_NUM_LAYERS", "1")
     canvas = 256
