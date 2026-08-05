@@ -20,7 +20,13 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
+from models.demos.gemma4.tt.dram_sharded import (
+    TILE_SIZE,
+    DramShardedLinear,
+    can_dram_shard,
+    interleaved_gate_up_prefill_config,
+    matmul_rows,
+)
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded decode matmuls for the shared MLP. On by default for
@@ -158,7 +164,11 @@ class SharedMLP:
                 ),
             )
         else:
-            gate_up_proj = ttnn.as_tensor(
+            # Interleaved-weight path (everything off Blackhole). Prefill gets an
+            # explicit 1D program config from interleaved_gate_up_prefill_config —
+            # see SharedMLP.__call__. Keep the weight as a tensor (not a lambda)
+            # so the call site can pass program_config / out memcfg / HiFi2.
+            self.gate_up_proj = ttnn.as_tensor(
                 gate_up_weight,
                 device=mesh_device,
                 dtype=dtype,
@@ -169,7 +179,6 @@ class SharedMLP:
                 ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            self.gate_up_proj = lambda x: ttnn.linear(x, gate_up_proj)
 
         if dram_shard and can_dram_shard(down_k, self.hidden_size, dtype=dtype):
             self.down_proj = DramShardedLinear(
@@ -197,6 +206,36 @@ class SharedMLP:
             )
             self.down_proj = lambda x: ttnn.linear(x, down_proj)
 
+    def _gate_up_linear(self, hidden_states):
+        """Fused gate+up matmul — DramShardedLinear on BH, tuned 1D prefill off BH."""
+        if isinstance(self.gate_up_proj, DramShardedLinear):
+            return self.gate_up_proj(hidden_states)
+
+        # Interleaved-weight prefill: pin 1d_c42_bw4-class program config + L1
+        # interleaved out + HiFi2 (test_gate_up_matmul_sweep overall winner).
+        # Also hoist in0 to L1 interleaved when it is still in DRAM — rms_norm
+        # leaves the activation there by default, and L1 in0 is part of the win.
+        m = matmul_rows(hidden_states)
+        k = int(hidden_states.shape[-1])
+        n = int(self.gate_up_proj.shape[-1])
+        program_config, out_memcfg, compute_kernel_config = interleaved_gate_up_prefill_config(m, k, n)
+        act = hidden_states
+        act_l1 = None
+        if program_config is not None and not hidden_states.is_sharded():
+            if hidden_states.memory_config().buffer_type != ttnn.BufferType.L1:
+                act_l1 = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+                act = act_l1
+        gate_up = ttnn.linear(
+            act,
+            self.gate_up_proj,
+            program_config=program_config,
+            memory_config=out_memcfg,
+            compute_kernel_config=compute_kernel_config,
+        )
+        if act_l1 is not None:
+            act_l1.deallocate(True)
+        return gate_up
+
     def __call__(self, hidden_states):
         """
         GeGLU MLP forward with TP support.
@@ -206,7 +245,7 @@ class SharedMLP:
         # Fused gate/up projection: one matmul produces [.., 2*inter_pad/device]
         # laid out as [up_i | gate_i]. Split with the padded half-width so TILE
         # slice bounds stay aligned (264 would round to 288 and break down_proj).
-        gate_up = self.gate_up_proj(hidden_states)
+        gate_up = self._gate_up_linear(hidden_states)
         shard = self._inter_per_device
         s = gate_up.shape[-2]
         up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard])
