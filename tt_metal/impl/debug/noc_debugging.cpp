@@ -565,9 +565,7 @@ bool NOCDebugState::CoreDebugState::write_into_unlocked_dfb(const NocWriteEvent&
             break;  // gap before this lock -> not fully covered
         }
         const uint32_t buf_end = buf.extent.address + buf.extent.size;
-        if (buf_end > covered_to) {
-            covered_to = buf_end;
-        }
+        covered_to = std::max(buf_end, covered_to);
         if (covered_to >= write_end) {
             break;
         }
