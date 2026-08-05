@@ -63,10 +63,10 @@ inline void mul_and_accumulate_block(
             // dest-reuse add: dst[0] += scratch_dfb (the prior tap's partial). srcA gets scratch_dfb
             // (cfg52 must match its format); srcB is filled from dst[0] by the dest-reuse path.
             reconfig_data_format_srca(scratch_cb_id);
-            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 scratch_cb_id);
             scratch_dfb.wait_front(1);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 scratch_cb_id, 0, 0);
             scratch_dfb.pop_front(1);
 

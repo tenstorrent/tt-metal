@@ -35,10 +35,10 @@ void kernel_main() {
 
     // Fold each remaining tile in: DEST = DEST * next_tile.
     // DEST_TO_SRCA loads the running product from DEST into SRCA.
-    mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(input_dfb);
+    mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(input_dfb);
     for (uint32_t t = 1; t < num_tiles; t++) {
         input_dfb_obj.wait_front(one_tile);
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(input_dfb, 0, 0);
+        mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(input_dfb, 0, 0);
         input_dfb_obj.pop_front(one_tile);
     }
 

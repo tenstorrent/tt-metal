@@ -48,8 +48,8 @@ void kernel_main() {
         dfb_in0.wait_front(num_tiles_per_cycle);
 
         // Step 3: Load A and add with result DST[0] + dfb_in0 -> DST[0]
-        add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_in0.get_id());
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+        add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb_in0.get_id());
+        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             dfb_in0.get_id(), 0, 0);
 
         tile_regs_commit();

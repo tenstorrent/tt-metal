@@ -157,10 +157,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             dfb_inb.wait_front(block.full_block_size());
             reconfig_data_format_srca(dfb_in_id, dfb_inb_id);
-            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 dfb_inb_id);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     dfb_inb_id, i, i);
             }
             dfb_inb.pop_front(block.full_block_size());
@@ -308,10 +308,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             dfb_inb.wait_front(block.full_block_size());
             reconfig_data_format_srca(dfb_inb_id);
-            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 dfb_inb_id);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     dfb_inb_id, i, i);
             }
             dfb_inb.pop_front(block.full_block_size());

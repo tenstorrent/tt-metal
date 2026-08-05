@@ -63,8 +63,8 @@ void kernel_main() {
             tile_regs_acquire();
             mul_bcast_cols_init(cb_id_src, cb_id_w);
             mul_tiles_bcast_cols(cb_id_src, cb_id_w, i, 0U, 0U);
-            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_id_existing_tile);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_id_existing_tile);
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                 cb_id_existing_tile, i, 0U);
             tile_regs_commit();
             tile_regs_wait();

@@ -141,9 +141,9 @@ void apply_fused_attn_mask(
         if (do_mask && cur_blk == dfb_length_t - blk) {
             // add mask to the last register to pad with -inf
             reconfig_data_format_srca(dfb_mask_padded);
-            add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_mask_padded);
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_mask_padded);
             dfb_mask_padded_obj.wait_front(1);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 dfb_mask_padded, 0 /*in_tile_index*/, blk - 1);
         }
         tile_regs_commit();

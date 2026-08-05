@@ -60,17 +60,24 @@ void kernel_main() {
         // Dest-reuse init is folded into the per-op inits via the binary_reuse_dest template param;
         // dispatch on the compile-time op type since there is no generic binary_init.
         if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWADD) {
-            add_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
+            add_reuse_dest_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
         } else if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWSUB) {
-            sub_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
+            sub_reuse_dest_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
         } else {
-            mul_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
+            mul_reuse_dest_init<ELTWISE_DEST_REUSE_TYPE>(cb_inp0);
         }
 #endif
 
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
 #ifdef ELTWISE_DEST_REUSE_TYPE
-            binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
+            // Dispatch on the compile-time op type; the dest-reuse execute is per-op.
+            if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWADD) {
+                add_reuse_dest_tiles<ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
+            } else if constexpr (ELTWISE_OP_TYPE == EltwiseBinaryType::ELWSUB) {
+                sub_reuse_dest_tiles<ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
+            } else {
+                mul_reuse_dest_tiles<ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
+            }
 #else
             ELTWISE_OP(cb_inp0, cb_inp1, i, i, i);
 #endif

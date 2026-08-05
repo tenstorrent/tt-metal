@@ -97,8 +97,8 @@ ALWI void fused_sub_mul(
 #if defined(FP32_DEST_ACC_EN)
     ckernel::reconfig_data_format_srca(y_cb_id);
 #endif
-    mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+    mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id);
+    mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         y_cb_id, y_tile_idx, DST_REG_ID);
 
     tile_regs_commit();

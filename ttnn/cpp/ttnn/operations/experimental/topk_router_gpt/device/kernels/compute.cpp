@@ -150,17 +150,17 @@ void kernel_main() {
     // =====================================================================
     cb_partial_recv.wait_front(2);
 
-    add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv_id);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv_id);
+    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_partial_recv_id, 0, 0);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_partial_recv_id, 1, 0);
 
     cb_partial_recv.pop_front(2);
 
     // Add bias
     cb_bias.wait_front(1);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_bias_id, 0, 0);
+    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_bias_id, 0, 0);
     cb_bias.pop_front(1);
 
     // Pack complete logits to cb_topk_val_id
@@ -242,8 +242,8 @@ void kernel_main() {
     transpose_init(cb_intermed_val_id);
     transpose_tile(cb_intermed_val_id, 0, 0);
 
-    add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_softmax_mask_id);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_softmax_mask_id);
+    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_softmax_mask_id, 0, 0);
 
     transpose_init(cb_intermed_ind_id);

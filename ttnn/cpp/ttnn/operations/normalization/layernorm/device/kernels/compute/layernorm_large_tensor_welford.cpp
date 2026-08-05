@@ -542,11 +542,11 @@ void kernel_main() {
             if constexpr (fuse_pre_add) {
                 // Fuse in = in + b
                 reconfig_data_format_srca(dfb_in, dfb_inb);
-                add_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     dfb_inb);
                 dfb_inb_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
-                    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                         dfb_inb, i, i);
                 }
                 dfb_inb_obj.pop_front(block.full_block_size());
@@ -555,9 +555,9 @@ void kernel_main() {
             // Multiply by 1/(√(Var(X) + ε)). SrcA currently holds cb_inb (fused) or cb_in
             // (non-fused), the last operand read above; switch it to cb_ex2pe's format.
             reconfig_data_format_srca(fuse_pre_add ? dfb_inb : dfb_in, dfb_ex2pe);
-            mul_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_ex2pe);
+            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_ex2pe);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     dfb_ex2pe, 0 /*in_tile_index*/, i);
             }
             tile_regs_commit();
