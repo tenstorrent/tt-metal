@@ -269,6 +269,66 @@ def test_device_ar_prefill_and_decode(device):
 @needs_weights
 @needs_golden
 @needs_l1_small
+def test_device_fixed_shape_cache_matches_the_growing_one(device):
+    """The right-aligned fixed-width cache must give the *same answer* as the
+    growing one -- it is a performance change, not a numerical one.
+
+    It exists because a growing cache gives every token a new attention key size,
+    and TTNN compiles per shape: 98.9% of cold decode time was JIT. Holding the
+    key width fixed leaves exactly two shapes for the whole utterance.
+
+    The alignment is the part that has to be right. `rel_shift` skews the score
+    block assuming the queries are the **last** `t1` of the `K` key positions, so
+    the live tokens go at the end of the buffer and the padding at the front.
+    Left-aligning gives every query the relative geometry of a position it is not
+    at -- which this test would catch and a shape check would not.
+    """
+    import ttnn
+    from models.demos.cosyvoice.tt.llm.decoder import TtARDecoder, right_aligned_bias
+    from models.demos.cosyvoice.tt.weights import WeightBag
+
+    g = load_golden("llm.ar_forward_chunk")
+    bag = WeightBag.load(LLM_WEIGHTS)
+    dec = TtARDecoder(device, bag.sub("llm"), bag.meta["ar_decoder"])
+
+    xs0 = as_torch(g["call0.in_xs"])
+    prefix_len = xs0.shape[1]
+    max_len = 256  # any width >= the sequence; two shapes get compiled, not 500
+
+    dev = lambda v: ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)  # noqa: E731
+
+    caches = dec.empty_cache(max_len, prefix_len)
+    ys, caches = dec.forward_chunk_fixed(
+        dev(xs0),
+        caches,
+        max_len,
+        valid=prefix_len,
+        mask=dev(right_aligned_bias(max_len, prefix_len, prefix_len, causal=True)),
+    )
+    got0 = ttnn.to_torch(ys).float()
+    ttnn.deallocate(ys)
+    p0 = pcc(got0, as_torch(g["call0.out_ys"]))
+
+    ys1, caches = dec.forward_chunk_fixed(
+        dev(as_torch(g["call1.in_xs"])),
+        caches,
+        max_len,
+        valid=prefix_len + 1,
+        mask=dev(right_aligned_bias(max_len, prefix_len + 1, 1)),
+    )
+    got1 = ttnn.to_torch(ys1).float()
+    ttnn.deallocate(ys1)
+    p1 = pcc(got1, as_torch(g["call1.out_ys"]))
+    TtARDecoder.free_caches(caches)
+
+    print(f"\n  fixed-shape cache (max_len={max_len}): prefill {p0:.10f}, decode {p1:.10f}")
+    assert p0 >= 0.99, p0
+    assert p1 >= 0.99, p1
+
+
+@needs_weights
+@needs_golden
+@needs_l1_small
 def test_device_generates_tokens_greedily(device):
     """The whole LLM stage end to end, with greedy decoding so the stream is
     reproducible. Checks that it emits plausible speech tokens and terminates --

@@ -162,3 +162,92 @@ class TtARDecoder:
         for cache in caches or []:
             for t in cache:
                 ttnn.deallocate(t)
+
+    # ----------------------------------------------------------------------
+    # fixed-shape decoding
+    # ----------------------------------------------------------------------
+    def forward_chunk_fixed(self, xs, caches, max_len: int, valid: int, mask=None):
+        """`forward_chunk` with a **right-aligned, fixed-width** KV cache.
+
+        This is the difference between 0.4 and 35 tok/s, and the reason is not
+        arithmetic. A cache that grows by one slot per token gives every step a new
+        attention key size -- 210, 211, 212 -- and TTNN's program cache is keyed on
+        shape, so *every token pays a fresh JIT compile*. Measured on Blackhole:
+        28 ms for the first step, 3.3 s by the 32nd, and a second pass over the
+        same sizes ran at 28 ms flat. **98.9% of the cold cost was compilation.**
+
+        Holding the key width at `max_len` makes exactly two shapes exist, one for
+        prefill and one for decode, no matter how long the utterance runs.
+
+        The alignment is what makes it correct. ESPnet's `rel_shift` skews a
+        `[t1, K]` score block on the assumption that the queries are the **last**
+        `t1` of the `K` key positions -- that is precisely the streaming case it
+        was written for. So the live tokens must sit at the *end* of the buffer and
+        the padding at the front, not the other way round. Left-aligning instead
+        gives every query the relative geometry of a position it is not at, which
+        is wrong everywhere and obviously wrong nowhere.
+
+        `valid` is how many of the `max_len` slots hold real history; the caller
+        supplies `mask` suppressing the rest.
+        """
+        chunk = xs.shape[1]
+        pos = self.positional(max_len)
+        h = self.embed(xs)
+        new_caches = []
+        for i, layer in enumerate(self.layers):
+            ck, cv = caches[i]
+            # The attention concatenates `chunk` new slots onto whatever it is
+            # given, so what it is given must be `max_len - chunk` wide. A cache
+            # returned by a previous call is `max_len` wide and needs its oldest
+            # `chunk` slots dropped; one straight from `empty_cache` is already
+            # sized and must be left alone.
+            b, nh, width, dk = ck.shape
+            trimmed = width > max_len - chunk
+            if trimmed:
+                ck = ttnn.slice(ck, [0, 0, chunk, 0], [b, nh, max_len, dk])
+                cv = ttnn.slice(cv, [0, 0, chunk, 0], [b, nh, max_len, dk])
+                for t in caches[i]:
+                    ttnn.deallocate(t)
+            h, new_cache = layer(h, pos, mask=mask, cache=(ck, cv), return_cache=True)
+            ttnn.deallocate(ck)
+            ttnn.deallocate(cv)
+            new_caches.append(new_cache)
+        out = ttnn.layer_norm(h, weight=self.g_after, bias=self.bt_after, epsilon=self.meta["layer_norm_eps"])
+        ttnn.deallocate(h)
+        return out, new_caches
+
+    def empty_cache(self, max_len: int, chunk: int):
+        """Zeroed `[1, h, max_len - chunk, d_k]` k/v per layer.
+
+        Sized so the attention's own concat with this step's `chunk` tokens lands
+        on `max_len` -- the first chunk takes the same path as every later one, so
+        there is no separate prefill shape to compile.
+        """
+        n_head, d_k = self.meta["n_head"], self.meta["d_k"]
+        return [
+            (
+                ttnn.zeros(
+                    (1, n_head, max_len - chunk, d_k), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+                ),
+                ttnn.zeros(
+                    (1, n_head, max_len - chunk, d_k), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+                ),
+            )
+            for _ in range(self.meta["n_layers"])
+        ]
+
+
+def right_aligned_bias(max_len: int, valid: int, chunk: int = 1, causal: bool = False, dtype=torch.float32):
+    """Additive `[1, 1, chunk, max_len]` mask for a right-aligned cache.
+
+    Slots before `max_len - valid` are padding and are suppressed. When `causal`,
+    query `i` (sitting at slot `max_len - chunk + i`) additionally may not see any
+    slot beyond its own.
+    """
+    slots = torch.arange(max_len)
+    live = slots >= (max_len - valid)
+    m = torch.where(live, 0.0, NEG_INF).reshape(1, 1, 1, max_len).repeat(1, 1, chunk, 1)
+    if causal:
+        q_slot = (max_len - chunk) + torch.arange(chunk)
+        m = torch.where(slots.reshape(1, 1, 1, -1) <= q_slot.reshape(1, 1, -1, 1), m, NEG_INF)
+    return m.to(dtype)
