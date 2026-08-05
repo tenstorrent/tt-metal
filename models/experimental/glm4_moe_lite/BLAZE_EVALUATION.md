@@ -1,7 +1,9 @@
 # tt-blaze evaluation for GLM-4.7-Flash on Blackhole Galaxy
 
 **Status:** one op measured and adoption-ready (`dram_streaming_matmul`, 2.45x on o_proj).
-Everything else is blocked on layout assumptions in blaze, documented below with evidence.
+`glm_moe_router` and `glm_routed_expert` run on this grid at GLM-5 dims; at GLM-4.7-Flash dims
+the routed expert hangs (F11) despite a valid authored config. Everything else is blocked on
+layout assumptions in blaze, documented below with evidence.
 
 **Hardware:** 32-chip Blackhole Galaxy, every chip 1x-harvested → **12x10 = 120 cores** per
 device, 8 DRAM banks. This matters throughout: blaze's model layouts are written for an
@@ -187,6 +189,35 @@ than or equal to total number of L1 banks 120"* — 128 heads vs 120 banks.
 `glm5_moe_router` failed 3/3 with `tt_tlb_alloc failed ... error code -12` (ENOMEM), then
 passed 3/3 on retry with the device idle. Not a real defect — retry before investigating.
 
+### F10 — the routed-expert test's gate bias is hardcoded to 256 experts
+
+`tests/blaze/glm5_1/test_glm5_routed_expert.py:209` did
+`gate_mm_bias_torch.reshape(-1).reshape(1, 16, 16)`. The bias is `[1,1,1,num_experts]`, so
+this only works when `num_experts` exactly fills a 16x16 face — GLM-5's 256 does, GLM-4.7-Flash's
+64 does not, and it raised `shape '[1, 16, 16]' is invalid for input of size 64`. The op
+itself is parameterized by `num_experts`; only the test was fixed to 256.
+
+Fixed by zero-padding to a `face_h x face_w` face, which is byte-identical for 256 experts.
+Patch preserved at
+[`blaze_eval/glm5_routed_expert_gate_bias_dim_general.patch`](blaze_eval/glm5_routed_expert_gate_bias_dim_general.patch)
+— small and self-contained, **worth upstreaming** alongside F1/F2.
+
+### F11 — `glm_routed_expert` still hangs at GLM-4.7-Flash dims, with a valid config
+
+With `GLM4_FLASH_BLAZE_CONFIG` (below) — 2 gate cores, sender (11,9), all sanity checks
+passing — and F10 fixed, the routed expert **still hangs** at 2048 / 1536 / 64 experts. Killed
+at 700 s; the GLM-5 shape completes in ~190 s on the same build. **The Galaxy recovered
+without a reset**, as in F6.
+
+So F6's gate-core mismatch was not the whole story: something else in this path does not
+tolerate GLM's dims. Candidates not yet eliminated — 2 gate cores versus GLM-5's 8 changes the
+gather/handshake width, and top-k is 4 here versus 8 there.
+
+Do not iterate blind on this: each attempt costs ~12 minutes and risks the device. Blaze ships
+the right tools — `triage-hang`, `check-kernel-sync`, `cb-tap` / `cb-inject`, and
+`BLAZE_DEBUG_KERNELS=1`, which per `WRITING_A_FUSED_OP.md` injects DPRINT markers at each
+phase boundary so the stalling phase can be named rather than guessed.
+
 ### F9 — blaze requires its own tt-metal
 
 Not C++20 as the README suggests: blaze's tt-metal also compiles kernels with `-std=c++17`,
@@ -214,19 +245,31 @@ Bench and diagnostic scripts (untracked, in the tt-blaze checkout):
 | `no_grid_guard_plugin.py` | stubs `requires_grid_size` (F7) |
 | `remap_col12_plugin.py` | column-12 → 11 remap (F5) + gate-core truncation (F6) |
 | `blaze/models/glm4_flash/glm4_flash.model_config.json` | GLM-4.7-Flash in blaze's schema |
+| `blaze/models/glm4_flash/glm4_flash_blaze_config.py` | `GLM4_FLASH_BLAZE_CONFIG` (F11 target) |
+| `tests/blaze/glm5_1/test_glm47_routed_expert_dims.py` | drives the routed expert at our dims |
 
-A copy of the model config is kept at [`blaze_eval/glm4_flash.model_config.json`](blaze_eval/glm4_flash.model_config.json)
-so it survives a re-clone of tt-blaze.
+Copies of all of the above are archived under [`blaze_eval/`](blaze_eval/) so they survive a
+re-clone of tt-blaze; see [`blaze_eval/README.md`](blaze_eval/README.md). They are not runnable
+from this tree — they import `blaze`.
 
 ## 6. Next steps
 
 1. **Adopt `dram_streaming_matmul` for o_proj** — the only measured, correctness-gated win.
    Gate on F1 (keep m=1 for decode) and re-measure *step* time, not just cluster time.
-2. **Author `GLM4_FLASH_BLAZE_CONFIG`** to finish the routed-expert A/B at our dims. The MoE
-   core block is small: 2 gate cores at (11,0)–(11,1), sender (11,9), 8 DRAM banks unchanged,
-   red2one (0,2), tp=1. Open question: whether `sanity_check_model_config` also demands
-   non-empty shared-expert coords (F4 says those cannot balance on 12x10; `dflash/config.py`
-   sets them empty, which suggests it tolerates that).
+2. **`GLM4_FLASH_BLAZE_CONFIG` is written** — [`blaze_eval/glm4_flash_blaze_config.py`](blaze_eval/glm4_flash_blaze_config.py),
+   constructs cleanly and passes every `sanity_check_model_config` assertion. The open question
+   from the previous revision is resolved: shared-expert coords **may be empty** (only the MoE
+   gate / DRAM-worker relations are checked, and `dflash/config.py` sets them empty too), so a
+   routed-only config is legal despite F4.
+   Its live home is `blaze/models/glm4_flash/` inside a tt-blaze checkout. Notable choices:
+   2 gate cores at (11,0)–(11,1) — column 11 is the phantom column on a 12-wide grid, the same
+   relationship GLM-5 has to its column 12; DRAM worker order preserved from
+   `get_pinned_optimal_dram_bank_to_logical_worker_assignment` because that ordering *is* the
+   bank-id assignment; and `attn_sdpa_tp = attn_sdpa_cp = 1`, since the checks require
+   `n_heads % tp == 0` and 20 is not divisible by 8.
+   The MLA cores in it satisfy the config's divisibility checks so the object is constructible,
+   but MLA remains unusable per F3 — that blocker is in `layout_plan.py`, not the config.
+   **Finishing the A/B is now blocked on F11, not on the config.**
 3. **File F1 and F2 upstream** — both are small, self-contained, and affect any blaze user.
 4. **Raise F3 and F4 with the blaze team** — GLM-4.7-Flash is unlikely to be the only model
    with a non-8-divisible head count or a 3:1 nope:rope ratio, and F4 blocks every harvested

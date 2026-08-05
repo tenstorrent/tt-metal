@@ -1,0 +1,24 @@
+diff --git a/tests/blaze/glm5_1/test_glm5_routed_expert.py b/tests/blaze/glm5_1/test_glm5_routed_expert.py
+index 7c29f54c0..b538feffc 100644
+--- a/tests/blaze/glm5_1/test_glm5_routed_expert.py
++++ b/tests/blaze/glm5_1/test_glm5_routed_expert.py
+@@ -205,8 +205,17 @@ def test_glm5_routed_expert_blaze(
+         mesh_mapper=mesh_mapper,
+     )
+ 
+-    # MoE gate runs on sender after gather; bias is a 16x16 face (same as matmul_fused_act_gather test).
+-    gate_bias_torch = gate_mm_bias_torch.reshape(-1).reshape(1, 16, 16)
++    # MoE gate runs on sender after gather; bias occupies one face_h x face_w face (same as
++    # the matmul_fused_act_gather test). Zero-pad when the model has fewer experts than the
++    # face holds: GLM-5's 256 fills it exactly, GLM-4.7-Flash's 64 does not, and the hardcoded
++    # reshape(1, 16, 16) then raised "shape '[1, 16, 16]' is invalid for input of size 64".
++    _bias_flat = gate_mm_bias_torch.reshape(-1)
++    assert _bias_flat.numel() <= face_h * face_w, (
++        f"{_bias_flat.numel()} experts exceed the {face_h}x{face_w} gate-bias face"
++    )
++    _bias_face = torch.zeros(face_h * face_w, dtype=_bias_flat.dtype)
++    _bias_face[: _bias_flat.numel()] = _bias_flat
++    gate_bias_torch = _bias_face.reshape(1, face_h, face_w)
+     gate_bias_config = ttnn.MemoryConfig(
+         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+         ttnn.BufferType.L1,
