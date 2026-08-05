@@ -158,6 +158,52 @@ initial noise and `SineGen`'s two draws already follow.
 
 ---
 
+## Speech quality — 5 languages, 2 modes
+
+Synthesised on Blackhole, scored with **whisper large-v3 on Tavern** (62 GB; the RAM preflight
+declines large-v3 on an 11 GB host, and `medium` has no Cantonese token, so the scoring host is part
+of the measurement). CER for CJK, WER for English.
+
+| mode | zh | en | ja | ko | yue | SIM | tok/s |
+|---|---|---|---|---|---|---|---|
+| zero-shot | 3.03 | **0.00** | 5.56 | 3.12 | 64.52 | 83–96 | 16–27 |
+| cross-lingual | 6.06 | **0.00** | 2.78 | **0.00** | 100.00 | 86–94 | 27–29 |
+
+**R9_wer_lt_3.0 PASS · R9_sim_gt_60 PASS · R8_rtf_lt_0.5 FAIL · R8_tok_per_s_ge_30 FAIL.**
+
+Excluding Cantonese the CJK mean is 3.90 % zero-shot and 2.95 % cross-lingual; English is perfect in
+both modes.
+
+### Cantonese is a model limitation
+
+The PyTorch reference, same texts and same ASR, scores **worse**:
+
+| case | TTNN | PyTorch reference |
+|---|---|---|
+| zero-shot yue | 64.52 % | **83.87 %** |
+| cross-lingual yue | 100.00 % | 67.74 % |
+| zero-shot zh | 3.03 % | **3.03 %** |
+
+CosyVoice-300M does not do Cantonese well when prompted with a Mandarin reference voice. Chinese
+matches the reference exactly. Without this baseline a 64 % CER would have read as a broken port.
+
+One difference is real and open: `cross_lingual yue` emitted 122 tokens for 2.44 s against the
+reference's 387 for 7.73 s — the LLM terminated early. RAS is stochastic and the model's Cantonese
+confidence is low, so this is plausible without a bug; a greedy run would settle it.
+
+### Two operational notes from the sweep
+
+**`l1_small_size` scales with conv *configurations*, not tensor size.** `ttnn.conv1d` allocates
+prepared weights from that bank and keeps them, so three models live at once (~80 convs) exhausts
+the 32 KB a single-model test uses — failing part-way through the *second* utterance with
+`Not enough space to allocate 480 B L1_SMALL buffer`. Zero-shot needs 128 KB; cross-lingual needs
+256 KB because its prompt is 1289 mel frames against 326.
+
+**Persist the JIT cache across runs.** Mounting `/root/.cache/tt-metal-cache` took the first
+utterance from 161.7 s to 14.8 s wall. Every distinct sequence length is a fresh compile.
+
+---
+
 ## Test counts
 
 | tier | count | hardware |
