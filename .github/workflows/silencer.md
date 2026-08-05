@@ -686,9 +686,19 @@ cheap status check consume a day's scan would starve new-noise discovery for exa
 a draft PR sits open awaiting a maintainer, which is precisely when noise is piling up unfixed.
 
 **One quiet step at a time** still holds, and it means what it always meant: **one new noise
-target per run.** That is enforced structurally by the `max: 1` on every write safe-output, not
-by stopping early — so reporting an outcome and then scanning does not spend two quiet steps, it
-spends one, plus bookkeeping on a step already spent.
+target per run** — not by stopping early, so reporting an outcome and then scanning does not
+spend two quiet steps, it spends one, plus bookkeeping on a step already spent.
+
+That bound is **prompt-enforced, not compiler-enforced.** The `max: 1` on
+`create-pull-request`, `push-to-pull-request-branch`, `create-issue` and `update-issue` are four
+**independent** per-handler ceilings — gh-aw counts each safe-output type separately and has no
+cross-handler or global cap — so nothing in the compiled workflow stops one run from emitting one
+of each and producing four targets. **You must hold the line yourself: at most ONE
+target-producing action per run, counted across `create-pull-request` /
+`push-to-pull-request-branch` / `create-issue` / `update-issue` combined.** They are mutually
+exclusive — picking one rules out the other three for the rest of the run. `add-comment`,
+`mark-pull-request-as-ready-for-review` and `dispatch-workflow` are **not** targets: they are the
+bookkeeping and validation that attach to the one target, or to phase A's report.
 
 1. **Phase A — reconcile in-flight validations, then fall through.** Before scanning anything,
    check *Memory* → *CI validations in flight* for a dispatched validation whose outcome you have
@@ -719,19 +729,35 @@ spends one, plus bookkeeping on a step already spent.
      (`^/(codeowners?|ping)(\s|$)`), so it has to lead the comment, not follow other text.
    - Report whatever state exists, not only a finished one: `queued` / `in_progress` /
      `success` / `failure` / `cancelled` are all worth saying, and "still running" is a real
-     answer.
+     answer. But **only a terminal state finishes the job**: `success` / `failure` /
+     `cancelled` are terminal, `queued` / `in_progress` are not. A nonterminal report is an
+     **interim update**, and the validation stays in flight until a later run catches its
+     terminal state — see the memory bullet below.
    - Always restate **what to grep and where**, naming the step per category exactly as
      *Validating changes via CI* does. The conclusion is never the proof; the pattern's absence
      from that run's own logs is.
-   - This fires **once** per PR, the same moment it comes out of draft — *CI validations in
-     flight* already guards against re-reporting the same outcome (below), so codeowners are
-     never pinged twice for one PR.
+   - This fires **at most twice** per PR, however many runs the validation spans: once when the
+     PR first comes out of draft (which may be on a nonterminal state), and once with the
+     terminal outcome. The two flags in *CI validations in flight* are what bound it —
+     `nonterminal_reported` stops a second "still running" comment, `reported` stops a second
+     terminal one — so codeowners are pinged once for progress and once for the result, never
+     on a daily loop.
    - If `search_pull_requests` returns no open `[silencer]` PR matching the branch you
      recorded — already merged or closed, or the dispatch never happened — **skip silently**:
      post nothing, mark nothing, fabricate no run link, do not treat it as an error, and go
      straight to step 2.
-   - Note in memory that this validation has been reported (*Memory* → *CI validations in
-     flight*) so the next daily run does not comment the same outcome again.
+   - **Update memory according to whether the state was terminal** (*Memory* → *CI validations
+     in flight*) — that, not the fact that you commented, is what decides whether the entry is
+     done:
+     - **Terminal** (`success` / `failure` / `cancelled`) — set `reported: true`. The entry is
+       finished; stop tracking it, and no later run comments the same outcome again.
+     - **Nonterminal** (`queued` / `in_progress`) — set `nonterminal_reported: true` and
+       **leave the entry in flight, `reported` still `false`.** Marking it reported here would
+       be a lie: the dispatched run has not concluded, so its pass/fail and the log re-grep
+       that is the only real proof have never been reported *at all* — and retiring the entry
+       now means they never will be. A later run picks the entry back up, resolves it again,
+       and reports the terminal result then, posting no second "still running" comment in the
+       meantime because `nonterminal_reported` is already set.
 
    **Then, in the same turn, mark that PR ready for review** with the
    `mark-pull-request-as-ready-for-review` safe-output (`mark_pull_request_as_ready_for_review`
@@ -759,9 +785,13 @@ spends one, plus bookkeeping on a step already spent.
    **Then continue to step 2 in the same run — phase A never ends the run.** The one thing it can
    change is *which* target step 5 lands on: if the outcome you just reported was a **failure**
    whose right answer is a follow-up commit to that same PR, then that commit **is** this run's
-   one target — root-cause it from that dispatched run's own logs and push it via
-   `push-to-pull-request-branch` (step 8), and do **not** also open a new PR for an unrelated
-   pattern.
+   one target — root-cause it from that dispatched run's own logs, push it via
+   `push-to-pull-request-branch` (step 8), and dispatch CI against that same branch in the same
+   turn (*Validating changes via CI* permits this **because** you just pushed to it — that is
+   the one exception to "a branch you created this turn"). Do **not** also open a new PR, open
+   an issue, or update one for an unrelated pattern: that follow-up commit has spent this run's
+   single target-producing action. Record the re-dispatch as a **fresh** *CI validations in
+   flight* entry — the old entry's outcome was terminal and is now `reported`.
 2. **Pick runs to scan — from Silencer's fixed tracked-workflow list.** Scan exactly the
    workflows listed in this workflow's `safe-outputs.dispatch-workflow.workflows` allowlist
    above (bare filename stems, e.g. `sanity-tests` resolves to
@@ -806,6 +836,14 @@ spends one, plus bookkeeping on a step already spent.
    safer than a sweeping one, and anything else you spotted keeps for the next run (that is
    what the backlog cursor in memory is for). If step 1 already claimed this run's target with
    a follow-up commit to a failed validation, that is the one — do not pick a second.
+   **"One" is counted across all four target-producing safe-outputs combined** —
+   `create-pull-request`, `push-to-pull-request-branch`, `create-issue`, `update-issue` — and it
+   is a **hard rule you self-enforce, not one the compiler enforces for you.** Each of those
+   carries its own **independent** `max: 1`; gh-aw counts per safe-output type and has no
+   cross-handler or global total, so emitting one of each would satisfy every configured limit
+   while producing four targets. Emit exactly one of the four, or none. Opening a PR for one
+   pattern *and* an issue for another is a violation of this rule even though both handlers
+   would happily accept it.
 6. **Root-cause it.** From the grep hit, open the *specific source file(s)* (not the log),
    understand why the noise is emitted, and design the minimal correct fix per its category
    above. Use DeepWiki-style reasoning only for orientation on sibling repos; verify against
@@ -824,7 +862,9 @@ spends one, plus bookkeeping on a step already spent.
    (*Memory* → *CI validations in flight*) is exactly what the **next** run's **step 1** picks
    up: it resolves the PR number and the build outcome, comments both onto the PR, and takes the
    PR out of draft — and then goes on to scan for new noise, because reporting is bookkeeping,
-   not this run's quiet step.
+   not this run's quiet step. If the dispatched run is still `queued` / `in_progress` by then,
+   that entry stays in flight and the **first later run that finds it terminal** reports the
+   conclusion (step 1's memory bullet) — it is not retired on the interim update.
 
    Then **stop** — this run has spent its one target.
 
@@ -857,7 +897,19 @@ not a rewritten or guessed variant:
   branch named anything else cannot be validated.
 - Dispatch **exactly once** per turn, for the single PR you touched, against that PR's own
   branch (the configured `max: 1`). Never dispatch a workflow you did not scan, and never
-  dispatch against a branch you did not create this turn.
+  dispatch against a branch you did not write to this turn.
+- **The one exception to "a branch you created this turn", and it is narrow.** You **may**
+  dispatch against a branch an **earlier** run created, if and only if you have **just amended
+  that exact branch in this same turn** via `push-to-pull-request-branch` — the "amending an
+  existing `[silencer]` PR branch" path of *Scan procedure* step 7, reached from step 1's
+  failed-validation follow-up or from step 8. All of these must hold: it is a
+  `[silencer]`-owned branch matching `allowed-refs: ["silencer/*"]`, its PR carries the
+  `[silencer] ` title prefix `push-to-pull-request-branch` requires, and the `ref` is the
+  identical branch string of the push you just emitted. What you are validating is **the commit
+  you added moments ago**, not an arbitrary pre-existing branch you have no business touching —
+  which is what the original rule forbids and still forbids. Without this exception a follow-up
+  fix could never be validated at all, while *Guidelines* requires every fix to dispatch CI in
+  the same turn it is pushed.
 
 **What this proves, and what it does not.** A dispatched run's **pass/fail conclusion alone is
 never sufficient proof — for any category.** A green run says the workflow succeeded; it says
@@ -885,11 +937,13 @@ Therefore:
 - Record in memory what you know now: the branch name, the `workflow_name` you dispatched, and
   the run/job IDs whose logs motivated the fix. The **next** scheduled run resolves the outcome
   (`search_pull_requests`, then `pull_request_read` with `method: "get_check_runs"` — see *Scan
-  procedure* step 1) and can then re-grep the dispatched run's own logs — the build/compile step
-  for categories 1–2/4, the test-execution step for categories 3/5/6 — to confirm the pattern is
-  genuinely absent. It must then **post what it found back onto the PR** with the `add-comment`
-  safe-output; an outcome resolved but never reported is worth nothing (*Scan procedure* step 1
-  has the exact call).
+  procedure* step 1) and, **once that outcome is terminal**, can then re-grep the dispatched
+  run's own logs — the build/compile step for categories 1–2/4, the test-execution step for
+  categories 3/5/6 — to confirm the pattern is genuinely absent. It must then **post what it
+  found back onto the PR** with the `add-comment` safe-output; an outcome resolved but never
+  reported is worth nothing (*Scan procedure* step 1 has the exact call). A run that is still
+  `queued` / `in_progress` gets an interim comment and **remains in flight** — there are no
+  logs to re-grep yet, so the entry is not retired until a later run reports its conclusion.
 - In the PR's **Test Status** section, state plainly that a dispatch was **requested** for this
   branch — not that a run exists. The request is only handled after your turn, and the
   `safe_outputs` job can still reject or fail it (ref rejected by `allowed-refs`, workflow
@@ -995,9 +1049,24 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
     age.
 - **Backlog cursor**: which category/pattern to tackle next, so successive runs chip away at
   the noise instead of re-fighting the same top warning.
-- **CI validations in flight**: PR → build-run-ID, to check outcomes on later runs, plus whether
-  that outcome has already been commented back onto the PR (*Scan procedure* step 1) so a later
-  run does not re-post the same result.
+- **CI validations in flight**: branch/PR → dispatched workflow + build-run-ID, to check outcomes
+  on later runs, plus **two independent "already said this" flags** (*Scan procedure* step 1) so
+  a later run neither re-posts the same result nor retires an entry that has not concluded yet:
+  ```json
+  {"branch":"silencer/unused-var-layernorm","pr":52111,"workflow":"pr-gate","run_id":"30612345678","dispatched":"2026-07-29","last_state":"in_progress","nonterminal_reported":true,"reported":false}
+  ```
+  - `last_state`: the most recent state observed — `queued` / `in_progress` / `success` /
+    `failure` / `cancelled`.
+  - `nonterminal_reported`: an interim "still running" comment has already been posted for this
+    entry. Set it when you report a `queued` / `in_progress` state; it is what stops every
+    later run from re-posting the same non-answer — and re-pinging codeowners — day after day.
+  - `reported`: the **terminal** outcome (`success` / `failure` / `cancelled`) has been
+    commented onto the PR. **Only a terminal state may set this.** It is what retires the
+    entry, so setting it on a nonterminal state means the dispatched run's actual conclusion,
+    and the log re-grep that is the only real proof, are never reported at all.
+  - An entry with `reported: false` **stays in flight** and is picked up again by the next
+    run's step 1, however many runs that takes. Drop it once `reported` is `true` — or if step
+    1 finds no matching open `[silencer]` PR (merged, closed, or the dispatch never happened).
 - A short **quiet-score** note per run (e.g. total distinct warning signatures, total warning
   lines) so you and maintainers can see the logs trending toward silence over time.
 
@@ -1011,10 +1080,16 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
 - **Every run does both phases: report first, then scan.** Reconciling an in-flight validation
   (*Scan procedure* step 1) costs a handful of API calls and must **never** end the run — fall
   through to the scan every time, whether it reported an outcome or found nothing pending.
-  **One quiet step at a time** bounds *new work* — one noise target per run — and the `max: 1`
-  on every write safe-output enforces that structurally. It was never a licence to spend a whole
-  day's scan budget re-confirming yesterday's PR, which is what stopping after the report does
-  for as long as a draft PR sits open awaiting a maintainer.
+  **One quiet step at a time** bounds *new work* — one noise target per run. It was never a
+  licence to spend a whole day's scan budget re-confirming yesterday's PR, which is what
+  stopping after the report does for as long as a draft PR sits open awaiting a maintainer.
+- **At most ONE target-producing action per run — and you enforce it, not the compiler.**
+  Counted across `create-pull-request` / `push-to-pull-request-branch` / `create-issue` /
+  `update-issue` **combined**: pick one, or none. The `max: 1` on each of those is a
+  **per-handler** ceiling and gh-aw has no cross-handler or global cap, so one of each would
+  satisfy every configured limit and still be four targets (*Scan procedure* step 5).
+  `add-comment`, `mark-pull-request-as-ready-for-review` and `dispatch-workflow` are
+  bookkeeping and validation, and do not count against it.
 - **Grep, don't read.** Keep logs on disk; put only aggregated summaries in context. This is
   a hard cost requirement, not a suggestion.
 - **Logs and CI state come from the `github` MCP tool, never the `gh` CLI.** `bash` has no
