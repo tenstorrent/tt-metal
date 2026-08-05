@@ -4553,3 +4553,40 @@ reference order tile by tile, and blends in **fp32** because the host path it re
    **39 % faster because it was not moving the data**. Nothing in the per-shard numerics suite caught
    it; the e2e CLIP gate did, 37.37 -> 19.58. So the correctness gate for this iteration is the **e2e
    CLIP number**, not a per-shard PCC, and it runs *before* the measurement.
+
+---
+
+## Amendment 105 (2026-08-05) — amendment 84's first loose end closed: the two-axis all-gather transposes dim 0
+
+Amendment 84 measured `gathered replica matches host: False, maxdiff 7.93` and left the permutation
+unpinned, naming it "the next thing to pin down". Pinned, empirically, on the 4x8 mesh:
+
+```
+observed  [0, 8, 16, 24, 1, 9, 17, 25, 2, 10, 18, 26, 3, 11, 19, 27, ...]
+```
+
+**It is exactly a transpose.** `ShardTensorToMesh(dim=0)` lays shard `k` on device `k` row-major, so
+shard `k` sits at mesh position `(k // cols, k % cols)`. Gathering `cluster_axis=0` concatenates each
+mesh *column*'s four shards along dim 0, and gathering `cluster_axis=1` then concatenates those
+per-column groups — so gathered position `c * rows + r` holds shard `r * cols + c`. Codified as
+`gathered_tile_order(mesh_rows, mesh_cols)` in `test_stitch_device_minimax_h3.py`, returning `order`
+with `gathered[i] == original[order[i]]`.
+
+The method that made this readable rather than inferential: **each shard carries its own index as its
+value**, so the gathered tensor *is* the permutation and there is no maxdiff to interpret. Amendment 84
+compared a gathered replica against the host tensor and got a distance, which says "wrong" without
+saying "how".
+
+Three things gated, and the first is the one that matters:
+
+1. **The gather actually gathered** — local dim 0 goes 1 -> 32, asserted. Amendment 86's readback bug
+   looked like a 39 % speedup precisely because it moved no data, and a test comparing only the *set*
+   of values would pass on a no-op too.
+2. It is a permutation, and it is not the identity — with an explicit failure message saying that if
+   this ever *becomes* the identity, `gathered_tile_order` is wrong and must be changed, rather than
+   the test silently continuing to pass.
+3. All 32 devices agree on the order, which is what makes reading a single replica legitimate.
+
+Note the API: `ttnn.all_gather(tensor, dim, cluster_axis=..., topology=...)` takes **no `mesh_device`
+keyword**. Passing one raises a `TypeError` listing the whole accepted signature, which is a good error
+but costs a run to find.
