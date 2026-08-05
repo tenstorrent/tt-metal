@@ -4898,3 +4898,75 @@ measured, and read as "accumulation" — but 0.17 % is 2**-9.2, and nothing in a
 2**-9.2. Measuring the same ops at both dtypes took one script and turned an accepted explanation into a
 falsified one. The corollary: a bar set from an inference inherits that inference's error, so the
 justification needs auditing whenever the bar is used as evidence.
+
+---
+
+## Amendment 110 (2026-08-05) — RETRACTION of amendment 109: the accumulation explanation was right. Tenstorrent's fp32 *reduction* datapath saturates at ~1e-3, and audio decode is already at its floor
+
+**What amendment 109 claimed.** That the 10.5 % RMSE could not be accumulation, because "in fp32 the
+ttnn ops measure 3e-8, so ~256 of them cannot reach 10.5 %", and that the cited 0.17 % per activation
+"is a bf16 signature".
+
+**Why it was wrong.** I measured **elementwise** ops (`sin`, `reciprocal`, `multiply`, `add`) and
+generalized to **convolutions**. Those are different datapaths. Measured now, at the reduction depth
+that actually matters:
+
+| operation | fp32, HiFi4 + fp32_dest_acc_en | note |
+|---|---|---|
+| `sin`, `reciprocal` | **3e-08**, 1e-08 | elementwise: true fp32 |
+| `multiply`, `add` | **0.0** | exact |
+| **`conv3d`**, Cin·k = 14336 | **2.34e-03** | conv_pre, against torch |
+| **`matmul`**, K = 14336 | **1.17e-03** | same reduction depth |
+
+**A single fp32 convolution is 2.3e-03 wrong, not 3e-08.** So 0.17 % per activation was never a bf16
+signature — bf16 epsilon (3.9e-3) and the fp32 *reduction* floor (~1e-3) happen to sit within a factor
+of a few of each other, and I read the coincidence as identification. The original comment in
+`test_audio_vae_minimax_h3.py` was measuring this floor correctly and attributing it correctly.
+
+Checking the arithmetic with the right per-op figure: 2.34e-03 over ~130 convolutions in quadrature is
+`sqrt(130) x 2.34e-3 = 2.7e-2`; the observed 10.5e-2 is ~4x that, which is what partially correlated
+accumulation through a 7-stage upsampling chain looks like. Consistent.
+
+### The dtype contract is satisfied, and the config is already optimal
+
+Both audited and swept, so neither is now an assumption:
+
+- fp32 is declared and threaded everywhere the reference uses fp32 — decoder, both conv classes, the
+  vocoder's convs/Snake/filters, `weights_dtype`, the conv3d call's `dtype`, `_persistent_zeros`, the
+  halo buffer. The prepared conv weights **retain their fp32 mantissa** (the 80.9 % bf16-representable
+  fraction is zero padding: 65536x1024 allocated against 14.7M real values).
+- All 8 `(math_fidelity, fp32_dest_acc_en)` combinations swept on `conv_pre`:
+
+| | fp32_dest=True | False |
+|---|---|---|
+| LoFi | 3.03e-02 | 2.21e-02 |
+| HiFi2 | 7.69e-03 | 1.82e-02 |
+| HiFi3 | 2.43e-03 | 1.93e-02 |
+| **HiFi4** | **2.34e-03** | 1.93e-02 |
+
+**HiFi4 + `fp32_dest_acc_en` is the best available and is what the code already uses.** `fp32_dest_acc_en=False`
+costs ~8x. HiFi3 is indistinguishable from HiFi4, so the datapath saturates before the last fidelity step.
+
+### So audio decode is at its floor, and there is no correctness bug to fix
+
+The 10.5 % RMSE / PCC 99.55 % / PSNR 29.9 dB against the diffusers reference is **the honest floor of
+this hardware's fp32 reduction datapath at this chain depth**, not a defect and not a dtype mismatch.
+`AUDIO_RELATIVE_RMSE = 0.12` is a correct bar and its justification is sound after all — amendment 109's
+attack on it is withdrawn.
+
+### The one lever that exists, and its size
+
+`matmul` is **2x more accurate than `conv3d`** at the same reduction depth (1.17e-03 vs 2.34e-03), so an
+im2col formulation of the convolutions would roughly halve the per-conv error and take the chain from
+~10.5 % toward ~5 %. That is a real option and it is `tt-dit-kernel-research` territory, not a config
+change: it would replace the conv3d path wholesale and change both the op mix and the perf profile
+(amendment 103 measured `Conv2d` at 4.0 % of the stage against ~70 % layout, so more matmul and less
+conv may even be neutral or better on time). Not attempted here.
+
+**The method note, and it is about my own error.** *Precision measured on one class of op does not
+transfer to another.* Elementwise fp32 on this hardware is exact to 3e-8; an fp32 reduction over 14336
+terms is 1e-3. Those differ by five orders of magnitude, and I used the first to falsify a claim about
+the second. The check that would have caught it immediately is the one I eventually ran: measure the op
+that is actually in the hot path, at the shape it actually runs, rather than a cheaper stand-in — the
+same rule as amendment 76's "a gate's shape is part of the gate", applied to op *kind* rather than
+tensor size.
