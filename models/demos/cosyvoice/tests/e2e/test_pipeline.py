@@ -221,15 +221,15 @@ def test_device_self_computed_source(device):
 
     hift = TtHiFTGenerator(device, WeightBag.load(HIFT_WEIGHTS))
     assert hift.f0_predictor is not None and hift.m_source is not None, "source branch not built"
-    wav, audio_len = hift.inference(
+    wav, audio_len, src = hift.inference(
         mel,
         mel_len2,
         phase_vec=dev(as_torch(sine_g["call0.in_phase_vec"])),
         sine_noise=dev(as_torch(sine_g["call0.out_noise"]).permute(0, 2, 1).contiguous()),
     )
     got = ttnn.to_torch(wav).float().reshape(1, -1)
-    ttnn.deallocate(mel)
-    ttnn.deallocate(wav)
+    for t in (mel, wav, src):
+        ttnn.deallocate(t)
 
     m = waveform_metrics(got, want)
     print(f"\n  self-computed source -> {audio_len} samples")
