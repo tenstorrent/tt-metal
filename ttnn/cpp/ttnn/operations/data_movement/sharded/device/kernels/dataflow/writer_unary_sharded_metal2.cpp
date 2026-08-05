@@ -2,13 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 fork of writer_unary_sharded.cpp.
+// KEEP IN SYNC WITH: writer_unary_sharded.cpp (this directory)
 //
-// Same logic, expressed against the Metal 2.0 named-binding APIs: the output CB index CTA became the
-// `dfb::out` DFB binding and the unit-count RTA became a named argument.
+// This is the Metal 2.0 fork of that kernel. Same logic, expressed against the Metal 2.0
+// named-binding APIs: the output CB index CTA became the `dfb::out` DFB binding and the unit-count
+// RTA became a named argument. A behavioural change to either one must be mirrored in the other.
 //
-// This fork exists because the legacy original is bound by several op directories that cannot all
-// convert at once; it lives alongside the original rather than replacing it.
+// The fork exists because the legacy original is bound by 8 op directories that cannot all convert at
+// once; it lives alongside the original rather than replacing it. Once the last legacy consumer is
+// ported, delete the original and rename this file over it.
+//
+// Tracking issue (why the duplication exists, the consumer list, and the sunset plan):
+// https://github.com/tenstorrent/tt-metal/issues/52228
 //
 // Binding vocabulary a Metal 2.0 KernelSpec must supply for this source:
 //   dfb::out        — the output DFB, bound CONSUMER
