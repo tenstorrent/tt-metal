@@ -213,11 +213,14 @@ class SharedMLP:
         gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard])
         gate_up.deallocate(True)
 
-        # Keep the GeGLU intermediate L1-resident so down_proj reads its input
-        # from L1 instead of round-tripping through DRAM (report's own advice
-        # for the down_proj matmul: "place input 0 in L1").
-        gate = ttnn.gelu(gate, fast_and_approximate_mode=True, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hidden = ttnn.mul(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # NOTE: keeping this GeGLU intermediate in L1 (so down_proj reads its
+        # input from L1) was measured and rejected: the gain on down_proj was
+        # ~3 us of a 124 us op, inside the run-to-run noise band, while the
+        # intermediate is [seq, intermediate_size/tp] — at tp=1/tp=2 that is
+        # 4-8x wider than tp=8 and OOMs L1 (176 MB at tp=1 seq=4096). Leave it
+        # in DRAM; the op default follows the input.
+        gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
+        hidden = ttnn.mul(gate, up)
         gate.deallocate(True)
         up.deallocate(True)
 
