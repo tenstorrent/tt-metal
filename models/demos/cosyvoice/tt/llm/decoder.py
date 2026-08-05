@@ -237,6 +237,136 @@ class TtARDecoder:
         ]
 
 
+class TracedDecodeStep:
+    """One decode step captured as a trace and replayed with a single host command.
+
+    F23 measured the AR decoder at ~124 us per op over ~280 ops -- **dispatch
+    bound, not compute bound**. Trace capture is the direct answer: it records the
+    op graph once and replays it without re-issuing every op from the host.
+
+    A trace replays *fixed device addresses*, which is what makes this more than a
+    flag. Three things follow:
+
+    * **The KV cache must live in persistent buffers.** The untraced path
+      reallocates it with `concat` on every step, so a replay would write to
+      addresses from the capture. Here the buffers are allocated once and updated
+      with `ttnn.copy` at the end of the traced body -- read at the top, written at
+      the bottom, which is safe within a single replay.
+    * **Inputs must be preallocated too**, and refreshed with
+      `copy_host_to_device_tensor` rather than a fresh `from_torch`. The token
+      embedding changes every step, and the validity mask's *values* change even
+      though its shape does not.
+    * **Two warm-up passes precede capture**, so every kernel variant is
+      JIT-compiled before the graph is recorded -- otherwise the compile lands
+      inside the trace.
+
+    Right-alignment is unchanged from `forward_chunk_fixed`: the live tokens sit at
+    the end of the buffer because `rel_shift` assumes the queries are the last of
+    the key positions.
+    """
+
+    def __init__(self, decoder, max_len: int):
+        self.dec = decoder
+        self.max_len = max_len
+        meta = decoder.meta
+        self.h, self.d_k, self.n_layers = meta["n_head"], meta["d_k"], meta["n_layers"]
+        d_in = meta["input_size"]
+        dev, dt = decoder.device, decoder.dtype
+
+        self.x_buf = ttnn.from_torch(torch.zeros(1, 1, d_in), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
+        self.mask_buf = ttnn.from_torch(
+            right_aligned_bias(max_len, max_len, 1), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev
+        )
+        shape = (1, self.h, max_len, self.d_k)
+        self.k_buf = [
+            ttnn.from_torch(torch.zeros(shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
+            for _ in range(self.n_layers)
+        ]
+        self.v_buf = [
+            ttnn.from_torch(torch.zeros(shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
+            for _ in range(self.n_layers)
+        ]
+        # Persistent output buffer. The tensor a traced body *returns* lives in the
+        # trace's own pool, and reading it after a replay is fragile -- copying into
+        # a buffer allocated up front is the same discipline the KV cache uses, for
+        # the same reason.
+        self.ys = ttnn.from_torch(torch.zeros(1, 1, meta["d_model"]), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
+        self.trace_id = None
+
+    # ------------------------------------------------------------------
+    def seed(self, caches):
+        """Load a prefill's caches into the persistent buffers.
+
+        The prefill runs untraced -- it happens once per utterance and its shape
+        differs from the decode step's, so tracing it would buy a single dispatch
+        saving for a second compile.
+        """
+        for i, (k, v) in enumerate(caches):
+            ttnn.copy(k, self.k_buf[i])
+            ttnn.copy(v, self.v_buf[i])
+
+    def _body(self):
+        """The graph that gets traced. Reads the buffers, writes them back."""
+        pos = self.dec.positional(self.max_len)
+        h = self.dec.embed(self.x_buf)
+        for i, layer in enumerate(self.dec.layers):
+            # Drop the oldest slot so the attention's own concat lands on max_len.
+            trimmed = (
+                ttnn.slice(self.k_buf[i], [0, 0, 1, 0], [1, self.h, self.max_len, self.d_k]),
+                ttnn.slice(self.v_buf[i], [0, 0, 1, 0], [1, self.h, self.max_len, self.d_k]),
+            )
+            h, (k_new, v_new) = layer(h, pos, mask=self.mask_buf, cache=trimmed, return_cache=True)
+            for t in trimmed:
+                ttnn.deallocate(t)
+            ttnn.copy(k_new, self.k_buf[i])
+            ttnn.copy(v_new, self.v_buf[i])
+            ttnn.deallocate(k_new)
+            ttnn.deallocate(v_new)
+        out = ttnn.layer_norm(
+            h, weight=self.dec.g_after, bias=self.dec.bt_after, epsilon=self.dec.meta["layer_norm_eps"]
+        )
+        ttnn.deallocate(h)
+        ttnn.copy(out, self.ys)
+        ttnn.deallocate(out)
+
+    def capture(self):
+        """Warm up twice, then record. Always closes the trace, even on failure --
+        an open trace wedges the device."""
+        for _ in range(2):
+            self._body()
+        ttnn.synchronize_device(self.dec.device)
+
+        self.trace_id = ttnn.begin_trace_capture(self.dec.device, cq_id=0)
+        try:
+            self._body()
+        finally:
+            ttnn.end_trace_capture(self.dec.device, self.trace_id, cq_id=0)
+        return self
+
+    def step(self, x_host: torch.Tensor, valid: int):
+        """One token in, `[1, 1, d]` hidden state out. Buffers updated in place."""
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(x_host, dtype=self.dec.dtype, layout=ttnn.TILE_LAYOUT), self.x_buf
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                right_aligned_bias(self.max_len, min(valid, self.max_len), 1),
+                dtype=self.dec.dtype,
+                layout=ttnn.TILE_LAYOUT,
+            ),
+            self.mask_buf,
+        )
+        ttnn.execute_trace(self.dec.device, self.trace_id, cq_id=0, blocking=False)
+        return self.ys
+
+    def release(self):
+        if self.trace_id is not None:
+            ttnn.release_trace(self.dec.device, self.trace_id)
+            self.trace_id = None
+        for t in [self.x_buf, self.mask_buf, self.ys, *self.k_buf, *self.v_buf]:
+            ttnn.deallocate(t)
+
+
 def right_aligned_bias(max_len: int, valid: int, chunk: int = 1, causal: bool = False, dtype=torch.float32):
     """Additive `[1, 1, chunk, max_len]` mask for a right-aligned cache.
 

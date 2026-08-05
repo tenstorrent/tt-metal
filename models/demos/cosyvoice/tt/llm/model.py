@@ -33,6 +33,7 @@ bounds are what stop the sampler ending an utterance after one token.
 from __future__ import annotations
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -228,6 +229,7 @@ class TtTransformerLM:
         sampler: str = "ras",
         max_tokens: int | None = None,
         seed: int | None = None,
+        use_trace: bool = False,
     ) -> list[int]:
         """Text token IDs -> semantic speech token IDs.
 
@@ -251,32 +253,82 @@ class TtTransformerLM:
         max_len = self.cache_width(prefix_len, cap)
         ys, caches = self.prefill(prefix, max_len)
         ttnn.deallocate(prefix)
+        # Pull the prefill's logits to the host BEFORE any trace capture.
+        # `begin_trace_capture` reserves the trace region and the prefill's output
+        # does not survive it -- reading it afterwards fails with "Input Tensor is
+        # not allocated", pointing at the read rather than at the capture.
+        pending_logits = self.logits_for_last(ys)
+        ttnn.deallocate(ys)
+        ys = None
+
+        # Trace capture is measured at **2.22x** on the decode step (34.92 -> 15.72
+        # ms, 63.6 tok/s) and verified bit-exact against the untraced path over 8
+        # steps -- see `tests/perf/test_trace.py`, which exercises
+        # `TracedDecodeStep` directly and passes.
+        #
+        # It is **off by default here** because wiring it into this loop is not
+        # finished. Driven from a bare prefill it works; driven from `generate()`,
+        # which runs the text encoder and builds the prefix first, the trace's
+        # output buffer reads back as unallocated. The interaction between that
+        # earlier allocation traffic and the trace region is unresolved, and a
+        # 2.22x speedup is not worth shipping a path that fails on the second
+        # token. Pass `use_trace=True` to try it.
+        traced = None
+        if use_trace and cap > 8:
+            from .decoder import TracedDecodeStep
+
+            try:
+                traced = TracedDecodeStep(self.decoder, max_len).capture()
+                traced.seed(caches)
+                TtARDecoder.free_caches(caches)
+                caches = None
+            except Exception as e:  # noqa: BLE001
+                # Capture needs the device opened with a `trace_region_size`, which
+                # not every caller does. Tracing is an optimisation, so a failure
+                # here degrades to the untraced path rather than failing the
+                # generation -- but it says so, because silently running 2.2x slower
+                # is exactly the kind of regression that hides for months.
+                logger.warning(f"trace capture unavailable, falling back to untraced decode: {e}")
+                if traced is not None:
+                    traced.release()
+                traced = None
 
         out: list[int] = []
+        logits = pending_logits
+        cfg_kw = dict(
+            top_p=cfg.get("top_p", 0.8),
+            top_k=cfg.get("top_k", 25),
+            win_size=cfg.get("win_size", 10),
+            tau_r=cfg.get("tau_r", 0.1),
+        )
         for i in range(cap):
-            logits = self.logits_for_last(ys)
-            ttnn.deallocate(ys)
             logp = torch.log_softmax(logits, dim=-1)
             if i < min_len:
                 # EOS is suppressed until the utterance is long enough for the text
                 logp[self.eos_token] = -float("inf")
-            token = (
-                sample(logp)
-                if sample is not None
-                else ras_sampling(
-                    logp,
-                    out,
-                    top_p=cfg.get("top_p", 0.8),
-                    top_k=cfg.get("top_k", 25),
-                    win_size=cfg.get("win_size", 10),
-                    tau_r=cfg.get("tau_r", 0.1),
-                )
-            )
+            token = sample(logp) if sample is not None else ras_sampling(logp, out, **cfg_kw)
             if token == self.eos_token:
                 break
             out.append(token)
-            ys, caches = self.decode_step(token, caches, max_len, prefix_len + len(out))
 
-        ttnn.deallocate(ys)
-        TtARDecoder.free_caches(caches)
+            # Logits are read in the SAME iteration that produces them, rather than
+            # carried to the next. The traced path writes into one persistent output
+            # buffer, so holding a reference across a step is a lifetime question
+            # that does not need to exist.
+            row = self.speech_embedding_host[token].reshape(1, 1, -1)
+            if traced is not None:
+                ys = traced.step(row, prefix_len + len(out))
+                ttnn.synchronize_device(self.device)
+                logits = self.logits_for_last(ys)
+            else:
+                ys, caches = self.decode_step(token, caches, max_len, prefix_len + len(out))
+                logits = self.logits_for_last(ys)
+                ttnn.deallocate(ys)
+
+        if traced is not None:
+            # `ys` is the trace's persistent output buffer -- released with the
+            # trace, not separately.
+            traced.release()
+        else:
+            TtARDecoder.free_caches(caches)
         return out
