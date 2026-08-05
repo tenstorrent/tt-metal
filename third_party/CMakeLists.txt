@@ -491,3 +491,6 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
+
+# Pinned ELFIO uses uint*_t before including cstdint with current libstdc++.
+target_compile_options(ttexalens_elf PRIVATE -include cstdint)
