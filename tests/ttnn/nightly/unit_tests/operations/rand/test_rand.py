@@ -313,8 +313,9 @@ def test_rand_all_ones_seed_does_not_lock_prng(device):
     data = ttnn.to_torch(ttnn.rand((32, 32), device=device, dtype=ttnn.float32, seed=0xFFFFFFFF)).float()
 
     # A single tile runs on one core, so other cores cannot mask an XNOR LFSR
-    # left in the all-ones lock state repeating the same lane row.
-    assert torch.unique(data, dim=0).shape[0] > 1
+    # left in the all-ones lock state. A locked state can produce at most one
+    # constant value per lane, independent of how lanes map into tile rows.
+    assert torch.unique(data).numel() > 32
 
 
 def test_rand_fp32_uses_both_mantissa_parities(device):
