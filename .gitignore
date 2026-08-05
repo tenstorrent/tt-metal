@@ -157,6 +157,9 @@ models/experimental/petr/resources/*.pth
 *.err
 
 .claude
+# tt_dit agent skills are versioned with the code they document (see also
+# tt_metal/tt-llk/.claude/skills, .cursor/commands/skills, .github/skills).
+!models/tt_dit/.claude/
 .cursor/.DS_store
 
 # Generated rank binding files (machine-specific, regenerated at runtime via generate_rank_bindings.py)
