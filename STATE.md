@@ -4970,3 +4970,87 @@ the second. The check that would have caught it immediately is the one I eventua
 that is actually in the hot path, at the shape it actually runs, rather than a cheaper stand-in — the
 same rule as amendment 76's "a gate's shape is part of the gate", applied to op *kind* rather than
 tensor size.
+
+---
+
+## Amendment 111 (2026-08-05) — RETRACTION of amendment 110's "as accurate as it can be": the isolated harness measured a different op configuration than production, and ~2.7x is available
+
+Answering "are we sure the audio decode is as accurate as it can be?" — **no**, on two counts.
+
+### 1. Every per-conv number in amendment 110 is from the wrong configuration
+
+`get_conv3d_config` picks `C_in_block` from `_FP32_BLOCKINGS`, and the H3 audio shapes are **not** in that
+table by default — they are added by `register_h3_audio_blockings()`, which runs at **import of
+`decoder_minimax_h3_audio`** (that module's line 51). A harness that imports only `layers/audio_ops`
+never fires it, so every shape falls to the conservative `C_in_block = 32` default.
+
+`conv_pre_iso.py` and the fidelity sweep did exactly that. Measured both ways:
+
+| conv_pre (Cin 2048, Cout 1024, k 7, K = 14336) | C_in_block | blocks over K | rel_rmse |
+|---|---|---|---|
+| isolated harness — what amendment 110 recorded | 32 | 448 | 2.34e-03 |
+| **production** (blockings registered) | **128** | 112 | **1.86e-03** |
+
+So the production per-conv error is **1.86e-03, not 2.34e-03**. Confirmed by spy on the factory printing
+the table lookup and the returned block side by side: all 23 distinct decoder conv shapes have tuned
+entries and **none** is stuck at the default. There is no coverage gap — the gap was in my harness.
+
+Two false alarms of my own on the way here, both from trusting introspection over direct observation: a
+bare `_FP32_BLOCKINGS.get` in a fresh process returned `None` (registration had not run) and a module
+walk found 1 conv instead of 23 (malformed traversal). The reconciling measurement was the one that
+printed lookup and result in the same row, so no step was inferred.
+
+### 2. The fp32 floor is a multiplier-mantissa limit, and operand splitting beats it
+
+The floor is **flat in K** — matmul fp32 HiFi4 + `fp32_dest_acc_en`, M 512 N 1024:
+
+| K | 32 | 128 | 512 | 2048 | 8192 | 14336 |
+|---|---|---|---|---|---|---|
+| rel_rmse | 1.162e-03 | 1.167e-03 | 1.167e-03 | 1.168e-03 | 1.169e-03 | 1.169e-03 |
+
+Flat across 448x in reduction depth. So `fp32_dest_acc_en` is doing its job and within-op accumulation is
+**not** the limit; 1.169e-03 = 2^-9.7 is ~11 significand bits, i.e. the FPU multiplier consumes ~5 mantissa
+bits per fidelity pass and 4 passes is the ceiling. **"fp32" here means fp32 storage + fp32 accumulate
+with an fp16-grade multiply.** (This does not disturb amendment 110's *across-op* accumulation arithmetic,
+which concerned the ~130-conv chain, not one op.)
+
+Because the limit is the operands, splitting them recovers precision. With `a = a_hi + a_lo`,
+`a_hi = bf16(a)`, and likewise `b` — matmul at K = 14336:
+
+| formulation | matmuls | rel_rmse | gain |
+|---|---|---|---|
+| plain `a @ b` | 1 | 1.169e-03 | 1.0x |
+| split `a` only | 2 | 8.535e-04 | 1.4x |
+| **split both, 3 terms** | 3 | **3.135e-04** | **3.7x** |
+| split both, 4 terms | 4 | 3.135e-04 | 3.7x |
+
+`lo*lo` is exactly negligible (3 terms == 4 terms), and a device-side `bfloat16` typecast round trip
+reproduces torch's `.bfloat16()` **bit-exactly**, so `x_hi` can be derived on device — a real
+implementation does not need host help. torch fp32 on the same reduction is 2.96e-07, for scale.
+
+On the real conv, at production blocking:
+
+| C_in_block | blocks | plain | 3-term split | gain |
+|---|---|---|---|---|
+| **128 (production)** | 112 | 1.857e-03 | **9.995e-04** | 1.9x |
+| 256 | 56 | 1.728e-03 | 8.211e-04 | 2.1x |
+| 512 | 28 | 1.633e-03 | 6.987e-04 | 2.3x |
+
+`C_in_block` 1024 and 2048 are rejected by the op's blocking rules. Combining a wider block with splitting
+gives **2.7x** over production (1.857e-03 -> 6.987e-04). Conv3d also carries a partial-sum rounding term
+absent from matmul — that is what the `C_in_block` column is, monotone in block count and insensitive to
+operand mantissa.
+
+### What this means for the audio decode
+
+`AUDIO_RELATIVE_RMSE = 0.12` guards a measured 10.5 %. A 2.7x per-conv improvement should take the chain
+to roughly **4 %**, at 3x the conv count plus a blocking change. Amendment 103 profiled `Conv2d` at 4.0 %
+of the stage against ~70 % layout ops, so 3x convs is likely a single-digit stage cost — but that is an
+inference from a *different* conv class and must be measured, not assumed (that is precisely the error
+this amendment retracts). **Not implemented.** Recorded as pending with its measured size.
+
+**The method note.** A precision measurement is only about the configuration it ran in, and op
+configuration can be established by a **side effect of importing some other module**. Amendment 76 said a
+gate's shape is part of the gate; this extends it — the gate's *op config* is part of the gate too, and
+here it was set by an import three modules away. The general defence: build the production object, or
+import the production module, and read the config off the thing that will actually run.
