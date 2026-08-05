@@ -261,3 +261,33 @@ This section is the durable record of the automated execution of this plan. Comm
 - None of the Matmul results was borderline against the 1.5% limit, so no additional performance runs were required.
   Raw results are `generated/mcast_migration_rt/gate3_20260804_matmul_*.json`.
 - Gate 3 is green.
+
+### 2026-08-05 — Gate 4
+
+- Implemented API-001 and bumped `MCAST_PIPE_API_VERSION` from 9 to 10. The uniform helper CT block
+  is now `[active, data_ready, consumer_ready, num_active, flags, rotating_span]`; zero selects the
+  fixed four-word RT layout and a nonzero span selects `4 + 2 * rotating_span` RT words.
+- Removed the caller-supplied rotating template parameter. `McastArgs<CT_BASE, RT_BASE>` now derives
+  fixed/rotating mode, receiver type, sender count, runtime width, and both next offsets from the
+  constexpr sixth CT word. The width-sharded Conv activation reader and rotating helper kernel were
+  updated to the two-argument decoder. API-002 face metadata and RT compaction remain explicitly
+  deferred.
+- Updated exact host-wire expectations for fixed, rotating, divergent, and degenerate `Mcast1D` and
+  `Mcast2D` layouts. `./build_metal.sh` passed; `McastHostFixture.*` passed 25/25; the complete helper
+  device suite passed 73/73 from an initially empty cache, including rotating and divergent cases.
+- Seven compile-focused production cases passed sequentially through `run_safe_pytest.sh --dev
+  --no-precompile`, each with an initially empty isolated cache: Matmul 2D, Conv height/block/width,
+  GroupNorm legacy/Welford, and Sort long-tensor. The width-sharded case—the material rotating-wire
+  risk—passed at PCC `0.9999992597711427` with 0/26 JIT hits. Matmul, both GroupNorm variants, and
+  Sort likewise reported zero cache hits (0/27, 0/31, 0/31, and 0/29).
+- Complete mapped inventories passed sequentially from initially empty per-family caches:
+  - `MM-IN1-ALL`: 302 passed / 188 expected skips / 490 selected (56/72, 46/50, 46/50, 154/16).
+  - `CONV-HEIGHT`, `CONV-BLOCK`, and `CONV-WIDTH`: each feature inventory passed 48 runnable cases
+    with 16 expected skips; each matching DRAM-config case passed; shared DRAM passed 14/14.
+  - `GN-SHARDED-PARAMETERIZED`: legacy 108/2, Welford 108/2, fixed/default routing 19/6.
+  - `SORT-SINGLE-ROW-CONTROL`: long-tensor 7/7 and both `Ht=2` deadlock regressions 2/2.
+- Added a durable audit rejecting a third `McastArgs` template argument in any migrated kernel. The
+  complete opaque-boundary audit passed 9/9, all 25 migrated ledger rows are API v10 with a
+  2026-08-05 verification date, both migration JSON files parse, and `git diff --check` is clean.
+- Gate 4 is green. The implementation and v10 metadata are committed as `3726bdd71f3`
+  (`Make mcast rotating wire self-describing`).
