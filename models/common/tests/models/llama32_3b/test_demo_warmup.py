@@ -114,6 +114,42 @@ def _called_names(function_name):
     ]
 
 
+@pytest.mark.parametrize(("data_parallel", "expected_tp_devices"), [(4, 2), (8, 1)])
+def test_t3k_dp_topology_preserves_supported_tp_lanes(data_parallel, expected_tp_devices):
+    helper = _demo_function("_dp_tp_devices_or_skip", {"pytest": pytest, "ttnn": SimpleNamespace(MeshDevice=object)})
+    mesh = SimpleNamespace(get_num_devices=lambda: 8)
+
+    assert helper(mesh, data_parallel) == expected_tp_devices
+
+
+def test_t3k_dp2_skips_unsupported_tp4_lanes(expect_error):
+    helper = _demo_function("_dp_tp_devices_or_skip", {"pytest": pytest, "ttnn": SimpleNamespace(MeshDevice=object)})
+    mesh = SimpleNamespace(get_num_devices=lambda: 8)
+
+    with expect_error(pytest.skip.Exception, "creates TP4 lanes"):
+        helper(mesh, 2)
+
+
+def test_dp_build_validates_and_resolves_cache_from_each_lane_submesh():
+    function = next(
+        node for node in _DEMO_TREE.body if isinstance(node, ast.FunctionDef) and node.name == "_run_dp_smoke"
+    )
+    lane_loop = next(
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name) and node.target.id == "sm"
+    )
+    calls = [node for node in ast.walk(lane_loop) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+    call_names = [node.func.id for node in calls]
+    assert "_skip_unless_heads_divide_mesh" in call_names
+    assert "lazy_weight_cache_dir_for_demo" in call_names
+
+    from_pretrained_call = next(node for node in calls if node.func.id == "from_pretrained")
+    cache_dir = next(keyword.value for keyword in from_pretrained_call.keywords if keyword.arg == "cache_dir")
+    assert isinstance(cache_dir, ast.Name)
+    assert cache_dir.id == "lane_cache_dir"
+
+
 @pytest.mark.parametrize("function_name", ["_run_perf_benchmark", "_run_dp_smoke"])
 def test_traced_demo_paths_warm_up_before_benchmark(function_name):
     calls = _called_names(function_name)

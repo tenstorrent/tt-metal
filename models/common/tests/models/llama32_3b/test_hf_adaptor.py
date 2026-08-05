@@ -272,3 +272,32 @@ def test_tied_embedding_is_explicit_lm_head_construction_source():
 def test_config_builder_is_owned_by_model_module():
     assert hf_adaptor.build_llama32_3b_transformer_1d_config is llama_model.build_llama32_3b_transformer_1d_config
     assert llama_model.build_llama32_3b_transformer_1d_config.__module__ == llama_model.__name__
+
+
+def test_post_attention_norm_program_and_memory_use_same_mlp_grid(monkeypatch):
+    grid = SimpleNamespace(num_cores=32)
+    program = object()
+    memory = object()
+    captured = {}
+
+    monkeypatch.setattr(llama_model, "get_padded_hidden_dim", lambda *_: 8192)
+    monkeypatch.setattr(llama_model, "_dram_shard_core_grid_k_n", lambda *_: grid)
+    monkeypatch.setattr(
+        llama_model,
+        "_create_sharded_norm_program_config",
+        lambda dim, selected_grid, rows, tile: captured.update(program=(dim, selected_grid, rows, tile)) or program,
+    )
+    monkeypatch.setattr(
+        llama_model.ttnn,
+        "create_sharded_memory_config",
+        lambda shape, selected_grid, *args, **kwargs: captured.update(memory=(shape, selected_grid)) or memory,
+    )
+
+    assert llama_model._post_attn_norm_decode_configs(
+        dim=3072,
+        hidden_dim=8192,
+        num_devices=1,
+        max_batch_size=1,
+    ) == (program, memory)
+    assert captured["program"] == (3072, grid, 32, 32)
+    assert captured["memory"] == ((32, 96), grid)

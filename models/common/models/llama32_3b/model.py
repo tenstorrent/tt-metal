@@ -396,7 +396,6 @@ def _resolve_llama32_3b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Llam
 
 
 def _post_attn_norm_decode_configs(
-    mlp_config: MLP1DConfig,
     *,
     dim: int,
     hidden_dim: int,
@@ -408,7 +407,14 @@ def _post_attn_norm_decode_configs(
     grid = _dram_shard_core_grid_k_n(dim, padded_hidden // num_devices)
     tile_padded_batch_rows = TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE)
     program_config = _create_sharded_norm_program_config(dim, grid, tile_padded_batch_rows, TILE_SIZE)
-    return program_config, mlp_config.decode_input_memcfg
+    memory_config = ttnn.create_sharded_memory_config(
+        (tile_padded_batch_rows, dim // grid.num_cores),
+        grid,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return program_config, memory_config
 
 
 def _build_decoder_layer(
@@ -502,7 +508,6 @@ def _build_decoder_layer(
     )
 
     post_attn_decode_program_config, post_attn_decode_memory_config = _post_attn_norm_decode_configs(
-        mlp_config,
         dim=mcfg.dim,
         hidden_dim=mcfg.hidden_dim,
         num_devices=num_dev,

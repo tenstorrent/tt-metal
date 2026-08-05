@@ -530,11 +530,12 @@ def _warmup_demo_executor(executor, *, kv_cache, page_table):
 #   ci-b1-DP-16 : max_seq_len=1024, max_generated_tokens=200,  stop_at_eos=True
 #   ci-b1-DP-32 : max_seq_len=1024, max_generated_tokens=200,  stop_at_eos=True
 #
-# Hardware feasibility: each DP group is one device (batch_size=1 per group), so
-# ``data_parallel == n_devices``. On N300 (2 chips) only DP-2 fits; DP-4/8/16/32 cleanly
-# ``pytest.skip`` via ``_dp_or_skip``. ``stop_at_eos`` is effectively a no-op in TTTv2's
-# fixed-budget ``run_perf_benchmark`` loop (it always runs ``num_decode_tokens`` steps); the
-# special-token guard truncates at the first stop token before scanning, so this is fine.
+# Hardware feasibility: each DP group serves one user, but may retain tensor parallelism within
+# its submesh. On T3K, DP-4 creates four TP2 lanes and DP-8 creates eight TP1 lanes; both are
+# supported. DP-2 would create TP4 lanes, which this provider intentionally does not support.
+# ``stop_at_eos`` is effectively a no-op in TTTv2's fixed-budget ``run_perf_benchmark`` loop (it
+# always runs ``num_decode_tokens`` steps); the special-token guard truncates at the first stop
+# token before scanning, so this is fine.
 _DP_SIZE_TABLE: dict[int, dict] = {
     2: {"max_seq_len": 1024, "max_generated_tokens": 200, "stop_at_eos": True},
     4: {"max_seq_len": 4096, "max_generated_tokens": 2048, "stop_at_eos": False},
@@ -548,9 +549,8 @@ def create_dp_submeshes(mesh_device: ttnn.MeshDevice, data_parallel: int) -> lis
     """Partition the open parent mesh into ``data_parallel`` disjoint row-submeshes.
 
     Mirrors TTTv1 ``generator.create_submeshes`` minus the Galaxy reshape-to-(4,8) branch
-    (no Galaxy reachable here). For the single-user DP cases on our hardware
-    ``n // data_parallel == 1``, so each submesh is a ``(1,1)`` mesh. Fabric stays owned by
-    the parent — do NOT set fabric per-submesh.
+    (no Galaxy reachable here). Each lane receives ``n // data_parallel`` devices. Fabric stays
+    owned by the parent — do NOT set fabric per-submesh.
     """
     if data_parallel == 1:
         return [mesh_device]
@@ -559,17 +559,23 @@ def create_dp_submeshes(mesh_device: ttnn.MeshDevice, data_parallel: int) -> lis
     return mesh_device.create_submeshes(ttnn.MeshShape(1, n // data_parallel))
 
 
-def _dp_or_skip(mesh_device: ttnn.MeshDevice, data_parallel: int) -> None:
-    """Skip unless the mesh has exactly ``data_parallel`` single-device DP groups."""
+def _dp_tp_devices_or_skip(mesh_device: ttnn.MeshDevice, data_parallel: int) -> int:
+    """Return devices per DP lane, skipping unsupported parent/lane topologies."""
     n = mesh_device.get_num_devices()
-    if n % data_parallel != 0 or (n // data_parallel) != 1:
-        pytest.skip(f"DP-{data_parallel} needs {data_parallel} single-device groups; have {n} devices")
+    if n % data_parallel != 0:
+        pytest.skip(f"DP-{data_parallel} needs a device count divisible by {data_parallel}; have {n} devices")
+    tp_devices = n // data_parallel
+    if tp_devices not in (1, 2, 8):
+        pytest.skip(
+            f"DP-{data_parallel} on {n} devices creates TP{tp_devices} lanes, but "
+            "Llama-3.2-1B supports TP1, TP2, or TP8"
+        )
+    return tp_devices
 
 
 def _run_dp_smoke(
     mesh_device: ttnn.MeshDevice,
     optimizations: str,
-    cache_dir: Path,
     data_parallel: int,
     max_seq_len: int,
     max_gen_tokens: int,
@@ -581,7 +587,7 @@ def _run_dp_smoke(
     ``LaneGroupExecutor``, and runs one global batch through its lane routing, decode
     partitioning, output assembly, and cleanup paths.
     """
-    _dp_or_skip(mesh_device, data_parallel)
+    _dp_tp_devices_or_skip(mesh_device, data_parallel)
 
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
     _skip_unless_heads_divide_mesh(mesh_device, hf_model)
@@ -603,6 +609,8 @@ def _run_dp_smoke(
     group = None
     try:
         for sm in submeshes:
+            _skip_unless_heads_divide_mesh(sm, hf_model)
+            lane_cache_dir = lazy_weight_cache_dir_for_demo(sm, hf_model)
             try:
                 llm = from_pretrained(
                     sm,
@@ -610,7 +618,7 @@ def _run_dp_smoke(
                     max_batch_size=1,
                     max_seq_len=max_seq_len,
                     n_layers=None,
-                    cache_dir=cache_dir,
+                    cache_dir=lane_cache_dir,
                     optimizations=precision,
                 )
                 model = llm.model
@@ -703,7 +711,6 @@ def test_llama32_1b(test_config, mesh_device, optimizations):
     expected = EXPECTED_METRICS.get(optimizations, {}).get(device_name, {})
     model = None
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
-    cache_dir = lazy_weight_cache_dir_for_demo(mesh_device, hf_model)
 
     try:
         # ci-b1-DP-*: single-user data-parallel smoke. Builds N models itself (one per
@@ -714,13 +721,14 @@ def test_llama32_1b(test_config, mesh_device, optimizations):
             _run_dp_smoke(
                 mesh_device,
                 optimizations,
-                cache_dir,
                 data_parallel=data_parallel,
                 max_seq_len=sizes["max_seq_len"],
                 max_gen_tokens=sizes["max_generated_tokens"],
                 stop_at_eos=sizes["stop_at_eos"],
             )
             return
+
+        cache_dir = lazy_weight_cache_dir_for_demo(mesh_device, hf_model)
 
         # Token-accuracy feeds a single reference sequence — max_batch_size=1 avoids
         # DRAM pressure from a full 32-user KV cache allocation.

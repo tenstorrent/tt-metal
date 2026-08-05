@@ -6,7 +6,8 @@ TTTv2 Qwen2-7B-Instruct demo — accuracy and performance measurement.
 
 Uses the model-owned ``Qwen2Executor`` directly (no vLLM adapter).
 
-**Mesh note — N300 only.** Qwen2-7B is N300-only on this stack — an *architecture* constraint (the 7B
+**Mesh note — TP2 model lanes.** Qwen2-7B uses two-device tensor-parallel lanes on this stack — an
+*architecture* constraint (the 7B
 does not fit a single Wormhole device's L1), NOT a TTTv1 publication (Qwen2-7B is not in TTTv1's config):
   - **N150 (1 device): unsupported.** The unsharded 7B prefill/decode matmuls overflow a single
     Wormhole device's ~1.5MB L1 ("Statically allocated circular buffers ... clash with L1 buffers",
@@ -14,11 +15,14 @@ does not fit a single Wormhole device's L1), NOT a TTTv1 publication (Qwen2-7B i
     over >=2 devices. Cleanly skipped via ``_skip_below_min_tp_devices``. (The earlier TTTv2 N150
     numbers were scaled from N300, never actually measured.)
   - **N300 (2 devices): the validated mesh.** 28 attention heads and 4 KV heads both divide 2.
-  - **T3K / TG (8 devices): incompatible** (8 ∤ 4 KV heads) — skipped via ``_skip_unless_heads_divide_mesh``.
+  - **T3K (8 devices):** ordinary TP8 cases are incompatible (8 ∤ 4 KV heads), but
+    ``ci-b1-DP-4`` partitions the parent into four independent TP2 lanes and runs through
+    ``LaneGroupExecutor``. DP2 would create unsupported TP4 lanes; DP8 would create TP1 lanes
+    that cannot hold the model.
   - **N150x4 (4 devices): not validated** (fabric routing failure + the Qwen HiFi4 attention floor is
     only wired for 1–2 devices), intentionally absent from ``_MESH_DEVICE_TO_SHAPE``.
-  - **ci-b1-DP-*: skipped** — every DP group is a single device, which cannot hold this 7B (same L1
-    limit); you cannot have both 1-device-per-user and >=2-device TP.
+  - **ci-b1-DP-4 on T3K:** supported as four one-user TP2 lanes. Other DP factors retain explicit
+    topology/capacity skips.
 
 CI cases (parity with TTTv1 ``simple_text_demo.py``):
     token-accuracy   - teacher-forcing top-1/top-5 vs the book ``.refpt``
@@ -64,6 +68,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.lane_group import LaneGroupExecutor
 from models.common.models.qwen2_7b.executor import Qwen2Executor, Qwen2ExecutorConfig
 from models.common.models.qwen2_7b.hf_adaptor import from_pretrained
 from models.common.models.qwen2_7b.model import QWEN2_7B_ACCURACY, QWEN2_7B_PERFORMANCE, Qwen2_7B
@@ -560,12 +565,14 @@ def _warmup_demo_executor(
     prefill_compile_case=None,
     prefill_sampling_params=None,
 ):
-    config = executor.config
+    config = executor.config if hasattr(executor, "config") else executor.lanes[0].config
     can_sample_on_device = config.device_sampling_enabled
     prefill_kwargs = {"kv_cache": kv_cache, "can_sample_on_device": can_sample_on_device}
     decode_kwargs = {
         "kv_cache": kv_cache,
-        "max_batch_size": int(executor.model.config.max_batch_size),
+        "max_batch_size": int(
+            executor.max_batch_size if hasattr(executor, "max_batch_size") else executor.model.config.max_batch_size
+        ),
         "num_blocks": int(page_table.shape[-1]),
         "can_sample_on_device": can_sample_on_device,
     }
@@ -592,20 +599,19 @@ def _warmup_demo_executor(
 # ci-b1-DP: single-user data-parallel scaling smoke (TTTv1 ci-b1-DP-* parity)
 # =============================================================================
 #
-# These case IDs are retained for manifest parity, but every lane would be a single device
-# and Qwen2-7B requires TP2. They therefore skip before model construction.
+# These case IDs retain manifest parity. Qwen2-7B lanes require exactly TP2, so a full T3K
+# parent can run DP4 as four two-device lanes; all other factors skip before construction.
 #
 # Per-case size table (TTTv1 simple_text_demo.py parity, with the DP-2 N300 addition):
-#   ci-b1-DP-2  : max_seq_len=1024, max_generated_tokens=200, stop_at_eos=True (only DP case on N300)
+#   ci-b1-DP-2  : max_seq_len=1024, max_generated_tokens=200, stop_at_eos=True (TP1 on N300: skip)
 #   ci-b1-DP-4  : max_seq_len=4096, max_generated_tokens=2048, stop_at_eos=False
 #   ci-b1-DP-8  : max_seq_len=4096, max_generated_tokens=2048, stop_at_eos=False
 #   ci-b1-DP-16 : max_seq_len=1024, max_generated_tokens=200,  stop_at_eos=True
 #   ci-b1-DP-32 : max_seq_len=1024, max_generated_tokens=200,  stop_at_eos=True
 #
-# Hardware feasibility: each DP group is one device (batch_size=1 per group), so
-# ``data_parallel == n_devices``. Qwen2-7B is N150/N300 only (28/4 heads ∤ 8); on N300 (2 chips)
-# DP-2 has the right parent mesh size on N300, but its single-device lanes cannot hold this model;
-# every DP case cleanly ``pytest.skip`` via the TP capacity guard.
+# Hardware feasibility: every group serves one user, but the group itself must contain exactly two
+# tensor-parallel devices. On an eight-device T3K, DP4 therefore maps to four TP2 lanes. DP2 maps
+# to unsupported TP4, DP8 maps to TP1 (which overflows L1), and DP16/32 exceed host capacity.
 _DP_SIZE_TABLE: dict[int, dict] = {
     2: {"max_seq_len": 1024, "max_generated_tokens": 200, "stop_at_eos": True},
     4: {"max_seq_len": 4096, "max_generated_tokens": 2048, "stop_at_eos": False},
@@ -615,11 +621,52 @@ _DP_SIZE_TABLE: dict[int, dict] = {
 }
 
 
-def _dp_or_skip(mesh_device: ttnn.MeshDevice, data_parallel: int) -> None:
-    """Skip unless the mesh has exactly ``data_parallel`` single-device DP groups."""
+def _dp_lane_tp_or_skip(mesh_device: ttnn.MeshDevice, data_parallel: int) -> int:
+    """Return devices per lane, accepting only Qwen2's validated TP2 topology."""
     n = mesh_device.get_num_devices()
-    if n % data_parallel != 0 or (n // data_parallel) != 1:
-        pytest.skip(f"DP-{data_parallel} needs {data_parallel} single-device groups; have {n} devices")
+    if n % data_parallel != 0:
+        pytest.skip(f"DP-{data_parallel} cannot partition {n} devices into equal lanes")
+    tensor_parallel = n // data_parallel
+    if tensor_parallel != _MIN_TP_DEVICES:
+        pytest.skip(
+            f"DP-{data_parallel} on {n} devices creates TP{tensor_parallel} lanes; "
+            f"Qwen2-7B requires TP{_MIN_TP_DEVICES} lanes"
+        )
+    return tensor_parallel
+
+
+def _create_dp_submeshes(mesh_device: ttnn.MeshDevice, data_parallel: int, tensor_parallel: int) -> list:
+    submeshes = list(mesh_device.create_submeshes(ttnn.MeshShape(1, tensor_parallel)))
+    if len(submeshes) != data_parallel:
+        raise ValueError(f"Expected {data_parallel} TP{tensor_parallel} submeshes, got {len(submeshes)}")
+    return submeshes
+
+
+def _dp_lane_cache_dir(cache_dir: Path, tensor_parallel: int) -> Path:
+    device_name = {2: "N300"}.get(tensor_parallel, f"{tensor_parallel}dev")
+    lane_cache_dir = cache_dir.parent / device_name
+    lane_cache_dir.mkdir(parents=True, exist_ok=True)
+    return lane_cache_dir
+
+
+def _validate_dp_lane(model: Qwen2_7B, lane: Qwen2Executor, tensor_parallel: int, max_seq_len: int) -> None:
+    config = model.config
+    attention = config.block_configs[0].attention_config
+    if config.num_devices != tensor_parallel:
+        raise ValueError(f"DP lane expected TP{tensor_parallel}, model uses TP{config.num_devices}")
+    if attention.n_heads % tensor_parallel or attention.n_kv_heads % tensor_parallel:
+        raise ValueError(
+            f"DP lane TP{tensor_parallel} does not divide Qwen2 heads " f"({attention.n_heads}/{attention.n_kv_heads})"
+        )
+    if config.max_batch_size != 1:
+        raise ValueError(f"DP lane must have capacity 1, got {config.max_batch_size}")
+    expected_blocks = math.ceil(max_seq_len / 32)
+    cache_config = lane.config.paged_kv_cache
+    if cache_config.max_num_blocks != expected_blocks or cache_config.num_blocks != expected_blocks:
+        raise ValueError(
+            f"DP lane cache must contain {expected_blocks} blocks, got "
+            f"max={cache_config.max_num_blocks}, resolved={cache_config.num_blocks}"
+        )
 
 
 def assert_no_special_tokens(
@@ -673,11 +720,89 @@ def _run_dp_smoke(
     max_gen_tokens: int,
     stop_at_eos: bool,
 ) -> None:
-    """Preserve the historical Qwen DP cases as clean hardware-capacity skips."""
-    _dp_or_skip(mesh_device, data_parallel)
-    # Every historical DP case creates single-device lanes. Qwen2-7B requires TP2, so none can run;
-    # retain the exact collected cases and their existing capacity-driven skip outcome.
-    _skip_below_min_tp_devices(mesh_device.get_num_devices() // data_parallel)
+    """Run one user per TP2 lane through the migrated model-owned DP runtime."""
+    tensor_parallel = _dp_lane_tp_or_skip(mesh_device, data_parallel)
+    submeshes = _create_dp_submeshes(mesh_device, data_parallel, tensor_parallel)
+    lane_cache_dir = _dp_lane_cache_dir(cache_dir, tensor_parallel)
+    hf_model = os.environ.get("HF_MODEL", "Qwen/Qwen2-7B-Instruct")
+    precision = QWEN2_7B_PERFORMANCE if optimizations == "performance" else QWEN2_7B_ACCURACY
+    prompts = load_input_prompts(data_parallel)
+    sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
+    on_device_params = {
+        "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
+        "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
+    }
+
+    models: list = []
+    lanes: list = []
+    group = None
+    try:
+        for submesh in submeshes:
+            try:
+                llm = from_pretrained(
+                    submesh,
+                    hf_model=hf_model,
+                    max_batch_size=1,
+                    max_seq_len=max_seq_len,
+                    n_layers=None,
+                    cache_dir=lane_cache_dir,
+                    optimizations=precision,
+                )
+            except Exception as error:
+                pytest.skip(f"Could not build Qwen2-7B TP2 lane (weights / memory / mesh): {error}")
+            model = llm.model
+            model.demo_tokenizer = llm.tokenizer
+            models.append((model, submesh))
+            lane = create_executor(
+                model,
+                traced=True,
+                device_sampling_enabled=sampling_mode in on_device_params,
+            )
+            lanes.append(lane)
+            _validate_dp_lane(model, lane, tensor_parallel, max_seq_len)
+
+        group = LaneGroupExecutor(lanes, mesh_device=mesh_device)
+        tokenizer = models[0][0].demo_tokenizer
+        kv_cache = group.allocate_kv_cache()
+        # Every lane owns an independent block pool; repeat the same lane-local block IDs for
+        # each global row rather than assigning cross-lane global block offsets.
+        page_table = make_contiguous_page_table(1, max_seq_len, 32).repeat(data_parallel, 1)
+        _warmup_demo_executor(group, kv_cache=kv_cache, page_table=page_table)
+        input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer)
+        sampling_params = (
+            on_device_params[sampling_mode]
+            if sampling_mode in on_device_params and getattr(models[0][0], "supports_on_device_sampling", False)
+            else None
+        )
+        logger.info(
+            f"[ci-b1-DP-{data_parallel}] TP={tensor_parallel}, SAMPLING_MODE={sampling_mode} "
+            f"-> sampling_params={sampling_params}, stop_at_eos={stop_at_eos}"
+        )
+        result = run_perf_benchmark(
+            group,
+            tokens=input_tokens,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            num_decode_tokens=max_gen_tokens,
+            max_batch_size=data_parallel,
+            prompt_lens=prompt_lens,
+            sampling_params=sampling_params,
+            prefill_sampling_params=None,
+        )
+        assert len(result.generated_token_ids) == data_parallel
+        assert all(result.generated_token_ids), f"ci-b1-DP-{data_parallel}: every TP2 lane must return output"
+        log_generated_text(prompts, result.generated_token_ids, tokenizer)
+        assert_no_special_tokens(result.generated_token_ids, tokenizer, case_name=f"ci-b1-DP-{data_parallel}")
+    finally:
+        if group is not None:
+            group.cleanup()
+        else:
+            for lane in lanes:
+                lane.cleanup()
+        for model, submesh in models:
+            cleanup_model_case(model, submesh)
+        if lanes:
+            mesh_device.quiesce_devices()
 
 
 # =============================================================================

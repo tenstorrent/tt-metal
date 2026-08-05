@@ -118,6 +118,26 @@ def test_demo_warmup_registers_concrete_prefill_before_trace_capture():
     assert compile_kwargs["execution"] is eager_execution
 
 
+def test_demo_warmup_uses_lane_group_capacity_and_lane_trace_policy():
+    calls = []
+    lane_config = SimpleNamespace(trace=TraceConfig("all"), device_sampling_enabled=True)
+    group = SimpleNamespace(
+        lanes=[SimpleNamespace(config=lane_config) for _ in range(4)],
+        max_batch_size=4,
+        warmup_model_prefill=lambda **kwargs: calls.append(("prefill", kwargs)),
+        warmup_model_decode=lambda **kwargs: calls.append(("decode", kwargs)),
+    )
+    warmup = _demo_function("_warmup_demo_executor")
+    kv_cache = [object() for _ in range(4)]
+    warmup(group, kv_cache=kv_cache, page_table=SimpleNamespace(shape=(4, 128)))
+
+    decode_calls = [kwargs for kind, kwargs in calls if kind == "decode"]
+    assert len(decode_calls) == 2
+    assert all(kwargs["max_batch_size"] == 4 for kwargs in decode_calls)
+    assert all(kwargs["num_blocks"] == 128 for kwargs in decode_calls)
+    assert all(kwargs["kv_cache"] is kv_cache for _, kwargs in calls)
+
+
 def test_eval_prefill_signature_multiset_is_rotation_invariant_and_not_static_warmup_shaped():
     tokens = torch.zeros((32, 700), dtype=torch.long)
     prompt_lens = torch.tensor([64] * 30 + [400, 700])
@@ -249,9 +269,86 @@ def test_qwen_stop_guard_truncates_both_turn_boundaries_before_shared_strict_sca
         guard([[1, 99, 12]], tokenizer)
 
 
-def test_dp_cases_remain_capacity_skips_before_model_construction():
+def test_dp_smoke_uses_model_owned_lane_group_execution():
     calls = _called_names("_run_dp_smoke")
-    assert calls == ["_dp_or_skip", "_skip_below_min_tp_devices"]
+    assert "_dp_lane_tp_or_skip" in calls
+    assert "_create_dp_submeshes" in calls
+    assert "create_executor" in calls
+    assert "LaneGroupExecutor" in calls
+    assert "run_perf_benchmark" in calls
+    assert "_skip_below_min_tp_devices" not in calls
+
+
+def test_qwen_dp_topology_accepts_only_t3k_dp4_tp2(expect_error):
+    topology = _demo_function(
+        "_dp_lane_tp_or_skip",
+        {"ttnn": SimpleNamespace(MeshDevice=object), "pytest": pytest, "_MIN_TP_DEVICES": 2},
+    )
+    t3k = SimpleNamespace(get_num_devices=lambda: 8)
+
+    assert topology(t3k, 4) == 2
+    with expect_error(pytest.skip.Exception, "DP-2 on 8 devices creates TP4 lanes"):
+        topology(t3k, 2)
+    with expect_error(pytest.skip.Exception, "DP-8 on 8 devices creates TP1 lanes"):
+        topology(t3k, 8)
+    with expect_error(pytest.skip.Exception, "DP-16 cannot partition 8 devices"):
+        topology(t3k, 16)
+
+
+def test_qwen_dp4_partitions_four_tp2_submeshes():
+    calls = []
+    submeshes = [object() for _ in range(4)]
+    parent = SimpleNamespace(
+        create_submeshes=lambda shape: calls.append(shape) or submeshes,
+    )
+    fake_ttnn = SimpleNamespace(MeshDevice=object, MeshShape=lambda rows, columns: (rows, columns))
+    create_submeshes = _demo_function("_create_dp_submeshes", {"ttnn": fake_ttnn})
+
+    assert create_submeshes(parent, 4, 2) == submeshes
+    assert calls == [(1, 2)]
+
+
+def test_qwen_dp_lane_cache_reuses_n300_topology(tmp_path):
+    cache_dir = tmp_path / "Qwen2-7B-Instruct" / "T3K"
+    cache_dir.mkdir(parents=True)
+    lane_cache_dir = _demo_function("_dp_lane_cache_dir", {"Path": Path})(cache_dir, 2)
+
+    assert lane_cache_dir == cache_dir.parent / "N300"
+    assert lane_cache_dir.is_dir()
+
+
+def test_qwen_dp_lane_contract_checks_heads_capacity_and_cache(expect_error):
+    validate = _demo_function(
+        "_validate_dp_lane",
+        {
+            "Qwen2_7B": object,
+            "Qwen2Executor": object,
+            "math": __import__("math"),
+        },
+    )
+    attention = SimpleNamespace(n_heads=28, n_kv_heads=4)
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            num_devices=2,
+            max_batch_size=1,
+            block_configs=[SimpleNamespace(attention_config=attention)],
+        )
+    )
+    cache = SimpleNamespace(max_num_blocks=128, num_blocks=128)
+    lane = SimpleNamespace(config=SimpleNamespace(paged_kv_cache=cache))
+
+    validate(model, lane, 2, 4096)
+    model.config.num_devices = 4
+    with expect_error(ValueError, "expected TP2, model uses TP4"):
+        validate(model, lane, 2, 4096)
+    model.config.num_devices = 2
+    model.config.max_batch_size = 2
+    with expect_error(ValueError, "capacity 1"):
+        validate(model, lane, 2, 4096)
+    model.config.max_batch_size = 1
+    cache.num_blocks = None
+    with expect_error(ValueError, "cache must contain 128 blocks"):
+        validate(model, lane, 2, 4096)
 
 
 def test_token_accuracy_cleans_up_executor_in_finally():
