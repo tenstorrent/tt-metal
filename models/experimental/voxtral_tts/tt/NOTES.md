@@ -305,6 +305,12 @@ TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 # Block 1 streams ~3.9 GB/frame against 96 MB of total L1, i.e. 2.4% of the model. The model not
 # fitting in L1 is exactly WHY 194 GB/s is the wall.
 #
+# RE-MEASURED WITH TUNED BLOCKING (STATUS.md 6.28) and the rejection holds: 180.7 us against the
+# shipped route's 108.6, i.e. 1.66x SLOWER, even though tuning in0_block_w was worth 1.68x on its own
+# (303.7 -> 180.7). It also needs the WEIGHT width-sharded, which is Out of Memory in L1 at 8 cores and
+# silently returns 1.4e+14 at 32. Better blocking makes the cross-core reduce cheaper; it cannot remove
+# it. Below is the original measurement, which reached the same verdict.
+#
 # `MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig` REQUIRES a width-sharded activation, so it
 # is the one config that wants what the norm already produces. It BUILDS here -- Block 1's wqkv is
 # per_core_N=24 tiles where Block 2's N=9216 overflowed L1 at 36 (STATUS.md) -- and it is still
