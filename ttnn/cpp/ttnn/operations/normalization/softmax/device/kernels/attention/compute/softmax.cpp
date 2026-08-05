@@ -41,25 +41,51 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
     dfb_max_obj.wait_front(1);
     sub_bcast_cols_init_short(dfb_in, dfb_max);
     for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+        const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
         tile_regs_acquire();
-        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+        for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
             sub_tiles_bcast_cols(dfb_in, dfb_max, wt + wt8, 0, wt8);
         }
-        dfb_out_obj.reserve_back(ndst);
-        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+        dfb_out_obj.reserve_back(rem);
+        for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
             exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
         }
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+        for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
             pack_tile(wt8, dfb_out);  // reuse the exps buffer again, this time in a circular manner
         }
         tile_regs_release();
-        dfb_out_obj.push_back(ndst);
+        dfb_out_obj.push_back(rem);
     }
     dfb_in_obj.pop_front(Wt);
     dfb_max_obj.pop_front(1);
     dfb_out_obj.wait_front(Wt);
+}
+
+// CB consumers cannot wrap mid-fifo: pops in one cycle must land exactly on fifo_limit.
+// After a partial row (Wt not a multiple of the CB capacity), rd/wr sit at that offset.
+// Push/pop `pad` tiles to complete the cycle and return pointers to the CB base.
+// Kept identical to the copy in softmax_large_tensor.cpp.
+ALWI void cycle_dfb_pad(uint32_t dfb_id, uint32_t pad) {
+    if (pad == 0) {
+        return;
+    }
+    DataflowBuffer dfb(dfb_id);
+    dfb.reserve_back(pad);
+    dfb.push_back(pad);
+    dfb.wait_front(pad);
+    dfb.pop_front(pad);
+}
+
+// Same, for CBs whose padding tiles the reader already pushed: only consume them.
+ALWI void drain_dfb_pad(uint32_t dfb_id, uint32_t pad) {
+    if (pad == 0) {
+        return;
+    }
+    DataflowBuffer dfb(dfb_id);
+    dfb.wait_front(pad);
+    dfb.pop_front(pad);
 }
 
 void kernel_main() {
@@ -69,6 +95,14 @@ void kernel_main() {
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
+    const uint32_t in0_t = get_arg_val<uint32_t>(6);  // factory: in0 CB tile capacity
+    const uint32_t out0_t = ndst * 2;                 // matches factory out0_t = block_size * 2 (double-buffered)
+    const uint32_t exps_t = ((Wt + ndst - 1) / ndst) * ndst;  // dfb_exps/dfb_x capacity, rounded to ndst
+    // Tiles needed after Wt to finish each CB's cycle, named for the capacity they align.
+    const uint32_t in0_pad = (in0_t > 0 && Wt > 0) ? ((in0_t - (Wt % in0_t)) % in0_t) : 0;
+    const uint32_t out0_pad = (out0_t > 0 && Wt > 0) ? ((out0_t - (Wt % out0_t)) % out0_t) : 0;
+    const uint32_t exps_pad = (exps_t > Wt) ? (exps_t - Wt) : 0;
+    const uint32_t attn_pad = exps_pad;  // in4_t is also round_up(Wt, ndst); reader pushes the pad
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
 
     constexpr uint32_t onetile = 1;
@@ -121,21 +155,22 @@ void kernel_main() {
         pack_reconfig_data_format(dfb_scale_mask);
         mul_tiles_bcast_scalar_init_short(dfb_in0, dfb_fused_scale);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+            const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
             // apply fused scale [*= 1/sqrt(...)]
             tile_regs_acquire();
-            dfb_in0_obj.wait_front(ndst);
-            dfb_scale_mask_obj.reserve_back(ndst);
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            dfb_in0_obj.wait_front(rem);
+            dfb_scale_mask_obj.reserve_back(rem);
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 mul_tiles_bcast_scalar(dfb_in0, dfb_fused_scale, wt8, 0, wt8);  // mul bcast-HW -> DST[wt8]
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 pack_tile(wt8, dfb_scale_mask);  // reuse exps buffer
             }
             tile_regs_release();
-            dfb_scale_mask_obj.push_back(ndst);
-            dfb_in0_obj.pop_front(ndst);
+            dfb_scale_mask_obj.push_back(rem);
+            dfb_in0_obj.pop_front(rem);
         }
         reconfig_data_format(dfb_scale_mask, dfb_fused_attn);
 
@@ -149,36 +184,37 @@ void kernel_main() {
         add_bcast_rows_init_short(dfb_scale_mask, dfb_fused_attn);
 #endif
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+            const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
             tile_regs_acquire();
-            dfb_scale_mask_obj.wait_front(ndst);
+            dfb_scale_mask_obj.wait_front(rem);
 #ifdef CAUSAL_MASK
-            dfb_fused_attn_obj.wait_front(wt + ndst);  // cumulative wait for up to Wt tiles
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            dfb_fused_attn_obj.wait_front(wt + rem);  // cumulative wait for up to Wt tiles
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 add_tiles(dfb_scale_mask, dfb_fused_attn, wt8, wt + wt8, wt8);  // tile *= 1/(sum(exp(x)))
             }
 #else
             if (wait_mask) {
-                dfb_fused_attn_obj.wait_front(wt + ndst);  // cumulative wait for up to Wt tiles, only at first ht
+                dfb_fused_attn_obj.wait_front(wt + rem);  // cumulative wait for up to Wt tiles, only at first ht
             }
 
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 add_tiles_bcast_rows(dfb_scale_mask, dfb_fused_attn, wt8, wt + wt8, wt8);  // tile *= 1/(sum(exp(x)))
             }
 #endif
-            dfb_scale_mask_obj.pop_front(ndst);
-            dfb_x_obj.reserve_back(ndst);
+            dfb_scale_mask_obj.pop_front(rem);
+            dfb_x_obj.reserve_back(rem);
 #ifndef NUMERIC_STABLE
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
             }
 #endif
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 pack_tile(wt8, dfb_x);  // reuse the exps buffer again, this time in a circular manner
             }
             tile_regs_release();
-            dfb_x_obj.push_back(ndst);
+            dfb_x_obj.push_back(rem);
         }
 
 // add numeric_stable
@@ -189,6 +225,7 @@ void kernel_main() {
 
 #ifdef CAUSAL_MASK
         dfb_fused_attn_obj.pop_front(Wt);
+        drain_dfb_pad(dfb_fused_attn, attn_pad);
 #else
         if (wait_mask) {
             wait_mask = false;
@@ -196,6 +233,7 @@ void kernel_main() {
         ht++;
         if (ht == Ht) {
             dfb_fused_attn_obj.pop_front(Wt);
+            drain_dfb_pad(dfb_fused_attn, attn_pad);
             ht = 0;
             wait_mask = true;
         }
@@ -211,10 +249,11 @@ void kernel_main() {
 #endif
         if (mask_padded_data) {
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+                const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
                 tile_regs_acquire();
-                dfb_in0_obj.wait_front(ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    if (wt == (Wt - ndst) && (wt8 == ndst - 1)) {
+                dfb_in0_obj.wait_front(rem);
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
+                    if (wt + wt8 == Wt - 1) {  // last tile of the row gets the -inf padding mask
                         reconfig_data_format(dfb_in0, dfb_mask_padded);
                         add_bcast_rows_init_short(dfb_in0, dfb_mask_padded);
                         dfb_mask_padded_obj.wait_front(1);
@@ -223,21 +262,21 @@ void kernel_main() {
                         copy_tile(dfb_in0, wt8, wt8);  // copy from c_in[0] to DST[0]
                     }
                 }
-                dfb_in0_obj.pop_front(ndst);
+                dfb_in0_obj.pop_front(rem);
 
-                dfb_x_obj.reserve_back(ndst);
+                dfb_x_obj.reserve_back(rem);
 #ifndef NUMERIC_STABLE
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
                     exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
                 }
 #endif
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
                     pack_tile(wt8, dfb_x);  // DST[0]->dfb_id[wt]
                 }
                 tile_regs_release();
-                dfb_x_obj.push_back(ndst);
+                dfb_x_obj.push_back(rem);
             }
 
 // add numeric_stable
@@ -253,24 +292,25 @@ void kernel_main() {
             calc_numeric_stable<dfb_in0, dfb_max_scaler, dfb_max, dfb_exps>(Wt, ndst);
 #else
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+                const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
                 tile_regs_acquire();
-                dfb_in0_obj.wait_front(ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                dfb_in0_obj.wait_front(rem);
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
                     copy_tile(dfb_in0, wt8, wt8);  // copy from c_in[0] to DST[0]
                 }
-                dfb_in0_obj.pop_front(ndst);
+                dfb_in0_obj.pop_front(rem);
 
-                dfb_exps_obj.reserve_back(ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                dfb_exps_obj.reserve_back(rem);
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
                     exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                for (uint32_t wt8 = 0; wt8 < rem; ++wt8) {
                     pack_tile(wt8, dfb_exps);  // DST[0]->dfb_id[wt]
                 }
                 tile_regs_release();
-                dfb_exps_obj.push_back(ndst);
+                dfb_exps_obj.push_back(rem);
             }
 #endif
         }
@@ -300,23 +340,44 @@ void kernel_main() {
         // by now we already did a cumulative wait for Wt tiles in cb_exps
         mul_bcast_cols_init_short(dfb_exps, dfb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+            const uint32_t rem = (wt + ndst > Wt) ? (Wt - wt) : ndst;  // clamped final block
             tile_regs_acquire();
-            dfb_out0_obj.reserve_back(ndst);
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            dfb_out0_obj.reserve_back(rem);
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 // wt+wt8 since we pop Wt after the entire loop
                 mul_tiles_bcast<BroadcastType::COL>(
                     dfb_exps, dfb_recipsumexps, wt + wt8, 0, wt8);  // tile *= 1/(sum(exp(x)))
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            for (uint32_t wt8 = 0; wt8 < rem; wt8++) {
                 pack_tile(wt8, dfb_out0);
             }
             tile_regs_release();
-            dfb_out0_obj.push_back(ndst);
+            dfb_out0_obj.push_back(rem);
         }
         dfb_recipsumexps_obj.pop_front(1);
         dfb_exps_obj.pop_front(Wt);
+
+        // Realign CBs before the next row when Wt does not fill them exactly.
+        drain_dfb_pad(dfb_in0, in0_pad);
+        cycle_dfb_pad(dfb_exps, exps_pad);
+#if FUSED_SCALE_MASK
+        cycle_dfb_pad(dfb_scale_mask, exps_pad + ndst);  // im3_t = exps_t + ndst
+#ifdef NUMERIC_STABLE
+        // Without NUMERIC_STABLE, dfb_x aliases dfb_exps; cycling it again would drift it per row.
+        cycle_dfb_pad(dfb_x, exps_pad);
+#endif
+#elif defined(NUMERIC_STABLE)
+        // Without NUMERIC_STABLE, dfb_x aliases dfb_exps (already cycled).
+        if (mask_padded_data) {
+            cycle_dfb_pad(dfb_x, exps_pad);
+        }
+#endif
+        if (out0_pad > 0) {
+            dfb_out0_obj.reserve_back(out0_pad);
+            dfb_out0_obj.push_back(out0_pad);  // writer drains, does not write to DRAM
+        }
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
     // the end so the CBs are left balanced.

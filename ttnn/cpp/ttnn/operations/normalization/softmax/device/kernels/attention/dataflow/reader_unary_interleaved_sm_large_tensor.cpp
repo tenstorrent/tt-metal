@@ -95,13 +95,14 @@ void kernel_main() {
             mask_index = mask_id_offset;
 #endif
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                dfb_id_in0_obj.reserve_back(blk);
+                uint32_t rem = (wt + blk > Wt) ? (Wt - wt) : blk;  // clamped final block
+                dfb_id_in0_obj.reserve_back(rem);
                 uint32_t write_offset = 0;
 #if FUSED_SCALE_MASK
-                dfb_id_attn_obj.reserve_back(blk);
+                dfb_id_attn_obj.reserve_back(rem);
                 uint32_t mask_write_offset = 0;
 #endif
-                for (uint32_t regs = 0; regs < blk; regs++) {
+                for (uint32_t regs = 0; regs < rem; regs++) {
                     noc.async_read(
                         src_a,
                         dfb_id_in0_obj,
@@ -122,10 +123,21 @@ void kernel_main() {
 #endif
                 }
                 noc.async_read_barrier();
-                dfb_id_in0_obj.push_back(blk);
+                dfb_id_in0_obj.push_back(rem);
 #if FUSED_SCALE_MASK
-                dfb_id_attn_obj.push_back(blk);
+                dfb_id_attn_obj.push_back(rem);
 
+#endif
+            }
+            // Complete the CB cycle after a partial last Wt pass so compute can realign to fifo base.
+            // Pad tiles are discarded by compute; contents are unused.
+            const uint32_t dfb_align_pad = (dfb_length_t - (Wt % dfb_length_t)) % dfb_length_t;
+            if (dfb_align_pad > 0) {
+                dfb_id_in0_obj.reserve_back(dfb_align_pad);
+                dfb_id_in0_obj.push_back(dfb_align_pad);
+#if FUSED_SCALE_MASK
+                dfb_id_attn_obj.reserve_back(dfb_align_pad);
+                dfb_id_attn_obj.push_back(dfb_align_pad);
 #endif
             }
         }
