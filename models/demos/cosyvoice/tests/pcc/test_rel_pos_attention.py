@@ -206,3 +206,54 @@ def test_reference_math_reproduces_the_captured_layer():
     )
     assert got.shape == want.shape, (got.shape, want.shape)
     assert p_ >= 0.9999, p_
+
+
+# --------------------------------------------------------------------------
+# device tier
+# --------------------------------------------------------------------------
+needs_l1_small = pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+
+
+def _have_flow_weights():
+    from models.demos.cosyvoice.tt.weights import default_weights_path
+
+    return os.path.exists(default_weights_path().replace("hift_", "flow_"))
+
+
+needs_flow_weights = pytest.mark.skipif(
+    not _have_flow_weights(),
+    reason="run scripts/export_weights.py --module flow in the CosyVoice venv first",
+)
+
+
+@needs_golden
+@needs_flow_weights
+@needs_l1_small
+def test_device_rel_pos_attention_matches_golden(device):
+    """The attention layer on device, against the captured reference output.
+
+    This is the piece `02_plan.md` §3.3 called a structural risk, and the one both
+    the flow encoder and the LLM depend on -- so it gets checked against real
+    weights and real activations rather than random ones.
+    """
+    import ttnn
+    from models.demos.cosyvoice.tt.flow.encoder import TtRelPosAttention
+    from models.demos.cosyvoice.tt.weights import WeightBag, default_weights_path
+
+    g = load_golden(GOLDEN)
+    query = as_torch(g["call0.in_query"])
+    pos_emb = as_torch(g["call0.in_pos_emb"])
+    want = as_torch(g["call0.out_out"])
+
+    bag = WeightBag.load(default_weights_path().replace("hift_", "flow_"))
+    meta = bag.meta
+    attn = TtRelPosAttention(device, bag.sub("encoder.encoders.0.self_attn"), meta["n_head"], meta["d_k"])
+
+    x = ttnn.from_torch(query, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    pe = ttnn.from_torch(pos_emb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    got = ttnn.to_torch(attn(x, pe)).float()
+
+    p = pcc(got, want)
+    print(f"\n  rel-pos attention on device: PCC {p:.10f}  max|d| {(got - want).abs().max():.3e}")
+    assert got.shape == want.shape, (got.shape, want.shape)
+    assert p >= 0.99, p
