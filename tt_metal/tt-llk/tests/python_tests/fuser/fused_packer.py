@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from .block_data import BlockData
     from .pack_node import PackNode
 
-from helpers.golden_generators import PackGolden
+from helpers.golden_generators import PackGolden, UntilizeGolden, get_golden_generator
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 from .fused_loop import FusedLoop
@@ -38,6 +38,26 @@ class Packer:
 
     # Controls the tile iteration pattern for the pack loop.
     loop: FusedLoop = FusedLoop()
+
+    # Set `per_block_init = True` if init() needs block dimensions and must
+    # be called per-block inside the batch loop rather than hoisted out.
+    per_block_init: bool = False
+
+    pack_mode: str = "PackMode::Default"
+
+    @staticmethod
+    def _untilize_golden(
+        tensor: torch.Tensor,
+        pack_node: "PackNode",
+    ) -> torch.Tensor:
+        untilize = get_golden_generator(UntilizeGolden)
+        tile_shape = pack_node.output.tile_shape
+        return untilize(
+            tensor,
+            pack_node.output.data_format,
+            dimensions=pack_node.output.dimensions,
+            tile_dimensions=(tile_shape.total_row_dim(), tile_shape.total_col_dim()),
+        )
 
     @staticmethod
     def _l1_acc_golden(

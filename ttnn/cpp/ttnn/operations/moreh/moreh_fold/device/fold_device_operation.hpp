@@ -5,11 +5,12 @@
 #pragma once
 
 #include <tuple>
+#include <variant>
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::moreh::moreh_fold {
 
@@ -31,10 +32,18 @@ struct MorehFoldOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+    // Metal 2.0 program factory (MetalV2FactoryConcept). Single-variant: the op splits work across a
+    // worker grid, but every node runs the same reader/writer program.
+    struct MultiCore {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    using program_factory_t = std::variant<MultiCore>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_inputs(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

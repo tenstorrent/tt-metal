@@ -40,6 +40,26 @@ struct AllGatherParams {
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
     std::optional<CoreRangeSet> sub_core_grid;
+
+    // "true 2D" = a 2D fabric config with both axes active
+    bool is_true_2d() const {
+        return ::tt::tt_fabric::is_2d_fabric_config(fabric_config) && axis_num_devices[0] > 1 &&
+               axis_num_devices[1] > 1;
+    }
+
+    // The active axis of an effectively-1D topology
+    uint32_t get_1d_axis() const {
+        TT_FATAL(!is_true_2d(), "get_1d_axis is undefined for true 2D topologies");
+        if (cluster_axis.has_value()) {
+            return cluster_axis.value();
+        }
+        for (uint32_t axis = 0; axis < axis_num_devices.size(); ++axis) {
+            if (axis_num_devices[axis] > 1) {
+                return axis;
+            }
+        }
+        return 0;
+    }
 };
 
 struct AllGatherInputs {

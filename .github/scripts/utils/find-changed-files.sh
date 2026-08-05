@@ -85,7 +85,7 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
-        .github/workflows/llk-*.yaml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
+        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
         tt_metal/**/*.@(h|hpp|c|cpp|cc|py))

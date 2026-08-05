@@ -67,6 +67,14 @@ inputs:
       stripped from all docker-image:// context URIs (GHCR direct fallback).
     required: false
     default: ""
+  syft-scanner-image:
+    description: "Canonical ghcr.io tag for our self-hosted syft-scanner (BuildKit's SBOM scanner), used to generate the SBOM attestation."
+    required: false
+    default: ""
+  oras-image:
+    description: "Canonical ghcr.io tag for our self-hosted oras (OCI registry CLI), used for SBOM enrichment."
+    required: false
+    default: ""
 
   enrich-sbom:
     description: >-
@@ -104,6 +112,8 @@ runs:
         INPUT_ENABLE_ATTESTATIONS: ${{ inputs.enable-attestations }}
         INPUT_ENRICH_SBOM: ${{ inputs.enrich-sbom }}
         INPUT_HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
+        INPUT_SYFT_SCANNER_IMAGE: ${{ inputs.syft-scanner-image }}
+        INPUT_ORAS_IMAGE: ${{ inputs.oras-image }}
       run: |
         set -euo pipefail
         # All logic lives in .github/scripts/manual-docker-bake.sh (kept small

@@ -36,6 +36,8 @@ file(
     permute/device/kernels/*.cpp
     reshape_on_device/device/kernels/*.cpp
     repeat/device/kernels/*.cpp
+    repeat/codegen/kernels/*.cpp
+    repeat/codegen/kernels/*.h
     roll/device/kernels/*.cpp
     reshape_view/device/device/*.cpp
     scatter/device/kernels/*.hpp
@@ -319,7 +321,6 @@ target_sources(
             untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp
             untilize_with_unpadding/device/untilize_with_unpadding_device_operation_types.hpp
             untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp
-            untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory.hpp
             untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_interleaved_program_factory.hpp
             untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_sharded_program_factory.hpp
             untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_shared_variables.hpp

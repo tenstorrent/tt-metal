@@ -134,6 +134,14 @@ void kernel_main() {
         }
     }
 
+    // Commit this chip's own contribution to the local reduction workers' reduction_input CB
+    // before releasing them. The payload writes above only noc_async_writes_flushed (sent, not
+    // landed), and the reduction_semaphore mcast release below is on a different NoC VC than the
+    // unicast payload write (no cross-VC ordering on Wormhole), so without this barrier a
+    // reduction worker can be released and read stale reduction_input. The exit barrier is too
+    // late (it runs after the release).
+    noc_async_write_barrier();
+
     // 2. mcast output ready semaphore
     auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     uint64_t out_ready_sem_noc_addr_in_pkt =

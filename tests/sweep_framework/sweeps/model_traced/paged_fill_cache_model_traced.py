@@ -265,13 +265,21 @@ def run(
     if "batch_idx" not in op_kwargs or op_kwargs["batch_idx"] is None:
         op_kwargs["batch_idx"] = 0
 
-    # mesh_coords is stripped by build_op_kwargs (infra key) — recover it from
-    # the raw test vector so the trace recorder names the per-coord variant
-    # distinctly. Without this, all configs that differ only in mesh_coords
-    # collapse to a single trace entry and validation reports them missing.
-    mesh_coords_set = _parse_mesh_coords(kwargs.get("mesh_coords"))
-    if mesh_coords_set is not None:
-        op_kwargs["mesh_coords"] = mesh_coords_set
+    # NOTE: do NOT forward the traced `mesh_coords` into the op call. The
+    # production model calls paged_fill_cache with no mesh_coords (see
+    # models/demos/llama3_70b_galaxy/tt/llama_attention.py:1050), so it fills
+    # every coordinate the cache tensor lives on. On this trace-validation path
+    # the cache is materialized REPLICATED across the whole device mesh (see
+    # create_tensor_on_mesh), so its tensor_coords are the full mesh. A single
+    # traced coord like {(0,1)} is then NOT a subset of an [8,4]-replicated
+    # tensor's coords the way the trace recorded it, and the device op asserts
+    # `tensor_coords_set.contains(mesh_coord)` (paged_fill_cache_device_operation
+    # .cpp:165) — the 96 FAIL_ASSERT_EXCEPTION on Galaxy. mesh_coords is kept in
+    # the stored vector (its own field) for per-coord vector identity, which does
+    # not require passing it to the op here. Omitting it (= None) fills all coords,
+    # matching the model; the replicated cache reads back identically, so the
+    # global golden + reconcile_golden_to_actual still validate.
+    op_kwargs.pop("mesh_coords", None)
 
     start_time = start_measuring_time()
     # Master used `page_table=` named for 128 cfgs and positional `arg2` for 1.

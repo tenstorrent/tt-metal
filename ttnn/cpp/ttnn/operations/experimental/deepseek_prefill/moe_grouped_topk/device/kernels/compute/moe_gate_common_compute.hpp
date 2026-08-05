@@ -98,11 +98,17 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
     }
 }
 
+template <bool dump_biased = false>
 void add_bias(
-    uint32_t cb_sigmoid_scores_id, uint32_t cb_in_bias_id, uint32_t cb_biased_scores_id, uint32_t width_tiles) {
+    uint32_t cb_sigmoid_scores_id,
+    uint32_t cb_in_bias_id,
+    uint32_t cb_biased_scores_id,
+    uint32_t width_tiles,
+    uint32_t cb_biased_dump_id = 0) {
     CircularBuffer cb_sigmoid_scores(cb_sigmoid_scores_id);
     CircularBuffer cb_in_bias(cb_in_bias_id);
     CircularBuffer cb_biased_scores(cb_biased_scores_id);
+    CircularBuffer cb_biased_dump(cb_biased_dump_id);
     // Perform add bias on sigmoid scores
     add_tiles_init(cb_sigmoid_scores_id, cb_in_bias_id, false);
     cb_sigmoid_scores.wait_front(width_tiles);
@@ -114,11 +120,20 @@ void add_bias(
         cb_in_bias.pop_front(1);
 
         cb_biased_scores.reserve_back(1);
+        if constexpr (dump_biased) {
+            cb_biased_dump.reserve_back(1);
+        }
         tile_regs_wait();
         pack_reconfig_data_format(cb_biased_scores_id);
         pack_tile(0, cb_biased_scores_id);
+        if constexpr (dump_biased) {
+            pack_tile(0, cb_biased_dump_id);
+        }
         tile_regs_release();
         cb_biased_scores.push_back(1);
+        if constexpr (dump_biased) {
+            cb_biased_dump.push_back(1);
+        }
     }
 }
 
