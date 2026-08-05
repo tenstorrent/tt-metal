@@ -113,9 +113,9 @@ fs::path resolve_kernel_file_path(const fs::path& given_file_name, ContextId con
 KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
     source_(source), source_type_(source_type) {
     if (source_type == FILE_PATH) {
-        // Residual relative-path construction without a Program uses DEFAULT_CONTEXT_ID.
-        // Program-backed factories pre-resolve via resolve_kernel_file_path so this hits the
-        // absolute-path early-out and never reads context.
+        // FILE_PATH without a prior resolve uses DEFAULT_CONTEXT_ID. Program-backed factories pass
+        // an absolute path from resolve_kernel_file_path, so this hits the absolute-path early-out
+        // and never reads context.
         path_ = resolve_kernel_file_path(source);
     }
 };
