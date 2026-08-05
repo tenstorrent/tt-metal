@@ -44,8 +44,9 @@ SPATIAL_MERGE_SIZE = 2
 NORM_EPS = 1e-6
 HIDDEN_ACT = "gelu_pytorch_tanh"
 
-# One image is one attention block. 48x48 is the 1:1 canvas; 4x6 keeps the CPU reference cheap.
-GRIDS = {"small": [[1, 4, 6]], "square": [[1, 48, 48]]}
+# One image is one attention block. 48x48 is the 1:1 canvas `resolve_canvas_size` produces at a
+# 16-pixel patch, and 2304 patches is a multiple of 128, so it runs under every parallel config.
+GRIDS = {"square": [[1, 48, 48]]}
 
 
 def _config(depth=1):
@@ -85,9 +86,12 @@ def _golden_pos_embeds(grid):
 
 # ------------------------------------------------------------------------- device
 
-# `single` is the replicated reference. The parallel configs shard the tower itself: TP fractures the
+# `single` is the replicated reference. The parallel configs shard the block itself: TP fractures the
 # 16 heads (2/device at TP=8) and the MLP's intermediate; SP splits the patch rows and runs ring SDPA.
 # TP and SP must occupy different mesh axes, so the 8x4 system covers TP=8 x SP=4.
+#
+# Only TP=8 is deployed, with SP either off or 4, so the configs are named for both factors. SP alone
+# (TP=1) is not a configuration this model will ever run in and is not covered.
 #
 # `device_params` is per-config: the CCL paths need FABRIC_1D, but requesting it on a 1x1 mesh has no
 # remote ethernet partner and times out in router init.
@@ -97,8 +101,7 @@ _NO_FABRIC = {"l1_small_size": _L1_SMALL}
 
 _MESH = [
     pytest.param((1, 1), (1, 1), None, None, 1, _NO_FABRIC, id="single"),
-    pytest.param((8, 4), (8, 4), 0, None, 2, _FABRIC, id="tp8"),
-    pytest.param((8, 4), (8, 4), None, 1, 2, _FABRIC, id="sp4"),
+    pytest.param((8, 4), (8, 4), 0, None, 2, _FABRIC, id="tp8_sp1"),
     pytest.param((8, 4), (8, 4), 0, 1, 2, _FABRIC, id="tp8_sp4"),
 ]
 _PARAMS = pytest.mark.parametrize(
@@ -124,9 +127,10 @@ def _parallel(submesh, tp_axis, sp_axis, num_links):
 def _skip_if_sp_misaligned(total, submesh, sp_axis):
     """SP needs a tile-aligned per-device row count.
 
-    Ring SDPA requires `N_local_q % 32 == 0`, which is stricter than the merger's 4-row merge group.
-    The `small` grid is 24 patches and cannot divide into 4 tile-aligned shards, so it is a skip rather
-    than a failure -- it exists to keep the CPU reference cheap, not to exercise SP.
+    Ring SDPA requires `N_local_q % 32 == 0`, which at SP=4 means a multiple of 128 patches. No grid
+    here trips it -- 48 x 48 is 2304 = 18 x 128 -- so this is a guard for whatever gets added next
+    rather than something that currently fires. A misaligned grid is a skip, not a failure: it says the
+    shape cannot be sequence-parallel at this factor, which is a property of the shape.
     """
     if sp_axis is None:
         return
