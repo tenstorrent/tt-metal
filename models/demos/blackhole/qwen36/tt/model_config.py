@@ -371,14 +371,23 @@ class Qwen36ModelArgs(ModelArgs):
         # Qwen3_5TextConfig.from_pretrained picks the `text_config` sub-dict on composite
         # (3.6 VLM) checkpoints via base_config_key, and reads a text-only (3.5) config.json
         # as-is, so both checkpoint layouts land on the config Qwen3_5ForCausalLM expects.
-        from transformers.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5TextConfig
+        # The 35B-A3B is a Qwen3.5-MoE checkpoint (model_type qwen3_5_moe): its sparse experts and
+        # gated shared expert live under the MoE config that the dense Qwen3_5TextConfig silently
+        # drops — that class would build a dense mlp.gate_proj and leave mlp.shared_expert/experts
+        # unloaded. Pick the MoE text class for MoE configs; the dense/vision path keeps Qwen3_5.
+        if self.moe_num_experts > 0:
+            from transformers.models.qwen3_5_moe import Qwen3_5MoeForCausalLM as _HFForCausalLM
+            from transformers.models.qwen3_5_moe import Qwen3_5MoeTextConfig as _HFTextConfig
+        else:
+            from transformers.models.qwen3_5 import Qwen3_5ForCausalLM as _HFForCausalLM
+            from transformers.models.qwen3_5 import Qwen3_5TextConfig as _HFTextConfig
 
-        text_config = Qwen3_5TextConfig.from_pretrained(self.CKPT_DIR)
+        text_config = _HFTextConfig.from_pretrained(self.CKPT_DIR)
         assert text_config.vocab_size == self.vocab_size and text_config.hidden_size == self.dim, (
             f"HF text config disagrees with model args: vocab_size {text_config.vocab_size} vs "
             f"{self.vocab_size}, hidden_size {text_config.hidden_size} vs {self.dim}"
         )
-        model = Qwen3_5ForCausalLM.from_pretrained(self.CKPT_DIR, config=text_config, dtype="auto")
+        model = _HFForCausalLM.from_pretrained(self.CKPT_DIR, config=text_config, dtype="auto")
         state_dict = remap_qwen36_state_dict(model.state_dict())
         del model
         return state_dict
