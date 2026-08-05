@@ -153,10 +153,7 @@ class CCLManager:
             for _ in range(2):
                 # Device-native, uninitialized allocation: these scratch ping-pong
                 # buffers are fully overwritten by the reduce-scatter op, so no
-                # zero-init is needed. allocate_tensor_on_device is a pure allocator
-                # (create_device_tensor) — unlike ttnn.zeros, which builds the buffer on
-                # host (std::fill) and uploads it over PCIe (replicated to every device),
-                # which is very slow for large buffers.
+                # zero-init is needed.
                 intermediate_buffer = ttnn.allocate_tensor_on_device(
                     ttnn.Shape(intermediate_buffer_shape),
                     ttnn.bfloat16,
@@ -212,9 +209,6 @@ class CCLManager:
             for _ in range(2):
                 # Device-native, uninitialized allocation: the all-gather fully
                 # overwrites this buffer, so no zero-init is needed.
-                # allocate_tensor_on_device is a pure allocator; ttnn.zeros would build
-                # on host + upload over PCIe (replicated per device), which is very slow
-                # for large buffers.
                 output_buffer = ttnn.allocate_tensor_on_device(
                     ttnn.Shape(output_buffer_shape),
                     dtype,
@@ -386,11 +380,7 @@ class CCLManager:
             buffers = []
             for _ in range(2):
                 # neighbor_pad relies on zeroed boundary-pad regions, so this buffer
-                # must be zero-initialized. Device-native pattern (mirrors
-                # models/tt_dit/utils/tensor.full): allocate_tensor_on_device (pure
-                # allocator) + in-place ttnn.fill, avoiding ttnn.zeros' slow host build +
-                # PCIe upload. allocate_tensor_on_device produces the standard TensorSpec
-                # (unlike moreh_full, whose custom spec is a suspected hang cause).
+                # must be zero-initialized.
                 output_buffer = ttnn.allocate_tensor_on_device(
                     ttnn.Shape(output_shape),
                     dtype,
