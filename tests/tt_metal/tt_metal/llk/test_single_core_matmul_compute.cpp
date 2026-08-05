@@ -350,7 +350,7 @@ inline void dump_matmul_debug(
 // Blackhole (see PR #40287/#41142 for the LLK family fix-up).  in0_fmt and
 // in1_fmt may differ for mixed-family verification (e.g. Float16_b A x Fp8 B).
 bool single_tile_matmul(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     tt::DataFormat in0_fmt = tt::DataFormat::Float16_b,
     tt::DataFormat in1_fmt = tt::DataFormat::Float16_b,
     tt::DataFormat out_fmt = tt::DataFormat::Float16_b,
@@ -364,8 +364,8 @@ bool single_tile_matmul(
     const uint32_t in1_tile_size = tt::tile_size(in1_fmt);
     const uint32_t out_tile_size = tt::tile_size(out_fmt);
 
-    auto* device = mesh_device->get_devices()[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto* device = mesh_device.get_devices()[0];
+    auto& cq = mesh_device.mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
@@ -500,7 +500,7 @@ bool single_tile_matmul(
 // Inputs and output formats are programmable; defaults preserve the legacy
 // BF16 test semantics.
 bool single_block_matmul(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t M,
     uint32_t K,
     uint32_t N,
@@ -521,11 +521,11 @@ bool single_block_matmul(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device.get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_0{
         .device = device,
@@ -659,7 +659,7 @@ bool single_block_matmul(
     return pass;
 }
 // blocked matmul has blocking on output, spill/reloads or does l1 accumulation using intermediate
-bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const BlockedMatmulConfig& cfg) {
+bool blocked_matmul(distributed::MeshDevice& mesh_device, const BlockedMatmulConfig& cfg) {
     const uint32_t M = cfg.M;
     const uint32_t K = cfg.K;
     const uint32_t N = cfg.N;
@@ -687,11 +687,11 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device.get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_0{
         .device = device,
@@ -984,36 +984,36 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmul) {
     for (auto& device : this->devices_) {
-        ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(device));
+        ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(*device));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileComputeMatmul) {
     for (auto& device : this->devices_) {
-        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 1, 1, 1));
+        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(*device, 1, 1, 1));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileAccumulationComputeMatmul) {
     for (auto& device : this->devices_) {
-        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 1, 2, 1));
+        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(*device, 1, 2, 1));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumulationComputeMatmul) {
     for (auto& device : this->devices_) {
-        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(device, 2, 1, 2));
+        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(*device, 2, 1, 2));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
         .M = 2, .K = 2, .N = 2, .num_blocks = 4, .packer_l1_acc = false};
     for (auto& device : this->devices_) {
-        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(device, config));
+        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(*device, config));
     }
 }
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
         .M = 2, .K = 2, .N = 2, .num_blocks = 4, .packer_l1_acc = true};
     for (auto& device : this->devices_) {
-        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(device, config));
+        ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(*device, config));
     }
 }
 
@@ -1034,7 +1034,7 @@ TEST_F(LLKQuasarUnitMeshFixture, TensixTestSingleCoreSingleBlockComputeMatmulMxF
         .in1_fmt = tt::DataFormat::MxFp4,
         .out_fmt = tt::DataFormat::Float16_b,
         .enable_2x_src_format = true};
-    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->device_, config));
+    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->device(), config));
 }
 
 // FP8 variants of the multi-block matmul. Blackhole-gated because Fp8_e4m3 only exists on BH
@@ -1051,7 +1051,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreMultiBlockSpillReloadC
         .in1_fmt = tt::DataFormat::Fp8_e4m3,
         .out_fmt = tt::DataFormat::Fp8_e4m3,
         .fp32_dest_acc_en = true};
-    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
+    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(*this->devices_.at(0), config));
 }
 TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmulFp8e4m3) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
@@ -1064,7 +1064,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreMultiBlockL1AccCompute
         .in1_fmt = tt::DataFormat::Fp8_e4m3,
         .out_fmt = tt::DataFormat::Fp8_e4m3,
         .fp32_dest_acc_en = true};
-    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
+    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(*this->devices_.at(0), config));
 }
 
 // Sweeps in × out data format (4 cells). fp32_dest_acc_en is fixed to true: BH requires it
@@ -1091,14 +1091,14 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreSingleTileComputeMatmu
                 out_fmt,
                 kFp32DestAccEn);
             ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(
-                this->devices_.at(0), in_fmt, in_fmt, out_fmt, kFp32DestAccEn));
+                *this->devices_.at(0), in_fmt, in_fmt, out_fmt, kFp32DestAccEn));
         }
     }
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreSingleBlockSingleTileComputeMatmulFp8e4m3) {
     ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(
-        this->devices_.at(0),
+        *this->devices_.at(0),
         1,
         1,
         1,
@@ -1109,7 +1109,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreSingleBlockSingleTileC
 
 TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreSingleBlockSingleTileAccumulationComputeMatmulFp8e4m3) {
     ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(
-        this->devices_.at(0),
+        *this->devices_.at(0),
         1,
         2,
         1,

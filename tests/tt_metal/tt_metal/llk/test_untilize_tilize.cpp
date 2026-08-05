@@ -203,10 +203,9 @@ static void validate_result(
 // Metal 2.0 single-core helper covering all migrated tilize/untilize kernels:
 //   - UntilizeType::PACK / DST (compute kernels: pack_untilize (optionally with FAST_UNTILIZE) / dst_untilize)
 //   - TilizeType::UNPACK_A (compute kernel: tilize.cpp, optionally with FAST_TILIZE)
-void run_single_core_tilize_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
-    auto* dev = mesh_device->get_devices()[0];
+void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const TestConfig& test_config) {
+    auto& cq = mesh_device.mesh_command_queue();
+    auto* dev = mesh_device.get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const std::uint32_t num_tiles = test_config.num_tiles_r * test_config.num_tiles_c;
@@ -283,7 +282,7 @@ void run_single_core_tilize_program(
     }
 
     experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         reader_hw_config = experimental::DataMovementGen2Config{};
     } else {
         reader_hw_config = experimental::DataMovementGen1Config{
@@ -299,7 +298,7 @@ void run_single_core_tilize_program(
     };
 
     experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         writer_hw_config = experimental::DataMovementGen2Config{};
     } else {
         writer_hw_config = experimental::DataMovementGen1Config{
@@ -348,7 +347,7 @@ void run_single_core_tilize_program(
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .enable_32_bit_dest = test_config.fp32_dest_acc_en,
             .double_buffer_dest = !test_config.dst_full_sync_en,
@@ -394,7 +393,7 @@ void run_single_core_tilize_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -794,7 +793,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilize) {
                     .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
                     .output_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
                     .golden_function = ::unit_tests::compute::gold_standard_tilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+                unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
             }
         }
     }
@@ -819,7 +818,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeFp8e4m3) {
                 .output_fmt = tt::DataFormat::Fp8_e4m3,
                 .src0_data = src_data,
                 .golden_function = ::unit_tests::compute::gold_standard_tilize};
-            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
         }
     }
 }
@@ -843,7 +842,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeInt8) {
                 .output_fmt = tt::DataFormat::Int8,
                 .src0_data = src_data,
                 .golden_function = ::unit_tests::compute::gold_standard_tilize};
-            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
         }
     }
 }
@@ -867,7 +866,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
                 .output_fmt = tt::DataFormat::UInt8,
                 .src0_data = src_data,
                 .golden_function = ::unit_tests::compute::gold_standard_tilize};
-            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
         }
     }
 }
@@ -895,7 +894,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeTinyTile16x32) {
                 .face_r_dim = face_r_dim,
                 .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
                 .golden_function = ::unit_tests::compute::gold_standard_tilize};
-            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
         }
     }
 }
@@ -916,7 +915,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
                     .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
                     .output_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
                     .golden_function = ::unit_tests::compute::gold_standard_tilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+                unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
             }
         }
     }
@@ -1481,7 +1480,7 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputeFastUntilize) {
             .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
             .output_fmt = tt::DataFormat::Float16_b,
             .golden_function = ::unit_tests::compute::gold_standard_untilize};
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->device_, test_config);
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->device(), test_config);
     }
 }
 
@@ -1503,7 +1502,7 @@ TEST_F(LLKQuasarUnitMeshFixture, QuasarComputeFastTilize) {
                     .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
                     .output_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
                     .golden_function = ::unit_tests::compute::gold_standard_tilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->device_, test_config);
+                unit_tests::compute::tilize::run_single_core_tilize_program(this->device(), test_config);
             }
         }
     }
@@ -1528,7 +1527,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilize) {
                     .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
                     .output_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
                     .golden_function = ::unit_tests::compute::gold_standard_untilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+                unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
             }
         }
     }
@@ -1547,7 +1546,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDst) {
                 .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
                 .output_fmt = tt::DataFormat::Float16_b,
                 .golden_function = ::unit_tests::compute::gold_standard_untilize};
-            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
         }
     }
 }
@@ -1566,7 +1565,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastUntilize) {
             .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
             .output_fmt = tt::DataFormat::Float16_b,
             .golden_function = ::unit_tests::compute::gold_standard_untilize};
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
     }
 }
 
@@ -1589,7 +1588,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeFp8e4m3) {
                 .output_fmt = tt::DataFormat::Fp8_e4m3,
                 .src0_data = src_data,
                 .golden_function = ::unit_tests::compute::gold_standard_untilize};
-            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
         }
     }
 }
@@ -1612,7 +1611,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeInt8) {
                 .output_fmt = tt::DataFormat::Int8,
                 .src0_data = src_data,
                 .golden_function = ::unit_tests::compute::gold_standard_untilize};
-            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
         }
     }
 }
@@ -1635,7 +1634,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeUInt8) {
                 .output_fmt = tt::DataFormat::UInt8,
                 .src0_data = src_data,
                 .golden_function = ::unit_tests::compute::gold_standard_untilize};
-            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
         }
     }
 }
@@ -1661,7 +1660,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstTinyTile) {
                 .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
                 .output_fmt = tt::DataFormat::Float16_b,
                 .golden_function = ::unit_tests::compute::gold_standard_untilize};
-            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
         }
     }
 }

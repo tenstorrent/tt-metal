@@ -46,9 +46,8 @@ constexpr std::uint32_t CB_API_NUM_READER_THREADS = 3;
 // involved, isolating whether the mailbox mechanism itself faults independent of the
 // dataflow-buffer address computation in QuasarCbL1ReadApi.
 TEST_F(LLKQuasarUnitMeshFixture, QuasarMailboxMinimal) {
-    auto mesh_device = devices_.at(0);
-    auto* device = mesh_device->get_devices()[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    auto* device = this->device().get_devices()[0];
+    auto& cq = this->device().mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
