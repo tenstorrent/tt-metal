@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 namespace tt::tt_metal {
 class IDevice;
 class Program;
@@ -29,5 +31,9 @@ void run_mesh_dispatch();
 /// so kernels blocked on a host-fed socket wait resume as the host streams tokens after program.run().
 /// No-op unless a run is parked in HostWait. See tt-emule docs/socket-emulation.md §7.
 void pump_device();
+
+/// Drive a parked (run_persistent) device to completion so Finish means what it does on silicon; no-op
+/// unless a HostWait run is owned by `device_ids` (empty = drain anyway). Throws, never hides a deadlock.
+void drain_device(const std::vector<int>& device_ids);
 
 }  // namespace tt::tt_metal::emule

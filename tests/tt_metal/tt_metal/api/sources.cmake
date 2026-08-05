@@ -91,6 +91,11 @@ if(TT_METAL_USE_EMULE)
         emule/test_alignment_writes.cpp
         emule/test_cb_leak.cpp
         emule/test_cb_pages.cpp
+        # Host-interleaved (persistent) dispatch: a fence for the RunOutcome::HostWait
+        # decision logic — which stalls are the host's to resolve and which are device-side
+        # faults — plus the spawn-generation query the runner's memory reclaim keys on.
+        # Drives the real FiberScheduler, no device. See EmuleHostWait.*.
+        emule/test_emule_host_wait.cpp
         # Per-fiber ASAN sanitizer-state isolation (pure unit test, no device/death):
         # a compile+runtime regression fence for EmuleSanitizerState living on the
         # per-fiber ctx (__emule_self->san). See EmuleSanitizerFiberState.*.
