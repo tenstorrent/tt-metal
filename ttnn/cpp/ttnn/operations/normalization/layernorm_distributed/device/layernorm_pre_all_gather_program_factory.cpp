@@ -379,11 +379,12 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
     CoreRangeSet all_cores = CoreRangeSet(std::vector{all_cores_range});
 
     std::vector<CoreRange> merge_core_ranges_vec;
+    merge_core_ranges_vec.reserve(cores_x);
     for (uint32_t x = 0; x < cores_x; ++x) {
         CoreCoord merge_core = {x, 0};
         merge_core_ranges_vec.emplace_back(CoreRange(merge_core, merge_core));
     }
-    CoreRangeSet merge_cores(merge_core_ranges_vec);
+    CoreRangeSet merge_cores(std::move(merge_core_ranges_vec));
 
     // Translate CreateSemaphore(...) to SemaphoreDescriptor with id 0.
     constexpr uint32_t reducer_semaphore_id = 0;
@@ -426,6 +427,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
             uint32_t out_tile_offset = x * out0_tiles;
 
             KernelDescriptor::RTArgList reader_args;
+            reader_args.reserve(9);
             reader_args.push_back(a.buffer());
             reader_args.push_back(tiles_per_core_x);
             reader_args.push_back(tiles_per_core_y);
