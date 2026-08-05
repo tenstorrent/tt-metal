@@ -1139,9 +1139,33 @@ def run_chunked_transformer_updated(
     from a known-good CI run), each chunk's measured median must stay within +/- `perf_margin` of its
     baseline; a single `perf_margin` covers every chunk. The table appends the baseline, tolerance band,
     and PASS/FAIL per chunk, and the run fails if any chunk is out of band. When no baseline is given the
-    table is record-only (perf-exploration combos)."""
+    table is record-only (perf-exploration combos).
+
+    TT_PREFILL_PERF_ITERS overrides `num_iters` for power/thermal measurement, where the run has to be
+    held for a wall-clock window that no fixed pytest param can express. The measured region is
+    (num_iters - 1) iterations, so a target duration is TT_PREFILL_PERF_ITERS = 1 + target_s / iter_s,
+    reading iter_s off the "iter N done" lines of a prior run. Overriding DISABLES the perf gate: the
+    baselines are recorded per (num_layers, n_chunks, num_iters), so keeping the gate would compare
+    against a band that was never measured at this iteration count."""
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+
+    iters_override = os.environ.get("TT_PREFILL_PERF_ITERS")
+    if iters_override is not None:
+        override = int(iters_override)
+        if override < 1:
+            raise ValueError(f"TT_PREFILL_PERF_ITERS must be >= 1, got {override}")
+        logger.warning(
+            f"TT_PREFILL_PERF_ITERS={override} overrides num_iters={num_iters} "
+            f"({override - 1} measured iterations after the compile pass)"
+        )
+        if baseline_chunk_times_s is not None:
+            logger.warning(
+                "perf gate DISABLED: the baseline is keyed on the pytest num_iters, so it does not apply "
+                "to an overridden iteration count. Chunk timings are record-only for this run."
+            )
+            baseline_chunk_times_s = None
+        num_iters = override
 
     def format_duration(seconds: float) -> str:
         return f"{seconds:7.3f}s"
@@ -1194,7 +1218,24 @@ def run_chunked_transformer_updated(
 
         margin_note = f", baseline gate +/- {margin * 100:.1f}%" if gated else ", record-only (no baseline)"
         logger.info(f"chunk timing stats computed over {len(samples)} iterations (iter 0 omitted){margin_note}")
-        return failures, render_table(headers, rows)
+
+        # Prefill throughput, from the same post-warmup samples as the table above. Per-iteration wall
+        # clock is the sum of that iteration's chunk times, so tok/s is measured_len / iteration_time --
+        # the median over iterations, plus min/max so a thermally-throttled tail is visible rather than
+        # averaged away. measured_len is the tokens one iteration prefills (n_chunks * CHUNK).
+        iter_totals = sorted(sum(row) for row in samples)
+        tps = [measured_len / t for t in iter_totals if t > 0]
+        throughput_lines = []
+        if tps:
+            throughput_lines = [
+                "",
+                f"prefill throughput over {len(tps)} measured iterations ({measured_len} tokens each):",
+                f"  median {statistics.median(tps):9.1f} tok/s   ({statistics.median(iter_totals):.3f}s per iteration)",
+                f"  min    {min(tps):9.1f} tok/s   max {max(tps):9.1f} tok/s",
+            ]
+            for line in throughput_lines[1:]:
+                logger.info(line.strip() if line.startswith("  ") else line)
+        return failures, render_table(headers, rows) + throughput_lines
 
     profiler.clear()
     profiler.start("total_test_time")
