@@ -76,7 +76,9 @@ def test_rand_columns_are_distinct(device, width):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="the PRNG is a sliding window over one stream, so columns stay correlated in value even "
+    raises=AssertionError,
+    reason="Tracked by https://github.com/tenstorrent/tt-metal/issues/52014. "
+    "The PRNG is a sliding window over one stream, so columns stay correlated in value even "
     "now that none are byte-identical: cross-position max |r| is 0.618 against 0.035 for host IID, "
     "and argmax coincides far more often than IID allows. Removing this needs a counter-based RNG "
     "keyed on each element's position; consuming more PRNG values only dilutes it",
@@ -85,7 +87,7 @@ def test_rand_columns_do_not_share_an_argmax(device):
     """Independent columns almost never pick the same row as their maximum.
 
     With ``height`` rows and ``n`` columns of IID noise, the expected number of colliding
-    argmaxes is ``C(n, 2) / height`` -- under 0.5 here. Any sizeable tie group is a dependency
+    argmaxes is ``C(n, 2) / height`` -- about 2 here. Any sizeable tie group is a dependency
     between columns. This is the functional form of the defect: for a Gumbel-max sampler it
     turns independent rare flips into synchronized bursts of the same token.
     """
