@@ -252,6 +252,37 @@ class LogProbsCalculator:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
+    def release(self) -> None:
+        """Best-effort release of unique calculator-owned tensors."""
+        field_names = (
+            "global_max",
+            "global_exp_sum",
+            "mask",
+            "output_tensor",
+            "topk_logprobs_output",
+            "topk_indices_output",
+        )
+        groups = {}
+        for name in field_names:
+            value = getattr(self, name, None)
+            if value is not None:
+                groups.setdefault(id(value), (value, []))[1].append(name)
+
+        failures = []
+        for value, names in groups.values():
+            try:
+                ttnn.deallocate(value)
+            except BaseException as error:
+                failures.append(error)
+            else:
+                for name in names:
+                    setattr(self, name, None)
+        if failures:
+            primary = failures[0]
+            previous = tuple(getattr(primary, "cleanup_failures", ()))
+            primary.cleanup_failures = previous + tuple(failures[1:])
+            raise primary
+
     def _perform_all_gather(self, tensor: ttnn.Tensor, dim: int, num_links: int, buffer_key: str = None):
         if callable(self._line_all_gather):
             kwargs = {

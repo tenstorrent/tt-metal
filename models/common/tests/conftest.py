@@ -171,13 +171,11 @@ def ttnn_mesh_device(request):
         # Single device does not need fabric config.
         pass
     else:
-        # Provide default fabric config for the mesh we actually open (full system mesh).
-        num_devices = parent_shape[0] * parent_shape[1]
+        # Select the default fabric topology for the logical mesh requested by the test.
+        # A submesh still requires opening the full system parent, but its workload topology
+        # determines whether that parent must provide Ring or Linear routes.
         if fabric_config is None:
-            if num_devices >= 8:
-                fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
-            else:
-                fabric_config = ttnn.FabricConfig.FABRIC_1D
+            fabric_config = _default_fabric_config(req_shape)
         # set all other input arguments to default values by top-level conftest.py
         ttnn.set_fabric_config(
             fabric_config, ttnn.FabricReliabilityMode.STRICT_INIT, None, ttnn.FabricTensixConfig.DISABLED
@@ -213,6 +211,16 @@ def ttnn_mesh_device(request):
             if fabric_config:
                 ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
             del parent_device
+
+
+def _default_fabric_config(mesh_shape: tuple[int, int]) -> ttnn.FabricConfig | None:
+    """Select the generic fabric topology for the requested logical mesh."""
+    if mesh_shape == (1, 1):
+        return None
+    num_devices = mesh_shape[0] * mesh_shape[1]
+    if mesh_shape[0] == 1 and num_devices >= 8:
+        return ttnn.FabricConfig.FABRIC_1D_RING
+    return ttnn.FabricConfig.FABRIC_1D
 
 
 def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int, int]]:

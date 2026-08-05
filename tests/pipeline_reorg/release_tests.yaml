@@ -150,9 +150,10 @@
 # N150 E2E tests (from models_e2e_tests.yaml)
 - name: Llama 3.1-8B N150 e2e tests
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.1-8B-Instruct MESH_DEVICE=N150 SAMPLING_MODE=on_device_topk PIPELINE_READBACK=1
+    pytest --timeout 420 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-token-accuracy-repeat_batch-1-prefetcher-off-N150]"
+    pytest --timeout 600 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-eval-32-repeat_batch-3-prefetcher-off-perf-report-off-N150]"
+    pytest --timeout 600 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-eval-32-repeat_batch-1-prefetcher-off-perf-report-on-N150]"
   model-name: llama3.1-8b
   skus:
     wh_n150:
@@ -444,8 +445,11 @@
 # Galaxy E2E tests (from models_e2e_tests.yaml)
 - name: Galaxy Llama 3.1-8B data-parallel e2e tests
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/meta-llama/Llama-3.1-8B-Instruct MESH_DEVICE=TG SAMPLING_MODE=on_device_topk PIPELINE_READBACK=1
+    pytest --timeout 1000 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-ci-b1-DP-4-TG]"
+    pytest --timeout 1000 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-ci-b1-DP-8-TG]"
+    pytest --timeout 1000 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-ci-b1-DP-16-TG]"
+    pytest --timeout 1000 "models/common/tests/demos/llama3_8b/demo.py::test_llama3_8b[wormhole_b0-performance-ci-b1-DP-32-TG]"
   model-name: llama3.1-8b-dp-galaxy
   skus:
     wh_galaxy:
