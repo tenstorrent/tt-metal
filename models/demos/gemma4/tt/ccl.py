@@ -177,7 +177,7 @@ class CCLManager:
         ]
         self._ring_gather_buffers = {}
 
-    def get_ring_gather_buffer(self, key, n_kv, seq, head_dim, dtype):
+    def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype):
         """Persistent ring-gather scratch for ``ring_joint`` SDPA.
 
         Allocated once and reused across every layer and chunk. The op treats it as
@@ -194,12 +194,20 @@ class CCLManager:
         ``key`` separates buffers live in the same call ("k" vs "v"); shape and dtype
         key the rest. Heads shard on the TP columns, sequence replicated across the
         CP rows — the layout the ring op reconstructs into.
+
+        ``n_kv_local`` is the per-device head count. The buffer is built at the global
+        size ``n_kv_local * tp_cols`` and sharded across the TP columns so each device
+        ends up with its own ``n_kv_local`` heads. Passing the local count straight to
+        the sharder fails ("number of chunks N to match the mesh dimension size"), and
+        it also has to work for kv-replicated layers where the model's global KV head
+        count is smaller than the TP width.
         """
-        cache_key = (key, n_kv, seq, head_dim, str(dtype))
+        rows, cols = tuple(self.mesh_device.shape)
+        n_kv_global = n_kv_local * cols
+        cache_key = (key, n_kv_global, seq, head_dim, str(dtype))
         if cache_key not in self._ring_gather_buffers:
-            rows, cols = tuple(self.mesh_device.shape)
             self._ring_gather_buffers[cache_key] = ttnn.from_torch(
-                torch.zeros(1, n_kv, seq, head_dim),
+                torch.zeros(1, n_kv_global, seq, head_dim),
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
