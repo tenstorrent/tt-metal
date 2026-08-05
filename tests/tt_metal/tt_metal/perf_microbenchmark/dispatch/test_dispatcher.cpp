@@ -1391,7 +1391,17 @@ INSTANTIATE_TEST_SUITE_P(
         // Testcase: 13 pages x 16 bytes (arbitrary non-even numbers) (L1)
         PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 100 pages x 8192 bytes (high BW) (DRAM)
-        PagedWriteParams{8192, 100, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true}),
+        PagedWriteParams{8192, 100, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 40 pages x 4112 bytes (DRAM). A page occupies a whole allocation-aligned slot in its bank, so the
+        // in-bank stride between rows of pages is the page size rounded up to that alignment. 4112 is not a multiple
+        // of either DRAM alignment -- 32 B on Wormhole, 64 B on Blackhole -- so the stride differs from the page size
+        // on both, and being larger than a 4 KB dispatch buffer page it also splits across the data the dispatcher has
+        // available, which reaches the row advance on the split-page path as well as the whole-page one. 40 pages
+        // wraps the bank cycle at least three times on either arch.
+        PagedWriteParams{4112, 40, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 40 pages x 4112 bytes (L1). The control for the case above: L1 is 16 B aligned, so the same page
+        // size strides by itself and only the DRAM case can tell the two strides apart.
+        PagedWriteParams{4112, 40, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false}),
     [](const testing::TestParamInfo<PagedWriteParams>& info) {
         std::stringstream ss;
         ss << "page_size" << info.param.page_size << "_np" << info.param.num_pages << "_iter"
@@ -1557,7 +1567,10 @@ INSTANTIATE_TEST_SUITE_P(
         PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
         PagedWriteParams{4128, 10, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
         PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
-        PagedWriteParams{8192, 100, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true}),
+        PagedWriteParams{8192, 100, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        // Page size that is not a multiple of either DRAM alignment, so the in-bank row stride differs from it; see
+        // the FD instantiation above.
+        PagedWriteParams{4112, 40, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true}),
     [](const testing::TestParamInfo<PagedWriteParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + (info.param.is_dram ? "dram" : "l1");
