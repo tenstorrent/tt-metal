@@ -120,6 +120,31 @@ def test_mrope_is_permutation_invariant_for_text_only():
         assert torch.equal(reference[1], other[1]), f"sin changed under section permutation {scrambled}"
 
 
+def test_interleaved_selection_is_a_noop_for_text_only():
+    """The `interleaved=` *selection* is a no-op for a text-only prompt, not merely insensitive to it.
+
+    The sibling above scrambles `mrope_section` and shows the chunked layout does not care how
+    frequencies are assigned to axes. That is a weaker claim than the one `t2va` actually rests on,
+    which is that the chunked and interleaved code paths produce the *same tensor*. Both layouts give
+    each output slot the same frequency and differ only in which axis's position feeds it, so they
+    coincide exactly while all three axes agree -- and diverge as soon as a vision run enters.
+
+    This is the complement of `tests/encoders/qwen3vl/test_qwen3vl_fused_conditioner.py::
+    test_the_chunked_rotary_layout_is_now_wrong`. The pair is what makes the `t2va` justification for
+    the chunked path load-bearing for the right reason: if this test ever failed, `t2va` was reading
+    the wrong tables all along; if its complement ever passed, `interleaved` would be cosmetic.
+    """
+    config = minimax_h3_text_config(_weights_dir())
+    head_dim = config["head_dim"]
+    theta = config["rope_scaling"].get("rope_theta", config["rope_theta"])
+    section = config["rope_scaling"]["mrope_section"]
+
+    chunked = create_rope_tensors(1, 64, None, head_dim, theta, section, interleaved=False)
+    interleaved = create_rope_tensors(1, 64, None, head_dim, theta, section, interleaved=True)
+    assert torch.equal(chunked[0], interleaved[0]), "cos differs between the chunked and interleaved layouts"
+    assert torch.equal(chunked[1], interleaved[1]), "sin differs between the chunked and interleaved layouts"
+
+
 # One bfloat16 ulp for values in [0.5, 1), which is where cos/sin spend most of their range.
 # HF emits its rotary tables in the hidden dtype, so the reference *is* bf16 and this is the
 # resolution of the thing being compared against -- the precision floor, not a tolerance chosen to

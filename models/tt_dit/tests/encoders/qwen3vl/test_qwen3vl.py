@@ -98,8 +98,12 @@ def test_qwen3vl_text_encoder(
     lm = _reference_lm(weights)
     cfg = lm.config
     head_dim = cfg.hidden_size // cfg.num_attention_heads
-    mrope_section = cfg.rope_scaling["mrope_section"]
-    rope_theta = cfg.rope_scaling.get("rope_theta", cfg.rope_theta)  # top-level in transformers >=4.57
+    # transformers >=5 moved `rope_theta` *into* `rope_parameters` and dropped the top-level attribute,
+    # so it must not be used as a `dict.get` default: Python evaluates defaults eagerly, and
+    # `cfg.rope_theta` raises AttributeError on a Qwen3-VL config before `.get` ever runs.
+    rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
+    mrope_section = rope_params["mrope_section"]
+    rope_theta = rope_params["rope_theta"] if "rope_theta" in rope_params else cfg.rope_theta
 
     ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
     caps: dict[int, torch.Tensor] = {}
