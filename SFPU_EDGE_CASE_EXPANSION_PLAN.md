@@ -4,6 +4,8 @@
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
 **Goal:** close the edge-case gaps catalogued in the coverage audit while adding the **least possible code** — no per-op edge tests, no duplicated stimulus lists.
 **Repo:** `tt-metal/tt_metal/tt-llk/tests/python_tests/`
+**Scope:** Wormhole B0 and Blackhole. Quasar and its `quasar/` suite are **out of scope for
+this plan** — it keeps its own inline stimulus definitions and is tracked separately.
 
 **Revision 2 — 2026-08-05.** Rewritten against the current tt-llk test infra. The first
 revision (2026-07-23) was written against a tree that has since been restructured by
@@ -72,7 +74,6 @@ free — see §3.
 | Shift edge test grew a third op (`SfpuElwLogicalRightShift`) and a `_SHIFT_EDGE_OPS` list; the Blackhole skip is an **inline `pytest.skip` in the test body**, not a `@skip_for_blackhole` decorator | `test_sfpu_binary.py:650`, `:746` | rewrites cat E's action item |
 | Dedicated `test_sfpu_binary_int_shift_int32_min_unsupported` xfail test | `test_sfpu_binary.py:774` | the xfail convention cited by §7 is now its own test, not an annotation |
 | `accuracy/accuracy_harness.py` is a **second consumer of `for_op()`**, measuring per-op `signed_ulp_error` | `accuracy/accuracy_harness.py:189` | any registry bound change now moves the accuracy sweep too — a coupling to state in the commit |
-| Quasar is a third arch with its own SFPU suite; `quasar/test_eltwise_unary_sfpu_quasar.py` **mirrors registry domains inline** instead of importing them | `quasar/` | edge matrix gains an arch axis; the Quasar mirror will drift |
 
 Two audit findings are **unchanged** and still the load-bearing ones:
 
@@ -86,7 +87,7 @@ Two audit findings are **unchanged** and still the load-bearing ones:
 
 ---
 
-## 3. Phase 0 — run the unary sweep over each op's real domain 🟡 **7 of 10 DONE** (`ldjurovic/sfpu_edge_cases_1`)
+## 3. Phase 0 — run the unary sweep over each op's real domain ✅ **DONE** (`ldjurovic/sfpu_edge_cases_1`)
 
 **Revision 1 scoped this as "≈0 new lines: stop the positive-only default".** That was the
 right target and the wrong cost estimate. Rerouting `spec_A` is 5 lines; making the reroute
@@ -97,7 +98,8 @@ inaccurate one — the inputs are too benign to separate them. Widening the doma
 all three at once.
 
 So **Phase 0 is now defined as: reroute the unary sweep onto the registry, and fix
-everything the wider domain exposes.** Ten parts — 0a–0g done, **0h–0j still open (§3.2)**:
+everything the wider domain exposes.** Nine parts, all landed — 0a–0g plus the two closing
+items 0h and 0i (§3.2):
 
 | | Part | Commit |
 |---|---|---|
@@ -122,16 +124,68 @@ measured. Revision 1 gave this one line (§7 "golden readiness"); it is closer t
 
 0a–0g above. Five commits, ~150 lines, all verified on **Wormhole**.
 
-### 3.2 ⬜ Left to do in Phase 0
+### 3.2 ✅ The two closing items (were open, now done)
 
-Phase 0 is **not closeable** on the branch as it stands. Three items remain, and the first
-two are blockers for declaring the phase done rather than nice-to-haves:
+| | Item | Outcome |
+|---|---|---|
+| **0h** | **Verify on Blackhole.** 0f recalibrated `exp`/`exp2`/`reciprocal` against *measured Wormhole error* and 0e's Bfp8_b either-criterion compare is tuned to measured WH approximation error, so neither number was known to be arch-independent. If BH had wanted different bounds, the registry entries would have become arch-sensitive — a change to the *shape* of 0f, not just its constants. | **Green, no arch-sensitivity needed.** `test_sfpu_unary.py` on Blackhole (p300a): **4270 passed, 1174 skipped, 4 xfailed, 0 failed** (14 min). The recalibrated domains and the Bfp8_b compare hold on BH unchanged, so 0f's constants stay arch-independent and no registry entry needs an arch axis. |
+| **0i** | **Merge `ALL_MATHOPS` into `DOMAIN_MATHOPS`**, collapsing `test_eltwise_unary_sfpu_float` and `test_eltwise_unary_sfpu_domain` into one test. | **Done, and provably behaviour-preserving** — see §3.3. |
 
-| | Item | Why it is still Phase 0, not a follow-up | Est. |
-|---|---|---|---|
-| **0h** | **Verify on Blackhole.** Every number in §3 is a Wormhole measurement. Run `test_sfpu_unary.py` on BH and triage. | 0f recalibrated `exp`/`exp2`/`reciprocal` against *measured WH error*, and 0e's Bfp8_b either-criterion compare is tuned to *measured WH approximation error*. Neither number is arch-independent. If BH needs different bounds, the registry entries become arch-sensitive — which changes the shape of 0f, not just its constants. Two of the branch's own commit messages already say verification was still running. | 1 run + triage |
-| **0i** | **Merge `ALL_MATHOPS` into `DOMAIN_MATHOPS`** and delete the split, collapsing `test_eltwise_unary_sfpu_float` and `test_eltwise_unary_sfpu_domain` into one driver. | This was the deliverable that made revision 1's Phase 0 *net-negative* code. Both drivers now read the same registry, so keeping two lists (31 + 63) and two nightly tests is pure duplication — and a new op added to the wrong list silently gets the wrong format coverage. Not a list concatenation: the two differ on formats (`_domain` is Float16_b + Float32 only) and on the fast/approx-mode product, so the merged driver has to keep both products without exploding the matrix. | ~1 day, real refactor |
-| **0j** | **Propagate the recalibrated domains to Quasar.** `quasar/test_eltwise_unary_sfpu_quasar.py` mirrors registry specs *inline in comments* ("mirrors sfpu_domains' Clamp spec") instead of importing them, so 0f's new `exp`/`exp2`/`reciprocal` bounds never reached it. | The mirror is already drifted as of this branch. Either import `for_op()` there or add a test that asserts the two agree — otherwise every later phase that touches a domain widens the drift silently. | ~half day |
+#### Why BH skips so much more than WH, and why that is not a 0h failure
+
+WH reports 5108 passed / 334 skipped; BH reports 4270 / 1174. The gap is entirely the two
+architecture guards, not lost coverage from Phase 0:
+
+- `_skip_bh_unsupported_float_combo` — on BH at `dest_acc=No`, neither a Float16 input nor
+  `Float32->Float16` is supported.
+- `_skip_bh_unless_fp32` — on BH at `dest_acc=No`, only `Float32->Float32` is supported.
+
+BH also reports **4** xfails against WH's 6, for the same reason: two of the three
+`_APPROX_EXP_ACCURACY_XFAIL` combinations have a Float16 input at `dest_acc=No` and are
+skipped on BH before the xfail can apply. Nothing regressed — the approximate-`exp` accuracy
+limit 0g recorded reproduces on BH wherever it is reachable.
+
+#### One finding that is *not* a Phase 0 item: the build dir is not run-isolated
+
+The first BH run reported 2 failures (`Atanh`, `Tanhshrink`, both at `[128, 256]` with
+`dest_acc=Yes`). Both were `ld: cannot open output file`, not numerical, and neither
+reproduced. Cause: `TestConfig` does
+`shutil.rmtree(ARTEFACTS_DIR)` at session setup ("always have a fresh build when compiling")
+against a **fixed** path, `/tmp/tt-llk-build`. Any second pytest session on the same host —
+even a `-k` run of one op — deletes the build tree out from under a running sweep, and the
+victim surfaces it as a link failure attributed to whichever variant was linking.
+
+Worth filing separately (key the artefact root by session, or take the existing
+`/tmp/tt-llk-build-shared.lock` for the rmtree). It is called out here because it is a live
+trap for Phases 1–4: those phases mean many more triage re-runs, and this failure mode looks
+exactly like a real kernel bug in the log.
+
+### 3.3 How 0i was verified
+
+The merge is **stimulus-identical**, not merely equivalent-looking, and that is checkable
+rather than asserted:
+
+- **Same case set.** Collection is 5448 tests before and after, and the merged test carries
+  5368 of them — 4864 broad + 504 standard, matching the two old tests exactly
+  (`4864 + 504 = 5368`). No case gained, lost or duplicated.
+- **Same stimuli.** The old `_domain` test passed `spec_A=exclude_undefined(op, for_op(op,
+  formats.input_format).spec_A)` explicitly; the merged test lets the driver default apply,
+  which resolves the domain through `narrowest_range_format(input, output)`. For the standard
+  profile's four format pairs those are the *same* format — Float16_b and Float32 both share
+  bfloat16's exponent range, so `narrowest_range_format` ties and resolves to its first
+  argument, the input. Verified directly for all four pairs. The broad profile already used
+  the driver default, so it is untouched by construction.
+- **Same result on hardware.** Blackhole, merged: **4270 passed, 1174 skipped, 4 xfailed,
+  0 failed** — identical to the 0h baseline above, case for case.
+
+What the merge actually changes, beyond deleting a test: the two lists are now *coverage
+profiles* (`BROAD_SWEEP_OPS` / `STANDARD_SWEEP_OPS`) rather than "ops with a domain" versus
+"ops without", which is what they had silently become. A module-level
+`_assert_sweep_profiles_disjoint()` now fails at **collection** if an op lands in both
+profiles or has no registered domain. Exhaustiveness is still unchecked and deliberately
+documented as such: `_OP_DOMAIN_REGISTRY` mixes unary, binary and reduce entries, so there is
+no authoritative "every unary op" list to check against. Recording an op's arity in the
+registry would close it, and that is Phase 1 work.
 
 **Explicitly out of Phase 0** (so the boundary is unambiguous):
 
@@ -142,9 +196,11 @@ two are blockers for declaring the phase done rather than nice-to-haves:
 - The approximate-`exp` accuracy bug itself. 0g records it as an xfail; whether the kernel
   gets fixed is a kernel-side question tracked separately, and the xfail is `strict=False`
   so a fix surfaces as XPASS.
+- Per-session build-artefact isolation (above) — a test-infra bug this work surfaced, not a
+  coverage item.
 
-**Definition of done for Phase 0:** 0h green (or BH-specific bounds landed and justified),
-0i merged, 0j either imported or covered by an agreement assertion.
+**Phase 0 is closed:** 0h green on Blackhole with no arch-specific bounds required, and 0i
+merged with identical hardware results on both arches.
 
 ---
 
@@ -425,7 +481,6 @@ still untested: none of `welfords`, `dropout`, `quant`, `cumsum`, `reshuffle_row
 | `reshuffle_rows`, `copy_dest_values`, `max_pool_indices` | data-movement/index, no test | Medium |
 | `generic_moe_gate_topk` (experimental) | **harness in progress** — `test_sfpu_generic_moe_gate_topk.py` + `sources/sfpu_generic_moe_gate_topk_test.cpp` exist as local work, not yet on a branch | Low, but nearly done |
 | `TopKLocalSort` / `Merge` / `Rebuild` | perf-only; whole-op `topk` is tested | Medium — add stage-level correctness |
-| `swiglu` | Quasar-only (`quasar/test_sfpu_swiglu_quasar.py`) | Low — port the Quasar test to WH/BH |
 
 ---
 
@@ -433,10 +488,9 @@ still untested: none of `welfords`, `dropout`, `quant`, `cumsum`, `reshuffle_row
 
 | Phase | What | New/changed LOC | Ops covered | Status |
 |-------|------|-----------------|-------------|--------|
-| 0a–0g | Unary reroute + Bfp8_b golden/compare + domain recalibration + accuracy xfail | ~150 across 5 commits | 31 unary ops gain negative branch / knees / tails | ✅ done (WH only) |
-| **0h** | **Blackhole verification run + triage** (0f/0e constants are WH measurements) | 0 + fallout | same 31 | ⬜ **open — gates Phase 1** |
-| **0i** | **Merge `ALL_MATHOPS` into `DOMAIN_MATHOPS`**, collapse the two unary drivers into one | **net negative** | same 31, deduplicated | ⬜ **open** |
-| **0j** | **Propagate recalibrated domains to Quasar** (`quasar/…_quasar.py` mirrors them inline) | ~10 | Quasar unary | ⬜ **open** |
+| 0a–0g | Unary reroute + Bfp8_b golden/compare + domain recalibration + accuracy xfail | ~150 across 5 commits | 31 unary ops gain negative branch / knees / tails | ✅ done |
+| 0h | Blackhole verification run + triage (0f/0e constants were WH measurements) | 0 — no code needed | same 31, on a second arch | ✅ green, no arch axis needed |
+| 0i | Merge the two unary sweeps into one test; lists become coverage profiles (`a5bd408`) | **+235 / −163, one test deleted** | all 94, deduplicated | ✅ done, verified identical |
 | 1 | Reroute binary / ternary / scalar onto the registry; add ternary + scalar spec params | ~40 + fallout | 10 binary ops with dormant domains, all ternary, all scalar | ⬜ |
 | 2 | Edge metadata (`boundary_probes` + specials + `_OP_EDGE_POINTS`) | ~60 | all | ⬜ |
 | 3 | `edge_spec()` + `_build_edge_pair_src` generalization (no compare change needed) | ~40 | all | ⬜ |
@@ -447,17 +501,23 @@ still untested: none of `welfords`, `dropout`, `quant`, `cumsum`, `reshuffle_row
 **Bottom line:** ~230 lines of shared infrastructure closes categories A–E across all ~150
 SFPU ops, and every future op auto-enrols by virtue of being in the enum. Phase 0 spent ~150
 of those on 31 ops, but two thirds of that spend was the shared golden/comparison correctness
-that phases 1–5 no longer have to pay for.
+that phases 1–5 no longer have to pay for — and 0i gave one nightly test and its duplicated
+skip paths back.
+
+**One dependency Phase 1 inherits.** 0i's `_assert_sweep_profiles_disjoint()` cannot check
+*exhaustiveness*, because `_OP_DOMAIN_REGISTRY` mixes unary, binary and reduce entries and
+there is no authoritative "every unary op" list to compare against — so an op in neither
+profile still goes untested silently. Recording an op's arity in the registry closes it, and
+Phase 1 has to touch the registry's shape anyway.
 
 ---
 
 ## 11. Suggested sequencing
 
-1. **Finish Phase 0** — 0a–0g are on `ldjurovic/sfpu_edge_cases_1`; **0h (Blackhole run), 0i
-   (`ALL_MATHOPS`/`DOMAIN_MATHOPS` merge) and 0j (Quasar propagation) are open** — see §3.2.
-   0h in particular gates everything downstream: if BH needs different domain bounds, 0f's
-   constants become arch-sensitive and every later phase inherits that. Do not start Phase 1
-   before 0h has run.
+1. ~~**Phase 0**~~ — **closed** on `ldjurovic/sfpu_edge_cases_1` (§3). 0h came back green on
+   Blackhole with no arch-specific bounds required, which is what unblocks the rest: 0f's
+   domain constants are arch-independent, so Phases 1–5 can treat the registry as
+   single-valued rather than per-arch.
 2. **Phase 1** next, not Phase 2. It is the same reroute on three more drivers, it converts 10
    dormant registry entries into coverage, and — critically — the ternary/scalar spec
    parameters it adds are a hard prerequisite for Phases 3–4. Expect Phase-0-shaped fallout.
@@ -469,6 +529,3 @@ that phases 1–5 no longer have to pay for.
 6. **Category E** — fold unary shift into the shift edge builder; convert both Blackhole skips
    to xfails and track tt-metal#44750 / `docs/SFPU_INT32_SHIFT.md` as external dependencies.
 7. **Category F** — finish the `generic_moe_gate_topk` harness, then schedule the rest by §9.
-8. **Keep Quasar in sync.** `quasar/test_eltwise_unary_sfpu_quasar.py` mirrors registry domains
-   inline; every phase that changes a domain silently drifts from it. Either import the
-   registry there or accept the drift explicitly.
