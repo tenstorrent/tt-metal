@@ -75,9 +75,9 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
         // TT_FATAL ("Invalid routing direction for opposite calculation: 4"), which is opaque.
         TT_FATAL(
             direction != RoutingDirection::Z,
-            "Intra-mesh Z (skip-link) routers are unsupported for 1D (Linear/Ring) topology. Skip links require "
-            "2D (Mesh/Torus) routing; run this skip-link mesh graph descriptor under a Mesh/Torus topology, or "
-            "drop the skip_links for 1D runs.");
+            "Intra-mesh Z (express-link) routers are unsupported for 1D (Linear/Ring) topology. Express links require "
+            "2D (Mesh/Torus) routing; run this express-link mesh graph descriptor under a Mesh/Torus topology, or "
+            "drop the express_links for 1D runs.");
         RoutingDirection opposite = get_opposite_direction(direction);
         mapping.add_target(
             0,  // VC0
