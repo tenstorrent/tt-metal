@@ -729,8 +729,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
             tt::LogTest,
             "Testing destination reuse through {}",
             reuse_type == unit_tests::compute::binary::BinaryDestReuseType::SrcA ? "SrcA" : "SrcB");
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config, 2));
+        for (auto& device : this->devices_) {
+            ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config, 2));
         }
     }
 }
@@ -754,8 +754,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
         .enable_32_bit_dest = true,
     };
 
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config, 2));
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(device, test_config, 2));
     }
 }
 
