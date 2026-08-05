@@ -4719,6 +4719,62 @@ class SoftmaxKGolden:
 
 
 @register_golden
+class MoeGateTopkGolden:
+    """Golden for the generic MoE-gate top-k SFPU entry
+    (experimental/ckernel_sfpu_generic_moe_gate_topk.h).
+
+    The kernel sorts on the *biased* keys but carries the raw score as the payload, so
+    the winners are chosen by `sort_keys` and the expected scores are looked up from
+    `scores` by the winning id. That split is the whole point: reporting the key instead
+    of the score, or pairing a score with the wrong id, both show up here.
+
+    With normalize the kernel divides each winner score by the sum of the winners' raw
+    scores (plus eps) and multiplies by scale; without it the scores pass through.
+
+    Returns (winner_ids, expected_scores) where winner_ids is in descending-key order
+    and expected_scores[i] corresponds to winner_ids[i]. Callers that only know the
+    winners as an unordered set should reorder via `scores_for_ids`.
+    """
+
+    def __call__(
+        self,
+        sort_keys,
+        scores,
+        num_winners: int,
+        normalize: bool,
+        eps: float = 0.0,
+        scale: float = 1.0,
+    ):
+        winner_ids = torch.argsort(sort_keys, descending=True)[:num_winners].tolist()
+        return winner_ids, self.scores_for_ids(
+            winner_ids, winner_ids, scores, normalize, eps, scale
+        )
+
+    def scores_for_ids(
+        self,
+        ids,
+        winner_ids,
+        scores,
+        normalize: bool,
+        eps: float = 0.0,
+        scale: float = 1.0,
+    ):
+        """Expected scores for `ids`, normalized over the `winner_ids` set.
+
+        The normalization denominator is fixed by the winner set, not by `ids`, so a
+        caller can ask for the scores in the order the device returned them while
+        still dividing by the same total.
+        """
+        factor = 1.0
+        if normalize:
+            total = scores[winner_ids].to(torch.float32).sum()
+            factor = scale / (total + eps)
+        return torch.tensor(
+            [scores[i].item() * factor for i in ids], dtype=torch.float32
+        )
+
+
+@register_golden
 class SdpaExpUnclampedGolden:
     """Golden for the upper-unclamped exp helpers
     (experimental/ckernel_sfpu_sdpa_exp_unclamped.h).

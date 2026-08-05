@@ -29,13 +29,12 @@ the sum runs over all 16 columns of the row and each lane is written back to the
 column it came from, so both the interleaved (even/odd) and half/half readings
 give the same expected tile.
 
-ONLY EVEN k IS SWEPT. Odd k routes through `_zero_paired_odd_tail_lane_`, which
-uses two identifiers (SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11) that are
-declared nowhere in tt-metal or tt-llk; because they are plain identifiers inside
-a template, the header does not compile at all until they exist. See the
-"UPSTREAM BLOCKER" comment in sources/sfpu_softmax_k_test.cpp -- the test source
-#defines them so the file parses, and this sweep stays on the even-k path where
-that branch is dead code. Extend to odd k once the LLK declares them.
+Both even and odd k are swept. Odd k is the interesting half: the tail column k is
+odd and its even partner k-1 is a valid non-zero lane, so the padding lane inherits
+an enabled condition code and would be exponentiated. `_zero_paired_odd_tail_lane_`
+is what clears it, via an SFPCONFIG write targeting LREG11 masked to the single SFPU
+instance holding lane k (1u << (k - 1)). That path is only reached for odd k < 16, so
+without odd k in the sweep it ships untested.
 
 dest_acc=Yes is swept for k=16 only. The kernel compiles for a 32-bit DEST and the
 full-width case is correct there, but every k < 16 returns a softmax taken over all
@@ -71,8 +70,8 @@ FACE_DIM = 16
 SOFTMAX_ROWS = 4  # one SFPU row band: DEST rows 0-3
 MAX_ROW_BASE = 8  # the caller-supplied maxima live at DEST rows 8-11
 
-# Only even k -- see module docstring.
-EVEN_K = [2, 4, 6, 8, 10, 12, 14, 16]
+# Every supported k. Odd values exercise `_zero_paired_odd_tail_lane_` -- see docstring.
+ALL_K = list(range(2, FACE_DIM + 1))
 
 
 def _build_input_tile(k: int, torch_format) -> tuple[torch.Tensor, torch.Tensor]:
@@ -103,7 +102,7 @@ def _build_input_tile(k: int, torch_format) -> tuple[torch.Tensor, torch.Tensor]
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    k=EVEN_K,
+    k=ALL_K,
 )
 def test_sfpu_softmax_k(formats, dest_acc, k):
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:

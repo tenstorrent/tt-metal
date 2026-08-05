@@ -13,11 +13,20 @@
 // What is under test: `_ckernel_sfpu_exp_accurate_upper_unclamped_` is a copy of
 // the accurate exp path with the *upper* input clamp removed. The clamped variant
 // saturates xlog2 = val/ln2 + 127 at its upper bound, which is dead code for the
-// SDPA use case where val <= 0 always. So:
-//   * for val <= 0 the two variants must agree, and both must match exp(val);
-//   * for val > 0 (past the clamp point) only the unclamped variant keeps
-//     tracking exp(val).
-// The python side sweeps both domains.
+// SDPA use case where val <= 0 always.
+//
+// Scope of the sweep: every point the python side feeds is inside the domain where
+// this kernel is bit-identical to `_sfpu_exp_21f_bf16_`, so what is verified is that
+// removing the upper clamp changed nothing observable. INPUT_RANGES tops out at 4.0
+// (xlog2 = 4*1.4427 + 127 = 132.8, well under the removed upper bound of 255), and
+// the surviving *lower* clamp needs val <= -88.03 while the swept minimum is -88.0
+// (xlog2 = +0.043), so neither clamp is actually entered.
+//
+// Neither clamp's domain is swept on purpose: past the upper clamp point it is the
+// unclamped variant that stops tracking exp(val) -- the float-to-int step in
+// `_float_to_int32_for_exp_21f_` wraps there -- and exp() overflows bf16 above
+// val ~= 88.7 regardless, so there is no reference to compare against. See the
+// python docstring, which is the authority on the swept domain.
 //
 // NOTE: the LLK header has an inverted dependency -- it does `#include
 // "ckernel_sfpu_exp.h"`, and there is no such file in tt-llk: the exp kernels
@@ -110,7 +119,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // The upper-unclamped exp shares the accurate exp's SFPU setup.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    ckernel::sfpu::exp_init<false /* APPROXIMATION_MODE */, 0x3F800000 /* base scale = 1.0f */, true /* fast_and_approx off */, is_fp32_dest_acc_en>();
+    ckernel::sfpu::exp_init<false /* APPROXIMATION_MODE */, 0x3F800000 /* base scale = 1.0f */, true /* CLAMP_NEGATIVE */, is_fp32_dest_acc_en>();
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {

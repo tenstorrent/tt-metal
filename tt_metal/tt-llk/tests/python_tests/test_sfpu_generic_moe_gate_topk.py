@@ -82,7 +82,12 @@ Configurations left uncovered, with the measurement behind each
 import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import ELEMENTS_PER_TILE, TILE_DIM
+from helpers.golden_generators import (
+    ELEMENTS_PER_TILE,
+    TILE_DIM,
+    MoeGateTopkGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -183,13 +188,12 @@ def assert_odd_columns_untouched(result_indices, result_scores, scores, rows):
 
 
 @parametrize(
-    dest_acc=[DestAccumulation.No],
     num_selected_experts=[8, 4, 16],
     full_sort=[True, False],
     normalize=[True, False],
 )
 def test_sfpu_generic_moe_gate_topk(
-    request, dest_acc, num_selected_experts, full_sort, normalize
+    request, num_selected_experts, full_sort, normalize
 ):
     # Known-wrong configurations still compile and run, so the day either is fixed the
     # suite reports XPASS instead of quietly staying green.
@@ -253,7 +257,9 @@ def test_sfpu_generic_moe_gate_topk(
             tile_count_B=1,
             tile_count_res=NUM_RESULT_TILES,
         ),
-        dest_acc=dest_acc,
+        # Pinned, not swept: the kernel packs the expert id and the score into the LO16
+        # and HI16 of one DEST word, which only exists for a 16-bit DEST.
+        dest_acc=DestAccumulation.No,
         unpack_to_dest=False,
     )
 
@@ -279,7 +285,12 @@ def test_sfpu_generic_moe_gate_topk(
     is_top16 = num_selected_experts == 16
     num_winners = 16 if is_top16 else TOP8_WINNERS
 
-    golden_ids = torch.argsort(biased, descending=True)[:num_winners].tolist()
+    golden_generator = get_golden_generator(MoeGateTopkGolden)
+    scale = _bits_to_float(SCALE_BITS)
+    eps = _bits_to_float(EPS_BITS)
+    golden_ids, _ = golden_generator(
+        biased, scores, num_winners, normalize, eps=eps, scale=scale
+    )
 
     got_ids = [int(result_indices[row, 0].item()) for row in range(num_winners)]
     got_scores = torch.tensor(
@@ -294,26 +305,14 @@ def test_sfpu_generic_moe_gate_topk(
     )
 
     # Pairing check: each returned score must be the normalized original score of the
-    # expert id it came back with. This is what catches a key/payload mix-up.
-    scale = _bits_to_float(SCALE_BITS)
-    eps = _bits_to_float(EPS_BITS)
-    total = scores[golden_ids].to(torch.float32).sum()
-    factor = scale / (total + eps) if normalize else 1.0
-    expected_paired = torch.tensor(
-        [scores[i].item() * factor for i in got_ids], dtype=torch.float32
+    # expert id it came back with. This is what catches a key/payload mix-up. Asked for
+    # in the order the device returned, but normalized over the golden winner set.
+    expected_paired = golden_generator.scores_for_ids(
+        got_ids, golden_ids, scores, normalize, eps=eps, scale=scale
     )
     assert passed_test(
         expected_paired, got_scores, formats.output_format, print_errors=True
     ), "returned scores are not the (normalized) original scores of the returned ids"
-
-    if not normalize:
-        # Sanity: without normalize the scores come through untouched, so the golden
-        # multiset is just the raw scores of the winners.
-        assert passed_test(
-            torch.sort(scores[golden_ids].to(torch.float32)).values,
-            torch.sort(got_scores).values,
-            formats.output_format,
-        ), "un-normalized winner scores do not match the raw input scores"
 
     if not is_top16:
         assert_odd_columns_untouched(result_indices, result_scores, scores, num_winners)

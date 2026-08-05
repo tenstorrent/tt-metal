@@ -613,14 +613,16 @@ class MOE_GATE_TOPK(TemplateParameter):
 
     Mirrors the template parameter list of
     ``ckernel::sfpu::_generic_moe_gate_topk_<normalize, num_selected_experts,
-    num_total_experts, zero_tail, full_sort>``.
+    num_total_experts, zero_tail, full_sort>``, including its defaults -- so a
+    partial-kwargs caller gets the same variant the C++ default arguments would
+    give it (see api/compute/experimental/generic_moe_gate.h).
     """
 
     num_selected_experts: int = 8
     num_total_experts: int = 256
-    normalize: bool = True
+    normalize: bool = False
     zero_tail: bool = False
-    full_sort: bool = True
+    full_sort: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
