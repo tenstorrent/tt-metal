@@ -5708,17 +5708,17 @@ if MESH_CONFIG.is_galaxy:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 8-device ring (Galaxy, sp=8 tp=4, 100 SDPA cores)
         ("kimi50k", 32, 640, 8, 68.5),
-        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. UNMEASURED -- 0.0 empties the
-        # band, so the case fails and logs the math_util to commit; expect ~60 (68.5 * 1.5/1.6894).
-        ("kimi_k3", 32, 640, 8, 0.0),
+        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. Measured 2026-08-05 on
+        # bh_sc1_high_power -- 9.680 ms vs kimi50k's 5.722, i.e. 1.69x time for 1.5x ideal work.
+        ("kimi_k3", 32, 640, 8, 61.03),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
         ("kimi50k", 32, 640, 4, 66.05),
-        # Kimi-K3, UNMEASURED as above. No estimate here: K3's pinned 24 heads sit against
-        # kimi50k's 14 (CHUNKED_PREFILL_HEADS_PER_RING) and the H_loc data point is Galaxy-only.
+        # Kimi-K3, UNMEASURED -- 0.0 empties the band, so the case fails and logs the math_util to
+        # commit. Only reachable now that the is_high_power gate below is galaxy-only.
         ("kimi_k3", 32, 640, 4, 0.0),
     ]
 
