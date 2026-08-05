@@ -27,7 +27,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_ind
 using namespace tt::tt_metal;
 using namespace tt::constants;
 using namespace tt::tt_metal::experimental;
-// Reused-kernel binding vocabulary (DFB / tensor names, writer+compute sources) — single-sourced here.
+// Reused-kernel binding vocabulary (CB / tensor names, writer+compute sources) — single-sourced here.
 using namespace ttnn::experimental::prim::rope_metal2;
 
 namespace {
@@ -35,18 +35,18 @@ namespace {
 // Writer + compute kernels are reused verbatim from the rotary_embedding_llama prefill path (they
 // consume cos/sin from the CB and write output indexed by local seq tile -- neither touches the
 // cos/sin source index). Only the reader is forked to derive the per-device cos/sin shard offset.
-// The shared DFB/tensor names and the writer/compute sources come from rope_metal2 (kWriterSource,
+// The shared CB/tensor names and the writer/compute sources come from rope_metal2 (kWriterSource,
 // kComputeSource, INPUT_DFB, OUT_DFB, OUTPUT_PARAM, ...) so the reused-kernel binding contract has one
 // source of truth; only the reader source and the metadata-path names are local.
 constexpr auto kReaderKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/kernels/dataflow/"
     "reader_rotary_embedding_indexed_interleaved_start_id.cpp";
 
-// Metadata path only: L1-scratch DFB the reader reads the metadata page into. The metadata tensor is a
+// Metadata path only: L1-scratch CB the reader reads the metadata page into. The metadata tensor is a
 // dedicated 1-element uint32 tensor holding kv_actual_global directly at element [0]; the reader
-// NoC-reads only that one element (4 bytes). kMetadataBytes is the DFB entry size, kept at the 16-byte
+// NoC-reads only that one element (4 bytes). kMetadataBytes is the CB page size, kept at the 16-byte
 // L1 page-alignment floor -- the read itself is 4 bytes.
-constexpr uint32_t kMetadataBytes = 16;  // DFB entry size (16B L1 alignment floor); only 4B (element [0]) is read
+constexpr uint32_t kMetadataBytes = 16;  // CB page size (16B L1 alignment floor); only 4B (element [0]) is read
 
 // Metadata-path-only names (everything else comes from rope_metal2).
 const DFBSpecName META_DFB{"meta"};
@@ -212,7 +212,7 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
     // dim is SP and thus the per-device sharding). The mesh adapter
     // additionally combines the target coordinates into the workload hash, so per-device my_sp_coord
     // (a compile-time arg baked per coordinate) is covered without being hashed here.
-    // Hash the full padded shapes, not just their volumes: the work split and DFB sizing derive from
+    // Hash the full padded shapes, not just their volumes: the work split and CB sizing derive from
     // specific dimensions, so two differently-shaped tensors that happen to share a volume must NOT
     // collide onto the same cached program.
     const auto& input = tensor_args.input;
@@ -407,7 +407,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         TensorBinding{.tensor_parameter_name = TRANS_MAT_PARAM, .accessor_name = "trans_mat"},
     };
     if (has_metadata) {
-        // meta scratch DFB is a single-toucher (reader fills + reads it) → self-loop.
+        // meta scratch CB is a single-toucher (reader fills + reads it) → self-loop.
         reader_dfbs.push_back(
             DFBBinding{.dfb_spec_name = META_DFB, .accessor_name = "meta", .endpoint_type = DFBEndpointType::PRODUCER});
         reader_dfbs.push_back(
@@ -472,7 +472,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
                  .accessor_name = "trans_mat",
                  .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
-             // Intermediate DFBs: compute is the sole toucher -> each is a self-loop (PRODUCER + CONSUMER).
+             // Intermediate CBs: compute is the sole toucher -> each is a self-loop (PRODUCER + CONSUMER).
              DFBBinding{
                  .dfb_spec_name = ROTATED_INTERM_DFB,
                  .accessor_name = "rotated_interm",

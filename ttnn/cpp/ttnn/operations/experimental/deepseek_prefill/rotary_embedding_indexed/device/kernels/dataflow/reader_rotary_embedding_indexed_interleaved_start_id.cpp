@@ -51,27 +51,24 @@ void kernel_main() {
 #ifdef HAS_METADATA
     // Metadata path: read kv_actual_global from element [0] of the 1-element uint32 tensor (4 bytes).
     // #ifdef-gated because tensor::metadata / dfb::meta are bound only on the metadata program.
-    uint32_t kv_actual_global;
-    {
-        const auto s_meta = TensorAccessor(tensor::metadata);
-        DataflowBuffer dfb_meta(dfb::meta);
-        dfb_meta.reserve_back(1);
-        uint32_t meta_l1_write_addr = dfb_meta.get_write_ptr();
-        noc.async_read(s_meta, CoreLocalMem<uint32_t>(meta_l1_write_addr), 4, {.page_id = 0}, {});
-        noc.async_read_barrier();
-        // The metadata tensor lives at a FIXED DRAM address reused across every chunk/layer/rope call;
-        // the host updates its contents in place each chunk. After the NoC writes the fresh value into
-        // this core's dfb_meta L1 page, the RISC data cache may still hold the PREVIOUS chunk's value for
-        // that L1 line: async_read_barrier orders the DMA but does NOT invalidate the RISC cache, and
-        // `volatile` forces a load but still reads the cached line. Whether the line was evicted is
-        // timing-dependent, so without this invalidate the read is intermittently STALE -> a wrong
-        // rotation offset that compounds (the L61 metadata KV-PCC run-to-run non-determinism).
-        // invalidate_l1_cache() forces a refetch of the freshly-DMA'd value.
-        invalidate_l1_cache();
-        CoreLocalMem<volatile uint32_t> meta(meta_l1_write_addr);
-        kv_actual_global = meta[0];  // the 1-element tensor holds kv_actual_global directly
-        dfb_meta.push_back(1);
-    }
+    const auto s_meta = TensorAccessor(tensor::metadata);
+    DataflowBuffer dfb_meta(dfb::meta);
+    dfb_meta.reserve_back(1);
+    uint32_t meta_l1_write_addr = dfb_meta.get_write_ptr();
+    noc.async_read(s_meta, CoreLocalMem<uint32_t>(meta_l1_write_addr), 4, {.page_id = 0}, {});
+    noc.async_read_barrier();
+    // The metadata tensor lives at a FIXED DRAM address reused across every chunk/layer/rope call;
+    // the host updates its contents in place each chunk. After the NoC writes the fresh value into
+    // this core's dfb_meta L1 page, the RISC data cache may still hold the PREVIOUS chunk's value for
+    // that L1 line: async_read_barrier orders the DMA but does NOT invalidate the RISC cache, and
+    // `volatile` forces a load but still reads the cached line. Whether the line was evicted is
+    // timing-dependent, so without this invalidate the read is intermittently STALE -> a wrong
+    // rotation offset that compounds (the L61 metadata KV-PCC run-to-run non-determinism).
+    // invalidate_l1_cache() forces a refetch of the freshly-DMA'd value.
+    invalidate_l1_cache();
+    CoreLocalMem<volatile uint32_t> meta(meta_l1_write_addr);
+    const uint32_t kv_actual_global = meta[0];  // the 1-element tensor holds kv_actual_global directly
+    dfb_meta.push_back(1);
 #else
     const uint32_t kv_actual_global = get_arg(args::kv_actual_global);
 #endif
@@ -112,7 +109,7 @@ void kernel_main() {
     const uint32_t sin_tile_bytes = dfb_sin.get_entry_size();
     const uint32_t trans_mat_tile_bytes = dfb_trans_mat.get_entry_size();
 
-    // Read transformation matrix into the DFB (only once, because it will be reused)
+    // Read transformation matrix in CB (only once, because it will be reused)
     dfb_trans_mat.reserve_back(onetile);
     uint32_t trans_mat_l1_write_addr = dfb_trans_mat.get_write_ptr();
     noc.async_read(s3, CoreLocalMem<uint32_t>(trans_mat_l1_write_addr), trans_mat_tile_bytes, {.page_id = 0}, {});
@@ -160,7 +157,7 @@ void kernel_main() {
                     sin_curr_idx = rope_seq_tile * Wt;
                 }
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    // Read input into the DFB
+                    // Read input into CB
                     noc.async_read(
                         s0,
                         CoreLocalMem<uint32_t>(input_l1_write_addr),
