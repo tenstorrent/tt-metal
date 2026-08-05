@@ -431,38 +431,44 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool has_kv_pad_rotation = args.has_kv_pad_rotation();
 
     if (args.has_sliding_window()) {
-        constexpr uint32_t gpt_oss_window_size = 128;
-        constexpr uint32_t gpt_oss_local_q_heads = 8;
-        constexpr uint32_t gpt_oss_local_kv_heads = 1;
-        constexpr uint32_t gpt_oss_head_dim = 64;
+        const uint32_t window_size = args.sliding_window_size.value();
         const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
         const bool supported_k_chunk = k_chunk_size == 128;
-        TT_FATAL(
-            args.sliding_window_size.value() == gpt_oss_window_size,
-            "Ring sliding-window attention supports the GPT-OSS {}-token window, got {}",
-            gpt_oss_window_size,
-            args.sliding_window_size.value());
+        // Structural requirements of the chunked sliding path rather than the original
+        // GPT-OSS value allowlist (W=128, 8Q:1K:1V, D64). build_sliding_q_work_plan and
+        // chunked_sliding_halo_tile_rows derive everything from the runtime window /
+        // k_chunk / slab sizes, and the program factory's CB sizing scales with DHt/vDHt,
+        // so the geometry is not special — only the halo-fits-one-slab condition is, and
+        // that is asserted explicitly below. Dtypes, causality, chunked-only, batch and
+        // chunk-size conditions are unchanged.
         TT_FATAL(
             args.ring_size == 4 || args.ring_size == 8,
-            "GPT-OSS sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
+            "Chunked sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
             args.ring_size);
         TT_FATAL(
             B == 1 || (B == 2 && args.ring_size == 8),
-            "GPT-OSS sliding attention supports batch 1 or the SP8 batch-2 surrogate, got B={} SP{}",
+            "Chunked sliding attention supports batch 1 or the SP8 batch-2 surrogate, got B={} SP{}",
             B,
             args.ring_size);
         TT_FATAL(
-            NQH == gpt_oss_local_q_heads && NKH == gpt_oss_local_kv_heads && tensor_args.v_num_heads() == 1,
-            "GPT-OSS sliding attention requires local heads 8Q:1K:1V, got {}Q:{}K:{}V",
-            NQH,
+            NKH == tensor_args.v_num_heads(),
+            "Chunked sliding attention requires matching K and V head counts, got K={} V={}",
             NKH,
             tensor_args.v_num_heads());
         TT_FATAL(
-            DH == gpt_oss_head_dim && tensor_args.v_head_dim(args.latent_v_head_dim) == gpt_oss_head_dim,
-            "GPT-OSS sliding attention requires Q/K/V head dimension {}, got Q={} V={}",
-            gpt_oss_head_dim,
+            NKH > 0 && NQH % NKH == 0,
+            "Chunked sliding attention requires Q heads to be a multiple of KV heads (GQA), got {}Q:{}K",
+            NQH,
+            NKH);
+        TT_FATAL(
+            DH == tensor_args.v_head_dim(args.latent_v_head_dim),
+            "Chunked sliding attention requires matching Q/V head dimension, got Q={} V={}",
             DH,
             tensor_args.v_head_dim(args.latent_v_head_dim));
+        TT_FATAL(
+            DH % tt::constants::TILE_WIDTH == 0,
+            "Chunked sliding attention requires a tile-aligned head dimension, got {}",
+            DH);
         TT_FATAL(has_input_v && has_gathered_v && !has_latent_v, "GPT-OSS sliding attention requires separate K and V");
         TT_FATAL(
             input_tensor_q.dtype() == DataType::BFLOAT16 && tensor_args.input_k.dtype() == DataType::BFLOAT8_B &&
@@ -485,17 +491,25 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!args.is_balanced, "Chunked ring sliding-window attention requires is_balanced=false");
         TT_FATAL(!args.is_cross, "Ring sliding-window attention does not support cross attention");
         TT_FATAL(L == 0, "Ring sliding-window attention does not support joint tokens");
-        const uint32_t halo_tokens = sliding_halo_token_count(gpt_oss_window_size, k_chunk_size);
+        // Derive the halo from the RUNTIME window. This previously used the hardcoded
+        // GPT-OSS 128, which silently validated the wrong window once the value gate above
+        // is relaxed.
+        const uint32_t halo_tokens = sliding_halo_token_count(window_size, k_chunk_size);
         TT_FATAL(
             N_local_q % q_chunk_size == 0,
             "q_chunk_size must divide the per-device Q slab for chunked sliding attention");
         TT_FATAL(
             N_local_q % k_chunk_size == 0,
             "k_chunk_size must divide the per-device Q slab for chunked sliding attention");
+        // One-hop halo: the work plan covers at most the local slab and its cyclic
+        // predecessor (SlidingQWorkPlan::max_source_ranges == 2), so a window whose
+        // k_chunk-rounded tail exceeds one slab would need a multi-hop exchange.
         TT_FATAL(
             halo_tokens <= N_local_q,
-            "Chunked GPT-OSS halo {} exceeds the per-device Q slab {}",
+            "Chunked sliding halo {} (window {}) exceeds the per-device Q slab {}; wider windows need a "
+            "multi-hop halo",
             halo_tokens,
+            window_size,
             N_local_q);
     }
 
