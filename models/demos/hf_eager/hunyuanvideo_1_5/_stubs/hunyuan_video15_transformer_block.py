@@ -111,6 +111,15 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
+    # SDPA-specific config: drop fp32 dest-accum in the attention softmax/exp core.
+    # The fp32 dest-accum halves SFPU/packer throughput there (tt_dit's own SDPA uses
+    # fp32_dest_acc_en=False); the attention tolerates bf16 accumulate. PCC-gated.
+    sdpa_compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2 if _bf16 else ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
 
     # Joint (dual-stream) flash attention: replaces the old explicit
     # matmul(q,kT)+softmax+matmul(.,v) sequence, which materializes the full
@@ -300,13 +309,14 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         if not sharded:
             return x
         # reduce_scatter's persistent-buffer path hardcodes bf16 ping-pong buffers
-        # (models/tt_dit/parallel/manager.py::get_rs_ping_pong_buffer); this stub
-        # runs float32 math, so use the (dtype-agnostic) barrier-semaphore path
-        # for reduce_scatter and reserve the persistent buffer for all_gather,
-        # whose buffer is allocated in the input's own dtype.
+        # (models/tt_dit/parallel/manager.py::get_rs_ping_pong_buffer). In the fp32
+        # path use the (dtype-agnostic) barrier-semaphore path; in the bf16 fast
+        # path (_bf16) the activations ARE bf16 and match that buffer, so use it to
+        # skip the barrier-semaphore overhead on the 4 all-reduces/block. all_gather
+        # always uses its own dtype-matched persistent buffer.
         B, L, Cx = (int(d) for d in x.shape)
         x4 = ttnn.reshape(x, (1, B, L, Cx))
-        x4 = ccl_manager.reduce_scatter(x4, dim=3, mesh_axis=mesh_axis, use_persistent_buffer=False)
+        x4 = ccl_manager.reduce_scatter(x4, dim=3, mesh_axis=mesh_axis, use_persistent_buffer=_bf16)
         x4 = ccl_manager.all_gather(x4, dim=3, mesh_axis=mesh_axis, use_hyperparams=True, use_persistent_buffer=True)
         return ttnn.reshape(x4, (B, L, Cx))
 
@@ -476,7 +486,7 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
                 joint_strategy="rear",
                 logical_n=logical_n,
                 program_config=sdpa_program_config,
-                compute_kernel_config=compute_config,
+                compute_kernel_config=sdpa_compute_config,
                 dim=2,
                 multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(sp_axis),
                 num_links=ccl_manager.num_links,
@@ -496,7 +506,7 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
                 ev,
                 joint_strategy="rear",
                 program_config=sdpa_program_config,
-                compute_kernel_config=compute_config,
+                compute_kernel_config=sdpa_compute_config,
             )
         if attn_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
             hid_out = ttnn.typecast(hid_out, attn_dtype)

@@ -17,8 +17,8 @@ sampler calls repeatedly:
 
 - **Branch:** `sdawle/hunyuanvideo-bringup_bh_glx`
 - **18/18** DiT modules **on device** (native ttnn, PCC-verified)
-- **Full 121-frame video generation: 5:13 end-to-end** (32-chip sp=8×tp=4, tile-sharded
-  VAE) — 3.6× vs the ~19 min 8-chip baseline. DiT + tiled VAE on device (all 32 chips);
+- **Full 121-frame video generation: 5:09 end-to-end** (32-chip sp=8×tp=4, tile-sharded
+  VAE) — 3.7× vs the ~19 min 8-chip baseline. DiT + tiled VAE on device (all 32 chips);
   text-encode (Qwen) on host — see "What runs where" below
 - **Per-step DiT device time optimized `6.43 → 5.10 ms` (1.26×)** via 16 committed
   fusion/sharding wins + an L1-fit guard (tt-hw-planner `optimize`)
@@ -146,7 +146,7 @@ a single tile.
 | 16-chip, sp=2 | 6:21 | ~2:30 | 10:38 |
 | 32-chip, sp=4, replicated VAE | 3:05 | ~5:00 | 9:47 |
 | 32-chip, sp=4, tile-sharded VAE | 2:49 | ~2:00 | 5:59 |
-| **32-chip, sp=8×tp=4, tile-sharded VAE** | 1:55 | ~2:00 | **5:13** ✅ |
+| **32-chip, sp=8×tp=4, + persist-RS + SDPA-cfg** | 1:51 | ~2:00 | **5:09** ✅ |
 
 **sp=8×tp=4 with tile-sharded VAE is the fastest full-video config: 5:13 e2e (3.6× vs the
 ~19 min 8-chip baseline).** The denoise is **attention-bound at 121f** (seq ~49k), and
