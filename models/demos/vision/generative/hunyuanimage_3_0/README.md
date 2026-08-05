@@ -1,117 +1,100 @@
-# HunyuanImage-3.0 — TTNN transformer pipeline (`tencent/HunyuanImage-3.0`)
+# tencent/HunyuanImage-3.0 — end-to-end TTNN pipeline (text → image)
 
-A native TTNN bring-up of the transformer decoder-block of
-**HunyuanImage-3.0** (`HunyuanImage3ForCausalMM`), an 80B-class mixed-MLP MoE
-causal multimodal model (text + image tokens; `model_type=hunyuan_image_3_moe`).
+A real, on-device TTNN pipeline for `tencent/HunyuanImage-3.0` (`HunyuanImage3ForCausalMM`, `model_type=hunyuan_image_3_moe`) — an ~80B-total / ~13B-active mixed-MLP MoE text→image model. It reproduces the model's real diffusion render — **(prompt) → 1024² image** — by driving the 32-layer MoE transformer with a FlowMatch (Euler) denoising loop, classifier-free guidance (`cfg_factor=2`), a timestep-conditioned velocity head, and VAE decode, entirely on the graduated native TTNN stubs plus native TTNN glue for the leaf conv heads (`patch_embed` / `final_layer`).
 
-- 32 decoder layers · hidden 4096 · 32 q-heads / 8 kv-heads · head_dim 128
-- MoE: **64 routed + 1 shared** SwiGLU experts, **top-8** routing, `norm_topk_prob`
-- 2D-RoPE · qk-norm · RMSNorm · non-causal joint attention
+The bring-up first graduated the transformer decoder-block as **Call-1** (`hunyuan_image3_transformer_prefill`), PCC-gated against the exact HF forward; the shipped path is the image render built on those same graduated layers. A secondary **incremental-KV transformer decode** path (KV cache + causal single-token attention) is also wired.
 
-The real `model.generate()` is a 50-step **diffusion image** loop over the full
-80B stack — not device-feasible and not the gate target. The bring-up graduated
-the transformer decoder-block internals, so the faithful, device-feasible e2e is
-the model's **real transformer forward** (the exact `HunyuanImage3Model.forward`
-path that feeds the CausalMM / image heads).
-
-## Call-1 — `hunyuan_image3_transformer_prefill`
-
-```
-input_ids (HF tokenizer)  --ttnn.embedding-->  inputs_embeds
-    --> image3_decoder_layer x N  -->  last_hidden_state   (+ summed MoE l_aux)
-```
-
-Graduated stubs, composed along the real HF nesting
-(`HunyuanImage3DecoderLayer.mlp == HunyuanMoE`; `HunyuanMoE.gate == HunyuanTopKGate`):
-
-| graduated stub | role | on the forward path |
-|---|---|---|
-| `image3_decoder_layer` | RMSNorm + GQA attn + 2D-RoPE + qk-norm + SDPA + residuals | layer output = `last_hidden_state` |
-| `mo_e` | shared SwiGLU + 64 routed expert SwiGLUs, combined by the router | feeds the post-attn residual |
-| `top_k_gate` | softmax + top-8 → **router weights** (feed expert combine) + `l_aux` | router → experts → hidden (main path) |
-
-Every graduated stub is invoked on this one real forward path with its output
-feeding downstream computation (no coverage sweep). All ops are native ttnn.
-
-## Tensor-parallel (TP=8) execution
-
-All three stubs are **shard-graduated at TP=8** (each `_stubs/*.py` carries a
-`.last_good_sharded` snapshot alongside `.last_good_native`). The live stubs are
-the **sharded** bodies, and the pipeline runs them tensor-parallel on the **full
-physical mesh** `MeshShape(8, 4)` with `FabricConfig.FABRIC_1D`:
-
-- TP=8 across the length-8 mesh axis (`cluster_axis`), **DP-replicated** across
-  the length-4 axis. This 6U Blackhole Galaxy only brings FABRIC_1D up on the
-  full physical mesh, so partial TP sub-meshes are not used.
-- attention QKV column-parallel by kv-group, o_proj row-parallel (+ `all_gather`
-  + `sum` all-reduce); MoE experts expert-parallel (8/device, all-reduced);
-  router `wg` column-parallel (+ `all_gather` → full replicated logits).
-- a sharded (TP>1) body **counts as native** (Gate 1) — the collectives are real
-  `ttnn.all_gather` / `ttnn.sum` over the fabric, not a replication downgrade.
-- the sharded decoder delegates its MoE to the sharded `mo_e` stub, which
-  delegates routing to the sharded `top_k_gate` stub — the SAME nesting the
-  single-device path uses, so all three stubs stay on the one forward path.
-
-## Package layout
+## Layout
 
 ```
 models/demos/vision/generative/hunyuanimage_3_0/
-  tt/pipeline.py        ONE shared chained pipeline (build_pipeline factory,
-                        run_prefill, per-stage trace+2CQ hooks, selftests).
-                        BOTH the demo and the e2e test import & call this.
-  _stubs/               the three graduated stubs (composed along the HF nesting)
-  demo/demo_image3_prefill.py   runnable `python -m ...demo.demo_image3_prefill`
-  tests/e2e/test_e2e_prefill.py Gate 1/2/3 on the shared pipeline
-  tests/e2e/test_trace_2cq.py   Command-3 trace + host-op selftests
-  tests/pcc/            per-component PCC tests (from bring-up)
-  e2e_plan.json         the planner sketch (Command 1)
+  _stubs/                         the 3 graduated native-TTNN stubs, composed along the real HF nesting
+    image3_decoder_layer.py         RMSNorm + GQA attn + 2D-RoPE + qk-norm + SDPA + residuals  (== HunyuanImage3DecoderLayer)
+    mo_e.py                         shared + 64 routed SwiGLU experts, EP=32, merged 2D matmuls  (== HunyuanMoE)
+    top_k_gate.py                   softmax + top-8 router + l_aux                               (== HunyuanTopKGate)
+  tt/
+    pipeline.py                     the ONE shared prefill/decode forward (build_pipeline, run_prefill/run_decode,
+                                    trace + host-op selftests). Imported by BOTH the prefill demo and the e2e test.
+    gen_image.py                    text→image diffusion driver (FlowMatch loop + CFG + velocity head + VAE)
+    host_glue_stage3.py             on-device head-glue render — hidden stays on device (PatchEmbedTT + FinalLayerTT)
+    host_glue_tt.py                 native-TTNN patch_embed + final_layer (velocity head) ports
+  demo/                           demos + resident servers (all import the same tt/ forwards — a green test == a working demo)
+  tests/e2e/                      prefill gates, decode, trace+2CQ, text→image PCC + latency, host-glue PCC + perf
+  tests/pcc/                      per-component PCC (single-chip + TP=8 sharded)
+  UNIFIED_STACK.md                perf-ladder / lever source of truth
+  e2e_plan.json                   the planner sketch (Call-1)
 ```
 
-## Results (Blackhole 6U Galaxy, TP=8 full mesh (8,4) + FABRIC_1D, N=1 layer, seq_len=64)
-
-| gate | metric | result |
-|---|---|---|
-| Gate 1 (native) | `host_op_selftest` host aten ops | **0** (fully on device) |
-| Gate 2 (invoked) | graduated stubs invoked | `image3_decoder_layer`, `mo_e`, `top_k_gate` (all, ×1 each) |
-| Gate 3 (PCC) | e2e PCC(last_hidden_state) vs HF golden | **0.99977** (≥ 0.95) |
-| — | MoE `l_aux` (tt vs ref) | 37.50 vs 37.15 |
-| per-component (native) | image3_decoder_layer / mo_e / top_k_gate PCC | 0.99999 / 0.9996 / 1.0 |
-| Command 3 (trace) | prefill / decode trace capture, host-free PCC | 1.0 / 1.0 |
+`tt/gen_image.py` + `tt/host_glue_stage3.py` are the ONE shared image forward, imported by BOTH the demos and the perf tests; `tt/pipeline.py` is the same for the prefill/decode path. A green test therefore guarantees a working demo (no drift).
 
 ## Run
 
+All commands from the tt-metal repo root. `HY3_SINGLE_CHIP=1` runs fabric-free on 1 device (per-layer bring-up); full renders need the mesh.
+
 ```bash
-# e2e gates (real input -> chained stubs -> real output, PCC vs HF golden)
+# e2e gate test: native ttnn (Gate 1) + all stubs invoked (Gate 2) + PCC vs HF golden (Gate 3)
 ./python_env/bin/python -m pytest \
   models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_e2e_prefill.py -s
 
-# trace+2CQ + fully-on-device selftests (Command 3)
-./python_env/bin/python -m pytest \
-  models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_trace_2cq.py -s
+# per-component PCC (single-chip + TP=8 sharded)
+./python_env/bin/python -m pytest models/demos/vision/generative/hunyuanimage_3_0/tests/pcc -s
 
-# per-component PCC
-./python_env/bin/python -m pytest \
-  models/demos/vision/generative/hunyuanimage_3_0/tests/pcc -s
+# text→image demo (hybrid path)
+./python_env/bin/python -m models.demos.vision.generative.hunyuanimage_3_0.demo.demo_image3_t2i \
+  --prompt "a red panda astronaut, studio lighting" --steps 50 --size 1024x1024 --out panda.png
 
-# demo (real prompt -> TT prefill -> real last_hidden_state; --compare adds PCC)
-./python_env/bin/python -m \
-  models.demos.vision.generative.hunyuanimage_3_0.demo.demo_image3_prefill \
-  --prompt "A serene mountain lake at sunrise" --compare
+# warm resident render server (build stack + conv heads once, then render prompts warm)
+HUNYUAN_VAE_AUTOCAST=bf16 HUNYUAN_CCL_LINKS=2 ./python_env/bin/python -m \
+  models.demos.vision.generative.hunyuanimage_3_0.demo.warm_render_server
+
+# live queue-driven server: append to $HUNYUAN_DEMO_DIR/queue.jsonl -> $HUNYUAN_DEMO_DIR/out/<id>.png
+export HUNYUAN_DEMO_DIR=/tmp/hunyuan_demo
+./python_env/bin/python -m models.demos.vision.generative.hunyuanimage_3_0.demo.demo_live_server
 ```
 
-Tunables: `HUNYUAN_E2E_NUM_LAYERS` (default 1 — the full 32-layer stack is the
-whole 80B model and does not fit on one chip; each graduated layer is a real
-transformer block), `HUNYUAN_E2E_SEQ_LEN` (default 64).
+## Pipeline (text → image)
 
-## Notes / honest simplifications
+`generate_image_ondevice` chains the following on the full `MeshShape(8, 4)` mesh (TP=8 + EP=32, `FABRIC_1D`); hidden never leaves the device:
 
-- **Golden** = the real `HunyuanImage3DecoderLayer` forward over the first `N`
-  layers on the same `inputs_embeds` + real 2D-RoPE (`build_2d_rope`), plus the
-  reference `HunyuanTopKGate` `l_aux`. `attention_mask=None` (matches the
-  graduated component's non-causal reference); image gen skips `ln_f`, so the
-  stack output IS `last_hidden_state`.
-- **decode stage:** the graduated attention is full-SDPA with no incremental KV
-  cache (the reference component ran non-causal), so the `decode` PIPELINE_STAGE
-  reuses the pinned-C decoder block reading the resident buffers rather than an
-  incremental single-token KV read. It is a real host-op-free fixed-shape
-  forward and is printed by `trace_capture_selftest` (never silently dropped).
+1. **Setup (once):** HF-tokenize the prompt → prefix/suffix token embeddings; build the 2D image RoPE cos/sin + the block attention mask; upload the static suffix; build `PatchEmbedTT` + `FinalLayerTT`.
+2. **FlowMatch (Euler) denoising loop, `cfg_factor=2`, per step:**
+   a. `PatchEmbedTT(latent, time_embed(t))` → image tokens on device.
+   b. assemble `inputs_embeds` on device via ROW_MAJOR `concat([prefix, img, suffix])` → tilize.
+   c. run the **32 graduated decoder layers** (hidden stays on device): per layer RMSNorm → GQA self-attn (fused-QKV, 2D-RoPE, qk-norm, SDPA, o_proj + fused all-reduce) → residual → post-attn RMSNorm → MoE (`top_k_gate` softmax + top-8 → shared + 64 routed SwiGLU experts, EP=32, all-reduce) → residual.
+   d. slice the image-position hidden → `FinalLayerTT` → velocity `diffusion_prediction` `[cfg,32,64,64]` (the only per-step download).
+   e. FlowMatch scheduler step on the CFG-combined velocity → next latent.
+3. **VAE decode** (host, bf16) the final latent → 1024² pixels → PNG.
+
+All 3 graduated stubs (`image3_decoder_layer`, `mo_e`, `top_k_gate`) are invoked in the real forward path (**Gate 2: 3/3**).
+
+## Results (32-layer 1024² 50-step render; prefill gate at N=1 layer, seq_len=64)
+
+| metric | value | gate |
+|---|---|---|
+| Gate 1 (native) — `host_op_selftest` host aten ops | **0** | fully on device |
+| Gate 2 (invoked) — graduated stubs on the forward path | image3_decoder_layer / mo_e / top_k_gate | 3/3 |
+| Gate 3 (PCC) — prefill `last_hidden_state` vs HF golden | **0.99977** | ≥ 0.95 |
+| per-component PCC, single-chip (decoder / mo_e / gate) | 0.99999 / 0.9996 / 1.0 | ≥ 0.95 |
+| per-component PCC, TP=8 sharded (decoder / mo_e / gate) | 0.99999 / 0.9940 / 1.0 | ≥ 0.95 |
+| Command 3 (trace) — prefill / decode trace PCC | 1.0 / 1.0 | host-free |
+| head-glue block PCC (velocity / patch_embed / stage-3 on-device velocity) | 0.99986 / 0.99973 / 0.99989 | ≥ 0.99 |
+| text→image path PCC (final-latent / decoded-image, reduced depth) | pass | ≥ 0.95 |
+| **E2E render — on-device, warm** (resident server) | **~84 s/image** | perf |
+| E2E render — on-device, cold | 216.5 s/image | perf |
+| E2E render — hybrid | 351.4 s/image | perf |
+
+Sources: Gate 1/2/3 + Command 3 + per-component PCC — `RUN_REPORT.md` / `e2e_plan.json`; TP=8 sharded PCC + wall-clock numbers — `UNIFIED_STACK.md`; head-glue block PCCs — perf-lever commit history. `TT_HY3_PCC` gate = 0.95, one 6U Blackhole Galaxy.
+
+## Performance
+
+End-to-end **wall-clock s/image** is the shipped metric — per-op Tracy device_ms does not track render time (the diffusion step is ~55% collective/sync-bound, so shaving per-op cost does not move it). The decisive lever was the **on-device head-glue port**: keeping the hidden state on the mesh (downloading only the small velocity tensor, not the full per-step hidden) cut the per-step from **5548 → 947 ms/step**, taking a render from **hybrid 351.4 s/image → on-device 216.5 s cold / ~84 s warm** (resident server; the ~36 s bf16 VAE decode is the host-side remainder and the next lever). The default lever stack (EP=32 + shard-shared, CCL_LINKS=2, MM_FULLGRID, fused all-reduce) is a further −29.1% on the hybrid per-step. Source: `UNIFIED_STACK.md`.
+
+Gated opt-ins, off by default: `HUNYUAN_SPARSE_MOE` (correct, PCC 1.0, but ~47× slower on the image path) and `HUNYUAN_CFG_PARALLEL` (renders correctly, net-positive only for a resident server).
+
+## Determinism
+
+The render is a deterministic feed-forward: a fixed `--seed` seeds `torch.Generator` for the initial latents, so `(prompt, seed, steps, size)` reproduces the same image. The graduated transformer is exact — per-component PCC ≥ 0.9996, prefill e2e 0.99977.
+
+## Trace + 2CQ (Command 3)
+
+`PIPELINE_STAGES = ["prefill", "decode"]`. `build_pipeline(device, model)` returns the resident `HunyuanImage3Pipeline`, exposing per-stage `trace_setup` / `trace_step` / `write_inputs` hooks. `trace_capture_selftest()` captures each stage host-free and PCC-checks the traced output (prefill 1.0, decode 1.0); `host_op_selftest()` runs the forward under the host-op observer and asserts **zero host aten ops** (fully on device). The transformer stages are the trace + 2CQ-validated path; the diffusion loop supports host-free traced replay via `HUNYUAN_T2I_TRACE` (`gen_image`), while the shipped on-device head-glue render currently runs eager (hidden resident on device).
