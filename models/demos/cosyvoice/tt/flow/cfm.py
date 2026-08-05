@@ -120,12 +120,24 @@ class TtConditionalCFM:
         bit-identical output (`max|d| 0.000e+00`), but the op writes internally
         regardless.
 
-        This is why the AR decoder traced cleanly and this does not: the decoder
-        contains **no convolutions**. The same limit blocks tracing the vocoder,
-        which has ~40. Until `ttnn.conv1d` can be captured, trace capture is
-        available to attention stacks and not to conv stacks -- worth carrying into
-        `03_plan.md`, since it constrains every conv-based model on this stack, not
-        just this one.
+        **It is a software limit, not a silicon one, and it is half-fixed.**
+        `ttnn.conv1d` prepares its weights -- tilize, pad to the sharding scheme,
+        move to device -- on *every call*. That is host work, and a trace forbids
+        host traffic either way: a host weight fails on the write, a device weight
+        fails on the **read back** to prepare it. `ttnn.prepare_conv_weights` hoists
+        the transform out, and a bare `conv1d` then captures cleanly with
+        bit-identical output. `TtConv1d` now does that and caches per input
+        geometry.
+
+        What still blocks this particular graph is the rest of the estimator:
+        `TtConvTranspose1d` in the up path has the same lazy preparation and has not
+        been converted, and `pack_input`'s `ttnn.repeat` is a further candidate. So
+        the *class* of problem is understood and demonstrated solvable; this graph
+        needs the remaining writes chased out one at a time.
+
+        Worth carrying into `03_plan.md`: any conv-based model on this stack is
+        untraceable by default, and the fix is per-op weight preparation rather than
+        anything in hardware.
         """
         b, t_len, ch = x.shape
         self._x_buf = ttnn.concat([x, x], dim=0)

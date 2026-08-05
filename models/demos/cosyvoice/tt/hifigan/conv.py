@@ -97,6 +97,9 @@ class TtConv1d:
         self.dtype = dtype
 
         self.weight = ttnn.from_torch(weight, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # OIHW with H=1, which is what prepare_conv_weights wants for a 1-D conv.
+        self._weight_4d = ttnn.from_torch(weight.unsqueeze(2), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self._prep_cache: dict = {}
         self.bias = None
         if bias is not None:
             # conv bias wants a 4-D [1, 1, 1, out_ch] row
@@ -119,11 +122,67 @@ class TtConv1d:
             **kw,
         )
 
+    def _prepared(self, x, input_length: int, batch_size: int):
+        """Pre-tilized, device-resident weights, cached per input geometry.
+
+        `ttnn.conv1d` will happily take a PyTorch-layout weight and sort it out
+        internally -- but it does that **on every call**, and the preparation is a
+        host-side layout transform, so it moves data across the command queue every
+        time. Two consequences:
+
+        * it is pure per-call overhead on a weight that never changes;
+        * **it makes the op impossible to trace.** A trace records device commands
+          and forbids host traffic in either direction, so capture fails with
+          `Writes are not supported during trace capture` for a host weight, or
+          `Reads are not supported` for a device one -- the op reads it back to
+          prepare it. Measured both ways; device residency alone does not help.
+
+        `prepare_conv_weights` hoists the transform out, and the op then has nothing
+        to transfer. Output is bit-identical (`max|d| 0.000e+00`), and a bare conv1d
+        captures cleanly once its weights are prepared this way.
+
+        The prepared layout depends on the input geometry -- the sharding scheme
+        follows `input_length` -- so the cache is keyed on it.
+        """
+        key = (input_length, batch_size)
+        if key in self._prep_cache:
+            return self._prep_cache[key]
+
+        kw = dict(
+            input_memory_config=x.memory_config(),
+            input_layout=x.layout,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=batch_size,
+            input_height=1,  # conv1d is conv2d at H=1
+            input_width=input_length,
+            kernel_size=(1, self.kernel_size),
+            stride=(1, self.stride),
+            padding=(0, self.padding),
+            dilation=(1, self.dilation),
+            groups=self.groups,
+            device=self.device,
+            input_dtype=self.dtype,
+            conv_config=self.conv_config,
+        )
+        try:
+            w = ttnn.prepare_conv_weights(
+                weight_tensor=self._weight_4d, weights_format="OIHW", has_bias=self.bias is not None, **kw
+            )
+            b = ttnn.prepare_conv_bias(bias_tensor=self.bias, **kw) if self.bias is not None else None
+        except Exception:  # noqa: BLE001
+            # Fall back to letting the op prepare them itself. Correct, just slower,
+            # and not traceable -- which is why the failure is not silent upstream.
+            w, b = self.weight, self.bias
+        self._prep_cache[key] = (w, b)
+        return w, b
+
     def __call__(self, x, input_length: int, batch_size: int = 1):
+        weight, bias = self._prepared(x, input_length, batch_size)
         out, out_length = ttnn.conv1d(
             input_tensor=x,
-            weight_tensor=self.weight,
-            bias_tensor=self.bias,
+            weight_tensor=weight,
+            bias_tensor=bias,
             device=self.device,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
