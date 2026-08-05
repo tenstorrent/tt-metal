@@ -1,6 +1,7 @@
 # Owned by @tenstorrent/metalium-developers-ds-prefill. Add/remove ops for
 # this domain here without touching ttnn/CMakeLists.txt.
 add_subdirectory(combine)
+add_subdirectory(combine_fabric2d)
 add_subdirectory(dispatch)
 add_subdirectory(extract)
 add_subdirectory(inbound_socket_service_sync)
@@ -28,6 +29,7 @@ target_link_libraries(
     ttnn_op_deepseek_prefill
     INTERFACE
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
+        TTNN::Ops::Experimental::DeepSeekPrefill::CombineFabric2d
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
         TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
@@ -62,6 +64,7 @@ target_sources(
     ttnn_op_deepseek_prefill
     INTERFACE
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Combine>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::CombineFabric2d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Extract>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync>
