@@ -23,7 +23,7 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Metric | Value | Target |
 |---|---:|---:|
-| End-to-end RTF | `1.163` | `< 0.5` ❌ |
+| End-to-end RTF | `1.123` | `< 0.5` ❌ |
 | LLM throughput (traced) | `63.6 tok/s` | `>= 60` ✅ |
 | LLM decode latency (traced) | `15.71 ms` | — |
 | Token agreement, teacher-forced | `98.56 %` | `> 95 %` ✅ |
@@ -37,17 +37,30 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Stage | Cost | RTF | Share |
 |---|---:|---:|---:|
-| LLM (14-block AR decoder, traced) | `15.71 ms/token × 164` | `0.787` | 68 % |
-| Flow decoder (10 Euler steps) | `1.151 s` | `0.352` | 30 % |
-| HiFT vocoder | `0.079 s` | `0.024` | 2 % |
-| **Total** | `3.807 s` | **`1.163`** | |
+| LLM (14-block AR decoder, traced) | `15.71 ms/token × 164` | `0.787` | 70 % |
+| Flow decoder (10 Euler steps, traced) | `1.053 s` | `0.322` | 29 % |
+| HiFT vocoder | `0.048 s` | `0.015` | 1 % |
+| **Total** | `3.677 s` | **`1.123`** | |
 
-**RTF misses its target and the reason is specific.** Trace capture took the LLM from 34.92 to
-15.71 ms/token (2.22×) and end-to-end RTF from 2.120 to 1.163. The same lever cannot be applied to
-the flow decoder or the vocoder: **`ttnn.conv1d` is not trace-compatible in this build** — a bare
-`conv1d` fails capture with a host-resident weight (`fd_mesh_command_queue.cpp:762`) *and* with a
-device-resident one (`:809`). The AR decoder traced cleanly precisely because it contains no
-convolutions; the estimator has ~37 and the vocoder ~40.
+**RTF misses its target, and both traced stages show why.** Trace capture is worth **2.22×** on the
+AR decoder (34.92 → 15.71 ms/token) but only **1.09×** on the flow decoder (1.151 → 1.053 s). That
+gap is the finding: tracing buys back *dispatch* overhead, so it pays in proportion to how
+dispatch-bound a stage already is. The AR decoder issues ~14 small ops per token at batch 1 and is
+almost pure overhead; the flow decoder runs 16 resnet and 64 transformer blocks over 608 frames at
+batch 2 and is close to compute-bound. End-to-end that took RTF from 2.120 to 1.123.
+
+Reaching 0.5 therefore needs less arithmetic, not less overhead. The LLM is 70 % of the remaining
+budget at one token per 15.71 ms, and the lever there is a shorter critical path per token —
+`bfloat8_b` weights, or fusing the per-block projections — not more tracing.
+
+Tracing the flow decoder took removing a host→device write that **every convolution** was issuing.
+`ttnn.conv1d` and `ttnn.conv_transpose2d` prepare their weights — tilize, pad to the sharding
+scheme, move to device — on *every call*, which a trace cannot contain; a host-resident weight fails
+capture at `fd_mesh_command_queue.cpp:762` and a device-resident one at `:809`, on the read back.
+`ttnn.prepare_conv_weights` hoists the transform out and both wrappers cache the result per input
+geometry. Output is bit-identical. **It was a software limit, not a silicon one** — worth stating
+plainly because the first reading of `:762` was that convolutions cannot be traced on this stack,
+and that reading would have written off both remaining stages.
 
 ## Accuracy
 
@@ -86,4 +99,4 @@ Source suites: `tests/perf/`, `tests/e2e/`, `tests/pcc/`
 | Tier | Count | Hardware |
 |---|---:|---|
 | host | 85 | none |
-| device | 37 | Blackhole `p150a` |
+| device | 40 | Blackhole `p150a` |
