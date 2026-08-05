@@ -584,7 +584,7 @@
   test_type: minimax_prefill_perf
   test_group: module
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       # Warm tilized-cache + chunked prefill (5120) x5 timed iters, no PCC; cold cache build will exceed this.
       timeout: 60
   owner_id: U08ECJQ848G # Viacheslav Melnykov
