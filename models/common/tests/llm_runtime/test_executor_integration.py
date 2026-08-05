@@ -16,6 +16,8 @@ from models.common.llm_runtime.execution import EagerExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
 from models.common.models.llama32_1b import executor as llama32_executor
 from models.common.models.llama32_1b import generator as llama32_generator
+from models.common.models.llama32_3b import executor as llama32_3b_executor
+from models.common.models.llama32_3b import generator as llama32_3b_generator
 
 EXECUTOR_BINDINGS = {
     "llama32_1b": SimpleNamespace(
@@ -30,6 +32,22 @@ EXECUTOR_BINDINGS = {
         make_model=lambda **kwargs: _make_llama32_model(**kwargs),
         make_runtime_config=lambda: _make_llama32_runtime_config(),
         make_executor_config=lambda mode="none": _make_llama32_executor_config(mode),
+        make_recording_target=lambda **kwargs: _RecordingTarget(_make_llama32_model(), **kwargs),
+        make_product=lambda mesh_device, max_batch_size: _make_llama32_product(mesh_device, max_batch_size),
+        make_lane=lambda llm, config: _FakeLane(llm, config),
+    ),
+    "llama32_3b": SimpleNamespace(
+        executor_module=llama32_3b_executor,
+        executor_class=llama32_3b_executor.Llama32_3BExecutor,
+        executor_config_class=llama32_3b_executor.Llama32_3BExecutorConfig,
+        generator_module=llama32_3b_generator,
+        generator_class=llama32_3b_generator.Llama32_3BGenerator,
+        generator_config_class=llama32_3b_generator.Llama32_3BGeneratorConfig,
+        build_generator_name="build_llama32_3b_generator",
+        build_executor_name="build_llama32_3b_executor",
+        make_model=lambda **kwargs: _make_llama32_model(**kwargs),
+        make_runtime_config=lambda: _make_llama32_runtime_config(),
+        make_executor_config=lambda mode="none": _make_llama32_executor_config(mode, module=llama32_3b_executor),
         make_recording_target=lambda **kwargs: _RecordingTarget(_make_llama32_model(), **kwargs),
         make_product=lambda mesh_device, max_batch_size: _make_llama32_product(mesh_device, max_batch_size),
         make_lane=lambda llm, config: _FakeLane(llm, config),
@@ -101,8 +119,9 @@ def _make_llama32_runtime_config():
     )
 
 
-def _make_llama32_executor_config(mode="none"):
-    return llama32_executor.Llama32_1BExecutorConfig(
+def _make_llama32_executor_config(mode="none", *, module=llama32_executor):
+    config_class = getattr(module, "Llama32_1BExecutorConfig", None) or module.Llama32_3BExecutorConfig
+    return config_class(
         trace=TraceConfig(mode),
         warmup=WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,)),
         paged_kv_cache=PagedKVCacheConfig(block_size=32, max_num_blocks=132, dtype=ttnn.bfloat8_b),
