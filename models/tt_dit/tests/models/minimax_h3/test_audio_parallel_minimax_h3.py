@@ -80,6 +80,66 @@ def _build(mesh_device, config, converted, parallel_config, ccl_manager):
     return decoder
 
 
+def _localize_divergence(baseline, parallel, *, factor: int, logger) -> None:
+    """Say *where* a diverging shard layout diverges. "PSNR -10.2 dB" alone names no bug.
+
+    Three shapes of answer, each pointing somewhere different:
+
+    - concentrated at the internal shard boundaries -> the halo exchange is wrong, and each conv in the
+      stack needs `kernel_size - 1` samples of its neighbour that it is not getting;
+    - uniform across the whole signal -> the shard layout itself is wrong, not its edges;
+    - a prefix or suffix only -> the causal padding or the final trim is off by a shard.
+
+    Also reports the best cross-correlation lag: a diverging-but-highly-correlated output at a nonzero
+    lag is a *shift*, which is a trim bug rather than a numerics one, and PSNR cannot distinguish those.
+    """
+    import numpy as np
+
+    error = (parallel - baseline).abs()
+    total = baseline.shape[-1]
+    logger.info(
+        f"  divergence localization, t_factor={factor}: overall mean {error.mean():.6f} "
+        f"max {error.max():.4f} against baseline absmax {baseline.abs().max():.4f}"
+    )
+    per_shard = []
+    for shard in range(factor):
+        lo, hi = shard * total // factor, (shard + 1) * total // factor
+        per_shard.append(float(error[..., lo:hi].mean()))
+    logger.info(f"  per-shard mean error: {[f'{v:.6f}' for v in per_shard]}")
+
+    # Boundary vs interior. A halo bug puts the error in a narrow band at each internal boundary.
+    window = 128
+    boundary, interior = [], []
+    for shard in range(1, factor):
+        cut = shard * total // factor
+        boundary.append(float(error[..., max(0, cut - window) : cut + window].mean()))
+    mask = torch.ones(total, dtype=torch.bool)
+    for shard in range(1, factor):
+        cut = shard * total // factor
+        mask[max(0, cut - window) : cut + window] = False
+    interior = float(error[..., mask].mean())
+    logger.info(
+        f"  boundary bands (+-{window}): {[f'{v:.6f}' for v in boundary]}  interior {interior:.6f}  "
+        f"ratio {max(boundary) / max(interior, 1e-12):.2f}"
+    )
+
+    a = baseline[0, 0].numpy()
+    c = parallel[0, 0].numpy()
+    best, best_lag = -2.0, None
+    for lag in range(-4096, 4097, 32):
+        x, y = (a[-lag:], c[: len(c) + lag]) if lag < 0 else (a[: len(a) - lag], c[lag:])
+        n = min(len(x), len(y))
+        if n < 2048:
+            continue
+        r = float(np.corrcoef(x[:n], y[:n])[0, 1])
+        if r > best:
+            best, best_lag = r, lag
+    logger.info(
+        f"  correlation at lag 0: {float(np.corrcoef(a, c)[0, 1]):.4f}; "
+        f"best {best:.4f} at lag {best_lag} (nonzero lag => a shift, i.e. a trim bug)"
+    )
+
+
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
 def test_audio_decode_t_parallel(mesh_device):
     weights_dir = _weights_dir("audio_vae")
@@ -126,6 +186,8 @@ def test_audio_decode_t_parallel(mesh_device):
             f"PERF audio_decode t_factor={factor} axis={axis}: {seconds:.4f} s "
             f"({baseline_s / seconds:.2f}x) PSNR vs 1-device {psnr:.1f} dB"
         )
+        if psnr < 40.0 and out is not baseline_out:
+            _localize_divergence(baseline_out.float(), out.float(), factor=factor, logger=logger)
         del decoder
 
     logger.info("=== audio decode T-parallel summary ===")
@@ -137,6 +199,20 @@ def test_audio_decode_t_parallel(mesh_device):
                 f"  t_factor={factor:2d} axis={axis}: {seconds:.4f} s  {baseline_s / seconds:5.2f}x  "
                 f"PSNR {psnr:6.1f} dB"
             )
+
+    # The baseline must have run, or there is nothing to compare against and every other factor was
+    # skipped for want of a reference. Without this the test PASSES when the whole stack is broken:
+    # observed once on a device left dirty by an unrelated crash, where all three factors raised
+    # TT_FATAL, each was swallowed as "unsupported", and the run reported green. A gate that cannot
+    # fail is worse than no gate.
+    baseline_ran = any(seconds is not None and factor == 1 for factor, _, seconds, _ in results)
+    assert baseline_ran, (
+        "the single-device baseline did not run, so nothing was compared. If this follows a crashed "
+        "run, reset the device (`tt-smi -glx_reset`) -- an allocator TT_FATAL here is usually a dirty "
+        "device, not a code failure"
+    )
+    ran = [(f, a) for f, a, seconds, _ in results if seconds is not None and f != 1]
+    assert ran, "no parallel factor ran at all; the T-parallel path is entirely unavailable"
 
     # Any factor that ran must agree with the single-device path; a fast wrong answer fails.
     for factor, axis, seconds, psnr in results:
