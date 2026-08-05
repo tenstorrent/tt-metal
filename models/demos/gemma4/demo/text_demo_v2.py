@@ -191,11 +191,24 @@ def _host_sample(logits, temperature, top_p):
     return torch.gather(sorted_idx, -1, choice)
 
 
+#: Fabric's own default max payload, and the floor for any override here. A
+#: payload smaller than a transported page deadlocks that CCL: the dense-model
+#: tuning below is sized for the *dense* width-sharded pages, but on-device
+#: sampling's all_gather moves pages up to 4096 B, so 12B's dense-ideal 3840 B
+#: hung the prefill sampling warmup indefinitely (device never completed, host
+#: stuck in synchronize_device). Only reachable since on-device sampling became
+#: the demo default; clamp so no per-model value can undercut a page again.
+_MIN_CCL_PACKET_BYTES = 4352
+
+
 def _default_ccl_packet_bytes():
     """Ideal Fabric packet for dense Gemma4 width-sharded CCL pages (4×page).
 
     Matches ``validate_packet_size`` guidance: 31B pages are 1344 B → 5376;
     12B pages are 960 B → 3840. Other models leave Fabric's default.
+
+    Clamped to ``_MIN_CCL_PACKET_BYTES`` by the caller — the dense-page ideal is
+    not necessarily large enough for every CCL in the model (see that constant).
     """
     model = os.environ.get("HF_MODEL", "").lower()
     if "31b" in model:
@@ -217,7 +230,9 @@ def _device_params():
       ``GEMMA4_FABRIC=ring`` → ``FABRIC_1D_RING`` (default ``1d``; ring
         regressed TTFT ~28.8s→~30.9s on 31B/P150x8 — leave off).
       ``GEMMA4_CCL_PACKET_BYTES`` → FabricRouterConfig max payload.
-        BH defaults: 5376 (31B) / 3840 (12B) to match CCL page packing.
+        BH defaults: 5376 (31B) / 3840 (12B) to match CCL page packing, then
+        clamped up to ``_MIN_CCL_PACKET_BYTES`` (a payload below a transported
+        page deadlocks that CCL — 12B's 3840 B hung on-device sampling).
         Set ``0`` / ``none`` / ``default`` to keep Fabric's default.
     ``l1_small_size`` is set so all_gather semaphores land in L1_SMALL (avoids
     fragmenting the main L1 pool).
@@ -246,8 +261,10 @@ def _device_params():
     elif pkt_env.strip().lower() in ("0", "none", "default", ""):
         pkt_bytes = None
     else:
-        pkt_bytes = max(4352, int(pkt_env))
+        pkt_bytes = int(pkt_env)
     if pkt_bytes is not None:
+        # Applies to the per-model defaults too, not just explicit overrides.
+        pkt_bytes = max(_MIN_CCL_PACKET_BYTES, pkt_bytes)
         router = ttnn.FabricRouterConfig()
         router.max_packet_payload_size_bytes = pkt_bytes
         params["fabric_router_config"] = router
