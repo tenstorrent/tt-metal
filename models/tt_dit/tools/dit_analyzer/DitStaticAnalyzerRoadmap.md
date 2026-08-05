@@ -517,8 +517,13 @@ generator (phase 8) already emits both halves for a new such op.
     nodes (MEDIUM/likely): the model's **asymmetric downsampler halos** (`(0,1)` pad)
     don't need every participant. Suggestive, resting on the newest halo-demand code +
     "the shim believes" — want device conformance before acting.
-  - **Still open:** the **audio VAE** is unscouted; the halo demand's 2-D corner
-    (diagonal neighbour) is over-approximated — safe, imprecise.
+  - **Halo demand is now exact in 2-D.** `neighbor_pad`'s backward demand splits as a
+    *product* over the padded axes, routing the corner (past the border on both H and W)
+    to the **diagonal** neighbour that owns it — no device is ever demanded for data
+    outside the shard it holds. This makes the `participant_shrink` accounting trustworthy
+    on 2-D-haloed sites; the confidence tier stays MEDIUM/likely (participant_shrink is an
+    opportunity requiring a code change, not a provable dead collective).
+  - **Still open:** the **audio VAE** is unscouted.
 - **Grouped-query attention** — `nlp_create_qkv_heads` now branches on its call
   shape: `num_kv_heads == 0` (LTX / Ideogram / Wan, `out, _, _ = …`) is the plain
   single-tensor head split; `num_kv_heads > 0` (Qwen3-VL / Gemma / **MiniMax-H3**,

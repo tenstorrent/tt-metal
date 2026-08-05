@@ -16,7 +16,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from dit_analyzer import GraphBuilder, analyze_graph, load_graph  # noqa: E402
-from dit_analyzer.analysis import run_forward  # noqa: E402
+from dit_analyzer.analysis import run_backward, run_forward  # noqa: E402
 from dit_analyzer.capture import Trace, TraceOp, trace_to_graph  # noqa: E402
 from dit_analyzer.ir import Dist, Graph, Mesh  # noqa: E402
 from dit_analyzer.region import Box, RegionSet  # noqa: E402
@@ -346,6 +346,38 @@ def test_concat_keeps_the_sharded_operands_distribution():
     y = b.concat([aux, x], axis=1)  # -> [1, 7, 64]
     st = run_forward(b.finish([y])).final[y.id]
     assert st.dist.shard[SP] == 2, st.dist.shard  # the shard survives the concat
+
+
+def test_two_dim_halo_routes_the_corner_to_the_diagonal_neighbour():
+    """A 2-D spatial halo (H *and* W sharded): the corner past the border on both axes
+    belongs to the *diagonal* neighbour, not to either axis-neighbour.
+
+    Demand routes each product sub-box to the device that owns it, so (a) no device is
+    ever asked for input outside the shard it actually holds -- which the earlier
+    per-axis-independent code violated, demanding axis-neighbours for corner columns they
+    don't own -- and (b) the diagonal neighbour really is demanded (the corner exists).
+    """
+    from dit_analyzer.ir import Mesh
+    from dit_analyzer.state import device_region
+
+    m = Mesh(shape=(2, 2), axis_names=("h", "w"))
+    b = GraphBuilder("halo2d", m)
+    x = b.input("x", [1, 8, 8, 4], shard={0: 1, 1: 2})  # H (dim1) over axis0, W (dim2) over axis1
+    padded = b.neighbor_pad(x, dims=[1, 2], pad_left=[1, 1], pad_right=[1, 1], axes=[0, 1], label="halo")
+    graph = b.finish([padded])
+    bwd = run_backward(graph, run_forward(graph))
+    xd = graph.placements[x.id].dist
+    demanded_devices = set()
+    for dev in m.devices():
+        d = bwd.demand.get(x.id, {}).get(dev)
+        if d is None or d.is_empty:
+            continue
+        demanded_devices.add(dev)
+        own = device_region(m, graph.symbol(x.id), xd, dev)  # the shard this device holds
+        for axis in (1, 2):
+            (dlo, dhi), (olo, ohi) = d.bounds(axis), own.bounds(axis)
+            assert olo <= dlo and dhi <= ohi, (dev, axis, d.bounds(axis), own.bounds(axis))  # inside its shard
+    assert demanded_devices == set(m.devices()), demanded_devices  # incl. the diagonal (device 3)
 
 
 def test_reduce_sum_over_a_sharded_axis_is_a_partial_sum():

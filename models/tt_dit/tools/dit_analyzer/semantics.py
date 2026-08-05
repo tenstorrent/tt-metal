@@ -19,6 +19,7 @@ correctness over aggressive cleverness.
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -607,8 +608,12 @@ def _neighbor_pad_demand(c: DemandCtx) -> None:
     """The demanded halo rows map back to the neighbours that own them.
 
     Per padded axis, the demanded grown-frame ``[lo, hi]`` maps to input rows
-    ``[lo-pad_left, hi-pad_left]``; each device along the axis that owns part of that
-    range is asked for its slice, so a device's border demand lands on its neighbour.
+    ``[lo-pad_left, hi-pad_left]`` and splits across the devices along that axis. When
+    two axes are padded at once (H *and* W), the split is a **product**: the region
+    that lies past the border on both axes is a corner owned by the *diagonal*
+    neighbour, not by either axis-neighbour, so each sub-box is routed to the device
+    that owns it on every padded axis. This keeps a device's demand inside the shard
+    it actually holds -- the precision the ``participant_shrink`` rule needs.
     """
     xid = c.node.inputs[0]
     xs = c.sym(xid)
@@ -619,24 +624,35 @@ def _neighbor_pad_demand(c: DemandCtx) -> None:
         want = dem[dev]
         if want.is_empty:
             continue
-        base = Box.full(xs.shape)  # other axes: demand clamped to the input extent
+        base = Box.full(xs.shape)  # non-padded axes: the demanded extent, clamped to input
         for a in range(xs.ndim):
             b = want.bounds(a)
-            if b is not None:
+            if b is not None and a not in dims:
                 base = base.replace_axis(a, min(b[0], xs.shape[a]), min(b[1], xs.shape[a]))
+        # for each padded axis, the (owner-index, slice) pieces of the demanded input range
+        per_axis = []
         for dim, pl, pr, ax in zip(dims, pls, prs, axes):
             b = want.bounds(dim)
             if b is None:
-                continue
+                break
             s = xs.shape[dim] // c.mesh.size(ax)
             in_lo, in_hi = max(0, b[0] - pl), min(xs.shape[dim], b[1] - pl)
-            if in_lo >= in_hi:
-                continue
-            for peer in c.mesh.group_of(dev, ax):
-                j = c.mesh.index_in_group(peer, ax)
-                lo, hi = max(in_lo, j * s), min(in_hi, (j + 1) * s)
-                if lo < hi:
-                    c.need(xid, peer, RegionSet.of(base.replace_axis(dim, lo, hi)))
+            pieces = [
+                (dim, ax, j, lo, hi)
+                for j in range(c.mesh.size(ax))
+                for lo, hi in ((max(in_lo, j * s), min(in_hi, (j + 1) * s)),)
+                if lo < hi
+            ]
+            if not pieces:
+                break
+            per_axis.append(pieces)
+        else:  # every padded axis contributed -- route each product sub-box to its owner
+            for combo in itertools.product(*per_axis):
+                box, owner = base, dev
+                for dim, ax, j, lo, hi in combo:
+                    box = box.replace_axis(dim, lo, hi)
+                    owner = c.mesh.group_of(owner, ax)[j]
+                c.need(xid, owner, RegionSet.of(box))
 
 
 register(
