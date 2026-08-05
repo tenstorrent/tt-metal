@@ -933,7 +933,10 @@ def test_qwen2_7b(test_config, mesh_device, optimizations):
             # 32-user cross-batch determinism (self-consistency under prompt rotation).
             _run_eval_repeat_batch32(model, mesh_device)
     finally:
-        cleanup_model_case(model, mesh_device)
+        # A pre-build topology skip owns no model state. Synchronizing the parent mesh
+        # here can advance its event stream before a later DP case creates submeshes.
+        if model is not None:
+            cleanup_model_case(model, mesh_device)
 
 
 def _run_token_accuracy(model, mesh_device, expected):

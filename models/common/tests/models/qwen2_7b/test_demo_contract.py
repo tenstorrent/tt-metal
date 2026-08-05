@@ -368,6 +368,22 @@ def test_token_accuracy_cleans_up_executor_in_finally():
     assert len(cleanup_calls) == 1
 
 
+def test_main_demo_does_not_synchronize_parent_mesh_after_prebuild_skip():
+    function = next(
+        node for node in _DEMO_TREE.body if isinstance(node, ast.FunctionDef) and node.name == "test_qwen2_7b"
+    )
+    try_node = next(node for node in function.body if isinstance(node, ast.Try))
+
+    assert len(try_node.finalbody) == 1
+    guard = try_node.finalbody[0]
+    assert isinstance(guard, ast.If)
+    assert ast.unparse(guard.test) == "model is not None"
+    assert any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "cleanup_model_case"
+        for node in ast.walk(guard)
+    )
+
+
 @pytest.mark.parametrize("function_name", ["_run_token_accuracy", "_run_perf_benchmark", "_run_eval_repeat_batch32"])
 def test_demo_reads_model_geometry_from_model_config(function_name):
     function = next(
