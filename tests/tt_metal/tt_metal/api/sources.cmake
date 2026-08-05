@@ -91,6 +91,7 @@ if(TT_METAL_USE_EMULE)
         emule/test_alignment_writes.cpp
         emule/test_cb_leak.cpp
         emule/test_cb_pages.cpp
+        emule/test_emule_host_wait.cpp
         # Per-fiber ASAN sanitizer-state isolation (pure unit test, no device/death):
         # a compile+runtime regression fence for EmuleSanitizerState living on the
         # per-fiber ctx (__emule_self->san). See EmuleSanitizerFiberState.*.
