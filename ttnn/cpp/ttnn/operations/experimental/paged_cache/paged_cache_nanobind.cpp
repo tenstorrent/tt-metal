@@ -123,6 +123,12 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         prefill writes longer than the bounded sliding-window capacity land correctly
         (only the last ``cache_position_modulo`` tokens survive). Must be a multiple
         of the effective ``block_size`` and ≤ ``page_table.shape[1] * block_size``.
+        ``valid_seq_len_tensor`` (optional, bounded mode only) is a 1-element int
+        device tensor giving the block-aligned real fill length (in tokens). The
+        writer restricts the surviving ring window to end there instead of the padded
+        input end, so a captured prefill trace (which can't slice the padded input on
+        the host per request) still avoids wrapping the prompt's padding tail over the
+        real recent window. Refresh its contents per request outside the trace.
         )doc";
 
     ttnn::bind_function<"paged_fill_cache", "ttnn.experimental.">(
@@ -138,7 +144,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
         nb::arg("mesh_coords").noconvert() = nb::none(),
         nb::arg("block_size") = nb::none(),
-        nb::arg("cache_position_modulo") = nb::none());
+        nb::arg("cache_position_modulo") = nb::none(),
+        nb::arg("valid_seq_len_tensor").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::paged_cache::detail

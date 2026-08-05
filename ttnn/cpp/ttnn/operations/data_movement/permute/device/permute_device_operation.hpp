@@ -19,7 +19,7 @@ namespace ttnn::operations::data_movement {
 
 struct PermuteDeviceOperation {
     struct operation_attributes_t {
-        const SmallVector<uint32_t> dims;
+        const ttsl::SmallVector<uint32_t> dims;
         const MemoryConfig output_mem_config;
         const float pad_value = 0.0f;
     };
@@ -28,7 +28,7 @@ struct PermuteDeviceOperation {
         std::optional<Tensor> optional_output_tensor;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
 
     using tensor_return_value_t = Tensor;
 
@@ -90,7 +90,6 @@ struct PermuteDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 };
@@ -99,7 +98,7 @@ struct PermuteDeviceOperation {
 namespace ttnn::prim {
 ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t permute(
     const Tensor& input_tensor,
-    const SmallVector<uint32_t>& dims,
+    const ttsl::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
     float pad_value = 0.0f);

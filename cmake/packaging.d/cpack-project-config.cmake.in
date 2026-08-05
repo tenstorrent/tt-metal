@@ -11,6 +11,10 @@ endif()
 
 if(BUILD_CONFIG_LOWER STREQUAL "asan" OR BUILD_CONFIG_LOWER STREQUAL "tsan" OR BUILD_CONFIG_LOWER STREQUAL "asancoverage")
     set(CPACK_DEBIAN_DEBUGINFO_PACKAGE FALSE)
+    # dpkg-shlibdeps is slow on the large sanitizer binaries; run it only on tt-metalium (carries
+    # libtt_metal.so) and skip the rest, which inherit its system deps via component deps.
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS FALSE)
+    set(CPACK_DEBIAN_METALIUM_PACKAGE_SHLIBDEPS TRUE)
 else()
     # TODO: When we stop packaging SFPI ourselves, then just set CPACK_DEBIAN_DEBUGINFO_PACKAGE instead of itemizing each.
     #       If the firmware/toolchain files play nice.

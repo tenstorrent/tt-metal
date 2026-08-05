@@ -32,7 +32,7 @@
  */
 template <typename T>
 std::vector<uint32_t> pack_as_mxint8_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
 /**
  * @brief Pack a dense tensor into MxInt4 (S1.2, signed two's-complement int4
@@ -49,7 +49,7 @@ std::vector<uint32_t> pack_as_mxint8_tiles(
  */
 template <typename T>
 std::vector<uint32_t> pack_as_mxint4_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
 /**
  * @brief Pack a dense tensor into MxInt2 (S1.0, signed two's-complement int2
@@ -66,7 +66,7 @@ std::vector<uint32_t> pack_as_mxint4_tiles(
  */
 template <typename T>
 std::vector<uint32_t> pack_as_mxint2_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
 /**
  * @brief Unpack MxInt8 tiles into a float vector.
@@ -77,7 +77,7 @@ std::vector<uint32_t> pack_as_mxint2_tiles(
  * @return Decoded values as float.
  */
 std::vector<float> unpack_mxint8_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxint_tiles,
+    ttsl::Span<const uint32_t> mxint_tiles,
     bool row_major_output,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
@@ -90,7 +90,7 @@ std::vector<float> unpack_mxint8_tiles_into_float_vec(
  * @return Decoded values as float.
  */
 std::vector<float> unpack_mxint4_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxint_tiles,
+    ttsl::Span<const uint32_t> mxint_tiles,
     bool row_major_output,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
@@ -103,7 +103,7 @@ std::vector<float> unpack_mxint4_tiles_into_float_vec(
  * @return Decoded values as float.
  */
 std::vector<float> unpack_mxint2_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxint_tiles,
+    ttsl::Span<const uint32_t> mxint_tiles,
     bool row_major_output,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
@@ -115,7 +115,7 @@ namespace tt::tt_metal {
  */
 template <typename T>
 std::vector<uint32_t> pack_as_mxint8_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     return ::pack_as_mxint8_tiles(data, row_major_input, tile);
 }
 
@@ -125,7 +125,7 @@ std::vector<uint32_t> pack_as_mxint8_tiles(
  */
 template <typename T>
 std::vector<uint32_t> pack_as_mxint4_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     return ::pack_as_mxint4_tiles(data, row_major_input, tile);
 }
 
@@ -135,7 +135,7 @@ std::vector<uint32_t> pack_as_mxint4_tiles(
  */
 template <typename T>
 std::vector<uint32_t> pack_as_mxint2_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     return ::pack_as_mxint2_tiles(data, row_major_input, tile);
 }
 
@@ -144,7 +144,7 @@ std::vector<uint32_t> pack_as_mxint2_tiles(
  * @see ::unpack_mxint8_tiles_into_float_vec for parameter details.
  */
 inline std::vector<float> unpack_mxint8_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxint_tiles,
+    ttsl::Span<const uint32_t> mxint_tiles,
     bool row_major_output,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     return ::unpack_mxint8_tiles_into_float_vec(mxint_tiles, row_major_output, tile);
@@ -155,7 +155,7 @@ inline std::vector<float> unpack_mxint8_tiles_into_float_vec(
  * @see ::unpack_mxint4_tiles_into_float_vec for parameter details.
  */
 inline std::vector<float> unpack_mxint4_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxint_tiles,
+    ttsl::Span<const uint32_t> mxint_tiles,
     bool row_major_output,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     return ::unpack_mxint4_tiles_into_float_vec(mxint_tiles, row_major_output, tile);
@@ -166,7 +166,7 @@ inline std::vector<float> unpack_mxint4_tiles_into_float_vec(
  * @see ::unpack_mxint2_tiles_into_float_vec for parameter details.
  */
 inline std::vector<float> unpack_mxint2_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxint_tiles,
+    ttsl::Span<const uint32_t> mxint_tiles,
     bool row_major_output,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     return ::unpack_mxint2_tiles_into_float_vec(mxint_tiles, row_major_output, tile);

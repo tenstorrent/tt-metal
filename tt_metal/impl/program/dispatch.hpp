@@ -137,11 +137,11 @@ void update_program_dispatch_commands(
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
-    CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update = {false, -1});
+    std::pair<bool, int> unicast_go_signal_update,
+    uint8_t cq_id);
 
 void update_traced_program_dispatch_commands(
     const TraceNode& node,
@@ -150,10 +150,10 @@ void update_traced_program_dispatch_commands(
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
-    CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update = {false, -1});
+    std::pair<bool, int> unicast_go_signal_update,
+    uint8_t cq_id);
 
 TraceNode create_trace_node(
     detail::ProgramImpl& program,
@@ -165,7 +165,6 @@ void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,
     uint32_t command_queue_id,
-    CoreType dispatch_core_type,
     bool stall_first,
     bool stall_before_program,
     bool send_binary = true);
@@ -191,7 +190,7 @@ void set_num_worker_sems_on_dispatch(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     uint32_t num_worker_sems,
-    tt::stl::Span<const uint32_t> workers_per_sub_device);
+    ttsl::Span<const uint32_t> workers_per_sub_device);
 
 void set_go_signal_noc_data_on_dispatch(
     const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);

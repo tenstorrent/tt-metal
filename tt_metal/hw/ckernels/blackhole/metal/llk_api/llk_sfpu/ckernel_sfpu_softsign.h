@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -23,6 +24,7 @@ inline void calculate_softsign() {
 
 template <bool APPROXIMATION_MODE>
 void init_softsign() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 

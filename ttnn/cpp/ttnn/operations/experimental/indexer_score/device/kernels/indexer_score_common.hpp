@@ -70,10 +70,17 @@ constexpr uint32_t k_chunk_tiles = k_tiles_per_unit * head_dim_tiles;           
 
 // Thin wrapper binding the shared work-split formula to this kernel's CT dims: unmasked prefix
 // k-tiles of absolute q-tile-row q_row_abs in a unit. chunk_start_tiles is the per-device runtime
-// chunk-start offset (in tiles); the compute kernel reads it from a runtime arg.
+// chunk-start offset (in tiles); straddle_* carry the mid-slab boundary-chip diagonal jump (0 otherwise).
+// All three are compute-kernel runtime args.
 inline uint32_t row_valid_prefix(
-    uint32_t q_row_abs, uint32_t k_tile_start, uint32_t k_tiles_in_unit, uint32_t chunk_start_tiles) {
-    return iscore::valid_prefix_tiles(q_row_abs, k_tile_start, k_tiles_in_unit, chunk_start_tiles);
+    uint32_t q_row_abs,
+    uint32_t k_tile_start,
+    uint32_t k_tiles_in_unit,
+    uint32_t chunk_start_tiles,
+    uint32_t straddle_q_tile,
+    uint32_t straddle_jump_tiles) {
+    return iscore::valid_prefix_tiles(
+        q_row_abs, k_tile_start, k_tiles_in_unit, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
 }
 
 /** (group, band) cell cursor. group = absolute q-row-group index; band = absolute k-band index; the

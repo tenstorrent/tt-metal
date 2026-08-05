@@ -20,6 +20,7 @@
 
 #include "host_sanitizers.hpp"  // emule_asan_enabled / dirty_cb_check_skipped
 #include "impl/emulation/emule_live_ranges.hpp"
+#include "jit_hw/internal/emule_thread_ctx.h"  // __emule_self / EmuleSanitizerState (per-fiber ASAN state)
 #include "tt_emule/cb_sync_state.hpp"
 
 // Defined in emule_asan_panic.cpp (same libtt_metal).
@@ -80,30 +81,16 @@ void ObjectIntentTracker::pre_launch_snapshot(
     }
 }
 
-void ObjectIntentTracker::setup_kernel_tls(
-    const EmuleOobTensorState& oob, uint64_t* local_log, uint32_t cap, uint32_t* count) {
-    if (!oob.object_intent_strict) {
-        __emule_l1_resolved_ranges = nullptr;
-        __emule_l1_resolved_ranges_count = nullptr;
-        __emule_l1_resolved_ranges_capacity = 0;
+void ObjectIntentTracker::accumulate_resolved(
+    const EmuleOobTensorState& oob, const uint64_t* resolved_log, uint32_t count) {
+    // Called in-fiber at kernel exit with this fiber's per-ctx resolved log
+    // (__emule_self->san_resolved_log). snapshots_ non-empty ⇒ single-kernel core
+    // (one fiber here): gating on it keeps this append off multi-kernel cores,
+    // where concurrent inserts would race an unsynchronized std::vector.
+    if (!oob.object_intent_strict || snapshots_.empty() || count == 0) {
         return;
     }
-    __emule_l1_resolved_ranges = local_log;
-    __emule_l1_resolved_ranges_count = count;
-    __emule_l1_resolved_ranges_capacity = cap;
-}
-
-void ObjectIntentTracker::teardown_kernel_tls(
-    const EmuleOobTensorState& oob, const uint64_t* local_log, uint32_t local_count) {
-    __emule_l1_resolved_ranges = nullptr;
-    __emule_l1_resolved_ranges_count = nullptr;
-    __emule_l1_resolved_ranges_capacity = 0;
-    // snapshots_ non-empty ⇒ single-kernel core (one thread here): gating on it keeps
-    // this append off multi-kernel cores, where concurrent inserts would race.
-    if (!oob.object_intent_strict || snapshots_.empty() || local_count == 0) {
-        return;
-    }
-    resolved_acc_.insert(resolved_acc_.end(), local_log, local_log + local_count);
+    resolved_acc_.insert(resolved_acc_.end(), resolved_log, resolved_log + count);
 }
 
 void ObjectIntentTracker::verify_post_launch(
@@ -138,46 +125,58 @@ void ObjectIntentTracker::verify_post_launch(
     }
 }
 
+// Arm/reset the per-launch sanitizer state on the CURRENT fiber's context. Both
+// are called in-fiber (see the launch lambda in emulated_program_runner.cpp),
+// where __emule_self points at the fiber about to run / just finished — so the
+// state is written where the kernel-side checks (which read the same __emule_self)
+// will see it, and cannot be clobbered by a co-scheduled fiber across a yield.
 void set_sanitizer_thread_locals(const EmuleOobTensorState& oob, uint32_t sem_base, uint32_t sem_size) {
-    __emule_sem_l1_range_start = oob.asan_enabled ? sem_base : 0;
-    __emule_sem_l1_range_end = oob.asan_enabled ? (sem_base + sem_size) : 0;
-    __emule_l1_unreserved_base = oob.l1_unreserved_base;
-    __emule_l1_tensor_ranges = oob.tensor_ranges;
-    __emule_l1_tensor_ranges_count = oob.tensor_ranges_count;
-    __emule_dram_unreserved_base = oob.dram_unreserved_base;
-    __emule_dram_tensor_ranges = oob.dram_tensor_ranges;
-    __emule_dram_tensor_ranges_count = oob.dram_tensor_ranges_count;
-    __emule_l1_padding_ranges = oob.l1_padding_ranges;
-    __emule_l1_padding_ranges_count = oob.l1_padding_ranges_count;
-    __emule_l1_host_ranges = oob.l1_host_ranges;
-    __emule_l1_host_ranges_count = oob.l1_host_ranges_count;
-    __emule_cb_boundary_strict = oob.cb_boundary_strict;
+    auto& san = __emule_self->san;
+    san.sem_l1_range_start = oob.asan_enabled ? sem_base : 0;
+    san.sem_l1_range_end = oob.asan_enabled ? (sem_base + sem_size) : 0;
+    san.l1_unreserved_base = oob.l1_unreserved_base;
+    san.l1_tensor_ranges = oob.tensor_ranges;
+    san.l1_tensor_ranges_count = oob.tensor_ranges_count;
+    san.dram_unreserved_base = oob.dram_unreserved_base;
+    san.dram_tensor_ranges = oob.dram_tensor_ranges;
+    san.dram_tensor_ranges_count = oob.dram_tensor_ranges_count;
+    san.l1_padding_ranges = oob.l1_padding_ranges;
+    san.l1_padding_ranges_count = oob.l1_padding_ranges_count;
+    san.l1_host_ranges = oob.l1_host_ranges;
+    san.l1_host_ranges_count = oob.l1_host_ranges_count;
+    san.cb_boundary_strict = oob.cb_boundary_strict;
+    san.pending_noc_reads = 0;
 }
 
 void clear_sanitizer_thread_locals() {
-    __emule_sem_l1_range_start = 0;
-    __emule_sem_l1_range_end = 0;
-    __emule_l1_unreserved_base = 0;
-    __emule_l1_tensor_ranges = nullptr;
-    __emule_l1_tensor_ranges_count = 0;
-    __emule_dram_unreserved_base = 0;
-    __emule_dram_tensor_ranges = nullptr;
-    __emule_dram_tensor_ranges_count = 0;
-    __emule_l1_padding_ranges = nullptr;
-    __emule_l1_padding_ranges_count = 0;
-    __emule_l1_host_ranges = nullptr;
-    __emule_l1_host_ranges_count = 0;
+    auto& san = __emule_self->san;
+    san.sem_l1_range_start = 0;
+    san.sem_l1_range_end = 0;
+    san.l1_unreserved_base = 0;
+    san.l1_tensor_ranges = nullptr;
+    san.l1_tensor_ranges_count = 0;
+    san.dram_unreserved_base = 0;
+    san.dram_tensor_ranges = nullptr;
+    san.dram_tensor_ranges_count = 0;
+    san.l1_padding_ranges = nullptr;
+    san.l1_padding_ranges_count = 0;
+    san.l1_host_ranges = nullptr;
+    san.l1_host_ranges_count = 0;
     for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
-        __emule_cb_reserved_pages[i] = 0;
-        __emule_cb_waited_pages[i] = 0;
-        __emule_cb_reserve_dangling[i] = false;
-        __emule_cb_wait_dangling[i] = false;
-        __emule_cb_reserve_file[i] = nullptr;
-        __emule_cb_reserve_line[i] = 0;
-        __emule_cb_wait_file[i] = nullptr;
-        __emule_cb_wait_line[i] = 0;
+        san.cb_reserved_pages[i] = 0;
+        san.cb_waited_pages[i] = 0;
+        san.cb_reserve_dangling[i] = false;
+        san.cb_wait_dangling[i] = false;
+        san.cb_reserve_file[i] = nullptr;
+        san.cb_reserve_line[i] = 0;
+        san.cb_wait_file[i] = nullptr;
+        san.cb_wait_line[i] = 0;
     }
-    __emule_cb_boundary_strict = false;
+    san.cb_boundary_strict = false;
+    san.pending_noc_reads = 0;
+    san.kernel_name = nullptr;
+    __emule_self->san_resolved_active = false;
+    __emule_self->san_resolved_count = 0;
 }
 
 namespace {
@@ -248,8 +247,9 @@ void sweep_per_kernel_dirty_cbs(
         }
         // The reported page count is the window counter, which for a genuine
         // dangling reserve is the unpushed amount.
-        uint32_t unpushed = __emule_cb_reserve_dangling[cb_id] ? __emule_cb_reserved_pages[cb_id] : 0;
-        uint32_t unpopped = __emule_cb_wait_dangling[cb_id] ? __emule_cb_waited_pages[cb_id] : 0;
+        uint32_t unpushed =
+            __emule_self->san.cb_reserve_dangling[cb_id] ? __emule_self->san.cb_reserved_pages[cb_id] : 0;
+        uint32_t unpopped = __emule_self->san.cb_wait_dangling[cb_id] ? __emule_self->san.cb_waited_pages[cb_id] : 0;
         if (unpushed > 0 || unpopped > 0) {
             abort_if_dirty_cb(
                 cb_id,
@@ -258,10 +258,10 @@ void sweep_per_kernel_dirty_cbs(
                 lx,
                 ly,
                 processor_id,
-                __emule_cb_reserve_file[cb_id],
-                __emule_cb_reserve_line[cb_id],
-                __emule_cb_wait_file[cb_id],
-                __emule_cb_wait_line[cb_id]);
+                __emule_self->san.cb_reserve_file[cb_id],
+                __emule_self->san.cb_reserve_line[cb_id],
+                __emule_self->san.cb_wait_file[cb_id],
+                __emule_self->san.cb_wait_line[cb_id]);
         }
     }
 }

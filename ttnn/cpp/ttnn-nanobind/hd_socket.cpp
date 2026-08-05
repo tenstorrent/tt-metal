@@ -97,9 +97,9 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             "write_tensor",
-            [](tt::tt_metal::distributed::H2DSocket& self, tt::tt_metal::Tensor& tensor) {
+            [](tt::tt_metal::distributed::H2DSocket& self, ttnn::Tensor& tensor) {
                 TT_FATAL(
-                    tensor.storage_type() == tt::tt_metal::StorageType::HOST,
+                    tensor.storage_type() == ttnn::StorageType::HOST,
                     "write_tensor: tensor must be on host (HostStorage)");
 
                 auto host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor);
@@ -278,9 +278,9 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             "read_tensor",
-            [](tt::tt_metal::distributed::D2HSocket& self, tt::tt_metal::Tensor& tensor, bool notify_sender) {
+            [](tt::tt_metal::distributed::D2HSocket& self, ttnn::Tensor& tensor, bool notify_sender) {
                 TT_FATAL(
-                    tensor.storage_type() == tt::tt_metal::StorageType::HOST,
+                    tensor.storage_type() == ttnn::StorageType::HOST,
                     "read_tensor: tensor must be on host (HostStorage)");
 
                 auto host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor);

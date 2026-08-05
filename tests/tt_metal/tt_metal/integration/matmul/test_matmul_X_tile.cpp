@@ -82,14 +82,14 @@ void create_test_stimuli(MatmulTileStimuli& stimuli, uint32_t M, uint32_t K, uin
 
     auto activations_tilized = tilize_swizzled(tensor.get_values(), M * 32, K * 32);
     auto activations_tile_layout =
-        convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
+        convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     auto activations_tile_transposed = tt::tt_metal::transpose_tiles(activations, M, K, 1);
     stimuli.a = activations_tile_transposed;
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);
     auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
-    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
+    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     stimuli.w = weights;
 }
@@ -183,7 +183,7 @@ static void verify_matmul_tile_output(
     std::vector<bfloat16> golden = std::move(tensor_vals);
     std::vector<bfloat16> golden_tilized = tilize_swizzled(golden, ctx.M * 32, ctx.N * 32);
     std::vector<bfloat16> golden_tilized_single =
-        convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(golden_tilized));
+        convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(golden_tilized));
 
     std::vector<uint32_t> golden_packed(golden_tilized_single.size());
     uint16_t math_fid_mask = 0xFFFF;
@@ -251,6 +251,13 @@ static void matmul_tile_block(
         .data_format_metadata = cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
     };
 
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source = cfg.reader_kernel,
@@ -279,16 +286,16 @@ static void matmul_tile_block(
                   "in1_block_tile_cnt",
                   "in0_block_size_bytes",
                   "in1_block_size_bytes"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}},
+        .hw_config = reader_hw_config,
     };
 
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
@@ -297,13 +304,7 @@ static void matmul_tile_block(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {DST_DFB}}},
+        .hw_config = writer_hw_config,
     };
 
     // matmul_block.cpp uses named CTAs. Map cfg.compute_kernel_args (positional) to the
@@ -331,6 +332,20 @@ static void matmul_tile_block(
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
+    experimental::ComputeHardwareConfig compute_hw_config;
+    if (mesh_device->arch() == ARCH::QUASAR) {
+        compute_hw_config = experimental::ComputeGen2Config{
+            .fpu_math_fidelity = cfg.math_fidelity,
+            .enable_32_bit_dest = cfg.fp32_dest_acc_en,
+            .double_buffer_dest = !cfg.dst_full_sync_en,
+        };
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{
+            .fpu_math_fidelity = cfg.math_fidelity,
+            .enable_32_bit_dest = cfg.fp32_dest_acc_en,
+            .double_buffer_dest = !cfg.dst_full_sync_en,
+        };
+    }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = cfg.compute_kernel,
@@ -356,12 +371,7 @@ static void matmul_tile_block(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = compute_cta_bindings,
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .math_fidelity = cfg.math_fidelity,
-                .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
-                .dst_full_sync_en = cfg.dst_full_sync_en,
-            },
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{
@@ -399,22 +409,22 @@ static void matmul_tile_block(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src0_addr", ctx.src0_dram_buffer->address()},
-                   {"src0_dram_bank_id", 0u},
-                   {"src1_addr", ctx.src1_dram_buffer->address()},
-                   {"src1_dram_bank_id", 0u},
-                   {"num_blocks", num_blocks},
-                   {"in0_block_tile_cnt", in0_block_tile_cnt},
-                   {"in1_block_tile_cnt", in1_block_tile_cnt},
-                   {"in0_block_size_bytes", in0_block_size_bytes},
-                   {"in1_block_size_bytes", in1_block_size_bytes}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", ctx.src0_dram_buffer->address()},
+                 {"src0_dram_bank_id", 0u},
+                 {"src1_addr", ctx.src1_dram_buffer->address()},
+                 {"src1_dram_bank_id", 0u},
+                 {"num_blocks", num_blocks},
+                 {"in0_block_tile_cnt", in0_block_tile_cnt},
+                 {"in1_block_tile_cnt", in1_block_tile_cnt},
+                 {"in0_block_size_bytes", in0_block_size_bytes},
+                 {"in1_block_size_bytes", in1_block_size_bytes}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node, {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

@@ -59,7 +59,7 @@ TensorReturnValue filter_tensor_shards(
             }
 
             // Create new storage with filtered coords, sharing the device memory
-            return Tensor(tt::tt_metal::DeviceStorage(old_storage, std::move(filtered_coords)));
+            return Tensor(ttnn::DeviceStorage(old_storage, std::move(filtered_coords)));
         },
         tensor_return_value);
 }
@@ -128,7 +128,7 @@ void update_output_tensor_topologies(
     const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
     std::vector<tt::tt_metal::TensorTopology> custom_topologies) {
     std::vector<std::reference_wrapper<Tensor>> output_tensors;
-    tt::stl::reflection::update_object_of_type<Tensor>(
+    ttsl::reflection::update_object_of_type<Tensor>(
         [&output_tensors](Tensor& t) { output_tensors.push_back(std::ref(t)); }, tensor_return_value);
 
     if (!custom_topologies.empty()) {

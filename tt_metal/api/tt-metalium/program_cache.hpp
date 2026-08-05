@@ -85,7 +85,7 @@ struct CachedProgramFactory {
     static constexpr auto MAX_SIZE = 4096;
     static constexpr auto ALIGNMENT = 32;
 
-    tt::stl::unique_any<MAX_SIZE, ALIGNMENT> cached_program;
+    ttsl::unique_any<MAX_SIZE, ALIGNMENT> cached_program;
 
     // Used to map a runtime value to a program factory type that is being used
     std::size_t program_factory_index = 0;
@@ -135,7 +135,7 @@ struct ProgramCacheKeyHasher {
 };
 
 // Generic Program Cache: This data structure is tied to a device handle and can store generic program types from
-// TT-Metal and TT-Eager using tt::stl::concepts::unique_any.
+// TT-Metal and TT-Eager using ttsl::concepts::unique_any.
 struct ProgramCache {
     bool contains(const ProgramCacheKey& program_key) const { return this->cache_.contains(program_key); }
 

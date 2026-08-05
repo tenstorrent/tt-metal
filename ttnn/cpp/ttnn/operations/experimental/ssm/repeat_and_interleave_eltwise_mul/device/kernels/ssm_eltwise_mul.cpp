@@ -160,25 +160,6 @@ void kernel_main() {
                 tile_regs_release();
                 cb_out.push_back(onetile);
                 cb_out_transposed_buf.pop_front(onetile);
-
-                /* TODO: Transpose directly on tiles in DST; is something like this possible?
-                cb_reserve_back(cb_id_out, onetile);
-
-                tile_regs_acquire();
-                tile_regs_wait();
-                mul_bcast_rows_init_short(cb_in0_transposed, cb_in1_bcast_row);
-                mul_tiles_bcast_rows(cb_in0_transposed, cb_in1_bcast_row, 0, 0, 0);
-
-                MATH(( llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, BroadcastType::NONE, DST_ACCUM_MODE>(cb_id_out)));
-                MATH(( llk_math_eltwise_unary_datacopy<DataCopyType::A2D, BroadcastType::NONE, DST_ACCUM_MODE>(0) ));
-
-                pack_tile(0, cb_id_out);
-
-                tile_regs_commit();
-                tile_regs_release();
-                cb_push_back(cb_id_out, onetile);
-                cb_pop_front(cb_in1_bcast_row, onetile);
-                */
             }
 
             cb_in1_transposed_buf.pop_front(onetile);

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -37,15 +37,15 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(src_args, src_addr);
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_out0 = 24;
+    constexpr uint32_t dfb_id_in0 = 0;
+    constexpr uint32_t dfb_id_out0 = 24;
 
     Noc noc;
-    // Create CircularBuffers for Device 2.0 API
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_out0(cb_id_out0);
+    // Create DataflowBuffers for Device 2.0 API
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_out0(dfb_id_out0);
 
-    uint32_t src_buffer_l1_addr = cb_in0.get_write_ptr();
+    uint32_t src_buffer_l1_addr = dfb_in0.get_write_ptr();
     volatile tt_l1_ptr uint8_t* in_stick = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src_buffer_l1_addr);
 
     uint32_t index[dims];  // To hold current index in each of the first dims-1 dimensions
@@ -75,12 +75,12 @@ void kernel_main() {
             {.page_id = base_linear_index, .offset_bytes = 0},
             {.offset_bytes = 0});
         // Reserve space in the output buffer
-        cb_out0.reserve_back(1);
+        dfb_out0.reserve_back(1);
         noc.async_read_barrier();
         for (uint32_t l = starts[dims - 1]; l < ends[dims - 1]; l += strides[dims - 1]) {
             // Write the element into the output buffer
             volatile tt_l1_ptr uint8_t* out_stick =
-                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_out0.get_write_ptr());
+                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dfb_out0.get_write_ptr());
             uint32_t src_offset = l * element_size;
             uint32_t dst_offset = out_stick_id * element_size;
             for (uint32_t byte = 0; byte < element_size; byte++) {
@@ -88,7 +88,7 @@ void kernel_main() {
             }
             out_stick_id++;
         }
-        cb_out0.push_back(1);
+        dfb_out0.push_back(1);
         if constexpr (dims == 1) {
             break;  // If there's only one dimension, we're done
         } else {

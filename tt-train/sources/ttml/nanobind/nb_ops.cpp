@@ -292,13 +292,13 @@ void py_module(nb::module_& m) {
             nb::arg("value"),
             nb::arg("mask") = std::nullopt);
         // Overload 2: mask as ttnn.Tensor (or None) - wrap it in autograd::Tensor
-        // ttnn.Tensor wraps tt::tt_metal::Tensor, so we accept that type
+        // ttnn.Tensor wraps ttnn::Tensor, so we accept that type
         py_attention.def(
             "scaled_dot_product_attention",
             [](const autograd::TensorPtr& query,
                const autograd::TensorPtr& key,
                const autograd::TensorPtr& value,
-               const std::optional<tt::tt_metal::Tensor>& mask) -> autograd::TensorPtr {
+               const std::optional<ttnn::Tensor>& mask) -> autograd::TensorPtr {
                 std::optional<autograd::TensorPtr> mask_ptr = std::nullopt;
                 if (mask.has_value()) {
                     mask_ptr = autograd::create_tensor(mask.value(), false);
@@ -458,13 +458,19 @@ void py_module(nb::module_& m) {
 
     {
         auto py_sample = static_cast<nb::module_>(m.attr("sample"));
+        // `seed_axes` (optional): the mesh axes across which the caller wants DISTINCT per-device
+        // noise -- i.e. the axes over which the logits/batch are sharded (data-distinct). Axes not
+        // listed are seeded identically (replicated). The CALLER owns this decision: only pass axes
+        // whose devices hold different data (dp / fsdp), and NEVER a replicated axis (tp).
+        //  seed_axes=None (default): every device draws the same noise (original single-seed behavior).
         py_sample.def(
             "sample_op",
             &ttml::ops::sample_op,
             nb::arg("logits"),
             nb::arg("temperature"),
             nb::arg("seed"),
-            nb::arg("logits_padding_mask") = nb::none());
+            nb::arg("logits_padding_mask") = nb::none(),
+            nb::arg("seed_axes") = nb::none());
     }
 
     {

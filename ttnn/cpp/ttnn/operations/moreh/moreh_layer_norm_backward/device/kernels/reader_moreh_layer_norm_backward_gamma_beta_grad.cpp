@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -23,13 +23,13 @@ void read_mean_rstd(
     using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
-    CircularBuffer cb(cb_id);
+    DataflowBuffer dfb(cb_id);
     const uint32_t cb_tile_bytes = get_tile_size(cb_id);
     const auto cb_dtype_bytes = cb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
-    cb.reserve_back(onetile);
+    dfb.reserve_back(onetile);
 
-    uint32_t l1_write_addr = cb.get_write_ptr();
+    uint32_t l1_write_addr = dfb.get_write_ptr();
     CoreLocalMem<volatile uint16_t> l1_ptr(l1_write_addr);
     if (normalized_dims == 1) {
         for (uint32_t src_h = 0; src_h < 2; src_h++) {
@@ -51,7 +51,7 @@ void read_mean_rstd(
 
             noc.async_read(
                 addrg,
-                cb,
+                dfb,
                 cb_dtype_bytes * FACE_HEIGHT,
                 {.page_id = noc_id, .offset_bytes = tilized_idx * cb_dtype_bytes},
                 {.offset_bytes = src_idx * cb_dtype_bytes});
@@ -81,7 +81,7 @@ void read_mean_rstd(
 
         noc.async_read(
             addrg,
-            cb,
+            dfb,
             cb_dtype_bytes,
             {.page_id = noc_id, .offset_bytes = tilized_idx * cb_dtype_bytes},
             {.offset_bytes = tilized_idx * cb_dtype_bytes});
@@ -92,7 +92,7 @@ void read_mean_rstd(
         }
     }
 
-    cb.push_back(onetile);
+    dfb.push_back(onetile);
 }
 
 void kernel_main() {
@@ -139,12 +139,12 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    CircularBuffer cb_scaler(cb_id_scaler);
-    fill_cb_with_value(cb_scaler, scaler.u);
+    DataflowBuffer dfb_scaler(cb_id_scaler);
+    fill_cb_with_value(dfb_scaler, scaler.u);
 
     if (do_mask_h) {
-        CircularBuffer cb_mask_h(cb_id_mask_h);
-        generate_mask_h(cb_mask_h, mask_h);
+        DataflowBuffer dfb_mask_h(cb_id_mask_h);
+        generate_mask_h(dfb_mask_h, mask_h);
     }
 
     auto mean_rstd_Ht = (mean_rstd_height + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -153,8 +153,8 @@ void kernel_main() {
     const uint32_t start_tile_idx = tile_offset;
 
     Noc noc;
-    CircularBuffer cb_output_grad(cb_id_output_grad);
-    CircularBuffer cb_input(cb_id_input);
+    DataflowBuffer dfb_output_grad(cb_id_output_grad);
+    DataflowBuffer dfb_input(cb_id_input);
     const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
     const auto input_tile_bytes = get_tile_size(cb_id_input);
 
@@ -162,23 +162,23 @@ void kernel_main() {
         for (uint32_t outer_idx = 0; outer_idx < num_outer; outer_idx++) {
             // output_grad (N, C, H, W)
             const uint32_t dy_tile_idx = num_inner * outer_idx + w_idx + start_tile_idx;
-            cb_output_grad.reserve_back(onetile);
+            dfb_output_grad.reserve_back(onetile);
             noc.async_read(
                 output_grad_addrg,
-                cb_output_grad,
+                dfb_output_grad,
                 output_grad_tile_bytes,
                 {.page_id = dy_tile_idx},
                 {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_output_grad.push_back(onetile);
+            dfb_output_grad.push_back(onetile);
 
             if (gamma_grad_has_value) {
                 // input (N, C, H, W)
                 const uint32_t x_tile_idx = num_inner * outer_idx + w_idx + start_tile_idx;
-                cb_input.reserve_back(onetile);
-                noc.async_read(input_addrg, cb_input, input_tile_bytes, {.page_id = x_tile_idx}, {.offset_bytes = 0});
+                dfb_input.reserve_back(onetile);
+                noc.async_read(input_addrg, dfb_input, input_tile_bytes, {.page_id = x_tile_idx}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_input.push_back(onetile);
+                dfb_input.push_back(onetile);
 
                 uint32_t mean_rstd_tile_offset = tile_offset / num_inner;
 

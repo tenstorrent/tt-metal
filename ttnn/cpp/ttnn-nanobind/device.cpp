@@ -59,6 +59,11 @@ namespace {
 // RegisterProgramRealtimeProfilerCallback. Access only from the Python thread (always under GIL), so no mutex needed.
 std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
 
+struct PythonProgramRealtimeRecordBatch {
+    std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> records;
+    uint64_t dropped = 0;
+};
+
 void ttnn_device(nb::module_& mod) {
     mod.def(
         "open_device",
@@ -94,7 +99,11 @@ void ttnn_device(nb::module_& mod) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    mod.def("close_device", [](ttnn::MeshDevice& device) { ttnn::close_device(device); }, nb::arg("device"));
+    mod.def(
+        "close_device",
+        [](ttnn::MeshDevice& device) { ttnn::close_device(device); },
+        nb::arg("device"),
+        nb::call_guard<nb::gil_scoped_release>());
 
     mod.def(
         "deallocate_buffers",
@@ -169,7 +178,19 @@ void py_device_module_types(nb::module_& m_device) {
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                 return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
             },
-            "Kernel source paths associated with this runtime ID");
+            "Kernel source paths associated with this runtime ID; valid until the callback returns");
+
+    nb::class_<PythonProgramRealtimeRecordBatch>(
+        m_device, "ProgramRealtimeRecordBatch", "Batch of real-time profiler records delivered to a callback.")
+        .def_ro(
+            "records",
+            &PythonProgramRealtimeRecordBatch::records,
+            "ProgramRealtimeRecord entries in this batch; non-empty, oldest first")
+        .def_ro(
+            "dropped",
+            &PythonProgramRealtimeRecordBatch::dropped,
+            "Records lost since this callback last ran; nonzero if the callback could not keep up with incoming "
+            "profiler data");
 
     nb::class_<tt::tt_metal::detail::MemoryView>(
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
@@ -289,7 +310,11 @@ void device_module(nb::module_& m_device) {
         nb::arg("DispatchCoreConfig") = nb::none(),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
-    m_device.def("CloseDevice", [](MeshDevice* device) { device->close(); }, R"doc(
+    m_device.def(
+        "CloseDevice",
+        [](MeshDevice* device) { device->close(); },
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
         +------------------+------------------------+-----------------------+-------------+----------+
@@ -305,6 +330,7 @@ void device_module(nb::module_& m_device) {
                 device_entry.second->close();
             }
         },
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
@@ -387,16 +413,28 @@ void device_module(nb::module_& m_device) {
         },
         nb::arg("unpadded_shape"),
         R"doc(
-        Pads the given shape to tile shape based on specified padding options.
+        Pads the given shape to tile shape (rounds last two dims up to multiples of 32).
+
+        .. deprecated::
+            This function is deprecated and will be removed in a future release.
+            Use ``ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)`` which handles
+            tile-alignment automatically.
+
+            If you only need the padded shape without converting layout, align
+            dimensions manually::
+
+                import math
+                TILE = 32
+                shape = list(original_shape)
+                shape[-1] = math.ceil(shape[-1] / TILE) * TILE
+                if len(shape) >= 2:
+                    shape[-2] = math.ceil(shape[-2] / TILE) * TILE
 
         Args:
             unpadded_shape (List of [int]): The original shape of the tensor to pad.
 
         Returns:
             List of [int]: The padded shape.
-
-        Note:
-            This functionality is planned for deprecation in the future.
 
         Example:
             >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2])
@@ -684,11 +722,20 @@ void device_module(nb::module_& m_device) {
             PyObject* raw_cb = callback.ptr();
             Py_INCREF(raw_cb);
 
-            auto handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
-                [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
-                    nb::gil_scoped_acquire gil;
-                    (nb::handle(raw_cb))(nb::cast(record, nb::rv_policy::copy));
-                });
+            uint64_t handle = 0;
+            {
+                nb::gil_scoped_release release;
+                handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
+                    [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
+                        PythonProgramRealtimeRecordBatch py_batch{
+                            .records = std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>(
+                                batch.records.begin(), batch.records.end()),
+                            .dropped = batch.dropped,
+                        };
+                        nb::gil_scoped_acquire gil;
+                        (nb::handle(raw_cb))(nb::cast(std::move(py_batch), nb::rv_policy::move));
+                    });
+            }
 
             python_realtime_callback_refs[handle] = raw_cb;
             return handle;
@@ -696,27 +743,32 @@ void device_module(nb::module_& m_device) {
         nb::arg("callback"),
         R"doc(
             Register a callback to be invoked when real-time profiler data arrives from a device.
-            The callback receives a ProgramRealtimeRecord and is called from the real-time profiler
-            receiver thread.
+            The callback receives a ProgramRealtimeRecordBatch and is called from its own thread.
+            Callbacks that are too slow to keep up with incoming profiler data may miss records;
+            this is reported by ProgramRealtimeRecordBatch.dropped.
 
             Multiple callbacks can be registered.
 
             Args:
-                callback: A callable that accepts a single ProgramRealtimeRecord argument.
+                callback: A callable that accepts a single ProgramRealtimeRecordBatch argument.
 
             Returns:
                 int: A handle that can be passed to UnregisterProgramRealtimeProfilerCallback.
 
             Example:
-                >>> def my_callback(record):
-                ...     print(f"runtime_id={record.runtime_id} on chip {record.chip_id}")
+                >>> def my_callback(batch):
+                ...     for record in batch.records:
+                ...         print(f"runtime_id={record.runtime_id} on chip {record.chip_id}")
                 >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(my_callback)
         )doc");
 
     m_device.def(
         "UnregisterProgramRealtimeProfilerCallback",
         [](uint64_t handle) {
-            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            {
+                nb::gil_scoped_release release;
+                tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            }
             auto it = python_realtime_callback_refs.find(handle);
             if (it != python_realtime_callback_refs.end()) {
                 Py_DECREF(it->second);
@@ -724,7 +776,6 @@ void device_module(nb::module_& m_device) {
             }
         },
         nb::arg("handle"),
-        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Unregister a previously registered real-time profiler callback.
             This call waits for any in-flight invocations of the callback to finish.

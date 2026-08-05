@@ -219,7 +219,8 @@ ttnn::Tensor reduce(
     bool negate,
     float post_mul_scaler,
     bool row_major_w_dense_path,
-    bool row_major_h_dense_path) {
+    bool row_major_h_dense_path,
+    bool use_sfpu_reduce) {
     return ttnn::device_operation::launch<ReduceDeviceOperation>(
         ReduceParams{
             reduce_math,
@@ -232,7 +233,8 @@ ttnn::Tensor reduce(
             negate,
             post_mul_scaler,
             row_major_w_dense_path,
-            row_major_h_dense_path},
+            row_major_h_dense_path,
+            use_sfpu_reduce},
         input_tensor);
 }
 

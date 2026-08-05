@@ -351,7 +351,7 @@ struct KVCacheUpdate {
                 constexpr uint32_t NUM_CHUNKS = kv_cache_num_tiles / CHUNK_SIZE;
 
                 // Phase 1: Untilize into intermed_cb, pushing each chunk of CHUNK_SIZE
-                reconfig_data_format_srca<false, true>(kv_cache_input_cb);
+                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(kv_cache_input_cb);
                 pack_reconfig_data_format<true>(kv_cache_intermed_cb);
                 pack_untilize_init<CHUNK_SIZE, CHUNK_SIZE>(kv_cache_input_cb, kv_cache_intermed_cb);
                 for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
@@ -364,7 +364,7 @@ struct KVCacheUpdate {
                 pack_untilize_uninit(kv_cache_intermed_cb);
 
                 // Phase 2: Tilize each chunk after NCRISC signals via sync CB
-                reconfig_data_format_srca<false, true>(kv_cache_intermed_sync_cb);
+                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(kv_cache_intermed_sync_cb);
                 pack_reconfig_data_format<true>(kv_cache_output_cb);
                 tilize_init(kv_cache_intermed_sync_cb, CHUNK_SIZE, kv_cache_output_cb);
                 for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {

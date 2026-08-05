@@ -32,6 +32,7 @@ namespace {
 std::vector<IDevice*> get_devices_from_coordinates(
     const MeshDeviceViewImpl& mesh, const std::vector<MeshCoordinate>& coords) {
     std::vector<IDevice*> devices;
+    devices.reserve(coords.size());
     for (const auto& coord : coords) {
         if (auto* device = mesh.get_device(coord)) {
             devices.push_back(device);
@@ -92,6 +93,7 @@ MeshDeviceViewImpl::MeshDeviceViewImpl(
 
 std::vector<IDevice*> MeshDeviceViewImpl::get_devices(const MeshCoordinateRange& range) const {
     std::vector<IDevice*> devices_in_region;
+    devices_in_region.reserve(range.shape().mesh_size());
     for (const auto& coord : range) {
         devices_.at(coord).if_local([&devices_in_region](const auto& device) { devices_in_region.push_back(device); });
     }
@@ -257,6 +259,7 @@ std::vector<MeshCoordinate> MeshDeviceViewImpl::get_line_coordinates(
     // Lambda to get valid neighbors (not checking visited - that's done in DFS)
     auto get_neighbors = [&](const MeshCoordinate& coord) -> std::vector<MeshCoordinate> {
         std::vector<MeshCoordinate> neighbors;
+        neighbors.reserve(4);
         const size_t row = coord[0];
         const size_t col = coord[1];
 
@@ -356,6 +359,7 @@ std::vector<MeshCoordinate> MeshDeviceViewImpl::get_ring_coordinates(
     const auto end_col = ring_cols - 1;
 
     std::vector<MeshCoordinate> boundary_coords;
+    boundary_coords.reserve(2 * (ring_rows + ring_cols));
 
     // Traverse the top row from left to right
     for (size_t col = 0; col <= end_col; ++col) {
@@ -419,8 +423,8 @@ MeshCoordinateRange MeshDeviceViewImpl::get_local_mesh_coord_range() const {
     const size_t num_dims = mesh_shape.dims();
 
     // Initialize min and max coordinates
-    tt::stl::SmallVector<uint32_t> min_coords(num_dims, UINT32_MAX);
-    tt::stl::SmallVector<uint32_t> max_coords(num_dims, 0);
+    ttsl::SmallVector<uint32_t> min_coords(num_dims, UINT32_MAX);
+    ttsl::SmallVector<uint32_t> max_coords(num_dims, 0);
     bool found_local = false;
 
     // Iterate through all coordinates in the mesh
@@ -436,8 +440,8 @@ MeshCoordinateRange MeshDeviceViewImpl::get_local_mesh_coord_range() const {
 
     TT_FATAL(found_local, "No local devices found in mesh device");
 
-    MeshCoordinate start_coord(tt::stl::Span<const uint32_t>(min_coords.data(), num_dims));
-    MeshCoordinate end_coord(tt::stl::Span<const uint32_t>(max_coords.data(), num_dims));
+    MeshCoordinate start_coord(ttsl::Span<const uint32_t>(min_coords.data(), num_dims));
+    MeshCoordinate end_coord(ttsl::Span<const uint32_t>(max_coords.data(), num_dims));
 
     return MeshCoordinateRange(start_coord, end_coord);
 }

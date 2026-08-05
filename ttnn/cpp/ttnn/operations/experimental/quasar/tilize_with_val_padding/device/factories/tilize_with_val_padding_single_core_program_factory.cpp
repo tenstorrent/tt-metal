@@ -12,6 +12,8 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/quasar/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -158,7 +160,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
                   "num_blocks_w_diff",
                   "block_row_size",
                   "block_row_leftover_size"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer (Metal 2.0 fork of writer_unary_interleaved_start_id) ----
@@ -171,13 +174,16 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute (Metal 2.0 fork of tilize) ----
-    ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_llk_acc};
+    ttnn::ComputeKernelConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
     if (fp32_llk_acc) {
-        compute_hw.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        std::visit([&](auto& c) { c.unpack_modes.emplace(IN, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,
@@ -200,29 +206,28 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     // ---- Per-core runtime args (single core) ----
     KernelRunArgs reader_args{
         .kernel = READER,
-        .runtime_arg_values = {KernelRunArgs::NodeRuntimeArgs{
-            .node = core.start_coord,
-            .args = {
-                {"num_unpadded_W", static_cast<uint32_t>(input_w)},
-                {"padded_W_diff_blocks", padded_W_diff_blocks},
-                {"num_unpadded_Z", static_cast<uint32_t>(input_z)},
-                {"padded_Z_diff_blocks", padded_Z_diff_blocks},
-                {"num_unpadded_Y", static_cast<uint32_t>(input_y)},
-                {"padded_Y_diff_blocks", padded_Y_diff_blocks},
-                {"num_leftover_Y", num_leftover_Y},
-                {"num_unpadded_X", static_cast<uint32_t>(input_x)},
-                {"padded_X_size", padded_row_size_bytes},
-                {"pad_value", packed_pad_value},
-                {"num_blocks_w_input", num_blocks_w_input},
-                {"num_blocks_w_output", num_blocks_w_output},
-                {"num_blocks_w_diff", num_blocks_w_diff},
-                {"block_row_size", block_row_size},
-                {"block_row_leftover_size", block_row_leftover_size}}}}};
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+            core.start_coord,
+            {{"num_unpadded_W", static_cast<uint32_t>(input_w)},
+             {"padded_W_diff_blocks", padded_W_diff_blocks},
+             {"num_unpadded_Z", static_cast<uint32_t>(input_z)},
+             {"padded_Z_diff_blocks", padded_Z_diff_blocks},
+             {"num_unpadded_Y", static_cast<uint32_t>(input_y)},
+             {"padded_Y_diff_blocks", padded_Y_diff_blocks},
+             {"num_leftover_Y", num_leftover_Y},
+             {"num_unpadded_X", static_cast<uint32_t>(input_x)},
+             {"padded_X_size", padded_row_size_bytes},
+             {"pad_value", packed_pad_value},
+             {"num_blocks_w_input", num_blocks_w_input},
+             {"num_blocks_w_output", num_blocks_w_output},
+             {"num_blocks_w_diff", num_blocks_w_diff},
+             {"block_row_size", block_row_size},
+             {"block_row_leftover_size", block_row_leftover_size}})};
 
     KernelRunArgs writer_args{
         .kernel = WRITER,
-        .runtime_arg_values = {KernelRunArgs::NodeRuntimeArgs{
-            .node = core.start_coord, .args = {{"num_pages", static_cast<uint32_t>(num_tiles)}, {"start_id", 0u}}}}};
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+            core.start_coord, {{"num_pages", static_cast<uint32_t>(num_tiles)}, {"start_id", 0u}})};
 
     ProgramSpec spec{
         .name = "tilize_with_val_padding_single_core",

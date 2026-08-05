@@ -11,7 +11,7 @@ Profiling is an essential part of software development that helps developers gai
 Overview
 --------
 
-`Tracy <https://github.com/wolfpld/tracy>`_ is an opens-source C++ profiling tool with sampling and code instrumentation profiling capabilities. Metalium uses a fork for Tracy adapted to the the Tensix Processors as it's primary profiling tool.
+`Tracy <https://github.com/wolfpld/tracy>`_ is an open-source C++ profiling tool with sampling and code-instrumentation capabilities. Metalium uses a fork for Tracy adapted to the Tensix processors as its primary profiling tool.
 
 Detailed documentation about Tracy itself can be found here: https://github.com/wolfpld/tracy/releases/latest/download/tracy.pdf. Reading the ``Quick-start guide`` section can help with the rest of this documentation.
 
@@ -31,6 +31,28 @@ Tracy profiling support is **enabled by default** when building Metalium. Simply
     cmake . -DENABLE_TRACY=ON
     ninja
     ninja install
+
+Debug-verbosity zones are off by default and gated behind opt-in *categories*.
+Build with one or more (comma-separated), or ``all`` for every zone; see
+``./build_metal.sh --help`` for the list:
+
+..  code-block:: bash
+
+    # Via build script
+    ./build_metal.sh --build-perf-debug dispatch,program
+
+    # Or via CMake flags
+    cmake -B build -DENABLE_TRACY=ON -DTRACY_DEBUG_CATEGORY=dispatch,program
+    ninja -C build
+    ninja -C build install
+
+The selection is cached and persists across builds until changed;
+``--build-perf-debug off`` disables it.
+
+To instrument code, tag a zone with a ``TTZone*D`` macro whose first argument is
+the category as an upper-snake token (``rt-profiler`` -> ``RT_PROFILER``), e.g.
+``TTZoneScopedD(DISPATCH)`` or ``TTZoneScopedDN(RT_PROFILER, "name")``. A zone
+whose category is not selected compiles out.
 
 GUI
 ---

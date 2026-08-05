@@ -1,0 +1,63 @@
+# LLK bit-exactness (hardware determinism) sweep.
+#
+# Same python_tests selection as the PR gate, but every variant is executed
+# BIT_EXACT_RUNS times on device and the result buffer must come back
+# byte-identical each time. PYTEST_MARKERS and BIT_EXACT_RUNS are set by
+# llk-bit-exact-impl.yaml / workflow_call inputs.
+# For max allowed timeout refer to .github/time_budget.yaml (llk -> bit_exact).
+#
+# Deliberately no -x: this is a nightly report, so it should list every
+# non-deterministic variant rather than stop at the first one.
+
+- name: llk_bit_exact_wormhole
+  split_group: 1
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    pytest -q --override-ini=log_cli=false -n auto \
+      --dist=worksteal -m "$PYTEST_MARKERS" \
+      --bit-exact-runs="$BIT_EXACT_RUNS" \
+      --timeout=300 \
+      --junitxml=pytest-report-wormhole-1.xml .
+  skus:
+    wh_n150_civ2:
+      timeout: 90
+  owner_id: U07J3K6KS1K # LLK team
+
+- name: llk_bit_exact_blackhole group 1/2
+  split_group: 1
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    pytest -q --override-ini=log_cli=false -n auto \
+      --dist=worksteal -m "$PYTEST_MARKERS" \
+      --bit-exact-runs="$BIT_EXACT_RUNS" \
+      --splits 2 --group 1 \
+      --timeout=300 \
+      --junitxml=pytest-report-blackhole-1.xml .
+  skus:
+    bh_p150b_civ2:
+      timeout: 90
+  owner_id: U07J3K6KS1K # LLK team
+
+- name: llk_bit_exact_blackhole group 2/2
+  split_group: 2
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    pytest -q --override-ini=log_cli=false -n auto \
+      --dist=worksteal -m "$PYTEST_MARKERS" \
+      --bit-exact-runs="$BIT_EXACT_RUNS" \
+      --splits 2 --group 2 \
+      --timeout=300 \
+      --junitxml=pytest-report-blackhole-2.xml .
+  skus:
+    bh_p150b_civ2:
+      timeout: 90
+  owner_id: U07J3K6KS1K # LLK team

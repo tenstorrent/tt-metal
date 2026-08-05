@@ -32,6 +32,7 @@ from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     generate_sfpu_format_dest_acc_combinations,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -101,9 +102,9 @@ def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
                             dest_acc,
                             dest_sync,
                             implied_math_format,
-                            exp_input_dimensions,
-                            input_A_dimensions,
-                            input_B_dimensions,
+                            runtime(exp_input_dimensions),
+                            runtime(input_A_dimensions),
+                            runtime(input_B_dimensions),
                         )
                     )
     return combinations
@@ -231,10 +232,10 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
-            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
-            NUM_FACES(num_faces, num_faces, num_faces),
         ],
         runtimes=[
+            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
+            NUM_FACES(num_faces, num_faces, num_faces),
             TILE_COUNT(tile_cnt_exp),
         ],
         variant_stimuli=stimuli,

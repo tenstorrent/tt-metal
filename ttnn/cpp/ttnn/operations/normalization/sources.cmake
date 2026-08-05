@@ -53,3 +53,20 @@ set(TTNN_OP_NORMALIZATION_API_HEADERS
     softmax/device/softmax_device_operation.hpp
     softmax/softmax.hpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/normalization/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_NORMALIZATION_NANOBIND_SRCS
+    batch_norm/batch_norm_nanobind.cpp
+    groupnorm/groupnorm_nanobind.cpp
+    layernorm/layernorm_nanobind.cpp
+    layernorm_distributed/layernorm_distributed_nanobind.cpp
+    normalization_nanobind.cpp
+    rmsnorm/rmsnorm_nanobind.cpp
+    rmsnorm/rmsnorm_nanobind.cpp
+    rmsnorm_distributed/rmsnorm_distributed_nanobind.cpp
+    softmax/softmax_nanobind.cpp
+)

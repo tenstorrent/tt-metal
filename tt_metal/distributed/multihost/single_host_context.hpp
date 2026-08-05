@@ -37,39 +37,39 @@ public:
     void barrier() const override;
 
     /* ---------------- point‑to‑point ------------------- */
-    void send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
-    void ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
-    void recv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
+    void send(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const override;
+    void ssend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const override;
+    void recv(ttsl::Span<std::byte> buf, Rank source, Tag tag) const override;
 
-    [[nodiscard]] RequestPtr isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
-    [[nodiscard]] RequestPtr irecv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
+    [[nodiscard]] RequestPtr isend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const override;
+    [[nodiscard]] RequestPtr irecv(ttsl::Span<std::byte> buf, Rank source, Tag tag) const override;
 
     /* ---------------- collectives ---------------------- */
-    void broadcast(tt::stl::Span<std::byte> buf, Rank root) const override;
+    void broadcast(ttsl::Span<std::byte> buf, Rank root) const override;
     void all_reduce(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
+        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
     void reduce(
-        tt::stl::Span<std::byte> send_buf,
-        tt::stl::Span<std::byte> recv_buf,
+        ttsl::Span<std::byte> send_buf,
+        ttsl::Span<std::byte> recv_buf,
         ReduceOp op,
         DType dtype,
         Rank root) const override;
-    void gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const override;
-    void scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const override;
-    void all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const override;
-    void all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const override;
+    void gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const override;
+    void scatter(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const override;
+    void all_gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const override;
+    void all_to_all(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const override;
     void reduce_scatter(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
+        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
     void scan(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
+        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
 
     void translate_ranks_to_other_ctx(
-        tt::stl::Span<int> ranks, const ContextPtr& other_ctx, tt::stl::Span<int> translated_ranks) const override;
+        ttsl::Span<int> ranks, const ContextPtr& other_ctx, ttsl::Span<int> translated_ranks) const override;
 
     /* ------------- communicator management ------------- */
     [[nodiscard]] ContextPtr duplicate() const override;
     [[nodiscard]] ContextPtr split(Color color, Key key) const override;
-    [[nodiscard]] ContextPtr create_sub_context(tt::stl::Span<int> ranks) const override;
+    [[nodiscard]] ContextPtr create_sub_context(ttsl::Span<int> ranks) const override;
     void revoke_and_shrink() override;
 
     /* ------------- message snooping ------------- */

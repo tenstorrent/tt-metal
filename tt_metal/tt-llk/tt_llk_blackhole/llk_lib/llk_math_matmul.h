@@ -159,16 +159,18 @@ inline void matmul_configure_addrmod(
             if (transpose)
             {
                 addr_mod_t {
-                    .srca = {.incr = 32, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 16, .clr = 0, .cr = 0},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 32, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 0, .clr = 0, .cr = 0},
+                    .dest = {.incr = 16, .clr = 0, .cr = 0},
                 }
                     .set(ADDR_MOD_2);
             }
             else
             {
                 addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 16, .clr = 0, .cr = 0},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 0, .clr = 0, .cr = 0},
+                    .dest = {.incr = 16, .clr = 0, .cr = 0},
                 }
                     .set(ADDR_MOD_2);
             }
@@ -215,15 +217,15 @@ inline void matmul_configure_addrmod(
                     .srca = {.incr = 16, .clr = 0, .cr = 1}, // srca=16
                     .srcb = {.incr = 16, .clr = 0, .cr = 0},
                     .dest = {.incr = 0, .clr = 1, .cr = 0},
-                    // .bias = {.incr = 1},
                 }
                     .set(ADDR_MOD_4);
             }
             else
             {
                 addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 16, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 1, .cr = 0},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 16, .clr = 0, .cr = 0},
+                    .dest = {.incr = 0, .clr = 1, .cr = 0},
                 }
                     .set(ADDR_MOD_4);
             }
@@ -236,15 +238,15 @@ inline void matmul_configure_addrmod(
                     .srca = {.incr = 16, .clr = 0, .cr = 1}, // srca=16
                     .srcb = {.incr = 16, .clr = 0, .cr = 1},
                     .dest = {.incr = 0, .clr = 0, .cr = 1},
-                    // .bias = {.incr = 1},
                 }
                     .set(ADDR_MOD_4);
             }
             else
             {
                 addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 16, .clr = 0, .cr = 1}, .dest = {.incr = 0, .clr = 0, .cr = 1},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 16, .clr = 0, .cr = 1},
+                    .dest = {.incr = 0, .clr = 0, .cr = 1},
                 }
                     .set(ADDR_MOD_4);
             }
@@ -253,16 +255,18 @@ inline void matmul_configure_addrmod(
     else if (is_in0_32x16)
     {
         addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 1}, .srcb = {.incr = 16, .clr = 0, .cr = 1}, .dest = {.incr = 8, .clr = 0, .cr = 0},
-            // .bias = {.incr = 1},
+            .srca = {.incr = 0, .clr = 0, .cr = 1},
+            .srcb = {.incr = 16, .clr = 0, .cr = 1},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_4);
     }
     else if (is_in1_32x16)
     {
         addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 1}, .srcb = {.incr = 8, .clr = 0, .cr = 0}, .dest = {.incr = 16, .clr = 0, .cr = 1},
-            // .bias = {.incr = 1},
+            .srca = {.incr = 0, .clr = 0, .cr = 1},
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = 16, .clr = 0, .cr = 1},
         }
             .set(ADDR_MOD_4);
     }
@@ -274,7 +278,6 @@ inline void matmul_configure_addrmod(
                 .srca = {.incr = 16, .clr = 0, .cr = 1},
                 .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
-                // .bias = {.incr = 1},
             }
                 .set(ADDR_MOD_4);
         }
@@ -285,7 +288,6 @@ inline void matmul_configure_addrmod(
                 //.srca = {.incr = srca_set, .clr = 0, .cr = 1},
                 .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
-                // .bias = {.incr = 1},
             }
                 .set(ADDR_MOD_4);
         }

@@ -275,16 +275,22 @@ prep_ubuntu_system() {
     apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg jq
 
     # Add LLVM repository for Clang 17
-    wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
-    echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
+    local llvm_keyring="/usr/share/keyrings/llvm-snapshot.gpg"
+    local llvm_keyring_tmp
+    llvm_keyring_tmp="$(mktemp "${llvm_keyring}.XXXXXX")"
+    ( set -o pipefail; wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor --batch --yes --no-tty -o "$llvm_keyring_tmp" )
+    chmod 0644 "$llvm_keyring_tmp"
+    mv -f "$llvm_keyring_tmp" "$llvm_keyring"
+    echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
     # Also v20
-    echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
+    echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
 
     # Install CMake from GitHub releases (skip in Docker, cmake provided via tool image)
     if [ "$docker" -ne 1 ]; then
         local cmake_version="4.0.2"
         local cmake_installer="/tmp/cmake-${cmake_version}-installer.sh"
-        wget -q "https://github.com/Kitware/CMake/releases/download/v${cmake_version}/cmake-${cmake_version}-linux-x86_64.sh" -O "$cmake_installer"
+        local cmake_arch="$(uname -m)"
+        wget -q "https://github.com/Kitware/CMake/releases/download/v${cmake_version}/cmake-${cmake_version}-linux-${cmake_arch}.sh" -O "$cmake_installer"
         bash "$cmake_installer" --skip-license --prefix=/usr/local
         rm -f "$cmake_installer"
     else
@@ -316,6 +322,10 @@ enabled=1
 gpgcheck=1
 repo_gpgcheck=1
 gpgkey=https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+# Keep the Intel repository scoped to the oneAPI TBB packages tt-metal needs.
+# Without this, DNF may satisfy unrelated dependencies (for example OpenMPI)
+# from oneAPI, pulling older Intel packages signed by keys not listed above.
+includepkgs=intel-oneapi-tbb* intel-oneapi-common-* intel-oneapi-tcm-*
 REPO_EOF
 }
 
@@ -464,6 +474,12 @@ install_mpi_ulfm() {
 
     if [[ "$OS_ID" == "ubuntu" ]] && [ "$VERSION_NUM" -gt "2404" ]; then
         echo "[INFO] Skipping MPI ULFM installation for Ubuntu $OS_VERSION (only needed for 24.04 or older)"
+        return
+    fi
+
+    local DEB_ARCH="$(uname -m)"
+    if [[ "$DEB_ARCH" != "x86_64" ]]; then
+        echo "[INFO] Skipping MPI ULFM installation on $DEB_ARCH (only amd64 package is available)"
         return
     fi
 

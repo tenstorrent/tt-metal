@@ -19,10 +19,18 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::ccl {
 
 bool is_fabric_2d();
+
+std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    tt::tt_metal::DataType input_dtype);
+
+// Warn about ideal packet size
+void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size);
 
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
@@ -30,6 +38,10 @@ tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
+// Resolve the topology (Ring vs Linear) for a single mesh axis
+tt::tt_fabric::Topology get_axis_topology(
+    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis);
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
@@ -99,7 +111,7 @@ class EriscDatamoverBuilder;
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     uint32_t num_devices,
-    const ttnn::SmallVector<uint32_t>& unpad_elements,
+    const ttsl::SmallVector<uint32_t>& unpad_elements,
     int dim);
 
 class LineTopology {

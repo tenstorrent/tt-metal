@@ -53,8 +53,9 @@ struct operation_attributes_t {
 
     // Add attributes method for reflection
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(17);
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);
@@ -82,7 +83,7 @@ struct tensor_args_t {
     std::optional<Tensor> optional_output_tensor;
 };
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 using tensor_return_value_t = std::vector<Tensor>;
 
 }  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
