@@ -110,7 +110,25 @@ public:
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
             } else {
-                flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
+                DeviceAddr kn_text = MEM_KERNEL_BASE;
+                if (params.core_type == HalProgrammableCoreType::DISPATCH) {
+                    static constexpr DeviceAddr dispatch_dm_kernel_bases[] = {
+                        MEM_DISPATCH_DM0_KERNEL_BASE,
+                        MEM_DISPATCH_DM1_KERNEL_BASE,
+                        MEM_DISPATCH_DM2_KERNEL_BASE,
+                        MEM_DISPATCH_DM3_KERNEL_BASE,
+                        MEM_DISPATCH_DM4_KERNEL_BASE,
+                        MEM_DISPATCH_DM5_KERNEL_BASE,
+                        MEM_DISPATCH_DM6_KERNEL_BASE,
+                        MEM_DISPATCH_DM7_KERNEL_BASE,
+                    };
+                    static_assert(std::size(dispatch_dm_kernel_bases) == NUM_DM_CORES);
+                    if (params.processor_id >= NUM_DM_CORES) {
+                        TT_THROW("Invalid dispatch DM processor id {}", params.processor_id);
+                    }
+                    kn_text = dispatch_dm_kernel_bases[params.processor_id];
+                }
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__kn_data={} ", MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
@@ -241,6 +259,8 @@ public:
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        // Upper bound: crt0-tls.o, crt0.o, noc.o and substitutes.o.
+        objs.reserve(4);
         std::string_view cpu = params.processor_class == HalProcessorClassType::DM ? "tt-qsr64" : "tt-qsr32";
         std::string_view dir = "runtime/hw/lib/quasar";
         objs.push_back(fmt::format("{}/{}-crt0-tls.o", dir, cpu));
@@ -260,6 +280,8 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        // Upper bound: 10 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(13);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
@@ -288,6 +310,12 @@ public:
                 break;
             }
             case HalProgrammableCoreType::IDLE_ETH: break;
+            case HalProgrammableCoreType::DISPATCH:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: break;
+                    case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
+                }
+                break;
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
@@ -355,6 +383,16 @@ public:
                                             : "runtime/hw/toolchain/quasar/kernel_subordinate_ierisc.ld";
                     default: TT_THROW("Invalid processor id {}", params.processor_id);
                 }
+            case HalProgrammableCoreType::DISPATCH:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: {
+                        return fmt::format(
+                            "runtime/hw/toolchain/quasar/{}_dm.ld",
+                            params.is_fw ? "firmware" : "kernel");
+                    }
+                    case HalProcessorClassType::COMPUTE:
+                        TT_THROW("DISPATCH cores do not have compute processors");
+                }
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query linker script",
@@ -385,15 +423,14 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
+    static_assert(
+        static_cast<int>(HalProgrammableCoreType::DISPATCH) == static_cast<int>(ProgrammableCoreType::DISPATCH));
 
-    HalCoreInfoType tensix_mem_map = quasar::create_tensix_mem_map();
-    this->core_info_.push_back(tensix_mem_map);
-
-    HalCoreInfoType active_eth_mem_map = quasar::create_active_eth_mem_map();
-    this->core_info_.push_back(active_eth_mem_map);
-
-    HalCoreInfoType idle_eth_mem_map = quasar::create_idle_eth_mem_map();
-    this->core_info_.push_back(idle_eth_mem_map);
+    this->core_info_.push_back(quasar::create_tensix_mem_map());
+    this->core_info_.push_back(quasar::create_active_eth_mem_map());
+    this->core_info_.push_back(quasar::create_idle_eth_mem_map());
+    ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] = quasar::create_dispatch_mem_map();
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
@@ -486,6 +523,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
             case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER: return false;
             default: TT_THROW("Invalid Quasar dispatch feature {}", static_cast<int>(feature));
         }
     };

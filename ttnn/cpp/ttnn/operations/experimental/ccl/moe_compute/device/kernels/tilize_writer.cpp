@@ -195,7 +195,6 @@ void kernel_main() {
     uint32_t matmul_chunk_available_semaphore_addr = get_semaphore(matmul_chunk_available_semaphore_id);
     uint32_t tilize_chunk_ready_semaphore_addr = get_semaphore(tilize_chunk_ready_semaphore_id);
     uint32_t matmul_chunk_ready_semaphore_addr = get_semaphore(matmul_chunk_ready_semaphore_id);
-    uint32_t initial_gather_semaphore_addr = get_semaphore(initial_gather_semaphore_id);
 
     // Noc typed wrappers
     Noc noc_obj(noc_index);
@@ -270,7 +269,8 @@ void kernel_main() {
     uint32_t tokens_this_core = core_token_end - core_token_start;
     uint32_t brisc_token_start_runtime = core_token_start + tokens_this_core / 2;
     uint32_t brisc_token_end_runtime = core_token_end;
-    uint32_t brisc_tokens_capacity = tokens_this_core / 2;
+    // ceil(tokens_this_core/2): BRISC's token count; must match tilize_reader.
+    uint32_t brisc_tokens_capacity = tokens_this_core - tokens_this_core / 2;
 
     // Wait for NCRISC to finish reading the mapping tensor
     cb_mapping_tensor.wait_front(num_devices);
@@ -669,14 +669,7 @@ void kernel_main() {
 
                     // == 4a ==
                     // signal to our initial mcast gather core that we've delivered our sub-chunk
-                    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-                    // (initial_gather_semaphore_noc_addr) cannot be wrapped by Semaphore<>::inc
-                    uint64_t initial_gather_semaphore_noc_addr = get_noc_addr(
-                        initial_mcast_gather_core_nox_x,
-                        initial_mcast_gather_core_nox_y,
-                        initial_gather_semaphore_addr,
-                        noc_index);
-                    noc_semaphore_inc(initial_gather_semaphore_noc_addr, 1, noc_index);
+                    initial_gather_sem.up(noc_obj, initial_mcast_gather_core_nox_x, initial_mcast_gather_core_nox_y, 1);
                 }
             } else {
                 // ALL SUBSEQUENT ITERATIONS

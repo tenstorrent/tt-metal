@@ -48,7 +48,7 @@ ChunkGatedDeltaRuleDeviceOperation::spec_return_value_t ChunkGatedDeltaRuleDevic
     const auto s_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     ttnn::Shape o_shape({attrs.BH, attrs.num_chunks, attrs.chunk_size, attrs.val_dim});
     ttnn::Shape s_shape({attrs.BH, attrs.key_dim, attrs.val_dim});
-    return {TensorSpec(o_shape, o_layout), TensorSpec(s_shape, s_layout)};
+    return {tt::tt_metal::TensorSpec(o_shape, o_layout), tt::tt_metal::TensorSpec(s_shape, s_layout)};
 }
 
 ChunkGatedDeltaRuleDeviceOperation::tensor_return_value_t ChunkGatedDeltaRuleDeviceOperation::create_output_tensors(

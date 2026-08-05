@@ -8,8 +8,8 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 #include "layernorm_post_all_gather_device_operation_types.hpp"
 
@@ -17,7 +17,7 @@ namespace ttnn::prim {
 
 // Program factory for normal (non-Welford) operation
 struct LayerNormPostAllGatherProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const LayerNormPostAllGatherParams& operation_attributes,
         const LayerNormPostAllGatherInputs& tensor_args,
         Tensor& output);
@@ -25,7 +25,7 @@ struct LayerNormPostAllGatherProgramFactory {
 
 // Program factory for Welford algorithm (layernorm only)
 struct LayerNormPostAllGatherWelfordProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const LayerNormPostAllGatherParams& operation_attributes,
         const LayerNormPostAllGatherInputs& tensor_args,
         Tensor& output);
@@ -34,7 +34,7 @@ struct LayerNormPostAllGatherWelfordProgramFactory {
 struct LayerNormPostAllGatherDeviceOperation {
     using operation_attributes_t = LayerNormPostAllGatherParams;
     using tensor_args_t = LayerNormPostAllGatherInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t =
         std::variant<LayerNormPostAllGatherProgramFactory, LayerNormPostAllGatherWelfordProgramFactory>;

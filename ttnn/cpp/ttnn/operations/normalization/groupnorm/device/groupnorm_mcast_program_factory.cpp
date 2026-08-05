@@ -348,6 +348,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
 
     std::vector<std::vector<CoreCoord>> mcast_groups;
     std::vector<std::vector<CoreCoord>> mcast_virtual_groups;
+    mcast_groups.reserve(core_coords.size());
+    mcast_virtual_groups.reserve(core_coords.size());
     int group_index = -1;
     for (size_t i = 0; i < core_coords.size(); ++i) {
         if (mcast_sender_core_ranges_all.contains(CoreRange(core_coords[i]))) {
@@ -956,12 +958,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         });
     }
 
-    // cb_ex_external holds packed cb_ex_external_slot_pitch_bytes-sized partial-reduction
+    // cb_ex_external holds packed dfb_ex_external_slot_pitch_bytes-sized partial-reduction
     // scalars gathered from every core in the mcast group, for every out_block. The
     // reader kernel (reader_mcast_sender_unary_gn) and compute kernel (groupnorm) both
     // reserve / wait-for cb_ex_external_tiles_required tiles at once, where
     //   cb_ex_external_tiles_required =
-    //       ceil(num_out_blocks_padded * num_mcast_cores * cb_ex_external_slot_pitch_bytes / tile_size)
+    //       ceil(num_out_blocks_padded * num_mcast_cores * dfb_ex_external_slot_pitch_bytes / tile_size)
     // so the CB must be at least that large. Mirror the kernel's
     // num_out_blocks_padded calculation to get the exact count.
     // Note that Welford does not use cb_ex_external.
@@ -974,7 +976,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             num_out_blocks_padded += (residual / out_block_h_normal + 1);
         }
         uint32_t cb_ex_external_tiles =
-            (num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes + single_tile_size -
+            (num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes + single_tile_size -
              1) /
             single_tile_size;
         desc.cbs.push_back(CBDescriptor{
@@ -1080,6 +1082,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                     std::swap(mcast_start, mcast_end);
                 }
                 tt::tt_metal::KernelDescriptor::RTArgList mcast_sender_args;
+                mcast_sender_args.reserve(22 + group.size() * 2);
                 mcast_sender_args.push_back(a.buffer());
                 mcast_sender_args.push_back(output.buffer());
                 mcast_sender_args.push_back(in0_start_id);
@@ -1125,6 +1128,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                 }
 
                 std::vector<uint32_t> mcast_noc_xy;
+                mcast_noc_xy.reserve(group.size() * 2);
                 for (const auto& gcore : group) {
                     CoreCoord coord = device->worker_core_from_logical_core(gcore);
                     mcast_noc_xy.push_back(coord.x);
@@ -1177,6 +1181,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         }
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
+        writer_mcast_sender_args.reserve(10);
         writer_mcast_sender_args.push_back(eps_u);
         writer_mcast_sender_args.push_back(output.buffer());
         if (gamma.has_value()) {

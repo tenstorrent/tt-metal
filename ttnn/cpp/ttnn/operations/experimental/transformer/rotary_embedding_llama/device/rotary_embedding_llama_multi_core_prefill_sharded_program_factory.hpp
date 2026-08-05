@@ -4,25 +4,21 @@
 
 #pragma once
 
-#include <optional>
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "rotary_embedding_llama_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingLlamaMultiCorePrefillSharded {
-    // Contract (1): single ProgramDescriptor.  Globally-allocated cos/sin/trans_mat
-    // CBs (when sharded and grid-covering) bind through CBDescriptor::buffer so the
-    // framework patches dynamic addresses on cache hit; partial-grid shard cases
-    // get a second non-buffered CB on the remaining cores (CBs are merged at
-    // runtime since they share buffer indices).
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // Metal 2.0 factory (MetalV2FactoryConcept) for prefill with sharded cos/sin/trans_mat.
+    // Globally-allocated (L1-resident) cos/sin/trans_mat bind through borrowed-memory DataflowBuffers
+    // (DataflowBufferSpec::borrowed_from) only when the shard grid covers all work-unit cores; otherwise
+    // they are read via TensorAccessor. The work unit is placed on all device cores.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const RotaryEmbeddingLlamaParams& operation_attributes,
         const RotaryEmbeddingLlamaInputs& tensor_args,
-        tt::tt_metal::Tensor& output);
+        ttnn::Tensor& tensor_return_value);
 };
 
 }  // namespace ttnn::experimental::prim

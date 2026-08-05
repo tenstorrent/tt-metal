@@ -368,7 +368,6 @@ void kernel_main() {
     // Device 2.0 migration: legacy primitives retained: these raw L1 semaphore addresses are
     // used as bases for multicast destinations (set_multicast / get_safe_multicast_noc_addr /
     // get_noc_addr) and for inter-core semaphore inc with precomposed uint64_t addresses.
-    uint32_t partial_metadata_ready_semaphore_addr = get_semaphore(partial_metadata_ready_semaphore_id);
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     const uint32_t combine_sync_addr = get_semaphore(combine_sync_semaphore_id);
 
@@ -555,7 +554,8 @@ void kernel_main() {
     uint32_t tokens_this_core = core_token_end - core_token_start;
     uint32_t ncrisc_token_start = core_token_start;
     uint32_t ncrisc_token_end = core_token_start + tokens_this_core / 2;
-    uint32_t brisc_tokens_capacity = tokens_this_core / 2;
+    // ceil(tokens_this_core/2): must match tilize_writer's brisc_tokens_capacity.
+    uint32_t brisc_tokens_capacity = tokens_this_core - tokens_this_core / 2;
 
     // indices/scores are in CB - drain has shard, non-drain read via NOC in Step 2
     uint32_t num_activated_tokens = 0;
@@ -949,11 +949,7 @@ void kernel_main() {
         noc_obj.async_write_barrier();
 
         // Signal drain core via semaphore increment
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address cannot
-        // be wrapped by Semaphore<>::inc which binds to a per-program id
-        uint64_t drain_semaphore_noc_addr =
-            get_noc_addr(drain_core_noc_x, drain_core_noc_y, partial_metadata_ready_semaphore_addr);
-        noc_semaphore_inc(drain_semaphore_noc_addr, 1);
+        partial_metadata_ready_sem.up(noc_obj, drain_core_noc_x, drain_core_noc_y, 1);
 
         // ========== NON-DRAIN tilize CORE: Wait for drain core to multicast data ==========
         // Wait for the semaphore signal from drain core

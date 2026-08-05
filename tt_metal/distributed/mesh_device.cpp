@@ -40,6 +40,7 @@
 #include "profiler_types.hpp"
 #include <experimental/fabric/routing_table_generator.hpp>
 #include "shape_base.hpp"
+#include <tt_stl/cleanup.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "impl/threading/thread_pool.hpp"
@@ -367,13 +368,14 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
                     worker_l1_size,
                     dispatch_core_config,
                     context_id),
-                mapped_devices.fabric_node_ids,
+                std::move(mapped_devices.fabric_node_ids),
                 mapped_devices.mesh_shape);
         }  // Initialize fabric node ids manually.
         // TODO: #22087 - Remove this code path.
         std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
         TT_FATAL(config.mesh_shape().has_value(), "Mesh shape must be provided when physical device ids are supplied");
         const auto& supplied_ids = config.physical_device_ids();
+        fabric_node_ids.reserve(supplied_ids.size());
         for (int supplied_id : supplied_ids) {
             auto fabric_node_id = ctx.get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_id);
             TT_FATAL(
@@ -398,7 +400,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
                 worker_l1_size,
                 dispatch_core_config,
                 context_id),
-            fabric_node_ids,
+            std::move(fabric_node_ids),
             config.mesh_shape().value());
     }();
 
@@ -649,6 +651,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     std::vector<MaybeRemote<IDevice*>> submesh_devices;
     std::vector<tt::tt_fabric::FabricNodeId> submesh_fabric_node_ids;
     const MeshCoordinateRange submesh_range(offset_coord, end_coordinate);
+    submesh_devices.reserve(submesh_range.shape().mesh_size());
+    submesh_fabric_node_ids.reserve(submesh_range.shape().mesh_size());
     for (const auto& coord : submesh_range) {
         if (view_->impl().is_local(coord)) {
             submesh_devices.push_back(MaybeRemote<IDevice*>::local(view_->impl().get_device(coord)));
@@ -717,6 +721,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_submeshes(
 
     // Stamp `submesh_shape` along each dimension, `steps` number of times.
     std::vector<std::shared_ptr<MeshDevice>> submeshes;
+    submeshes.reserve(MeshShape(steps).mesh_size());
     for (const auto& step_position : MeshCoordinateRange(MeshShape(steps))) {
         ttsl::SmallVector<uint32_t> offset_coords;
         for (size_t dim = 0; dim < submesh_shape.dims(); dim++) {
@@ -1144,6 +1149,33 @@ std::vector<CoreCoord> MeshDeviceImpl::worker_cores_from_logical_cores(
 std::vector<CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
     return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
+std::unordered_map<uint32_t, CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(
+    NOC noc, const MeshCoordinate& coord) {
+    // The assignment is a device-local physical property that can only be queried for a local device.
+    // If `coord` maps to a local device, use it. Otherwise (a remote device) fall back to an arbitrary
+    // local device's assignment; this is a best-effort approximation that is exact only when the mesh
+    // is homogeneously harvested. Fail only when there is no local device to fall back to.
+    IDevice* device = nullptr;
+    if (view_->impl().is_local(coord)) {
+        device = view_->impl().get_device(coord);
+    } else {
+        const auto local_devices = this->get_devices();
+        TT_FATAL(
+            !local_devices.empty(),
+            "get_optimal_dram_bank_to_logical_worker_assignment: MeshCoordinate {} maps to a remote device and this "
+            "mesh has no local devices to fall back to.",
+            coord);
+        device = local_devices.front();
+    }
+    // The underlying assignment is a per-bank list indexed by DRAM bank id; expose it as an explicit
+    // bank-id -> worker-core map so consumers do not treat the position in a flat list as incidental.
+    const auto per_bank = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    std::unordered_map<uint32_t, CoreCoord> assignment;
+    for (uint32_t bank_id = 0; bank_id < per_bank.size(); ++bank_id) {
+        assignment.emplace(bank_id, per_bank[bank_id]);
+    }
+    return assignment;
+}
 CoreCoord MeshDeviceImpl::virtual_core_from_logical_core(
     const CoreCoord& logical_coord, const CoreType& core_type) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_coord, core_type](const auto* device) {
@@ -1324,6 +1356,10 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
 
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     TracyTTMetalEndMeshTrace(this->get_device_ids(), *trace_id);
+
+    // Ensure allocations are marked unsafe on any exit, including thrown exceptions
+    auto mark_unsafe_on_exit = ttsl::make_cleanup([this]() { this->mark_allocations_unsafe(); });
+
     TT_FATAL(
         this->mesh_command_queues_[cq_id]->trace_id() == trace_id,
         "CQ {} is not being used for tracing tid {}",
@@ -1349,9 +1385,13 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
         dram_deletion_high_water_mark = this->allocator_impl()->get_dram_deletion_high_water_mark();
     }
 
+    const DeviceAddr max_live_trace_high_water_mark = sub_device_manager_tracker_->get_max_trace_high_water_mark();
     MeshTrace::populate_mesh_buffer(
-        *(mesh_command_queues_[cq_id]), trace_buffer, dram_allocation_high_water_mark, dram_deletion_high_water_mark);
-    this->mark_allocations_unsafe();
+        *(mesh_command_queues_[cq_id]),
+        trace_buffer,
+        dram_allocation_high_water_mark,
+        dram_deletion_high_water_mark,
+        max_live_trace_high_water_mark);
 }
 
 void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
@@ -1483,9 +1523,7 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
     }
 }
 
-D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
-    return realtime_profiler_ ? realtime_profiler_->get_socket() : nullptr;
-}
+RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const { return realtime_profiler_.get(); }
 
 ::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() {
     TT_FATAL(
@@ -1725,6 +1763,10 @@ std::vector<CoreCoord> MeshDevice::ethernet_cores_from_logical_cores(
 }
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
     return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+}
+std::unordered_map<uint32_t, CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(
+    NOC noc, const MeshCoordinate& coord) {
+    return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
     return pimpl_->virtual_core_from_logical_core(logical_coord, core_type);

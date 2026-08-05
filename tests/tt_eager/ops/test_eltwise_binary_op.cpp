@@ -20,8 +20,8 @@
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::Layout;
-using tt::tt_metal::Tensor;
 using tt::tt_metal::distributed::MeshDevice;
+using ttnn::Tensor;
 
 template <typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {

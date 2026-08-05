@@ -122,6 +122,7 @@ class MathFidelitySetting(Enum):
     HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI2_NOL1ACC = "hifi2nol1acc"  # fp32_dest_acc_en=True but packer_l1_acc=False (issue #36378)
     HIFI4 = "hifi4"
+    HIFI4_FP16 = "hifi4fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI4_FP32 = "hifi4fp32"
 
 
@@ -802,6 +803,12 @@ class ModelArgs:
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            self.compute_kernel_config_hifi4_fp16 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
             self.compute_kernel_config_hifi4_fp32 = ttnn.WormholeComputeKernelConfig(
@@ -1660,16 +1667,12 @@ class ModelArgs:
                     in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                     out_subblock_h=1,  # Must be divisible by per_core_M
                     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                    per_core_M=7
-                    if self.device_name == "P100"
-                    else (
-                        max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                            1,
-                            8
-                            if seq_len >= self.MAX_QKV_MM_SEQ_LEN
-                            else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
-                        )
-                    ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                    # This branch is only reached when use_minimal_qkv_prefill_matmul() is False,
+                    # i.e. seq_len <= 128, so the former `8 if seq_len >= MAX_QKV_MM_SEQ_LEN` arm
+                    # (MAX_QKV_MM_SEQ_LEN == 2048) was unreachable and has been removed. At every
+                    # reachable seq_len the max(1, ...) floor makes this 1.
+                    # NOTE: P100 runs OOM in L1 with a larger per_core_M (workaround for issue #50656).
+                    per_core_M=1 if self.device_name == "P100" else max(1, math.ceil(seq_len / ttnn.TILE_SIZE / 8)),
                     per_core_N=math.ceil(
                         self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
                     ),  # N / TILE_WIDTH / grid width
@@ -4507,6 +4510,7 @@ class DecodersPrecision:
             MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
             MathFidelitySetting.HIFI2_NOL1ACC: configuration.compute_kernel_config_hifi2_nol1acc,
             MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
+            MathFidelitySetting.HIFI4_FP16: configuration.compute_kernel_config_hifi4_fp16,
             MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_fp32,
         }
         return math_fidelity_setting_lookup[self.decoder_optimizations[decoder_id].op_fidelity_settings[op]]

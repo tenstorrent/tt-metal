@@ -17,7 +17,7 @@ namespace ttnn::prim {
 struct CopyDeviceOperation {
     using operation_attributes_t = ttnn::prim::CopyParams;
     using tensor_args_t = ttnn::prim::CopyInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct SameMemoryConfig {

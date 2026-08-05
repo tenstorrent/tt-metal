@@ -29,13 +29,13 @@ namespace ttnn::d2d_stream_service {
 
 namespace {
 
-using tt::tt_metal::D2DEndpointConfig;
-using tt::tt_metal::D2DStreamConfig;
-using tt::tt_metal::D2DStreamService;
-using tt::tt_metal::D2DStreamServiceReceiver;
-using tt::tt_metal::D2DStreamServiceSender;
 using tt::tt_metal::distributed::SocketMemoryConfig;
 using tt::tt_metal::distributed::multihost::Rank;
+using ttnn::D2DEndpointConfig;
+using ttnn::D2DStreamConfig;
+using ttnn::D2DStreamService;
+using ttnn::D2DStreamServiceReceiver;
+using ttnn::D2DStreamServiceSender;
 using MeshDevicePtr = std::shared_ptr<tt::tt_metal::distributed::MeshDevice>;
 
 // Assemble a D2DStreamConfig from individual kwargs. Like the H2DStreamService ctor, the
@@ -82,7 +82,7 @@ void py_module_types(nb::module_& mod) {
             "get_per_shard_spec",
             &D2DStreamServiceSender::get_per_shard_spec,
             nb::rv_policy::reference_internal,
-            "The per-coord TensorSpec of the backing tensor (mapper output).")
+            "The per-coord tt::tt_metal::TensorSpec of the backing tensor (mapper output).")
         .def(
             "get_worker_cores",
             &D2DStreamServiceSender::get_worker_cores,
@@ -145,7 +145,7 @@ void py_module_types(nb::module_& mod) {
             "get_per_shard_spec",
             &D2DStreamServiceReceiver::get_per_shard_spec,
             nb::rv_policy::reference_internal,
-            "The per-coord TensorSpec of the backing tensor (mapper output).")
+            "The per-coord tt::tt_metal::TensorSpec of the backing tensor (mapper output).")
         .def(
             "get_worker_cores",
             &D2DStreamServiceReceiver::get_worker_cores,
