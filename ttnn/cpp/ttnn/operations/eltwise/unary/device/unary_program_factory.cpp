@@ -142,7 +142,7 @@ void enumerate_core_rt_args(
     const UnaryDeviceOperation::operation_attributes_t& operation_attributes,
     const UnaryDeviceOperation::tensor_args_t& tensor_args,
     const Tensor& output,
-    Fn&& fn) {
+    const Fn& fn) {
     using namespace tt;
     using namespace tt::tt_metal;
 
