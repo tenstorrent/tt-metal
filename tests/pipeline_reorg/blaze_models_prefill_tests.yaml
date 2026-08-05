@@ -64,13 +64,36 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 8x4 and fabric2d" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 8x4 and fabric2d and (dsv3 or kimi) and no_determinism" -vvv --tb=short
     '
   test_type: mla_chunked
   test_group: module
   skus:
     bh_sc1:
       timeout: 10
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
+# Kimi-K3 owns its own row: an allowlist keeps it out of the shared selectors above, which picked it
+# up only because they were variant-unqualified. Accuracy/padding, determinism and perf, in that order.
+- name: "Blaze - K3 MLA"
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+      rc=0
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and k3 and cpu and 8x4 and fabric2d and scalar and no_determinism" -vvv --tb=short || rc=1
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "plain-5k and k3 and func and 8x4 and fabric2d and scalar and with_determinism" -vvv --tb=short || rc=1
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and 8x4 and fabric2d" -vvv --tb=short || rc=1
+      exit $rc
+    '
+  test_type: k3_mla
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 20
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
