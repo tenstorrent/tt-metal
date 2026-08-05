@@ -1118,9 +1118,10 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
-# Regression test for issue #51215 bug 1: the retile compute kernel entered the tilize phase
-# without reconfiguring the packer destination format from mid_cb (input format) to out_cb
-# (output format), so the final pack never performed the dtype conversion the design relies on.
+# Tilize with simultaneous tile-shape and dtype change (the retile path).
+# The packer destination format must be reconfigured to match the output CB before
+# the tilize phase; without it the dtype conversion is silently skipped and the
+# output tensor carries data in the wrong format.
 @skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
 @pytest.mark.parametrize(
     "in_dtype, out_dtype, min_pcc",
@@ -1142,8 +1143,8 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
 def test_tilize_retile_dtype_conversion(
     device, tensor_shape, input_tile_shape, output_tile_shape, in_dtype, out_dtype, min_pcc
 ):
-    """Retile into a different tile shape AND dtype: exercises the pack_reconfig_data_format
-    that was missing before tilize_init in the retile compute kernel."""
+    """Tilize with simultaneous tile-shape and dtype change: verifies that the output
+    tensor carries the requested dtype and numerically correct data."""
     torch.manual_seed(42)
     torch_dtype = torch.float32 if in_dtype == ttnn.float32 else torch.bfloat16
     torch_input = torch.rand(tensor_shape, dtype=torch_dtype)

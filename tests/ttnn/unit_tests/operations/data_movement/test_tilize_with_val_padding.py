@@ -737,11 +737,15 @@ def test_tilize_with_val_padding_unaligned_row_width(device, input_shape, output
     assert_equal(torch_golden, torch_output)
 
 
-# FP8_E4M3 is a 1-byte-per-element format, so width=31 → 31 bytes/row, 31 % 4 == 3.
-# This exercises the uint8_t head/tail path in dataflow_kernel_lib::fill_l1_range<1>.
+# FP8_E4M3 is a 1-byte-per-element format. A row width of 31 → 31 bytes/row, which is
+# not a multiple of 4. This covers the head/tail element-sized stores in
+# fill_l1_range<1> that handle the unaligned bytes at the start and end of each
+# padding region; an incorrect 4-byte-only fill would corrupt adjacent real data.
 @run_for_blackhole()
 def test_tilize_with_val_padding_fp8_unaligned_row_width(device):
-    """Single-core FP8_E4M3 tilize_with_val_padding with 1-byte-unaligned row width (issue #51215 bug 4)."""
+    """Single-core FP8_E4M3 tilize_with_val_padding where the row byte size (width × 1)
+    is not a multiple of 4: verifies that padding is written exactly and real data is
+    preserved."""
     input_shape = [1, 1, 32, 31]
     output_shape = [1, 1, 32, 32]
     # Use a nonzero FP8-exact pad value so the padding assertion fails loudly if the

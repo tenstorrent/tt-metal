@@ -10,6 +10,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/debug/assert.h"
 
 namespace dataflow_kernel_lib {
 
@@ -82,8 +83,8 @@ FORCE_INLINE void prepare_zero_tile() {
  *                    for the bulk writes.
  *
  * @note For val_size == 4 the head/tail element stores compile out entirely.
- *       Both start_addr and (start_addr + n_bytes) must be 4-byte-aligned;
- *       an unaligned range silently under-fills the head/tail bytes.
+ *       Both start_addr and n_bytes must be multiples of val_size; an
+ *       unaligned range silently under-fills the head/tail bytes.
  */
 template <uint32_t val_size>
 FORCE_INLINE void fill_l1_range(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
@@ -121,6 +122,8 @@ FORCE_INLINE void fill_l1_range(uint32_t start_addr, uint32_t n_bytes, uint32_t 
     }
 
     // Element-sized stores for unaligned head and tail.
+    // For val_size == 4 these loops compile out: assert that the range is
+    // already val_size-aligned so the bulk writes cover the full region.
     if constexpr (val_size < sizeof(uint32_t)) {
         const IntType val_ = static_cast<IntType>(val);
         auto* head = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr);
@@ -133,6 +136,8 @@ FORCE_INLINE void fill_l1_range(uint32_t start_addr, uint32_t n_bytes, uint32_t 
         for (; tail < tail_end; ++tail) {
             *tail = val_;
         }
+    } else {
+        ASSERT(start_addr % val_size == 0 && n_bytes % val_size == 0);
     }
 }
 
