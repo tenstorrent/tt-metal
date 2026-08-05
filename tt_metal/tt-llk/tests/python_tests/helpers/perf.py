@@ -736,6 +736,7 @@ class PerfConfig(TestConfig):
                 self.formats_config[0].unpack_A_dst,
                 self.formats_config[0].unpack_B_dst,
                 self.formats_config[0].output_format,
+                self.formats_config[0].sfpu_math,
             ]
             if has_formats
             else []
