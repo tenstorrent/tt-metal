@@ -1,0 +1,96 @@
+MEASURED: blackhole p150b, 1350 MHz, ONE core, bf16 in/out + fp32 stat, HiFi2,
+fp32_dest_acc_en=False, math_approx_mode=False (the focus case's PINNED contract --
+identical in every variant).  Metric = DEVICE KERNEL DURATION [ns] of a kernel that
+contains PASS B AND NOTHING ELSE.  One fresh-cache profiled run per variant; the
+test_matches_baseline block re-runs the focus point for every variant and is the
+independent REPLICATE column.  Correctness gate: pcc >= 0.9995 + rel-RMS <= 0.04 vs an
+fp64 torch reference, with the stat tile's columns 1..31 POISONED 1e3x wrong (so a
+variant that reads any lane but column 0 fails instead of passing by luck).
+
+=============================================================================
+1. FOCUS: rows=8 (BLOCK_ROWS) x wt=4 (WT_CHUNK) x 4 blocks = 128 tiles/core
+   -- one core of (1,1,8192,1024) BLOCK_SHARDED [1024,128] on (8,8)
+=============================================================================
+variant                 ns      replicates          x base   pcc       rel_rms  bitwise=base
+baseline              14050   14050..14064 (n=9)    1.00     0.999983  0.00937  --
+baseline_blk (blk=4)   8860    8727/8860/8863       1.59     0.999983  0.00937  YES
+baseline_blk_up         8901    8777/8901           1.58     0.999983  0.00937  YES
+baseline_up  (blk=1)   10710   10608/10710          1.32     0.999983  0.00937  YES
+baseline_norecfg       13676   13541/13676          1.03     0.999983  0.00937  YES
+baseline_blk_norecfg    8830    8728/8830           1.59     0.999983  0.00937  YES
+baseline_gfull_blk      9292    9170/9292           1.51     0.999983  0.00937  YES
+outer  (stat(x)gamma)   9008    8882/9008           1.56     0.999983  0.00935  no (1 ulp)
+fused        (blk=1)   16750   16601/16750          0.84     0.999983  0.00927  no (1 ulp)
+fused_blk    (blk=4)   13418   13316/13418          1.05     0.999983  0.00927  no (1 ulp)
+fused_blk_norecfg      13408   13277/13408          1.05     0.999983  0.00927  no (1 ulp)
+
+no-gamma (HAS_GAMMA=0, same geometry -- the scale pass alone):
+baseline 7174 | baseline_blk 4328 (1.66x) | fused_blk 4319 (identical code, 0.2% = noise)
+=> of the baseline's 14050 ns, ~7.2 us is the scale chain and ~6.9 us the gamma chain.
+
+=============================================================================
+2. DEST-LANE AMORTIZATION CURVE  (rows=8, wt=8, 2 blocks = 128 tiles, only blk moves)
+=============================================================================
+blk            1       2       4       8
+baseline_blk 13266    9229    8804    8209     (1.00 / 1.44 / 1.51 / 1.62x)
+fused_blk    16839   14685   13614   13150*    (*pcc 0.987 -- WRONG, see 5)
+
+=============================================================================
+3. CALL-COUNT CROSSOVER  (wt=4, blk=4, 128 tiles; only `rows` == BLOCK_ROWS moves,
+   so the baseline runs 2*blocks chain calls and the fused variant runs `blocks`)
+=============================================================================
+rows            1       2       4       8      32
+blocks         32      16       8       4       1
+baseline_blk 15624   11941    9929    8860    8016
+fused_blk    13402   13410   13424   13410   13430   <- DEAD FLAT: no per-call cost
+=> a chain CALL costs ~120-155 ns fixed; the fused chain pays its two math-MOP inits
+   per OUTER ITER instead (it is not init-hoistable), so extra calls are free to it and
+   extra tiles are expensive.  Fused only wins where BLOCK_ROWS==1 AND there are many
+   row-blocks -- a configuration the op does not choose (it would raise BLOCK_ROWS).
+
+=============================================================================
+4. DOMAIN SWEEP  (128 tiles except wt=1 rows which are 32 tiles; blk = blk_for(wt))
+=============================================================================
+rows x wt   blk  baseline  base_blk  x     base_blk_up  x     fused_blk   x
+ 1 x 1       1     9926      9926   1.00     10016    0.99      5310    1.87
+ 1 x 4       4    19979     15601   1.28     15642    1.28     13389    1.49
+ 1 x16       8    14241     10177   1.40     10264    1.39     13977^   1.02
+ 1 x32       8    13301      8912   1.49      8947    1.49     14730^   0.90
+ 8 x 1       1     4403      4403   1.00      3569    1.23      4770    0.92
+ 8 x 4       4    14060      8863   1.59      8901    1.58     13410    1.05
+ 8 x16       8    12752      7864   1.62      7872    1.62     14002^   0.91
+32 x 1       1     3719      3718   1.00      3044    1.22      4717    0.79
+32 x 4       4    13249      8016   1.65      8033    1.65     13425    0.99
+   ^ re-measured at blk=4 (blk=8 is numerically wrong for the fused spelling, see 5)
+
+TRUE decode / width-shard geometry -- ONE tile-row, ONE row-block (2 chain calls total
+for the baseline, 1 for the fused), blk=4 everywhere:
+wt            4      16      32
+baseline    1145    2243    3725
+base_blk     957    1650    2544    (1.20 / 1.36 / 1.46x)
+fused_blk   1384    3121    5392    (0.83 / 0.72 / 0.69x)  <- the fusion LOSES here too
+
+=============================================================================
+5. THE FUSED SPELLING IS NUMERICALLY WRONG AT blk == 8
+=============================================================================
+BinaryFpu<x,stat,Mul,Col> + DestReuseBinary<gamma_full,Mul,DEST_TO_SRCB> + PackTile at
+block_size 8 (== DEST_AUTO_LIMIT for bf16 half-sync) gives pcc 0.987 / rel-RMS 0.11 at
+every geometry tried (1x16, 1x32, 8x16, 8x8).  The same block_size is CORRECT for the
+two-chain baseline, so it is specific to DestReuseBinary occupying all 8 DEST lanes.
+Not root-caused: the variant is a measured regression at every block_size where it IS
+correct, so the cliff only reinforces the verdict.  If anyone revisits DEST-reuse here,
+cap block_size at DEST_AUTO_LIMIT/2 and re-gate.
+
+=============================================================================
+6. WHAT THE 1.59x IS MADE OF (focus point)
+=============================================================================
+14050  baseline                    per-tile reserve/push, per-tile tile_regs handshake,
+                                   one hoisted init+reconfig per CALL
+10710  + one reserve/push per CALL (Upfront/AtEnd, blk still 1)      -> 3.3 us
+ 8860  + 4 DEST lanes per outer iter (blk=4, PerChunk lifecycles)    -> 1.9 us more
+13676  reconfig ablation alone (drop the 3 provably-inert reconfigs)  ->  0.4 us
+=> the win is the per-TILE fixed cost (CB flow-control ops + the MATH<->PACK DEST
+   handshake + per-element init), amortised over blk tiles.  It is the same mechanism as
+   examples/compute_block_size, one level down (DEST lanes, not chain calls).
+   The reconfig ablation is real but small here (2.7%) -- pass B only has 6 reconfigs
+   per block and 3 of them are genuinely needed.

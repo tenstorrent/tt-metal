@@ -496,39 +496,6 @@ the scheme, topology, work split and helper mapping are unchanged):
       Wt = 127 collapses to one tile per chunk; L5 removes that shape's pass-B
       RE-READ but not its 127 one-tile compute phases.  A ragged-tail chunk (runtime
       wt_c) is still the lever there.
-  D20-D25 PERF 2 (a fan-out perf tournament; SUPPORTED and EXCLUSIONS untouched).  Each
-      is documented in full, with its measured authorisation, at its own site -- listed
-      here only so the set is discoverable.  Focus shape (1,1,8192,1024) BLOCK_SHARDED
-      64c: 64677 -> 34438 ns, 1.878x, and no supported cell got slower.
-
-      D20 the reduce datapath's THIRD floor, on the reduce's actual PER-CALL width
-          (`REDUCE_ACC_VIA_ADD_MIN_CALL_WT` vs `x_squared_wt`).  Spelled as a narrow
-          carve-out BELOW D7/D8's two floors, both of which stay load-bearing -- each
-          direction of getting that wrong is a measured rel-RMS regression, recorded at
-          the predicate.  Pass A 11551 -> 6079 ns (1.90x) at BETTER rel-RMS.
-      D21 pass B's DEST-LANE BLOCK SIZE (`PASS_B_BLK`, a divisor of WT_CHUNK capped by
-          `DEST_AUTO_LIMIT`) plus the PerChunk pack lifecycle it requires.  14050 ->
-          8860 ns (1.59x), BITWISE identical.  The assigned fusion of pass B's two
-          multiplies was measured a REGRESSION (0.84x) and is NOT here.
-      D22 the FUSED ROOT CHAIN: the group fold accumulates PAIRWISE IN DEST and the
-          finalize runs in that same DEST window, one pack.  Replaces D16's
-          packer-L1-accumulation AND D19's separate finalize pass; `ROOT_FOLD_OUT` and
-          every COMBINE-path use of cb_row_stat are deleted.  Stage pair 5874 -> 2698 ns
-          (2.18x) and MORE accurate than the chain it replaces (rel-RMS 2.42e-3 vs
-          3.38e-3), which refutes D16's recorded reasoning.  Needs `GATHER_SLOTS`
-          (group_size rounded up to even) so the pairwise walk is universal.
-      D23 TILE-gamma read granularity (`gamma_trim`): fetch only the face-rows pass B's
-          BroadcastDim::Row consumer reads.  Interleaved prefill 1.107-1.182x, BIT-EXACT.
-          bfloat8_b demotes to a half-page read (272-byte face, not 64-B aligned) -- a
-          format fact, not a shape guard.
-      D24 the root publishes its OWN stat copy BEFORE the broadcast, so its pass B no
-          longer waits out its own multicast (-2643 ns on the root).
-      D25 the COMBINE PIPELINE: block blk+1's pass A is issued before block blk's
-          combine, filling the root's measured ~3400 ns/round arrival idle, plus
-          cb_sum_handoff at depth 2.  Carved out to `native_in` -- on a reader-fed input
-          ring the pipeline is INCORRECT (a tile offset cannot cross a ring wrap) and,
-          once made correct, still 0.894x.  The gather ring stays at ONE round: deepening
-          it was a measured regression twice over.
   D15 Refinement 4 (perf), Lamp L6b.  The finalize's rsqrt is scoped to the tile
       faces pass B reads back (RSQRT_COL_SCOPE).  cb_row_stat is a REDUCE_ROW result
       whose ONLY consumer is mul<BroadcastDim::Col>, i.e. tile column 0, which in the
@@ -587,6 +554,29 @@ import ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 TILE_DIM = 32
+
+# =========================================================================
+# EXPERIMENT KNOBS (perf_experiments/gamma_broadcast_and_trim).
+# This file is a VERBATIM CLONE of rms_norm_program_descriptor.py plus these
+# two knobs and the wiring they need.  With both at 0 it is byte-identical in
+# behaviour to the in-tree op (asserted by test_clone_is_baseline).
+#
+#   GAMMA_TRIM   0 = whole tile (the op today) | 1 = faces 0+1 | 2 = face rows
+#                (2 x 32 B) | 3 = face rows rounded to the 64 B DRAM granule
+#   GAMMA_MCAST  0 = every core reads gamma from DRAM (the op today)
+#                1 = one injector per SHARING GROUP reads it and multicasts
+#
+# The sharing group is the set of cores that need BYTE-IDENTICAL gamma, i.e.
+# cores with the same width slice:
+#   * GRID_W == 1 (row split only)  -> the WHOLE grid is one group  (Mcast2D)
+#   * GRID_W  > 1 (width split)     -> one group per grid COLUMN    (Mcast1D
+#     PerColumn) -- orthogonal to the stat combine's grid-ROW groups.
+# =========================================================================
+GAMMA_TRIM = 0
+GAMMA_MCAST = 0
+# One-element list the last create_program_descriptor() call fills with what it
+# actually planned, so the bench can report the geometry it measured.
+GAMMA_PLAN_NOTE = [""]
 
 # ---------------------------------------------------------------------------
 # Primary knobs — the only hand-set numbers in this op.
@@ -692,37 +682,7 @@ REDUCE_ACC_VIA_ADD_MIN_WT = 4
 # So the datapath needs BOTH a wide total (the error it fixes) and a chunk with
 # something to pair up (2 tiles is the smallest that has). Raise to 10**9 to pin
 # the op back to ReduceTile everywhere.
-#
-# STILL LOAD-BEARING after Perf 2, and measured to be so: dropping this floor in
-# favour of D20's regressed `test_sharded_row_major[ragged_width_tail_wt127]` --
-# (1,1,32,4064) ROW_MAJOR, the very shape in the table above -- to rel-RMS 0.06093
-# against its 0.04 bound.  D20 is layered as a carve-out BELOW this floor, never as a
-# replacement for it.
 REDUCE_ACC_VIA_ADD_MIN_CHUNK_WT = 2
-
-# Per-CALL floor (Perf 2, D20).  A THIRD, independent quantity: the reduce's ACTUAL
-# per-call reduce-dim width, which is `x_squared_wt` -- NOT `wt_chunk`.  D12's
-# square-DEST-fold collapses the per-call width to 1 while leaving `wt_chunk` wide, so
-# the two floors above cannot see that regime at all: they both read a wide number
-# while every reduce call is one tile deep.
-#
-# MEASURED (blackhole p150b 1350 MHz, at the op's pinned config -- bf16 / HiFi2 /
-# fp32_dest_acc_en=False, isolated bench perf_experiments/reduce_at_percall_width_1,
-# ns for the reduce alone, one fresh-cache profiled run per point):
-#
-#   per-call width   rows=8: AccViaAdd / ReduceTile      relRMS AVA / RT
-#      1               7672  /  2796   RT 2.75x          0.0034 / 0.0032   <- RT wins BOTH
-#      2               7316  /  2843   RT 2.58x          (RT pcc starts sliding)
-#      4               7770  /  4101   RT 1.90x
-#      8               8691  /  6258   RT 1.39x          RT pcc 0.99907  <- below the gate
-#     16              10648  / 10727   FLAT              RT pcc 0.99634
-#     32              15297  / 20147   AVA 1.32x         RT pcc 0.98775
-#
-# Width 1 is the ONLY width where ReduceTile is both faster AND at least as accurate;
-# ReduceTile's precision degrades monotonically from there.  Whole pass A
-# (square+reduce) measures 11551 -> 6079 ns (1.90x) at the focus shape, rel-RMS
-# 0.00491 -> 0.00459 (i.e. BETTER).  Raise to 1 to disable D20 entirely.
-REDUCE_ACC_VIA_ADD_MIN_CALL_WT = 2
 
 # Ring depth of cb_row_stat, in units of BLOCK_ROWS.  MUST be >= 2 -- this is a
 # correctness constant, not a perf knob.  See D6.
@@ -1630,52 +1590,6 @@ def create_program_descriptor(
     st = ttnn.tile_size(ttnn.bfloat16)  # scaler CB (R4: value exactly 1.0)
     ft = ttnn.tile_size(ttnn.float32)  # cb_row_stat & the combine CBs
 
-    # ---- TILE-gamma read granularity (Perf 2, D23) -------------------------
-    # A TILE-layout gamma is a (1,1,1,W) vector, so the tensor is tile-padded to 32 rows
-    # and 31 of every 32 rows are PADDING.  Its only consumer is pass B's
-    # mul<BroadcastDim::Row>, which reads TILE ROW 0 -- so the reader has been moving
-    # `gt` bytes per tile where a couple of face-rows are meaningful.
-    #
-    # MEASURED that the consumer really reads row 0 only, rather than assuming it: an
-    # isolated bench ran the op's exact pass-B consumer over a gamma whose rows 1..31 were
-    # seeded with independent garbage at 1e5x the real weights and got pcc BIT-IDENTICAL to
-    # clean (0.9999841 and 1.0000000 on two shapes); the TEETH control -- corrupting row 0
-    # instead and leaving 1..31 clean -- collapsed pcc to -0.0000561 / 0.0347, proving the
-    # harness really feeds gamma.  This is the row analogue of D17's column result.
-    #
-    #   2  FACE-ROWS: two reads, `TILE_DIM * gamma_elem_bytes` each, at page offsets 0 and
-    #      gt/4 -- i.e. the top row-group of faces 0 and 1, which is where row 0 lives.
-    #      Legal only when a FACE OFFSET (gt/4) is 64-byte DRAM aligned, which holds for
-    #      every LINEAR tiled format (bf16 512 B faces, fp32 1024 B).
-    #   1  HALF PAGE: one read of gt/2 from offset 0 == faces 0 and 1 in EVERY tiled
-    #      format, block-float included, and needs no face-stride alignment.
-    #   0  WHOLE TILE: the pre-Perf-2 behaviour, byte-identical.
-    #
-    # bfloat8_b is the measured exception and it is a FORMAT FACT, not a shape guard: its
-    # 1088-byte tile has a 272-byte face (16 shared-exponent bytes + 256 mantissa) which is
-    # NOT 64-byte aligned, so a face-offset read would be silently truncated down to the
-    # alignment.  It demotes to the half page, which is still correct and still a 2x byte
-    # reduction.  A ROW_MAJOR gamma has no tile padding to trim at all (`inexpressible`),
-    # and it already moves ~2 kB/core instead of ~64 kB, so it stays at 0.
-    #
-    # MEASURED (blackhole p150b 1350 MHz, at the op's pinned config; whole-op ns, isolated
-    # bench perf_experiments/gamma_broadcast_and_trim, a verbatim clone of the op asserted
-    # `torch.equal` to the live op at knobs off):
-    #   (1,1,8192,1024) INTERLEAVED   104376 -> 90338 ns   1.155x   (half page: 1.097x)
-    #   (1,1,8192,2304) INTERLEAVED   218264 -> 198213     1.10x
-    #   (1,1,8192,5120) / (1,1,8192,7168) INTERLEAVED       1.10x / 1.11x
-    #   (1,1,8192,1024) BLOCK 64c     64676 -> 64827       0.998x = FLAT (gamma is 3.8%
-    #                                                      of that wall) -- in-domain, and
-    #                                                      the reason this is not guarded
-    # BIT-EXACT (`torch.equal`) across 7 geometries x 3 gamma dtypes.  It captures 83% of
-    # gamma's marginal READ cost; the hard ceiling (deleting gamma outright) is 82785 ns.
-    if not has_gamma or gamma_is_rm:
-        gamma_trim = 0
-    else:
-        # A linear tiled format's face is exactly a quarter tile; block-float carries a
-        # shared-exponent section, so gt/4 is not a face boundary and not 64-B aligned.
-        gamma_trim = 2 if (gt % 4 == 0 and (gt // 4) % 64 == 0) else 1
-
     # ---- placement -> scheme, cores, per-core (row, width) extents ---------
     # Refinement 2.  The scheme decides which axis the cores cut, whether the
     # x / out CBs alias a resident shard, and whether a cross-core combine runs;
@@ -1727,13 +1641,8 @@ def create_program_descriptor(
         # those CBs drop to depth 1 (and must instead hold a whole block — R5).
         depth_candidates = CB_DEPTH_CANDIDATES if is_tile else (1,)
         # fp32 pages per tile-row of a block: cb_row_stat, plus the combine's
-        # handoff / gather / mcast CBs when the width split is active.  The gather term
-        # is GATHER_SLOTS (group_size rounded up to even), matching D22's CB sizing --
-        # the L1 solve must see the same page count the allocation uses or BLOCK_ROWS
-        # is solved against a budget that does not exist.
-        f32_pages = CB_ROW_STAT_DEPTH + (
-            (CB_ROW_STAT_DEPTH + (plan.group_size + plan.group_size % 2) + 1 + CB_ROW_STAT_DEPTH) if plan.combine else 0
-        )
+        # handoff / gather / mcast CBs when the width split is active.
+        f32_pages = CB_ROW_STAT_DEPTH + ((1 + plan.group_size + 1 + CB_ROW_STAT_DEPTH) if plan.combine else 0)
 
         def _resident_fit(depth):
             mult = _cb_block_mult(depth if dx0 is None else dx0, depth if do0 is None else do0, has_gamma)
@@ -1868,6 +1777,23 @@ def create_program_descriptor(
     x_hold_wt = wt_per_core if x_resident else wt_chunk
     assert x_hold_wt == wt_chunk * num_w_chunks if x_resident else x_hold_wt == wt_chunk
 
+    # ---- reduce datapath (D7, refined by D8) ------------------------------
+    # The crossover is measured against THIS CORE'S WHOLE reduce dim
+    # (`wt_per_core`), not against WT_CHUNK.  In the RESIDENT regime the two are
+    # equal, so this is byte-identical to Refinement 1b; they differ only when L1
+    # forces a chunked width, and there it is the total that decides -- see D8.
+    # AccumulateViaAdd's cross-chunk Accumulate indexes a resident block, hence
+    # BulkWaitBulkPop only: the two knobs are coupled here (one place), and the
+    # compute kernel static_asserts it.
+    reduce_acc_via_add = (
+        REDUCE_BULK == 1 and wt_per_core >= REDUCE_ACC_VIA_ADD_MIN_WT and wt_chunk >= REDUCE_ACC_VIA_ADD_MIN_CHUNK_WT
+    )
+    # Tiles the reader actually pushes into cb_scaler, and the compute pops.
+    # AccumulateViaAdd takes ONE: the 0/1 mask (partial W) or an unused 1.0 scaler.
+    # ReduceTile takes the [full, partial] pair when W is not tile-aligned.
+    scaler_tiles = 1 if reduce_acc_via_add else scaler_pages
+    assert scaler_tiles <= scaler_pages, "rms_norm: cb_scaler is sized below the tiles the reader pushes"
+
     # ---- pass A's square: fold into DEST, or pack to L1?  (Lamp L6d, D12) ---
     # With the fold on, `square` runs DestAccumulation::PerRow: the chunk's width
     # tiles are multiplied and ACCUMULATED in DEST, so cb_x_squared receives ONE
@@ -1879,78 +1805,9 @@ def create_program_descriptor(
     # in BEFORE the reduce runs, so the reduce's partial scaler / 0-1 mask can no
     # longer reach them.  (The BAND scheme passes kernel_partial_w == 0 and zeroes
     # its staging ring, so its pad lanes are an exact 0 and it keeps the fold.)
-    #
-    # This block sits ABOVE the reduce-datapath decision (Perf 2, D20) because
-    # `x_squared_wt` IS the reduce's per-call width and the datapath choice reads it.
-    # Ordering is safe by inspection: both inputs (`kernel_partial_w`, `wt_chunk`) are
-    # already bound, and nothing here reads `reduce_acc_via_add`.
     square_dest_acc_per_row = kernel_partial_w == 0 and wt_chunk <= DEST_ACC_SQUARE_MAX_WT
     # Width tiles cb_x_squared holds per tile-row, and the reduce's per-call width.
     x_squared_wt = 1 if square_dest_acc_per_row else wt_chunk
-
-    # ---- reduce datapath (D7, refined by D8, carve-out added by D20) -------
-    # THREE floors, measuring THREE different quantities.  Every one is load-bearing and
-    # every one has a measured regression behind it; the two Refinement 1b/D8 floors are
-    # the base predicate and D20 is a narrow carve-out UNDER them.
-    #
-    #   REDUCE_ACC_VIA_ADD_MIN_WT       vs `wt_per_core`  -- this core's WHOLE reduce dim.
-    #     The precision floor AccumulateViaAdd exists for (the wide-W bf16-DEST error).
-    #     In the RESIDENT regime this equals wt_chunk, so it is byte-identical to
-    #     Refinement 1b; they differ only when L1 forces a chunked width -- see D8.
-    #   REDUCE_ACC_VIA_ADD_MIN_CHUNK_WT vs `wt_chunk`     -- the chunk must have something
-    #     to pair up; at ONE tile per chunk AccumulateViaAdd is 6x WORSE (D8's table).
-    #   REDUCE_ACC_VIA_ADD_MIN_CALL_WT  vs `x_squared_wt` -- the reduce's actual PER-CALL
-    #     width, which D12's square-DEST-fold sets to 1 while leaving `wt_chunk` wide.
-    #     Neither floor above can see that regime: both read a wide number while every
-    #     reduce call is one tile deep.  There AccumulateViaAdd is pure per-call overhead
-    #     and ReduceTile is 2.75x faster at BETTER rel-RMS.
-    #
-    # D20 IS SPELLED AS A CARVE-OUT, and the polarity is the point.  Both earlier floors
-    # keep their exact original meaning, and D20 only *removes* AccumulateViaAdd from the
-    # one narrow corner where the fold has collapsed the per-call width.  So every build
-    # the carve-out does not name is byte-identical to Refinement 4 (same CT args, same
-    # kernel hash), and the corner shrinks on its own as the L1 solve changes.  Getting
-    # this backwards was measured, twice, during integration:
-    #   * replacing MIN_CHUNK_WT with MIN_CALL_WT regressed
-    #     `test_sharded_wide_w_keeps_the_reduce_datapath` ((1,1,160,11008) HEIGHT, a
-    #     344-tile shard) to rel-RMS 0.04774 against its 0.04 bound -- because at
-    #     `num_w_chunks > 1` the row's total is carried ACROSS calls and ReduceTile
-    #     accumulates 344 chunks of all-positive addends in a 16-bit DEST word.  That
-    #     cross-chunk depth is invisible to any per-call measurement.
-    #   * vetoing MIN_CALL_WT on `num_w_chunks > 1` instead regressed
-    #     `test_sharded_row_major[ragged_width_tail_wt127]` ((1,1,32,4064) RM) to rel-RMS
-    #     0.06093 -- because that re-admitted AccumulateViaAdd at `wt_chunk == 1`, exactly
-    #     the regime MIN_CHUNK_WT was measured to exclude.
-    # Both bounds are rel-RMS, not pcc: pcc stayed 0.9999 through BOTH regressions, which
-    # is precisely why Refinement 1b's regression nets assert an rms bound as well.
-    #
-    # `num_w_chunks == 1` in the carve-out is not a proxy for anything -- it is the exact
-    # condition under which the per-call width IS the whole accumulation depth, so D20's
-    # bracket governs and the cross-chunk term does not exist.
-    #
-    # AccumulateViaAdd's cross-chunk Accumulate indexes a resident block, hence
-    # BulkWaitBulkPop only: the two knobs are coupled here (one place), and the compute
-    # kernel static_asserts it.
-    reduce_acc_via_add = (
-        REDUCE_BULK == 1
-        and wt_per_core >= REDUCE_ACC_VIA_ADD_MIN_WT
-        and wt_chunk >= REDUCE_ACC_VIA_ADD_MIN_CHUNK_WT
-        # D20's carve-out: the whole row is ONE reduce call AND the fold collapsed that
-        # call below the per-call floor -> ReduceTile.  Nothing else moves.
-        and not (num_w_chunks == 1 and x_squared_wt < REDUCE_ACC_VIA_ADD_MIN_CALL_WT)
-    )
-    # Tiles the reader actually pushes into cb_scaler, and the compute pops.
-    # AccumulateViaAdd takes ONE: the 0/1 mask (partial W) or an unused 1.0 scaler.
-    # ReduceTile takes the [full, partial] pair when W is not tile-aligned.
-    #
-    # The datapath's partial-W mechanisms differ (scaler pair vs 0/1 mask), but D20's
-    # flip can never straddle them: it only fires when `x_squared_wt == 1`, which
-    # requires the fold, which is itself gated on `kernel_partial_w == 0`.  So every
-    # build D20 moves has `scaler_pages == 1` and carries one 1.0 scaler on either
-    # datapath.  (Verified independently anyway with POISONED pad lanes at
-    # PARTIAL_W in {1,8,31}: zero leak on both datapaths.)
-    scaler_tiles = 1 if reduce_acc_via_add else scaler_pages
-    assert scaler_tiles <= scaler_pages, "rms_norm: cb_scaler is sized below the tiles the reader pushes"
 
     # ---- circular buffers -------------------------------------------------
     # Every page count below is a function of the block/depth knobs only.
@@ -2002,33 +1859,8 @@ def create_program_descriptor(
         # cb_partials_gathered lands on EVERY core (not just the roots) so its L1
         # address is identical everywhere -- that is how a sender computes the
         # root's landing address without the host having to know a CB address.
-        # Perf 2 (D25): cb_sum_handoff is TWO row-blocks deep so the pipelined pass A can
-        # pack block blk+1's partial while the writer is still shipping block blk's.  At
-        # depth 1 the pipeline stalls on the very CB it exists to keep busy.  Costs
-        # `block_rows` extra fp32 pages (+40 kB/core on the focus shape) and measured
-        # 1.161x vs 1.135x for the pipeline without it.
-        #
-        # The GATHER RING is deliberately left at ONE round: deepening it was a measured
-        # regression twice over (1.089x vs 1.204x at the op's block_rows, and 59435 vs
-        # 54474 ns at EQUAL block_rows), and it overshoots L1 by ~115 kB, forcing the
-        # block_rows solve down and COSTING a round.  It is also unnecessary -- the writer
-        # already carries the happens-before chain: a member's ship(r+1) is preceded by its
-        # receive() of round r's stat, which the root only sends after its fold has drained
-        # the ring.
-        cbs.append(_cb(CB_SUM_HANDOFF, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
-        # Perf 2 (D22): the gather lands GATHER_SLOTS -- group_size ROUNDED UP TO EVEN --
-        # slots per tile-row, not group_size.  The root's fused fold walks a row's
-        # partials PAIRWISE in one DEST window (two halves, slot p and slot p + GP/2), so
-        # an odd group needs one pad slot to pair against.  The pad is boot-zeroed by the
-        # writer and no member ever writes it (my_slot < group_size <= GP - 1), so it adds
-        # an exact +0.0 to the row total.
-        #
-        # Cost is ZERO at even group_size (every live even profile: 8, 28, 32, and the
-        # focus shape's 8) and `block_rows` fp32 pages at odd group_size -- one 4 kB page
-        # at the op's only odd profile, (1,1,32,2304) WIDTH 9c with block_rows == 1.
-        # Both kernels re-derive GP from GROUP_SIZE identically, so this needs no CT arg.
-        gather_slots = plan.group_size + plan.group_size % 2
-        cbs.append(_cb(CB_PARTIALS_GATHERED, ft, gather_slots * block_rows, ttnn.float32, all_cores))
+        cbs.append(_cb(CB_SUM_HANDOFF, ft, block_rows, ttnn.float32, all_cores))
+        cbs.append(_cb(CB_PARTIALS_GATHERED, ft, plan.group_size * block_rows, ttnn.float32, all_cores))
         cbs.append(_cb(CB_STAT_HANDOFF, ft, block_rows, ttnn.float32, all_cores))
         cbs.append(_cb(CB_ROW_FINAL, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
 
@@ -2051,6 +1883,60 @@ def create_program_descriptor(
         else partial_w != 0
     )
 
+    # ==== EXPERIMENT: the gamma sharing-group multicast family ==============
+    # A SECOND mcast family, orthogonal to the stat combine's:
+    #   * rides NOC_0 (the reader's own NoC) vs the combine's NOC_1;
+    #   * takes base_sem_id 3 when the combine exists (which owns 0,1 and the
+    #     gather counter 2), else 0;
+    #   * its groups are grid COLUMNS (same width slice) where the combine's are
+    #     grid ROWS, so the two families' groups intersect in exactly one core
+    #     and never carry the same payload.
+    # The FACE-ROW trim (TRIM 2/3) addresses face 1 at page offset tile_bytes/4, which
+    # must be 64 B DRAM-aligned -- true iff tile_bytes % 256 == 0.  bfloat8_b's 1088 B
+    # tile has a 272 B face (16 shared-exponent bytes + 256 mantissa bytes), so the fetch
+    # would be silently truncated to the alignment.  Demote to the HALF-page trim, which
+    # only ever reads from offset 0 and is therefore format-agnostic.
+    g_trim = GAMMA_TRIM if (has_gamma and not gamma_is_rm) else 0
+    g_trim_note = ""
+    if g_trim in (2, 3) and (gt % 256) != 0:
+        g_trim_note = f"TRIM{g_trim}->1: {gamma.dtype} tile is {gt} B, face stride {gt // 4} B not 64 B aligned"
+        g_trim = 1
+
+    g_mcast = None
+    g_mcast_group = 1
+    g_mcast_off_reason = "knob off"
+    if GAMMA_MCAST and has_gamma and not gamma_is_rm:
+        bbox = all_cores.bounding_box()
+        bw = bbox.end.x - bbox.start.x + 1
+        bh = bbox.end.y - bbox.start.y + 1
+        # The emitters address a RECTANGLE anchored at (0,0); a ragged assignment
+        # would multicast into cores this program has no kernel/CB on.  (The op's own
+        # WIDTH-shard path already solves this by joining the bounding box's
+        # out-of-shard cores as INACTIVE; a graduated gamma mcast would do the same.
+        # Here it is a measured fallback so the sweep still produces a number.)
+        g_group = bh if plan.group_size > 1 else bw * bh
+        if not (bbox.start.x == 0 and bbox.start.y == 0):
+            g_mcast_off_reason = "grid not anchored at (0,0)"
+        elif len(assignment) != bw * bh:
+            g_mcast_off_reason = f"ragged assignment: {len(assignment)} cores in a {bw}x{bh} box"
+        elif g_group < 2:
+            g_mcast_off_reason = f"sharing group of {g_group} — nothing to share"
+        else:
+            g_base_sem = 3 if combine else 0
+            g_cfg = ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True, base_sem_id=g_base_sem)
+            if plan.group_size > 1:
+                # width split: one group per grid COLUMN, injector = grid row 0.
+                g_mcast = ttnn.Mcast1D(device, all_cores, ttnn.Mcast1DShape.PerColumn, 0, g_cfg)
+            else:
+                g_mcast = ttnn.Mcast2D(device, all_cores, ttnn.CoreCoord(0, 0), g_cfg)
+            g_mcast_group = g_group
+            g_mcast_off_reason = ""
+    GAMMA_PLAN_NOTE[:] = [
+        f"cores={len(assignment)} GRID_W={plan.group_size} combine={combine} "
+        f"gamma_group={g_mcast_group} trim={g_trim}{('[' + g_trim_note + ']') if g_trim_note else ''} "
+        f"mcast={'on' if g_mcast is not None else 'OFF(' + g_mcast_off_reason + ')'}"
+    ]
+
     # ---- reader -----------------------------------------------------------
     reader_ct_args = [
         1 if is_tile else 0,  # 0  IS_TILE
@@ -2072,12 +1958,11 @@ def create_program_descriptor(
         plan.shard_row_bytes,  # 16 L1 stick stride inside that shard (0 if !BAND)
         1 if stage_zero else 0,  # 17 zero the RM staging ring at boot
         1 if x_resident else 0,  # 18 X_RESIDENT: x/gamma held across both passes (D14)
-        gamma_trim,  # 19 TILE-gamma read granularity (D23): 0 whole / 1 half page / 2 face-rows
     ]
     # The kernel reads its accessor args at TensorAccessorArgs<N>() -- N must equal
     # the scalar CT-arg count above.  Assert it here so adding a scalar arg fails
     # in Python instead of mis-parsing on device.
-    assert len(reader_ct_args) == 20, "rms_norm_reader.cpp expects TensorAccessorArgs<20>()"
+    assert len(reader_ct_args) == 19, "rms_norm_reader.cpp expects TensorAccessorArgs<19>()"
     assert reader_ct_args[READER_CT_BAND] == (1 if plan.band else 0), "READER_CT_BAND index drifted"
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
@@ -2085,6 +1970,11 @@ def create_program_descriptor(
         if has_gamma
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
+    # EXPERIMENT: appended AFTER both accessor blocks so the in-tree
+    # TensorAccessorArgs<19> contract is untouched.
+    reader_ct_args.append(g_trim)
+    reader_ct_args.append(1 if g_mcast is not None else 0)
+    reader_ct_args.extend(g_mcast.compile_time_args() if g_mcast is not None else [0] * 5)
 
     # ---- writer -----------------------------------------------------------
     # The writer owns the whole cross-core combine (gather -> root -> mcast back):
@@ -2133,7 +2023,6 @@ def create_program_descriptor(
         plan.group_size,  # 13 cores per width group (GRID_W)
         x_squared_wt,  # 14 reduce's per-call width == cb_x_squared's row stride (D12)
         1 if x_resident else 0,  # 15 X_RESIDENT: x/gamma held across both passes (D14)
-        1 if plan.native_in else 0,  # 16 NATIVE_IN: cb_input_tiles aliases the resident shard (D25)
     ]
     assert x_squared_wt in (1, wt_chunk), "rms_norm: x_squared_wt must be 1 (DEST fold) or WT_CHUNK"
 
@@ -2153,7 +2042,18 @@ def create_program_descriptor(
         # on the tile-axis schemes they are the DERIVED view of the same slice
         # (_work_tile_axis), so passing both cannot drift.
         band_rt = [w.stick_base, w.stick_count, w.w_off_elems, w.w_real_elems]
-        reader_rt[core.x][core.y] = [x_addr, g_addr, w.row_start, w.row_count, w.w_start, w.w_real] + band_rt
+        reader_rt[core.x][core.y] = (
+            [x_addr, g_addr, w.row_start, w.row_count, w.w_start, w.w_real]
+            + band_rt
+            # EXPERIMENT: RT 10..13 = the gamma McastArgs block, RT 14 = is_sender.
+            # With the family off this is 4 zeros + is_sender = 1, i.e. every core
+            # reads gamma for itself -- the op's current behaviour.
+            + (
+                list(g_mcast.runtime_args(core)) + [1 if g_mcast.is_sender(core) else 0]
+                if g_mcast is not None
+                else [0, 0, 0, 0, 1]
+            )
+        )
         writer_rt[core.x][core.y] = (
             [out_addr, w.row_start, w.row_count, w.w_start, 1 if w.is_root else 0, w.slot]
             + band_rt
@@ -2190,6 +2090,10 @@ def create_program_descriptor(
     if combine:
         semaphores = list(plan.mcast.owned_semaphores())
         semaphores.append(ttnn.SemaphoreDescriptor(id=plan.gather_sem_id, core_ranges=all_cores, initial_value=0))
+    if g_mcast is not None:
+        # EXPERIMENT: the gamma family's own two handshake semaphores (ids 3,4 when
+        # the combine exists, else 0,1) -- disjoint from the combine's by construction.
+        semaphores.extend(g_mcast.owned_semaphores())
 
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],

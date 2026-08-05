@@ -1,0 +1,191 @@
+# csv: generated/profiler/reports/2026_08_05_10_16_40/ops_perf_results_2026_08_05_10_16_40.csv  (120 device ops)
+
+=== focus  GROUP_SIZE=8  rows=8  (floor=1091 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                4806     3715  1.00x   464.4     +0   0.999999  2.90e-03  5.85e-03    OK
+pack_l1_acc_pairs          3105     2014  1.84x   251.8     +0   0.999999  2.37e-03  4.81e-03    OK
+dest_acc_wide              1867      776  4.79x    97.0     +0   0.999999  1.54e-03  3.09e-03    OK
+dest_acc_wide_pad          1867      776  4.79x    97.0     +0   0.999999  1.54e-03  3.09e-03    OK
+dest_pairs_tail_raw        1895      804  4.62x   100.5     +0   0.999999  1.54e-03  3.09e-03    OK
+dest_acc_any               2741     1650  2.25x   206.2 +0+1cb   0.999999  1.46e-03  2.93e-03    OK
+floor                      1091        -      - (ablation)
+
+=== focus  GROUP_SIZE=32  rows=1  (floor=736 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                2441     1705  1.00x  1705.0     +0   1.000000  3.29e-03  6.58e-03    OK
+pack_l1_acc_pairs          1754     1018  1.67x  1018.0     +0   0.999999  2.45e-03  4.94e-03    OK
+dest_acc_wide              1075      339  5.03x   339.0     +0   0.999999  1.46e-03  2.91e-03    OK
+dest_acc_wide_pad          1061      325  5.25x   325.0     +0   0.999999  1.46e-03  2.91e-03    OK
+dest_pairs_tail_raw        1035      299  5.70x   299.0     +0   0.999999  1.46e-03  2.91e-03    OK
+dest_acc_any               1519      783  2.18x   783.0 +0+1cb   0.999997  3.68e-03  7.37e-03    OK
+floor                       736        -      - (ablation)
+
+=== focus  GROUP_SIZE=28  rows=1  (floor=723 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                2247     1524  1.00x  1524.0     +0   1.000000  2.66e-03  5.32e-03    OK
+pack_l1_acc_pairs          1630      907  1.68x   907.0     +0   1.000000  1.94e-03  3.87e-03    OK
+dest_acc_wide              1018      295  5.17x   295.0     +0   0.999999  1.73e-03  3.49e-03    OK
+dest_acc_wide_pad          1020      297  5.13x   297.0     +0   0.999999  1.73e-03  3.49e-03    OK
+dest_pairs_tail_raw         992      269  5.67x   269.0     +0   0.999999  1.73e-03  3.49e-03    OK
+dest_acc_any               1417      694  2.20x   694.0 +0+1cb   0.999998  2.97e-03  5.92e-03    OK
+floor                       723        -      - (ablation)
+
+=== focus  GROUP_SIZE=9  rows=1  (floor=745 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                1294      549  1.00x   549.0     +0   0.999999  3.18e-03  6.29e-03    OK
+dest_acc_wide_pad           881      136  4.04x   136.0     +1   0.999999  1.49e-03  2.98e-03    OK
+dest_pairs_tail_raw         784       39 14.08x    39.0     +0   0.999999  1.81e-03  3.69e-03    OK
+dest_acc_any                928      183  3.00x   183.0 +0+1cb   0.999999  1.33e-03  2.66e-03    OK
+floor                       745        -      - (ablation)
+
+=== focus  GROUP_SIZE=8  rows=1  (floor=726 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                1237      511  1.00x   511.0     +0   1.000000  2.72e-03  5.42e-03    OK
+pack_l1_acc_pairs           988      262  1.95x   262.0     +0   0.999999  2.05e-03  4.18e-03    OK
+dest_acc_wide               884      158  3.23x   158.0     +0   0.999999  1.41e-03  2.91e-03    OK
+dest_acc_wide_pad           884      158  3.23x   158.0     +0   0.999999  1.41e-03  2.91e-03    OK
+dest_pairs_tail_raw         776       50 10.22x    50.0     +0   0.999999  1.41e-03  2.91e-03    OK
+dest_acc_any                911      185  2.76x   185.0 +0+1cb   0.999998  1.82e-03  3.66e-03    OK
+floor                       726        -      - (ablation)
+
+=== sweep  GROUP_SIZE=4  rows=1  (floor=725 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                 968      243  1.00x   243.0     +0   0.999999  2.92e-03  5.97e-03    OK
+pack_l1_acc_pairs           928      203  1.20x   203.0     +0   0.999999  2.04e-03  4.21e-03    OK
+dest_acc_wide               889      164  1.48x   164.0     +0   1.000000  1.17e-03  2.36e-03    OK
+dest_acc_wide_pad           888      163  1.49x   163.0     +0   1.000000  1.17e-03  2.36e-03    OK
+dest_pairs_tail_raw         776       51  4.76x    51.0     +0   1.000000  1.17e-03  2.36e-03    OK
+dest_acc_any                910      185  1.31x   185.0 +0+1cb   0.999999  1.31e-03  2.63e-03    OK
+floor                       725        -      - (ablation)
+
+=== sweep  GROUP_SIZE=4  rows=8  (floor=1090 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                3037     1947  1.00x   243.4     +0   0.999999  2.72e-03  5.49e-03    OK
+pack_l1_acc_pairs          2479     1389  1.40x   173.6     +0   0.999999  1.97e-03  4.00e-03    OK
+dest_acc_wide              1567      477  4.08x    59.6     +0   0.999999  1.35e-03  2.72e-03    OK
+dest_acc_wide_pad          1569      479  4.06x    59.9     +0   0.999999  1.35e-03  2.72e-03    OK
+dest_pairs_tail_raw        1547      457  4.26x    57.1     +0   0.999999  1.35e-03  2.72e-03    OK
+dest_acc_any               1896      806  2.42x   100.8 +0+1cb   0.999999  1.28e-03  2.57e-03    OK
+floor                      1090        -      - (ablation)
+
+=== sweep  GROUP_SIZE=4  rows=32  (floor=2362 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc               10020     7658  1.00x   239.3     +0   0.999999  2.81e-03  5.68e-03    OK
+pack_l1_acc_pairs          7764     5402  1.42x   168.8     +0   0.999999  1.99e-03  4.02e-03    OK
+dest_acc_wide              4162     1800  4.25x    56.2     +0   0.999999  1.37e-03  2.76e-03    OK
+dest_acc_wide_pad          4146     1784  4.29x    55.8     +0   0.999999  1.37e-03  2.76e-03    OK
+dest_pairs_tail_raw        4183     1821  4.21x    56.9     +0   0.999999  1.37e-03  2.76e-03    OK
+dest_acc_any               5773     3411  2.25x   106.6 +0+1cb   0.999999  1.26e-03  2.55e-03    OK
+floor                      2362        -      - (ablation)
+
+=== sweep  GROUP_SIZE=8  rows=1  (floor=739 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                1225      486  1.00x   486.0     +0   1.000000  2.72e-03  5.42e-03    OK
+pack_l1_acc_pairs           982      243  2.00x   243.0     +0   0.999999  2.05e-03  4.18e-03    OK
+dest_acc_wide               883      144  3.38x   144.0     +0   0.999999  1.41e-03  2.91e-03    OK
+dest_acc_wide_pad           885      146  3.33x   146.0     +0   0.999999  1.41e-03  2.91e-03    OK
+dest_pairs_tail_raw         770       31 15.68x    31.0     +0   0.999999  1.41e-03  2.91e-03    OK
+dest_acc_any                894      155  3.14x   155.0 +0+1cb   0.999998  1.82e-03  3.66e-03    OK
+floor                       739        -      - (ablation)
+
+=== sweep  GROUP_SIZE=8  rows=8  (floor=1085 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                4806     3721  1.00x   465.1     +0   0.999999  2.90e-03  5.85e-03    OK
+pack_l1_acc_pairs          3106     2021  1.84x   252.6     +0   0.999999  2.37e-03  4.81e-03    OK
+dest_acc_wide              1870      785  4.74x    98.1     +0   0.999999  1.54e-03  3.09e-03    OK
+dest_acc_wide_pad          1870      785  4.74x    98.1     +0   0.999999  1.54e-03  3.09e-03    OK
+dest_pairs_tail_raw        1898      813  4.58x   101.6     +0   0.999999  1.54e-03  3.09e-03    OK
+dest_acc_any               2744     1659  2.24x   207.4 +0+1cb   0.999999  1.46e-03  2.93e-03    OK
+floor                      1085        -      - (ablation)
+
+=== sweep  GROUP_SIZE=9  rows=1  (floor=745 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                1285      540  1.00x   540.0     +0   0.999999  3.18e-03  6.29e-03    OK
+dest_acc_wide_pad           881      136  3.97x   136.0     +1   0.999999  1.49e-03  2.98e-03    OK
+dest_pairs_tail_raw         782       37 14.59x    37.0     +0   0.999999  1.81e-03  3.69e-03    OK
+dest_acc_any                925      180  3.00x   180.0 +0+1cb   0.999999  1.33e-03  2.66e-03    OK
+floor                       745        -      - (ablation)
+
+=== sweep  GROUP_SIZE=9  rows=8  (floor=1085 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                5204     4119  1.00x   514.9     +0   0.999999  3.24e-03  6.43e-03    OK
+dest_acc_wide_pad          2076      991  4.16x   123.9     +8   0.999999  1.55e-03  3.11e-03    OK
+dest_pairs_tail_raw        2307     1222  3.37x   152.8     +0   0.999999  1.64e-03  3.27e-03    OK
+dest_acc_any               2946     1861  2.21x   232.6 +0+1cb   0.999999  1.64e-03  3.28e-03    OK
+floor                      1085        -      - (ablation)
+
+=== sweep  GROUP_SIZE=16  rows=1  (floor=744 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                1630      886  1.00x   886.0     +0   0.999999  2.88e-03  5.75e-03    OK
+pack_l1_acc_pairs          1270      526  1.68x   526.0     +0   0.999999  2.50e-03  5.00e-03    OK
+dest_acc_wide               874      130  6.82x   130.0     +0   0.999999  1.67e-03  3.35e-03    OK
+dest_acc_wide_pad           877      133  6.66x   133.0     +0   0.999999  1.67e-03  3.35e-03    OK
+dest_pairs_tail_raw         830       86 10.30x    86.0     +0   0.999999  1.67e-03  3.35e-03    OK
+dest_acc_any               1099      355  2.50x   355.0 +0+1cb   0.999998  1.84e-03  3.70e-03    OK
+floor                       744        -      - (ablation)
+
+=== sweep  GROUP_SIZE=16  rows=8  (floor=1091 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                8164     7073  1.00x   884.1     +0   1.000000  2.97e-03  5.94e-03    OK
+pack_l1_acc_pairs          5198     4107  1.72x   513.4     +0   0.999999  2.46e-03  4.96e-03    OK
+dest_acc_wide              2708     1617  4.37x   202.1     +0   0.999999  1.52e-03  3.05e-03    OK
+dest_acc_wide_pad          2715     1624  4.36x   203.0     +0   0.999999  1.52e-03  3.05e-03    OK
+dest_pairs_tail_raw        2671     1580  4.48x   197.5     +0   0.999999  1.52e-03  3.05e-03    OK
+dest_acc_any               4455     3364  2.10x   420.5 +0+1cb   0.999998  1.85e-03  3.70e-03    OK
+floor                      1091        -      - (ablation)
+
+=== sweep  GROUP_SIZE=28  rows=1  (floor=724 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                2231     1507  1.00x  1507.0     +0   1.000000  2.66e-03  5.32e-03    OK
+pack_l1_acc_pairs          1636      912  1.65x   912.0     +0   1.000000  1.94e-03  3.87e-03    OK
+dest_acc_wide              1018      294  5.13x   294.0     +0   0.999999  1.73e-03  3.49e-03    OK
+dest_acc_wide_pad          1022      298  5.06x   298.0     +0   0.999999  1.73e-03  3.49e-03    OK
+dest_pairs_tail_raw         985      261  5.77x   261.0     +0   0.999999  1.73e-03  3.49e-03    OK
+dest_acc_any               1422      698  2.16x   698.0 +0+1cb   0.999998  2.97e-03  5.92e-03    OK
+floor                       724        -      - (ablation)
+
+=== sweep  GROUP_SIZE=28  rows=8  (floor=1093 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc               13218    12125  1.00x  1515.6     +0   1.000000  2.61e-03  5.20e-03    OK
+pack_l1_acc_pairs          8138     7045  1.72x   880.6     +0   1.000000  2.00e-03  3.98e-03    OK
+dest_acc_wide              3992     2899  4.18x   362.4     +0   0.999998  1.81e-03  3.62e-03    OK
+dest_acc_wide_pad          3996     2903  4.18x   362.9     +0   0.999998  1.81e-03  3.62e-03    OK
+dest_pairs_tail_raw        3954     2861  4.24x   357.6     +0   0.999998  1.81e-03  3.62e-03    OK
+dest_acc_any               7003     5910  2.05x   738.8 +0+1cb   0.999997  3.13e-03  6.27e-03    OK
+floor                      1093        -      - (ablation)
+
+=== sweep  GROUP_SIZE=32  rows=1  (floor=730 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc                2430     1700  1.00x  1700.0     +0   1.000000  3.29e-03  6.58e-03    OK
+pack_l1_acc_pairs          1750     1020  1.67x  1020.0     +0   0.999999  2.45e-03  4.94e-03    OK
+dest_acc_wide              1070      340  5.00x   340.0     +0   0.999999  1.46e-03  2.91e-03    OK
+dest_acc_wide_pad          1065      335  5.07x   335.0     +0   0.999999  1.46e-03  2.91e-03    OK
+dest_pairs_tail_raw        1047      317  5.36x   317.0     +0   0.999999  1.46e-03  2.91e-03    OK
+dest_acc_any               1519      789  2.15x   789.0 +0+1cb   0.999997  3.68e-03  7.37e-03    OK
+floor                       730        -      - (ablation)
+
+=== sweep  GROUP_SIZE=32  rows=8  (floor=1091 ns) ===
+variant                total_ns  fold_ns      x  ns/row    L1d    pcc_out  rrms_out  rrms_sum  gate
+pack_l1_acc               15059    13968  1.00x  1746.0     +0   1.000000  3.03e-03  6.08e-03    OK
+pack_l1_acc_pairs          9095     8004  1.75x  1000.5     +0   0.999999  2.47e-03  4.97e-03    OK
+dest_acc_wide              4416     3325  4.20x   415.6     +0   0.999998  1.77e-03  3.53e-03    OK
+dest_acc_wide_pad          4417     3326  4.20x   415.8     +0   0.999998  1.77e-03  3.53e-03    OK
+dest_pairs_tail_raw        4376     3285  4.25x   410.6     +0   0.999998  1.77e-03  3.53e-03    OK
+dest_acc_any               7870     6779  2.06x   847.4 +0+1cb   0.999996  3.45e-03  6.96e-03    OK
+floor                      1091        -      - (ablation)
+
+=== speedup vs pack_l1_acc (fold_ns ratio), sweep tag ===
+   G,rows  pack_l1_acc_pairs      dest_acc_wide  dest_acc_wide_pad  dest_pairs_tail_r       dest_acc_any
+      4,1         203  1.20x         164  1.48x         163  1.49x          51  4.76x         185  1.31x
+      4,8        1389  1.40x         477  4.08x         479  4.06x         457  4.26x         806  2.42x
+     4,32        5402  1.42x        1800  4.25x        1784  4.29x        1821  4.21x        3411  2.25x
+      8,1         243  2.00x         144  3.38x         146  3.33x          31 15.68x         155  3.14x
+      8,8        2021  1.84x         785  4.74x         785  4.74x         813  4.58x        1659  2.24x
+      9,1                 --                 --         136  3.97x          37 14.59x         180  3.00x
+      9,8                 --                 --         991  4.16x        1222  3.37x        1861  2.21x
+     16,1         526  1.68x         130  6.82x         133  6.66x          86 10.30x         355  2.50x
+     16,8        4107  1.72x        1617  4.37x        1624  4.36x        1580  4.48x        3364  2.10x
+     28,1         912  1.65x         294  5.13x         298  5.06x         261  5.77x         698  2.16x
+     28,8        7045  1.72x        2899  4.18x        2903  4.18x        2861  4.24x        5910  2.05x
+     32,1        1020  1.67x         340  5.00x         335  5.07x         317  5.36x         789  2.15x
+     32,8        8004  1.75x        3325  4.20x        3326  4.20x        3285  4.25x        6779  2.06x

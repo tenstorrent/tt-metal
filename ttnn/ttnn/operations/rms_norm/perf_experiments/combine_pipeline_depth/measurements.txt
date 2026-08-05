@@ -1,0 +1,106 @@
+combine_pipeline_depth -- measured data
+=======================================
+box/arch : blackhole p150b, CHIP_FREQ 1350 MHz, 110-core compute grid
+config   : bf16 in/out + bf16 TILE gamma, HiFi2, fp32_dest_acc_en=False,
+           math_approx_mode=False, eps=1e-6, fp32 stat CBs.  IDENTICAL for every
+           variant -- the precision contract was never a lever.
+metric   : DEVICE KERNEL DURATION [ns], one fresh-cache profiled run per variant
+           (all variants of a case in one process, one program each).
+harness  : bench.py asks the OP'S OWN create_program_descriptor for the program and
+           only repoints kernel_source at verbatim copies + a defines switch, so
+           variant 0 IS the op.  Cross-check: bench serial on the focus shape
+           64707 / 64714 / 64724 ns across three runs vs the real op measured at
+           64801 ns (test_rms_norm_perf.py -k r4target_bshard_64c) -- 0.1%.
+
+LEVERS (bitmask)
+  1  mcast  writer: root pushes its own finalized stat to cb_row_final BEFORE
+            SenderPipe::send(), so its pass B does not wait out the broadcast.
+  2  pipe   compute: pass A runs ONE ROW-BLOCK AHEAD on every core.
+  4  ring2  cb_partials_gathered 2 rounds deep, round-parity halves.
+  8  hand2  cb_sum_handoff 2 row-blocks deep.
+  16 xdeep  a READER-FED cb_input_tiles sized to (num_blocks+1) row-blocks.
+
+WHY THERE IS ANYTHING TO OVERLAP (real op, zone timeline, root core (1,2), BR=10)
+  Steady-state round: compute_root_sum 7664 ns of which 3246 ns is compute IDLE in
+  cb_wait_front(cb_partials_gathered) before the fold starts, plus compute_scale
+  4105 ns of which ~2340 ns is compute IDLE waiting for its own writer to finish
+  the multicast.  5586 of 18871 ns per round (30%) is one thread waiting for the
+  other on the SAME core.
+
+LEVER 4 -- IS THE ARRIVAL WAIT SKEW OR LATENCY?  (real op, group on virtual row y=2)
+  compute_reduce END spread across the 8 cores of the group:
+      blk1 119 ns   blk2 127 ns   blk3 112 ns      <- pass A finishes TOGETHER
+  writer_gather_ship END spread over the same cores, same rounds:
+      blk1 1693 ns  blk2 1704 ns  blk3 448 ns
+      monotone by hop distance from the root: x1(root) 26292, x2 26740, x3 26990,
+      x4 27250, x5 27503, x6 27759, x11 27973, x12 27984  (~250 ns per sender)
+  => the root's arrival wait is SERIALIZED NoC INGRESS at the root's L1, ~250 ns per
+     sender, NOT the slowest member finishing pass A.  It is hideable latency.
+
+MECHANISM CONFIRMED (same core, serial vs variant 11, one CSV, run ids 1024 / 2048)
+  zone totals over 4 rounds, root core TRISC_0:
+      compute_root_sum   25174 -> 16559   (-8615)   idle 3246/round -> 0
+      compute_scale      13575 -> 10932   (-2643)   mcast wait removed
+      TRISC_0 kernel     64044 -> 52987   (-11057)  == 8615 + 2643, closes
+  The member ingress staircase is UNCHANGED (1796 ns) -- it is now hidden, not gone.
+
+FOCUS SHAPE  (1,1,8192,1024) BLOCK_SHARDED shard[1024,128] grid(8,8), 64 cores,
+             GROUP_SIZE 8, BLOCK_ROWS 10, num_blocks 4
+  variant                      ns      vs base   +L1 B/core   bit-exact vs serial
+  serial                    64707      1.000x            0    (reference)
+  mcast                     64303      1.006x            0    yes
+  pipe                      57000      1.135x            0    yes
+  mcast+pipe                55279      1.171x            0    yes
+  pipe+hand2                55740      1.161x        40960    yes
+  mcast+pipe+hand2          53740      1.204x        40960    yes   <-- RECOMMENDED
+  pipe+ring2+hand2          60546      1.069x       294912    yes   (BLOCK_ROWS 8)
+  mcast+pipe+ring2+hand2    59435      1.089x       294912    yes   (BLOCK_ROWS 8)
+  serial            @BR=8   64276      1.007x            0    yes
+  mcast+pipe+hand2  @BR=8   54474      1.188x        32768    yes
+  repeats of the recommended option: 1.194x / 1.199x / 1.204x (3 fresh runs)
+
+  RING2 is a MEASURED REGRESSION, twice over:
+    * at equal BLOCK_ROWS (8): 59435 vs 54474 for the same variant without ring2
+      => the ring depth itself costs 1.09x.
+    * it does not FIT L1 at the op's own BLOCK_ROWS=10 (CB region overshoots the
+      L1 buffer base by 117632 B), so the descriptor's own solve must drop to 8.
+    * it is also UNNECESSARY: `pipe` alone is bit-exact on every geometry, because
+      a member's WRITER cannot ship round r+1 until it has received round r's stat
+      multicast, which the root only sends after its fold has drained the ring.
+
+  hand2's BLOCK_ROWS consequence: +1 fp32 page per tile-row moves the descriptor's
+  f32_pages 14 -> 15, i.e. per_tilerow 73728 -> 77824 B, i.e. brmax 10 -> 9 or 10.
+  num_blocks = ceil(32/9) = 4 either way -- NO extra combine round.
+
+DOMAIN SWEEP  (num_blocks x GROUP_SIZE; every row bit-exact unless noted)
+  case        geometry                                     GS  nb   serial   best  speedup
+  nb1    (1,1,2560,1024) BLOCK [320,128] (8,8)               8   1    22296  21954   1.016x  FLAT
+  nb2    (1,1,5120,1024) BLOCK [640,128] (8,8)               8   2    41524  35938   1.155x
+  focus  (1,1,8192,1024) BLOCK [1024,128] (8,8)              8   4    64707  53740   1.204x
+  nb8    focus with BLOCK_ROWS forced to 4                   8   8    68645  56099   1.224x
+  nb16   focus with BLOCK_ROWS forced to 2                   8  16    78323  61383   1.276x
+  gs32_nb1 (1,1,32,5120) WIDTH [32,160] (8,4)               32   1     7692   7603   1.012x  FLAT
+  gs28_nb1 (1,1,32,7168) WIDTH [32,256] (7,4)               28   1     7507   7475   1.004x  FLAT
+  gs16_multi (1,1,4096,1024) WIDTH [4096,64] (8,2)          16  43   316076 260754   1.212x
+  gs32_multi (1,1,2048,1024) WIDTH [2048,32] (8,4)          32  11   227644 211124   1.078x
+  ilv_gw8 (1,1,8192,1024) INTERLEAVED, GRID_W=8              8   3   116712 116031   REGRESSION
+
+  nb == 1 is a structural no-op for this idea (there is no block r+1), so FLAT there
+  is expected, not a boundary.  gs32_multi's smaller win is the GROUP_SIZE=32 fold
+  (32 tiles/row) dwarfing a Wt=1 pass A -- less independent work to hide behind.
+
+THE ONE REAL EXCEPTION -- a READER-FED cb_input_tiles (interleaved width split)
+  pipe                     130617   0.894x        0   NOT bit-exact, pcc 0.980150
+  mcast+pipe               130196   0.896x        0   NOT bit-exact, pcc 0.980150
+  pipe+hand2               128387   0.909x    49152   NOT bit-exact, pcc 0.980150
+  mcast+pipe+hand2         129304   0.903x    49152   NOT bit-exact, pcc 0.980150
+  pipe+xdeep               130164   0.897x   196608   bit-exact
+  mcast+pipe+hand2+xdeep   130613   0.894x   245760   bit-exact
+  Cause, confirmed by the fix: pass A one block ahead reads a TWO-ROW-BLOCK window
+  of cb_input_tiles at a tile OFFSET from the CB front, and a tile offset cannot
+  cross the ring wrap.  A shard-backed cb_input_tiles IS the whole per-core
+  assignment, so its front never wraps (every SHARDED combine plan).  A reader-fed
+  ring is CB_X_DEPTH == 2 row-blocks and the window straddles the wrap once per two
+  rounds.  `xdeep` (ring >= num_blocks+1 row-blocks) restores bit-exactness for
+  196608 B/core -- and the result is still 0.894x, because this regime is
+  reader/DRAM-bound, not combine-latency-bound.  Exception on both counts.

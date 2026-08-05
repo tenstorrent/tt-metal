@@ -59,6 +59,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+// EXPERIMENT (gamma_broadcast_and_trim): the gamma-broadcast family.
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 namespace {
 constexpr uint32_t cb_input_sticks = 0;
@@ -112,12 +114,36 @@ void kernel_main() {
     // third regime -- ROW_RESIDENT: resident x/gamma with the DERIVED CBs chunked,
     // which means ONE pass over x here instead of two.
     constexpr uint32_t X_RES = get_compile_time_arg_val(18);
-    // Perf 2 (descriptor D23): TILE-gamma read granularity.  0 whole tile / 1 half page /
-    // 2 face-rows.  The descriptor owns the choice (it knows gamma's tile format and
-    // whether a face offset is 64-byte DRAM aligned); the kernel only spells the reads.
-    constexpr uint32_t GAMMA_TRIM = get_compile_time_arg_val(19);
-    constexpr auto x_args = TensorAccessorArgs<20>();
+    constexpr auto x_args = TensorAccessorArgs<19>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+
+    // ================== EXPERIMENT KNOBS (appended AFTER both accessor blocks, so
+    // the in-tree TensorAccessorArgs<19> contract is untouched) ==================
+    //
+    //   GAMMA_TRIM  0 = whole tile  (the op today: get_tile_size() bytes per gamma tile)
+    //               1 = FACES 0+1   (the top half of the tile: rows 0..15, both column
+    //                                halves -- ONE contiguous 1024 B read for bf16)
+    //               2 = FACE ROWS   (row 0 of face 0 and row 0 of face 1: TWO 32 B reads
+    //                                at page offsets 0 and FACE_BYTES -- exactly the bytes
+    //                                `mul<BroadcastDim::Row>` reads)
+    //               3 = FACE ROWS, rounded up to the 64 B DRAM alignment granule (two
+    //                                64 B reads) -- the alignment-safe form of 2
+    //   GAMMA_MCAST 0 = every core reads gamma from DRAM itself (the op today)
+    //               1 = ONE injector per sharing group reads it and multicasts it
+    //                   (mcast_pipe, on the reader's own NOC_0)
+    constexpr uint32_t GEXT = gamma_args.next_compile_time_args_offset();
+    constexpr uint32_t GAMMA_TRIM = get_compile_time_arg_val(GEXT);
+    constexpr uint32_t GAMMA_MCAST = get_compile_time_arg_val(GEXT + 1);
+    constexpr auto gmc = dataflow_kernel_lib::McastArgs</*CT=*/GEXT + 2, /*RT=*/10>();
+    // RT 10..13 = the McastArgs block; RT 14 = is_sender.
+    const uint32_t g_is_sender = (GAMMA_MCAST != 0) ? get_arg_val<uint32_t>(14) : 1u;
+    static_assert(GAMMA_MCAST == 0 || gmc.active, "gamma mcast on but McastArgs inactive");
+    // The trim exists only for a TILE gamma: a ROW_MAJOR gamma is a single W-element
+    // stick with NO tile padding, so there is nothing to trim (see the domain note).
+    static_assert(GAMMA_TRIM == 0 || GAMMA_IS_RM == 0, "gamma trim is TILE-gamma only");
+    // A ROW_MAJOR gamma's filler is `read_sticks_for_tilize`, which owns its own CB
+    // push shape; broadcasting it is expressible but is NOT what this bench measures.
+    static_assert(GAMMA_MCAST == 0 || GAMMA_IS_RM == 0, "gamma mcast measured on TILE gamma only");
 
     constexpr bool NATIVE_X = (NATIVE_IN != 0);
     constexpr bool BAND_X = (BAND != 0);
@@ -261,41 +287,71 @@ void kernel_main() {
                 }
             } else {
                 const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
+                // Face geometry of a 32x32 tile: 4 faces of 16x16, laid out row-major in
+                // the page at offsets 0 / F / 2F / 3F.  TILE row 0 -- the ONLY row
+                // `mul<BroadcastDim::Row>` reads (MEASURED: test_row0_only seeds rows
+                // 1..31 five orders of magnitude wrong and the pcc does not move) -- is
+                // face 0 row 0 (columns 0..15) plus face 1 row 0 (columns 16..31).
+                //
+                // Everything is derived from the CB's ACTUAL tile size rather than from
+                // GAMMA_ELEM_BYTES, which is 0 on a block-float dtype (it exists only for
+                // the ROW_MAJOR stick math).  For a linear tiled format:
+                //     face      = tile_bytes / 4      face row (16 datums) = tile_bytes / 64
+                // A DRAM source offset must be 64 B aligned (this reader's own comment
+                // above: an unaligned DRAM read is silently TRUNCATED to the alignment),
+                // and tile_bytes/4 is a multiple of 64 exactly when tile_bytes % 256 == 0
+                // -- true for bf16 (2048) and fp32 (4096), FALSE for bfloat8_b (1088, a
+                // 272 B face = 16 shared-exponent bytes + 256 mantissa bytes).  The host
+                // demotes TRIM 2/3 to TRIM 1 on those formats; TRIM 1 needs only offset 0.
+                const uint32_t G_FACE_BYTES = gamma_tile_bytes >> 2;
+                const uint32_t G_FACE_ROW_BYTES = gamma_tile_bytes >> 6;
+                const uint32_t G_FACE_ROW_ALIGNED = (G_FACE_ROW_BYTES < 64u) ? 64u : G_FACE_ROW_BYTES;
                 cb_reserve_back(cb_gamma_tiles, WT_CHUNK);
-                uint32_t l1_addr = get_write_ptr(cb_gamma_tiles);
-                for (uint32_t w = 0; w < WT_CHUNK; ++w) {
-                    // A RAGGED width shard ends in whole PAD tiles that have no
-                    // gamma counterpart; clamp so the read stays inside the tensor
-                    // (the product lands in the output shard's pad region and is
-                    // never read back).
-                    const uint32_t wt = first_wt + w;
-                    const uint32_t tile_id = (wt < WT) ? wt : (WT - 1);
-                    // D23: fetch only the part of the tile pass B's BroadcastDim::Row
-                    // consumer reads.  gamma is a (1,1,1,W) vector, so 31 of the tile's 32
-                    // rows are PADDING and row 0 lives in the top row-group of faces 0
-                    // and 1.  Everything the trim does not fetch stays whatever was in the
-                    // CB -- which is exactly why the trim is only as wide as the faces the
-                    // consumer provably reads (measured: rows 1..31 seeded 1e5x wrong left
-                    // the output BIT-IDENTICAL; corrupting row 0 instead collapsed pcc).
-                    if constexpr (GAMMA_TRIM == 2) {
-                        // Two face-rows.  The face offset gamma_tile_bytes/4 is 64-byte
-                        // DRAM aligned for every linear tiled format -- the descriptor has
-                        // already refused this granularity for block-float, where it is not.
-                        constexpr uint32_t G_ROW_BYTES = TILE_DIM * GAMMA_ELEM_BYTES;
-                        const uint64_t base = get_noc_addr(tile_id, g_acc);
-                        const uint32_t face = gamma_tile_bytes / 4;
-                        noc_async_read(base, l1_addr, G_ROW_BYTES);
-                        noc_async_read(base + face, l1_addr + face, G_ROW_BYTES);
-                    } else if constexpr (GAMMA_TRIM == 1) {
-                        // Half the page from offset 0 == faces 0 and 1 in EVERY tiled
-                        // format, block-float included; needs no face-stride alignment.
-                        noc_async_read(get_noc_addr(tile_id, g_acc), l1_addr, gamma_tile_bytes / 2);
-                    } else {
-                        noc_async_read_tile(tile_id, g_acc, l1_addr);
+                const uint32_t g_dst = get_write_ptr(cb_gamma_tiles);
+                if (g_is_sender != 0) {
+                    uint32_t l1_addr = g_dst;
+                    for (uint32_t w = 0; w < WT_CHUNK; ++w) {
+                        // A RAGGED width shard ends in whole PAD tiles that have no
+                        // gamma counterpart; clamp so the read stays inside the tensor
+                        // (the product lands in the output shard's pad region and is
+                        // never read back).
+                        const uint32_t wt = first_wt + w;
+                        const uint32_t page = (wt < WT) ? wt : (WT - 1);
+                        if constexpr (GAMMA_TRIM == 0) {
+                            noc_async_read_tile(page, g_acc, l1_addr);
+                        } else if constexpr (GAMMA_TRIM == 1) {
+                            // The FIRST HALF of the page is faces 0+1 in every tiled
+                            // format, block-float included -- one contiguous read from
+                            // offset 0, so no face-stride alignment question arises.
+                            noc_async_read(g_acc.get_noc_addr(page, 0), l1_addr, gamma_tile_bytes >> 1);
+                        } else if constexpr (GAMMA_TRIM == 2) {
+                            noc_async_read(g_acc.get_noc_addr(page, 0), l1_addr, G_FACE_ROW_BYTES);
+                            noc_async_read(
+                                g_acc.get_noc_addr(page, G_FACE_BYTES), l1_addr + G_FACE_BYTES, G_FACE_ROW_BYTES);
+                        } else {
+                            noc_async_read(g_acc.get_noc_addr(page, 0), l1_addr, G_FACE_ROW_ALIGNED);
+                            noc_async_read(
+                                g_acc.get_noc_addr(page, G_FACE_BYTES), l1_addr + G_FACE_BYTES, G_FACE_ROW_ALIGNED);
+                        }
+                        l1_addr += gamma_tile_bytes;
                     }
-                    l1_addr += gamma_tile_bytes;
+                    noc_async_read_barrier();
+                    if constexpr (GAMMA_MCAST != 0) {
+                        // Broadcast IN PLACE out of the same cb_gamma_tiles slot the read
+                        // landed in (src == dst -> the EXCLUDE-source path in both host
+                        // emitters, so the injector is neither served twice nor skipped).
+                        // The payload is the WHOLE staged region even when the DRAM read
+                        // was trimmed: one contiguous on-chip transaction beats WT_CHUNK
+                        // scattered ones, and the untouched bytes are never read.
+                        Noc mnoc;
+                        auto pipe = gmc.sender(mnoc);
+                        pipe.send(g_dst, g_dst, WT_CHUNK * gamma_tile_bytes);
+                    }
+                } else {
+                    Noc mnoc;
+                    auto pipe = gmc.receiver(mnoc);
+                    pipe.receive();
                 }
-                noc_async_read_barrier();
                 cb_push_back(cb_gamma_tiles, WT_CHUNK);
             }
         }

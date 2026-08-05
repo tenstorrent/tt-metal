@@ -112,11 +112,7 @@ void kernel_main() {
     // third regime -- ROW_RESIDENT: resident x/gamma with the DERIVED CBs chunked,
     // which means ONE pass over x here instead of two.
     constexpr uint32_t X_RES = get_compile_time_arg_val(18);
-    // Perf 2 (descriptor D23): TILE-gamma read granularity.  0 whole tile / 1 half page /
-    // 2 face-rows.  The descriptor owns the choice (it knows gamma's tile format and
-    // whether a face offset is 64-byte DRAM aligned); the kernel only spells the reads.
-    constexpr uint32_t GAMMA_TRIM = get_compile_time_arg_val(19);
-    constexpr auto x_args = TensorAccessorArgs<20>();
+    constexpr auto x_args = TensorAccessorArgs<19>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr bool NATIVE_X = (NATIVE_IN != 0);
@@ -269,30 +265,7 @@ void kernel_main() {
                     // (the product lands in the output shard's pad region and is
                     // never read back).
                     const uint32_t wt = first_wt + w;
-                    const uint32_t tile_id = (wt < WT) ? wt : (WT - 1);
-                    // D23: fetch only the part of the tile pass B's BroadcastDim::Row
-                    // consumer reads.  gamma is a (1,1,1,W) vector, so 31 of the tile's 32
-                    // rows are PADDING and row 0 lives in the top row-group of faces 0
-                    // and 1.  Everything the trim does not fetch stays whatever was in the
-                    // CB -- which is exactly why the trim is only as wide as the faces the
-                    // consumer provably reads (measured: rows 1..31 seeded 1e5x wrong left
-                    // the output BIT-IDENTICAL; corrupting row 0 instead collapsed pcc).
-                    if constexpr (GAMMA_TRIM == 2) {
-                        // Two face-rows.  The face offset gamma_tile_bytes/4 is 64-byte
-                        // DRAM aligned for every linear tiled format -- the descriptor has
-                        // already refused this granularity for block-float, where it is not.
-                        constexpr uint32_t G_ROW_BYTES = TILE_DIM * GAMMA_ELEM_BYTES;
-                        const uint64_t base = get_noc_addr(tile_id, g_acc);
-                        const uint32_t face = gamma_tile_bytes / 4;
-                        noc_async_read(base, l1_addr, G_ROW_BYTES);
-                        noc_async_read(base + face, l1_addr + face, G_ROW_BYTES);
-                    } else if constexpr (GAMMA_TRIM == 1) {
-                        // Half the page from offset 0 == faces 0 and 1 in EVERY tiled
-                        // format, block-float included; needs no face-stride alignment.
-                        noc_async_read(get_noc_addr(tile_id, g_acc), l1_addr, gamma_tile_bytes / 2);
-                    } else {
-                        noc_async_read_tile(tile_id, g_acc, l1_addr);
-                    }
+                    noc_async_read_tile((wt < WT) ? wt : (WT - 1), g_acc, l1_addr);
                     l1_addr += gamma_tile_bytes;
                 }
                 noc_async_read_barrier();

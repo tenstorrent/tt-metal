@@ -1,0 +1,175 @@
+MEASURED: blackhole p150b, 1350 MHz, single core, bf16 in / fp32 stat CB / TILE,
+math_fidelity=HiFi2, fp32_dest_acc_en=False, math_approx_mode=False (the op's FROZEN
+_perf_case contract -- identical in EVERY variant; never a lever).
+DEVICE KERNEL DURATION [ns], one fresh-cache profiled run per variant; the whole file was
+run TWICE end-to-end and both columns are given (rep = the independent replicate).
+48 + 18 = 66 points, ALL correctness-green vs an fp64 torch reference.
+
+=============================================================================
+1. THE FOCUS GEOMETRY -- pass A (square + reduce) at the op's per-core geometry
+   for (1,1,8192,1024) BLOCK_SHARDED shard [1024,128]:
+   32 tile-rows/core, BLOCK_ROWS=8 -> blocks=4, WT_CHUNK=4, X_SQUARED_WT=1.
+=============================================================================
+variant                              ns      rep      vs baseline   pcc        rel-RMS
+sq_acc_add   (the op TODAY)        11551   11565      1.00x         0.999884   0.00491
+sq_reduce_tile (the predicate fix)  6079    6092    **1.90x**       0.999877   0.00459  <-- WIN
+fused_batch  (option 2, batched)    9531    9536      1.21x         0.999884   0.00491
+fused_per_row (option 2)           11189   11189      1.03x         0.999884   0.00491
+
+Every option meets the precision contract; NO option traded precision for speed.
+The predicate fix's rel-RMS is BETTER than the baseline's (0.00459 vs 0.00491).
+
+=============================================================================
+2. THE CROSSOVER -- the reduce ALONE, per-call reduce-dim width x tile-rows/call.
+   `width` here IS the reduce's per-call reduce-dim width (the op's X_SQUARED_WT).
+   Same total tile-rows (32) at every rows value, so ns are comparable down a column.
+=============================================================================
+rows=1 (32 calls of 1 row)
+ w   AccViaAdd ns (rep)   pcc      relRMS | ReduceTile ns (rep)   pcc      relRMS | winner
+  1   10955 (10924)   0.999956  0.00400  |   8625  (8643)    0.999942  0.00354  | RT 1.27x
+  2   10621 (10627)   0.999969  0.00276  |   8606  (8612)    0.999928  0.00325  | RT 1.23x
+  4   11384 (11371)   0.999945  0.00292  |   8569  (8582)    0.999697  0.00353  | RT 1.33x
+  8   12455 (12453)   0.999814  0.00309  |   9666  (9663)    0.999285  0.00402  | RT 1.29x
+ 16   14745 (14745)   0.999720  0.00237  |  14218 (14240)    0.997361  0.00779  | FLAT 1.04x
+ 32   19367 (19365)   0.999238  0.00241  |  23424 (23421)    0.992999  0.01222  | AVA 1.21x
+
+rows=8 (4 calls of 8 rows)
+  1    7672  (7664)   0.999973  0.00342  |   2796  (2776)    0.999962  0.00318  | RT 2.75x
+  2    7316  (7323)   0.999957  0.00272  |   2843  (2827)    0.999926  0.00298  | RT 2.58x
+  4    7770  (7772)   0.999922  0.00287  |   4101  (4085)    0.999778  0.00334  | RT 1.90x
+  8    8691  (8705)   0.999785  0.00297  |   6258  (6273)    0.999071  0.00409  | RT 1.39x
+ 16   10648 (10631)   0.999480  0.00251  |  10727 (10727)    0.996343  0.00671  | FLAT 0.99x
+ 32   15297 (15269)   0.999076  0.00210  |  20147 (20167)    0.987746  0.01184  | AVA 1.32x
+
+rows=32 (1 call of 32 rows; w>=16 exceeds the single-core L1 budget, untested)
+  1    7241  (7245)   0.999975  0.00329  |   2278  (2281)    0.999967  0.00317  | RT 3.18x
+  2    6960  (6955)   0.999944  0.00293  |   2296  (2320)    0.999910  0.00312  | RT 3.01x
+  4    7373  (7378)   0.999893  0.00293  |   3530  (3533)    0.999725  0.00326  | RT 2.09x
+  8    8290  (8279)   0.999748  0.00291  |   5716  (5750)    0.998928  0.00414  | RT 1.45x
+
+READ-OFF:
+ * PERF crossover: per-call width 16 is FLAT; AccumulateViaAdd only wins at width 32
+   (1.21-1.32x).  ReduceTile wins everywhere below 16, by 1.2x (rows=1) to 3.2x (rows=32).
+ * PRECISION crossover: at per-call width 1 and 2 the two datapaths are EQUAL (pcc
+   0.99991-0.99998 both; ReduceTile's rel-RMS is the better of the two at width 1).
+   ReduceTile's raw-sum pcc first falls below the op's 0.9995 soft gate at width 8, and
+   collapses at 16/32 (0.9963 / 0.9877).  AccumulateViaAdd stays >= 0.9991 to width 32.
+ * So width 1 is the ONE regime where ReduceTile is faster AND at least as accurate.
+   That is exactly the regime the D12 DEST fold creates and the current predicate misses.
+
+=============================================================================
+3. THE DOMAIN of the predicate change, in pass-A geometry (X_SQUARED_WT == 1).
+   The predicate flips exactly where the D12 fold is ON: tile-aligned W with
+   2 <= WT_CHUNK <= DEST_ACC_SQUARE_MAX_WT (8) and wt_per_core >= 4.
+=============================================================================
+WT_CHUNK  rows   sq_acc_add ns   sq_reduce_tile ns   speedup   pcc AVA -> RT        relRMS AVA -> RT
+   2        1        14659            14527           1.01x    0.999921 -> 0.999922  0.00541 -> 0.00476
+   2        8         9961             5007         **1.99x**  0.999926 -> 0.999919  0.00527 -> 0.00491
+   2       32         9382             4302         **2.18x**  0.999929 -> 0.999916  0.00529 -> 0.00490
+   4        1        16307            14494           1.13x    0.999851 -> 0.999855  0.00563 -> 0.00475
+   4        8        11564             6081         **1.90x**  0.999884 -> 0.999877  0.00491 -> 0.00459
+   4       32        11013             5874         **1.87x**  0.999860 -> 0.999840  0.00516 -> 0.00470
+   8        1        19519            14503           1.35x    0.999775 -> 0.999785  0.00523 -> 0.00450
+   8        8        14790             9326         **1.59x**  0.999746 -> 0.999707  0.00488 -> 0.00467
+   8       32        14219             9081         **1.57x**  0.999736 -> 0.999682  0.00496 -> 0.00467
+No regression anywhere.  rows=1 is FLAT (1.01-1.35x), not an exception: at BLOCK_ROWS=1
+the per-block CB handshake dominates the block, so the reduce delta is diluted.
+rel-RMS is BETTER on the candidate at every one of the nine points.
+
+=============================================================================
+4. The D12 fold OFF (X_SQUARED_WT == WT_CHUNK) -- the regime the EXISTING
+   REDUCE_ACC_VIA_ADD knob was measured on.  The predicate must NOT flip here.
+=============================================================================
+WT_CHUNK  rows  sq_acc_add ns (rep)   sq_reduce_tile ns (rep)   pcc AVA / RT
+   4        8     14284 (14301)          10632 (10649)          0.999898 / 0.999754
+  16        8     35491 (35464)          36469 (36459)          0.999582 / 0.996279
+At WT_CHUNK 16 ReduceTile is already both SLOWER and 0.9963 -- exactly why the datapath
+must stay width-gated.  The recommended predicate keeps AccumulateViaAdd at every
+unfolded width, so it cannot lose here.
+
+=============================================================================
+5. The COUPLED partial-W mechanism -- pad lanes POISONED with 1e4 (x^2 = 1e8), so a
+   padding leak is catastrophic, not marginal.  P == 8 is what every one of
+   feature_spec._PAD_POISON_SHAPES (W in {40,72,136,200}) reduces to; 1 and 31 bracket it.
+   ReduceTile takes the [full, partial] SCALER PAIR (SCALER_TILES 2);
+   AccumulateViaAdd takes a single 0/1 MASK tile (SCALER_TILES 1).  rows=32, 1 block.
+=============================================================================
+WT_CHUNK  P    AccViaAdd ns / pcc / relRMS      ReduceTile ns / pcc / relRMS
+   2      8      8776  / 0.999967 / 0.00292      2541 / 0.999942 / 0.00318
+   5      8      8578  / 0.999869 / 0.00292      4929 / 0.999586 / 0.00365
+   2      1      8776  / 0.999972 / 0.00336      2539 / 0.999948 / 0.00327
+   2     31      8852  / 0.999945 / 0.00254      2647 / 0.999907 / 0.00318
+BOTH partial mechanisms are exactly correct -- zero leak on either datapath at every P.
+(Reported for completeness only: the recommended predicate never flips a PARTIAL_W build,
+because the D12 fold is already gated on PARTIAL_W == 0, so X_SQUARED_WT == WT_CHUNK there
+and the predicate's answer is byte-identical to today's.)
+
+=============================================================================
+6. OPTION 2 -- "can the within-tile column sum ride the square's own DEST window?"
+=============================================================================
+YES, it is expressible and CORRECT (public compute APIs only: mul_tiles_init(...,
+acc_to_dest) / mul_tiles / sfpu_reduce<SUM,.,REDUCE_ROW> / pack_tile, with
+eltwise_chain's DestAccumulation::PerRow DEST lifecycle).  It deletes cb_x_squared, its
+L1 round-trip, AND the reduce call.  Measured at the focus geometry it is a
+MEASURED NON-WIN against the predicate fix:
+    fused_per_row  11189 ns (1.03x over baseline) -- 1.84x SLOWER than sq_reduce_tile
+    fused_batch     9531 ns (1.21x over baseline) -- 1.57x SLOWER than sq_reduce_tile
+MECHANISM: at per-call width 1 all AccumulateViaAdd does is copy_tile + the SFPU
+within-tile column fold.  The fused option deletes the copy_tile and the CB round-trip
+but KEEPS the SFPU column fold -- i.e. it deletes the cheap half and inherits the
+expensive half.  ReduceTile's win comes from replacing that SFPU fold with ONE FPU
+matmul-against-ones, which is ~3x cheaper.  Batching 8 tile-rows into one DEST acquire
+recovers 1.17x of the DEST-sync cost but cannot close the gap.
+An FPU-based fusion (keep the square in DEST, then reduce it with the FPU) is
+INEXPRESSIBLE: reduce_tile's operand must arrive through SrcA/SrcB from a CB, and
+there is no dest-reuse form of the FPU reduce (EltwiseBinaryReuseDestType exists for
+eltwise binary only).  So the L1 round-trip is what pays for the cheap datapath.
+
+=============================================================================
+7. THE PREDICATE (what to change in rms_norm_program_descriptor.py) -- NOT applied
+   here; this experiment dir does not touch the real op.
+=============================================================================
+(a) MOVE the two `x_squared_wt` lines (currently ~1785-1787) ABOVE the
+    `reduce_acc_via_add` block (currently ~1765).  Safe by inspection: both inputs
+    (`kernel_partial_w` ~1589, `wt_chunk` ~1737) are already bound, and
+    `square_dest_acc_per_row` does not read `reduce_acc_via_add`.
+
+(b) The predicate, with `wt_chunk` replaced by the reduce's ACTUAL per-call width:
+
+    reduce_acc_via_add = (
+        REDUCE_BULK == 1
+        and wt_per_core >= REDUCE_ACC_VIA_ADD_MIN_WT        # unchanged (whole reduce dim)
+        and x_squared_wt >= REDUCE_ACC_VIA_ADD_MIN_CALL_WT  # was: wt_chunk >= ..._MIN_CHUNK_WT
+    )
+
+(c) RENAME REDUCE_ACC_VIA_ADD_MIN_CHUNK_WT -> REDUCE_ACC_VIA_ADD_MIN_CALL_WT.
+    VALUE STAYS 2.  Its comment must say the floor is on the reduce's per-CALL
+    reduce-dim width (which the D12 DEST fold collapses to 1), not on WT_CHUNK, and
+    carry section 2's bracket: at per-call width 1 ReduceTile is 2.75-3.18x faster at
+    equal-or-better precision; at per-call width >= 2 AccumulateViaAdd is kept because
+    its precision advantage grows monotonically with width (0.9997 -> 0.9877 raw-sum pcc
+    for ReduceTile from width 1 to 32) and it is the faster path from width 32 up.
+
+COUPLED EDITS THIS IMPLIES: none beyond (a)-(c).
+  * `scaler_tiles = 1 if reduce_acc_via_add else scaler_pages` and the three CT args
+    that carry the datapath (reader 12, compute 10, compute 11) are ALREADY derived
+    from `reduce_acc_via_add`; they follow with no edit.
+  * The partial-scaler-pair vs 0/1-mask coupling is INERT for this change:
+    `scaler_pages = 2 if kernel_partial_w else 1`, and the predicate only flips where
+    `x_squared_wt == 1 and wt_chunk >= 2`, which REQUIRES `kernel_partial_w == 0` (the
+    D12 fold is gated on it).  So every flipped build has scaler_pages == 1 and both
+    datapaths take the same single 1.0 scaler tile.  Verified independently in section 5:
+    both partial mechanisms are leak-free anyway.
+  * ZERO kernel edits.  rms_norm_compute.cpp's REDUCE_ALGO / PARTIAL_SCALER / the
+    BulkWaitBulkPop static_assert and rms_norm_reader.cpp's scaler-boot branch are
+    already fully parameterised on the CT args; this bench drives the identical CT-arg
+    space both ways.
+
+EXACTLY WHICH BUILDS CHANGE:
+    kernel_partial_w == 0  AND  2 <= wt_chunk <= DEST_ACC_SQUARE_MAX_WT (8)
+                           AND  wt_per_core >= REDUCE_ACC_VIA_ADD_MIN_WT (4)
+Every other build is BYTE-IDENTICAL to today (same CT args, same kernel hash).
+That set includes all five sharded perf profiles in the Perf-1 table (shard widths
+4/5/8 tiles) and the tile-aligned interleaved shapes with 4 <= Wt <= 8; it EXCLUDES the
+wide interleaved prefill profiles (Wt = 32 > 8 turns the fold off, so they keep
+AccumulateViaAdd at per-call width 32, where section 2 measures it 1.2-1.3x faster).

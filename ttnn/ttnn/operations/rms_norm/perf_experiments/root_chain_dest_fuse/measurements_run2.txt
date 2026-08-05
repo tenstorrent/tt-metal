@@ -1,0 +1,175 @@
+# csv: generated/profiler/reports/2026_08_05_10_27_09/ops_perf_results_2026_08_05_10_27_09.csv  (117 device ops)
+
+=== focus  GROUP_SIZE=8  rows=8  (floor=433 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  6307      5874  1.00x   0.999998  3.37e-03   3.38e-03    OK
+destacc_split             3481      3048  1.93x   0.999998  2.40e-03   2.42e-03    OK
+pairs_l1acc_split         4575      4142  1.42x   0.999998  2.91e-03   2.91e-03    OK
+fused_pairs               3134      2701  2.17x   0.999998  2.40e-03   2.42e-03    OK
+fused_pairs_dst2          3107      2674  2.20x   0.999998  2.40e-03   2.42e-03    OK
+fused_reuse               4976      4543  1.29x   0.999997  2.28e-03   2.30e-03    OK
+fused_reuse_nozero        4996      4563  1.29x   0.999997  2.28e-03   2.30e-03    OK
+fused_pairs_stream        3131      2698  2.18x   0.999998  2.40e-03   2.42e-03    OK
+floor                      433         -      - (ablation)
+
+=== focus  GROUP_SIZE=32  rows=1  (floor=441 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  2481      2040  1.00x   0.999998  4.23e-03   4.24e-03    OK
+destacc_split             1144       703  2.90x   0.999997  2.32e-03   2.33e-03    OK
+pairs_l1acc_split         1767      1326  1.54x   0.999998  2.97e-03   2.97e-03    OK
+fused_pairs                969       528  3.86x   0.999997  2.32e-03   2.33e-03    OK
+fused_pairs_dst2           969       528  3.86x   0.999997  2.32e-03   2.33e-03    OK
+fused_reuse               1899      1458  1.40x   0.999995  4.40e-03   4.42e-03    OK
+fused_reuse_nozero        1868      1427  1.43x   0.999995  4.40e-03   4.42e-03    OK
+fused_pairs_stream         968       527  3.87x   0.999997  2.32e-03   2.33e-03    OK
+floor                      441         -      - (ablation)
+
+=== focus  GROUP_SIZE=28  rows=1  (floor=439 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  2239      1800  1.00x   0.999998  5.08e-03   5.09e-03    OK
+destacc_split             1084       645  2.79x   0.999996  3.36e-03   3.36e-03    OK
+pairs_l1acc_split         1641      1202  1.50x   0.999998  4.36e-03   4.37e-03    OK
+fused_pairs                910       471  3.82x   0.999996  3.36e-03   3.36e-03    OK
+fused_pairs_dst2           905       466  3.86x   0.999996  3.36e-03   3.36e-03    OK
+fused_reuse               1723      1284  1.40x   0.999995  3.00e-03   3.03e-03    OK
+fused_reuse_nozero        1703      1264  1.42x   0.999995  3.00e-03   3.03e-03    OK
+fused_pairs_stream         908       469  3.84x   0.999996  3.36e-03   3.36e-03    OK
+floor                      439         -      - (ablation)
+
+=== sweep  GROUP_SIZE=4  rows=1  (floor=434 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  1012       578  1.00x   0.999998  3.58e-03   3.58e-03    OK
+destacc_split              884       450  1.28x   0.999998  2.13e-03   2.12e-03    OK
+fused_pairs                593       159  3.64x   0.999998  2.13e-03   2.12e-03    OK
+fused_pairs_stream         596       162  3.57x   0.999998  2.13e-03   2.12e-03    OK
+fused_reuse                724       290  1.99x   0.999998  2.05e-03   2.05e-03    OK
+floor                      434         -      - (ablation)
+
+=== sweep  GROUP_SIZE=4  rows=8  (floor=439 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  4560      4121  1.00x   0.999998  3.35e-03   3.36e-03    OK
+destacc_split             3103      2664  1.55x   0.999998  2.26e-03   2.28e-03    OK
+fused_pairs               2706      2267  1.82x   0.999998  2.26e-03   2.28e-03    OK
+fused_pairs_stream        2710      2271  1.81x   0.999998  2.26e-03   2.28e-03    OK
+fused_reuse               3648      3209  1.28x   0.999998  2.16e-03   2.17e-03    OK
+floor                      439         -      - (ablation)
+
+=== sweep  GROUP_SIZE=4  rows=32  (floor=433 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                 16792     16359  1.00x   0.999998  3.30e-03   3.30e-03    OK
+destacc_split            10999     10566  1.55x   0.999998  2.17e-03   2.19e-03    OK
+fused_pairs               9907      9474  1.73x   0.999998  2.17e-03   2.19e-03    OK
+fused_pairs_stream        9913      9480  1.73x   0.999998  2.17e-03   2.19e-03    OK
+fused_reuse              13659     13226  1.24x   0.999998  2.09e-03   2.10e-03    OK
+floor                      433         -      - (ablation)
+
+=== sweep  GROUP_SIZE=8  rows=1  (floor=428 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  1250       822  1.00x   0.999998  3.62e-03   3.62e-03    OK
+destacc_split              868       440  1.87x   0.999998  2.69e-03   2.70e-03    OK
+fused_pairs                653       225  3.65x   0.999998  2.69e-03   2.70e-03    OK
+fused_pairs_stream         646       218  3.77x   0.999998  2.69e-03   2.70e-03    OK
+fused_reuse                896       468  1.76x   0.999998  2.33e-03   2.35e-03    OK
+floor                      428         -      - (ablation)
+
+=== sweep  GROUP_SIZE=8  rows=8  (floor=433 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  6301      5868  1.00x   0.999998  3.37e-03   3.38e-03    OK
+destacc_split             3477      3044  1.93x   0.999998  2.40e-03   2.42e-03    OK
+fused_pairs               3134      2701  2.17x   0.999998  2.40e-03   2.42e-03    OK
+fused_pairs_stream        3131      2698  2.17x   0.999998  2.40e-03   2.42e-03    OK
+fused_reuse               4980      4547  1.29x   0.999997  2.28e-03   2.30e-03    OK
+floor                      433         -      - (ablation)
+
+=== sweep  GROUP_SIZE=9  rows=1  (floor=430 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  1296       866  1.00x   0.999998  4.59e-03   4.61e-03    OK
+destacc_split              874       444  1.95x   0.999997  3.31e-03   3.32e-03    OK
+fused_pairs                667       237  3.65x   0.999997  3.31e-03   3.32e-03    OK
+fused_pairs_stream         660       230  3.77x   0.999997  3.31e-03   3.32e-03    OK
+fused_reuse                930       500  1.73x   0.999998  3.04e-03   3.05e-03    OK
+floor                      430         -      - (ablation)
+
+=== sweep  GROUP_SIZE=9  rows=8  (floor=439 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  6643      6204  1.00x   0.999998  4.84e-03   4.83e-03    OK
+destacc_split             3639      3200  1.94x   0.999997  3.18e-03   3.18e-03    OK
+fused_pairs               3284      2845  2.18x   0.999997  3.18e-03   3.18e-03    OK
+fused_pairs_stream        3281      2842  2.18x   0.999997  3.18e-03   3.18e-03    OK
+fused_reuse               5247      4808  1.29x   0.999997  3.00e-03   3.00e-03    OK
+floor                      439         -      - (ablation)
+
+=== sweep  GROUP_SIZE=16  rows=1  (floor=435 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  1669      1234  1.00x   0.999999  2.76e-03   2.76e-03    OK
+destacc_split              932       497  2.48x   0.999998  1.97e-03   1.97e-03    OK
+fused_pairs                747       312  3.96x   0.999998  1.97e-03   1.97e-03    OK
+fused_pairs_stream         755       320  3.86x   0.999998  1.97e-03   1.97e-03    OK
+fused_reuse               1232       797  1.55x   0.999998  2.35e-03   2.37e-03    OK
+floor                      435         -      - (ablation)
+
+=== sweep  GROUP_SIZE=16  rows=8  (floor=439 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  9627      9188  1.00x   0.999998  3.59e-03   3.60e-03    OK
+destacc_split             4343      3904  2.35x   0.999998  2.28e-03   2.30e-03    OK
+fused_pairs               3986      3547  2.59x   0.999998  2.28e-03   2.30e-03    OK
+fused_pairs_stream        3987      3548  2.59x   0.999998  2.28e-03   2.30e-03    OK
+fused_reuse               7631      7192  1.28x   0.999997  2.54e-03   2.56e-03    OK
+floor                      439         -      - (ablation)
+
+=== sweep  GROUP_SIZE=28  rows=1  (floor=438 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  2238      1800  1.00x   0.999998  5.08e-03   5.09e-03    OK
+destacc_split             1091       653  2.76x   0.999996  3.36e-03   3.36e-03    OK
+fused_pairs                910       472  3.81x   0.999996  3.36e-03   3.36e-03    OK
+fused_pairs_stream         909       471  3.82x   0.999996  3.36e-03   3.36e-03    OK
+fused_reuse               1721      1283  1.40x   0.999995  3.00e-03   3.03e-03    OK
+floor                      438         -      - (ablation)
+
+=== sweep  GROUP_SIZE=28  rows=8  (floor=439 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                 14654     14215  1.00x   0.999998  4.84e-03   4.84e-03    OK
+destacc_split             5550      5111  2.78x   0.999996  3.32e-03   3.33e-03    OK
+fused_pairs               5203      4764  2.98x   0.999996  3.32e-03   3.33e-03    OK
+fused_pairs_stream        5204      4765  2.98x   0.999996  3.32e-03   3.33e-03    OK
+fused_reuse              11555     11116  1.28x   0.999995  3.10e-03   3.11e-03    OK
+floor                      439         -      - (ablation)
+
+=== sweep  GROUP_SIZE=32  rows=1  (floor=430 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  2450      2020  1.00x   0.999998  4.23e-03   4.24e-03    OK
+destacc_split             1148       718  2.81x   0.999997  2.32e-03   2.33e-03    OK
+fused_pairs                971       541  3.73x   0.999997  2.32e-03   2.33e-03    OK
+fused_pairs_stream         959       529  3.82x   0.999997  2.32e-03   2.33e-03    OK
+fused_reuse               1903      1473  1.37x   0.999995  4.40e-03   4.42e-03    OK
+floor                      430         -      - (ablation)
+
+=== sweep  GROUP_SIZE=32  rows=8  (floor=441 ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                 16394     15953  1.00x   0.999998  3.75e-03   3.75e-03    OK
+destacc_split             6044      5603  2.85x   0.999997  2.53e-03   2.54e-03    OK
+fused_pairs               5690      5249  3.04x   0.999997  2.53e-03   2.54e-03    OK
+fused_pairs_stream        5687      5246  3.04x   0.999997  2.53e-03   2.54e-03    OK
+fused_reuse              12947     12506  1.28x   0.999995  3.78e-03   3.78e-03    OK
+floor                      441         -      - (ablation)
+
+=== dest_fp32  GROUP_SIZE=8  rows=8  (floor=None ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  6139         0      -   1.000000  3.65e-04   3.62e-04    OK
+fused_pairs               3021         0      -   1.000000  1.52e-04   1.52e-04    OK
+fused_pairs_stream        3016         0      -   1.000000  1.52e-04   1.52e-04    OK
+fused_reuse               4936         0      -   1.000000  2.20e-04   2.20e-04    OK
+
+=== dest_fp32  GROUP_SIZE=32  rows=1  (floor=None ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  2370         0      -   1.000000  3.86e-04   3.84e-04    OK
+fused_pairs                936         0      -   1.000000  1.54e-04   1.54e-04    OK
+fused_pairs_stream         939         0      -   1.000000  1.54e-04   1.54e-04    OK
+fused_reuse               1897         0      -   1.000000  3.82e-04   3.82e-04    OK
+
+=== dest_fp32  GROUP_SIZE=9  rows=8  (floor=None ns) ===
+variant               total_ns  stage_ns      x    pcc_out  rrms_out  rrms_stat  gate
+baseline                  6467         0      -   1.000000  4.22e-04   4.22e-04    OK
+fused_pairs               3144         0      -   1.000000  1.59e-04   1.58e-04    OK
+fused_pairs_stream        3149         0      -   1.000000  1.59e-04   1.58e-04    OK
+fused_reuse               5201         0      -   1.000000  2.54e-04   2.52e-04    OK

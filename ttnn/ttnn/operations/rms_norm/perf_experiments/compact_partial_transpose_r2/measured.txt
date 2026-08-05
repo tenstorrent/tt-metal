@@ -1,0 +1,115 @@
+compact_partial_transpose_r2 -- Perf 2 re-measurement of Perf 1's deferred WIN #1
+blackhole p150b, 1350 MHz.  ns = ONE root-chain round, (t_9 - t_1) / 8 (launch floor cancelled).
+TWO independent profiled runs agreed within 1.01% on ALL 78 configs (ops_perf_results_run1/2.csv).
+Precision contract identical in every row: fp32 stat CBs, fp32_dest_acc_en=False, HiFi2,
+math_approx_mode=False.  Correctness gate: 90/90 pass, zero_leak == 0.0 exactly everywhere.
+
+BASELINE = base_d19 = the tree's CURRENT root branch (D16 per-row L1-accumulating fold + D17
+column-scoped finalize fused with the handoff by D19).  NOT Perf 1's pre-tournament root.
+
+=== 1. HEADLINE DOMAIN SWEEP: root-chain ns/block, BLOCK_ROWS x GROUP_SIZE ===================
+rows = BLOCK_ROWS.  cand_recv = compact fold + ONE finalize, un-permute moved to the receivers.
+FIN column = the narrowest CORRECT finalize scope (0 = D17 <2,4> C, 1 = <1,8> C, 2 = <1,8> RC).
+
+ rows   G    base_d19   cand_recv  FIN   root-chain x
+    1    4        760         779    0    0.98   FLAT (mechanism is a no-op at BR = 1)
+    1    8        986         987    0    1.00   FLAT
+    1   28       1992        1993    0    1.00   FLAT
+    1   32       2188        2186    0    1.00   FLAT
+    8    4       4802         998    1    4.81
+    8    8       6398        1192    1    5.37   <-- FOCUS SHAPE geometry
+    8   28      14390        2220    1    6.48
+    8   32      15964        2427    1    6.58
+   16    4       9404         986    1    9.54
+   16    8      12642        1195    1   10.58
+   16   28      28643        2232    1   12.83
+   16   32      31821        2418    1   13.16
+   32    4      18544        1448    2   12.81
+   32    8      25056        1644    2   15.24
+   32   28      57146        2657    2   21.51
+   32   32      63507        2858    2   22.22
+
+The baseline is O(BLOCK_ROWS x GROUP_SIZE); the candidate is O(GROUP_SIZE) and essentially FLAT in
+BLOCK_ROWS (1192 at 8, 1195 at 16; the 1644 at 32 is the RC widening, not the row count).
+
+=== 2. THE TWO SIDES THE COMPACT LAYOUT ADDS (both paid in PARALLEL on all cores) ============
+Their baseline is ZERO: D18 has pass A's reduce pack straight into cb_sum_handoff, and the mcast
+lands straight in cb_row_final.
+
+ rows   member_pack (sender)   recv_unpack (receiver, DEST_BATCH 4)
+    1            240                   230
+    8            421                   540
+   16            627                   874
+   32           1032                  1544   (1377 at DEST_BATCH 8)
+
+=== 3. OPTION MENU (focus geometry G = 8, rows = 8, and rows = 32) ==========================
+All under the SAME user config.  pcc is the op-equivalent pcc (stat x a fixed N(0,1) draw), soft
+gate 0.9995.
+
+ option                                     rows=8 ns   rows=32 ns   pcc        rel_rms   L1 bank/core
+ base_d19 (the tree today)                       6398        25056   0.9999983  0.00308   0
+ cand_recv  root only                            1192         1644   0.9999977  0.00386   0 (root folds only)
+ cand_recv + recv_unpack (ROOT's timeline)       1732         3188*  0.9999908  0.00769   BR bf16 pages
+ cand_root  (un-permute on the ROOT, serial)     1709         3166    0.9999899  0.00403   BR bf16 pages
+ cand_root  DEST_BATCH 8                         1756         2986    0.9999886  0.00438   BR bf16 pages
+   * 3021 with the receiver un-pack at DEST_BATCH 8.
+ --- pack-side spellings, all FLAT in ns, so pick the cheapest L1 ---
+ bank EF  (2*BR+1 pages, explicit F_r)     recv_unpack  556 / 1544    same       same     2BR+1 pages
+ bank E_T (BR+1 pages, matmul srcB transpose)          540 / 1544/1577 same      same     BR+1 pages
+ bank dtype fp32                                       540 / 1544    same       same     4 kB/page
+ bank dtype bf16 (one-hot is EXACT in bf16)            534 / 1547    same       same     2 kB/page
+ --- DEST seeding ---
+ SEED=0, rely on the packer's ZEROACC       member_pack  421 / 1032   0.9999908  0.00769  no zero page
+                                            recv_unpack  540 / 1544
+                                            cand_root   1709 / 3166
+ SEED=1, explicit zero-tile copy first      member_pack  493 / 1105   IDENTICAL          +1 page
+                                            recv_unpack 1181 / 3808  <- 2.2-2.5x WORSE
+                                            cand_root   2592 / 6264  <- 1.5-2.0x WORSE
+ --- finalize SCOPE (the D17 conflict, priced) ---
+ cand_recv FIN=0 (D17 <2,4> C)   rows=8  980 ns but pcc 0.997 / rel_rms 1031 -- WRONG above BR=1
+ cand_recv FIN=1 (<1,8> C)       rows=1/8/16  987 / 1192 / 1195   correct up to BR = 16
+ cand_recv FIN=2 (<1,8> RC)      rows=1/8/16/32  1649 / 1650 / 1648 / 1644   correct at ANY BR
+ => widening C -> RC costs a FLAT +455 ns per BLOCK.  At BR = 32 the candidate still beats the
+    baseline 15.2x, so the "conflicts with D17 above BLOCK_ROWS = 16" caveat is real but costs
+    455 ns against a 23412 ns saving.  D17's <2,4> even-parity scope stays valid for the
+    NON-combine (local) finalize and at BR = 1; the compact root finalize needs <1,8>.
+
+ NO option trades precision for speed: every spelling above is within 0.99999 pcc / 0.008 rel-RMS
+ against an fp64 reference, against a soft gate of 0.9995.
+
+=== 4. RECOMMENDED COMPOSITION ==============================================================
+ cand_recv (compact fold + ONE <1,8> finalize; RC only above BR = 16)
+ + sender-side member_pack, bank = BR bf16 one-hot pages, SEED = 0
+ + receiver-side recv_unpack, DEST_BATCH = min(BLOCK_ROWS, 8)
+Chosen over cand_root because their ROOT timelines are within 1.3% (1732 vs 1709 at the focus)
+while cand_recv also multicasts ONE page instead of BLOCK_ROWS -- a writer-side saving this bench
+does not measure and does not claim.
+
+=== 5. L1 PER CORE (fp32 tile 4096 B, bf16 tile 2048 B) =====================================
+Focus shape (BLOCK_ROWS = 8, GROUP_SIZE = 8):
+                          today (D16-D19)        compact
+  cb_row_stat        2*BR = 16 p   65536      16 p   65536
+  cb_sum_handoff       BR =  8 p   32768       1 p    4096
+  cb_partials_gathered G*BR= 64 p  262144   G = 8 p   32768   <-- FLAT in BLOCK_ROWS now
+  cb_stat_handoff      BR =  8 p   32768       1 p    4096
+  cb_stat_mcast_in            --        -       2 p    8192
+  cb_row_final       2*BR = 16 p   65536      16 p   65536
+  one-hot bank                --        -   BR bf16   16384
+  TOTAL                            458752            196608
+  => the compact layout FREES 256 kB per core.  It does NOT force BLOCK_ROWS down: it REMOVES the
+  gather CB's GROUP_SIZE x BLOCK_ROWS term from the descriptor's L1-bound BLOCK_ROWS solve
+  (GROUP_SIZE * BLOCK_ROWS pages -> GROUP_SIZE pages), which is the largest BR-scaling CB there is.
+  At BLOCK_ROWS = 32 / GROUP_SIZE = 32 the gather goes 4096 kB -> 128 kB.
+
+=== 6. WHOLE-OP EXTRAPOLATION (explicitly extrapolated, NOT measured end-to-end) ============
+Focus shape has num_blocks = 4.  Bench baseline 4 x 6398 = 25592 ns against the whole-op peel's
+23230 ns of wall for the same chain -- the isolated reconstruction is 10% high (no DM overlap), so
+scale by 23230 / 25592 = 0.908:
+  candidate root chain  (4 x 1192 + 4 x 540) x 0.908 =  6290 ns   (was 23230)
+  sender pack, if FULLY exposed          4 x 421 x 0.908 =  1529 ns
+  => 64753 -> 49342 ns (1.31x) fully exposed, 47813 ns (1.35x) if the sender pack hides inside the
+     root's 13610 ns gather WAIT (7 of the 8 senders finish pass A before the root does).
+NOT banked: the gather ships BLOCK_ROWS x fewer pages, the mcast BLOCK_ROWS x fewer bytes, and the
+writer's boot-zeroing of the gather CB becomes unnecessary (every compact position is defined by
+construction) -- that zone is 7633 ns but only 1063 ns of wall, so it is deliberately not counted.
+Perf 1's extrapolated 1.94x was against the pre-D16 root; against the CURRENT root it is ~1.3x.

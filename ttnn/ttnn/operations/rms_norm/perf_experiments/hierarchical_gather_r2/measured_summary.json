@@ -1,0 +1,104 @@
+{
+ "box": "blackhole p150b, 110-core grid, CHIP_FREQ 1350 MHz",
+ "metric": "DEVICE KERNEL DURATION [ns]; one fresh program per (config, variant); ttnn.generic_op",
+ "precision_contract": "FIXED on every variant: fp32 partial/stat CBs, HiFi2, fp32_dest_acc_en=False, math_approx_mode=False. Never a lever.",
+ "baseline": "flat == the op's CURRENT root chain, carried verbatim: D16 row-major gather + one per-row packer-accumulate (L1Accumulation::SeedFirst) fold call + D17 column-scoped raw-sfpi StatFinalize + D19 finalize-writes-cb_stat_handoff.",
+ "candidate": "grid_k<K>_m<m> == K contiguous slot chunks x m row subsets, gatherer for (chunk j, row subset w) = slot j*(G/K)+w. (1,1)=flat via the generic path, (K,1)=slot tree, (1,m)=row split, (K,m)=combined.",
+
+ "focus_g8_ng8_br8_r32": {
+  "geometry": "(1,1,8192,1024) BLOCK_SHARDED shard [1024,128] grid (8,8) = 64 cores; G=8, num_groups=8, BLOCK_ROWS=8, 32 tile-rows/core -> 4 combine rounds",
+  "median_of_3": {"flat": 46436, "grid_k1_m1": 47161, "grid_k1_m8": 18748},
+  "run_to_run_spread_pct": 0.2,
+  "single_run_all_variants": {
+   "flat": 46519, "grid_k1_m1": 47156,
+   "grid_k1_m2": 31161, "grid_k1_m4": 22328, "grid_k1_m8": 18751,
+   "grid_k2_m1": 42133, "grid_k4_m1": 41524, "grid_k8_m1": 51642,
+   "grid_k2_m2": 28836, "grid_k2_m4": 22307, "grid_k4_m2": 29852
+  },
+  "winner": "grid_k1_m8 (the RULE's choice) = 18748 ns = 2.48x",
+  "pcc": {"flat": 0.999989, "grid_k1_m8": 0.999989, "grid_k2_m4": 0.999988},
+  "rel_rms": {"flat": 0.00320, "grid_k1_m8": 0.00320, "grid_k2_m4": 0.00379},
+  "l1_bytes_per_core": {"flat": 360448, "grid_k1_m8": 45056},
+  "zones_flat_root_core": {
+   "compute_root_sum": 38384, "compute_root_finalize": 8870,
+   "writer_mcast_send": 28296, "writer_gather_wait": 4477, "writer_gather_zero": 10946,
+   "writer_mcast_recv_on_the_56_members": 42778,
+   "note": "root chain 38384+8870 = 47254 ~= the 46519 ns wall: the zones ARE the wall, and only the 8 root cores pay while 7 members each block in writer_mcast_recv."
+  },
+  "zones_grid_k1_m8": {
+   "compute_stage1_fold_all_64_cores": 15965, "compute_root_finalize": 1604,
+   "writer_stage3_ship": 4767, "writer_stage3_wait_on_root": 2207,
+   "writer_mcast_send": 9159, "writer_mcast_recv": 4733, "writer_gather_wait": 2396,
+   "note": "writer_mcast_recv collapses 42778 -> 4733: no member blocks behind a root any more."
+  },
+  "extra_hop_accounting_per_round": {
+   "flat_root_chain": 11814,
+   "row_split_saving_at_m8": 10337,
+   "extra_hop_cost": "1192 (worker stage3_ship) + 552 (root stage3_wait) = 1744",
+   "verdict": "the extra hop is 17% of the parallelism it buys -- it does NOT eat it."
+  }
+ },
+
+ "sweep": {
+  "columns": "config -> {variant: ns}; flat absent == L1_OOM (the flat root's G*BLOCK_ROWS fp32 gather ring does not fit)",
+  "g8_ng8_br1_r1": {"flat": 3556, "grid_k1_m1": 3718, "grid_k2_m1": 3512, "grid_k4_m1": 3210, "grid_k8_m1": 3348},
+  "g8_ng8_br2_r32": {"flat": 48810, "grid_k1_m1": 50293, "grid_k1_m2": 42697, "grid_k2_m1": 53817, "grid_k4_m1": 54947, "grid_k8_m1": 62467, "grid_k2_m2": 45370, "grid_k4_m2": 47478},
+  "g8_ng8_br32_r32": {"flat": "L1_OOM_1408kB", "grid_k1_m2": 40279, "grid_k1_m4": 24327, "grid_k1_m8": 19001, "grid_k2_m2": 31113, "grid_k2_m4": 21304, "grid_k4_m2": 29330},
+  "g4_ng8_br1_r1": {"flat": 2585, "grid_k1_m1": 2807, "grid_k2_m1": 2983, "grid_k4_m1": 2958},
+  "g4_ng8_br2_r32": {"flat": 38507, "grid_k1_m1": 39924, "grid_k1_m2": 35786, "grid_k2_m1": 48557, "grid_k4_m1": 50156, "grid_k2_m2": 42924},
+  "g4_ng8_br8_r32": {"flat": 31933, "grid_k1_m1": 32566, "grid_k1_m2": 22685, "grid_k1_m4": 16959, "grid_k2_m1": 35693, "grid_k4_m1": 38585, "grid_k2_m2": 24918},
+  "g16_ng1_br1_r1": {"flat": 5450, "grid_k1_m1": 5808, "grid_k2_m1": 4404, "grid_k4_m1": 3889, "grid_k8_m1": 3783, "grid_k16_m1": 4402},
+  "g16_ng1_br8_r32": {"flat": 75930, "grid_k1_m1": 76746, "grid_k1_m2": 48033, "grid_k1_m4": 33484, "grid_k1_m8": 26684, "grid_k2_m1": 57235, "grid_k4_m1": 48840, "grid_k8_m1": 55255, "grid_k16_m1": 77950, "grid_k2_m2": 37132, "grid_k2_m4": 26421, "grid_k2_m8": 21530, "grid_k4_m2": 32867, "grid_k4_m4": 25132, "grid_k8_m2": 38516},
+  "g28_ng1_br1_r1": {"flat": 8035, "grid_k1_m1": 8315, "grid_k2_m1": 6027, "grid_k4_m1": 4530, "grid_k7_m1": 4150, "grid_k14_m1": 4360},
+  "g28_ng1_br8_r32": {"flat": 118550, "grid_k1_m1": 119582, "grid_k1_m2": 71566, "grid_k1_m4": 47408, "grid_k1_m8": 36291, "grid_k2_m1": 79473, "grid_k4_m1": 61050, "grid_k7_m1": 58502, "grid_k14_m1": 74305, "grid_k2_m2": 50556, "grid_k2_m4": 33560, "grid_k2_m8": 27205, "grid_k4_m2": 40770, "grid_k4_m4": 30771, "grid_k7_m2": 37488, "grid_k7_m4": 28003},
+  "g32_ng1_br1_r1": {"flat": 9002, "grid_k1_m1": 9189, "grid_k2_m1": 6190, "grid_k4_m1": 4703, "grid_k8_m1": 4299, "grid_k16_m1": 4744},
+  "g32_ng1_br2_r32": {"flat": 119716, "grid_k1_m1": 121301, "grid_k1_m2": 86502, "grid_k2_m1": 88821, "grid_k4_m1": 72467, "grid_k8_m1": 74984, "grid_k16_m1": 96433, "grid_k2_m2": 68592, "grid_k4_m2": 56667, "grid_k8_m2": 59381},
+  "g32_ng1_br8_r32": {"flat": 133113, "grid_k1_m1": 134446, "grid_k1_m2": 80501, "grid_k1_m4": 53202, "grid_k1_m8": 40114, "grid_k2_m1": 86291, "grid_k4_m1": 63341, "grid_k8_m1": 62050, "grid_k16_m1": 81013, "grid_k2_m2": 53439, "grid_k2_m4": 36581, "grid_k2_m8": 28870, "grid_k4_m2": 40232, "grid_k4_m4": 27980, "grid_k4_m8": 22349, "grid_k8_m2": 40084, "grid_k8_m4": 30096},
+  "g32_ng1_br32_r32": {"flat": "L1_OOM_4480kB", "grid_k1_m4": 66925, "grid_k1_m8": 40573, "grid_k1_m16": 27481, "grid_k1_m32": 21521, "grid_k2_m4": 41153, "grid_k2_m8": 27734, "grid_k4_m2": 47804, "grid_k4_m4": 28644, "grid_k4_m8": 21533, "grid_k8_m2": 41881, "grid_k8_m4": 29156}
+ },
+
+ "rule": {
+  "statement": [
+   "m = min(BLOCK_ROWS, GROUP_SIZE)                       # spend gatherers on ROWS first, ALL of them",
+   "K_cap = GROUP_SIZE // m                               # a chunk must contain its m gatherers",
+   "K = smallest divisor of GROUP_SIZE >= sqrt(GROUP_SIZE); if K > K_cap, take the largest divisor <= K_cap",
+   "K = 1 if GROUP_SIZE - (GROUP_SIZE/K + K) < 2          # the tree must delete >= 2 fold tiles per row (kills GROUP_SIZE <= 4)",
+   "K = 1 if GROUP_SIZE <= 8 and num_blocks > 1           # at G <= 8 the tree deletes <= 2 tiles/row, less than the ~1 us/round the extra hop costs"
+  ],
+  "accuracy": "optimal at 13 of the 15 measured (GROUP_SIZE, BLOCK_ROWS) cells; 2.8% off at g16 decode (picks K=4, best K=8) and 4% off at g32/BLOCK_ROWS=2 (picks K=8, best K=4). Never below 1.00x anywhere.",
+  "rule_choice_speedup": {
+   "focus_g8_br8": "(1,8) 2.48x", "g8_br1_decode": "(4,1) 1.11x", "g8_br2": "(1,2) 1.14x",
+   "g4_br1_decode": "(1,1) 1.00x == flat", "g4_br2": "(1,2) 1.08x", "g4_br8": "(1,4) 1.88x",
+   "g16_br1_decode": "(4,1) 1.40x", "g16_br8": "(2,8) 3.53x",
+   "g28_br1_decode": "(7,1) 1.94x", "g28_br8": "(2,8) 4.36x",
+   "g32_br1_decode": "(8,1) 2.09x", "g32_br2": "(8,2) 2.02x", "g32_br8": "(4,8) 5.96x",
+   "g8_br32": "(1,8) 19001 ns, flat is L1_OOM", "g32_br32": "(1,32) 21521 ns, flat is L1_OOM"
+  }
+ },
+
+ "integration_facts": {
+  "semaphores": "the descriptor allocates mcast's two (ids 0,1) + gather (id 2) = 3 today. The RULE's row split needs a 4th (id 3: finished-rows-landed-in-the-mcast-buffer). A combined K>1 point needs a 5th (id 4: stage-2 forward arrivals). NUM_SEMAPHORES = 16 per core (tt_metal/impl/buffers/semaphore.hpp), so there is ample room.",
+  "l1": "the gather ring goes from GROUP_SIZE*BLOCK_ROWS pages to (GROUP_SIZE/K)*ceil(BLOCK_ROWS/m). Focus: 352 kB -> 44 kB per core, i.e. 308 kB HANDED BACK. It also makes BLOCK_ROWS values the flat root cannot express at all (G=8/BR=32 needs 1408 kB, G=32/BR=32 needs 4480 kB) legal.",
+  "l1_does_not_buy_more_speed_directly": "raising BLOCK_ROWS 8 -> 32 under (1,8) at G=8 measures 18748 -> 19001 ns, i.e. FLAT. The L1 win is worth 308 kB/core to the rest of the op, not extra combine speed.",
+  "unified_path_overhead": "grid_k1_m1 (the generic path at the flat corner) is a reproducible 47161 vs 46436 = +1.6% (181 ns/round) on the focus, and up to +8% (222 ns) on the 2.6 us g4 decode combine. The bench keeps K and m COMPILE-TIME and already if-constexprs stage 2 and the stage-3 wait away; the residual is the row-split arithmetic, the per-subset ship loop and the gatherer-coord RT reads. A production spelling that if-constexprs the whole (K==1 && m==1) body back to the flat one pays 0.",
+  "flow_control": "unchanged in kind: a remote sender is gated by the PREVIOUS round's stat multicast, which the root only sends after every stage-3 gatherer finalized, which requires each gatherer's compute to have drained that round's gather ring. Same argument the op already relies on for its single root.",
+  "no_self_signal": "preserved. Every gatherer writes its own slot synchronously and waits for exactly M-1 / K-1 / w_eff-1 REMOTE incs; Semaphore::up is a non-atomic local RMW and is never used on a counter the core itself owns.",
+  "cb_row_final_caveat": "the row-split writes finished stat tiles into the ROOT's cb_row_final at a row offset, relying on every core pushing the same page count per round so the local write pointer equals the root's. In the op cb_row_final is consumed by pass B, so the root must not let the buffer wrap before the workers' writes land -- the root's cb_reserve_back(rows) happens before its stage-3 wait, which orders it, but the integration must keep that order."
+ },
+
+ "precision_menu": {
+  "K==1_row_split": "NUMERICALLY IDENTICAL to flat -- the per-row fold is still one GROUP_SIZE-long SeedFirst pack-accumulate, just on a different core. pcc and rel-RMS match flat to all printed digits in EVERY config measured (focus 0.999989 / 0.00320 both).",
+  "K>1_slot_tree": "changes the fp32 summation ORDER (M-wide partial sums then a K-wide fold). rel-RMS moves by <= 0.0007 absolute (g32 decode 0.00389 -> 0.00509); pcc stays >= 0.999978. Still fp32 throughout -- the precision CONTRACT is untouched, only the association order.",
+  "gate": "soft pcc gate 0.9995 / rel-RMS 0.04. Every one of the 134 measured variant-runs passes with pcc >= 0.999978 and rel-RMS <= 0.0054. No variant trades precision for speed."
+ },
+
+ "how_to_rerun": [
+  "scripts/run_safe_pytest.sh --profile ttnn/ttnn/operations/rms_norm/perf_experiments/hierarchical_gather_r2/test_hierarchical_gather_r2.py -k focus",
+  "... -k sweep_a   (G in {8,4,16})",
+  "... -k sweep_b   (G in {28,32})",
+  "... -k sweep_c   (the BLOCK_ROWS=2 row-split crossover probe)",
+  "... -k focus_repeat  (3x median)",
+  "then: python3 <this dir>/read_results.py <the printed ops_perf_results csv> [out.json]",
+  "per-stage zones: python3 tests/ttnn/unit_tests/operations/rms_norm/probes/zone_breakdown.py [run_host_id]"
+ ]
+}

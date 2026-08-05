@@ -1,6 +1,42 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
+// ISOLATED PERF BENCH (perf_experiments/combine_pipeline_depth) -- NOT the op.
+// A VERBATIM copy of ttnn/ttnn/operations/rms_norm/kernels/rms_norm_writer.cpp
+// plus the `RMS_PIPE_VARIANT` switch (see bench_compute.cpp for the variant
+// table).  Two changes, both inside the CROSS_CORE block:
+//
+//   MCAST_EARLY (variants 1, 3)
+//     The root pushes its own finalized stat to cb_row_final BEFORE
+//     SenderPipe::send() instead of after.  In the op, the root's pass B blocks
+//     on that push, so it waits out the whole multicast even though its own copy
+//     of the stat has been in L1 since before the send started.  Legal because
+//     the send and pass B are both READERS of those pages, and cb_row_final is
+//     CB_ROW_STAT_DEPTH (== 2) row-blocks deep, so the next round's reserve
+//     cannot reach the half the (already-returned) send read.
+//
+//   RING2 (bit 4)
+//     A sender addresses ROUND-PARITY HALF `blk & 1` of the root's gather ring,
+//     and the root pushes/reserves a WHOLE half per round.  The ring base is
+//     captured ONCE, before any push, so it is identical on every core (the op
+//     relies on the same identity via get_write_ptr).
+//
+//     It is measured as an OPTION, not a prerequisite.  The compute-side pipeline
+//     (bit 2) is already SAFE on the op's ONE-round ring, by a happens-before
+//     chain that lives in THIS kernel and not in the compute one:
+//         member writer round r+1's `ship` is preceded by round r's
+//         `ReceiverPipe::receive()`  ->  which is preceded by the root's
+//         `writer_mcast_send(r)`     ->  which waits on cb_stat_handoff(r)
+//                                         pushed by the root's finalize(r)
+//                                     ->  which follows the root's fold(r),
+//                                         the only reader of the ring.
+//     So however far AHEAD a member's COMPUTE runs, its WRITER cannot put round
+//     r+1's partials into the ring until the root has finished reading round r's.
+//     Measured: bit 2 alone is bit-identical to the serial variant (pcc equal to
+//     6 places on every geometry swept), and RING2 costs GROUP_SIZE extra fp32
+//     pages per tile-row of L1 -- which on the focus shape forces the
+//     descriptor's own L1 solve from BLOCK_ROWS 10 down to 8.
+
 // Writer for rms_norm (BRISC, NoC1).
 //
 // Mirror image of the reader — same (row-block, width-chunk) loop nest, same
@@ -62,6 +98,14 @@
 
 #include <stdint.h>
 
+// ---- BENCH VARIANT SWITCH (perf_experiments/combine_pipeline_depth) ---------
+// A BITMASK: 1 MCAST_EARLY, 2 PIPE_A (compute), 4 RING2, 8 HANDOFF2 (host-only).
+#ifndef RMS_PIPE_VARIANT
+#define RMS_PIPE_VARIANT 0
+#endif
+#define RMS_MCAST_EARLY ((RMS_PIPE_VARIANT) & 1)
+#define RMS_PIPE_RING2 ((RMS_PIPE_VARIANT) & 4)
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"  // DataflowBuffer, for the boot zeroing below
@@ -103,14 +147,6 @@ void kernel_main() {
     constexpr uint32_t COMBINE = get_compile_time_arg_val(9);
     constexpr uint32_t GATHER_SEM_ID = get_compile_time_arg_val(10);
     constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(11);
-    // Perf 2 (descriptor D22): the gather's slots per tile-row -- GROUP_SIZE rounded UP
-    // TO EVEN.  The root's fused fold (compute kernel) walks a row's partials PAIRWISE in
-    // one DEST window, halves p and p + GATHER_SLOTS/2, so an odd group needs one pad slot
-    // to pair against.  Derived, not passed: it is a pure function of GROUP_SIZE and the
-    // compute kernel derives it identically, so there is one definition of the layout in
-    // each kernel and no CT arg can drift between them.  Equals GROUP_SIZE at every even
-    // group (all of 8 / 28 / 32, and the focus shape's 8), so it is byte-identical there.
-    constexpr uint32_t GATHER_SLOTS = GROUP_SIZE + GROUP_SIZE % 2;
     constexpr uint32_t OUT_SHARD_PAGES = get_compile_time_arg_val(12);
     // Refinement 2b: BAND == 1 means the output goes back stick-by-stick into this
     // core's own band -- straight into the resident output shard when
@@ -284,14 +320,20 @@ void kernel_main() {
         //      face-sized transfers per tile, HALF the bytes.
         static_assert(GATHER_FACES >= 2 && GATHER_FACES <= 4, "rms_norm: GATHER_FACES must be 2, 3 or 4");
         const uint32_t face_bytes = stat_bytes / 4;
+#if RMS_PIPE_RING2
+        // BENCH (PIPE): the 2-round gather ring's base, captured BEFORE any push so
+        // it is the same L1 address on every core of the program (the CB is declared
+        // everywhere -- the same identity the op already relies on).  Round r lands
+        // in half `r & 1`.
+        const uint32_t gather_base = get_write_ptr(cb_partials_gathered);
+        const uint32_t gather_half_bytes = GROUP_SIZE * BLOCK_ROWS * stat_bytes;
+#endif
         // ROW-MAJOR GATHER LAYOUT (Perf 1, descriptor D16).  A sender's partial for
-        // row r lands at PAGE `r * GATHER_SLOTS + my_slot` of the root's gather CB, i.e.
-        // the group's GROUP_SIZE partials for ONE row are CONTIGUOUS.  That is what lets
-        // the root fold a whole row inside ONE DEST window (compute kernel: pairwise
-        // add_tiles with acc_to_dest, then the finalize, then one pack -- Perf 2 / D22)
-        // instead of GROUP_SIZE separate helper calls.  Perf 2 widens the stride from
-        // GROUP_SIZE to GATHER_SLOTS so the pairwise walk has an even count to halve.  The Phase-0 layout was
-        // slot-major
+        // row r lands at PAGE `r * GROUP_SIZE + my_slot` of the root's gather CB, i.e.
+        // the group's GROUP_SIZE partials for ONE row are CONTIGUOUS.  That is what
+        // lets the root fold them with a single streaming chain call per row (compute
+        // kernel: CopyTile -> L1Accumulation::SeedFirst pack) instead of GROUP_SIZE
+        // separate helper calls.  The Phase-0 layout was slot-major
         // (`my_slot * rows + r`), which put a row's partials on a stride of `rows` --
         // a gapped window no chain walk can express.
         //
@@ -307,7 +349,7 @@ void kernel_main() {
         auto ship_partial = [&](uint32_t src, uint64_t dst_noc, uint32_t rows) {
             for (uint32_t r = 0; r < rows; ++r) {
                 const uint32_t s_off = r * stat_bytes;
-                const uint32_t d_off = (r * GATHER_SLOTS + my_slot) * stat_bytes;
+                const uint32_t d_off = (r * GROUP_SIZE + my_slot) * stat_bytes;
                 if constexpr (GATHER_FACES == 4) {
                     noc_async_write(src + s_off, dst_noc + d_off, stat_bytes);
                 } else if constexpr (GATHER_FACES == 3) {
@@ -326,13 +368,7 @@ void kernel_main() {
         // wipes members that already arrived; measured as pcc 0.87-0.99 with a large
         // rms across every combine cell).  Only the root reads this CB, so only the
         // root pays.
-        // A PAD slot (odd GROUP_SIZE only, D22) is never written by any member, so the
-        // root's fold would otherwise add whatever L1 garbage was there.  Zeroing it WHOLE
-        // is race-free by exactly the argument below: a sender lands at
-        // `r * GATHER_SLOTS + my_slot` with `my_slot < GROUP_SIZE <= GATHER_SLOTS - 1`, so
-        // no member ever touches a pad page, and the pad contributes an exact +0.0.
-        constexpr bool ZERO_PAD = (GATHER_SLOTS != GROUP_SIZE);
-        if constexpr (GATHER_FACES < 4 || ZERO_PAD) {
+        if constexpr (GATHER_FACES < 4) {
 #if defined(RMS_ABLATE_GATHER_ZERO)
             if (false) {
 #else
@@ -343,18 +379,10 @@ void kernel_main() {
                 const uint32_t pages = gather_dfb.get_total_size_bytes() / stat_bytes;
                 for (uint32_t p = 0; p < pages; ++p) {
                     const uint32_t base = p * stat_bytes;
-                    if constexpr (ZERO_PAD) {
-                        if (p % GATHER_SLOTS >= GROUP_SIZE) {  // a pad slot: zero it whole
-                            noc.async_write_zeros(gather_dfb, stat_bytes, {.offset_bytes = base});
-                            continue;
-                        }
-                    }
                     if constexpr (GATHER_FACES == 2) {  // faces 1 and 3 unshipped
                         noc.async_write_zeros(gather_dfb, face_bytes, {.offset_bytes = base + face_bytes});
                     }
-                    if constexpr (GATHER_FACES < 4) {
-                        noc.async_write_zeros(gather_dfb, face_bytes, {.offset_bytes = base + 3 * face_bytes});
-                    }
+                    noc.async_write_zeros(gather_dfb, face_bytes, {.offset_bytes = base + 3 * face_bytes});
                 }
                 noc.write_zeros_l1_barrier();
             }
@@ -369,8 +397,14 @@ void kernel_main() {
                 {
                     MaybeDeviceZoneScope("writer_gather_ship");
                     cb_wait_front(cb_sum_handoff, rows);
-                    cb_reserve_back(cb_partials_gathered, GATHER_SLOTS * rows);
+#if RMS_PIPE_RING2
+                    cb_reserve_back(cb_partials_gathered, GROUP_SIZE * BLOCK_ROWS);
+                    ship_partial(
+                        get_read_ptr(cb_sum_handoff), get_noc_addr(gather_base + (blk & 1u) * gather_half_bytes), rows);
+#else
+                    cb_reserve_back(cb_partials_gathered, GROUP_SIZE * rows);
                     ship_partial(get_read_ptr(cb_sum_handoff), get_noc_addr(get_write_ptr(cb_partials_gathered)), rows);
+#endif
                     noc_async_write_barrier();
                 }
                 // NO self-signal here.  Semaphore::up(value) is a NON-ATOMIC local
@@ -387,7 +421,11 @@ void kernel_main() {
                     MaybeDeviceZoneScope("writer_gather_wait");
                     arrivals += GROUP_SIZE - 1;
                     gather_sem.wait_min(arrivals);
-                    cb_push_back(cb_partials_gathered, GATHER_SLOTS * rows);
+#if RMS_PIPE_RING2
+                    cb_push_back(cb_partials_gathered, GROUP_SIZE * BLOCK_ROWS);
+#else
+                    cb_push_back(cb_partials_gathered, GROUP_SIZE * rows);
+#endif
                 }
 
                 // 3. multicast the finalized stat back to the whole group.
@@ -405,24 +443,20 @@ void kernel_main() {
                     const uint32_t stat_dst = get_write_ptr(cb_row_final);
                     noc_async_write(get_read_ptr(cb_stat_handoff), get_noc_addr(stat_dst), rows * stat_bytes);
                     noc_async_write_barrier();
-                    // Perf 2 (D24): PUBLISH THE ROOT'S OWN COPY BEFORE THE BROADCAST.
-                    // The root's pass B blocks on this push, so pushing after the send made
-                    // the root wait out the whole multicast to the other GROUP_SIZE-1 cores
-                    // even though its own copy of the stat had been in L1 since before the
-                    // send started.  Legal because `send()` and pass B are both READERS of
-                    // these pages -- the send never writes them -- and cb_row_final is
-                    // CB_ROW_STAT_DEPTH (== 2) row-blocks deep, so the next round's reserve
-                    // cannot reach the half the (already-returned) send read.
-                    //
-                    // MEASURED on the root core (perf_experiments/combine_pipeline_depth):
-                    // `compute_scale` 13575 -> 10932 ns, i.e. -2643 ns of the root's pass B
-                    // spent waiting out its own multicast.  Whole-op it is worth 1.006x
-                    // ALONE but 1.037x on top of the compute-side pipeline (which exposes
-                    // the root's pass B as the next thing on the critical path).
+#if RMS_MCAST_EARLY
+                    // BENCH: publish the root's OWN copy before the broadcast, so the
+                    // root's pass B is not blocked on serving the other GROUP_SIZE-1
+                    // cores.  send() and pass B are both readers of these pages.
                     cb_push_back(cb_row_final, rows);
                     if constexpr (mc.active) {
                         sender.send(stat_dst, stat_dst, rows * stat_bytes);
                     }
+#else
+                    if constexpr (mc.active) {
+                        sender.send(stat_dst, stat_dst, rows * stat_bytes);
+                    }
+                    cb_push_back(cb_row_final, rows);
+#endif
                     cb_pop_front(cb_stat_handoff, rows);
                 }
 
@@ -444,7 +478,11 @@ void kernel_main() {
                     cb_wait_front(cb_sum_handoff, rows);
                     ship_partial(
                         get_read_ptr(cb_sum_handoff),
+#if RMS_PIPE_RING2
+                        get_noc_addr(root_x, root_y, gather_base + (blk & 1u) * gather_half_bytes),
+#else
                         get_noc_addr(root_x, root_y, get_write_ptr(cb_partials_gathered)),
+#endif
                         rows);
                     noc_async_write_barrier();  // data before signal
                     gather_sem.up(noc, root_x, root_y, 1);

@@ -1,6 +1,33 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
+// ISOLATED PERF BENCH (perf_experiments/combine_pipeline_depth) -- NOT the op.
+// A VERBATIM copy of ttnn/ttnn/operations/rms_norm/kernels/rms_norm_compute.cpp
+// with ONE addition: the `RMS_PIPE_VARIANT` switch below, which turns the
+// cross-core combine from a per-row-block BARRIER into a 2-deep PIPELINE.
+//
+//   RMS_PIPE_VARIANT  0  SERIAL      the op's current loop order (the honest
+//                                    baseline; byte-identical to the op).
+//                     1  MCAST_EARLY writer-only: the root publishes its own
+//                                    finalized stat to cb_row_final BEFORE the
+//                                    multicast, so its pass B does not wait for
+//                                    the broadcast to complete.
+//                     2  PIPE2       pass A runs ONE ROW-BLOCK AHEAD on every
+//                                    core, so block r+1's square+reduce overlaps
+//                                    block r's gather wait + root fold + mcast.
+//                                    Needs cb_partials_gathered 2 ROUNDS deep
+//                                    (round-parity landing half) + cb_sum_handoff
+//                                    2 blocks deep -- the host sizes both.
+//                     3  PIPE2 + MCAST_EARLY.
+//                     4  PIPE2 with a ONE-round gather ring: the RACE DEMO.  It
+//                                    exists to prove the ring depth in variant 2
+//                                    is load-bearing, not decorative.  Expected
+//                                    to be NUMERICALLY WRONG.
+//
+// Precision contract is FIXED across every variant (fp32_dest_acc_en,
+// math_fidelity, math_approx_mode and every dtype come from the op's descriptor
+// unchanged); the only difference is WHEN work is issued.
+//
 // Compute kernel for rms_norm (UNPACK / MATH / PACK).
 //
 //   out = x * rsqrt( (1/W) * sum_w x^2 + eps ) * gamma
@@ -48,6 +75,18 @@
 
 #include <cstdint>
 
+// ---- BENCH VARIANT SWITCH (perf_experiments/combine_pipeline_depth) ---------
+// A BITMASK, so each lever is measurable on its own and in composition:
+//   1  MCAST_EARLY  writer: publish the root's own stat before the broadcast
+//   2  PIPE_A       compute: pass A runs one row-block AHEAD
+//   4  RING2        writer + compute: 2-ROUND gather ring, round-parity halves
+//   8  HANDOFF2     host-only: cb_sum_handoff 2 row-blocks deep
+#ifndef RMS_PIPE_VARIANT
+#define RMS_PIPE_VARIANT 0
+#endif
+#define RMS_PIPE_A ((RMS_PIPE_VARIANT) & 2)
+#define RMS_PIPE_RING2 ((RMS_PIPE_VARIANT) & 4)
+
 // ---- TEMPORARY ABLATION SWITCHES (/perf-measure cumulative peel) ------------
 // Uncomment to strip a stage's PAYLOAD while keeping every CB handshake and trip
 // count.  Perf measurement only -- the op is wrong with any of these on.  These
@@ -58,9 +97,6 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reduce.h"
-// add_tiles / add_tiles_init with acc_to_dest -- the root's fused pairwise DEST fold
-// (Perf 2 / D22; justification at the fused chain in the COMBINE branch).
-#include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 // PERMANENT per-stage device-profiler instrumentation (never remove; free when
 // the profiler is off -- see the header's durability contract).
@@ -183,16 +219,6 @@ struct StatFinalize : compute_kernel_lib::UnaryOp<StatFinalize<RMS_INV_W, RMS_EP
     static ALWI void exec_impl(uint32_t slot_offset) { stat_finalize_payload<RMS_INV_W, RMS_EPS>(slot_offset); }
 };
 
-// Largest divisor of `wt` that is <= `cap` -- pass B's DEST-lane block size (Perf 2,
-// descriptor D21; the full measured justification is at PASS_B_BLK's use below).
-constexpr uint32_t pass_b_blk(uint32_t wt, uint32_t cap) {
-    uint32_t b = (cap < wt) ? cap : wt;
-    while (b > 1 && (wt % b) != 0) {
-        --b;
-    }
-    return b;
-}
-
 namespace {
 constexpr uint32_t cb_input_sticks = 0;
 constexpr uint32_t cb_input_tiles = 1;
@@ -247,9 +273,6 @@ void kernel_main() {
     //                                                 chunked -> x read ONCE
     //   STREAM        X_RESIDENT=0, NUM_W_CHUNKS>1    x re-read in pass B
     constexpr uint32_t X_RES = get_compile_time_arg_val(15);
-    // Perf 2 (descriptor D25): is cb_input_tiles the ZERO-COPY resident shard?  That is the
-    // precondition for the combine pipeline below -- see its justification at PIPE_A.
-    constexpr uint32_t NATIVE_IN = get_compile_time_arg_val(16);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // tile-rows owned by this core
     // Only the core holding the row's LAST width tile applies the partial-W
@@ -279,46 +302,15 @@ void kernel_main() {
     // WT_CHUNK in both Phase-0 regimes, so this is byte-identical off the L5 path.
     constexpr uint32_t X_HOLD_WT = X_RESIDENT ? (WT_CHUNK * NUM_W_CHUNKS) : WT_CHUNK;
     constexpr auto XOFF = ROW_RESIDENT ? ckl::TileOffset::Set : ckl::TileOffset::Unset;
-
-    // Perf 2 (descriptor D25) -- THE COMBINE PIPELINE.  Run block blk+1's pass A BEFORE
-    // block blk's cross-core combine, so the root's gather wait and its whole fold +
-    // multicast overlap independent square+reduce work instead of idling.
-    //
-    // WHAT IT HARVESTS, measured.  Ablating the root chain's payload while keeping every CB
-    // handshake left the root's own `cb_wait_front(cb_partials_gathered)` at 13610 ns over 4
-    // rounds -- ~3400 ns per round of the root sitting idle, 21% of the pre-Perf-2 wall.
-    // That residue is LATENCY, not payload: no amount of making the fold cheaper removes it.
-    // And it IS hideable rather than being the slowest member finishing: across a group the
-    // `compute_reduce` END spread is 112-127 ns (members finish pass A together) while the
-    // `writer_gather_ship` END spread is 448-1704 ns, strictly monotone in hop distance from
-    // the root -- i.e. ~250 ns per sender of SERIALIZED NoC ingress at the root's L1.
-    //
-    // MEASURED (blackhole p150b 1350 MHz, at the op's pinned config; whole-op ns from
-    // perf_experiments/combine_pipeline_depth, whose serial baseline reproduces the real op
-    // to 0.1% -- 64707 vs 64801 ns -- because it patches the op's own descriptor):
-    //     serial 64707 -> pipe 57000 (1.135x) -> + handoff depth 2 55740 (1.161x)
-    //            -> + the writer's early stat publish (D24) 53740 (1.204x)
-    // Mechanism on the root core: `compute_root_sum`'s per-round idle 3246 -> 0 ns.
-    // `torch.equal`-IDENTICAL to serial -- this changes WHEN work is issued, never what.
-    //
-    // EARNED CARVE-OUT, and it is a CORRECTNESS one, not a perf one: this requires
-    // cb_input_tiles to hold the core's WHOLE assignment, i.e. the zero-copy resident shard
-    // (`NATIVE_IN`).  Pass A for blk+1 addresses x at a TILE OFFSET past a front that pass B
-    // has not popped yet, and a tile offset cannot cross a CB ring WRAP.  A shard-backed CB
-    // is the whole assignment so its front never wraps; a reader-fed `CB_X_DEPTH == 2` ring
-    // straddles once every two rounds.  Measured on the interleaved width split: the
-    // pipeline is WRONG there (pcc 0.980150, not bit-exact), and sizing that ring to
-    // num_blocks+1 blocks to make it right costs +196608 B/core and is STILL 0.894x
-    // ((1,1,8192,1024) INTERLEAVED GRID_W=8: 116712 -> 130164 ns) because that regime is
-    // reader/DRAM-bound.  So the carve-out is doubly earned -- incorrect AND slower -- and
-    // it is written as the narrow exception: everything shard-backed gets the pipeline.
-    //
-    // `num_blocks > 1` is not a guard, it is the mechanism: with one block there is no
-    // blk+1 to hoist.  It is checked at runtime below, not here.
-    constexpr bool PIPE_A = (NATIVE_IN != 0) && (COMBINE != 0);
-    // Pass A's x operand needs a RUNTIME tile base once it can run ahead of the front.
-    // Compile-time-elided (hence byte-identical to Refinement 4) when PIPE_A is off.
-    constexpr auto AOFF = PIPE_A ? ckl::TileOffset::Set : XOFF;
+    // BENCH (PIPE): pass A for block blk+1 runs while the cb_input_tiles FRONT still
+    // points at block blk (pass B has not popped it yet), so pass A's operand needs a
+    // RUNTIME TILE BASE even off the ROW_RESIDENT path.  Compile-time-elided (and so
+    // byte-identical to the op) in the SERIAL variant.
+#if RMS_PIPE_A
+    constexpr auto AOFF = ckl::TileOffset::Set;
+#else
+    constexpr auto AOFF = XOFF;
+#endif
 
     // srcA at boot is whichever CB the first helper unpacks from.
     constexpr uint32_t CB_A = RM ? cb_input_sticks : cb_input_tiles;
@@ -398,12 +390,26 @@ void kernel_main() {
         ckl::DestAccumulation::PerRow);
     constexpr auto SQ_OUT = SQ_FOLD ? SQ_OUT_FOLDED : ckl::output(cb_x_squared);
 
-    // Perf 1's D16 `ROOT_FOLD_OUT` -- the root fold's packer-L1-accumulation output spec
-    // (`cb_row_stat`, OneUpfront/OneAtEnd, `L1Accumulation::SeedFirst`) -- is DELETED.
-    // Perf 2 / D22 accumulates the group sum in DEST and fuses the finalize into that same
-    // window, so nothing packs into cb_row_stat on the COMBINE path at all any more.  Its
-    // measured justification (2.18x, and MORE accurate than the packer fold) is at the
-    // fused chain below.
+    // Perf 1 (descriptor D16): the group root's fold of the gathered partials.
+    //
+    // The gather lands the group's GROUP_SIZE partials for ONE row CONTIGUOUSLY
+    // (writer: page = r * GROUP_SIZE + my_slot), so folding a row is a SINGLE
+    // streaming chain call: copy each partial into DEST and PACK-ACCUMULATE it into
+    // the row's cb_row_stat tile.  L1Accumulation::SeedFirst makes the first tile a
+    // plain pack and every later one a pack-add, so there is nothing to zero and no
+    // separate seed call -- and the running sum lives in the fp32 CB rather than in
+    // a DEST register that is 16-bit at fp32_dest_acc_en == False, so this is at
+    // least as accurate as the GROUP_SIZE-call `add` chain it replaces.
+    //
+    // (OneUpfront, OneAtEnd) is the policy pair L1 accumulation requires: the whole
+    // call pins ONE output tile.  Hence one call per row rather than one per block.
+    constexpr auto ROOT_FOLD_OUT = ckl::output(
+        cb_row_stat,
+        ckl::ReservePolicy::OneUpfront,
+        ckl::PushPolicy::OneAtEnd,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::PackRelu::Disabled,
+        ckl::L1Accumulation::SeedFirst);
 
     // ---- the operand specs, ONE definition each ---------------------------
     // Every one carries XOFF, so the L5 regime differs from Phase 0 only in the
@@ -436,60 +442,7 @@ void kernel_main() {
         ckl::DataFormatReconfig::Enabled,
         XOFF);
     constexpr uint32_t NORM_OUT = HAS_G ? cb_normalized : cb_output_tiles;
-
-    // Perf 2 (descriptor D21): pass B's DEST-LANE BLOCK SIZE.
-    //
-    // Pass B's two chains walk (rows x WT_CHUNK) tiles.  At block_size 1 each tile pays
-    // its own CB reserve/push and its own MATH<->PACK `tile_regs` handshake; at
-    // block_size B one outer iter drives B DEST lanes and the per-element init, the
-    // format reconfig and the CB flow control all amortize over B tiles.  The chain walks
-    // element-major inside a block (eltwise_chain.inl `elem_apply_compute`), which is what
-    // makes the amortization real rather than nominal.
-    //
-    // BITWISE IDENTICAL to block_size 1 -- this changes WHEN work is issued, never what.
-    // Verified `torch.equal` against the previous spelling at every geometry swept.
-    //
-    // MEASURED (blackhole p150b 1350 MHz, at the op's pinned config -- bf16 / HiFi2 /
-    // fp32_dest_acc_en=False; isolated bench perf_experiments/pass_b_fuse_scale_gamma, a
-    // kernel containing pass B and nothing else, one fresh-cache profiled run per variant):
-    //     rows=8, WT_CHUNK=4 (the focus shape)   14050 -> 8860 ns   1.59x
-    //   decomposed: -3.3 us from one reserve/push per CHUNK instead of per tile, then
-    //   -1.9 us from 4 DEST lanes per outer iter.  The block_size curve at 128 tiles is
-    //   monotonic and diminishing: 13266 / 9229 / 8804 / 8209 ns at B = 1 / 2 / 4 / 8.
-    //   Wins across the whole (rows x WT_CHUNK) space: 1.28x at rows=1/wt=4, 1.49x at
-    //   rows=1/wt=32, 1.62x at rows=8/wt=16, 1.65x at rows=32/wt=4, and 1.66x with
-    //   HAS_GAMMA=0 -- i.e. the lever is not gamma-specific, the scale pass alone gains.
-    //
-    // NEVER a literal 8: DEST_AUTO_LIMIT is 8 lanes at fp32_dest_acc_en=False but 4 at
-    // True, and it is the build-flag-derived cap (dest_helpers.hpp).  A DIVISOR of
-    // WT_CHUNK keeps every outer iter full, so the Chunked pack lifecycle below always
-    // covers exactly `PASS_B_BLK` pages.
-    //
-    // The block size and the PerChunk pack lifecycle are ONE change, not two: at
-    // block_size > 1 the chain emits the pack lifecycle once per OUTER iter (outside the
-    // lane loop), so a `PerTile` reserve would reserve 1 page and then pack
-    // PASS_B_BLK -- it corrupts the CB ring and HANGS (observed in the bench before the
-    // fix).  Do not change one without the other.
-    constexpr uint32_t PASS_B_BLK = pass_b_blk(WT_CHUNK, ckl::DEST_AUTO_LIMIT);
-    // Reserve/push once per DEST-lane block. `PerChunk` (not `Upfront`) deliberately:
-    // it keeps the per-block page handover the ROW_MAJOR path's `untilize` consumer
-    // needs, and it measured within noise of `Upfront` (8860 vs 8901 ns) wherever both
-    // are legal -- one path, no untested regime. `Upfront`/`AtEnd` is 1.22-1.23x at
-    // WT_CHUNK == 1 (where PASS_B_BLK clamps to 1 and this is inert), which is the one
-    // geometry that pays ~0.4% for the single path; see the changelog for that trade.
-    constexpr auto PASS_B_OUT_NORM = ckl::output(NORM_OUT, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk);
-    constexpr auto PASS_B_OUT_GAMMA =
-        ckl::output(cb_output_tiles, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk);
     constexpr bool CROSS_CORE = (COMBINE != 0);
-    // Perf 2 (descriptor D22): the gather's slots per tile-row -- GROUP_SIZE rounded UP TO
-    // EVEN -- and the half-stride the root's fused pairwise fold walks.  DERIVED, never
-    // passed: a pure function of GROUP_SIZE that the writer derives identically, so the
-    // landing layout has one definition per kernel and no CT arg can drift between them.
-    // Equal to GROUP_SIZE at every even group (8 / 28 / 32, including the focus shape's 8);
-    // the one extra slot at odd GROUP_SIZE is boot-zeroed by the writer and pairs against
-    // the odd contributor as an exact +0.0.  See the fused chain below.
-    constexpr uint32_t GATHER_SLOTS = GROUP_SIZE + GROUP_SIZE % 2;
-    constexpr uint32_t GATHER_HALF = GATHER_SLOTS / 2;
     // Pass B's Col operand: the multicast landing CB when the stat was combined
     // across cores, the local accumulator otherwise.
     constexpr uint32_t CB_STAT_B = CROSS_CORE ? cb_row_final : cb_row_stat;
@@ -540,15 +493,11 @@ void kernel_main() {
     }
 
     const uint32_t num_blocks = (num_rows + BLOCK_ROWS - 1) / BLOCK_ROWS;
-    auto rows_of = [&](uint32_t blk) {
-        const uint32_t r0 = blk * BLOCK_ROWS;
-        return (num_rows - r0 < BLOCK_ROWS) ? (num_rows - r0) : BLOCK_ROWS;
-    };
 
     // ================= pass A: sum(x^2) over the whole width ===============
-    // Hoisted into a lambda so D25's pipeline can issue it for block blk+1 before block
-    // blk's combine.  `pipe_base` is that not-yet-fronted block's tile offset inside
-    // cb_input_tiles, and is a compile-time 0 (fully elided) whenever PIPE_A is off.
+    // BENCH: hoisted into a lambda so the PIPE variant can issue it for block
+    // blk + 1 BEFORE block blk's combine, with `pipe_base` = the tile offset of
+    // that not-yet-fronted block inside cb_input_tiles (0 in SERIAL).
     auto pass_a = [&](uint32_t rows, uint32_t pipe_base) {
         for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
             // Tile offset of this chunk inside the HELD CBs.  0 (and elided) unless
@@ -589,29 +538,37 @@ void kernel_main() {
         }
     };
 
-    // D25's PROLOGUE: block 0's pass A runs before the loop, so from here on the loop body
-    // issues block blk+1's pass A first and the root's arrival wait + fold + multicast for
-    // block blk overlap it.  Elided entirely when PIPE_A is off.
-    if constexpr (PIPE_A) {
-        pass_a(rows_of(0), 0);
-    }
+    auto rows_of = [&](uint32_t blk) {
+        const uint32_t r0 = blk * BLOCK_ROWS;
+        return (num_rows - r0 < BLOCK_ROWS) ? (num_rows - r0) : BLOCK_ROWS;
+    };
+
+#if RMS_PIPE_A
+    // PROLOGUE: block 0's pass A.  From here on the loop body runs block blk+1's
+    // pass A first, so the root's `cb_wait_front(cb_partials_gathered)` (a pure
+    // arrival wait: the members' partials serialize into the root's L1) and the
+    // whole root fold + multicast overlap independent square+reduce work.
+    pass_a(rows_of(0), 0);
+#endif
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-        const uint32_t rows = rows_of(blk);
+        const uint32_t r0 = blk * BLOCK_ROWS;
+        const uint32_t rows = (num_rows - r0 < BLOCK_ROWS) ? (num_rows - r0) : BLOCK_ROWS;
 
-        if constexpr (PIPE_A) {
-            // cb_input_tiles' front is still block blk (pass B has not popped it), so block
-            // blk+1 begins `rows * X_HOLD_WT` tiles further in.  Widen the wait to cover
-            // both blocks -- on the shard-backed CB this is already satisfied (the whole
-            // assignment is published up front), and PIPE_A is gated on exactly that.
-            if (blk + 1 < num_blocks) {
-                const uint32_t next_rows = rows_of(blk + 1);
-                cb_wait_front(cb_input_tiles, (rows + next_rows) * X_HOLD_WT);
-                pass_a(next_rows, rows * X_HOLD_WT);
-            }
-        } else {
-            pass_a(rows, 0);
+#if RMS_PIPE_A
+        // cb_input_tiles' front is still block blk (pass B has not popped it), so
+        // block blk+1 lives `rows * WT_CHUNK` tiles further in.  On the native
+        // (shard-backed) input CB the whole shard is already published; on a
+        // reader-fed CB the depth-2 ring is what makes the next block available,
+        // and the chain's Upfront wait is widened here to cover both blocks.
+        if (blk + 1 < num_blocks) {
+            const uint32_t next_rows = rows_of(blk + 1);
+            cb_wait_front(cb_input_tiles, (rows + next_rows) * X_HOLD_WT);
+            pass_a(next_rows, rows * X_HOLD_WT);
         }
+#else
+        pass_a(rows, 0);
+#endif
 
         // ================= finalize: 1/rms = rsqrt(sum/W + eps) ============
         // Pops before reserving, so the `rows`-page accumulator CB suffices.
@@ -627,130 +584,84 @@ void kernel_main() {
             // The `compute_partial_handoff` zone that used to sit here is retired with the
             // copy it measured.
             if (is_root != 0) {
-                // Sum the group's GROUP_SIZE partials ELEMENTWISE and finalize the row
-                // total, in ONE DEST WINDOW per tile-row.  Each partial is a column-shaped
-                // REDUCE_ROW result, so the row total is their elementwise sum regardless
-                // of which lanes the datapath filled.
+                // Sum the group's GROUP_SIZE partials ELEMENTWISE: each is a
+                // column-shaped REDUCE_ROW result, so the row total is their
+                // elementwise sum regardless of which lanes the datapath filled.
                 //
-                // Perf 2 (descriptor D22) -- THE FUSED ROOT CHAIN.  This replaces the two
-                // stages Perf 1 left here:
-                //   (D16) a per-row chain that copied each partial into DEST and let the
-                //         PACKER fold it onto the resident fp32 cb_row_stat
-                //         (L1Accumulation::SeedFirst), then
-                //   (D19) a second chain that UNPACKED cb_row_stat, ran StatFinalize, and
-                //         packed cb_stat_handoff.
-                // Now the row's partials are accumulated PAIRWISE IN DEST
-                // (`add_tiles(..., acc_to_dest=true)` over the two halves of the row's
-                // GATHER_SLOTS window), the finalize runs on that same DEST slot, and ONE
-                // `pack_tile` writes cb_stat_handoff.  Deleted: GROUP_SIZE packs, one fp32
-                // pack and one fp32 unpack per tile-row -- cb_row_stat's whole L1 round
-                // trip on the root, and with it every remaining use of cb_row_stat on the
-                // COMBINE path.
-                //
-                // MEASURED (blackhole p150b 1350 MHz, at the op's pinned config -- bf16 /
-                // HiFi2 / fp32_dest_acc_en=False / math_approx_mode=False, UNCHANGED;
-                // isolated bench perf_experiments/root_chain_dest_fuse, ns for the stage
-                // PAIR per combine round, one fresh-cache profiled run per variant):
-                //     baseline (D16 fold + D19 finalize)   5874 ns
-                //     DEST fold only, finalize separate    3048 ns   1.93x
-                //     THIS (fused, one DEST window)        2698 ns   2.18x
-                //   Sweep 1.73x-3.86x over GROUP_SIZE {4,8,9,16,28,32} x rows {1,8,32};
-                //   the win GROWS as the group widens (3.04x at GROUP_SIZE=32, rows=8) and
-                //   is largest at rows=1, i.e. the decode / width-shard profiles.
-                //   Bench calibration: baseline x 4 rounds = 23496 ns against the op's own
-                //   cumulative-peel value of 23230 ns for these two stages -- 1.1%.
-                //
-                // MORE ACCURATE THAN THE CHAIN IT REPLACES, measured, not argued:
-                // rel-RMS 2.42e-03 vs 3.38e-03 at the focus geometry (3.36e-03 vs 5.09e-03
-                // at GROUP_SIZE=28), pcc_out 0.999998.  This REFUTES D16's recorded
-                // reasoning that an fp32-L1 accumulator is "at least as accurate": the
-                // packer fold rounds EVERY contributor into a 16-bit DEST word before its
-                // exact fp32 L1 add, so it pays GROUP_SIZE roundings in a LINEAR chain,
-                // while the pairwise DEST walk pays the same per-addend rounding but sums
-                // as a TREE, shortening the error chain to log2(GROUP_SIZE)+1.  A
-                // precision HEDGE was measured too (pair in DEST, accumulate in fp32 L1)
-                // and was both slower (4142 ns) AND less accurate (2.91e-03) -- there was
-                // nothing to hedge.  The user's precision contract is untouched.
-                //
-                // RAW-LLK SUBSTITUTION -- the fusion is INEXPRESSIBLE through eltwise_chain.
-                // `DestAccumulation::PerRow` gives exactly the DEST window this needs, but
-                // EVERY chain element's apply runs on EVERY inner iteration of that row
-                // (eltwise_chain.inl `elem_apply_compute`; a DestOnly/UnaryOp element's
-                // exec is called `inner_count` times unconditionally).  So a StatFinalize
-                // element placed after the accumulating BinaryFpu would rsqrt a PARTIAL sum
-                // GROUP_SIZE/2 times instead of once on the completed one.  There is no
-                // apply-after-the-accumulation element kind and no per-row tail hook -- the
-                // chain's only per-row tail is the pack itself.  The helper-expressible
-                // split form is measured at 1.93x against this 2.18x, and the bench keeps
-                // both so the gap is re-checkable.  Do NOT "restore" this to chain calls
-                // without re-measuring.
-                //
-                // The finalize is the op's existing sanctioned raw-sfpi StatFinalize (D17),
-                // called through the SAME `stat_finalize_payload` the chain element wraps,
-                // so the SFPU spelling is bit-identical to before.  Its lane invariant
-                // survives unchanged: both bodies stay <STRIDE=2, ITERS=4> at
-                // VectorMode::C, so `*(1/W)+eps` and `rsqrt` visit exactly the same lanes
-                // and the +eps guard still covers every lane the rsqrt touches (no
-                // rsqrt(0)=inf on an all-zero row).  The fusion cannot disturb that: the
-                // FPU has no lane scope, so the DEST accumulation fills the WHOLE tile and
-                // the finalize sees the completed sum on every lane it visits -- exactly as
-                // it did when it unpacked cb_row_stat.  The lanes it skips hold the raw
-                // finite group sum, the same defined-but-meaningless datum as before.
-                //
-                // GATHER_SLOTS (== GROUP_SIZE rounded up to even) is what makes the
-                // pairwise walk universal: at odd GROUP_SIZE the writer boot-zeroes one pad
-                // slot per tile-row, which pairs against the odd contributor and adds an
-                // exact +0.0.  So there is no odd/even code path and no GROUP_SIZE guard.
-                MaybeDeviceZoneScope("compute_root_fused");
-#if defined(RMS_ABLATE_ROOT_SUM) || defined(RMS_ABLATE_ROOT_FINALIZE)
-                // ABLATION (temporary, /perf-measure): payload removed, every CB handshake
-                // and trip count preserved.
-                cb_wait_front(cb_partials_gathered, GATHER_SLOTS * rows);
-                for (uint32_t r = 0; r < rows; ++r) {
-                    cb_reserve_back(cb_stat_handoff, 1);
-                    cb_push_back(cb_stat_handoff, 1);
-                }
-                cb_pop_front(cb_partials_gathered, GATHER_SLOTS * rows);
-#else
-                // The whole block's gather window is waited/popped ONCE: the pairwise walk
-                // addresses two tiles of the same CB at a stride, which a per-tile wait
-                // cannot express.  Legal exactly as it stands -- the writer already
-                // publishes the block atomically (`cb_push_back(cb_partials_gathered,
-                // GATHER_SLOTS * rows)`) and the CB is sized to that same window.
-                cb_wait_front(cb_partials_gathered, GATHER_SLOTS * rows);
-                // The DATA-FORMAT RECONFIG the eltwise_chain helpers emit for us has to be
-                // written out by hand here, and it is NOT optional: pass A left the
-                // unpacker configured for cb_x_squared (the input dtype, bf16 in the
-                // measured config) and the packer for cb_sum_handoff, while the gather and
-                // the handoff are fp32.  Without these two calls the fold unpacks fp32 L1
-                // through a bf16 srcA/srcB and the accumulated sum reads as ~0, which the
-                // finalize then turns into rsqrt(eps) -- a uniform ~1/sqrt(eps) scale error
-                // that keeps pcc at 0.9997 and shows up only in rel-RMS (measured 994
-                // against a 0.04 bound during integration).  That is exactly why the
-                // op's regression nets bound rms and not just pcc.
-                reconfig_data_format(cb_partials_gathered, cb_partials_gathered);
-                pack_reconfig_data_format(cb_stat_handoff);
-                add_tiles_init(cb_partials_gathered, cb_partials_gathered, /*acc_to_dest=*/true);
-                rsqrt_tile_init();
-                for (uint32_t r = 0; r < rows; ++r) {
-                    const uint32_t base = r * GATHER_SLOTS;
-                    tile_regs_acquire();
-                    for (uint32_t p = 0; p < GATHER_HALF; ++p) {
-                        add_tiles(cb_partials_gathered, cb_partials_gathered, base + p, base + GATHER_HALF + p, 0);
+                // Perf 1 (D16): ONE streaming chain call per row folds that row's
+                // GROUP_SIZE partials -- CONTIGUOUS in the gather CB by the writer's
+                // row-major landing layout -- into a single pack-accumulated
+                // cb_row_stat tile.  Phase 0 spent GROUP_SIZE separate helper calls
+                // per row-block (a copy plus GROUP_SIZE-1 in-place adds); on a decode
+                // profile (rows == 1, so every call carried ONE tile) that per-call
+                // cost WAS the combine -- 31 one-tile calls measured 6619 ns of an
+                // 11202 ns whole-op latency on (1,1,32,5120) WIDTH-sharded 32c.
+                {
+                    MaybeDeviceZoneScope("compute_root_sum");
+#if defined(RMS_ABLATE_ROOT_SUM)
+                    // ABLATION (temporary, /perf-measure): payload removed, every CB
+                    // handshake + trip count preserved.
+                    for (uint32_t r = 0; r < rows; ++r) {
+                        cb_reserve_back(cb_row_stat, 1);
+                        for (uint32_t t = 0; t < GROUP_SIZE; ++t) {
+                            cb_wait_front(cb_partials_gathered, 1);
+                            cb_pop_front(cb_partials_gathered, 1);
+                        }
+                        cb_push_back(cb_row_stat, 1);
                     }
-                    stat_finalize_payload<INV_W_BITS, EPS_BITS>(0);
-                    tile_regs_commit();
-                    // Reserve/push PER TILE-ROW, not per block: the writer's stat multicast
-                    // starts on the first finalized row, and a block-granular publish would
-                    // make it wait for the block's LAST row.  Measured cost of keeping that
-                    // overlap: zero (2698 vs 2701 ns).
-                    cb_reserve_back(cb_stat_handoff, 1);
-                    tile_regs_wait();
-                    pack_tile(0, cb_stat_handoff);
-                    tile_regs_release();
-                    cb_push_back(cb_stat_handoff, 1);
+#else
+                    for (uint32_t r = 0; r < rows; ++r) {
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::tiles(GROUP_SIZE),
+                            ckl::CopyTile<ckl::input(cb_partials_gathered)>{},
+                            ckl::PackTile<ROOT_FOLD_OUT>{});
+                    }
+#endif
+#if RMS_PIPE_RING2
+                    // BENCH (PIPE, 2-round gather ring): the writer pushes a WHOLE ring
+                    // HALF (GROUP_SIZE * BLOCK_ROWS pages) every round, unconditionally,
+                    // so the ring pointer lands on an exact half boundary and a sender
+                    // can address round r's half as `base + (r & 1) * half`.  A ragged
+                    // final block therefore leaves an unread tail that must still be
+                    // popped, or the halves drift.
+                    if (rows < BLOCK_ROWS) {
+                        cb_wait_front(cb_partials_gathered, GROUP_SIZE * (BLOCK_ROWS - rows));
+                        cb_pop_front(cb_partials_gathered, GROUP_SIZE * (BLOCK_ROWS - rows));
+                    }
+#endif
                 }
-                cb_pop_front(cb_partials_gathered, GATHER_SLOTS * rows);
+                // Perf 1 (descriptor D19): the finalize READS cb_row_stat and WRITES
+                // cb_stat_handoff in ONE pass -- one unpack and one pack per tile instead
+                // of two of each.  The separate `ckl::copy` handoff stage is GONE; its
+                // 8177 ns on the (1,1,8192,1024) BLOCK-sharded 64c profile was pure copy,
+                // ~10% of that shape's whole-op wall.  The chain element also hoists
+                // rsqrt_tile_init() out of the per-tile loop, which transform_in_place
+                // re-emits every tile (a measured 25 ns/tile).
+                //
+                // MEASURED (isolated bench perf_experiments/root_finalize_scope): the
+                // finalize+handoff stage PAIR goes 24389 -> 20110 ns at rows=32 for the
+                // A->B restructure alone (1.21x), and 24389 -> ~8.5k with the column-scoped
+                // finalize above (~2.9x).  `ckl::input(cb_row_stat)` takes the default
+                // per-tile wait/pop, so the net CB effect is identical to the pair it
+                // replaces: cb_row_stat drained, `rows` tiles pushed to cb_stat_handoff.
+                //
+                // The retired `compute_stat_handoff` zone's cost now lives inside
+                // `compute_root_finalize` -- there is no separate stage left to measure.
+                MaybeDeviceZoneScope("compute_root_finalize");
+#if defined(RMS_ABLATE_ROOT_FINALIZE)
+                // ABLATION (temporary, /perf-measure): payload removed, CB handshakes kept.
+                for (uint32_t t = 0; t < rows; ++t) {
+                    cb_wait_front(cb_row_stat, 1);
+                    cb_reserve_back(cb_stat_handoff, 1);
+                    cb_push_back(cb_stat_handoff, 1);
+                    cb_pop_front(cb_row_stat, 1);
+                }
+#else
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(rows),
+                    ckl::CopyTile<ckl::input(cb_row_stat)>{},
+                    StatFinalize<INV_W_BITS, EPS_BITS>{},
+                    ckl::PackTile<ckl::output(cb_stat_handoff)>{});
 #endif
             }
         }
@@ -777,13 +688,13 @@ void kernel_main() {
             {
                 MaybeDeviceZoneScope("compute_scale");
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(rows, WT_CHUNK, PASS_B_BLK),
+                    ckl::EltwiseShape::grid(rows, WT_CHUNK),
                     ckl::BinaryFpu<
                         X_IN_B,
                         ckl::input(CB_STAT_B, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Col>{hold_base},
-                    ckl::PackTile<PASS_B_OUT_NORM>{});
+                    ckl::PackTile<ckl::output(NORM_OUT)>{});
             }
 
             if constexpr (HAS_G) {
@@ -791,14 +702,14 @@ void kernel_main() {
                 // rows (BroadcastDim::Row), indexed by column (OperandKind::Row).
                 MaybeDeviceZoneScope("compute_gamma_mul");
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(rows, WT_CHUNK, PASS_B_BLK),
+                    ckl::EltwiseShape::grid(rows, WT_CHUNK),
                     ckl::BinaryFpu<
                         ckl::input(
                             cb_normalized, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
                         G_IN,
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Row>{0u, hold_base},
-                    ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                    ckl::PackTile<ckl::output(cb_output_tiles)>{});
             }
 
             if constexpr (RM) {
