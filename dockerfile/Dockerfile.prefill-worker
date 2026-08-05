@@ -7,85 +7,64 @@
 # The prefill worker is a THIN LAYER on top of an already-built release image:
 # it adds tt-llm-engine's _migration_client nanobind module and nothing else.
 # tt-metal itself is never built here - it arrives with the release base, which
-# already carries TT_METAL_HOME, the bundled venv and the built runtime. Both
-# bases come in as named build contexts, stubbed FROM scratch below so this file
-# stays valid standalone (same pattern as dockerfile/Dockerfile's tool layers):
-#   release-base   - what the worker ships on top of (the release-models image)
-#   llm-build-base - throwaway toolchain image for compiling the client (dev image)
+# already carries TT_METAL_HOME, the bundled venv and the built runtime.
 #
-# Cloning the PRIVATE tenstorrent/tt-llm-engine needs a read token, passed as a
-# BuildKit secret (never a build arg - that would persist in the image history).
+# Unlike the previous revision, this does NOT clone or compile tt-llm-engine.
+# The _migration_client module is copied straight out of a PREBUILT tt-llm-engine
+# image - the same `migration-worker` image tt-blaze's decode worker copies it
+# from (tt-blaze/Dockerfile.disaggregated-decode-worker). So there is NO private
+# clone and NO GitHub token here: pulling the engine image needs only
+# `docker login ghcr.io`, which the release workflow already does. The two
+# _migration_client builds are the same artifact - the module links no tt-metal,
+# no MPI and no device path, so the full build in the migration image and the
+# old synthetic build produce an identical module (only CPython minor must match).
 #
-# BUILD via Bake from the repo root (contexts resolve to local targets):
-#   GH_TOKEN=<pat> docker buildx bake -f dockerfile/docker-bake.hcl prefill-worker
+# Two inputs:
+#   release-base        - named build context: the release-models image this
+#                         worker ships on top of. Stubbed FROM scratch below so
+#                         this file stays valid standalone; overridden by Bake
+#                         (dockerfile/docker-bake.hcl) or --build-context.
+#   TT_LLM_ENGINE_IMAGE - build arg: a PREBUILT, already-pushed tt-llm-engine
+#                         migration image used ONLY as a COPY source. None of its
+#                         layers land in the final image - only the one
+#                         _migration_client*.so is taken out of it.
+#
+# PROTOCOL MATCH: pick a TT_LLM_ENGINE_IMAGE whose migration wire protocol (the
+# KV chunk-table proto + shmem layout) matches the decode / migration-layer side
+# - simplest is the SAME tag the migration layer (and the tt-blaze decode
+# worker) is deployed from. Pin by full SHA per release, never :latest. The
+# module is a CPython-version-specific nanobind extension, so the engine image
+# must be built for the same Python minor as the release base (3.10 on 22.04).
+#
+# BUILD via Bake from the repo root (release-base resolves to a local target):
+#   docker buildx bake -f dockerfile/docker-bake.hcl prefill-worker
 # ...or with plain docker build against published bases:
 #   DOCKER_BUILDKIT=1 docker build -f dockerfile/Dockerfile.prefill-worker \
 #     --platform=linux/amd64 \
-#     --secret id=gh_token,env=GH_TOKEN \
-#     --build-context llm-build-base=docker-image://<tt-metalium dev image> \
 #     --build-context release-base=docker-image://<tt-metalium release-models image> \
-#     --build-arg TT_LLM_ENGINE_REF=<llm-branch-or-sha> \
+#     --build-arg TT_LLM_ENGINE_IMAGE=<tt-llm-engine migration image>:<tag> \
 #     -t ghcr.io/<ns>/prefill-worker:<tag> .
 
-# These FROM scratch stubs are overridden by Bake (dockerfile/docker-bake.hcl's
-# prefill-worker target) or by --build-context on a plain docker build:
-FROM scratch AS llm-build-base
+# ============================================================================
+# Stage 1 (llm-prebuilt): the prebuilt tt-llm-engine migration image, pulled and
+# used ONLY as a COPY source for the already-built _migration_client module.
+# Nothing is built or run here, so the stage contributes no layers to `final`.
+# It carries the module at
+#   /opt/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python/
+# ============================================================================
+ARG TT_LLM_ENGINE_IMAGE=ghcr.io/tenstorrent/tt-llm-engine/migration-worker:598154ddb3b838e5a516c220db83442340a72f74
+FROM ${TT_LLM_ENGINE_IMAGE} AS llm-prebuilt
+
+# Stubbed FROM scratch so this file is valid standalone; overridden by Bake
+# (dockerfile/docker-bake.hcl's prefill-worker target) or by --build-context:
 FROM scratch AS release-base
 
 # ============================================================================
-# Stage 1 (llm-build): compile ONLY _migration_client from a tt-llm-engine branch,
-# against tt-llm-engine's OWN bundled tt-metal (headers only, no tt-metal build).
-# This whole stage is discarded — only the built module is COPYed into `final`.
-# The base must be a full toolchain image whose system python3 minor version
-# matches the release base's venv, or the nanobind module won't import there
-# (hence the per-platform dev image: 3.10 on 22.04, 3.12 on 24.04).
-# ============================================================================
-FROM llm-build-base AS llm-build
-USER root
-ARG DEBIAN_FRONTEND=noninteractive
-# FIXME: floating `main` makes a release non-reproducible - the same release tag
-# rebuilt tomorrow picks up a different engine commit. To be pinned to a SHA
-# (recorded in-repo, overridable per release) as a follow-up.
-ARG TT_LLM_ENGINE_REF=main
-# Enforce strict error handling: exit on error, unset vars, pipe failures
-SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
-# Deps the migration CMake needs beyond the base: protobuf (the client
-# (de)serializes the KV chunk-table proto) + Python dev headers (nanobind).
-# fmt/spdlog/nanobind/enchantum/tt-logger/nlohmann are CPM-fetched (network).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates protobuf-compiler libprotobuf-dev python3-dev \
- && rm -rf /var/lib/apt/lists/*
-
-# Clone the engine at the requested ref WITH submodules so its own tt-metal
-# source is present for headers (build_migration_layer.sh --synthetic-only needs
-# submodule source, not a built libtt_metal.so). Token via git `insteadOf`; this
-# stage is discarded so the token never reaches `final`, and the token-bearing
-# /root/.gitconfig is scrubbed in-layer (trap) so it can't leak via a build-cache
-# export either.
-WORKDIR /src
-RUN --mount=type=secret,id=gh_token \
-    set -e; \
-    trap 'rm -f /root/.gitconfig' EXIT; \
-    TOKEN="$(cat /run/secrets/gh_token)"; \
-    git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"; \
-    git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"; \
-    git clone https://github.com/tenstorrent/tt-llm-engine.git ttllm; \
-    cd ttllm; \
-    git checkout "${TT_LLM_ENGINE_REF}"; \
-    git submodule update --init --recursive --depth 1 --jobs 4
-
-# Build only the nanobind client. No TT_METAL_DIR override => uses the bundled
-# ./tt-metal submodule for headers; --synthetic-only skips the tt-metal build.
-WORKDIR /src/ttllm
-RUN ./build_migration_layer.sh --synthetic-only --targets=_migration_client --build-type=RelWithDebInfo \
- && ls -l disaggregation/migration/build_RelWithDebInfo/python/_migration_client*.so
-
-# ============================================================================
-# Stage 2 (final): the release base plus the migration client. No tt-metal build,
-# and no build context is consumed here — TT_METAL_HOME, PYTHON_ENV_DIR, PATH and
+# Stage 2 (final): the release base plus the migration client. No tt-metal build
+# and no build context consumed here - TT_METAL_HOME, PYTHON_ENV_DIR, PATH and
 # PYTHONPATH all come from the release base (see dockerfile/Dockerfile's
 # release-models stage), so this image is the release it ships on top of plus
-# exactly one COPYed directory.
+# exactly one COPYed module.
 # ============================================================================
 FROM release-base
 LABEL org.opencontainers.image.source=https://github.com/tenstorrent/tt-metal
@@ -94,12 +73,16 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 # Bake in _migration_client at PREFILL_MIGRATION_CLIENT_DIR. Must equal the path
 # the prefill runner reads (manifest migration_client_dir, set by the prefill
-# Helm chart in the deploy repo — not tt-metal — as $(ttLlmEngineDir)/
+# Helm chart in the deploy repo - not tt-metal - as $(ttLlmEngineDir)/
 # disaggregation/migration/build_RelWithDebInfo/python) so the runner finds it
 # with no hostPath mount. COPY runs as root -> world-readable under /opt.
+#
+# Copy ONLY _migration_client*.so, not the whole python/ dir: the migration
+# image's python/ also holds _device_metal_verify*.so (a device module that
+# links libtt_metal), which this worker neither needs nor wants.
 ARG MIG_CLIENT_DIR=/opt/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
-COPY --from=llm-build \
-     /src/ttllm/disaggregation/migration/build_RelWithDebInfo/python/ \
+COPY --from=llm-prebuilt \
+     /opt/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python/_migration_client*.so \
      ${MIG_CLIENT_DIR}/
 
 # Fail the BUILD (not the pod, ~2 min into a run) if the client won't import under
