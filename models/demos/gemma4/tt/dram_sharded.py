@@ -508,6 +508,35 @@ def interleaved_gate_up_prefill_config(m, k, n):
     return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
 
 
+def interleaved_down_proj_prefill_config(m, k, n):
+    """``(program_config, out_memory_config, compute_kernel_config)`` for
+    SharedMLP ``down_proj`` on a DRAM-*interleaved* weight, or all-``None`` for
+    ttnn auto.
+
+    ``test_down_proj_matmul_sweep`` ranks the overall winner for M=128 K=2688
+    N=5376 at TP=8 as ``1d_c42_bw4`` + L1-interleaved in0/out + HiFi2 / bfp8
+    (~1.35x vs shipped auto). Same ``prefill_progcfg_1d`` family as gate+up
+    (Nt=168 → 42 cores); K differs (2688 vs 5376) but ``in0_block_w=4`` still
+    divides Kt=84.
+
+    Same ``_PREFILL_CUTOFF`` band as ``interleaved_gate_up_prefill_config``:
+    hoist in0 to L1 interleaved when still in DRAM (GeGLU ``mul`` leaves it
+    there). Above the cutoff (and decode ``M<=32``) return ``None``.
+    """
+    if not TILE_SIZE < m <= _PREFILL_CUTOFF:
+        return None, None, None
+    program_config = prefill_progcfg_1d(m, k, n)
+    if program_config is None:
+        return None, None, None
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
+
+
 def matmul_rows(x):
     """Row count a matmul sees for ``x``: the product of all but the last dim.
 
