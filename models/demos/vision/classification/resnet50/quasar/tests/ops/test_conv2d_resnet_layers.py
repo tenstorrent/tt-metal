@@ -204,3 +204,75 @@ def test_quasar_conv2d_layer_conv_1x1(mesh_device, cfg):
         reshard_if_not_optimal=reshard,
         act_block_h_override=abh,
     )
+
+
+# ---------------------------------------------------------------------------------------------------------
+# [#48552] layer3/4 forced to HEIGHT_SHARDED instead of the model's default BLOCK_SHARDED. On the 2-core
+# emulator block-sharding buys nothing and routes these convs to the fused conv_bmm_tilize (ERROR_TRISC1
+# 0x0119, the "0x19 rabbit hole"); HEIGHT_SHARDED routes them onto the proven split/L1 path that layer1/2 use.
+# Earlier this hit the uint16 weights-DFB ring limit -> main commit 6079b5f widened ring_size to uint32, so
+# they should now fit. If these PASS, gate the model's height_sharding=True for layer3/4 on Quasar.
+# Run just these:  -k as_hs
+# fmt: off
+_LAYER34_AS_HS_3x3 = [
+    (256, 256, 28, 28, (3, 3), 2, 1, HS, True, 32),  # layer3_module1.conv2 (28->14)
+    (256, 256, 14, 14, (3, 3), 1, 1, HS, True, 32),  # layer3.conv2
+    (512, 512, 14, 14, (3, 3), 2, 1, HS, True, 32),  # layer4_module1.conv2 (14->7)
+    (512, 512, 7,  7,  (3, 3), 1, 1, HS, True, 32),  # layer4.conv2
+]
+_LAYER34_AS_HS_1x1 = [
+    (512, 256, 28, 28, (1, 1), 1, 0, HS, True, 32),   # layer3 conv1
+    (256, 1024, 14, 14, (1, 1), 1, 0, HS, True, 32),  # layer3 conv3
+    (512, 1024, 28, 28, (1, 1), 2, 0, HS, True, 32),  # layer3 downsample (28->14)
+    (1024, 512, 14, 14, (1, 1), 1, 0, HS, True, 32),  # layer4 conv1
+    (512, 2048, 7,  7,  (1, 1), 1, 0, HS, True, 32),   # layer4 conv3
+    (1024, 2048, 14, 14, (1, 1), 2, 0, HS, True, 32),  # layer4 downsample (14->7)
+]
+# fmt: on
+
+
+def _id_hs(cfg):
+    ic, oc, h, w, k, s, p, _shard, _, _ = cfg
+    return f"{k[0]}x{k[1]}_{ic}to{oc}_s{s}_{h}x{w}_asHS"
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("cfg", _LAYER34_AS_HS_3x3, ids=[_id_hs(c) for c in _LAYER34_AS_HS_3x3])
+def test_quasar_conv2d_layer34_as_hs_3x3(mesh_device, cfg):
+    """layer3/4 conv2 (3x3) forced HEIGHT_SHARDED (vs the model's BLOCK_SHARDED) to dodge the fused 0x19."""
+    ic, oc, h, w, k, s, p, shard, reshard, abh = cfg
+    _run_conv2d_l1(
+        mesh_device,
+        in_channels=ic,
+        out_channels=oc,
+        input_height=h,
+        input_width=w,
+        kernel_size=k,
+        stride=s,
+        padding=p,
+        shard_layout=shard,
+        reshard_if_not_optimal=reshard,
+        act_block_h_override=abh,
+    )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("cfg", _LAYER34_AS_HS_1x1, ids=[_id_hs(c) for c in _LAYER34_AS_HS_1x1])
+def test_quasar_conv2d_layer34_as_hs_1x1(mesh_device, cfg):
+    """layer3/4 conv1/conv3/downsample (1x1) forced HEIGHT_SHARDED (vs BLOCK_SHARDED) -> matmul path."""
+    ic, oc, h, w, k, s, p, shard, reshard, abh = cfg
+    _run_conv2d_l1(
+        mesh_device,
+        in_channels=ic,
+        out_channels=oc,
+        input_height=h,
+        input_width=w,
+        kernel_size=k,
+        stride=s,
+        padding=p,
+        shard_layout=shard,
+        reshard_if_not_optimal=reshard,
+        act_block_h_override=abh,
+    )
