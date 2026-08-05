@@ -105,8 +105,8 @@ public:
     //                    construction time from the owning Device's MetalContext rtoptions
     //                    so the SHM provider does not need to walk MetalContext slots later
     // cb_tracking_enabled: process-wide TT_METAL_SHM_CB_TRACKING_ENABLED flag, captured the same way.
-    //                    Gates the expensive per-program CB aggregation (update_from_allocator);
-    //                    off by default so only the CB column is dropped, not the whole feature.
+    //                    Gates per-program CB aggregation (update_from_allocator);
+    //                    off by default so only the CB column is dropped.
     // verbose: process-wide TT_METAL_SHM_VERBOSE flag, captured the same way
     SharedMemoryStatsProvider(
         uint64_t asic_id, int device_id, bool tracking_disabled, bool cb_tracking_enabled, bool verbose);
@@ -189,7 +189,6 @@ public:
     void set_per_pid_tracking(bool enabled) { per_pid_tracking_enabled_ = enabled; }
     bool is_per_pid_tracking_enabled() const { return per_pid_tracking_enabled_; }
 
-    // Whether the expensive per-program CB aggregation runs (TT_METAL_SHM_CB_TRACKING_ENABLED).
     bool is_cb_tracking_enabled() const { return cb_tracking_enabled_; }
 
 private:
