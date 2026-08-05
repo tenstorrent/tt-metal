@@ -142,7 +142,7 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 3
-  owner_id: U03FJB5TM5Y # Colman Glagovich
+  owner_id: U06UEFWB4P9 # Colman Glagovich
   team: models
 
 - name: Llama 3.2-90B-Vision e2e tests
@@ -155,7 +155,7 @@
     wh_llmbox_perf:
       timeout: 25
       tier: 2
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 # Not running on wh_llmbox_perf: performance-ci-eval-32 fails there with
@@ -245,12 +245,15 @@
 - name: Qwen3-32B e2e tests (Galaxy)
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "ci-token-matching"
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "ci-token-matching"
   model: qwen3-32b-galaxy
   model_family: Qwen
   skus:
     wh_galaxy_perf:
       timeout: 30
+      tier: 1
+    bh_galaxy:
+      timeout: 15
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -333,7 +336,7 @@
     bh_quietbox_2:
       timeout: 20
       tier: 2
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: Qwen2.5-VL-32B e2e tests
@@ -350,7 +353,7 @@
     bh_quietbox_2:
       timeout: 15
       tier: 3
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: Qwen3-VL-32B e2e tests
@@ -597,7 +600,7 @@
     wh_n150:
       timeout: 6
       tier: 3
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: Falcon-40B e2e tests
@@ -736,7 +739,7 @@
     bh_p150:
       timeout: 5
       tier: 2
-  owner_id: U06ECNVR0EN # Evan Smal
+  owner_id: U088DBNUKGR # Evan Smal
   team: models
 
 
@@ -905,6 +908,92 @@
   skus:
     bh_sc4-mgd:
       timeout: 80
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ── LTX-2.3 (Black Hole single galaxy, bh_sc1) ───────────────────
+- name: TT-DiT LTX-2.3 Pro T2V e2e tests
+  cmd: |
+    export NO_PROMPT=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 3300 models/tt_dit/tests/models/ltx/test_pipeline_ltx_one_stage.py::test_pipeline_one_stage -k "4x8sp1tp0nl2_ring_is_fsdp0"
+  model: ltx-2.3-pro-t2v
+  model_family: LTX
+  skus:
+    bh_sc1:
+      timeout: 60
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT LTX-2.3 Fast T2V e2e tests
+  cmd: |
+    export NO_PROMPT=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 3300 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"
+  model: ltx-2.3-fast-t2v
+  model_family: LTX
+  skus:
+    bh_sc1:
+      timeout: 60
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT LTX-2.3 Pro I2V e2e tests
+  cmd: |
+    export NO_PROMPT=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 3000 models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py::test_pipeline_two_stages_i2v_smoke -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
+  model: ltx-2.3-pro-i2v
+  model_family: LTX
+  skus:
+    bh_sc1:
+      timeout: 55
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT LTX-2.3 Fast I2V e2e tests
+  cmd: |
+    export NO_PROMPT=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Condition on a fixed image so distilled_i2v takes the single-i2v path and SKIPS the in-process
+    # t2v pre-gen -- on 4x8 that chain reloads the encoder over captured traces and wedges (the test
+    # documents this at test_pipeline_ltx_distilled.py: "t2v->i2v chain in one process ... wedges").
+    export LTX_I2V_IMAGE=models/sample_data/huggingface_cat_image.jpg
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 3000 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled_i2v -k "i2v_4x8sp1tp0nl2_ring_is_fsdp0"
+  model: ltx-2.3-fast-i2v
+  model_family: LTX
+  skus:
+    bh_sc1:
+      timeout: 55
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

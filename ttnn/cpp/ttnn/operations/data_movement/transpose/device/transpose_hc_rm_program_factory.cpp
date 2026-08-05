@@ -143,6 +143,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
 
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> reader_common_runtime_args;
+    reader_compile_time_args.reserve(5);
     reader_compile_time_args.push_back(N);
     reader_compile_time_args.push_back(H);
     reader_compile_time_args.push_back(C);

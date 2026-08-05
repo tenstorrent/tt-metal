@@ -171,6 +171,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
 
     // Collect local devices for this program, handling async idle checks
     std::vector<IDevice*> local_devices;
+    local_devices.reserve(coord_range.shape().mesh_size());
     for (const auto& coord : coord_range) {
         if (!mesh_device_->impl().is_local(coord)) {
             continue;

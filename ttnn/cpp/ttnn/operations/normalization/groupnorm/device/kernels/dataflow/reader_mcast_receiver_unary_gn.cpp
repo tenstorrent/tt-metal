@@ -161,14 +161,12 @@ void kernel_main() {
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
-    uint32_t out_block_hw_last = out_block_hw_normal;
     const uint32_t num_reads_of_input = 3;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
         num_out_blocks_padded += (residual / out_block_h_normal + 1);
         out_block_h_last = residual % out_block_h_normal;
-        out_block_hw_last = out_block_h_last * block_w;
     }
 
     index_b_offset = 0;
@@ -188,13 +186,11 @@ void kernel_main() {
             for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
                 uint32_t out_block_start_id_offset = 0;
                 for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                    uint32_t out_block_h_actual, out_block_hw_actual;
+                    uint32_t out_block_h_actual;
                     if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                         out_block_h_actual = out_block_h_last;
-                        out_block_hw_actual = out_block_hw_last;
                     } else {
                         out_block_h_actual = out_block_h_normal;
-                        out_block_hw_actual = out_block_hw_normal;
                     }
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
                     const uint32_t src0_tile_bytes = get_tile_size(dfb_in0_id);
