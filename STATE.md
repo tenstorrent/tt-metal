@@ -4381,3 +4381,98 @@ finding it needed a statistic matched to the defect's width, plus a control to p
 not measuring the image. The corollary that kept this honest: having found a real, systematic,
 reproducible signal, the next question is not "how do I remove it" but "how large is it in units a
 viewer perceives" — 0.12 % of full scale, and the answer was to gate it, not chase it.
+
+---
+
+## Amendment 103 (2026-08-05) — Tracy profiles: the video decode unit is SDPA-and-matmul bound, the audio decode is ~70 % layout thrash. And a correction to amendment 66
+
+Two signposted captures, per `tt-dit-benchmark-profile`. New entry points
+`test_tracy_visual_decode_unit` and `test_tracy_audio_decode` in
+`test_performance_vae_minimax_h3.py`, kept **separate from the `_baseline` timing tests** because a
+profile wants the opposite window: `_time_it` runs a warmup plus two timed iterations, and three
+invocations of the 36-layer decoder blow straight past Tracy's per-device op buffer. One warmed forward
+inside the signposts; weight upload and activation prep outside, or their
+`TilizeWithValPadding`/`Untilize` run dominates the aggregate and makes data movement look like the
+bottleneck for the wrong reason.
+
+Both needed `--op-support-count` raised (8000 and 40000). The first attempt without it failed exactly as
+the skill predicts — `AssertionError: Device data missing: Op 1046528 not present in
+cpp_device_perf_report.csv` — which reads as a tool bug and is buffer overflow.
+
+### Video VAE decode, one work unit
+
+**Target:** `test_performance_vae_minimax_h3.py -k tracy_visual_decode` · mesh 1x1 · 7x16x16 latents ->
+1792 patches, 36 layers · `9ba25f0f044`
+**Window:** signposts `start`/`stop`, one warmed forward, **940 ops**
+
+| Op | n | Device FW | % | Note |
+|---|---|---|---|---|
+| MinimalMatmul | 146 | 52.3 ms | 36.6 % | weighted mean 51 % of peak FLOPs |
+| SDPA | 36 | 43.9 ms | 30.7 % | **1.24 ms each**, the largest single op |
+| BinaryNg | 324 | 18.3 ms | 12.8 % | |
+| LayerNorm | 145 | 10.9 ms | 7.7 % | |
+| **Typecast** | 144 | 8.8 ms | 6.2 % | pure dtype overhead, 4 per layer |
+| NlpCreateHeads | 36 | 4.1 ms | 2.9 % | |
+| Unary | 72 | 3.1 ms | 2.1 % | |
+| NLPConcatHeads | 36 | 1.5 ms | 1.0 % | |
+
+**Device FW total 189.3 ms per unit**, mean 201 µs/op. **Op-to-op gap: median 95.9 µs, mean 95.3 µs,
+32.1 % of window wall.**
+
+Sanity check that the window is right: 189 ms/unit against 7 waves is ~1.3 s of device compute, and the
+recorded device-compute floor for the stage is 1.06 s at 152 ms/wave — same order, so the signposts are
+not accidentally including construction. The stage measures 4.0 s warm, so the remainder is host
+transfer, consistent with amendments 82/83.
+
+**Bottleneck: SDPA and unconfigured matmuls.** `tt-perf-report` flags most matmuls `SLOW` at 26-52 % of
+peak with two specific notes — input 0 is in `DRAM_INTERLEAVED` rather than L1, and **no
+`program_config` is specified**, so `in0_block_w` and `out_subblock_h/w` are left to the default. That
+is a concrete lever and it is the same class of finding as amendments 54/55 for the DiT's SDPA. Handing
+off, not acting: this is a measurement entry.
+
+### Audio decode, whole stage
+
+**Target:** `-k tracy_audio_decode` · mesh 1x1 · 207 latents x 2 channels -> 165 600 samples ·
+`9ba25f0f044`
+**Window:** signposts, one warmed forward, **6449 ops**
+
+| Op | n | Device FW | % | Category |
+|---|---|---|---|---|
+| **Concat** | 433 | 239.2 ms | 20.3 % | TM |
+| Conv3d | 136 | 204.0 ms | 17.3 % | Other |
+| **Ternary** | 127 | 185.2 ms | 15.7 % | TM |
+| **UntilizeWithUnpadding** | 472 | 148.4 ms | 12.6 % | TM |
+| **PaddedSlice** | 654 | 94.4 ms | 8.0 % | TM |
+| **TilizeWithValPadding** | 127 | 59.3 ms | 5.0 % | TM |
+| Conv2d | 726 | 47.7 ms | **4.0 %** | **Compute** |
+| BinaryNg | 480 | 46.8 ms | 4.0 % | Compute |
+| Permute | 57 | 42.6 ms | 3.6 % | TM |
+| Slice | 770 | 33.4 ms | 2.8 % | TM |
+| ReshapeView | 216 | 26.3 ms | 2.2 % | TM |
+| others (I2S, SliceWrite, S2I, Halo, Move, Unary) | 2251 | 52.7 ms | 4.5 % | mixed |
+
+**Device FW total 1506.2 ms**, mean 234 µs/op. **Op-to-op gap: median 58.9 µs, 25.5 % of window wall.**
+
+**Bottleneck: layout, not arithmetic.** The actual convolution compute — `Conv2d` — is **4.0 %** of the
+stage. Summing the tensor-manipulation rows (concat, ternary, untilize, padded-slice, tilize, permute,
+slice, reshape) gives **~70 %**. `Conv2d`'s weighted-mean FLOPs is 20 % against a mean of 62 %, so the
+726 convolutions are mostly small and inefficient. This is a far sharper statement than amendment 59's
+"1.273 s against a 0.05 s target" and it points somewhere specific.
+
+### Correction to amendment 66
+
+Amendment 66 concluded *"audio decode is device-bound, and Tracy undercounts it 6x"* — 224 ms device
+against 1284 ms wall. With `--op-support-count 40000` the same stage reports **1506 ms of device FW over
+6449 ops**, against a warm pipeline row of 1.7 s. So device FW accounts for ~89 % of the stage rather
+than 17 %.
+
+**The 6x was not Tracy undercounting: it was the op buffer silently dropping ops.** Amendment 64's
+"1680 ops" is itself a truncated count — the real figure is 6449. The conclusion amendment 66 reached
+(device-bound) was right; the evidence it used was an artifact, and the magnitude was wrong by 6x in a
+way that would have mis-sized any optimization built on it.
+
+**The method note.** *A profiler that silently drops data looks exactly like a profiler measuring
+something small.* Both of these captures failed loudly the first time, which was lucky — the failure
+mode that costs you is the one where the report generates fine from a truncated buffer. Raising
+`--op-support-count` until the report succeeds **and** the op count stops growing is the check; 1680 →
+6449 is what that check is worth.
