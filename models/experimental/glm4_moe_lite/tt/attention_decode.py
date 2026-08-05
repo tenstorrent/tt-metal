@@ -21,6 +21,7 @@ import torch
 import ttnn
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.linear_helpers import (
+    scg_kwargs,
     sdpa_grid_x,
     attn_linear,
     mlp_linear,
@@ -83,7 +84,7 @@ def _safe_slice(
     (the default) keeps full-grid behaviour. ttnn.slice already supports this, unlike
     permute -- see linear_helpers.worker_sub_core_grids.
     """
-    result = ttnn.slice(tensor, starts, ends, sub_core_grids=sub_core_grids)
+    result = ttnn.slice(tensor, starts, ends, **scg_kwargs(sub_core_grids))
     if not skip_clones:
         cloned = ttnn.clone(result, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return cloned
@@ -147,14 +148,14 @@ def kv_cache_update(
                 [0, 0, 0, 0],
                 [1, 1, batch, int(hparams.q_lora_rank)],
                 skip_clones=cfg.skip_defensive_clones,
-                sub_core_grids=worker_sub_core_grids(device, cfg),
+                **scg_kwargs(worker_sub_core_grids(device, cfg)),
             )
             kv = _safe_slice(
                 qkv,
                 [0, 0, 0, int(hparams.q_lora_rank)],
                 [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
                 skip_clones=cfg.skip_defensive_clones,
-                sub_core_grids=worker_sub_core_grids(device, cfg),
+                **scg_kwargs(worker_sub_core_grids(device, cfg)),
             )
             if not cfg.skip_defensive_clones:
                 ttnn.deallocate(qkv, force=False)
@@ -167,14 +168,14 @@ def kv_cache_update(
             [0, 0, 0, 0],
             [1, 1, batch, int(hparams.kv_lora_rank)],
             skip_clones=cfg.skip_defensive_clones,
-            sub_core_grids=worker_sub_core_grids(device, cfg),
+            **scg_kwargs(worker_sub_core_grids(device, cfg)),
         )
         kv_rope = _safe_slice(
             kv,
             [0, 0, 0, int(hparams.kv_lora_rank)],
             [1, 1, batch, kvpe_dim],
             skip_clones=cfg.skip_defensive_clones,
-            sub_core_grids=worker_sub_core_grids(device, cfg),
+            **scg_kwargs(worker_sub_core_grids(device, cfg)),
         )
         if not cfg.skip_defensive_clones and kv is not None:
             ttnn.deallocate(kv, force=False)
@@ -198,7 +199,7 @@ def kv_cache_update(
         if kv is not None:
             ttnn.deallocate(kv, force=False)
 
-        kvpe_new = ttnn.concat([kv_nope, kv_rope], dim=-1, sub_core_grids=worker_sub_core_grids(device, cfg))
+        kvpe_new = ttnn.concat([kv_nope, kv_rope], dim=-1, **scg_kwargs(worker_sub_core_grids(device, cfg)))
         ttnn.deallocate(kv_nope, force=False)
         ttnn.deallocate(kv_rope, force=False)
 
@@ -328,21 +329,21 @@ def q_projection(
     ttnn.deallocate(q_a, force=False)
 
     q = ttnn.reshape(q, (1, batch, int(hparams.num_attention_heads), int(hparams.qk_head_dim)))
-    q = ttnn.permute(q, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))  # [1,H,B,qk_head_dim]
+    q = ttnn.permute(q, (0, 2, 1, 3), **scg_kwargs(worker_sub_core_grids(device, cfg)))  # [1,H,B,qk_head_dim]
 
     q_nope = _safe_slice(
         q,
         [0, 0, 0, 0],
         [1, int(hparams.num_attention_heads), batch, int(hparams.qk_nope_head_dim)],
         skip_clones=cfg.skip_defensive_clones,
-        sub_core_grids=worker_sub_core_grids(device, cfg),
+        **scg_kwargs(worker_sub_core_grids(device, cfg)),
     )
     q_rope = _safe_slice(
         q,
         [0, 0, 0, int(hparams.qk_nope_head_dim)],
         [1, int(hparams.num_attention_heads), batch, int(hparams.qk_head_dim)],
         skip_clones=cfg.skip_defensive_clones,
-        sub_core_grids=worker_sub_core_grids(device, cfg),
+        **scg_kwargs(worker_sub_core_grids(device, cfg)),
     )
     if not cfg.skip_defensive_clones:
         ttnn.deallocate(q, force=False)
@@ -376,9 +377,7 @@ def q_projection(
     if q is not None:
         ttnn.deallocate(q, force=False)
 
-    q_kvpe = ttnn.concat(
-        [q_nope, q_rope], dim=-1, sub_core_grids=worker_sub_core_grids(device, cfg)
-    )  # [1,H,B,kvpe_dim]
+    q_kvpe = ttnn.concat([q_nope, q_rope], dim=-1, **scg_kwargs(worker_sub_core_grids(device, cfg)))  # [1,H,B,kvpe_dim]
     ttnn.deallocate(q_nope, force=False)
     ttnn.deallocate(q_rope, force=False)
 
@@ -414,9 +413,9 @@ def flash_mla_and_output(
 
     # Prepare Q for decode: [1,H,B,kvpe_dim] -> [1,B,H,kvpe_dim]
     if cfg.skip_defensive_clones:
-        q_for_decode = ttnn.permute(q_kvpe, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
+        q_for_decode = ttnn.permute(q_kvpe, (0, 2, 1, 3), **scg_kwargs(worker_sub_core_grids(device, cfg)))
     else:
-        q_for_decode_view = ttnn.permute(q_kvpe, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
+        q_for_decode_view = ttnn.permute(q_kvpe, (0, 2, 1, 3), **scg_kwargs(worker_sub_core_grids(device, cfg)))
         q_for_decode = ttnn.clone(q_for_decode_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(q_kvpe, force=False)
         q_kvpe = None
@@ -449,7 +448,7 @@ def flash_mla_and_output(
         _sdpa_scg = None
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=_sdpa_grid,
-        sub_core_grids=_sdpa_scg,
+        **scg_kwargs(_sdpa_scg),
         q_chunk_size=0,
         k_chunk_size=cfg.mla_k_chunk_size,
         exp_approx_mode=False,
@@ -570,7 +569,7 @@ def flash_mla_and_output(
                 ttnn.deallocate(q_chunk, force=False)
                 ttnn.deallocate(page_table_chunk, force=False)
                 ttnn.deallocate(positions_chunk, force=False)
-            attn_latent = ttnn.concat(chunks, dim=1, sub_core_grids=worker_sub_core_grids(device, cfg))
+            attn_latent = ttnn.concat(chunks, dim=1, **scg_kwargs(worker_sub_core_grids(device, cfg)))
             for chunk in chunks:
                 ttnn.deallocate(chunk, force=False)
         if v_cache is not None:
@@ -597,12 +596,12 @@ def flash_mla_and_output(
         [0, 0, 0, 0],
         [1, batch, num_heads, int(hparams.kv_lora_rank)],
         skip_clones=cfg.skip_defensive_clones,
-        sub_core_grids=worker_sub_core_grids(device, cfg),
+        **scg_kwargs(worker_sub_core_grids(device, cfg)),
     )
     if not cfg.skip_defensive_clones:
         ttnn.deallocate(attn_latent_padded, force=False)
     attn_latent = ttnn.permute(
-        attn_latent, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg)
+        attn_latent, (0, 2, 1, 3), **scg_kwargs(worker_sub_core_grids(device, cfg))
     )  # [1,H,B,kv_lora_rank]
 
     # kv_b2 + output projection
@@ -622,9 +621,9 @@ def flash_mla_and_output(
             v = ttnn.transformer.concatenate_heads(v)
             v = ttnn.reshape(v, (1, 1, batch, flat_dim))
         else:
-            v = ttnn.permute(v, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
+            v = ttnn.permute(v, (0, 2, 1, 3), **scg_kwargs(worker_sub_core_grids(device, cfg)))
             v = ttnn.reshape(v, (1, batch, 1, flat_dim))
-            v = ttnn.permute(v, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
+            v = ttnn.permute(v, (0, 2, 1, 3), **scg_kwargs(worker_sub_core_grids(device, cfg)))
         # TP decode path: an ordinary matmul, so it needs the interleaved copy when
         # prefetch has made w_o DRAM-sharded. (Prefetch rejects TP up front, so this is
         # belt-and-braces rather than a live combination.)
@@ -654,9 +653,9 @@ def flash_mla_and_output(
             v = ttnn.transformer.concatenate_heads(v)
             v = ttnn.reshape(v, (1, 1, batch, int(num_heads * hparams.v_head_dim)))
         else:
-            v = ttnn.permute(v, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
+            v = ttnn.permute(v, (0, 2, 1, 3), **scg_kwargs(worker_sub_core_grids(device, cfg)))
             v = ttnn.reshape(v, (1, batch, 1, int(num_heads * hparams.v_head_dim)))
-            v = ttnn.permute(v, (0, 2, 1, 3), sub_core_grids=worker_sub_core_grids(device, cfg))
+            v = ttnn.permute(v, (0, 2, 1, 3), **scg_kwargs(worker_sub_core_grids(device, cfg)))
         attn_out = attn_linear(v, w.w_o, device=device, cfg=cfg, prefetch=prefetch)
         ttnn.deallocate(v, force=False)
         if prefetch is not None:

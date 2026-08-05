@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 import ttnn
+from models.experimental.glm4_moe_lite.tt.linear_helpers import scg_kwargs
 from models.common.modules.tt_ccl import get_tt_ccl
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.layer_weights import MoELayerTTWeights
@@ -413,12 +414,19 @@ def _all_gather_reduce_single_axis(
     )
     ttnn.deallocate(tensor, force=False)
 
+    # epilogue_input_a/b are parameters this branch ADDED to fast_reduce_nc (the fused
+    # collective epilogue). Omit them when unused so the model runs on a tt-metal without
+    # that patch -- same reasoning as linear_helpers.scg_kwargs.
+    _epi_kwargs = {}
+    if epilogue_input_a is not None:
+        _epi_kwargs["epilogue_input_a"] = epilogue_input_a
+    if epilogue_input_b is not None:
+        _epi_kwargs["epilogue_input_b"] = epilogue_input_b
     reduced = ttnn.experimental.fast_reduce_nc(
         gathered,
         dims=[0],
         output=None,
-        epilogue_input_a=epilogue_input_a,
-        epilogue_input_b=epilogue_input_b,
+        **_epi_kwargs,
         compute_kernel_config=None,
         memory_config=memory_config,
     )
@@ -2089,17 +2097,23 @@ def moe_sparse_experts_forward_tt(
         local_weights_blocked = ttnn.permute(
             local_weights_blocked,
             (0, 2, 1, 3),
-            sub_core_grids=sub_core_grids,
+            **scg_kwargs(sub_core_grids),
         )
         ttnn.deallocate(local_weights_rm, force=False)
         down_post_scale = ttnn.to_layout(local_weights_blocked, ttnn.TILE_LAYOUT)
         ttnn.deallocate(local_weights_blocked, force=False)
 
+    # post_scale is a parameter this branch ADDED to ttnn's sparse_matmul (the fused
+    # down-routing-scale epilogue). Passing it unconditionally -- even as None -- makes the
+    # model unrunnable on a tt-metal without that patch, e.g. the v0.75.0-dev tree tt-blaze
+    # pins, which rejects the kwarg. Same reasoning as linear_helpers.scg_kwargs: omit it
+    # when there is no scale to fold.
+    _post_scale_kwargs = {"post_scale": down_post_scale} if down_post_scale is not None else {}
     expert_output_sparse = ttnn.sparse_matmul(
         x_ff,
         moe_w.w2_experts,
         sparsity=sparsity,
-        post_scale=down_post_scale,
+        **_post_scale_kwargs,
         memory_config=sparse_mc,
         program_config=_down_pc,
         is_input_a_sparse=True,
@@ -2127,10 +2141,10 @@ def moe_sparse_experts_forward_tt(
     if num_blocks == 1:
         expert_output = ttnn.reshape(expert_output_sparse, _target_eo_shape)
     elif skip_defensive_clones:
-        expert_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3), sub_core_grids=sub_core_grids)
+        expert_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3), **scg_kwargs(sub_core_grids))
         expert_output = ttnn.reshape(expert_output, _target_eo_shape)
     else:
-        expert_output_view = ttnn.permute(expert_output_sparse, (1, 0, 2, 3), sub_core_grids=sub_core_grids)
+        expert_output_view = ttnn.permute(expert_output_sparse, (1, 0, 2, 3), **scg_kwargs(sub_core_grids))
         expert_output = ttnn.clone(expert_output_view, memory_config=memory_config)
         ttnn.deallocate(expert_output_view, force=False)
         ttnn.deallocate(expert_output_sparse, force=False)
@@ -2167,7 +2181,7 @@ def moe_sparse_experts_forward_tt(
 
         topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(topk_expert_weights, force=False)
-        topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 2, 0), sub_core_grids=sub_core_grids)  # [K,1,tokens,1]
+        topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 2, 0), **scg_kwargs(sub_core_grids))  # [K,1,tokens,1]
         topk_weights = ttnn.to_layout(topk_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(topk_weights_rm, force=False)
 
@@ -2202,7 +2216,7 @@ def moe_sparse_experts_forward_tt(
         if local_weights_rm.layout != ttnn.ROW_MAJOR_LAYOUT:
             local_weights_rm = ttnn.to_layout(local_weights_rm, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(local_weights, force=False)
-        local_weights_rm = ttnn.permute(local_weights_rm, (3, 1, 2, 0), sub_core_grids=sub_core_grids)  # [E,1,T,1]
+        local_weights_rm = ttnn.permute(local_weights_rm, (3, 1, 2, 0), **scg_kwargs(sub_core_grids))  # [E,1,T,1]
         local_weights_tiled = ttnn.to_layout(local_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(local_weights_rm, force=False)
 

@@ -12,6 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.experimental.glm4_moe_lite.tt.linear_helpers import scg_kwargs
 from models.experimental.glm4_moe_lite.tt.attention_decode import flash_mla_and_output, kv_cache_update, q_projection
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.mlp_decode import dense_mlp_forward, moe_mlp_forward
@@ -589,7 +590,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             assert rope_sharded_cfg is not None
             if int(t.shape[-1]) != rope_dim:
                 raise ValueError(f"rope tensor dim mismatch: expected {rope_dim}, got {int(t.shape[-1])}")
-            t = ttnn.permute(t, (0, 2, 1, 3), sub_core_grids=_worker_scg)
+            t = ttnn.permute(t, (0, 2, 1, 3), **scg_kwargs(_worker_scg))
             heads = int(heads)
             pad_h = ttnn.TILE_SIZE - heads
             if isinstance(cos_decode, (list, tuple)):
@@ -630,7 +631,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 t = ttnn.to_memory_config(t, memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
                 if pad_h:
                     t = ttnn.slice(t, [0, 0, 0, 0], [1, batch, heads, rope_dim])
-            t = ttnn.permute(t, (0, 2, 1, 3), sub_core_grids=_worker_scg)
+            t = ttnn.permute(t, (0, 2, 1, 3), **scg_kwargs(_worker_scg))
             return t
 
     # ---- Input LayerNorm ----
@@ -1319,7 +1320,6 @@ def run_decoder_layer_prefill_update_cache_tt(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 # Prefill runs before the prefetcher's SubDevice manager is loaded and
                 # needs the full grid, so no core restriction here.
-                sub_core_grids=None,
             )
         _profile_add(profile, "moe_experts_s", time.perf_counter() - t0 if profile is not None else 0.0)
 

@@ -18,6 +18,7 @@ from typing import Any
 import ttnn
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.linear_helpers import (
+    scg_kwargs,
     _DS_BATCH,
     compute_1d_prog_cfg,
     dram_sharded_mlp,
@@ -320,7 +321,7 @@ def moe_mlp_forward(
             collective_epilogue_a=shared_out if use_collective_epilogue else None,
             collective_epilogue_b=collective_residual if use_collective_epilogue else None,
             use_buffered_all_reduce=use_buffered_all_reduce,
-            sub_core_grids=worker_sub_core_grids(device, cfg),
+            **scg_kwargs(worker_sub_core_grids(device, cfg)),
         )
     _profile_add(profile, "moe_experts_s", time.perf_counter() - t0 if profile is not None else 0.0)
     if use_signpost:

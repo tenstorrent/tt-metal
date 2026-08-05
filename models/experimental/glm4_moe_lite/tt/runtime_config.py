@@ -165,10 +165,30 @@ def dispatch_core_config() -> Any:
     rejected alongside the COL axis BH requires (ttnn/ttnn/device.py:114-123). Deferring
     to the ttnn helpers gives WORKER+ROW on WH and WORKER+COL on BH.
     """
-    return ttnn.DispatchCoreConfig(
-        ttnn.device.get_default_dispatch_core_type(),
-        ttnn.device.get_default_dispatch_core_axis(ttnn.FabricTensixConfig.DISABLED),
-    )
+    # The get_default_dispatch_core_* helpers are relatively new. Older tt-metal (e.g. the
+    # v0.75.0-dev tree tt-blaze pins) does not have them, and the model is worth keeping
+    # runnable there so blaze ops can be A/B'd against it in-tree. Fall back to deriving the
+    # same answer from the arch: WORKER/COL on Blackhole -- which rejects ROW -- and
+    # WORKER/ROW elsewhere.
+    try:
+        return ttnn.DispatchCoreConfig(
+            ttnn.device.get_default_dispatch_core_type(),
+            ttnn.device.get_default_dispatch_core_axis(ttnn.FabricTensixConfig.DISABLED),
+        )
+    except AttributeError:
+        is_bh = False
+        try:
+            is_bh = bool(ttnn.device.is_blackhole())
+        except Exception:  # pragma: no cover - no driver / no devices
+            pass
+        axis = ttnn.DispatchCoreAxis.COL if is_bh else ttnn.DispatchCoreAxis.ROW
+        logger.info(
+            "ttnn.device.get_default_dispatch_core_* unavailable; deriving dispatch from arch "
+            "(is_blackhole={}) -> WORKER/{}",
+            is_bh,
+            "COL" if is_bh else "ROW",
+        )
+        return ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, axis)
 
 
 _CCL_CLAMP_WARNED: set[str] = set()

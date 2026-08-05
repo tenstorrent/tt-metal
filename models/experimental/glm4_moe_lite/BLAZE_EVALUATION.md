@@ -289,13 +289,41 @@ attributed to the shape before the control disproved it.
 `tt-metal/python_env/bin/tt-smi`. On Galaxy it warns that CPLD FW v1.16+ is needed for `-r` and
 suggests `-glx_reset` as the fallback; `-r` worked here.
 
-### F9 — blaze requires its own tt-metal
+### F9 (revised) — the trees are asymmetric: the MODEL runs in blaze's tree
 
-Not C++20 as the README suggests: blaze's tt-metal also compiles kernels with `-std=c++17`,
-but adds SFPI flags ours lacks — `-ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit`.
-So benchmarks run in the tt-blaze tree and the model runs in ours; the two are not
-interchangeable. Our tt-metal already has the named CT-arg infrastructure
-(`tt_metal/hw/inc/api/compile_time_args.h:81`).
+Blaze needs its own tt-metal — not for C++20 as its README says, but for SFPI flags ours lacks
+(`-ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit`). The original conclusion drawn from
+that — "benchmarks run in blaze's tree, the model runs in ours, and the two are not
+interchangeable" — was **too pessimistic in one direction that matters**.
+
+GLM-4.7-Flash is pure Python over ttnn, and it **imports and prefills successfully inside
+blaze's tt-metal tree** (v0.75.0-dev): weights load, 47 layers build, prefill completes in
+~1.2 s. That is the route to the step-level measurement this evaluation needs — blaze ops and
+the model in one process — and it does not require porting blaze into our tree.
+
+Getting there means clearing genuine divergences. Cleared so far:
+
+| divergence | why | fix |
+|---|---|---|
+| `get_default_dispatch_core_type/axis` absent | newer helpers | derive WORKER/COL vs ROW from `is_blackhole()` |
+| `permute/slice/concat(sub_core_grids=…)` rejected | **our** ttnn addition | `linear_helpers.scg_kwargs` — omit the kwarg when None |
+| `sparse_matmul(post_scale=…)` rejected | **our** ttnn addition | omit when None; the fused down-routing-scale needs `=0` there |
+| `fast_reduce_nc(epilogue_input_a/b=…)` rejected | **our** ttnn addition | omit when None; fused collective epilogue needs `=0` |
+| `topk_router_gpt` asserts `num_experts == 128` | blaze's copy is OLDER than ours | run with `FUSED_ROUTER=0` |
+
+Three of those were latent bugs in this model regardless of blaze: it passed **our own** ttnn
+extensions unconditionally, even as `None`, so it could not run on stock ttnn at all. The
+`scg_kwargs` / conditional-kwarg fixes are portability improvements in their own right, and are
+verified non-regressing — 33.2 ms/token and correct output, unchanged.
+
+Remaining, and the current stopping point: `ttnn.copy` in blaze's tree requires matching logical
+shapes (`Shape([1,1,1,64])` vs `Shape([1,1,32,64])`) where our newer tt-metal broadcasts. That
+is in the decode trace-capture path, so it needs a real model change rather than a flag.
+
+**Caveat for whoever finishes this.** Reaching a running decode there costs three default-on
+optimizations (`FUSE_DOWN_ROUTING_SCALE`, `FUSED_COLLECTIVE_EPILOGUE`, `FUSED_ROUTER`), so a
+step time measured in blaze's tree is **not** comparable to our 33.2 ms. The valid experiment is
+same-tree, same-flags, with and without the blaze op swapped in.
 
 ## 5. Reproducing
 
@@ -330,9 +358,12 @@ from this tree — they import `blaze`.
 
 1. **Step-level measurement is the only thing that settles the matmul question.** All six
    shapes win on kernel time (1.75x–9.17x) but sum to 31.5% of the step against an 11.7%
-   bandwidth budget, so the translation rate is unknown and probably low. This needs GLM running
-   under blaze's tree (F9) with the traced decode loop measured end to end. Adopt in
-   per-call-win order — mlp_gate_up, q_a, kv_a first — and gate on F1 (keep m=1 for decode).
+   bandwidth budget, so the translation rate is unknown and probably low. The route is now
+   **mapped and partly cleared** (F9 revised): the model imports and prefills inside blaze's
+   tree, five divergences are fixed, and one remains — `ttnn.copy`'s shape strictness in the
+   decode trace path. Finish that, then measure same-tree/same-flags with and without the blaze
+   op swapped in. Adopt in per-call-win order — mlp_gate_up, q_a, kv_a first — and gate on F1
+   (keep m=1 for decode).
 2. **`GLM4_FLASH_BLAZE_CONFIG` is written** — [`blaze_eval/glm4_flash_blaze_config.py`](blaze_eval/glm4_flash_blaze_config.py),
    constructs cleanly and passes every `sanity_check_model_config` assertion. The open question
    from the previous revision is resolved: shared-expert coords **may be empty** (only the MoE

@@ -61,6 +61,23 @@ assert sdpa_grid_x(8) == SDPA_GRID_X, "derivation must reproduce the validated W
 _WORKER_SCG_CACHE: dict[tuple[int, int], Any] = {}
 
 
+def scg_kwargs(scg: Any | None) -> dict:
+    """`{"sub_core_grids": scg}` when set, `{}` when None.
+
+    `sub_core_grids` on permute/transpose/slice/concat is a parameter this branch ADDED to
+    ttnn (see the ttnn commit wiring Flash's decode permutes). Passing it unconditionally --
+    even as None -- makes the model unrunnable on any tt-metal that lacks the patch, e.g. the
+    v0.75.0-dev tree tt-blaze pins, which rejects the kwarg outright:
+
+        ttnn.permute(): incompatible function arguments ... kwargs = { sub_core_grids: NoneType }
+
+    Since the confinement is only needed under the GlobalCB prefetcher (off by default), omit
+    the kwarg entirely when there is nothing to confine. That keeps the model portable to
+    stock ttnn and is what lets blaze ops be A/B'd against it in blaze's own tree.
+    """
+    return {"sub_core_grids": scg} if scg is not None else {}
+
+
 def worker_sub_core_grids(device: Any, cfg: Glm4RuntimeConfig) -> Any | None:
     """CoreRangeSet of the prefetcher's worker region, or None when prefetch is off.
 
