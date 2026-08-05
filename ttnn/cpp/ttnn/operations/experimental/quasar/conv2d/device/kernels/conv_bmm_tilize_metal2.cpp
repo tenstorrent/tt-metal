@@ -466,6 +466,9 @@ void kernel_main() {
                     (uint32_t)in0_block_h_i,
                     (uint32_t)in0_block_w_i,
                     (uint32_t)in0_num_blocks_w));
+                MATH(DPRINT("After BSLOOP 1\n"));  // [#48552 DIAG - remove after]
+                MATH(DPRINT("After BSLOOP 2\n"));  // [#48552 DIAG - remove after]
+                MATH(DPRINT("After BSLOOP 3\n"));  // [#48552 DIAG - remove after]
                 if constexpr (!height_sharded) {
                     if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
                         if constexpr (pack_relu && !fuse_bias) {
@@ -633,8 +636,14 @@ void kernel_main() {
                 }
 
                 MATH(DPRINT("BS kb={} pre-mmin0 n={}\n", (uint32_t)in0_block_w_i, (uint32_t)in0_block_num_tiles));
+                MATH(DPRINT("After pre-mmin0 1\n"));  // [#48552 DIAG - remove after]
+                MATH(DPRINT("After pre-mmin0 2\n"));  // [#48552 DIAG - remove after]
+                MATH(DPRINT("After pre-mmin0 3\n"));  // [#48552 DIAG - remove after]
                 cb_mm_in0.wait_front(in0_block_num_tiles);
                 MATH(DPRINT("BS kb={} mmin0-ok\n", (uint32_t)in0_block_w_i));  // [#48552 DIAG - remove after]
+                MATH(DPRINT("After mmin0-ok 1\n"));                            // [#48552 DIAG - remove after]
+                MATH(DPRINT("After mmin0-ok 2\n"));                            // [#48552 DIAG - remove after]
+                MATH(DPRINT("After mmin0-ok 3\n"));                            // [#48552 DIAG - remove after]
 
                 uint32_t in0_index_subblock_offset = 0;
 #ifdef CHECK_SKIP_COMPUTE
@@ -645,8 +654,14 @@ void kernel_main() {
 #endif
 
                 MATH(DPRINT("BS kb={} pre-in1 n={}\n", (uint32_t)in0_block_w_i, (uint32_t)in1_block_num_tiles));
+                MATH(DPRINT("After pre-in1 1\n"));  // [#48552 DIAG - remove after]
+                MATH(DPRINT("After pre-in1 2\n"));  // [#48552 DIAG - remove after]
+                MATH(DPRINT("After pre-in1 3\n"));  // [#48552 DIAG - remove after]
                 cb_in1.wait_front(in1_block_num_tiles);
                 MATH(DPRINT("BS kb={} in1-ok\n", (uint32_t)in0_block_w_i));  // [#48552 DIAG - remove after]
+                MATH(DPRINT("After in1-ok 1\n"));                            // [#48552 DIAG - remove after]
+                MATH(DPRINT("After in1-ok 2\n"));                            // [#48552 DIAG - remove after]
+                MATH(DPRINT("After in1-ok 3\n"));                            // [#48552 DIAG - remove after]
 
                 if (last_inner_dim_block) {
                     if constexpr (!fuse_bias) {
@@ -680,6 +695,9 @@ void kernel_main() {
                     (uint32_t)in0_block_h_i,
                     (uint32_t)curr_matmul_out_cb,
                     (uint32_t)cb_matmul_partials.get_write_ptr()));
+                PACK(DPRINT("After MMBLK 1\n"));  // [#48552 DIAG - remove after]
+                PACK(DPRINT("After MMBLK 2\n"));  // [#48552 DIAG - remove after]
+                PACK(DPRINT("After MMBLK 3\n"));  // [#48552 DIAG - remove after]
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
@@ -721,6 +739,9 @@ void kernel_main() {
                                 (uint32_t)in0_subblock_i,
                                 (uint32_t)in1_subblock_i,
                                 (uint32_t)in0_block_w));
+                            MATH(DPRINT("After MMMV 1\n"));  // [#48552 DIAG - remove after]
+                            MATH(DPRINT("After MMMV 2\n"));  // [#48552 DIAG - remove after]
+                            MATH(DPRINT("After MMMV 3\n"));  // [#48552 DIAG - remove after]
                         }
                         for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
                             // [#48552 DIAG - remove after] per-K-tile probe for the hanging 3rd subblock. If the
@@ -733,6 +754,9 @@ void kernel_main() {
                                     (uint32_t)inner_dim_idx,
                                     (uint32_t)in0_index,
                                     (uint32_t)in1_index));
+                                MATH(DPRINT("After MMK 1\n"));  // [#48552 DIAG - remove after]
+                                MATH(DPRINT("After MMK 2\n"));  // [#48552 DIAG - remove after]
+                                MATH(DPRINT("After MMK 3\n"));  // [#48552 DIAG - remove after]
                             }
                             // [#48552 DIAG - remove after] UNPACK-side disambiguator (llk-debugger deliverable 5).
                             // NEW text => proves the JIT recompiled. On TRISC0 (UNPACK). If "UNPK i0=2 idx=0" prints
@@ -747,6 +771,9 @@ void kernel_main() {
                                     (uint32_t)inner_dim_idx,
                                     (uint32_t)in0_index,
                                     (uint32_t)in1_index));
+                                UNPACK(DPRINT("After UNPK 1\n"));  // [#48552 DIAG - remove after]
+                                UNPACK(DPRINT("After UNPK 2\n"));  // [#48552 DIAG - remove after]
+                                UNPACK(DPRINT("After UNPK 3\n"));  // [#48552 DIAG - remove after]
                             }
                             matmul_block(
                                 mm_in0_cb_id,
@@ -764,23 +791,10 @@ void kernel_main() {
                         // [#48552] all MVMULs for this subblock completed (MATH survived the matmul_block loop).
                         if (in0_block_h_i == 0) {
                             MATH(DPRINT("MMMVOK i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
+                            MATH(DPRINT("After MMMVOK 1\n"));  // [#48552 DIAG - remove after]
+                            MATH(DPRINT("After MMMVOK 2\n"));  // [#48552 DIAG - remove after]
+                            MATH(DPRINT("After MMMVOK 3\n"));  // [#48552 DIAG - remove after]
                         }
-
-#ifdef ARCH_QUASAR
-                        // [#48552] Per-subblock FPU dest-dvalid clear (exact parallel of the tilize fix in
-                        // tilize.h:173). The matmul MVMULs above SET the FPU dest-dvalid on the DEST bank they
-                        // wrote, but tile_regs_commit (llk_math_dest_section_done) only SEMPOSTs MATH_PACK +
-                        // advances the SyncHalf bank -- it NEVER clears the FPU dvalid, and the semaphore-scheme
-                        // pack section_done (_llk_pack_dest_semaphore_section_done_) only ZEROACCs + SEMGETs; no
-                        // client issues a CLEARDVALID for the FPU. With SyncHalf (2 DEST banks) subblock 0->bank0,
-                        // subblock 1->bank1, subblock 2 REUSES bank0 whose FPU dvalid is still set -> the first
-                        // MVMUL of subblock 2 stalls at issue -> MATH MOP timeout ERROR_TRISC1 0x0119. Pulse-clear
-                        // the FPU dvalid once per subblock (after all K accumulation, before the section flip).
-                        // DEST data persists (CLEARDVALID clears only the sync bit); PACK still reads via the
-                        // semaphore, so this only frees the FPU ring. Safe when subblocks<=2 (re-set next MVMUL).
-                        // NOT the dest-dvalid CTRL-mask scheme (set_up_dest_dvalid_per_thread); no mixing.
-                        MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));
-#endif
 
 #ifdef SFPU_OP_INIT_ACTIVATION
                         if constexpr (!fuse_bias) {

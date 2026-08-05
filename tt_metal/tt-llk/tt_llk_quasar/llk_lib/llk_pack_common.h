@@ -323,8 +323,14 @@ inline void _llk_pack_dest_semaphore_section_done_()
         TT_ZEROACC(p_zeroacc::CLR_HALF, EN_32BIT_DEST, 0, ADDR_MOD_7, dest_register_offset != 0);
     }
 
-    // Tell math that it can write again
-    _llk_packer_set_math_semaphore_();
+    // Tell math that it can write again.
+    // [#48552] Pre-stall on PACK0 so the ZEROACC above (which zeroes the DEST bank MATH is about to recycle)
+    // DRAINS before the MATH_PACK SEMGET releases MATH. The semaphore DEST-sync scheme never arms the HW
+    // dest-dvalid interlock, so without this the SEMGET frees MATH while the ZEROACC is still in flight and
+    // MATH's reuse MVMUL collides with the ZEROACC on the same DEST bank -> MATH MOP timeout ERROR_TRISC1
+    // 0x0119 (timing-sensitive: SyncHalf's 2-section head start only hides it until MATH catches PACK; the
+    // #47797 collision the block-sharded conv factory documents). WH does not need this (HW orders it).
+    _llk_packer_set_math_semaphore_<p_stall::PACK0>();
 
     if constexpr (DST == DstSync::SyncHalf)
     {
