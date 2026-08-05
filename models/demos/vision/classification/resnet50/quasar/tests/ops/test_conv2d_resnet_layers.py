@@ -65,6 +65,11 @@ def _run_conv2d_l1(
     device = mesh_device
     batch_size = 1
     kh, kw = kernel_size
+    # ttnn.experimental.quasar.conv2d's binding takes stride/padding as Sequence[int] (no int overload),
+    # so normalize the scalar cfg values to 2-tuples (matching the other quasar conv tests). torch.conv2d
+    # accepts the tuple form too.
+    stride = (stride, stride) if isinstance(stride, int) else stride
+    padding = (padding, padding) if isinstance(padding, int) else padding
 
     torch_input_nchw = torch.randn((batch_size, in_channels, input_height, input_width), dtype=torch.bfloat16).float()
     torch_weight = torch.randn((out_channels, in_channels, kh, kw), dtype=torch.bfloat16).float()

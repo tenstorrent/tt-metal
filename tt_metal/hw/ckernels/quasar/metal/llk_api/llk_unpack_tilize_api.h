@@ -147,6 +147,23 @@ inline void llk_unpack_tilizeA_B_init(
     bd_val.f.z_dim = 1;
     ckernel::trisc::_configure_buf_desc_table_(operandA_id, bd_val);
 
+    // Same for operandB (the reduce scaler / srcB): overwrite the buffer descriptor programmed by
+    // llk_unpack_hw_configure so UNPACR reads operandB with the correct full-face geometry. Without this
+    // operandB's descriptor keeps stale/default dims and its reads resolve to a bad L1 address (halo /
+    // maxpool padding path: MEM_READ_NO_RESPONSE-class fault). This block exists on the branch but was
+    // dropped when this file was reverted to main.
+    const ckernel::TensorShape tensor_shape_B = get_operand_tensor_shape(operandB_id);
+    buffer_descriptor_u bd_val_b = {0};
+    bd_val_b.f.l1_addr_16B = get_local_dfb_interface(operandB_id).tc_slots[0].base_addr;
+    bd_val_b.f.format = static_cast<std::uint8_t>(unpack_src_format[operandB_id]);
+    bd_val_b.f.x_dim = ckernel::trisc::FACE_C_DIM;
+    bd_val_b.f.y_dim = ckernel::trisc::FACE_R_DIM;
+    bd_val_b.f.z_dim =
+        (tensor_shape_B.num_faces_r_dim == tensor_shape_B.num_faces_c_dim)
+            ? tensor_shape_B.total_num_faces()
+            : ckernel::trisc::compute_square_of_min(tensor_shape_B.num_faces_r_dim, tensor_shape_B.num_faces_c_dim);
+    ckernel::trisc::_configure_buf_desc_table_(operandB_id, bd_val_b);
+
     _llk_unpack_reduce_col_tilizeA_strided_init_(operandA_id, operandB_id, ct_dim, tensor_shape_A);
 }
 

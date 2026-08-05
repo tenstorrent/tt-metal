@@ -6,6 +6,7 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-logger/tt-logger.hpp>  // [#48552 DIAG] log_warning (remove with the S2I-DIAG block)
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include <tt-metalium/hal.hpp>
@@ -126,6 +127,31 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     bool is_tile = (output.layout() == Layout::TILE);
+
+    // [#48552 DIAG - remove after] The reader fake-pushes num_units_per_shard into the INPUT DFB, which is
+    // borrowed onto the resident input shard, so its real capacity = per-shard bytes / entry_size. When the
+    // pushed count exceeds that capacity, push_back asserts (dataflow_buffer.inl). Log both so the mismatch
+    // is visible. borrowed_capacity below is the entries the borrowed shard buffer actually holds.
+    {
+        const auto& _diag_shard = input.shard_spec().value().shape;
+        const uint32_t _diag_shard_bytes =
+            static_cast<uint32_t>(_diag_shard[0]) * static_cast<uint32_t>(_diag_shard[1]) * input.element_size();
+        const uint32_t _diag_borrowed_capacity = input_page_size == 0 ? 0 : (_diag_shard_bytes / input_page_size);
+        log_warning(
+            tt::LogOp,
+            "[S2I-DIAG] in_layout={} out_layout={} shard=[{}x{}] elem_sz={} unit_sz={} page_sz={} "
+            "num_units_per_shard(PUSHED)={} shard_bytes={} borrowed_capacity(entries)={}",
+            static_cast<int>(input.layout()),
+            static_cast<int>(output.layout()),
+            static_cast<uint32_t>(_diag_shard[0]),
+            static_cast<uint32_t>(_diag_shard[1]),
+            input.element_size(),
+            input_unit_size,
+            input_page_size,
+            num_units_per_shard,
+            _diag_shard_bytes,
+            _diag_borrowed_capacity);
+    }
 
     // ---- Build the ProgramSpec ----
     ProgramSpec spec;

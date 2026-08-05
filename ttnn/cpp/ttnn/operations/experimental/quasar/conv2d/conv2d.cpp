@@ -83,19 +83,21 @@ static bool conv_act_requires_tile_padding_qsr(const ttnn::Tensor& tensor) {
 }
 
 // Quasar variant of conv2d_utils::tilize_with_optional_deallocation. The original converts the conv
-// activation to TILE via core to_layout, which dispatches the ORIGINAL tilize kernel. Here we route
-// the common (already tile-aligned) case through the QUASAR tilize op so that kernel runs from the
-// quasar tree. The genuinely-needs-padding case falls back to the shared helper, since quasar has no
-// tilize_with_val_padding port.
+// activation to TILE via core to_layout, which dispatches the ORIGINAL tilize kernel. Both the common
+// (already tile-aligned) case and the genuinely-needs-padding case are kept in the quasar tree: quasar
+// tilize for the aligned case, and quasar to_layout for the padding case (which internally does quasar
+// pad + tilize — the val-padding equivalent — including the height-sharded RM path where the activation
+// height isn't a tile multiple, e.g. the 1x1 mm_conv at 28x28: 784 -> 800). This replaces the old shared
+// tilize_with_val_padding fallback, which dispatched the generic pad op -> DataMovementKernel (unsupported
+// on Quasar). Mirrors the block/width-sharded mm_conv tilize in the is_mm_conv branch below.
 static void tilize_with_optional_deallocation_qsr(ttnn::Tensor& input_tensor_on_device, bool deallocate) {
     if (input_tensor_on_device.layout() == Layout::TILE) {
         return;
     }
-    if (conv_act_requires_tile_padding_qsr(input_tensor_on_device)) {
-        tilize_with_optional_deallocation(input_tensor_on_device, deallocate);
-        return;
-    }
-    ttnn::Tensor input_tensor_tilized = ttnn::operations::experimental::quasar::tilize(input_tensor_on_device);
+    ttnn::Tensor input_tensor_tilized =
+        conv_act_requires_tile_padding_qsr(input_tensor_on_device)
+            ? ttnn::operations::experimental::quasar::to_layout(input_tensor_on_device, Layout::TILE)
+            : ttnn::operations::experimental::quasar::tilize(input_tensor_on_device);
     if (deallocate) {
         input_tensor_on_device.deallocate(/*force*/ true);
     }
