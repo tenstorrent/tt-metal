@@ -53,15 +53,43 @@ class TtLoRAWeightsManager:
         self._skipped_reason = None
         self._text_encoder_components = []
 
+        # Text-encoder LoRA state. `_te_base_state` is a lazily-captured clean snapshot
+        # of the torch text-encoder weights (taken before any adapter is applied) used to
+        # revert; `_te_fused` tracks whether the on-device encoders currently hold merged
+        # LoRA weights. `_reload_text_encoders` is the caller-supplied hook that pushes
+        # torch weights onto the device encoders — see register_text_encoder_reload().
+        self._te_base_state = None
+        self._te_fused = False
+        self._reload_text_encoders = None
+        self._device_text_encoders = ()
+
+    def register_text_encoder_reload(self, reload_fn, components):
+        """Register the hook that pushes torch text-encoder weights onto the device.
+
+        ``reload_fn()`` takes no arguments and reloads the device encoders from the
+        current torch state dicts. ``components`` is the subset of
+        ``("text_encoder", "text_encoder_2")`` that ``reload_fn`` actually reloads.
+
+        Not registering — or registering no components — disables the text-encoder LoRA
+        path entirely, which is how the caller signals that the encoders run on host.
+        """
+        self._reload_text_encoders = reload_fn
+        self._device_text_encoders = tuple(components)
+
+    def _text_encoders_reloadable(self):
+        return self._reload_text_encoders is not None and bool(self._device_text_encoders)
+
     def adapter_state(self):
         """Current state of the loaded LoRA adapter.
 
-        ``fused`` is whether the UNet deltas are merged on device, ``skipped_reason``
-        is why a load was rejected (``None`` when it was applied), and
+        ``fused`` is whether the UNet deltas are merged on device,
+        ``text_encoder_fused`` whether the device text encoders hold merged weights,
+        ``skipped_reason`` is why a load was rejected (``None`` when it was applied), and
         ``text_encoder_components`` lists the text encoders the adapter trains.
         """
         return {
             "fused": self._is_fused,
+            "text_encoder_fused": self._te_fused,
             "skipped_reason": self._skipped_reason,
             "text_encoder_components": list(self._text_encoder_components),
         }
@@ -174,6 +202,11 @@ class TtLoRAWeightsManager:
         )
 
     def load_lora_weights(self, lora_path):
+        # Must run before anything can attach an adapter to the torch text encoders,
+        # so the snapshot is of clean weights. Deliberately ahead of the
+        # already-loaded early return below, which would otherwise skip it.
+        self._ensure_te_base_snapshot()
+
         self._skipped_reason = None
         self._text_encoder_components = []
 
@@ -195,16 +228,46 @@ class TtLoRAWeightsManager:
             self._skipped_reason = "unsupported_ops"
             return
 
-        # Text-encoder adapters are supported via host-side fuse + on-device
-        # encoder reload (handled by TtSDXLPipeline). Record which TE components
-        # are present so the caller can fuse and report them.
+        # Text-encoder adapters are supported via host-side fuse + on-device encoder
+        # reload (see _fuse_text_encoder_lora). Record which TE components are present
+        # so the fuse can target them and adapter_state() can report them.
         self._text_encoder_components = self._text_encoder_components_present()
 
-    def fuse_lora(self, lora_scale=1.0):
-        if not self.has_lora_adapter():
-            logger.warning("No LoRA weights loaded. Please load LoRA weights with load_lora_weights() before fusing.")
+    def _ensure_te_base_snapshot(self):
+        """Capture a clean copy of the torch text-encoder weights, once."""
+        if self._te_base_state is not None or not self._text_encoders_reloadable():
             return
+        state = {}
+        for name in self._device_text_encoders:
+            text_encoder = getattr(self._torch_pipeline, name, None)
+            if text_encoder is not None:
+                state[name] = {k: v.detach().cpu().clone() for k, v in text_encoder.state_dict().items()}
+        self._te_base_state = state
 
+    def fuse_lora(self, lora_scale=1.0, clip_scale=None):
+        """Fuse the loaded LoRA into the UNet (on device) and the text encoders (on host).
+
+        ``lora_scale`` applies to the UNet; ``clip_scale`` to the text encoders, and
+        defaults to ``lora_scale`` when omitted. A ``clip_scale`` of 0.0 skips the
+        text-encoder fuse entirely.
+
+        The caller is responsible for establishing the mesh-mapper context for the UNet
+        device work — see TtSDXLPipeline.fuse_lora.
+        """
+        if clip_scale is None:
+            clip_scale = lora_scale
+
+        if self.has_lora_adapter():
+            self._fuse_unet_lora(lora_scale)
+        elif not (self._is_fused or self._te_fused):
+            # Genuinely nothing loaded. Stay quiet when something is already fused: a
+            # text-encoder fuse strips the torch adapters, so has_lora_adapter() is
+            # False afterwards even though the LoRA is applied.
+            logger.warning("No LoRA weights loaded. Please load LoRA weights with load_lora_weights() before fusing.")
+
+        self._fuse_text_encoder_lora(clip_scale)
+
+    def _fuse_unet_lora(self, lora_scale=1.0):
         if self._is_fused:
             logger.info("LoRA weights already fused. Skipping fusion.")
             return
@@ -321,6 +384,48 @@ class TtLoRAWeightsManager:
 
             ttnn.add_(self._base_weights_device[qkv_key], qkv_delta_tt)
 
+    def _fuse_text_encoder_lora(self, lora_scale):
+        # Idempotency guard, mirroring the UNet path (_fuse_unet_lora early-returns on
+        # self._is_fused). Without this, a second fuse before an unload would merge the
+        # TE delta on top of already-merged torch weights, double-applying the adapter.
+        if self._te_fused:
+            logger.info("Text-encoder LoRA already fused; skipping re-fuse (idempotent).")
+            return
+        components = self._text_encoder_components
+        if not components:
+            return
+        # scale=0.0 means "do not apply to CLIP" — skip the host fuse + device reload
+        # entirely rather than fusing a zero delta (saves a full TE reload). _te_fused
+        # stays False, so adapter_state reports text_encoder_fused: false.
+        if lora_scale == 0.0:
+            logger.info("CLIP LoRA scale is 0.0 — skipping text-encoder fusion.")
+            return
+        if not self._text_encoders_reloadable():
+            logger.warning("Text-encoder LoRA present but encoders run on host; TE LoRA not applied.")
+            return
+        logger.info(f"Fusing text-encoder LoRA into {components} and reloading on device...")
+        # Merge the TE LoRA into the torch encoders, then strip all adapters. The merged
+        # weights stay in place with clean state-dict keys, which the reload hook pushes
+        # onto the device encoders. UNet deltas are already applied on device, so
+        # dropping the torch UNet adapter here is harmless.
+        self._torch_pipeline.fuse_lora(components=components, lora_scale=lora_scale)
+        self._torch_pipeline.unload_lora_weights()
+        self._reload_text_encoders()
+        self._te_fused = True
+
+    def _unload_text_encoder_lora(self):
+        if not self._te_fused:
+            return
+        logger.info("Restoring base text-encoder weights on device...")
+        # _ensure_te_base_snapshot only stores components the reload hook covers, so the
+        # presence of a key is itself the "this encoder exists on device" check.
+        base = self._te_base_state or {}
+        for name in ("text_encoder", "text_encoder_2"):
+            if base.get(name) is not None:
+                getattr(self._torch_pipeline, name).load_state_dict(base[name])
+        self._reload_text_encoders()
+        self._te_fused = False
+
     def unload_lora_weights(self):
         # Restore original base weights to the device
         for key in self._base_weights_device.keys():
@@ -335,3 +440,7 @@ class TtLoRAWeightsManager:
         self._is_fused = False
         self._skipped_reason = None
         self._text_encoder_components = []
+
+        # Base snapshot is deliberately retained: it is a one-shot capture of clean
+        # weights, valid for every later load/fuse/unload cycle.
+        self._unload_text_encoder_lora()
