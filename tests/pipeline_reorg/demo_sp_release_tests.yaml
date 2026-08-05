@@ -270,39 +270,3 @@
       timeout: 40
   owner_id: U03FJB5TM5Y
   team: models
-
-# ============================================================================
-# Wan 2.2 Tests (T3K)
-# ============================================================================
-
-- name: t3k_wan2.2_tests_demo
-  cmd: run_t3000_wan22_tests
-  model: wan22
-  skus:
-    wh_llmbox_perf:
-      timeout: 45
-  owner_id: U03FJB5TM5Y
-  team: models
-  model-name: wan22
-
-- name: t3k_DiT_Wan2.2_model_perf_tests
-  cmd: run_t3000_wan22_tests
-  model: wan22
-  skus:
-    wh_llmbox_perf:
-      timeout: 45
-  owner_id: U03FJB5TM5Y
-  team: models
-  model-name: wan22
-  model-type: DiT
-  save-perf-data: true
-
-- name: t3k_wan2.2_tests_integration
-  cmd: run_t3000_wan22_tests
-  model: wan22
-  skus:
-    wh_llmbox_perf:
-      timeout: 45
-  owner_id: U03FJB5TM5Y
-  team: models
-  model-name: wan2.2
