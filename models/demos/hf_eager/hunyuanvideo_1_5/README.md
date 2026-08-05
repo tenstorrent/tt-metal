@@ -17,8 +17,8 @@ sampler calls repeatedly:
 
 - **Branch:** `sdawle/hunyuanvideo-bringup_bh_glx`
 - **18/18** DiT modules **on device** (native ttnn, PCC-verified)
-- **Full 121-frame video generation** validated end-to-end on a **24-chip Blackhole
-  Galaxy** mesh (sp=3, TP=8×SP=3), text-encode + DiT + tiled VAE all on-device
+- **Full 121-frame video generation: 5:59 end-to-end** (32-chip sp=4, tile-sharded VAE)
+  — 3.2× vs the ~19 min 8-chip baseline; text-encode + DiT + tiled VAE all on-device
 - **Per-step DiT device time optimized `6.43 → 5.10 ms` (1.26×)** via 16 committed
   fusion/sharding wins + an L1-fit guard (tt-hw-planner `optimize`)
 
@@ -34,40 +34,46 @@ they differ only in whether `image_embeds` is populated. The t2v image tokens ar
 masked with a per-key additive attention bias — the final latent output is provably
 independent of the invalid image tokens, so it matches the reference exactly.
 
-## Layout
+## Directory structure
 
 ```
 hunyuanvideo_1_5/
-  tt/pipeline.py            the ONE shared chained forward (both demo + test call it)
-  demo/demo_i2v.py          i2v denoise-step demo   (python -m … .demo.demo_i2v)
-  demo/demo_t2v.py          t2v denoise-step demo   (python -m … .demo.demo_t2v)
-  _stubs/*.py               the 18 graduated TTNN stubs (Source B)
-  tests/pcc/                per-component PCC tests (18 modules, + mesh variant)
-  tests/e2e/                e2e gate, real-weight PCC, generation, perf tests
-  e2e_plan.json             the planner mental model (Command 1)
+├── tt/
+│   └── pipeline.py         # the ONE shared chained forward (demo + tests call it)
+├── _stubs/                 # the 18 graduated TTNN stubs (native on-device modules)
+├── demo/
+│   ├── demo_i2v.py         # i2v denoise-step demo
+│   └── demo_t2v.py         # t2v denoise-step demo
+├── tests/
+│   ├── pcc/                # per-component PCC tests (18 modules + mesh variant)
+│   └── e2e/                # e2e gate, real-weight PCC, generation, perf tests
+├── e2e_plan.json           # planner mental model
+└── README.md
 ```
 
 ## How to run
 
 ```bash
-# ---- correctness ----
-# e2e gate (Gate 1 native + Gate 2 all-18-invoked + Gate 3 PCC>=0.95)
-./python_env/bin/python -m pytest models/demos/hf_eager/hunyuanvideo_1_5/tests/e2e/test_e2e_pipeline.py -s
-# real-weight DiT PCC (single-device, and 24-chip mesh @ threshold 0.99)
-./python_env/bin/python -m pytest models/demos/hf_eager/hunyuanvideo_1_5/tests/e2e/test_real_weight_pcc.py -s
+PY=./python_env/bin/python
+DIR=models/demos/hf_eager/hunyuanvideo_1_5
 
-# ---- full video generation (24-chip sp=3, 480x848, 121 frames, 50 steps) ----
-HY_MESH=3,8 HY_DIT_SP=1 HY_DIT_BF16=1 HY_TT_VAE=1 HY_TT_QWEN=1 HY_VAE_TILE=1 HY_VAE_TILE_PX=128 \
-HY_H=480 HY_W=848 HY_FRAMES=121 HY_STEPS=50 HY_TRACE=0 \
-./python_env/bin/python -m pytest \
-  models/demos/hf_eager/hunyuanvideo_1_5/tests/e2e/test_stage2b_gen.py::test_stage2b_gen_qb2 -svv
+# --- correctness ---
+$PY -m pytest $DIR/tests/e2e/test_e2e_pipeline.py -s      # e2e gate (Gate 1/2/3, PCC >= 0.95)
+$PY -m pytest $DIR/tests/e2e/test_real_weight_pcc.py -s   # real-weight DiT PCC (single + mesh)
 
-# ---- perf (trace+2CQ device_ms, capped 2-layer profiling workload) ----
-./python_env/bin/python -m pytest models/demos/hf_eager/hunyuanvideo_1_5/tests/e2e/test_main_perf.py::test_main_perf -svv
+# --- 121-frame video generation (fastest config: 32-chip sp=4, tile-sharded VAE) ---
+#   HY_MESH=4,8       : 32-chip sp=4         HY_TT_QWEN/HY_TT_VAE=1 : encoders on device
+#   HY_VAE_TILE_PX=128: required at 121f     (VAE auto tile-shards across the mesh, ndev>1)
+HY_MESH=4,8 HY_TT_QWEN=1 HY_TT_VAE=1 HY_VAE_TILE=1 HY_VAE_TILE_PX=128 \
+HY_FRAMES=121 HY_STEPS=50 HY_H=480 HY_W=848 \
+$PY -m pytest $DIR/tests/e2e/test_stage2b_gen.py::test_stage2b_gen_qb2 -svv
 
-# ---- demos (single denoise step) ----
-python -m models.demos.hf_eager.hunyuanvideo_1_5.demo.demo_i2v
-python -m models.demos.hf_eager.hunyuanvideo_1_5.demo.demo_t2v
+# --- perf (device_ms, trace+2CQ, capped 2-layer workload) ---
+$PY -m pytest $DIR/tests/e2e/test_main_perf.py::test_main_perf -svv
+
+# --- demos (single denoise step) ---
+$PY -m models.demos.hf_eager.hunyuanvideo_1_5.demo.demo_i2v
+$PY -m models.demos.hf_eager.hunyuanvideo_1_5.demo.demo_t2v
 ```
 
 ## Performance
@@ -98,26 +104,27 @@ the tuned `ttnn` matmul. C++ Metalium `generic_op` matmul: same result. Both rev
 
 ### Full 121-frame end-to-end generation
 
-Real weights, 24-chip sp=3, 480×848, 121 frames, 50 steps, tiled VAE (128px).
+Real weights, 480×848, 121 frames, 50 steps. The VAE decode is **tile-sharded across the
+mesh** (`_decode_batch_sharded`, `085be79`): the ~45 tiles are batched and the batch
+dimension sharded so each device decodes one tile per round — **2 batched passes instead
+of 45 sequential** — cutting VAE wall-clock ~mesh-fold while per-device DRAM peak stays at
+a single tile.
 
-Steady-state (the ~52 s one-time trace capture is excluded — paid once, amortized across
-all subsequent generations):
+| config | denoise | VAE | **e2e** |
+|---|---|---|---|
+| baseline (8-chip) | ~15:00 | — | 18:52 |
+| 16-chip, sp=2 | 6:21 | ~2:30 | 10:38 |
+| 32-chip, sp=4, replicated VAE | 3:05 | ~5:00 | 9:47 |
+| **32-chip, sp=4, tile-sharded VAE** | 3:02 | ~2:00 | **5:59** ✅ |
 
-| mode | steady-state s/it | denoise (50 steps, steady) |
-|---|---|---|
-| **Eager** (`HY_TRACE=0`) | 4.18 | ~3:29 |
-| **Trace+2CQ** (`HY_TRACE=1`) | 4.15 | ~3:27 |
+**sp=4 with tile-sharded VAE is the fastest full-video config: 5:59 e2e (3.2× vs the
+~19 min 8-chip baseline)**, beating 16-chip sp=2 (10:38). Both DiT and VAE weights stay
+resident throughout; output is crisp and coherent (no tiling seams).
 
-Steady-state per-step is **essentially identical** (4.15 vs 4.18 s/it, trace marginally
-faster) — the DiT is compute-bound, so 2CQ input-overlap buys almost nothing.
-
-**e2e wall-clock ≈ 8:00–8:20**, but it is **not a clean trace-vs-eager discriminator**:
-~half of it is model-load + tiled-VAE decode — identical work in both modes — which
-varies 40–50 s run-to-run from kernel-cache warmth. The mode-attributable part is the
-denoise above (trace ≈ eager, ± a couple seconds). The `device_ms` wins are at the tiny
-dispatch-bound profiling scale and **do not materially speed up the compute-bound 121f
-denoise**. For a one-shot generation, eager avoids the ~52 s capture; trace pulls ahead
-only once that capture is amortized across many generations.
+At 121 frames the VAE tiles must be **128 px, not 192 px** — the high frame count (T=31)
+makes each tile's decode ~8× larger and 192 px fragments DRAM; 128 px fits with margin and
+still gives the two-round win. `ndev=1` falls back to the sequential path unchanged; the
+tile-shard flags default off.
 
 ## PCC validation
 
@@ -182,8 +189,10 @@ All are 480×848, 24 fps, decoded through the on-device tiled VAE.
   width-sharding it into L1 needs ~16 MB/core (bank is 1.4 MB) → `TT_FATAL` OOM. `_wln`
   now falls back to interleaved LN when the per-core shard won't fit L1 (`d0d07d0`); the
   shard still applies where it fits.
-- **Trace at 121f:** trace+2CQ does *not* OOM at 121f on the 24-chip sp=3 config (only
-  the 4-chip flat-TP QB2 does). It's simply not faster for a one-shot generation.
+- **Tiled VAE at 121f:** VAE tiles must be **128 px** (`HY_VAE_TILE_PX=128`); the high
+  frame count makes each tile's decode ~8× larger and 192 px fragments DRAM. Decode is
+  tile-sharded across the mesh, so it reuses the full 32-chip mesh once the DiT denoise
+  is done (sequential phases), which is what makes sp=4 the fastest e2e config.
 - **Reference vs real weights:** the per-component / e2e-PCC tests use deterministic-random
   (seed 0) weights with the repeated stacks shrunk to `num_layers=2` for CPU feasibility,
   so PCC validates the op implementation. `test_real_weight_pcc*` and the generation
