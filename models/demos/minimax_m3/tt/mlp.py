@@ -79,6 +79,8 @@ class MLP:
             hf_config,
             router_state_dict,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "router"),
+            # Tokens per device per forward — lets the router size the fused gate's wide bias at init.
+            num_tokens=ep_seq_len_per_chip,
         )
 
         # Cache-only loading: an empty state_dict means "load every tilized weight from the on-disk
@@ -138,6 +140,20 @@ class MLP:
                 for e in range(E)
             ]
         )
+        # The MoE's closing TP reduce-scatter. Routed through MeshConfig so it uses
+        # reduce_scatter_minimal_async with the same ping-pong + barrier semaphores as every other M3
+        # collective, instead of the plain `ttnn.reduce_scatter` prim (no barrier, no subdevice id, no
+        # keepalive — none of which it can stay without once the shared expert overlaps dispatch).
+        # Contract: reduce over the TP axis, scatter on the last dim.
+        # dim is resolved from the tensor's rank rather than passed as -1: MeshConfig.reduce_scatter
+        # forwards straight to reduce_scatter_minimal_async, which (unlike the ttnn.reduce_scatter
+        # wrapper it replaces) does not normalize a negative dim.
+        moe_reduce_scatter = None
+        if mesh_config is not None and ccl_manager is not None and mesh_config.tp > 1:
+            moe_reduce_scatter = lambda t: mesh_config.reduce_scatter(  # noqa: E731
+                t, ccl_manager, dim=len(t.shape) - 1, axis=mesh_config.tp_axis
+            )
+
         # Routed experts: DeepSeek EP dispatch/combine + the fused unified_routed_expert_moe kernel with
         # M3's clamped swigluoai activation (baked alpha=1.702 / limit=7.0). See TtMiniMaxMoE.
         self.experts = TtMiniMaxMoE(
@@ -158,6 +174,11 @@ class MLP:
             num_links=ccl_manager.num_links,
             routed_expert_weights_dtype=expert_weight_dtype,
             weight_cache_path=_ep_cache_dir(tensor_cache_path),
+            # Must match the model's routed_scaling_factor (2.0), not the 1.0 default: the internal gate
+            # applies it to the top-k weights, so a stale 1.0 silently halves every routed contribution
+            # as soon as gate_fallback_mode selects the internal gate over the caller-supplied topk.
+            route_scale=getattr(hf_config, "routed_scaling_factor", 1.0),
+            reduce_scatter_fn=moe_reduce_scatter,
         )
         self.ep_num_links = ccl_manager.num_links
 
