@@ -46,7 +46,7 @@ constexpr uint32_t READ_RESPONSE_STATIC_VC = 12;
 // NOC V2 command buffer VC assignments (same HW values as overlay::CMDBUF_*_VC)
 constexpr uint32_t NOC_V2_RD_REQ_VC = 1;
 constexpr uint32_t NOC_V2_RD_RESP_VC = 12;
-constexpr uint32_t NOC_V2_WR_REQ_VC = 2;
+constexpr uint32_t NOC_V2_WR_REQ_VC = 1;
 constexpr uint32_t NOC_V2_WR_RESP_VC = 13;
 constexpr uint32_t NOC_V2_MCAST_REQ_VC = 8;
 constexpr uint32_t NOC_V2_MCAST_RESP_VC = 14;
