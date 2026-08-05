@@ -337,3 +337,36 @@ This section is the durable record of the automated execution of this plan. Comm
   `git diff --check` is clean.
 - Gate 6 is green. The host coverage and metadata are committed as `fc4f251be19`
   (`Close GroupNorm mcast geometry coverage`).
+
+### 2026-08-05 — Gate 7 (not green)
+
+- `./build_metal.sh` passed. `McastHostFixture.*` and the three GroupNorm geometry tests passed 28/28;
+  the complete helper device suite passed 77/77 from an initially empty cache with 0/133 cache hits;
+  and the opaque-ABI/source audit passed 10/10.
+- All mapped correctness inventories passed sequentially from initially empty per-family caches:
+  Matmul 302/188, each Conv height/block/width feature inventory 48/16 plus all mapped DRAM cases,
+  GroupNorm legacy 108/2, Welford 108/2, fixed/default routing 19/6, and Sort long/deadlock 7/7 plus
+  2/2. Fresh artifacts covered all 13 migrated ledger kernel paths; the current host build covered all
+  12 migrated host bindings.
+- Nine of ten current-code performance cases pass the 1.5% limit: four Conv cases range from -0.273%
+  to +1.096%, three Matmul cases range from -0.074% to +0.929%, GroupNorm Welford is -0.358%, and
+  Sort is +0.449%. GroupNorm legacy measured `49,812.22222222222 ns`, +2.508% versus its
+  `48,593.7037037037 ns` baseline, and therefore fails.
+- Two additional unchanged-code legacy runs measured `49,817.50296151212` and `49,854.10571354485 ns`;
+  all three run medians fail, so this is not a borderline result under the plan's repeat rule.
+- Focused correctness recompiles continued to pass from empty caches while isolating the regression.
+  Compile-time removal of inactive first/last sends, explicit outlining of the send path, cached
+  receiver coordinates, normal instead of forced internal inlining, an active/in-place send path, and
+  conditional no-handshake storage were each measured independently. None closed the gate; all
+  experimental code was removed. Skipping construction of the two inactive edge pipes was the only
+  measurable improvement (`49,554.07536560204 ns`, +1.976%), but retaining it would still leave the
+  release gate red.
+- Device-profiler evidence shows stable individual BRISC kernels but increasing cross-core start/end
+  skew over the 20 back-to-back launches; the first measured record remains near the historical
+  baseline while later records form the failing median. The existing historical baseline artifact
+  is stable across all 20 records, so a same-environment historical checkout is required to distinguish
+  a code regression from a current profiler/dispatch-state effect before making a broader kernel change.
+- Gate 7 is not green. Further isolation requires running the baseline and intermediate commits in a
+  separate checkout; the primary checkout has unrelated dirty state and the repository instructions
+  prohibit creating a TT-Metal worktree without explicit permission. No correctness or production-code
+  change is left uncommitted.
