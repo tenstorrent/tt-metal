@@ -291,3 +291,28 @@ This section is the durable record of the automated execution of this plan. Comm
   2026-08-05 verification date, both migration JSON files parse, and `git diff --check` is clean.
 - Gate 4 is green. The implementation and v10 metadata are committed as `3726bdd71f3`
   (`Make mcast rotating wire self-describing`).
+
+### 2026-08-05 — Gate 5
+
+- Made signal-only traffic honor the configured handshake policy. A handshaked `send_signal()` now waits for and
+  resets all consumer acknowledgements before publishing its control signal; `receive_signal()` acknowledges the
+  current sender before waiting and advances its sender round for both Counter and Flag modes. No-handshake behavior
+  is unchanged.
+- Split Sort's coordinator-to-worker control path into a handshaked row-start Counter channel and a no-handshake
+  sub-stage Counter channel. The helper now owns row-start readiness; the raw reader-ready semaphore was removed,
+  while the independent operation-owned writer-done counter remains.
+- Extended the helper control-only test matrix across both handshake policies, 1x2/1x8 rectangles, and 2/32 rounds.
+  `./build_metal.sh` passed; a fresh-JIT handshaked 1x2 compile case passed with 0/20 cache hits; the complete helper
+  suite passed 77/77 from an initially empty cache with 0/133 cache hits.
+- The exact long Sort `(1, 524288)` compile/JIT case passed from an initially empty cache with 0/29 hits. Both `Ht=2`
+  deadlock regressions passed 2/2, and the complete long-tensor Sort inventory passed 7/7.
+- Added a durable source audit requiring Sort row-start readiness to remain pipe-owned. The complete audit passed
+  10/10. API-003 and MIG-002 are marked implemented, both migration JSON files parse, and `git diff --check` is
+  clean.
+- The Sort performance case was repeated three times because the result was near the limit. Run medians were
+  `145,201,100.41355687`, `144,983,524.86661464`, and `145,768,174.93690944 ns`. Their median is
+  `145,201,100.41355687 ns`, +1.195124% versus the recorded `143,486,262.2222222 ns` baseline. The 1.5% limit is
+  `145,638,556.15555552 ns`; the result is below it by `437,455.7419986427 ns` — **PASS**. Raw results are
+  `generated/mcast_migration_rt/gate5_20260805_sort_single_row_524288{,_r2,_r3}.json`.
+- Gate 5 is green. The implementation and metadata are committed as `160effde4fc`
+  (`Make mcast signal handshakes explicit`).
