@@ -80,6 +80,10 @@ void kernel_main() {
     // Blocked-cyclic global-K mapping, filled in by the fused prologue below (0 => contiguous, the
     // single-chip layout). Declared out here because the in0 ring load further down needs them.
     uint32_t k_run_len = 0u, k_stripe_base = 0u, k_shard_stride = 0u;
+    // Capacity-local slots PER SOURCE RANK. Equals k_run_len on the DRAM-staged path (rank stripes are packed
+    // back to back); larger under direct-L1, which pads each rank up to a whole number of ring slots so that
+    // no slot straddles two ranks. Only the first k_run_len slots of each rank hold real data.
+    uint32_t k_rank_span = 1u;
     // Progressive consumption: filled in by the fused prologue, read by the in0 ring below so it can gate
     // each shard on that source rank having actually landed rather than on the whole gather being done.
     uint32_t wave_fwd_sem_id = 0u, wave_bwd_sem_id = 0u, ready_sem_id_c = 0u;
@@ -299,6 +303,14 @@ void kernel_main() {
     const uint32_t rs_T = get_arg_val<uint32_t>(fidx++);            // tiles per sub-block = M_block*N_block
 #endif
 
+    // ---- cb0 reservation, hoisted ABOVE the gather ----
+    // cb0 holds the worker's COMPLETE gathered k-slice and is written exactly once, so reserving all of it up
+    // front is free (the CB is empty at kernel entry, so this never blocks) and it is what gives the gather a
+    // stable slot-0 address to write into. Direct-L1 needs that address before the gather runs, since a peer
+    // writes our slot 0 straight into L1; the staged path is unaffected by the earlier reservation.
+    cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
+    const uint32_t base0 = get_write_ptr(in0_cb);
+
     // ---- PHASE 0: fused fabric all-gather (Phase 1 of the design spec; DRAM-staged) ----
     //
     // Runs BEFORE the on-chip ring below. Two different rings, easy to confuse:
@@ -362,6 +374,13 @@ void kernel_main() {
         k_shard_stride = get_arg_val<uint32_t>(fa++);
         const uint32_t fwd_coord_swaps = get_arg_val<uint32_t>(fa++);
         const uint32_t bwd_coord_swaps = get_arg_val<uint32_t>(fa++);
+        k_rank_span = get_arg_val<uint32_t>(fa++);
+        // ---- PHASE 2 direct-L1 stream plan for THIS core (all zero on the staged path) ----
+        const uint32_t dl1_active = get_arg_val<uint32_t>(fa++);
+        const uint32_t dl1_dist = get_arg_val<uint32_t>(fa++);
+        const uint32_t dl1_send_fwd = get_arg_val<uint32_t>(fa++);
+        const uint32_t dl1_send_bwd = get_arg_val<uint32_t>(fa++);
+        const uint32_t dl1_recv_sem_addr = get_arg_val<uint32_t>(fa++);
         const uint32_t num_release_ranges = get_arg_val<uint32_t>(fa++);
         const std::size_t release_base = fa;  // 6 words per range: sx, sy, ex, ey, dests_fwd, dests_bwd
         fa += 6u * num_release_ranges;
@@ -446,6 +465,155 @@ void kernel_main() {
             }
         };
 
+#if defined(DIRECT_L1)
+        // Direct-L1 needs none of the staged path's machinery: no staging accessor, no progressive-arrival
+        // publication, no per-rank wave counters. The args are still READ above (the sequential `fa` walk is
+        // what lands on the mux client block, so it cannot be skipped) and the on-chip ring below has no
+        // arrival gate to evaluate, so these are genuinely dead here. Named explicitly rather than left to
+        // -Wunused: the writer's arg block is the one place where a silently-dropped read shifts everything
+        // after it.
+        (void)stage_acc;
+        (void)report_arrival;
+        (void)in0;
+        (void)k_shard_stride;
+        (void)ready_sem_id_c;
+        (void)fwd_recv_total;
+        (void)bwd_recv_total;
+        (void)my_rank;
+        (void)my_tp;
+        // ================= PHASE 2: DIRECT-L1 STREAMING =================
+        // No DRAM staging, no store-and-forward relay buffer, and no credit/window protocol.
+        //
+        // cb0 slot 0 is the ONLY externally-sourced data this core has (slots 1..G-1 arrive over the on-chip
+        // ring below), it is contiguous [base0, base0 + shard_bytes), and under the rank-aligned K mapping it
+        // holds tiles from exactly ONE source rank. So this core's entire share of the all-gather is: get
+        // slot 0 filled once, then hand those same bytes to the next device.
+        //
+        //   dist == 0  -> this device owns that rank: read the stripe out of the LOCAL in0 shard.
+        //   dist  > 0  -> it arrives over the fabric, written by the upstream device into this same address.
+        //
+        // Relay source == consume destination, so a relaying core forwards the very slot it consumes: no
+        // relay buffer, no extra L1. Nothing in the program ever rewrites slot 0 (slot 0 is written once,
+        // slots s>0 only by the ring forward), so there is no window to flow-control -- one arrival
+        // semaphore per core is the whole synchronisation.
+        //
+        // The destination address is OUR OWN base0. The peer core has the same core index and runs the same
+        // program with the same CB config, so its cb0 base is ours. That is the same construction the staged
+        // path already relies on for DRAM ("mesh tensors share an address across the mesh"); a host-side
+        // check is not available because CB L1 addresses are only assigned when the program is finalized at
+        // enqueue, after create_at has returned. If direct-L1 ever produces per-device-varying corruption,
+        // divergent L1 allocator state across devices is the first thing to suspect.
+        {
+            constexpr uint32_t slot0_tiles = W * in0_blk;
+            volatile tt_l1_ptr uint32_t* dl1_recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dl1_recv_sem_addr);
+            if (!dl1_active) {
+                // This ring position lies entirely past the last source rank (tp * rank_span < 8 * W * kb):
+                // its slot is pure zero padding. Nothing to fetch, nothing to forward -- but it must still be
+                // ZEROED, because those tiles are summed into every valid output column.
+                uint32_t q = base0;
+                for (uint32_t t = 0; t < slot0_tiles; ++t) {
+                    zero_tile(q);
+                    q += tile_bytes;
+                }
+            } else if (dl1_dist == 0u) {
+                // ORIGIN. Read our own shard's stripe straight into slot 0. Capacity-local index l sits at
+                // shard column stripe_base + (l % rank_span); slots at or past run_len are this rank's zero
+                // padding and are never read (the in1 reader zeroes the same positions, so the product is
+                // 0*0, never 0*NaN).
+                uint32_t q = base0;
+                for (uint32_t wb = 0; wb < W; ++wb) {
+                    const uint32_t sb = ring_pos * W + wb;  // capacity-local block index of our own slot
+                    for (uint32_t m = 0; m < M_block; ++m) {
+                        for (uint32_t k = 0; k < K_block; ++k) {
+                            const uint32_t l = sb * K_block + k;
+                            const uint32_t j = l - (l / k_rank_span) * k_rank_span;  // offset within the rank
+                            if (m < valid_m && j < k_run_len) {
+                                noc_async_read_page((m_start + m) * k_shard_tiles + k_stripe_base + j, shard_acc, q);
+                            } else {
+                                zero_tile(q);
+                            }
+                            q += tile_bytes;
+                        }
+                    }
+                }
+                noc_async_read_barrier();
+            } else {
+                // RELAY / LEAF. Our slot is filled by the upstream device; wait for its credit.
+                // ABLATE_NOWAIT skips exactly this wait, so the delta against the real number is the pure
+                // DEPENDENCY STALL on THIS path. The staged path's ablation hooks live in the step-0 read
+                // that direct-L1 compiles out, so without this hook TT_AGMM_ABLATE would silently do
+                // nothing here and report the unablated time as the ablated one.
+#if !defined(ABLATE_NOWAIT)
+                noc_semaphore_wait_min(dl1_recv, 1);
+#endif
+            }
+            if (dl1_send_fwd || dl1_send_bwd) {
+                // Packet headers from the per-RISC PacketHeaderPool (12 on Blackhole), allocated ONCE: one
+                // per in-flight payload (the header stays live until the send drains) plus a separate one
+                // for the credit, since to_noc_unicast_write and to_noc_unicast_atomic_inc overwrite the
+                // same command_fields union.
+                constexpr uint32_t kDl1Batch = 8;
+                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr[kDl1Batch];
+                for (uint32_t j = 0; j < kDl1Batch; ++j) {
+                    hdr[j] = PacketHeaderPool::allocate_header();
+                }
+                auto* hdr_sem = PacketHeaderPool::allocate_header();
+                // Same core index on the peer: core i holds the same slot of the same Pk group on every
+                // device, so core i credits core i and each core's counter is its own private arrival flag.
+                // NOC0 coords (my_x[0], not my_x[noc_index]): the packet-header setter re-encodes the
+                // address with its own mirroring, so an already-noc1-mirrored coordinate mirrors twice and
+                // aims at the mirror-image core. Invisible on Blackhole, a hang on Wormhole.
+                const uint64_t peer_sem = safe_get_noc_addr(my_x[0], my_y[0], dl1_recv_sem_addr, 0);
+                // A LINE origin drives BOTH muxes (the stripe has to fan out either way from its owner);
+                // every other core drives exactly one. The host appends the client blocks in this same
+                // fwd-then-bwd order, and only for directions this core actually sends in, so reading them
+                // in order off `fa` lands on the right one.
+                for (uint32_t dir = 0; dir < 2u; ++dir) {
+                    if ((dir == 0u) ? (dl1_send_fwd == 0u) : (dl1_send_bwd == 0u)) {
+                        continue;
+                    }
+                    auto sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(fa);
+                    sender.open();
+                    for (uint32_t t0 = 0; t0 < slot0_tiles; t0 += kDl1Batch) {
+                        const uint32_t nb = ((slot0_tiles - t0) < kDl1Batch) ? (slot0_tiles - t0) : kDl1Batch;
+                        for (uint32_t j = 0; j < nb; ++j) {
+                            const uint32_t off = (t0 + j) * tile_bytes;
+                            tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
+                                &sender,
+                                hdr[j],
+                                base0 + off,
+                                tile_bytes,
+                                tt::tt_fabric::NocUnicastCommandHeader{
+                                    safe_get_noc_addr(my_x[0], my_y[0], base0 + off, 0)},
+                                /*num_hops=*/1);
+                        }
+                        // One flush per batch: the headers (not the source, which is never rewritten) are
+                        // what has to be free before the next batch reuses them.
+                        noc_async_writes_flushed();
+                    }
+                    // Credit AFTER the payload. Ordering is enforced on the RECEIVING chip: flush=true makes
+                    // the peer drain every prior write on this channel before applying the increment.
+                    // sender.flush() would NOT do this -- it is a no-op unless EAGER_STAGING is on.
+                    tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+                        &sender,
+                        hdr_sem,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{peer_sem, 1, /*flush=*/true},
+                        /*num_hops=*/1);
+                    // Drain writes AND non-posted atomics before closing, or the kernel exits with pending
+                    // NOC transactions. close() is mandatory: the v2 mux self-terminates only once every
+                    // client has closed, so skipping it hangs the mux kernels.
+                    noc_async_write_barrier();
+                    noc_async_atomic_barrier();
+                    sender.close();
+                }
+            }
+            if (dl1_active && dl1_dist != 0u) {
+                // Re-arm for the next invocation. A GLOBAL semaphore is not zeroed by program launch (that
+                // is exactly why the credit lives in one), so whoever consumed it has to reset it.
+                noc_semaphore_set(dl1_recv, 0);
+            }
+        }
+#else
         // The 8 master-ring cores split the shard by M tiles; bank_id picks the slice. Ceil-divide so the
         // last core takes the short tail rather than dropping rows.
         const uint32_t m_per_core = (Mt_total + 7u) / 8u;
@@ -666,15 +834,20 @@ void kernel_main() {
             noc_semaphore_wait_min(my_recv, my_recv_rounds);
             noc_semaphore_set(my_recv, 0);
         }
+#endif  // DIRECT_L1 vs DRAM-staged
     }
 #endif  // FUSED_GATHER
 
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
-    cb_reserve_back(in0_cb, K_num_blocks * in0_blk);
-    const uint32_t base0 = get_write_ptr(in0_cb);
     for (uint32_t step = 0; step < G; ++step) {
         uint32_t slot = base0 + step * shard_bytes;
         if (step == 0) {
+#if defined(DIRECT_L1)
+            // Slot 0 is ALREADY complete: the direct-L1 prologue above either read it from the local in0
+            // shard (this device owns the rank) or blocked until the upstream device wrote it into L1. There
+            // is no DRAM read and no per-shard arrival gate to evaluate here -- the arrival gate IS that
+            // block's semaphore wait, which has already returned.
+#else
             // read our OWN shard (shard index = ring_pos) from DRAM into slot 0 (+ barrier).
             uint32_t p = slot;
             for (uint32_t wb = 0; wb < W; ++wb) {
@@ -732,7 +905,11 @@ void kernel_main() {
                 for (uint32_t m = 0; m < M_block; ++m) {
                     for (uint32_t k = 0; k < K_block; ++k) {
                         const uint32_t l = sb * K_block + k;  // capacity-local K index within the slice
-                        if (m < valid_m && l < valid_k) {
+                        // Written with k_rank_span rather than k_run_len so this is LITERALLY the in1
+                        // reader's global_k/k_valid_at. On this (staged) path the two are equal, so it is a
+                        // no-op today; keeping one formula is what stops the two sides drifting apart.
+                        if (m < valid_m && l < valid_k &&
+                            (k_run_len == 0u || (l - (l / k_rank_span) * k_rank_span) < k_run_len)) {
                             // Capacity-local K index -> global staging column. On the fused path every
                             // Pk group owns a stripe of EVERY source rank's shard, so consecutive l walk
                             // one stripe and then jump a whole shard; k_run_len == 0 is the single-chip
@@ -740,7 +917,7 @@ void kernel_main() {
                             const uint32_t gk =
                                 (k_run_len == 0u)
                                     ? (k_start + l)
-                                    : ((l / k_run_len) * k_shard_stride + k_stripe_base + (l % k_run_len));
+                                    : ((l / k_rank_span) * k_shard_stride + k_stripe_base + (l % k_rank_span));
                             noc_async_read_page((m_start + m) * Kt + gk, in0, p);
                         } else {
                             zero_tile(p);  // pad M row or K tail -> local zero (no DRAM read)
@@ -750,6 +927,7 @@ void kernel_main() {
                 }
             }
             noc_async_read_barrier();
+#endif  // DIRECT_L1
         } else {
             noc_semaphore_wait_min(fwd_ptr, step);  // wait for prev to forward a shard into our slot `step`
         }

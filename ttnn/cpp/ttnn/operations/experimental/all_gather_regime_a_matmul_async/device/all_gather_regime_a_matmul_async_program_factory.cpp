@@ -301,6 +301,114 @@ void place_mesh(plan::ExecutionPlan& P, const plan::Geometry& geo, const CoreCoo
 }
 
 // ---------------------------------------------------------------------------------------------------
+// PHASE 2 direct-L1 streaming: per-core stream plan.
+// ---------------------------------------------------------------------------------------------------
+// Every consumer core is its own fabric client. Core (kk, ring_pos) on device d receives its cb0 slot 0
+// straight into L1 from the SAME core index on the upstream device and relays those same bytes once to the
+// downstream one, so relay source == consume destination: no relay buffer, no extra L1, and no credit or
+// bounded-window protocol (slot 0 is written exactly once and nothing in the program reuses it). See
+// tools/mm_sweep/AGMM_DIRECT_L1_DESIGN.md, "Dataflow".
+//
+// The whole scheme rests on one property: slot 0 of core (kk, p) must hold exactly ONE source rank's tiles,
+// so that one origin can fill it with one contiguous transfer. That is NOT automatic -- see rank_span.
+struct DirectL1Core {
+    uint32_t src_rank = 0;     // the rank whose shard fills this core's cb0 slot 0
+    uint32_t dist = 0;         // hops from src_rank along this core's stream (0 == origin: reads local DRAM)
+    uint32_t run_len = 0;      // VALID K tiles per (rank, Pk group) stripe
+    uint32_t stripe_base = 0;  // this Pk group's first K tile within a source shard
+    uint32_t rank_span = 0;    // capacity-local K slots reserved per rank (== pos_per_rank * W*kb)
+    bool has_stripe = false;   // false => this ring position is pure zero padding: no fabric, no DRAM read
+    bool send_fwd = false;     // originates/relays toward rank+1
+    bool send_bwd = false;     // ... toward rank-1
+};
+
+// RANK-ALIGNED BLOCKED-CYCLIC K -- why direct-L1 needs its own K mapping.
+//
+// The DRAM-staged path packs each Pk group's per-shard stripes back to back, so capacity-local index l
+// belongs to source rank l / run_len. Ring slot boundaries, however, sit at multiples of W*kb. Unless
+// run_len happens to be a multiple of W*kb a single slot 0 STRADDLES two ranks, and a straddling slot
+// cannot be filled by one contiguous transfer from one origin. This is not a corner case: `medium` at Pk=4,
+// kb=2 gives run_len=10 against W*kb=6.
+//
+// So here each rank is given a whole number of ring positions: pos_per_rank = cdiv(run_len, W*kb), i.e.
+// rank_span = pos_per_rank * W*kb capacity-local slots of which the first run_len are valid and the rest
+// zero. Since tp * pos_per_rank <= 8, the total tp * rank_span <= 8 * W*kb == K_slice_capacity: this spends
+// only capacity the staged path was ALREADY leaving as its k-tail. It redistributes the zero padding (from
+// one run at the end to a little after each rank), it does not add any, and compute cost is unchanged
+// because the kernels always walk the full capacity and zero-fill invalid positions either way.
+//
+// Both the in0 side and the in1 reader take rank_span as a runtime arg and evaluate the same gk(l), so the
+// two stay in lockstep -- the spec requires the in1 reader to walk the identical global-K order. Passing
+// rank_span == run_len (what the staged path does) reduces every formula back to the old one exactly.
+std::vector<DirectL1Core> build_direct_l1_plan(
+    const plan::ExecutionPlan& P,
+    const plan::Geometry& geo,
+    uint32_t Pk,
+    uint32_t kb,
+    uint32_t tp,
+    uint32_t rank,
+    bool topology_is_ring) {
+    std::vector<DirectL1Core> out(geo.num_cores);
+    const uint32_t Wkb = geo.W * kb;  // capacity-local K tiles per ring slot
+    const uint32_t k_shard_tiles = geo.Kt / tp;
+    for (uint32_t i = 0; i < geo.num_cores; ++i) {
+        const plan::CorePlan& cp = P.cores[i];
+        DirectL1Core d;
+        const plan::BalRange rs = plan::rap_balanced(cp.kk, k_shard_tiles, Pk);
+        d.run_len = rs.extent;
+        d.stripe_base = rs.start;
+        const uint32_t pos_per_rank = (d.run_len + Wkb - 1u) / Wkb;
+        d.rank_span = pos_per_rank * Wkb;
+        // tp * pos_per_rank <= 8 is what makes the tp ranks fit in the 8 ring positions. It follows from
+        // K_slice_capacity >= ceil(Kt/Pk) for every shape this op accepts, but a violation would silently
+        // alias two ranks onto one slot, so check rather than assume.
+        TT_FATAL(
+            tp * pos_per_rank <= 8u,
+            "TT_AGMM_DIRECT_L1: Pk group {} needs {} ring positions per source rank (run_len={} over a "
+            "W*kb={} slot), which does not fit tp={} ranks in 8 positions. Unset TT_AGMM_DIRECT_L1 to use "
+            "the DRAM-staged path.",
+            cp.kk,
+            pos_per_rank,
+            d.run_len,
+            Wkb,
+            tp);
+        d.has_stripe = cp.ring_pos < tp * pos_per_rank;
+        if (d.has_stripe) {
+            d.src_rank = cp.ring_pos / pos_per_rank;
+            if (topology_is_ring) {
+                // Direction from ring-position parity. The pos_per_rank positions owning a rank are split
+                // between the two directions, so each link carries half the stripes -- the design doc's
+                // "antipode split becomes position-level", with no byte-level split of any core's payload.
+                // At pos_per_rank == 1 (tp == 8) the parity alternates across RANKS instead, which balances
+                // the two directions just as evenly.
+                const bool bwd = (cp.ring_pos % 2u) != 0u;
+                d.dist = bwd ? ((d.src_rank + tp - rank) % tp) : ((rank + tp - d.src_rank) % tp);
+                // The last hop consumes without forwarding; everyone else (origin included) sends once.
+                const bool relays = (d.dist + 1u) < tp;
+                d.send_fwd = !bwd && relays;
+                d.send_bwd = bwd && relays;
+            } else {
+                // LINE: there is no wrap, so a stripe has to fan out BOTH ways from its origin -- the origin
+                // is the one core that drives two muxes. Everyone else relays outward only.
+                if (rank == d.src_rank) {
+                    d.dist = 0;
+                    d.send_fwd = (rank + 1u) < tp;
+                    d.send_bwd = rank > 0u;
+                } else if (rank > d.src_rank) {
+                    d.dist = rank - d.src_rank;
+                    d.send_fwd = (rank + 1u) < tp;
+                } else {
+                    d.dist = d.src_rank - rank;
+                    d.send_bwd = rank > 0u;
+                }
+            }
+        }
+        out[i] = d;
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------------------------------
 // PHASE 1 fused fabric all-gather: per-device host context.
 // ---------------------------------------------------------------------------------------------------
 // Built once per mesh coordinate inside create_at, only when tp > 1. Resolves this rank's position in the
@@ -322,6 +430,17 @@ struct FusedGatherContext {
     std::vector<uint8_t> next_channel_bwd;
     uint32_t num_links = 1;
     uint32_t channels_per_mux = 0;
+    // Per-mux channel counts. Under direct-L1 the client set is the whole compute grid and, on a LINE, its
+    // size depends on this device's rank, so the two directions no longer have equal or link-divisible
+    // counts. Each mux is therefore sized to exactly the clients dealt to it: mux v2 self-terminates by
+    // counting close() calls against its compile-time channel count, so an over-provisioned mux does not
+    // error -- its forwarder RISC simply never exits.
+    std::vector<uint8_t> mux_channels_fwd;
+    std::vector<uint8_t> mux_channels_bwd;
+    // Round-robin dealing counters over a direction's links (direct-L1 only; the staged path keys the link
+    // off bank_id instead).
+    uint32_t next_link_fwd = 0;
+    uint32_t next_link_bwd = 0;
     // Readiness: one semaphore slot per (source rank, chunk). Receivers block on these; senders
     // atomic-inc AFTER the payload is flushed.
     uint32_t chunk_ready_sem_id = 0;   // VALID/INVALID go-ahead flag, on EVERY core
@@ -413,11 +532,21 @@ enum FusedGatherArg : uint32_t {
     // coordinators are different cores and need not share a NOC.
     kFgFwdCoordSwap = 35,
     kFgBwdCoordSwap = 36,
-    kFgNumReleaseRanges = 37,
+    // Capacity-local K slots reserved per source rank. Equals kFgKRunLen on the DRAM-staged path (so every
+    // formula reduces to the old one); larger under direct-L1, which pads each rank up to a whole number of
+    // ring slots so that a slot never straddles two ranks. See build_direct_l1_plan.
+    kFgKRankSpan = 37,
+    // ---- PHASE 2 direct-L1 stream plan for THIS core (all zero on the staged path). ----
+    kFgDl1Active = 38,   // 1 => this core sources a real stripe (0 => its slot is pure zero padding)
+    kFgDl1Dist = 39,     // hops from the origin; 0 => this device owns the rank and reads local DRAM
+    kFgDl1SendFwd = 40,  // drives the forward mux
+    kFgDl1SendBwd = 41,  // drives the backward mux (both, for a LINE origin)
+    kFgDl1RecvSem = 42,  // GLOBAL semaphore address for this core's single arrival; patched on replay
+    kFgNumReleaseRanges = 43,
     // Followed by kFgNumReleaseRanges 6-word records {sx, sy, ex, ey, dests_fwd, dests_bwd} in VIRTUAL
     // coords: the multicast rectangles master 0 releases. Per-range rather than one bounding box because
     // the bank-adjacent placement is deliberately not a filled rectangle.
-    kFusedArgCount = 38,  // + 6*num_release_ranges + 2*num_masters words, then the mux client block
+    kFusedArgCount = 44,  // + 6*num_release_ranges + 2*num_masters words, then the mux client block(s)
 };
 
 // Mux sizing. Kept deliberately small for bring-up: the design spec says to optimise for the default
@@ -437,7 +566,11 @@ FusedGatherContext build_fused_gather_context(
     const Tensor& in0,
     const std::vector<CoreCoord>& master_ring_cores,
     const CoreRangeSet& all_cores,
-    IDevice* device) {
+    IDevice* device,
+    // Direct-L1 client counts (0/0 on the staged path). These decide the mux channel counts, so they have
+    // to be known BEFORE the muxes are created -- which is why the direct-L1 plan is built first.
+    uint32_t dl1_clients_fwd,
+    uint32_t dl1_clients_bwd) {
     FusedGatherContext ctx;
     if (attrs.tp <= 1) {
         return ctx;  // single-chip path: no fabric, nothing to build
@@ -506,14 +639,35 @@ FusedGatherContext build_fused_gather_context(
     // Split each direction's masters across num_links muxes. Must divide evenly: an uneven split would
     // leave one mux short of the close() count it waits for, i.e. a hang with no diagnostic.
     ctx.num_links = attrs.num_links;
+    const bool dl1 = (dl1_clients_fwd + dl1_clients_bwd) > 0u;
     const uint32_t masters_per_direction = ctx.num_masters / 2u;
-    TT_FATAL(
-        ctx.num_links >= 1u && masters_per_direction % ctx.num_links == 0u,
-        "num_links={} must divide the {} masters that drive each direction; an uneven split leaves a mux "
-        "waiting on a close() count that never arrives",
-        ctx.num_links,
-        masters_per_direction);
-    ctx.channels_per_mux = masters_per_direction / ctx.num_links;
+    if (!dl1) {
+        TT_FATAL(
+            ctx.num_links >= 1u && masters_per_direction % ctx.num_links == 0u,
+            "num_links={} must divide the {} masters that drive each direction; an uneven split leaves a mux "
+            "waiting on a close() count that never arrives",
+            ctx.num_links,
+            masters_per_direction);
+        ctx.channels_per_mux = masters_per_direction / ctx.num_links;
+    }
+    // Deal `total` clients round-robin over the links (client c -> link c % L), and give each mux exactly the
+    // count that dealing produces. Fewer clients than links => fewer muxes, because a 0-channel mux is
+    // rejected outright by FabricMuxV2Config.
+    auto mux_channel_counts = [&](uint32_t total) {
+        std::vector<uint8_t> counts;
+        if (total == 0u) {
+            return counts;
+        }
+        const uint32_t links = std::min<uint32_t>(ctx.num_links, total);
+        for (uint32_t L = 0; L < links; ++L) {
+            counts.push_back(static_cast<uint8_t>(total / links + ((L < total % links) ? 1u : 0u)));
+        }
+        return counts;
+    };
+    ctx.mux_channels_fwd = dl1 ? mux_channel_counts(dl1_clients_fwd)
+                               : std::vector<uint8_t>(ctx.num_links, static_cast<uint8_t>(ctx.channels_per_mux));
+    ctx.mux_channels_bwd = dl1 ? mux_channel_counts(dl1_clients_bwd)
+                               : std::vector<uint8_t>(ctx.num_links, static_cast<uint8_t>(ctx.channels_per_mux));
     TT_FATAL(
         !attrs.gather_semaphores.empty(),
         "the fused gather (tp={}) needs at least one caller-supplied global semaphore for the cross-chip "
@@ -530,6 +684,48 @@ FusedGatherContext build_fused_gather_context(
 
     const size_t mux_base_l1 = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
+    // ---- Mux channel DEPTH, sized to what actually fits ----
+    // Direct-L1 turns every consumer core into a client, so one mux can carry tens of channels instead of the
+    // staged path's 4, and its L1 map (dominated by channels * depth * packet) stops fitting: measured
+    // 48 channels x 8 buffers x 4 KiB = 1.5 MB against a 1.5 MB worker L1. Shrink the buffer DEPTH rather than
+    // the packet size -- the design spec says to optimise for the default 4 KiB packet, and depth is the term
+    // that only costs pipelining. FabricMuxV2Config's own map check is the backstop if this estimate drifts.
+    uint32_t mux_depth = kMuxBuffersPerChannel;
+    {
+        uint32_t max_ch = 0;
+        for (const auto c : ctx.mux_channels_fwd) {
+            max_ch = std::max<uint32_t>(max_ch, c);
+        }
+        for (const auto c : ctx.mux_channels_bwd) {
+            max_ch = std::max<uint32_t>(max_ch, c);
+        }
+        // One stream register per channel, 64 per Tensix worker -- a hard hardware cap that no depth can buy
+        // back. num_links is the only lever, since a mux binds exactly one link.
+        TT_FATAL(
+            max_ch <= 64u,
+            "TT_AGMM_DIRECT_L1 needs {} channels on one mux (fwd={} bwd={} clients over num_links={}), over "
+            "the 64 stream registers a Tensix worker has. Raise num_links (a mux binds one link, so links are "
+            "what add mux cores) or unset TT_AGMM_DIRECT_L1 to use the DRAM-staged path.",
+            max_ch,
+            dl1_clients_fwd,
+            dl1_clients_bwd,
+            ctx.num_links);
+        if (max_ch > 0u) {
+            // Per-channel L1 beyond the payload buffers: connection info + handshake + credit scratch, each
+            // L1-aligned. Rounded generously; the shared regions (status, trid ring, control block) are the
+            // small constant.
+            constexpr size_t kPerChannelOverheadBytes = 512;
+            constexpr size_t kSharedOverheadBytes = 16u * 1024u;
+            const size_t budget = device->l1_size_per_core() - mux_base_l1;
+            while (mux_depth > 1u &&
+                   max_ch * (static_cast<size_t>(mux_depth) * kMuxChannelBufferBytes + kPerChannelOverheadBytes) +
+                           kSharedOverheadBytes >
+                       budget) {
+                mux_depth /= 2u;
+            }
+        }
+    }
+
     // The mux cores must not collide with the matmul's compute cores. The matmul occupies the low part of
     // the grid (banks x ring groups), so take mux cores from the TOP row downward.
     const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -537,19 +733,17 @@ FusedGatherContext build_fused_gather_context(
 
     auto deploy = [&](const std::optional<ttnn::MeshCoordinate>& dst_coord,
                       uint32_t slot_base,
+                      const std::vector<uint8_t>& channels,
                       std::vector<std::unique_ptr<tt::tt_fabric::FabricMuxV2Config>>& cfgs_out,
                       std::vector<CoreCoord>& vcores_out,
                       std::vector<uint8_t>& next_channel_out) {
         if (!dst_coord.has_value()) {
             return;  // line end: this direction does not exist
         }
-        for (uint32_t L = 0; L < ctx.num_links; ++L) {
+        for (uint32_t L = 0; L < channels.size(); ++L) {
             const CoreCoord mux_logical = mux_core_for(slot_base + L);
             cfgs_out.push_back(std::make_unique<tt::tt_fabric::FabricMuxV2Config>(
-                static_cast<uint8_t>(ctx.channels_per_mux),
-                kMuxBuffersPerChannel,
-                kMuxChannelBufferBytes,
-                mux_base_l1));
+                channels[L], static_cast<uint8_t>(mux_depth), kMuxChannelBufferBytes, mux_base_l1));
             tt::tt_fabric::add_fabric_mux_v2_to_program(
                 program,
                 *cfgs_out.back(),
@@ -565,12 +759,26 @@ FusedGatherContext build_fused_gather_context(
 
     // Mux cores are taken from the top row: forward links occupy slots [0, num_links), backward the next
     // num_links, so the two directions never share a core.
-    deploy(fwd_coord, 0, ctx.mux_cfgs_fwd, ctx.mux_virtual_cores_fwd, ctx.next_channel_fwd);
+    // mux_core_for walks the top row leftward from grid.x-1, so the two directions together must fit in it.
+    // The design doc flags this as the one bounds check widening the client set past 8 masters needs.
+    TT_FATAL(
+        ctx.mux_channels_fwd.size() + ctx.mux_channels_bwd.size() <= grid.x,
+        "the fused gather needs {} mux cores (fwd) + {} (bwd) from the {}-wide top row",
+        ctx.mux_channels_fwd.size(),
+        ctx.mux_channels_bwd.size(),
+        grid.x);
+    deploy(fwd_coord, 0, ctx.mux_channels_fwd, ctx.mux_cfgs_fwd, ctx.mux_virtual_cores_fwd, ctx.next_channel_fwd);
     // Both muxes are deployed now that the kernel drives both directions. Mux v2 self-terminates by
     // counting close() calls against its compile-time channel count and has no host-side termination
     // signal, so a mux must only ever be given clients that really do open/close it -- which is why each
     // master registers with the mux for its OWN direction only.
-    deploy(bwd_coord, ctx.num_links, ctx.mux_cfgs_bwd, ctx.mux_virtual_cores_bwd, ctx.next_channel_bwd);
+    deploy(
+        bwd_coord,
+        static_cast<uint32_t>(ctx.mux_channels_fwd.size()),
+        ctx.mux_channels_bwd,
+        ctx.mux_cfgs_bwd,
+        ctx.mux_virtual_cores_bwd,
+        ctx.next_channel_bwd);
     return ctx;
 }
 
@@ -692,6 +900,47 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     // branch in a non-template function -- it would still be compiled and fail deduction on the tp == 1 build.
     if (operation_attributes.tp > 1) {
         wdefs["FUSED_GATHER"] = "1";
+    }
+    // ---- PHASE 2: direct-L1 streaming (TT_AGMM_DIRECT_L1=1). Opt-in; DRAM staging stays the default and
+    // the A/B oracle, per the design spec's "retain DRAM staging as an A/B diagnostic until direct L1 is
+    // proven correct and faster". See tools/mm_sweep/AGMM_DIRECT_L1_DESIGN.md.
+    //
+    // WHY: this shape is DRAM-bandwidth-bound (83.0 us == 30.14 MB / 363 GB/s == 81% of the 448 GB/s
+    // Galaxy RevB peak), so surplus bytes convert directly into time. Phase 1's staging round-trip costs
+    // 5.25 MB/device, putting its ROOFLINE at 97.5 us -- above the 91.3 us gate (1.1 * max(83.0, 41.3)).
+    // Phase 1 therefore cannot pass however well it is scheduled. Direct-L1 keeps the gathered activation
+    // out of DRAM entirely: 28.2 MB -> 77.6 us, below even the single-chip matmul.
+    //
+    // No credits and no bounded window: cb0 is already sized for the worker's COMPLETE gathered K/Pk slice
+    // (plan.hpp compute_cb_sizes, planned against the staging buffer -- see in0_for_plan above), so a
+    // remote stripe written into its final cb0 slot is never overwritten. Slot 0 is written only by fabric
+    // (remote positions) or DRAM (the local position); slot s>0 only by the ring forward. Zero reuse
+    // anywhere, so the only synchronisation needed is the per-shard arrival semaphores that already exist.
+    const bool direct_l1 = (std::getenv("TT_AGMM_DIRECT_L1") != nullptr) && operation_attributes.tp > 1;
+    if (direct_l1) {
+        // Ns>1 ring groups need IDENTICAL in0, so a per-consumer fabric scatter would emit duplicate copies
+        // of the same tiles across the fabric -- which the design spec forbids ("Ns groups need identical A;
+        // they may share forwarding work, but must not emit duplicate fabric copies"). Doing it properly
+        // needs a NoC replication step after ingress. Until then refuse rather than silently paying (Ns)x
+        // the fabric bytes; DRAM staging still covers Ns>1.
+        TT_FATAL(
+            cfg.n_slices <= 1u,
+            "TT_AGMM_DIRECT_L1 does not support Ns>1 yet (got Ns={}): Ns groups consume identical in0, so a "
+            "direct per-consumer scatter would send each tile over the fabric Ns times. Unset "
+            "TT_AGMM_DIRECT_L1 to use the DRAM-staged path, which handles Ns>1.",
+            cfg.n_slices);
+        // `nowait` works on this path (the kernel gates its arrival wait on ABLATE_NOWAIT, so the delta
+        // against the real number is the pure dependency stall). `nogather` does NOT: with the payload and
+        // credit removed the direct-L1 senders open and immediately close their mux channels, and that
+        // HANGS rather than measuring anything -- reproduced twice. Refuse it here instead of shipping an
+        // ablation that wedges the board; the staged path's nogather is still available for the byte floor.
+        TT_FATAL(
+            ablate != "nogather",
+            "TT_AGMM_ABLATE=nogather is not supported with TT_AGMM_DIRECT_L1: with no payload and no credit "
+            "the direct-L1 senders open and immediately close their mux channels, which hangs. Use "
+            "TT_AGMM_ABLATE=nowait for the dependency-stall split, or drop TT_AGMM_DIRECT_L1 for the staged "
+            "path's nogather floor.");
+        wdefs["DIRECT_L1"] = "1";
     }
     // extra COMPUTE defines beyond fusion; currently only the reduction strategy (RSCATTER).
     std::map<std::string, std::string> cdefs_extra;
@@ -939,8 +1188,40 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
     for (uint32_t b = 0; b < 8u; ++b) {
         master_ring_cores.push_back(cores[b * preaders_pf]);
     }
+
+    // ---- PHASE 2 direct-L1: per-core stream plan, built BEFORE the mux context. ----
+    // The mux channel count must equal the number of clients that will really open/close it, and under
+    // direct-L1 that count is a property of this plan (on a LINE it even varies with this device's rank), so
+    // the plan has to exist before the muxes are created. ring_pos is final by now: optimize_in0_ring_order
+    // and the M-split placement both ran above.
+    std::vector<DirectL1Core> dl1_plan;
+    uint32_t dl1_clients_fwd = 0, dl1_clients_bwd = 0;
+    if (direct_l1) {
+        dl1_plan = build_direct_l1_plan(
+            P,
+            geo,
+            Pk,
+            kb,
+            operation_attributes.tp,
+            ttnn::ccl::get_linearized_index_from_physical_coord(
+                in0, mesh_coordinate, operation_attributes.cluster_axis),
+            operation_attributes.topology_is_ring);
+        for (const auto& d : dl1_plan) {
+            dl1_clients_fwd += d.send_fwd ? 1u : 0u;
+            dl1_clients_bwd += d.send_bwd ? 1u : 0u;
+        }
+    }
+
     FusedGatherContext fused_gather = build_fused_gather_context(
-        program, operation_attributes, mesh_coordinate, in0, master_ring_cores, all_cores, device);
+        program,
+        operation_attributes,
+        mesh_coordinate,
+        in0,
+        master_ring_cores,
+        all_cores,
+        device,
+        dl1_clients_fwd,
+        dl1_clients_bwd);
 
     // ---- On-chip gather barrier geometry ----
     // A master core's fwd_recv count only proves ITS OWN M slice arrived: the gather splits M by bank_id,
@@ -1257,12 +1538,17 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         // Pk still distributes rather than being refused; run_len is then constant per group across shards
         // (every shard has the same tile count), which keeps the closed form above valid.
         uint32_t k_run_len = 0u, k_stripe_base = 0u, k_shard_stride = 0u, k_valid = cp.valid_k;
+        // Capacity-local slots reserved per source rank. Equal to k_run_len on the staged path (rank stripes
+        // are packed back to back); under direct-L1 each rank is padded up to a whole number of ring slots so
+        // one slot never straddles two ranks -- see build_direct_l1_plan.
+        uint32_t k_rank_span = 0u;
         if (fused_gather.enabled) {
             k_shard_stride = geo.Kt / fused_gather.tp;  // tiles per source rank (Kt % tp == 0 asserted below)
             const plan::BalRange rs = plan::rap_balanced(cp.kk, k_shard_stride, Pk);
             k_run_len = rs.extent;
             k_stripe_base = rs.start;
-            k_valid = k_run_len * fused_gather.tp;
+            k_rank_span = direct_l1 ? dl1_plan[i].rank_span : k_run_len;
+            k_valid = k_rank_span * fused_gather.tp;
             TT_FATAL(
                 k_run_len > 0u,
                 "the blocked-cyclic K assignment gives Pk group {} no tiles: Pk={} exceeds the {} tiles per "
@@ -1314,6 +1600,7 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             ra.push_back(k_run_len);
             ra.push_back(k_stripe_base);
             ra.push_back(k_shard_stride);
+            ra.push_back(k_rank_span);
         }
         SetRuntimeArgs(program, rh, cores[i], ra);
 
@@ -1417,8 +1704,15 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             const uint32_t m_groups_pf = fused_gather.num_masters / 2u;
             const uint32_t bank_pf = i / preaders_pf;
             const bool core_is_bwd = is_master_ring && (bank_pf >= m_groups_pf);
-            const bool has_fwd_client = is_master_ring && !core_is_bwd && !fused_gather.mux_cfgs_fwd.empty();
-            const bool has_bwd_client = is_master_ring && core_is_bwd && !fused_gather.mux_cfgs_bwd.empty();
+            // Under direct-L1 the client set is the whole compute grid and each core's direction comes from
+            // its stream plan, not from the master-ring halves. A LINE origin drives BOTH muxes, which is the
+            // one case where a single core registers twice.
+            const bool has_fwd_client = direct_l1
+                                            ? (dl1_plan[i].send_fwd && !fused_gather.mux_cfgs_fwd.empty())
+                                            : (is_master_ring && !core_is_bwd && !fused_gather.mux_cfgs_fwd.empty());
+            const bool has_bwd_client = direct_l1
+                                            ? (dl1_plan[i].send_bwd && !fused_gather.mux_cfgs_bwd.empty())
+                                            : (is_master_ring && core_is_bwd && !fused_gather.mux_cfgs_bwd.empty());
             wa.push_back(has_fwd_client ? 1u : 0u);
             wa.push_back(has_bwd_client ? 1u : 0u);
             wa.push_back(Mt_r);                          // global M tiles (staging row count)
@@ -1471,6 +1765,16 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             wa.push_back(k_shard_stride);
             wa.push_back(fused_gather.fwd_coord_swaps);
             wa.push_back(fused_gather.bwd_coord_swaps);
+            wa.push_back(k_rank_span);
+            // ---- direct-L1 stream plan (all zero on the staged path) ----
+            // One arrival semaphore per core is the entire synchronisation. It is a GLOBAL semaphore, not a
+            // program one, for the same reason the staged path's credit is: the upstream device can credit us
+            // before our program has launched, and launch zeroes program semaphores.
+            wa.push_back((direct_l1 && dl1_plan[i].has_stripe) ? 1u : 0u);
+            wa.push_back(direct_l1 ? dl1_plan[i].dist : 0u);
+            wa.push_back((direct_l1 && dl1_plan[i].send_fwd) ? 1u : 0u);
+            wa.push_back((direct_l1 && dl1_plan[i].send_bwd) ? 1u : 0u);
+            wa.push_back(direct_l1 ? operation_attributes.gather_semaphores[0].address() : 0u);
             wa.push_back(static_cast<uint32_t>(fused_gather.release_ranges.size()));
             for (const auto& rr : fused_gather.release_ranges) {
                 wa.push_back(rr.sx);
@@ -1495,29 +1799,31 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             // Register ONLY with the mux this core actually drives. Registering with both would hand each
             // mux clients that never open or close it, and mux v2 terminates by counting close() calls --
             // its forwarder RISC would spin forever.
-            if (is_master_ring) {
-                if (has_fwd_client) {
-                    const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
-                    const auto tc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
-                    // Deal clients round-robin across this direction's links, so consecutive masters use
-                    // different links rather than piling onto one.
-                    const uint32_t Lf = bank_pf % fused_gather.num_links;
-                    fused_gather.mux_cfgs_fwd[Lf]->append_client_connection_rt_args(
-                        fused_gather.mux_virtual_cores_fwd[Lf],
-                        fused_gather.next_channel_fwd[Lf]++,
-                        tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{fc, tc},
-                        wa);
-                }
-                if (has_bwd_client) {
-                    const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
-                    const auto tc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
-                    const uint32_t Lb = (bank_pf - m_groups_pf) % fused_gather.num_links;
-                    fused_gather.mux_cfgs_bwd[Lb]->append_client_connection_rt_args(
-                        fused_gather.mux_virtual_cores_bwd[Lb],
-                        fused_gather.next_channel_bwd[Lb]++,
-                        tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{fc, tc},
-                        wa);
-                }
+            if (has_fwd_client) {
+                const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
+                const auto tc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
+                // Deal clients round-robin across this direction's links, so consecutive senders use
+                // different links rather than piling onto one. Direct-L1 keys the round robin off a running
+                // counter (its client set is every core, not one per bank) -- and that counter has to advance
+                // in exactly the pattern mux_channel_counts assumed when it sized each mux.
+                const uint32_t Lf = direct_l1 ? (fused_gather.next_link_fwd++ % fused_gather.mux_cfgs_fwd.size())
+                                              : (bank_pf % fused_gather.num_links);
+                fused_gather.mux_cfgs_fwd[Lf]->append_client_connection_rt_args(
+                    fused_gather.mux_virtual_cores_fwd[Lf],
+                    fused_gather.next_channel_fwd[Lf]++,
+                    tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{fc, tc},
+                    wa);
+            }
+            if (has_bwd_client) {
+                const auto fc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
+                const auto tc = CreateSemaphore(program, CoreRangeSet(CoreRange(cores[i], cores[i])), 0);
+                const uint32_t Lb = direct_l1 ? (fused_gather.next_link_bwd++ % fused_gather.mux_cfgs_bwd.size())
+                                              : ((bank_pf - m_groups_pf) % fused_gather.num_links);
+                fused_gather.mux_cfgs_bwd[Lb]->append_client_connection_rt_args(
+                    fused_gather.mux_virtual_cores_bwd[Lb],
+                    fused_gather.next_channel_bwd[Lb]++,
+                    tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{fc, tc},
+                    wa);
             }
         }
         SetRuntimeArgs(program, wh, cores[i], wa);
@@ -1542,6 +1848,31 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
         SetRuntimeArgs(program, compute, cores[i], ca);
     }
 
+    // Every mux channel must have been claimed by a client that will really open and close it. Mux v2
+    // self-terminates by counting close() calls against its compile-time channel count, so a mismatch is a
+    // HANG with no diagnostic, not an error -- this branch's history has three of them. Cheap to assert here,
+    // impossible to attribute later.
+    if (fused_gather.enabled) {
+        for (uint32_t L = 0; L < fused_gather.mux_cfgs_fwd.size(); ++L) {
+            TT_FATAL(
+                fused_gather.next_channel_fwd[L] == fused_gather.mux_channels_fwd[L],
+                "forward mux {} was sized for {} channels but {} clients registered; mux v2 waits for one "
+                "close() per channel, so this would hang",
+                L,
+                fused_gather.mux_channels_fwd[L],
+                fused_gather.next_channel_fwd[L]);
+        }
+        for (uint32_t L = 0; L < fused_gather.mux_cfgs_bwd.size(); ++L) {
+            TT_FATAL(
+                fused_gather.next_channel_bwd[L] == fused_gather.mux_channels_bwd[L],
+                "backward mux {} was sized for {} channels but {} clients registered; mux v2 waits for one "
+                "close() per channel, so this would hang",
+                L,
+                fused_gather.mux_channels_bwd[L],
+                fused_gather.next_channel_bwd[L]);
+        }
+    }
+
     return ttnn::device_operation::CachedProgram<shared_variables_t>{
         std::move(program),
         shared_variables_t{
@@ -1559,7 +1890,8 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             .fused_gather = fused_gather.enabled,
             .fused_rt_base = fused_rt_base,
             .preaders = preaders_pf,
-            .fwd_master_count = fused_gather.enabled ? (fused_gather.num_masters / 2u) : 0u}};
+            .fwd_master_count = fused_gather.enabled ? (fused_gather.num_masters / 2u) : 0u,
+            .direct_l1 = direct_l1}};
 }
 
 AllGatherRegimeAMatmulAsyncProgramFactory::cached_mesh_workload_t
@@ -1655,6 +1987,13 @@ void AllGatherRegimeAMatmulAsyncProgramFactory::override_runtime_arguments(
                 // hardcoded 4 here would desync silently.
                 const bool is_bwd = ((i / sv.preaders) >= sv.fwd_master_count);
                 wa[g + kFgMyRecvSem] = operation_attributes.gather_semaphores[is_bwd ? 1u : 0u].address();
+                // Direct-L1's arrival semaphore rotates with the caller's set exactly like the staged
+                // credit does. Leaving this stale is the classic "correct on invocation 1, wedged from 2 on"
+                // failure: every non-origin core would wait on a word nobody increments. Only patched when
+                // the core actually has one (0 means "no stream", and must stay 0).
+                if (sv.direct_l1 && wa[g + kFgDl1Active] != 0u) {
+                    wa[g + kFgDl1RecvSem] = operation_attributes.gather_semaphores[0].address();
+                }
             }
         }
     }  // per-coordinate program

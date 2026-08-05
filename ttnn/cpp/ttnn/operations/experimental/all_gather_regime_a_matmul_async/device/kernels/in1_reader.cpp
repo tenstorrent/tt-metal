@@ -48,11 +48,23 @@ void kernel_main() {
     const uint32_t k_run_len = get_arg_val<uint32_t>(9 + 2 * mpeers);
     const uint32_t k_stripe_base = get_arg_val<uint32_t>(10 + 2 * mpeers);
     const uint32_t k_shard_stride = get_arg_val<uint32_t>(11 + 2 * mpeers);
+    // Capacity-local slots PER SOURCE RANK. Equals k_run_len on the DRAM-staged path (rank stripes packed
+    // back to back), and is larger under direct-L1, which pads each rank up to a whole number of ring slots
+    // so that one slot never straddles two ranks. Only the first k_run_len slots of each rank are valid.
+    const uint32_t k_rank_span = get_arg_val<uint32_t>(12 + 2 * mpeers);
 #else
-    constexpr uint32_t k_run_len = 0u, k_stripe_base = 0u, k_shard_stride = 0u;
+    constexpr uint32_t k_run_len = 0u, k_stripe_base = 0u, k_shard_stride = 0u, k_rank_span = 1u;
 #endif
     auto global_k = [&](uint32_t l) {
-        return (k_run_len == 0u) ? (k_start + l) : ((l / k_run_len) * k_shard_stride + k_stripe_base + (l % k_run_len));
+        return (k_run_len == 0u) ? (k_start + l)
+                                 : ((l / k_rank_span) * k_shard_stride + k_stripe_base + (l % k_rank_span));
+    };
+    // Is capacity-local K index `l` a real logical K tile? Beyond the ranks (l >= valid_k) or inside a rank's
+    // pad (l % rank_span >= run_len) it is not, and both the in0 side and this reader must zero it -- the tile
+    // is summed into every valid output column, so 0*garbage is not good enough (0*NaN = NaN).
+    // With rank_span == run_len the second term is vacuous, so the staged path is byte-identical.
+    auto k_valid_at = [&](uint32_t l) {
+        return (l < valid_k) && ((k_run_len == 0u) || ((l - (l / k_rank_span) * k_rank_span) < k_run_len));
     };
 
     constexpr uint32_t in1_cb = 1;
@@ -138,7 +150,9 @@ void kernel_main() {
         // The coalesced read assumes consecutive K rows are adjacent in the bank shard. Under the
         // blocked-cyclic mapping that only holds while the block stays inside a single stripe -- crossing
         // a stripe boundary jumps a whole shard, so fall back to per-row there.
-        const bool stripe_ok = (k_run_len == 0u) || (((kblk * K_block) % k_run_len) + K_block <= k_run_len);
+        // Contiguity needs the whole block to stay inside ONE rank's VALID run: crossing a rank boundary jumps
+        // a whole shard, and crossing into the rank's pad would read tiles that must be zero.
+        const bool stripe_ok = (k_run_len == 0u) || (((kblk * K_block) % k_rank_span) + K_block <= k_run_len);
         const bool contig = (vcols == N_block) && (N_block == in1_shard_stride_n) && ((n_local + ncol_base) == 0u) &&
                             ((kblk * K_block + K_block) <= valid_k) && stripe_ok;
         if (contig) {
@@ -147,7 +161,7 @@ void kernel_main() {
         } else {
             for (uint32_t kr = 0; kr < K_block; ++kr) {
                 const uint32_t l = kblk * K_block + kr;  // capacity-local K index within the slice
-                if (l < valid_k) {
+                if (k_valid_at(l)) {
                     const uint32_t gk = global_k(l);  // global logical K tile
                     const uint32_t off = (gk * in1_shard_stride_n + n_local + ncol_base) * tile_bytes;
                     noc_async_read(get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, vcols * tile_bytes);

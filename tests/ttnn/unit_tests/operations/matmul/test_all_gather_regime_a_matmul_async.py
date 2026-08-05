@@ -30,6 +30,21 @@
 #   ) -> ttnn.Tensor                     # [M, N], REPLICATED across the TP group
 #
 # Numerics follow regime_a_matmul and are fixed: BF16 in/out, HiFi2, FP32 dest acc.
+#
+# WHICH GATHER PATH RUNS is an environment decision, so this one file covers all three:
+#
+#   (unset)                                        Phase 0: all_gather_async + matmul, the correctness oracle
+#   TT_AGMM_FUSED_GATHER=1                         Phase 1: fused gather via a DRAM staging buffer -- 40/40
+#   TT_AGMM_FUSED_GATHER=1 TT_AGMM_DIRECT_L1=1     Phase 2: fabric writes straight into cb0 -- 28/40, with
+#                                                  the other 12 REFUSED at program creation (Ns>1, and >64
+#                                                  mux channels on a LINE at num_links=1), not failing.
+#                                                  See tools/mm_sweep/AGMM_DIRECT_L1_DESIGN.md, "Scope
+#                                                  limits of the implementation".
+#
+# A refusal is a TT_FATAL, never a silent fallback -- so a Phase-2 run can never be reported as Phase 2 when
+# it actually took the staged path. Note that ONE refusal shows up as many failures: the fixture leaks
+# fabric config on a failed open (see open_cluster), so every later test dies on a bogus
+# "Tried to override previous value of fabric config".
 
 import contextlib
 
