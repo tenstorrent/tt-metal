@@ -55,7 +55,7 @@ from models.common.models.llama32_3b.executor import Llama32_3BExecutor, Llama32
 from models.common.models.llama32_3b.hf_adaptor import from_pretrained
 from models.common.models.llama32_3b.model import LLAMA32_3B_ACCURACY, LLAMA32_3B_PERFORMANCE, Llama32_3BTransformer1D
 from models.common.sampling.sampling_params import SamplingParams
-from models.common.tests.demos.cleanup_utils import cleanup_model_case
+from models.common.tests.demos.cleanup_utils import cleanup_dp_model_case, cleanup_model_case
 from models.common.tests.demos.run_helpers import (
     assert_no_special_tokens,
     load_eval_repeat_prompts_batch32,
@@ -610,6 +610,7 @@ def _run_dp_smoke(
     _skip_unless_heads_divide_mesh(mesh_device, hf_model)
     precision = LLAMA32_3B_PERFORMANCE if optimizations == "performance" else LLAMA32_3B_ACCURACY
 
+    mesh_device.quiesce_devices()
     submeshes = create_dp_submeshes(mesh_device, data_parallel)
 
     # One prompt per DP group (load_input_prompts pads/truncates to the requested count).
@@ -686,19 +687,7 @@ def _run_dp_smoke(
         log_generated_text(prompts, result.generated_token_ids, tokenizer)
         assert_no_special_tokens(result.generated_token_ids, tokenizer, case_name=f"ci-b1-DP-{data_parallel}")
     finally:
-        if group is not None:
-            group.cleanup()
-        else:
-            for lane in lanes:
-                lane.cleanup()
-        for model, sm in models:
-            cleanup_model_case(model, sm)
-        # When data_parallel > 1 we carved child submeshes off the fixture-owned parent
-        # mesh. Those submeshes share the parent's command queue, so the parent cannot be
-        # closed (by the module-scoped ttnn_mesh_device fixture) while they remain in use.
-        # Drain the parent + submesh CQs and reset their in-use state before teardown.
-        if data_parallel > 1:
-            mesh_device.quiesce_devices()
+        cleanup_dp_model_case(group, lanes, models, mesh_device, submeshes)
 
 
 # =============================================================================

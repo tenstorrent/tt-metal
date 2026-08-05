@@ -73,7 +73,7 @@ from models.common.models.qwen2_7b.executor import Qwen2Executor, Qwen2ExecutorC
 from models.common.models.qwen2_7b.hf_adaptor import from_pretrained
 from models.common.models.qwen2_7b.model import QWEN2_7B_ACCURACY, QWEN2_7B_PERFORMANCE, Qwen2_7B
 from models.common.sampling.sampling_params import SamplingParams
-from models.common.tests.demos.cleanup_utils import cleanup_model_case
+from models.common.tests.demos.cleanup_utils import cleanup_dp_model_case, cleanup_model_case
 from models.common.tests.demos.run_helpers import assert_no_special_tokens as assert_no_special_tokens_shared
 from models.common.tests.demos.run_helpers import (
     load_eval_repeat_prompts_batch32,
@@ -722,6 +722,7 @@ def _run_dp_smoke(
 ) -> None:
     """Run one user per TP2 lane through the migrated model-owned DP runtime."""
     tensor_parallel = _dp_lane_tp_or_skip(mesh_device, data_parallel)
+    mesh_device.quiesce_devices()
     submeshes = _create_dp_submeshes(mesh_device, data_parallel, tensor_parallel)
     lane_cache_dir = _dp_lane_cache_dir(cache_dir, tensor_parallel)
     hf_model = os.environ.get("HF_MODEL", "Qwen/Qwen2-7B-Instruct")
@@ -794,15 +795,7 @@ def _run_dp_smoke(
         log_generated_text(prompts, result.generated_token_ids, tokenizer)
         assert_no_special_tokens(result.generated_token_ids, tokenizer, case_name=f"ci-b1-DP-{data_parallel}")
     finally:
-        if group is not None:
-            group.cleanup()
-        else:
-            for lane in lanes:
-                lane.cleanup()
-        for model, submesh in models:
-            cleanup_model_case(model, submesh)
-        if lanes:
-            mesh_device.quiesce_devices()
+        cleanup_dp_model_case(group, lanes, models, mesh_device, submeshes)
 
 
 # =============================================================================
