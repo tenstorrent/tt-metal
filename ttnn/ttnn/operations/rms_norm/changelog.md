@@ -1087,3 +1087,341 @@ ablation switches used for the cumulative peel (`RMS_ABLATE_ROOT_SUM`, `RMS_ABLA
 so the next round re-runs the classification instead of re-deriving it. New probe
 `probes/zone_percore.py` — per-core zone closure, which is what made the root core's 63214-of-64221
 arithmetic checkable.
+
+## Perf 3 — the cross-core combine's LAYOUT and TOPOLOGY (a fan-out tournament)
+- Date: 2026-08-05
+- A **perf tournament**, not a refinement: `SUPPORTED` untouched, `EXCLUSIONS` untouched,
+  `verify_supported` categories identical before and after. Six ideas were floated at the measured
+  bottleneck, each fanned out to its own `blocking-perf-part-optimizer` with its own isolated
+  on-device micro-benchmark under `perf_experiments/<slug>/` (all six artifacts committed).
+  **All six measured; three graduated as three deviations (D26–D28), two were measured REGRESSIONS,
+  one was superseded.**
+- Round 3 of 3, so the breakdown was **re-measured on the now-instrumented, twice-optimized op**.
+  That mattered twice: Perf 2's rank-3 stage had been promoted to rank 3 *by Perf 2 itself*, and the
+  coordinator's own headline premise about the transport turned out to be **wrong** (below).
+
+### Measured breakdown, and the ranked bottleneck
+blackhole p150b, 110-core grid, CHIP_FREQ **1350 MHz** (== the reference clock, so no scaling);
+bf16 / TILE / HiFi2 / `fp32_dest_acc_en=False` — the `_perf_case` config. One fresh-cache profiled
+run per variant, **no trial loop**.
+
+`feature_spec.py` still carries **no `attention:` note**, so the focus shape was free-selected as the
+largest *measured* headroom — the same shape Perf 1 and Perf 2 took from 84836 to 34438:
+**`(1,1,8192,1024)` BLOCK_SHARDED, shard `[1024,128]`, grid `(8,8)` = 64 cores — 34494 ns against a
+25640 ns config-matched reference, 1.345x off**, the worst of the nine `_perf_case` targets. Every
+knob it declares is in `SUPPORTED`; no generality gap, no proxy shape.
+
+**Root-core arithmetic closure first** (`probes/zone_percore.py`, extended this round with a
+`--has ZONE` filter — *without it the combine's ROOT core is unreachable*, because ranking by KERNEL
+wall alone surfaces only MEMBER cores, whose wall is one long `cb_wait_front` on the root's stat):
+the root's TRISC_0 zones sum to **32799 ns of its 33856 ns kernel wall** (gap 1057), so on that core
+the zones *are* the wall.
+
+| stage | ns (root core) | note |
+|---|---|---|
+| `compute_root_fused` | **13728** | root only; the D22 fold + its gather-arrival wait |
+| `compute_scale` | 7842 | 22087 on a member — almost all `cb_wait_front` on the stat |
+| `compute_square` | 5044 | all 64 cores |
+| `compute_gamma_mul` | 4370 | all 64 cores |
+| `compute_reduce` | 1813 | all 64 cores |
+| `writer_mcast_send` / `writer_gather_zero` / `writer_gather_wait` / `writer_gather_ship` | 18280 / **7862 (n=1)** / 4429 / 2076 | root BRISC, sums to 32710 — the writer is busy for the whole wall |
+| `reader_read_gamma` / `reader_read_x` | 1453 / **56** | NoC0 idle for ~31 us; native zero-copy shard CBs both ends |
+
+**Cumulative peel** (payload stubbed, every CB reserve/wait/push/pop and trip count kept; peeled
+cumulatively, not one at a time; pass A+B peeled with the eltwise family's own
+`CKL_ELTWISE_CHAIN_SKIP_COMPUTE` switch rather than a hand-rolled flag):
+full **34494** -> ablate `writer_gather_zero` **32032** -> + ablate the fused root chain **20735**
+-> + ablate all three eltwise chains **16097**.
+
+**Ranked, roofline-gated (`/perf-ceiling-dm`):**
+
+| rank | stage | wall contribution | share |
+|---|---|---|---|
+| **1** | the fused root chain payload (fold + finalize) | **11297 ns** | **32.8%** |
+| **2** | the combine's TRANSPORT + SYNC residual (gather ship/wait + mcast round trip + CB handshake floor) | **16097 ns** | **46.7%** |
+| **3** | `writer_gather_zero`, the one-time boot | **2462 ns** | 7.1% |
+| gated OUT | the three eltwise chains (`square` + `scale` + `gamma_mul`) | 4638 ns | **AT the FPU roofline**: 384 tile FPU ops / 4638 ns = **12.1 ns per 32x32 bf16 HiFi2 broadcast multiply**. No idea was spent here, and that gating held up — see "what this round did to itself". |
+| gated OUT | `reader_read_x` / `writer_write` | 120 ns | native sharding is a **precondition** of this pass, not a lever |
+
+Two things only the *cumulative* peel could show. Removing the root chain alone would have been read
+against a 13728 ns zone, but the zone **contains the gather-arrival wait**; the peel prices the
+*payload* at 11297. And `writer_gather_zero`, which Perf 2 correctly ranked *out* at 1063 ns of wall,
+now measures 2462 — **Perf 2's own graduations exposed it**, exactly as Perf 2's changelog predicted.
+
+**Three sub-findings that shaped the portfolio:**
+1. The ROOT core is **compute-saturated** (32799 of a 33856 wall, no idle) while every MEMBER idles
+   ~22 us (`writer_mcast_recv` 25859). **The wall IS the root's serial work** — so *rebalancing off*
+   the root was floated as a first-class idea alongside *making the fold cheaper*.
+2. A partial is a `REDUCE_ROW` result, so at `GATHER_FACES=2` `ship_partial` issued **2 NoC writes of
+   1024 B per tile-row = 16 writes / 16 kB per member per round to carry 1 kB of information** — 16x
+   byte amplification.
+3. `rms_norm_writer.cpp`'s comment claiming a slot-major gather is "a gapped window no chain walk can
+   express" is **STALE**: it described the pre-D22 `eltwise_chain`, and D22's raw fold takes
+   **explicit tile indices**. Two subagents independently confirmed this.
+
+### The portfolio (6 ideas; overlap and fusion deliberately allowed)
+| idea | verdict | measured | domain |
+|---|---|---|---|
+| `compact_partial_transpose_r3` — one-hot matmul packs BLOCK_ROWS partials into ONE tile | **WIN** | combine bench **34772 -> 10996 ns (3.16x)**; root chain 3024 -> 770 ns/round; L1 288 -> 88 kB/core; 1.01x–9.66x over BR{1..32} x G{4,8,9,28,32} | everywhere on COMBINE, three measured carve-outs |
+| `slot_tree_gather` — a k-ary tree over the SLOT axis at m=1, built to COMPOSE with compaction | **WIN (wide groups), NULL (focus)** | w5120 G=32 **5424 -> 3744 (1.45x)**; w7168 G=28 1.40x; focus G=8 **1.00x** | wide groups only; two measured-regression carve-outs |
+| `gather_zero_elim` — is the boot zeroing needed at all? | **WIN** | stage **9900 -> 0 ns**; 2462 ns / 7.1% of wall; 9 catastrophic seeds all bit-identical | everywhere, minus the odd-G pad page (correctness) |
+| `gather_dual_noc` — split the gather across the idle NoC0 | **WIN, superseded** | `sf` **30147 -> 27683 (1.089x)**; 1.154x/1.158x at G=28/32 | superseded by D27, which deletes the per-row face writes `sf` splits |
+| `gather_slot_major_coalesce` — ONE contiguous NoC write per member | **REGRESSION** (+ a WIN found in the slot) | 0.931x focus, 0.782x–1.011x everywhere; by-product `dboot` 1.082x | do not ship; `dboot` superseded by D26 |
+| `root_rotation` — rotate the root per block to spread the fold | **REGRESSION** | **0.912x** focus; 0.854x–0.998x across ALL 14 geometries, no cell >= 1.00x | correct everywhere, slower everywhere |
+
+**Four WINs and two REGRESSIONs, and the two negative results are the most valuable things in the
+round**, because each refuted a premise the coordinator had written into the brief:
+
+- **`gather_slot_major_coalesce` refuted the coordinator's own rank-2 mechanism.** The brief asserted
+  the gather was small-transfer bound at ~13 GB/s and that coalescing 16 writes into 1 would pay. The
+  subagent built the decisive control — `rm_f4` vs `sm_f4`, **identical bytes, BLOCK_ROWS transactions
+  vs ONE** — and measured it **flat within ±1% across 11 geometries**. Transaction count is *not* the
+  constraint; the root's L1 ingress **bytes** are (D13's bound again). So compaction wins because it
+  moves **8x fewer bytes**, not because it issues fewer writes. A slot aimed at a wrong premise still
+  paid: the same bake-off found the `dboot` lever at 1.082x, which D26 then superseded by deleting the
+  stage outright.
+- **`root_rotation` refuted the coordinator's first-order rebalance arithmetic**, and refuted it *by
+  succeeding at what it set out to do*. The rebalance worked — the fold moved (13400 ns n=4 on one
+  core -> 7476 n=1 on each of four) and per-core KERNEL times **equalized** (33.6/34.1 ->
+  37.3/37.4) — but equalized **above** the fixed root's level. Mechanism: **D24** makes the fixed root
+  a full broadcast latency *ahead* of its group every round, so its fold runs in slack the group
+  spends on gather + broadcast (visible as the root's 4449 ns `writer_gather_wait`). A rotating root
+  is by construction a core that *did* wait, and must serially wait out every earlier round's
+  `writer_mcast_recv` (18977 ns, n=3) before it can publish. **Rotation cannot shorten a serial chain
+  by moving a link.** The penalty grows monotonically with round count (0.968x@nb1 -> 0.854x@nb16),
+  which is the signature of exactly that mechanism.
+
+### Aggregation — what conflicted with what
+- **`gather_dual_noc`'s `sf` is SUPERSEDED, not stacked.** It splits the *two face-writes per
+  tile-row* across NoC0/NoC1; D27 replaces those with ONE whole-tile write per round, so there is
+  nothing left to split. Its own author flagged the composition as expressible-but-unmeasured. Not
+  double-counted.
+- **`gather_slot_major_coalesce`'s `dboot` is SUPERSEDED.** It *distributes* the boot zeroing across
+  cores; D26 *deletes* it. Deleting strictly dominates distributing.
+- **`compact_partial_transpose` and `slot_tree_gather` are NOT mutually exclusive** — which
+  **refutes what Perf 1 and Perf 2 both recorded.** That exclusivity belonged to hierarchical
+  gather's ROW-SPLIT half, which parallelises over the row axis compaction removes. The SLOT tree
+  parallelises over `GROUP_SIZE`, an axis compaction does not touch. Their measured domains turn out
+  to be **disjoint**: compaction wins at `BLOCK_ROWS > 1`, the tree at `BLOCK_ROWS == 1` with
+  `GROUP_SIZE >= 30`. Both graduated, sharing one code path.
+- The three that graduated are mutually independent: the gather CB's defined-ness, the partial's
+  layout, and the fan-in's topology.
+
+### What graduated, how widely, and what was deleted
+Three deviations. **Every one is a single unqualified path** for the domain it is correct on, and each
+deleted the code it replaced.
+
+- **D26 — the gather CB's FACE boot-zeroing is DELETED** (rank 3). Perf 2's changelog named this stage
+  "the honest next target" and recorded that its own argument for removing it was *"reasoned, not
+  measured"*. It is now measured. An isolated bench seeds faces 1 and 3 of every gathered page with
+  **nine** catastrophic patterns — 1e30, -1e30, NaN, ±Inf, fp32 subnormals, a per-lane mix that makes
+  the fold evaluate `Inf + (-Inf)`, and a stale-L1 lookalike — then runs the op's **real** D22 fold +
+  D17 finalize + pass B's exact column-broadcast consumer. **Every seed came back BIT-IDENTICAL
+  (`torch.equal`)** to the boot-zeroed run, at `GROUP_SIZE` 4/8/9/28/32 x `BLOCK_ROWS` 1/8/32.
+  **The CONTROL is what makes it a proof rather than an accident:** the packed stat tile's columns
+  16..31 came back **100% non-finite** for the NaN/Inf seeds and |max| 7.96e30 for the 1e30 seeds. The
+  garbage *does* enter DEST (the FPU has no lane scope), *does* survive the pairwise `acc_to_dest`
+  fold, and *is* multicast to every member — it is **carried and never read**.
+  **34494 -> 31803 (1.085x)** on the focus shape and **6266 -> 5406 (1.159x)** at WIDTH 32c, output
+  bit-identical.
+- **D27 — the COMPACT partial** (ranks 1 and 2 at once). A sender's whole row-block travels as **ONE
+  tile** whose column *r* is tile-row *r*'s partial sum, via a one-hot `matmul_tiles` column
+  permutation; the root's fold becomes **ONE DEST window independent of `BLOCK_ROWS`**; the multicast
+  carries one tile; the receiver un-permutes with the *same* bank read through matmul's srcB
+  `transpose` flag. The one-hot bank is synthesized **on device by the reader**
+  (`reader_bank_boot`, 1461 ns one-shot, off the critical path) rather than plumbed in as a host
+  tensor, and bf16 is exact for a one-hot so it costs no accuracy.
+  **Deleted:** `ship_partial`'s per-tile-row loop and its row-major landing arithmetic, the root
+  fold's per-tile-row window loop, the `GATHER_SLOTS * BLOCK_ROWS` term from **both** the CB
+  allocation and the L1-bound `block_rows` solve, the pad-zeroing walk over that same product, and
+  **`cb_row_stat`'s allocation on the combine path** (D22 left it strictly dead there — 256 kB/core at
+  `block_rows` 32). Removing the `GROUP_SIZE x BLOCK_ROWS` term from the L1 solve is *itself* a lever:
+  it lets the solve take a coarser block (8 -> 20 rows, 4 rounds -> 2), worth **1.066x on top of**
+  compaction's own 1.235x. **31803 -> 24179 ns (1.321x)**; `compute_root_fused` 13728 -> **1464 ns**.
+- **D28 — the two-level SLOT TREE** for wide groups. `f0 = 4` (measured: `4x8` 1.45x vs `8x4` 1.38x),
+  **two levels always** (depth 3+ lost at 6 of 7 bench cells, so no depth knob was added — shipping
+  one would re-propose a measurement-refuted shape), interior nodes provably do not finalize
+  (a `FINALIZE` template arg). **Deleted:** `GATHER_HALF` and the ~45-line inline root chain, lifted
+  into ONE `combine_fold<...>` template with three instantiations (flat root, tree L0, tree L1).
+  **WIDTH 32c 5376 -> 5046 (1.066x)**, and interleaved width-split at `gw=56` 9002 -> 8256 (1.090x).
+
+**The five earned carve-outs, and the measured reason for each:**
+1. **D26's odd-`GROUP_SIZE` PAD page still gets zeroed** — *correctness*. A pad page is folded
+   **whole**, so its faces 0/2 land in column 0 and must be an exact +0.0. Measured catastrophic
+   without it: `pad = 1e30` gives **rel-RMS 1.00 at pcc 0.999672** — this op's signature pcc-blind
+   uniform-scale failure — and `pad = NaN` gives rel-RMS 1.00. Poisoning only the pad's columns 16..31
+   is bit-identical, so only its faces 0/2 are load-bearing, **but** zeroing just those two faces is a
+   measured **10–11% regression** (1959 vs 1781 ns at G=9): this stage pays per **API call**, not per
+   byte (`async_write_zeros` sets state up once and chunks at `MEM_ZEROS_SIZE = 512`). Whole page.
+2. **D27 elides the permute pair at `BLOCK_ROWS == 1`** — *inexpressible* (the map is
+   `partial_0 x E_0`, the identity) **and** a measured regression with the identity permutes left in:
+   0.76x / 0.80x / 0.76x / 0.91x on the four WIDTH decode targets. Spelled once, as
+   `COMPACT = CROSS_CORE && (BLOCK_ROWS > 1)`.
+3. **D27 keeps D13's two-face gather at `BLOCK_ROWS == 1`** — with no un-permute matmul, nothing needs
+   the unshipped faces defined, and a whole-tile ship doubles the root's ingress bytes. The regression
+   is **monotone in `GROUP_SIZE`** (0.859x at 32c, 0.908x at 28c) — the fan-in multiplier's own
+   signature. `GATHER_FACES` is therefore **scoped, not deleted**.
+4. **D27 caps `BLOCK_ROWS <= 32` on the combine path** — a compact tile has 32 columns. Found by
+   **measurement, not reasoning**, once the L1 term left the solve: `(1,1,3232,96)` WIDTH solved to a
+   **101-row** block and returned **pcc 0.949109 / rel-RMS 0.31**.
+5. **D28 is FLAT below its threshold** — `f1 < 2` (`GROUP_SIZE <= 4`: the only legal tree deletes zero
+   fold tiles and pays a pure hop, 0.78x–1.02x) and `deleted < 18` (`GROUP_SIZE <= 29`).
+
+**Nothing was guarded on a suspicion.** The `gw=32` interleaved width split is a measured **0.998x
+NULL** (a DRAM-bound pass A absorbs the combine saving) and is left **on the unified path**; so are
+every flat regime in D26 and D27.
+
+**D28's threshold did not survive re-derivation, and that is the round's cleanest methodological
+result.** The isolated bench's rule said `>= 17`; against the post-D26 tree it is `>= 18`, and the
+crossover is bracketed by **adjacent measured values** rather than extrapolated — a dedicated 30-core
+width shard, `(1,1,32,4800)`, was built purely to get the 18 point:
+
+| G | f1 | deleted | flat | tree | ratio |
+|---|---|---|---|---|---|
+| 8 | 2 | 2 | 3729 | 4307 | 0.866x |
+| 9 | 3 | 2 | 4481 | 5040 | 0.889x |
+| 8 (BLOCK 64c) | 2 | 2 | 24181 | 25244 | 0.958x |
+| 28 | 7 | **17** | 5717 | 5881 | **0.972x** |
+| 30 | 8 | **18** | 5130 | 4991 | **1.028x** |
+| 32 | 8 | 20 | 5376 | 5004 | 1.074x |
+
+And **why the isolated 1.40–1.45x became 1.03–1.08x is arithmetic, not noise**, recorded at the
+constants: (i) the bench's flat baseline still paid the per-face boot-zero calls that **D26 has since
+deleted**, so most of what the bench credited to the tree had already been banked by a *sibling
+graduation*; (ii) the combine is only ~1.5–2 us of a 5–5.4 us op sitting on a ~3.5 us one-core
+dispatch floor. **A 1.4x on a stage is not 1.4x of a wall**, and a tournament that reports the
+isolated number as the op's number is lying.
+
+**Raw-LLK bypasses — one new family, D27's**, with its measured authorisation at the definition:
+`matmul_tiles` / `matmul_init` used as a **column permutation**. The eltwise / bcast / reduce families
+all preserve or collapse the column axis and `transpose_wh` transposes the whole tile, so the matmul
+is the FPU's only horizontal-mixing primitive; srcB `transpose` lets ONE bank serve both directions
+(`C = partial_r x E_r` packing, `C = compact x E_r^T` un-packing), and DEST accumulation is free
+(`matmul_tiles` is `DST += A*B`), so `rows` matmuls cost one pack. Recorded alongside: **`matmul_init`
+does NOT reconfigure data formats**, so `reconfig_data_format<SrcOrder::Reverse>` is emitted at every
+matmul site — the same class of omission that in Perf 2 produced a uniform ~1000x scale error holding
+pcc at 0.9997. D28 adds **no** new bypass: `combine_fold` carries D22's raw pairwise `add_tiles` fold
+and D17's raw-sfpi finalize verbatim, with their justifications relocated to the template head.
+A **safety invariant** any later refactor must preserve: the permutation matmul sums 32 products, so
+**every column of both operands must be finite** — an Inf/NaN in an unused column becomes `Inf*0 =
+NaN` and poisons column 0. That is exactly why a compact page is shipped **whole**, and it is what
+makes D26's face-zeroing unnecessary on the compact path *by construction* rather than by D26's
+never-read argument. A related **untested** hazard is documented at the kernel site rather than
+guarded: at `epsilon == 0` the compact stat's unused columns would be `rsqrt(0) = +inf` and the
+un-permute's `inf*0` would return NaN everywhere, where the flat path degraded only on an all-zero
+row. No `epsilon` axis exists in `SUPPORTED`, the default is 1e-6, and the suite runs 1e-12…1e-2.
+
+**THE ROUND'S SHARPEST HAZARD, and it is a correctness change, not a perf one.** D27's finalize must
+run at a **wider VectorMode scope**. D17's shipped `<STRIDE=2, ITERS=4> VectorMode::C` reaches only
+columns 0,2..14 — right for a stat living in column 0, and **silently wrong on a compact tile from
+`BLOCK_ROWS = 2`**, where the odd rows' stats are never scaled and never rsqrt-ed. Measured
+**pcc 0.9972987 with rel-RMS 1036** against a 0.04 bound: **the fourth bug in this op that pcc alone
+would have waved through.** The compact fold gets `<1,8> C` (`BLOCK_ROWS <= 16`) / `<1,8> RC` (above);
+**D17's narrow scope STAYS** for the local non-combine finalize, which really does own only column 0.
+Two scopes, two call sites, each with its measured justification at the definition, and the bench
+keeps the hazard as a **live assertion** (`test_finalize_scope_hazard`) that fails if the narrow scope
+ever starts passing.
+
+**A fifth instance of this op's pcc-blind pattern, found in passing and worth recording as a policy:**
+`gather_slot_major_coalesce`'s deliberate falsification (writer slot-major vs compute row-major)
+measured **pcc 0.999564 / rel-RMS 2.892e-02 — INSIDE both the 0.9995 pcc gate AND the 0.04 rel-RMS
+bound.** Only **bit-exactness against the baseline** caught it. Any future gather-layout change should
+be gated on bit-exactness, not on pcc/rms.
+
+### Whole-op before/after (one fresh-cache profiled run per variant; guard set = the `_perf_case` table)
+| target | reference | Perf 2 after (= Perf 3 before) | Perf 3 after | speedup | vs reference |
+|---|---|---|---|---|---|
+| **`(1,1,8192,1024)` BLOCK 64c** (focus) | 25640 | 34494 | **24307** | **1.419x** | 1.345x off -> **0.948x, BEATS ref** |
+| `(1,1,32,5120)` WIDTH 32c | 5267 | 6266 | **5046** | **1.242x** | 1.190x -> **0.958x, BEATS ref** |
+| `(1,1,32,7168)` WIDTH 28c | 5481 | 6112 | **5703** | **1.072x** | 1.115x -> 1.041x |
+| `(1,1,32,2304)` WIDTH 9c | 4617 | 4530 | **4463** | 1.015x | 0.981x -> **0.966x** |
+| `(1,1,32,1024)` WIDTH 8c | 4110 | 3719 | **3680** | 1.011x | 0.905x -> **0.895x** |
+| `(1,1,8192,1024)` interleaved | 96744 | 89132 | **88795** | 1.004x | **0.918x** |
+| `(1,1,8192,2304)` interleaved | 211345 | 192736 | 194635 | 0.990x (noise) | **0.921x** |
+| `(1,1,8192,5120)` interleaved | 738307 | 413370 | 413383 | 1.000x | **0.560x** |
+| `(1,1,8192,7168)` interleaved | 1032281 | 569533 | 577288 | 0.987x (noise) | **0.559x** |
+
+**Guard-set no-regression: no target regressed** — one representative per distinct kernel path x
+layout x placement (BLOCK / WIDTH / interleaved, root, member, tree interior node, combine and local
+finalize, `native_in` and reader-fed, even and odd `GROUP_SIZE`, compact and identity paths).
+**Eight of the nine now beat their reference outright**, where Perf 2 left six. The two interleaved
+cells at 0.990x / 0.987x sit inside the ±2–3% noise band **and run untouched code** — the combine is
+OFF there (`group_size == 1`); their measured run-to-run spread across six profiled runs this round
+was ±2–4%. The one target still off its reference, WIDTH 28c at 1.041x, is off because D28's rule
+**correctly** keeps it flat (`deleted = 17 < 18`, a measured 0.972x for the tree there).
+
+Across three tournaments the focus shape has gone **84836 -> 64677 -> 34438 -> 24307 ns**, a
+cumulative **3.49x**, from 3.31x off its reference to beating it.
+
+### Final per-stage state on the focus shape (24307 ns), and what this round did to itself
+Root core TRISC_0: KERNEL 23717, stages sum 22898 (gap 819).
+
+| stage | Perf 3 before | after | note |
+|---|---|---|---|
+| `compute_root_fused` | 13728 | **1464** | D27 — **9.4x**; no longer the bottleneck, no longer even top-4 |
+| `writer_gather_zero` | 7862 zone / 2462 wall | **absent** | D26 — a literal no-op at even `GROUP_SIZE` |
+| `compute_square` | 5044 | **6935** | **now rank 1** |
+| `compute_scale` + `compute_gamma_mul` | 12212 | **8303** | now rank 2 |
+| `compute_recv_unpack` + `compute_member_pack` | 0 | **4598** | D27's new cost, paid in PARALLEL on all 64 cores |
+| `compute_reduce` | 1813 | 1597 | |
+
+**The critical path has left the combine, and this round put it where it is.** The op's rank-1 stage
+is now pass A's `compute_square`, with pass B second — **precisely the stages this round
+roofline-gated OUT of its portfolio at 12.1 ns per 32x32 bf16 HiFi2 broadcast multiply.** That gating
+was right (no idea was wasted on them) and it is now the binding constraint: the combine, which was
+79.5% of the wall in the breakdown above, is down to ~25% including D27's new permute pair. A Perf 4
+would have to attack the elementwise FPU work itself — a different kind of problem, at or very near
+its roofline, where the levers are the *shape* of the arithmetic (fewer passes over x, or a cheaper
+`x^2` datapath) rather than the movement around it.
+
+### Deferred, with their numbers intact
+There is no Perf 4 scheduled, so deferring has a real cost and it is recorded as such.
+1. **`gather_dual_noc`'s `mc` / `mcs`** — moving the stat multicast to the idle NoC0 was **1.448x /
+   1.363x on the transport** but **0.912x / 0.917x on the wall**, because the multicast was hidden
+   behind the root chain. Its author's exact note was *"re-measure if a sibling shrinks the root
+   chain"* — and D27 shrank it **9.4x**. This is the most likely live lever left in the combine and it
+   was **not** re-measured after D27 landed. Also recorded there: NCRISC issues NoC work ~3 us slower
+   than BRISC here (`z`, the gather-zero move, was a regression even in the transport-only
+   measurement at 0.860x), and the `SPLIT_ROOT=0` knob is load-bearing when composing the two levers
+   (0.977x -> 1.426x).
+2. **One combine round at the focus geometry** — L1-infeasible by a **measured** 48 kB once pass A's
+   and pass B's CBs are counted. Two named, unmeasured levers could close it: `_cb_block_mult` counts
+   `cb_x_squared` as `block_rows * wt_chunk` pages while D12's DEST fold allocates only `block_rows`
+   (a pre-existing over-count), and `cb_row_final` / `cb_sum_handoff` are `CB_ROW_STAT_DEPTH *
+   block_rows`.
+3. **D27's 12-row ragged tail** pays the `RC` finalize scope because the cap is decided from
+   `BLOCK_ROWS` (20 > 16) rather than the round's actual `rows`. Correct (a superset), measured flat
+   (~452 ns/round on the short round), not optimized.
+
+### Correctness (green throughout; counts identical to Perf 2)
+- Golden: **5541 passed / 1365 xfailed / 33921 skipped**; cartesian **5037 pass / 1365 xfail**,
+  `supported_fail = 0`; loose **384 pass / 3 infeasible-skip / 0 xfail**.
+- `test_regression.py` **15/15**. `test_translated.py` **105/106** — the one failure bit-identical at
+  relative Frobenius **1.122406e-01** to the pre-existing `{bfloat8_b, w_non_aligned}` pad-poison
+  non-issue `feature_spec.INVALID` declares out of scope (recorded the same way in Refinements 2, 2b,
+  3, 4 and Perf 1 and 2).
+- Unit suite **463 passed / 30 skipped**, including the two rel-RMS nets that caught D20's polarity,
+  the pad-poison shapes, all three sharded schemes x both layouts, the RM BAND geometries and the
+  `GRID_W` overrides that exercise D25's carved-out reader-fed path. **Zero hangs.**
+- **Precision contract untouched**: `fp32_dest_acc_en`, `math_fidelity`, `math_approx_mode`,
+  `dst_full_sync_en` and every dtype are exactly as the caller passed them. **No option that traded
+  precision for speed was graduated** — every subagent returned an option menu with per-option
+  precision, and the fastest option meeting the contract was taken in each case. D26 is bit-identical.
+  D28 is **more accurate** (rel-RMS 0.0074483 -> 0.0067687 at WIDTH 32c, never worse across
+  bf16/HiFi2/acc=F and fp32/HiFi2/acc=T). D27's *stat-level* rel-RMS is 1.7x worse in isolation (two
+  extra roundings through a 16-bit DEST word at `fp32_dest_acc_en=False`, understood not mysterious,
+  and 4 orders inside the 0.04 bound) — but **at whole-op scale accuracy IMPROVED**: focus rel-RMS
+  0.006648 -> 0.006209, `(1,1,3232,96)` 0.006459 -> 0.006020, and the four WIDTH geometries are
+  **bit-for-bit identical** (identity path). Recorded as an option cost, not hidden.
+
+### Instrumentation
+`MaybeDeviceZoneScope` extended to every new path and never removed: `compute_member_pack`,
+`compute_recv_unpack`, `reader_bank_boot`, `compute_tree_fold_l0`, `writer_tree_forward`,
+`writer_tree_wait`. `writer_gather_zero` survives as a zone even though it is a no-op at even
+`GROUP_SIZE`, because the odd-`GROUP_SIZE` pad path still runs there and a retired zone would hide it.
+The ablation switches (`RMS_ABLATE_ROOT_SUM`, `RMS_ABLATE_GATHER_ZERO`) are committed **commented
+out**, still compile against the compact and tree paths, and now cover the tree's rings, with the peel
+recipe at their definition. `probes/zone_percore.py` gains a **`--has ZONE`** filter — the single most
+load-bearing tooling change of the round, because ranking cores by KERNEL wall surfaces only the
+combine's idle MEMBER cores and the ROOT (the core the critical path actually runs on) is otherwise
+unreachable.
