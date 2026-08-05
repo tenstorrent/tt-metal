@@ -73,13 +73,13 @@ void EmaDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec EmaDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec EmaDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
     }
     const auto& old_spec = tensor_args.input.tensor_spec();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         old_spec.logical_shape(),
         TensorLayout(
             old_spec.tensor_layout().get_data_type(),

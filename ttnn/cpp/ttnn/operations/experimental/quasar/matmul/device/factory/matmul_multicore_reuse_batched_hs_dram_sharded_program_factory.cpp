@@ -523,6 +523,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     std::set<CoreCoord> worker_cores_set(all_worker_cores_ordered.begin(), all_worker_cores_ordered.end());
 
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(all_worker_cores_ordered.size());
 
     // Idle cores in the bounding box
     for (const auto& core : all_cores_in_rect_grid_vec) {
@@ -607,7 +608,7 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
 
     const auto& a = input_tensors.at(0).mesh_tensor();
     const auto& b = input_tensors.at(1).mesh_tensor();
-    auto bias = tt::tt_metal::as_optional_mesh_tensor(optional_input_tensors.at(0));
+    auto bias = ttnn::as_optional_mesh_tensor(optional_input_tensors.at(0));
     const auto& output = output_tensors.at(0).mesh_tensor();
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();

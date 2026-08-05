@@ -13,6 +13,7 @@
 #include "tt_metal/api/tt-metalium/bfloat16.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>
 #include "ttnn/api/ttnn/distributed/api.hpp"
 #include "ttnn/api/ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -43,8 +44,8 @@ inline tt::tt_metal::Shape compute_tensor_shape_in_pages(
     TT_FATAL(rank >= 1, "Tensor must have at least 1 dimension");
 
     // Get physical shape and page shape from tensor layout
-    tt::tt_metal::Shape2D physical_shape = tensor_layout.compute_physical_shape(tensor_shape);
-    tt::tt_metal::Shape2D page_shape = tensor_layout.compute_page_shape(physical_shape);
+    tt::tt_metal::Shape2D physical_shape = tensor_layout.impl().compute_physical_shape(tensor_shape);
+    tt::tt_metal::Shape2D page_shape = tensor_layout.impl().compute_page_shape(physical_shape);
 
     std::vector<uint32_t> shape_in_pages;
 

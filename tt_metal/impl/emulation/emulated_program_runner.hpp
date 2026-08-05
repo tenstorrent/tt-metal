@@ -24,4 +24,10 @@ void execute_program_emulated(IDevice* device, Program& program);
 void begin_mesh_dispatch();
 void run_mesh_dispatch();
 
+/// Host-interleaved socket dispatch: drive a parked (run_persistent) device forward one scheduler
+/// quantum. Called from the host's H2D/D2H socket credit-wait loops (distributed/{h2d,d2h}_socket.cpp)
+/// so kernels blocked on a host-fed socket wait resume as the host streams tokens after program.run().
+/// No-op unless a run is parked in HostWait. See tt-emule docs/socket-emulation.md §7.
+void pump_device();
+
 }  // namespace tt::tt_metal::emule

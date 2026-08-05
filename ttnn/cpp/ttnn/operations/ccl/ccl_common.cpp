@@ -25,6 +25,17 @@ bool is_fabric_2d() {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D;
 }
 
+std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config, tt::tt_metal::DataType input_dtype) {
+    if (!compute_kernel_config.has_value() && input_dtype == tt::tt_metal::DataType::FLOAT32) {
+        return ttnn::DeviceComputeKernelConfig{
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .fp32_dest_acc_en = true,
+        };
+    }
+    return compute_kernel_config;
+}
+
 void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size) {
     // NOTE: ideally query the below which are currently not publicly accessible.
     // FabricEriscDatamoverBuilder::max_packet_payload_size_bytes_{wormhole,blackhole} in
@@ -466,6 +477,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
     const ttsl::SmallVector<uint32_t>& unpad_elements,
     const int dim) {
     std::vector<ttnn::Tensor> combined_tensors;
+    combined_tensors.reserve(num_devices);
 
     ttsl::SmallVector<uint32_t> begins = {0, 0, 0, 0};
     ttsl::SmallVector<uint32_t> ends = {1, 1, 1, 1};
@@ -478,7 +490,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
 
         ttnn::Tensor sliced_tensor = ttnn::slice(output_tensor.at(0), begins, ends, step);
 
-        combined_tensors.push_back(sliced_tensor);
+        combined_tensors.push_back(std::move(sliced_tensor));
     }
     ttnn::Tensor concat_tensor = ttnn::concat(combined_tensors, dim);
     return {concat_tensor};

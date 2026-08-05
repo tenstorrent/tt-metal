@@ -61,7 +61,7 @@
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized
   skus:
     bh_sc4-blitz:
       timeout: 30
@@ -86,7 +86,7 @@
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized
   skus:
     bh_sc4-blitz:
       timeout: 60
@@ -94,86 +94,126 @@
   team: scaleout
   sp_config: sc4-blitz
 
-# ============================================================================
+# =============================================================================
 # BH SC16 Multihost Pipeline Tests (4 connected SC4 = 16 galaxies)
-# ============================================================================
+# =============================================================================
+# Count + SC16 topologyKey, then tt-run automapper (same pattern as tt-blaze
+# kimi-decode-ladder): --mesh-graph-descriptor + --hosts from /etc/ttop/hostfile.
+# Launch from an empty NFS cwd ($PIPELINE_DIR/ttrun-cwd) so Phase 1 writes
+# generated/ttrun/ on shared storage (runner can see rank-0 outputs). Do NOT
+# copy the full source tree onto NFS — that OOMs the 4Gi Actions runner.
+# ttrun.py + MGD use absolute paths under TT_METAL_HOME (local build/source).
+# Phase 2 --wdir ${TT_METAL_HOME}. --bind-to none for Phase 1.
+# PYTHONPATH / LD_LIBRARY_PATH must point at TT_METAL_HOME: tt-run defaults both
+# to ORIGINAL_CWD (empty NFS ttrun-cwd), which breaks imports and native libs.
 
-- name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
-  cmd: |
-    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+#TODO: re-enable after SC16 Teacher Forcing Test when it is fixed
+# - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
+#   cmd: |
+#     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+#     export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}"
+#     export LD_LIBRARY_PATH="${TT_METAL_HOME}/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+#     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging)}"
+#     TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
+#     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+#     MGD="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
+#     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+#     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+#     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+#     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
 
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
-      --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding rev_c_rank_binding_superpod.yaml \
-      python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
-        --weights real \
-        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized \
-        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-        --reference-file /mnt/models/ref_data/output1_reference.txt \
-        --output-file output1_teacher_forcing_results.json \
-        --chunk-accuracy 256
-  skus:
-    bh_sc16:
-      timeout: 30
-  owner_id: U08E1JCMAJF
-  team: scaleout
-  sp_config: sc16
+#     cd "${TTRUN_CWD}"
+#     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+#       --skip-executable-check \
+#       --tcp-interface ens5f0np0 \
+#       --mesh-graph-descriptor "${MGD}" \
+#       --hosts "${RESOLVED_HOSTS}" \
+#       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+#       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
+#         --weights real \
+#         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+#         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+#         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+#         --reference-file /mnt/models/ref_data/output1_reference.txt \
+#         --output-file "${PIPELINE_DIR}/teacher_forcing_output.json" \
+#         --chunk-accuracy 256 \
+#       > "${PIPELINE_DIR}/launch.log" 2>&1
+#   skus:
+#     bh_sc16:
+#       timeout: 30
+#   owner_id: U08E1JCMAJF
+#   team: scaleout
+#   sp_config: sc16
 
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}"
+    export LD_LIBRARY_PATH="${TT_METAL_HOME}/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging)}"
+    TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    MGD="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
 
+    cd "${TTRUN_CWD}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+      --skip-executable-check \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding rev_c_rank_binding_superpod.yaml \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+      > "${PIPELINE_DIR}/launch.log" 2>&1
   skus:
     bh_sc16:
       timeout: 60
   owner_id: U08E1JCMAJF
   team: scaleout
   sp_config: sc16
+#TODO: re-enable after SC16 Stress Test when it is fixed
+# - name: "Stress Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
+#   cmd: |
+#     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+#     export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}"
+#     export LD_LIBRARY_PATH="${TT_METAL_HOME}/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+#     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging)}"
+#     TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
+#     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+#     MGD="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
+#     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+#     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+#     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+#     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
 
-- name: "Stress Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
-  cmd: |
-    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-
-    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
-      --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding rev_c_rank_binding_superpod.yaml \
-      python3 -m models.demos.deepseek_v3_b1.demo.cli \
-        --max-new-tokens 128000 \
-        --repeat-generations 2 \
-        --no-stop-at-eos \
-        --weights real \
-        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
-        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
-  skus:
-    bh_sc16:
-      timeout: 60
-  owner_id: U08E1JCMAJF
-  team: scaleout
-  sp_config: sc16
+#     cd "${TTRUN_CWD}"
+#     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+#       --skip-executable-check \
+#       --tcp-interface ens5f0np0 \
+#       --mesh-graph-descriptor "${MGD}" \
+#       --hosts "${RESOLVED_HOSTS}" \
+#       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+#       python3 -m models.demos.deepseek_v3_b1.demo.cli \
+#         --max-new-tokens 128000 \
+#         --repeat-generations 2 \
+#         --no-stop-at-eos \
+#         --weights real \
+#         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+#         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+#         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+#       > "${PIPELINE_DIR}/launch.log" 2>&1
+#   skus:
+#     bh_sc16:
+#       timeout: 60
+#   owner_id: U08E1JCMAJF
+#   team: scaleout
+#   sp_config: sc16

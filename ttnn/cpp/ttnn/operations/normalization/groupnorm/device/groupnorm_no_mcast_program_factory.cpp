@@ -482,6 +482,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     std::vector<std::vector<CoreCoord>> mcast_groups;
     std::vector<std::vector<CoreCoord>> mcast_virtual_groups;
+    mcast_groups.reserve(core_coords.size());
+    mcast_virtual_groups.reserve(core_coords.size());
     int group_index = -1;
     for (size_t i = 0; i < core_coords.size(); ++i) {
         if (mcast_sender_core_ranges_all.contains(CoreRange(core_coords[i]))) {
@@ -1337,6 +1339,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                 std::swap(mcast_start, mcast_end);
             }
             tt::tt_metal::KernelDescriptor::RTArgList mcast_sender_args;
+            mcast_sender_args.reserve(22 + group.size() * 2);
             mcast_sender_args.push_back(a.buffer());
             mcast_sender_args.push_back(output.buffer());
             mcast_sender_args.push_back(in0_start_id);
@@ -1382,6 +1385,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }
 
             std::vector<uint32_t> mcast_noc_xy;
+            mcast_noc_xy.reserve(group.size() * 2);
             for (const auto& gcore : group) {
                 CoreCoord coord = device->worker_core_from_logical_core(gcore);
                 mcast_noc_xy.push_back(coord.x);
@@ -1432,6 +1436,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         }
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
+        writer_mcast_sender_args.reserve(10);
         writer_mcast_sender_args.push_back(eps_u);
         writer_mcast_sender_args.push_back(output.buffer());
         if (gamma.has_value()) {

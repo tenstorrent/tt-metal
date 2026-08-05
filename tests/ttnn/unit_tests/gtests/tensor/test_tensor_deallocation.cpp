@@ -18,8 +18,9 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace tt::tt_metal;
 
-TensorSpec make_test_tensor_spec() {
-    return TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+tt::tt_metal::TensorSpec make_test_tensor_spec() {
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
 using DeallocateTest = GenericMeshDeviceFixture;
@@ -31,14 +32,14 @@ TEST_F(DeallocateTest, HostTensorDeallocate) {
 }
 
 TEST_F(DeallocateTest, SingleTensorDeallocate) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     // This tensor is the only instance, so deallocate will succeed.
     tensor.deallocate(/*force = */ false);
     EXPECT_FALSE(tensor.is_allocated()) << "Single tensor should be able to be deallocated";
 }
 
 TEST_F(DeallocateTest, SharedTensorDeallocate) {
-    Tensor tensor1 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor1 = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     Tensor tensor2 = tensor1;
     Tensor tensor3(tensor1.device_storage());
     tensor1.deallocate(/*force = */ false);
@@ -50,7 +51,7 @@ TEST_F(DeallocateTest, SharedTensorDeallocate) {
 }
 
 TEST_F(DeallocateTest, SharedTensorDeallocateForce) {
-    Tensor tensor1 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor1 = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     Tensor tensor2 = tensor1;
     Tensor tensor3(tensor1.device_storage());
     tensor1.deallocate(/*force = */ true);
@@ -59,7 +60,7 @@ TEST_F(DeallocateTest, SharedTensorDeallocateForce) {
 }
 
 TEST_F(DeallocateTest, DeallocatedTensorHasNoDevice) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     tensor.deallocate(/*force = */ true);
     EXPECT_FALSE(tensor.is_allocated());
 
@@ -73,7 +74,7 @@ TEST_F(DeallocateTest, DeallocatedTensorHasNoDevice) {
 }
 
 TEST_F(DeallocateTest, DeallocatedTensorDoesNOTHaveMeshTensor) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     tensor.deallocate(/*force = */ true);
     EXPECT_FALSE(tensor.is_allocated());
 
@@ -88,7 +89,7 @@ TEST_F(DeallocateTest, DeallocatedTensorDoesNOTHaveMeshTensor) {
 }
 
 TEST_F(DeallocateTest, DeallocatedTensorTensorSpec) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     tensor.deallocate(/*force = */ true);
     EXPECT_FALSE(tensor.is_allocated());
 
@@ -110,7 +111,7 @@ TEST_F(DeallocateTest, DefaultConstructedThrowsForSpecTopologyAndMeshTensor) {
 }
 
 TEST_F(DeallocateTest, SpecAndTopologyAccessibleAfterDeallocate) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     DeviceStorage storage = tensor.device_storage();
 
     storage.deallocate();
@@ -121,7 +122,7 @@ TEST_F(DeallocateTest, SpecAndTopologyAccessibleAfterDeallocate) {
 }
 
 TEST_F(DeallocateTest, MeshTensorGetterThrowsWhenDeallocated) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     DeviceStorage storage = tensor.device_storage();
 
     storage.deallocate();
@@ -131,7 +132,7 @@ TEST_F(DeallocateTest, MeshTensorGetterThrowsWhenDeallocated) {
 }
 
 TEST_F(DeallocateTest, DeallocatedTombStoneThrowsForMeshBuffer) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    Tensor tensor = ttnn::create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     DeviceStorage storage = tensor.device_storage();
 
     storage.deallocate();

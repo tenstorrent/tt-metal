@@ -50,37 +50,6 @@ def _load_text_tokenizer(model_path):
         return AutoTokenizer.from_pretrained(fallback, trust_remote_code=True, extra_special_tokens={})
 
 
-def _trace_prefill_supported_seq_lens(max_seq_len, has_per_layer_inputs, bounded_sliding=False):
-    """Padded prefill buckets for which capturing a prefill trace is correct AND
-    a net win for Gemma4.
-
-    Tracing removes host op-dispatch overhead, a meaningful fraction of TTFT
-    across short *and* medium/high ISLs (the model body is ~1k dispatched ops per
-    prefill). The lm_head is deferred OUTSIDE the trace — the trace returns
-    post-norm hidden states and ``process_logits_after_prefill_trace`` runs
-    lm_head on just the last-token tile — so the 262k-vocab matmul no longer
-    scales with sequence length and these buckets stay a net win at higher ISL.
-
-    Disabled when the model has per-layer inputs (E2B/E4B): prefill uploads
-    per-layer tensors via ``ttnn.from_torch`` inside the layer loop, which is not
-    allowed during trace capture and would freeze warmup values.
-
-    Bounded sliding is fine: the generator refreshes a persistent
-    ``valid_seq_len`` device tensor out-of-trace and ``paged_fill_cache``'s
-    writer caps the circular fill at runtime (``get_last_token=-1`` no longer
-    skips the cap). ``bounded_sliding`` is kept for call-site compatibility.
-    """
-    del bounded_sliding  # unlocked by kernel-side valid_seq_len fill cap
-    if has_per_layer_inputs:
-        return []
-    override = os.environ.get("GEMMA4_TRACE_PREFILL_SEQ_LENS")
-    if override is not None:
-        lens = [int(x) for x in override.split(",") if x.strip()]
-    else:
-        lens = [128, 1024, 4096, 8192, 16384, 32768, 65536]
-    return [n for n in lens if n <= max_seq_len]
-
-
 def _patch_model_args(
     model_args,
     mesh_device,

@@ -33,7 +33,7 @@ from helpers.test_variant_parameters import (
     rt_dim=FAST_UNTILIZE_RT_DIMS,
     ct_dim=FAST_UNTILIZE_CT_DIMS,
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
-    loop_factor=[1, 4, 16],
+    loop_factor=[8, 32, 128],
 )
 def test_perf_fast_untilize(
     perf_report, formats, dest_acc, rt_dim, ct_dim, dest_sync, loop_factor

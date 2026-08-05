@@ -11,7 +11,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_results_batch_norm,
 )
 from itertools import product
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
@@ -24,7 +24,9 @@ pytestmark = pytest.mark.use_module_device
         torch.Size([5, 8, 32, 32]),
         torch.Size([7, 3, 23, 23]),
         torch.Size([3, 5, 64, 120]),
-        torch.Size([1, 128, 14, 14]),
+        # C=129: past CB depth (2) on WH (64 cores); BH drain coverage comes from
+        # test_batch_norm_running_statistics_drain which derives C from the device grid.
+        torch.Size([1, 129, 14, 14]),
         torch.Size([1, 8, 24, 42]),
     ],
 )
@@ -928,3 +930,310 @@ def test_batch_norm_training_avoids_variance_cancellation(device):
     assert torch.isfinite(tt_output).all()
     assert torch.isfinite(tt_running_var).all()
     assert_numeric_metrics(torch_output, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([3, 5, 64, 120]),
+        torch.Size([1, 8, 24, 42]),
+    ],
+)
+@pytest.mark.parametrize("weight", [True, False])
+@pytest.mark.parametrize("bias", [True, False])
+@pytest.mark.parametrize(
+    "input_dtype, param_dtype, needs_output_typecast",
+    [
+        ("bfloat16", "float32", True),
+        ("float32", "float32", False),
+    ],
+)
+def test_batch_norm_fp32_acc_output_typecast(
+    input_shapes, weight, bias, input_dtype, param_dtype, needs_output_typecast, device
+):
+    """Regression test for missing output_tensor_cb in the UnpackToDestFp32 list.
+
+    needs_output_typecast is true when interm_data_format is Float32 (any tensor is
+    float32) but the output dtype is not (input/output are bfloat16). In that config
+    the SFPU compute kernel uses output_tensor_cb (c_2) as an fp32 staging buffer and
+    unpacks it back via copy_tile for dtype conversion — c_2 must be in the
+    UnpackToDestFp32 list or the unpack/DST precision mismatch degrades output accuracy.
+
+    Two parametrized cases:
+      - bf16 I/O + fp32 params (needs_output_typecast=True): hits the typecast self-loop.
+      - all fp32 (needs_output_typecast=False): control — no typecast, c_2 is plain output.
+    """
+    in_data, input_tensor = data_gen_with_range_batch_norm(
+        input_shapes, 5, 10, device, is_input=True, testing_dtype=input_dtype
+    )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+    mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=param_dtype)
+    var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device, testing_dtype=param_dtype)
+    weight_data, weight_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=param_dtype)
+        if weight
+        else (None, None)
+    )
+    bias_data, bias_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=param_dtype) if bias else (None, None)
+    )
+
+    # Explicit fp32_dest_acc_en pins the bug path; HiFi3 matches batch_norm_utils default on Wormhole.
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+    )
+
+    tt_output_tensor = ttnn.batch_norm(
+        input_tensor,
+        running_mean=mean_tensor,
+        running_var=var_tensor,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        compute_kernel_config=compute_config,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor)
+
+    in_ref = in_data.float()
+    mean_ref = mean_data.float()
+    var_ref = var_data.float()
+    weight_ref = weight_data.float() if weight_data is not None else None
+    bias_ref = bias_data.float() if bias_data is not None else None
+    torch_result = torch.nn.functional.batch_norm(
+        input=in_ref,
+        running_mean=mean_ref,
+        running_var=var_ref,
+        weight=weight_ref,
+        bias=bias_ref,
+    ).to(tt_output.dtype)
+
+    if needs_output_typecast:
+        assert_numeric_metrics(
+            torch_result, tt_output, pcc_threshold=0.999, rtol=1e-2, atol=0.1, frobenius_threshold=0.02
+        )
+    else:
+        assert_numeric_metrics(
+            torch_result, tt_output, pcc_threshold=0.999, rtol=1e-2, atol=0.5, frobenius_threshold=0.05
+        )
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([3, 5, 64, 120]),
+        torch.Size([1, 8, 24, 42]),
+    ],
+)
+@pytest.mark.parametrize("weight", [True, False])
+@pytest.mark.parametrize("bias", [True, False])
+@pytest.mark.parametrize(
+    "check_mean, check_var",
+    [
+        (True, True),
+        (True, False),
+        (False, True),
+    ],
+)
+def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mean, check_var, device):
+    """First CI coverage of the FPU running_statistics kernel (fp32_dest_acc_en=False).
+
+    Default resolve_compute_kernel_config sets fp32_dest_acc_en=True, which selects the
+    SFPU kernel — so running_statistics_kernel.cpp was previously untested. This forces
+    the FPU path with all-bf16 tensors in training mode and checks main output plus
+    updated running stats.
+
+    Note: nested tile_regs / missing reserve_back are unobservable under Metal 1.0 CBs
+    (bit-identical vs main). The both-absent case is rejected by validate_tensors
+    (at least one stat must be present). Hang coverage for absent stats lives in
+    test_batch_norm_running_statistics_drain.
+    """
+    in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+    mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if check_mean else (None, None)
+    var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device) if check_var else (None, None)
+    weight_data, weight_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if weight else (None, None)
+    bias_data, bias_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if bias else (None, None)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+    )
+
+    tt_mean = ttnn.clone(mean_tensor) if check_mean else None
+    tt_var = ttnn.clone(var_tensor) if check_var else None
+
+    tt_output_tensor = ttnn.batch_norm(
+        input_tensor,
+        running_mean=tt_mean,
+        running_var=tt_var,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        training=True,
+        momentum=0.1,
+        compute_kernel_config=compute_config,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor)
+
+    channels = input_shapes[1]
+    torch_mean_ref = mean_data.clone() if mean_data is not None else None
+    torch_var_ref = var_data.clone() if var_data is not None else None
+    ref_mean = (
+        torch_mean_ref
+        if torch_mean_ref is not None
+        else (torch.zeros(channels, dtype=in_data.dtype) if torch_var_ref is not None else None)
+    )
+    ref_var = (
+        torch_var_ref
+        if torch_var_ref is not None
+        else (torch.ones(channels, dtype=in_data.dtype) if torch_mean_ref is not None else None)
+    )
+
+    torch_result = torch.nn.functional.batch_norm(
+        input=in_data,
+        running_mean=ref_mean,
+        running_var=ref_var,
+        weight=weight_data,
+        bias=bias_data,
+        training=True,
+        momentum=0.1,
+    )
+    # LoFi + fp32_dest_acc_en=False is inherently lower precision than the default
+    # SFPU path; widen the Frobenius threshold accordingly.
+    assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.25)
+
+    if check_mean:
+        tt_updated_mean = ttnn.to_torch(tt_mean)
+        assert_numeric_metrics(
+            ref_mean.view(1, channels, 1, 1),
+            tt_updated_mean,
+            rtol=0.05,
+            atol=0.5,
+            frobenius_threshold=0.25,
+            check_pcc=False,
+        )
+    if check_var:
+        tt_updated_var = ttnn.to_torch(tt_var)
+        assert_numeric_metrics(
+            ref_var.view(1, channels, 1, 1),
+            tt_updated_var,
+            rtol=0.05,
+            atol=0.5,
+            frobenius_threshold=0.25,
+            check_pcc=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "check_mean, check_var",
+    [
+        (True, False),  # mean-only: batch_var must still be drained
+        (False, True),  # var-only: batch_mean must still be drained (FPU)
+    ],
+)
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_acc_en, device):
+    """Regression for CB drain hangs when a running stat is absent.
+
+    Reader pushes batch_mean and writer pushes batch_var every tile with no
+    presence guard. When the corresponding compute block compiles out, those
+    CBs fill after b_num_tiles_per_cb (=2) tiles and the producer stalls.
+
+    Channel count is derived from the device grid so some core gets ≥3 tiles on
+    both WH (64 cores) and BH (~130 cores). Hardcoding C=192 only stalls on WH.
+    """
+    grid = device.compute_with_storage_grid_size()
+    channels = 3 * grid.x * grid.y + 1
+    input_shapes = torch.Size([1, channels, 14, 14])
+    in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+    mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if check_mean else (None, None)
+    var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device) if check_var else (None, None)
+    weight_data, weight_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
+    bias_data, bias_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi
+        if not fp32_dest_acc_en
+        else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4),
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+    )
+
+    tt_mean = ttnn.clone(mean_tensor) if check_mean else None
+    tt_var = ttnn.clone(var_tensor) if check_var else None
+
+    # Completing without hang is the primary assertion; numeric check is secondary.
+    tt_output_tensor = ttnn.batch_norm(
+        input_tensor,
+        running_mean=tt_mean,
+        running_var=tt_var,
+        weight=weight_tensor,
+        bias=bias_tensor,
+        training=True,
+        momentum=0.1,
+        compute_kernel_config=compute_config,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor)
+
+    torch_mean_ref = mean_data.clone() if mean_data is not None else None
+    torch_var_ref = var_data.clone() if var_data is not None else None
+    ref_mean = (
+        torch_mean_ref
+        if torch_mean_ref is not None
+        else (torch.zeros(channels, dtype=in_data.dtype) if torch_var_ref is not None else None)
+    )
+    ref_var = (
+        torch_var_ref
+        if torch_var_ref is not None
+        else (torch.ones(channels, dtype=in_data.dtype) if torch_mean_ref is not None else None)
+    )
+
+    torch_result = torch.nn.functional.batch_norm(
+        input=in_data,
+        running_mean=ref_mean,
+        running_var=ref_var,
+        weight=weight_data,
+        bias=bias_data,
+        training=True,
+        momentum=0.1,
+    )
+    # LoFi + fp32_dest_acc_en=False is inherently lower precision than the default SFPU
+    # path, and the channel count (so also the generated data) varies with the device grid,
+    # which makes the worst-case element error backend-dependent. PCC and relative Frobenius
+    # are the real gates on the main output; allclose is a coarse outlier guard.
+    lofi = not fp32_dest_acc_en
+    frobenius_threshold = 0.25 if lofi else 0.15
+    assert_numeric_metrics(
+        torch_result,
+        tt_output,
+        pcc_threshold=0.99,
+        rtol=0.1,
+        atol=6.0 if lofi else 4.0,
+        frobenius_threshold=frobenius_threshold,
+    )
+
+    if check_mean:
+        tt_updated_mean = ttnn.to_torch(tt_mean)
+        assert_numeric_metrics(
+            ref_mean.view(1, channels, 1, 1),
+            tt_updated_mean,
+            rtol=0.05,
+            atol=0.5,
+            frobenius_threshold=frobenius_threshold,
+            check_pcc=False,
+        )
+    if check_var:
+        tt_updated_var = ttnn.to_torch(tt_var)
+        assert_numeric_metrics(
+            ref_var.view(1, channels, 1, 1),
+            tt_updated_var,
+            rtol=0.05,
+            atol=0.5,
+            frobenius_threshold=frobenius_threshold,
+            check_pcc=False,
+        )

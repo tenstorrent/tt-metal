@@ -96,13 +96,9 @@ TopologyMappingResult run_topology_mapping(
             const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
             const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
             if (!is_1d && mesh_shape.mesh_size() % 32 == 0) {
-                auto mesh_pinnings = get_galaxy_fixed_asic_position_pinnings_for_mesh(
+                auto mesh_pinning_groups = get_galaxy_fixed_asic_position_pinnings_for_mesh(
                     mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/false);
-                for (const auto& [fabric_node, positions] : mesh_pinnings) {
-                    for (const auto& position : positions) {
-                        config.pinnings.emplace_back(position, fabric_node);
-                    }
-                }
+                config.pinnings.insert(config.pinnings.end(), mesh_pinning_groups.begin(), mesh_pinning_groups.end());
             }
         }
     }
@@ -113,11 +109,9 @@ TopologyMappingResult run_topology_mapping(
         config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
     }
 
-    // Extract pinnings from MGD and add to config (same as control plane)
-    const auto& pinnings = mgd.get_pinnings();
-    for (const auto& [pos, fabric_node] : pinnings) {
-        config.pinnings.emplace_back(pos, fabric_node);
-    }
+    // Append MGD many-to-many pinning groups directly (same as control plane).
+    const auto& mgd_pinnings = mgd.get_pinnings();
+    config.pinnings.insert(config.pinnings.end(), mgd_pinnings.begin(), mgd_pinnings.end());
 
     // Set per-mesh validation modes based on mesh graph policy
     for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {

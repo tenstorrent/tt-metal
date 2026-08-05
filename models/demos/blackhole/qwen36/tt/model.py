@@ -170,6 +170,10 @@ class Qwen36Model:
         self._bucket_cos_buf = None
         self._bucket_sin_buf = None
         self._gdn_batched_prev = None  # batched GDN bindings saved during bucket-trace capture
+        # Persistent B=1 GDN prefill scratch (batched serving): allocated once at warmup, its buffer
+        # addresses are baked into the chunk-prefill trace and reused by every prefill_paged_slots
+        # replay, so it is never freed/reallocated (only zeroed in place). See _bind_gdn_prefill_scratch.
+        self._gdn_prefill_scratch = None
 
         # Optional vision tower (DropInVisionTransformer), attached lazily by
         # init_vision_model() for the multimodal serving path. None on the text-only path.
@@ -1016,9 +1020,10 @@ class Qwen36Model:
         Chunk-outer prefill stays under the 4 GiB trace limit at long context.
         Flexible SDPA (runtime chunk_start) makes one trace serve all chunk positions.
 
-        capture_chunk_trace=False warms the masked-bucket programs but skips parking the chunk
-        trace — used by the batched (B>1) vLLM path, which serves short prompts only (the chunk
-        trace would bake the throwaway B=1 prefill scratch that is freed after warmup)."""
+        capture_chunk_trace=False warms the masked-bucket programs but skips parking the chunk trace.
+        The batched (B>1) vLLM path passes capture_chunk_trace=True with the PERSISTENT B=1 prefill
+        scratch bound (_bind_gdn_prefill_scratch), so the trace bakes that scratch's addresses and
+        long prompts replay the traced chunk path per user (prefill_paged_slots rebinds the scratch)."""
         if self.num_devices > 1:
             return self._capture_prefill_trace_chunked_tp(
                 device,
@@ -1270,6 +1275,58 @@ class Qwen36Model:
             if dn._zero_conv0 is not None:
                 ttnn.deallocate(dn._zero_conv0)
             # Rebind the batched decode buffers.
+            dn.B = B_b
+            dn.rec_state = rec_b
+            dn.conv_states = conv_b
+            dn.conv_carry = carry_b
+            dn._zero_conv0 = zero0_b
+            dn._stable_state = stable_b
+
+    def _ensure_gdn_prefill_scratch(self):
+        """Allocate the PERSISTENT B=1 GDN prefill scratch once (idempotent).
+
+        Unlike _alloc_gdn_scratch_b1 (throwaway, freed by _restore_gdn_batched), this scratch lives
+        for the server lifetime: the batched chunk-prefill trace bakes its buffer addresses at warmup
+        and every prefill_paged_slots replay reuses them, so it must never be freed/reallocated (only
+        zeroed in place via _reset_gdn_state_for_new_sequence). Allocate at warmup so no device buffer
+        is allocated at request time (which would be unsafe under the parked decode trace)."""
+        if self._gdn_prefill_scratch is not None:
+            return
+        scratch = []
+        for layer in self.layers:
+            if layer.is_full_attention:
+                continue
+            dn = layer.attention
+            # reset_state allocates fresh B=1 buffers and assigns them WITHOUT freeing the current
+            # (batched) ones, so save+restore the batched bindings and keep the scratch handles alive.
+            saved = (dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state)
+            dn.B = 1
+            dn.reset_state()  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0
+            scratch.append((dn, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0))
+            dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state = saved
+        self._gdn_prefill_scratch = scratch
+
+    def _bind_gdn_prefill_scratch(self):
+        """Bind the persistent B=1 prefill scratch onto every GDN layer (prefill runs B=1); returns the
+        saved batched decode bindings for _unbind_gdn_prefill_scratch. Allocates the scratch on first use.
+        The drop-in analogue of _alloc_gdn_scratch_b1 that reuses one persistent scratch instead of
+        allocating a throwaway per call (so the chunk trace's baked addresses stay valid)."""
+        self._ensure_gdn_prefill_scratch()
+        prev = []
+        for dn, rec, conv, carry, zero0 in self._gdn_prefill_scratch:
+            prev.append((dn, dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state))
+            dn.B = 1
+            dn.rec_state = rec
+            dn.conv_states = conv
+            dn.conv_carry = carry
+            dn._zero_conv0 = zero0
+            dn._stable_state = True  # in-place carry so the trace's baked addresses survive replays
+        return prev
+
+    def _unbind_gdn_prefill_scratch(self, prev):
+        """Rebind the batched [B,...] decode buffers saved by _bind_gdn_prefill_scratch, WITHOUT freeing
+        the persistent scratch (unlike _restore_gdn_batched, whose scratch is throwaway)."""
+        for dn, B_b, rec_b, conv_b, carry_b, zero0_b, stable_b in prev:
             dn.B = B_b
             dn.rec_state = rec_b
             dn.conv_states = conv_b
@@ -1670,22 +1727,22 @@ class Qwen36Model:
         valid_lens:     optional list of N real token counts (defaults to each T_u).
         Returns:        list of N host torch logits [1, 1, vocab_size] (one per request, in call order).
 
-        Call allocate_kv_caches(batch_size=B) + the batched warmup first. Short prompts only
-        (actual_len < chunk_size): the masked-bucket path is pre-warmed and trace-safe; long-prompt
-        batch (which needs the chunk trace) is not wired.
+        Call allocate_kv_caches(batch_size=B) + the batched warmup first. Any prompt length is served:
+        prefill_traced_chunked chunks long prompts via pre-warmed programs (no post-park compile).
         """
         assert self.num_devices > 1, "prefill_paged_slots is the TP (num_devices>1) path"
         N = len(token_ids_list)
         assert len(empty_slots) == N, "one slot per request"
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         assert pt.shape[0] == N, "page_table must have one row per request"
-        chunk_size = self._chunked_chunk_size or 2048
         comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         dn_states = [layer.attention for layer in self.layers if not layer.is_full_attention]
 
-        # Bind a B=1 GDN scratch: the masked-bucket prefill runs B=1 and its per-sequence reset
-        # would otherwise zero the batched [B,...] decode buffer (clobbering the live rows).
-        prev = self._alloc_gdn_scratch_b1()
+        # Bind the persistent B=1 GDN prefill scratch: prefill runs B=1 and its per-sequence reset
+        # would otherwise zero the batched [B,...] decode buffer (clobbering the live rows). This is
+        # the SAME scratch whose addresses the chunk-prefill trace baked at warmup, so the traced
+        # long-prompt path replays correctly; short prompts use the masked bucket on the same scratch.
+        prev = self._bind_gdn_prefill_scratch()
         host_logits = []
         per_user_rec = []
         per_user_conv = []
@@ -1694,13 +1751,9 @@ class Qwen36Model:
                 toks = token_ids_list[u]
                 assert toks.shape[0] == 1, f"request {u}: token_ids must be [1, T_u]"
                 actual = int(valid_lens[u]) if valid_lens is not None else toks.shape[1]
-                assert actual < chunk_size, (
-                    f"request {u}: actual_len {actual} >= chunk_size {chunk_size}; batched (B>1) prefill "
-                    f"serves short prompts via the pre-warmed masked bucket only. Long-prompt batch "
-                    f"(chunk-trace) is not wired — route it to single-sequence serving."
-                )
-                # Trace-safe masked-bucket prefill into the B=1 scratch (fills this user's KV blocks
-                # via its page-table row); prefill_masked_bucket re-zeros the scratch per sequence.
+                assert actual >= 1, f"request {u}: empty prompt (actual_len={actual})"
+                # Trace-safe prefill into the B=1 scratch: prefill_traced_chunked runs short prompts in
+                # one masked-bucket forward and chunks longer ones; GDN state carries + is snapshotted below.
                 lg = self.prefill_traced_chunked(toks[:, :actual], pt[u : u + 1], actual_len=actual)
                 host_logits.append(
                     ttnn.to_torch(lg, mesh_composer=comp).reshape(-1, self.args.vocab_size)[:1].float().view(1, 1, -1)
@@ -1714,7 +1767,8 @@ class Qwen36Model:
                 )
         finally:
             # Always rebind the batched decode buffers (a mid-loop assert must not leave GDN on scratch).
-            self._restore_gdn_batched(prev)
+            # Does NOT free the scratch — it persists for the next request and keeps the trace valid.
+            self._unbind_gdn_prefill_scratch(prev)
 
         # Write each user's snapshot into its decode slot, preserving the other live rows.
         for u in range(N):
@@ -2523,6 +2577,14 @@ class Qwen36Model:
                 _host_refs.clear()
             if (c + 1) % _log_every == 0:
                 logger.info(f"[TP chunk-replay] {c + 1}/{num_full} chunks")
+
+        # Drain any still-in-flight chunk DMAs before returning, so the loop's host input tensors
+        # (_host_refs) are not GC'd while a non-blocking execute_trace is still reading them — a
+        # use-after-free that hangs the device. When num_full < _SYNC_EVERY the loop never synced,
+        # so the no-tail return below (which issues no further blocking work) would otherwise race.
+        if _host_refs:
+            ttnn.synchronize_device(self.device)
+            _host_refs.clear()
 
         # Tail via masked bucket, or _masked_bucket_logits_tp if no tail (TP 4D hidden).
         if tail_real > 0:

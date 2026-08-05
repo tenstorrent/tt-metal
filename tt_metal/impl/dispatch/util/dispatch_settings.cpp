@@ -47,6 +47,10 @@ DispatchSettings::DispatchSettings(
     this->prefetch_q_entry_size_bytes_ = prefetch_q_entry_size_bytes;
     switch (core_type) {
         case CoreType::WORKER:
+        // Quasar dispatch-engine cores run the cq kernels like worker DMs; their DISPATCH HAL memmap
+        // mirrors the Tensix (worker) L1 layout, so reuse the worker dispatch defaults. core_type_ is
+        // set to DISPATCH below, overriding the WORKER value the builder sets internally.
+        case CoreType::DISPATCH:
             init_worker_defaults(num_hw_cqs, is_galaxy_cluster, are_cqs_dram_backed, l1_alignment);
             break;
         case CoreType::ETH: init_eth_defaults(num_hw_cqs, l1_alignment); break;

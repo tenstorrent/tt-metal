@@ -22,9 +22,9 @@ namespace ttnn::operations::data_movement::indexed_fill {
 // `input_b` is allowed to be in DRAM or interleaved; it does not need to match the shard
 // geometry of input_a. Applies to both ROW_MAJOR and TILE layouts.
 bool is_native_indexed_fill_sharding(
-    const TensorSpec& input_a_spec,
-    const TensorSpec& input_b_spec,
-    const TensorSpec& batch_id_spec,
+    const tt::tt_metal::TensorSpec& input_a_spec,
+    const tt::tt_metal::TensorSpec& input_b_spec,
+    const tt::tt_metal::TensorSpec& batch_id_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 
 // Worker-grid selection priority:
@@ -43,12 +43,12 @@ CoreRangeSet get_indexed_fill_worker_grid(
 //   * output  is the same sharding layout, L1, with the same shard grid and shard shape
 //   * input_b is either (a) the same sharding / grid / shape as input_a, or (b) INTERLEAVED
 bool is_shard_local_indexed_fill(
-    const TensorSpec& input_a_spec,
-    const TensorSpec& input_b_spec,
+    const tt::tt_metal::TensorSpec& input_a_spec,
+    const tt::tt_metal::TensorSpec& input_b_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 
 // True iff the tensor is sharded and the shard shape does not evenly divide the padded shape.
-bool is_uneven(const TensorSpec& t);
+bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
 // Scale the input shard spec from `from_shape` to `to_shape`.
 // `is_tile` controls the minimum shard dimension: TILE_{HEIGHT,WIDTH} for TILE layout, 1 for ROW_MAJOR.
