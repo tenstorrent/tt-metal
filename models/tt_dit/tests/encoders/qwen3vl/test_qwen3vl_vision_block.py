@@ -140,6 +140,17 @@ _PARAMS = pytest.mark.parametrize(
     indirect=["mesh_device", "device_params"],
 )
 
+# `check` computes the CPU golden and asserts PCC; `perf` skips both and runs only our implementation,
+# asserting shape and finiteness. Same ids as the other tt_dit tests -- see
+# models/wan2_2/test_all_gather_minimal_matmul_async.py.
+#
+# `perf` is what makes the large grids usable. The golden's attention is quadratic within each block, so
+# `max_load` (18 blocks, the largest 16384 patches) and the 65536-row grids are dominated by it, and they
+# exist to exercise capacity, tiling and dispatch rather than arithmetic -- accuracy is established by
+# the smaller grids. It is also the mode to use under `python -m tracy`, where the CPU forward would
+# otherwise swamp the capture. A green `perf` run says nothing about accuracy.
+_MODE = pytest.mark.parametrize("check_pcc", [True, False], ids=["check", "perf"])
+
 
 def _parallel(submesh, tp_axis, sp_axis, num_links):
     """The resolved `VisionParallel` these submodules take, or `None` when fully replicated."""
@@ -179,7 +190,8 @@ def _sp_shard(x, submesh, sp_axis):
 
 @_PARAMS
 @pytest.mark.parametrize("name", list(GRIDS))
-def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name):
+@_MODE
+def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name, check_pcc):
     """The whole pre-norm block: LayerNorm + attention + LayerNorm + MLP, both residuals.
 
     `cu_seqlens` is passed on both sides, so the multi-block grids exercise the per-block SDPA loop in
@@ -210,13 +222,15 @@ def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
 
     torch.manual_seed(0)
     x = torch.randn(total, HIDDEN_SIZE)
-    cos, sin = _golden_pos_embeds(grid)
-    with torch.no_grad():
-        golden = reference.blocks[0](
-            x,
-            cu_seqlens=torch.tensor(list(cu_seqlens), dtype=torch.int32),
-            position_embeddings=(cos, sin),
-        ).float()
+    golden = None
+    if check_pcc:
+        cos, sin = _golden_pos_embeds(grid)
+        with torch.no_grad():
+            golden = reference.blocks[0](
+                x,
+                cu_seqlens=torch.tensor(list(cu_seqlens), dtype=torch.int32),
+                position_embeddings=(cos, sin),
+            ).float()
 
     block = Qwen3VlVisionBlock(
         hidden_size=HIDDEN_SIZE,
@@ -228,10 +242,21 @@ def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
         parallel=_parallel(submesh, tp_axis, sp_axis, num_links),
     )
     block.load_torch_state_dict(reference.blocks[0].state_dict())
+    print("Prepare Vision Rope")
     tt_cos, tt_sin = vision_rope_tensors(grid, head_dim=HEAD_DIM, spatial_merge_size=SPATIAL_MERGE_SIZE)
+    print("Block Forward")
     out = block.forward(
         _sp_shard(x, submesh, sp_axis),
         pos_embeds=(_sp_shard(tt_cos, submesh, sp_axis), _sp_shard(tt_sin, submesh, sp_axis)),
         cu_seqlens=cu_seqlens,
     )
-    assert_quality(golden, tensor.to_torch(out, mesh_axes=[sp_axis, None]), pcc=0.99)
+    print("Block Done")
+    actual = tensor.to_torch(out, mesh_axes=[sp_axis, None])
+
+    if not check_pcc:
+        # `perf`: no golden was computed, so only what can be checked without one.
+        assert actual.shape[-1] == HIDDEN_SIZE, f"{tuple(actual.shape)}"
+        assert torch.isfinite(actual[:total]).all(), "our output contains NaN or Inf"
+        return
+
+    assert_quality(golden, actual, pcc=0.99)
