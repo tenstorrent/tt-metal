@@ -375,12 +375,13 @@ def combine_shape_params():
             (
                 "pcc",
                 128,
-                config.NUM_ROUTED_EXPERTS // 8,
+                config.NUM_ROUTED_EXPERTS // 8,  # reduced seq/experts for faster correctness check.
+                # further reducing num_experts would yield 0 experts on 8x4 mesh, thus effectively
+                # skipping the test on the intended production mesh.
                 config.NUM_EXPERTS_PER_TOKEN // 2,
                 4,
                 True,
-            ),  # reduced seq/experts for faster correctness check.
-            # further reducing num_experts would yield 0 experts on 8x4 mesh, thus effectively skipping the test on the intended production mesh.
+            ),
             (
                 "perf_no_pcc",
                 640,
