@@ -566,13 +566,21 @@ void RollDeviceOperation::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // compute_program_hash keys on shift/dim/memory_config/dtype/layout but not shape, so the whole
-    // per-core transfer plan can move on a hit. Re-run just the planner -- create_descriptor's own
+    // Buffer addresses and bank ids move per dispatch, so re-run the planner -- create_descriptor's own
     // source of truth -- and write its args into the cached program instead of rebuilding it.
     const RollPlan plan = compute_roll_plan(operation_attributes, tensor_args, tensor_return_value);
     for (const auto& [core, args] : plan.per_core_args) {
         auto& a = tt::tt_metal::GetRuntimeArgs(program, 0, core);
-        for (uint32_t i = 0; i < args.size() && i < a.size(); ++i) {
+        // The arg count encodes the transfer count, which padded_shape fixes and the hash keys on, so a
+        // mismatch means the key stopped matching the program -- never silently write a prefix.
+        TT_FATAL(
+            a.size() == args.size(),
+            "roll cache hit on core ({}, {}) expected {} runtime args, cached program has {}",
+            core.x,
+            core.y,
+            args.size(),
+            a.size());
+        for (uint32_t i = 0; i < args.size(); ++i) {
             a[i] = args[i];
         }
     }
