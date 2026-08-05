@@ -390,15 +390,24 @@ Full write-up, with evidence and reproduction steps: **[BLAZE_EVALUATION.md](BLA
 covering this model's whole decode stack, so the BH port is what made it usable here at all.
 One op has been measured, correctness-gated, and is adoption-ready:
 
-| cluster | ttnn | blaze | speedup | verdict |
-|---|---:|---:|---:|---|
-| **o_proj** 5120x2048 bf8, bs=1 | 58.4 µs (80 cores, 32 rows) | **23.8 µs** (8 cores, 1 row) | **2.45x** | ADOPT — both sides PCC 0.9999 |
-| rmsnorm 2048, correct precision | 23.3 µs | 25.2 µs | 0.92x | REGRESSION — do not adopt |
+`DRAMStreamingMatmul` is correct at **all six** of the model's decode matmul shapes and faster
+on kernel time at every one (bs=1, bf8, all PCCs 0.9999):
 
-**How much this is worth at the model level:** o_proj runs once per layer, so 34.6 µs saved
-x 47 layers ≈ **1.6 ms/token, ~5% of the 33.2 ms step** — an upper bound, and unverified.
-A cluster win is not a step win; this model already measured removing 23% of its ops for
-**0.0 ms** under trace.
+| shape | ttnn µs | blaze µs | speedup |
+|---|---:|---:|---:|
+| q_a_proj 2048x768 | 44.7 | **4.9** | **9.17x** |
+| kv_a_proj 2048x576 | 44.7 | **5.0** | **9.03x** |
+| mlp_gate_up 2048x1536 | 45.0 | **8.2** | **5.50x** |
+| mlp_down 1536x2048 | 34.4 | 8.1 | 4.25x |
+| o_proj 5120x2048 | 58.4 | 23.8 | 2.45x |
+| q_b_proj 768x5120 | 20.3 | 11.6 | 1.75x |
+| *rmsnorm 2048 (correct precision)* | *23.3* | *25.2* | *0.92x — do not adopt* |
+
+**Do not read the sum as a step saving.** Naively these total 10.47 ms of the 33.2 ms step
+(31.5%), but doubling every dense weight's bytes costs only **+3.9 ms (11.7%)** — so the sum
+exceeds the model's whole weight-bandwidth budget and most of it cannot be on the critical path.
+This model already measured removing 23% of its ops as **0.0 ms** under trace. The table ranks
+where blaze's kernels are more efficient; only a step-level measurement settles what lands.
 
 Two constraints frame everything else:
 

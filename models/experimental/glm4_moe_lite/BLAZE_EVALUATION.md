@@ -1,9 +1,13 @@
 # tt-blaze evaluation for GLM-4.7-Flash on Blackhole Galaxy
 
-**Status:** one op measured and adoption-ready (`dram_streaming_matmul`, 2.45x on o_proj).
-`glm_moe_router` and `glm_routed_expert` run on this grid at GLM-5 dims; at GLM-4.7-Flash dims
-the routed expert hangs (F11) despite a valid authored config. Everything else is blocked on
-layout assumptions in blaze, documented below with evidence.
+**Status:** `DRAMStreamingMatmul` is correct and faster on kernel time at **all six** of the
+model's decode matmul shapes (1.75x–9.17x, every PCC 0.9999) — the adoption surface is the whole
+dense matmul set, not one op. But the per-call wins sum to more than the model's entire measured
+weight-bandwidth budget, so most of it cannot be on the critical path: the next milestone is a
+**step-level** measurement, not more cluster A/Bs. `glm_moe_router` and `glm_routed_expert` run
+on this grid at GLM-5 dims; at GLM-4.7-Flash dims the routed expert hangs, now localised to the
+gather (F11). Fused ops beyond that are blocked on layout assumptions in blaze, documented below
+with evidence.
 
 **Hardware:** 32-chip Blackhole Galaxy, every chip 1x-harvested → **12x10 = 120 cores** per
 device, 8 DRAM banks. This matters throughout: blaze's model layouts are written for an
@@ -65,6 +69,41 @@ layer x 47 layers ≈ **1.6 ms/token, ~5% of the step** — an upper bound assum
 the critical path and translates perfectly. Consistent with the ~12% ceiling above. A
 cluster win is not a step win: this model previously measured removing 23% of its ops for
 **0.0 ms** under trace.
+
+### Every decode matmul — all six ADOPT on kernel time
+
+`DRAMStreamingMatmul` is numerically correct at **every** GLM-4.7-Flash decode matmul shape
+(`glm47_all_shapes_check.py`, 6/6 pass at m=1 bf8), so the adoption surface is the whole dense
+matmul set, not just o_proj. Full A/B (`ab_all_shapes_bench.py`), ttnn side mirroring
+`dram_sharded_linear` exactly:
+
+| shape | ttnn cores in/out | ttnn µs | blaze µs | speedup | calls/layer | x47 layers |
+|---|---|---:|---:|---:|---:|---:|
+| q_a_proj 2048x768 | 64 / 24 | 44.7 | **4.9** | **9.17x** | 1 | 1.87 ms |
+| kv_a_proj 2048x576 | 64 / 24 | 44.7 | **5.0** | **9.03x** | 1 | 1.87 ms |
+| q_b_proj 768x5120 | 24 / 80 | 20.3 | 11.6 | 1.75x | 1 | 0.41 ms |
+| o_proj 5120x2048 | 80 / 64 | 58.4 | 23.8 | 2.45x | 1 | 1.62 ms |
+| mlp_gate_up 2048x1536 | 64 / 48 | 45.0 | **8.2** | **5.50x** | 2 | 3.46 ms |
+| mlp_down 1536x2048 | 48 / 64 | 34.4 | 8.1 | 4.25x | 1 | 1.24 ms |
+
+All twelve PCCs are 0.9999. The largest wins are the *small-N* projections (q_a, kv_a), where
+ttnn spreads a 768- or 576-wide output over 64 input cores and is overhead-dominated, while
+blaze uses 8 and computes 1 row instead of 32.
+
+**THE SUM IS NOT BELIEVABLE AS A STEP SAVING, AND THAT IS THE POINT.** Naively these total
+**10.47 ms of a 33.2 ms step (31.5%)**. But doubling every dense weight's bytes costs only
+**3.9 ms (11.7%)** — measured, section 1. A 10.5 ms saving therefore exceeds the model's entire
+weight-bandwidth budget, which is arithmetically impossible if the win were weight-read time.
+
+So most of this per-call delta is **not on the step's critical path**. Under trace replay the
+command stream is pre-recorded and per-op cost pipelines — the same reason this model measured
+removing 23% of its ops as **0.0 ms**. Read the table as a *ranking* of where blaze's kernels
+are more efficient, not as a step-time forecast.
+
+The implication for adoption order: q_a/kv_a/mlp_gate_up look most attractive per call, but the
+only way to know what lands is a **step-level** measurement of the traced model, which needs
+GLM running under blaze's tree (F9). That is the next real milestone, and no further cluster
+A/B changes it.
 
 ### rmsnorm — REGRESSION, do not adopt
 
@@ -213,10 +252,42 @@ So F6's gate-core mismatch was not the whole story: something else in this path 
 tolerate GLM's dims. Candidates not yet eliminated — 2 gate cores versus GLM-5's 8 changes the
 gather/handshake width, and top-k is 4 here versus 8 there.
 
-Do not iterate blind on this: each attempt costs ~12 minutes and risks the device. Blaze ships
-the right tools — `triage-hang`, `check-kernel-sync`, `cb-tap` / `cb-inject`, and
-`BLAZE_DEBUG_KERNELS=1`, which per `WRITING_A_FUSED_OP.md` injects DPRINT markers at each
-phase boundary so the stalling phase can be named rather than guessed.
+**Localised with tt-triage** (callstacks archived at
+[`blaze_eval/F11_triage_callstacks.log`](blaze_eval/F11_triage_callstacks.log)). Stuck roles,
+by op:
+
+| stuck in | frames | reading |
+|---|---:|---|
+| `swiglu__gather::sender_impl` | 16 | gather senders blocked — **head of the chain** |
+| `swiglu__gather::receiver_impl` | 1 | gather receiver waiting for pages |
+| `swiglu__post_gather_mcast::sender_impl` | 1 | waiting on gather output |
+| `swiglu__post_gather_mcast::receiver_impl` | 111 | waiting on that sender |
+
+So the **Gather** deadlocks and the mcast stall is derivative — the 111 waiting receivers are a
+symptom, not the bug. The gather's resolved CT args are self-consistent at GLM's shape
+(`noc1_num_senders = 8`, `dst_num_pages = 48` = 8 cores x 6 tiles for hidden 1536), and
+`compute_cores` / `out_num_tiles` are *derived* from the gate matmul's output handle rather than
+hardcoded, so the mismatch is not in that accounting. Resolving it needs kernel-level DPRINT
+(`BLAZE_DEBUG_KERNELS=1`, which per `WRITING_A_FUSED_OP.md` marks each phase boundary) or
+`cb-tap` / `cb-inject`. Running triage needs `TT_METAL_INSPECTOR=1`, and the logs land in
+`<cwd>/generated/inspector`, **not** the `/tmp/tt-metal/inspector` the error message suggests.
+
+### F12 — a hang DEGRADES the device, and open/close does not detect it
+
+Earlier revisions of this document said the Galaxy "recovered without a reset" after the F6 and
+F11 hangs. **That was wrong**, and the health check behind it was too weak: opening a device,
+reading its grid size and closing it succeeds on a degraded device. After several hangs, real
+kernel work began hanging unconditionally — including `o_proj`, which had passed in 23 s
+minutes earlier.
+
+`tt-smi -r` fixed it, and the 6/6 shape sweep then passed in 12 s. The control experiment is
+what caught it: **re-run a known-good case after any hang**, and treat a previously-passing test
+that now hangs as a degraded device rather than a new finding. A "1536 hangs" result was
+attributed to the shape before the control disproved it.
+
+`tt-smi` was not on PATH but is installed at
+`tt-metal/python_env/bin/tt-smi`. On Galaxy it warns that CPLD FW v1.16+ is needed for `-r` and
+suggests `-glx_reset` as the fallback; `-r` worked here.
 
 ### F9 — blaze requires its own tt-metal
 
@@ -240,6 +311,9 @@ Bench and diagnostic scripts (untracked, in the tt-blaze checkout):
 | file | what |
 |---|---|
 | `ab_oproj_v2_bench.py` | the 2.45x o_proj A/B (both sides PCC-verified) |
+| `ab_all_shapes_bench.py` | the same A/B across all 6 decode matmul shapes |
+| `glm47_all_shapes_check.py` | correctness of DRAMStreamingMatmul at all 6 shapes |
+| `F11_triage_callstacks.log` | tt-triage output localising F11 to the gather |
 | `ab_rmsnorm_bench.py` | the rmsnorm A/B |
 | `ab_m32_check.py` | reproduces F1 at m ∈ {1,8,32} |
 | `no_grid_guard_plugin.py` | stubs `requires_grid_size` (F7) |
@@ -254,8 +328,11 @@ from this tree — they import `blaze`.
 
 ## 6. Next steps
 
-1. **Adopt `dram_streaming_matmul` for o_proj** — the only measured, correctness-gated win.
-   Gate on F1 (keep m=1 for decode) and re-measure *step* time, not just cluster time.
+1. **Step-level measurement is the only thing that settles the matmul question.** All six
+   shapes win on kernel time (1.75x–9.17x) but sum to 31.5% of the step against an 11.7%
+   bandwidth budget, so the translation rate is unknown and probably low. This needs GLM running
+   under blaze's tree (F9) with the traced decode loop measured end to end. Adopt in
+   per-call-win order — mlp_gate_up, q_a, kv_a first — and gate on F1 (keep m=1 for decode).
 2. **`GLM4_FLASH_BLAZE_CONFIG` is written** — [`blaze_eval/glm4_flash_blaze_config.py`](blaze_eval/glm4_flash_blaze_config.py),
    constructs cleanly and passes every `sanity_check_model_config` assertion. The open question
    from the previous revision is resolved: shared-expert coords **may be empty** (only the MoE
