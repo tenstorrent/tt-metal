@@ -55,13 +55,19 @@ WEIGHT_DTYPE = ttnn.bfloat8_b
 SEMANTIC_DTYPE = ttnn.float32
 
 # NOTES.md [flow-07] -- RMSNORM, WIDTH-SHARDED. Same finding as Block 1's...
-_NORM_GRID_X = 8
+# Grid and blocking: swept, see NOTES.md [gpt-04] for the Block 1 version of the same experiment.
+# More cores is monotonically faster end to end here too -- 8x1/8x2/8x4 measure 24.628/24.572/24.465
+# ms/frame -- and `subblock_w` is INERT: 4 and 1 measure byte-identical at 8x1. 32 cores is the most
+# that divides evenly (3072/32 = 96 tiles; 96/64 is not an integer).
+_NORM_GRID_X, _NORM_GRID_Y, _NORM_SUBBLOCK_W = 8, 4, 1
+_NORM_CORES = _NORM_GRID_X * _NORM_GRID_Y
 _NORM_SHARD = ttnn.create_sharded_memory_config(
-    shape=(1, 1, 32, FM_INPUT_DIM), core_grid=ttnn.CoreGrid(y=1, x=_NORM_GRID_X),
+    shape=(1, 1, 32, FM_INPUT_DIM), core_grid=ttnn.CoreGrid(y=_NORM_GRID_Y, x=_NORM_GRID_X),
     strategy=ttnn.ShardStrategy.WIDTH)
 _NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(_NORM_GRID_X, 1), subblock_w=4, block_h=1,
-    block_w=FM_INPUT_DIM // _NORM_GRID_X // 32, inplace=False)
+    compute_with_storage_grid_size=(_NORM_GRID_X, _NORM_GRID_Y),
+    subblock_w=_NORM_SUBBLOCK_W, block_h=1,
+    block_w=FM_INPUT_DIM // _NORM_CORES // 32, inplace=False)
 
 
 class TtVoxtralFlow:

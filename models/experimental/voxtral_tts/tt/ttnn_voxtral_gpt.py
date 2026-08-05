@@ -39,13 +39,21 @@ DTYPE = ttnn.bfloat16
 _L1 = ttnn.L1_MEMORY_CONFIG
 
 # NOTES.md [gpt-04] -- RMSNORM, WIDTH-SHARDED, for the DECODE shape...
-_NORM_GRID_X = 8
+# Grid and blocking for the sharded norm. NOTES.md [gpt-04] has the sweep; the short version is
+# that `block_w` is NOT a free knob (it is DIM // cores // TILE, so it only moves when the core
+# count does), `subblock_w` IS free but inert (1/2/3/4 within 0.02 ms, and >=6 will not build), and
+# MORE CORES IS MONOTONICALLY FASTER END TO END: 2/4/8/16/32 cores measure 25.53/24.84/24.56/24.45/
+# 24.41 ms/step. 32 cores (8x4) is the fastest that divides the work evenly -- 64 cannot, since
+# 3072/32 = 96 tiles and 96/64 is not an integer.
+_NORM_GRID_X, _NORM_GRID_Y, _NORM_SUBBLOCK_W = 8, 4, 1
+_NORM_CORES = _NORM_GRID_X * _NORM_GRID_Y
 _NORM_SHARD = ttnn.create_sharded_memory_config(
-    shape=(1, 1, TILE, DIM), core_grid=ttnn.CoreGrid(y=1, x=_NORM_GRID_X),
+    shape=(1, 1, TILE, DIM), core_grid=ttnn.CoreGrid(y=_NORM_GRID_Y, x=_NORM_GRID_X),
     strategy=ttnn.ShardStrategy.WIDTH)
 _NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(_NORM_GRID_X, 1), subblock_w=4, block_h=1,
-    block_w=DIM // _NORM_GRID_X // TILE, inplace=False)
+    compute_with_storage_grid_size=(_NORM_GRID_X, _NORM_GRID_Y),
+    subblock_w=_NORM_SUBBLOCK_W, block_h=1,
+    block_w=DIM // _NORM_CORES // TILE, inplace=False)
 
 # NOTES.md [gpt-05] -- Decode runs in ttnn's DECODE-NATIVE head layout, [1...
 _QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection

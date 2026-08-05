@@ -239,10 +239,18 @@ TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 #
 # fp32 accumulation is UNCHANGED, so this is NOT the rejected "drop the compute config" trade.
 #
-# THE CORE COUNT BARELY MATTERS and the reason is worth knowing: 2/4/8 cores measure 42.4/40.5/44.1
-# us, flat, because the norm COMPUTE is ~16 us at any of them and the two to_memory_config calls are
-# the other ~28. The reshard is the tax, not the reduction. 8 is used because it is marginally the
-# fastest end to end (26.54 vs 27.50 ms/step at 2 cores).
+# THE CORE COUNT DOES MATTER, AND THIS PARAGRAPH USED TO SAY OTHERWISE -- see STATUS.md 6.18.
+# The old claim was "2/4/8 cores measure 42.4/40.5/44.1 us, flat, so it barely matters", drawn from
+# the ISOLATED norm. That measurement is ANTI-CORRELATED with end-to-end: re-swept properly,
+#     grid  cores  block_w   isolated   ms/step
+#     2x1     2      48       43.5 us    25.53
+#     4x1     4      24       43.9 us    24.84
+#     8x1     8      12       45.6 us    24.57   <- what used to ship
+#     8x2    16       6       48.2 us    24.45
+#     8x4    32       3       54.6 us    24.41   <- ships now, SLOWEST in isolation
+# 64 cores cannot work: 3072/32 = 96 tiles, 96/64 = 1.5. `subblock_w` is inert (1/2/3/4 within
+# 0.02 ms; >=6 will not build). A norm cannot be benchmarked alone -- it is ~16 us of reduction
+# inside ~28 us of resharding, and the reshard's cost depends on what consumes it next.
 #
 # THE SECOND RESHARD CANNOT BE DODGED, and both ways of trying are now measured.
 #
