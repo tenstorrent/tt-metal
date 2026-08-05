@@ -55,7 +55,7 @@ void kernel_main() {
     constexpr uint32_t num_input_cores = get_compile_time_arg_val(9);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(11);
-    constexpr dataflow_kernel_lib::McastArgs<12, 3, num_input_cores> act_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<12, 3> act_mcast_args;
     constexpr uint32_t act_post_mcast_ct_offset = act_mcast_args.next_compile_time_args_offset();
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(act_post_mcast_ct_offset);
     constexpr uint32_t num_output_cores = get_compile_time_arg_val(act_post_mcast_ct_offset + 1);

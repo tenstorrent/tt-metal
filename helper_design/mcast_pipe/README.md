@@ -7,11 +7,11 @@ design and migration artifacts unless a task below links to them.
 - Last reviewed: 2026-08-04
 - Branch: `sjovic/mcast-migration`
 - Baseline: `origin/llk_helper_library` at `4a1d6a97ca9`
-- Current helper API: v9
+- Current helper API: v10
 
 ## Where the effort is now
 
-The v9 rollout is reconciled through the width-sharded Conv migration at the
+The v10 rollout is reconciled through the self-describing rotating-wire migration at the
 current branch HEAD. The machine-readable ledger records:
 
 - 13 migrated kernel rows;

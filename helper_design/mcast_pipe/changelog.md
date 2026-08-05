@@ -6,6 +6,27 @@ feedback round lands.
 
 ---
 
+## Round 18 — self-describing rotating wire, API v10 (2026-08-05)
+
+- **Trigger (API-001):** rotating kernels repeated the host-generated sender span as a third
+  `McastArgs` template argument, allowing the CT/RT wire shape and decoder type to disagree.
+- **API:** `MCAST_PIPE_API_VERSION` is **10**. The uniform CT block is now
+  `[active, data_ready, consumer_ready, num_active, flags, rotating_span]`.
+  `McastArgs<CT_BASE, RT_BASE>` derives fixed/rotating mode, receiver type, runtime width, and both
+  next offsets from the constexpr sixth word. Zero denotes the fixed four-word RT layout; a nonzero
+  value denotes `4 + 2 * rotating_span` RT words.
+- **Callers:** all migrated emitters now provide the sixth word and every production kernel uses the
+  two-argument decoder. API-002 face metadata and RT compaction remain explicitly deferred.
+- **Safety:** Gate 2's opaque-boundary audit was completed before this wire change. A new durable
+  audit rejects a third `McastArgs` template argument in any migrated kernel.
+- **Validation:** `./build_metal.sh`, `McastHostFixture` 25/25, and the complete helper device suite
+  73/73 passed. Fresh-JIT focused cases passed for Matmul, Conv height/block/width, GroupNorm
+  legacy/Welford, and Sort. Complete mapped inventories passed at their recorded counts:
+  Matmul 302/188; each Conv feature route 48/16 plus three DRAM-config cases and shared DRAM 14/14;
+  GroupNorm legacy 108/2, Welford 108/2, fixed/default 19/6; Sort long 7/7 and deadlock 2/2.
+
+---
+
 ## Round 17 — non-owning receiver-coordinate view (2026-08-04)
 
 - **Trigger:** SegFormer width-sharded Conv profiling isolated substantial receiver overhead in
@@ -60,9 +81,10 @@ feedback round lands.
 - **Trigger:** the earlier v9 port's 25 numerical failures predated the Round-13 ACKed completion
   rule for a real INCLUDE-source loopback, so the production reader was re-entered for a fresh
   end-to-end port rather than left design-blocked.
-- **API:** remains `MCAST_PIPE_API_VERSION 9`. One rotating, handshaked Flag `Mcast2D` owns the full
+- **Historical API at this round:** `MCAST_PIPE_API_VERSION 9`. One rotating, handshaked Flag `Mcast2D` owns the full
   reader rectangle while carrying `max(input_cores,output_cores)-1` as the distinct active ACK
-  population. `McastArgs<12,3,num_input_cores>` consumes only the actual sender-coordinate prefix.
+  population. The then-current `McastArgs<12,3,num_input_cores>` consumed the actual sender-coordinate
+  prefix; Round 18 supersedes this with the self-describing `McastArgs<12,3>` v10 wire.
 - **Rollout:** the activation reader and width-sharded factory migrated atomically in `fe866a1d0c4`.
   The raw multicast/semaphore protocol and physical-coordinate lookup arrays were replaced by
   `SenderPipe::send()` and `ReceiverPipe::receive(round)`, removing 102 net production lines.

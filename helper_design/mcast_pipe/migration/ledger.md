@@ -1,4 +1,4 @@
-# mcast_pipe migration ledger — API v9, reconciled 2026-08-03, verified 2026-08-03
+# mcast_pipe migration ledger — API v10, verified 2026-08-05
 
 Source of truth: `ledger.json`. Test inventories are in `test_map.json`;
 failure isolation and JIT evidence are in the per-kernel migration logs.
@@ -10,7 +10,7 @@ now runs through width-sharded Conv code commit `fe866a1d0c4`. The pre-rebase br
 ledger was remapped from that line to its post-rebase equivalent on 2026-08-03.
 
 The v8 July ledger is historical input, not the current result. Every one of
-its 19 production migrations was re-audited against the current v9 helper.
+its 19 production migrations was re-audited against the current v10 helper.
 Remediation also added the previously raw Conv 1D sender and both GroupNorm v2
 senders; the subsequent sort and width-sharded Conv re-entries produce the current
 24-row production set (13 migrated plus 11 concretely blocked).
@@ -19,20 +19,20 @@ senders; the subsequent sort and width-sharded Conv re-entries produce the curre
 
 The paired `mcast_host` helper and `McastArgs` decoder are materialized and
 their intake tests are green. Twelve required bindings across six units are
-now fully current at API v9:
+now fully current at API v10:
 
 | Unit | Required bindings | Status | Kernel rows | Validation |
 |---|---:|---|---:|---|
-| `conv2d-weights-single-sender-rect` | 1 | fully end-to-end migrated @ v9 | 2 | `CONV-HEIGHT`: 49 passed, 16 expected skips; shared DRAM: 14 passed |
-| `conv2d-weights-fixed-line` | 1 | fully end-to-end migrated @ v9 | 2 | `CONV-BLOCK`: 49 passed, 16 expected skips; shared DRAM: 14 passed |
-| `matmul-in1-mcast-padding-host` | 4 | fully end-to-end migrated @ v9 — **re-verified 2026-08-03** | 2 | `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected (exact baseline match, re-run at `eb05b3929a3`) |
-| `groupnorm-sharded-v2-mcast-host` | 4 | fully end-to-end migrated @ v9 | 4 | legacy: 108 passed, 2 expected skips; Welford: 108 passed, 2 expected skips; fixed/default: 19 passed, 6 expected skips; v2 sender-only bindings lack op-level runtime coverage |
-| `sort-single-row-control` | 1 | fully end-to-end migrated @ v9 | 2 migrated + 1 helper-neutral | exact fresh-cache JIT path; long tensor 7/7; Ht=2 2/2; helper 72/72 |
-| `conv2d-activation-width-sharded` | 1 | fully end-to-end migrated @ v9 | 1 hybrid | exact fresh-cache JIT at PCC 0.999956503; features 48 passed / 16 expected skips; DRAM-config 1 passed; helper 72/72 |
+| `conv2d-weights-single-sender-rect` | 1 | fully end-to-end migrated @ v10 | 2 | `CONV-HEIGHT`: 48 passed, 16 expected skips; DRAM-config 1 passed; shared DRAM: 14 passed |
+| `conv2d-weights-fixed-line` | 1 | fully end-to-end migrated @ v10 | 2 | `CONV-BLOCK`: 48 passed, 16 expected skips; DRAM-config 1 passed; shared DRAM: 14 passed |
+| `matmul-in1-mcast-padding-host` | 4 | fully end-to-end migrated @ v10 — **re-verified 2026-08-05** | 2 | `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected |
+| `groupnorm-sharded-v2-mcast-host` | 4 | fully end-to-end migrated @ v10 | 4 | legacy: 108 passed, 2 expected skips; Welford: 108 passed, 2 expected skips; fixed/default: 19 passed, 6 expected skips |
+| `sort-single-row-control` | 1 | fully end-to-end migrated @ v10 | 2 migrated + 1 helper-neutral | exact fresh-cache JIT path; long tensor 7/7; Ht=2 2/2; helper 73/73 |
+| `conv2d-activation-width-sharded` | 1 | fully end-to-end migrated @ v10 | 1 hybrid | exact fresh-cache JIT at PCC 0.9999992598; features 48 passed / 16 expected skips; DRAM-config 1 passed; helper 73/73 |
 
 The exact binding/dispatch map is in `test_map.json`; the easier-first atomic
 order and risk gates are in `tiers.md`. Until a unit's required bindings are
-migrated at API v9, its kernel rows are kernel-current but not fully
+migrated at API v10, its kernel rows are kernel-current but not fully
 end-to-end current. The completed Conv2d units use code commits
 `991b5b6b6386a90726d15007002fe1f5a77d8487` and
 `51dfb1f1ed61045ed10dc679269960b6d2ccac9e`; matmul in1 uses
@@ -54,23 +54,23 @@ The 6 rows raised by `reconcile_2026-08-03.md` were cleared by an
 Each row's `commit` still points at its migration commit (`aeeb28ff007`) — that field's role is the
 revert/bisect anchor; "last verified at" is `verified_at_commit`.
 
-## Current migrations under API v9 (13)
+## Current migrations under API v10 (13)
 
 | Area | Role | Kernel | Validation |
 |---|---|---|---|
-| matmul | sender/hybrid | `reader_bmm_tile_layout_in1_sender_writer_padding.cpp` | fully end-to-end @ v9, **re-verified 2026-08-03 at `eb05b3929a3`**; `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected; exact `--dev` 2D node with fresh JIT evidence |
-| matmul | receiver | `reader_bmm_tile_layout_in1_receiver_writer_padding.cpp` | fully end-to-end @ v9, **re-verified 2026-08-03 at `eb05b3929a3`**; `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected; exact `--dev` 2D node with fresh JIT evidence |
-| Conv | sender | `reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v9; `CONV-HEIGHT`: 49 passed, 16 expected skips; 14 DRAM regressions; exact JIT path |
-| Conv | receiver | `reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v9; `CONV-HEIGHT`: 49 passed, 16 expected skips; 14 DRAM regressions; exact JIT path |
-| Conv | sender | `writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v9; `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions; exact PerRow/PerColumn paths |
-| Conv | receiver | `writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v9; `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions; exact PerRow/PerColumn paths |
-| normalization | receiver | `reader_mcast_receiver_unary_sharded_gn_v2.cpp` | fully end-to-end @ v9; legacy inventory: 108 passed, 2 expected skips; exact JIT evidence |
-| normalization | sender | `reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v9; legacy inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
-| normalization | receiver | `welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp` | fully end-to-end @ v9; Welford inventory: 108 passed, 2 expected skips; exact JIT evidence |
-| normalization | sender | `welford_reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v9; Welford inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
-| sort | sender | `coordinator_single_row_multi_core.cpp` | fully end-to-end @ v9; Counter `send_signal`; exact fresh-cache JIT; long tensor 7/7; Ht=2 2/2 |
-| sort | receiver | `reader_single_row_multi_core.cpp` | fully end-to-end @ v9; Counter `receive_signal`; exact fresh-cache JIT; long tensor 7/7; Ht=2 2/2 |
-| Conv | hybrid | `activation_reader_width_sharded.cpp` | fully end-to-end @ v9; rotating INCLUDE-source loopback; exact fresh-cache PCC 0.999956503; features 48/16 expected skips; DRAM-config 1/1; helper 72/72 |
+| matmul | sender/hybrid | `reader_bmm_tile_layout_in1_sender_writer_padding.cpp` | fully end-to-end @ v10, **re-verified 2026-08-03 at `eb05b3929a3`**; `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected; exact `--dev` 2D node with fresh JIT evidence |
+| matmul | receiver | `reader_bmm_tile_layout_in1_receiver_writer_padding.cpp` | fully end-to-end @ v10, **re-verified 2026-08-03 at `eb05b3929a3`**; `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected; exact `--dev` 2D node with fresh JIT evidence |
+| Conv | sender | `reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v10; `CONV-HEIGHT`: 49 passed, 16 expected skips; 14 DRAM regressions; exact JIT path |
+| Conv | receiver | `reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v10; `CONV-HEIGHT`: 49 passed, 16 expected skips; 14 DRAM regressions; exact JIT path |
+| Conv | sender | `writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v10; `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions; exact PerRow/PerColumn paths |
+| Conv | receiver | `writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp` | fully end-to-end @ v10; `CONV-BLOCK`: 49 passed, 16 expected skips; 14 DRAM regressions; exact PerRow/PerColumn paths |
+| normalization | receiver | `reader_mcast_receiver_unary_sharded_gn_v2.cpp` | fully end-to-end @ v10; legacy inventory: 108 passed, 2 expected skips; exact JIT evidence |
+| normalization | sender | `reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v10; legacy inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
+| normalization | receiver | `welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp` | fully end-to-end @ v10; Welford inventory: 108 passed, 2 expected skips; exact JIT evidence |
+| normalization | sender | `welford_reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v10; Welford inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
+| sort | sender | `coordinator_single_row_multi_core.cpp` | fully end-to-end @ v10; Counter `send_signal`; exact fresh-cache JIT; long tensor 7/7; Ht=2 2/2 |
+| sort | receiver | `reader_single_row_multi_core.cpp` | fully end-to-end @ v10; Counter `receive_signal`; exact fresh-cache JIT; long tensor 7/7; Ht=2 2/2 |
+| Conv | hybrid | `activation_reader_width_sharded.cpp` | fully end-to-end @ v10; rotating INCLUDE-source loopback; exact fresh-cache PCC 0.999956503; features 48/16 expected skips; DRAM-config 1/1; helper 72/72 |
 
 The original ten kernel files remain byte-identical to the pre-rebase verified state and retain
 `mcast_pipe.hpp` + `McastArgs`. The two sort faces were added atomically in `7337302b564`; the
@@ -99,7 +99,7 @@ The census now contains 91 entries (92 before the 2026-08-03 reconcile; the
 deepseek_prefill `reader_dispatch.cpp` row was deleted after the kernel was
 removed upstream by `af00262e51d`):
 
-- 13 current production migrations at API v9, **0 carrying `needs_recheck`**;
+- 13 current production migrations at API v10, **0 carrying `needs_recheck`**;
 - all 12 required host bindings current across 6 atomic units, **0 carrying
   `needs_recheck`**;
 - 11 production candidates deferred with `v9-port-blocked` and a concrete

@@ -41,6 +41,17 @@ def test_migrated_host_bindings_treat_helper_outputs_as_opaque_ranges():
     assert not violations, "Helper argument vectors must be copied as complete ranges:\n" + "\n".join(violations)
 
 
+def test_migrated_kernels_do_not_repeat_rotating_span_as_a_template_argument():
+    kernels, _ = _migrated_sources()
+    third_template_argument = re.compile(r"\bMcastArgs\s*<\s*[^,>]+\s*,\s*[^,>]+\s*,")
+
+    violations = [
+        str(kernel.relative_to(REPO_ROOT)) for kernel in kernels if third_template_argument.search(kernel.read_text())
+    ]
+
+    assert not violations, "McastArgs rotating span must come only from the v10 CT wire:\n" + "\n".join(violations)
+
+
 OPAQUE_BOUNDARY_RULES = {
     "reader_bmm_tile_layout_in1_sender_writer_padding.cpp": [
         (r"rt_args_idx\s*\+=\s*4", "manual runtime skip assumes the helper wire width"),

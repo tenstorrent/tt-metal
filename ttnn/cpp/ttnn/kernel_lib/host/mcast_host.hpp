@@ -28,12 +28,14 @@
 //     coords of every sender (one per round), which the receiver indexes by round.
 //
 // This header is HOST-ONLY (no dataflow_api.h). It shares the *wire* with mcast_pipe.hpp — the CT + RT
-// layout the one McastArgs<CT_BASE, RT_BASE[, SPAN]> decoder self-parses — so the two version in
+// layout the one McastArgs<CT_BASE, RT_BASE> decoder self-parses — so the two version in
 // lockstep. See helper_design/NEW_HOST_HELPER/{API_SKETCH,IMPL_PLAN}.md.
 //
-//   CT (per family, contiguous, 5 words):
-//                                [ active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags ]
+//   CT (per family, contiguous, 6 words):
+//                                [ active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags,
+//                                  rotating_span ]
 //                                flags bit0 = pre_handshake, bit1 = data-ready signal (0 Flag / 1 Counter)
+//                                rotating_span = 0 fixed; sender count when rotating
 //   RT, FIXED (per family, 4 words):
 //                                sender   -> [ rect_x0, rect_y0, rect_x1, rect_y1 ]  (virtual, NOC-ordered)
 //                                receiver -> [ sender_x, sender_y, 0, 0 ]
@@ -262,12 +264,13 @@ public:
         return out;
     }
 
-    // Uniform (grid-wide) config, spliced into the reader CT list. Fixed 5-word block the kernel's
-    // McastArgs<CT, RT[, SPAN]> self-parses: [active, data_ready, consumer_ready, num_active, flags].
+    // Uniform (grid-wide) config, spliced into the reader CT list. Fixed 6-word block the kernel's
+    // McastArgs<CT, RT> self-parses:
+    // [active, data_ready, consumer_ready, num_active, flags, rotating_span].
     // `consumer_ready` is UNUSED_SEM_ID with no handshake; `num_active` is the sender's ack wait-count
     // (the dense EXCLUDE fan-out span-1); `flags` carries pre_handshake + the data-ready signal (see
-    // detail::mcast_flags). Shared by both sender modes — rotating carries no extra CT (the round count
-    // is num_senders(), a queryable the caller splices where its kernel expects it).
+    // detail::mcast_flags). rotating_span is zero for fixed mode and the line span for rotating mode,
+    // making the CT wire the only source of truth for the RT layout and receiver type.
     //
     // `pre_handshake` overrides the flags word's pre_handshake bit for THIS emission only (the sems and
     // geometry are unchanged) — one semantic mcast whose faces pick their own handshake per kernel: a
@@ -279,7 +282,8 @@ public:
             data_ready_id_,
             consumer_ready_id_,
             num_active(),
-            detail::mcast_flags(cfg_, pre_handshake)};
+            detail::mcast_flags(cfg_, pre_handshake),
+            cfg_.rotating_sender ? span_ : 0u};
     }
 
     // Sender's handshake ACK wait-count on the wire. Mcast1D is always dense, so this is the EXCLUDE
@@ -461,8 +465,9 @@ private:
 // it. The participating set that needs the semaphores (and reader runtime args) is the rect, or
 // rect ∪ {sender} when the sender is separate; the helper owns that union in owned_semaphores().
 //
-//   CT (5 words): [ active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags ]
+//   CT (6 words): [ active, data_ready_sem_id, consumer_ready_sem_id, num_active, flags, rotating_span ]
 //                 flags bit0 = pre_handshake, bit1 = data-ready signal (0 Flag / 1 Counter)
+//                 rotating_span = 0 fixed; rectangle area when rotating
 //   RT, FIXED (4 words):    sender   -> [ rect_x0, rect_y0, rect_x1, rect_y1 ]  (virtual, NOC-ordered)
 //                           receiver -> [ sender_x, sender_y, 0, 0 ]
 //                           degenerate (single-core rect, no receivers) -> [ 0, 0, 0, 0 ]
@@ -470,8 +475,8 @@ private:
 //                           every core -> [ rect_x0, rect_y0, rect_x1, rect_y1,     (full-rect rect)
 //                                           s0_x, s0_y, ... ]  (sender coords, row-major over the rect)
 //
-// Kernel side: one McastArgs<CT_BASE, RT_BASE[, SPAN]> — the same decoder as Mcast1D (SPAN = area for
-// the rotating rect). num_active + flags ride the shared CT block; the sender/receiver take no knobs.
+// Kernel side: one McastArgs<CT_BASE, RT_BASE> — the same decoder as Mcast1D. The rotating rectangle's
+// area rides the shared CT block; the sender/receiver take no knobs.
 // =============================================================================
 class Mcast2D {
 public:
@@ -561,8 +566,9 @@ public:
         return out;
     }
 
-    // Uniform (grid-wide) config, spliced into the reader CT list. 5-word block the kernel's
-    // McastArgs<CT, RT[, SPAN]> self-parses: [active, data_ready, consumer_ready, num_active, flags].
+    // Uniform (grid-wide) config, spliced into the reader CT list. 6-word block the kernel's
+    // McastArgs<CT, RT> self-parses:
+    // [active, data_ready, consumer_ready, num_active, flags, rotating_span].
     // num_active is the sender's ack wait-count (receiver ignores it); flags carries pre_handshake +
     // the data-ready signal (see detail::mcast_flags). `pre_handshake` overrides the flags bit for THIS
     // emission (one semantic mcast whose faces pick their own handshake per kernel — e.g. a divergent
@@ -573,7 +579,8 @@ public:
             data_ready_id_,
             consumer_ready_id_,
             ack_count_,
-            detail::mcast_flags(cfg_, pre_handshake)};
+            detail::mcast_flags(cfg_, pre_handshake),
+            cfg_.rotating_sender ? area_ : 0u};
     }
 
     // Per-core runtime args. FIXED: 4 words (sender rect | receiver sender-coords).

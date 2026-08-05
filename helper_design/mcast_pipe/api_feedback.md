@@ -19,7 +19,7 @@ Record issues in individual ports, including brittle CT/RT offset handling, in
 ## API-001 — Derive rotating span from the compile-time wire
 
 - **Date:** 2026-08-04
-- **Status:** Open
+- **Status:** Implemented
 - **Surface:** `dataflow_kernel_lib::McastArgs`
 - **Feedback:** `McastArgs` should need only the compile-time and runtime base
   offsets. The rotating sender span should be encoded in the compile-time
@@ -51,7 +51,7 @@ need to be a template argument supplied by the caller.
 `get_compile_time_arg_val()` is constexpr and the decoder already uses values
 read from the CT block as non-type template arguments.
 
-### Candidate wire change
+### Implemented wire change
 
 Add `rotating_span` to the uniform CT block:
 
@@ -66,17 +66,19 @@ This cannot be derived generally from `num_active`: a divergent `Mcast2D` may
 have fewer acknowledging receivers than its geometric span, and fixed and
 rotating dense multicasts can have the same acknowledgement count.
 
-### Resolution checklist
+### Resolution
 
-- Decide whether to add a sixth CT word or pack the value into the unused flag
-  bits.
-- Audit CT-block construction and any manually calculated downstream CT
-  offsets.
-- Audit rotating call sites and remove their third `McastArgs` template
-  argument.
-- Update helper tests for fixed, dense rotating, and divergent rotating wires.
-- If accepted, bump `MCAST_PIPE_API_VERSION` and record the change in
-  `changelog.md`.
+Implemented on 2026-08-05 as `MCAST_PIPE_API_VERSION=10`. The host emits the
+dedicated sixth CT word rather than packing the span into flags. `McastArgs`
+now takes only `CT_BASE` and `RT_BASE` and derives fixed/rotating mode,
+receiver type, runtime width, and both next offsets from `rotating_span`.
+
+All 13 migrated kernels and 12 host bindings were audited after Gate 2 made
+their helper boundaries opaque. Exact host-wire tests cover fixed, rotating,
+divergent, and degenerate layouts; the complete helper device suite and all
+mapped Matmul, Conv, GroupNorm, and Sort production inventories passed. A
+durable source audit rejects any reintroduction of a third `McastArgs` template
+argument.
 
 ## API-002 — Encode and enforce the kernel's permitted mcast face
 
