@@ -154,6 +154,12 @@ class GraphBuilder:
         )
         return y
 
+    def mesh_partition(self, x: Value, dim: int, mesh_axis: int, label: Optional[str] = None) -> Value:
+        """Scatter a replicated tensor across ``mesh_axis`` on ``dim`` (dual of all_gather)."""
+        y = self._symbol(label or "partitioned", x.shape, x.symbol.dtype)
+        self._node("mesh_partition", [x], [y], {"dim": dim}, mesh_axis=mesh_axis, label=label)
+        return y
+
     def all_reduce(self, x: Value, mesh_axis: int, label: Optional[str] = None, loc: Optional[str] = None) -> Value:
         y = self._symbol(label or "reduced", x.shape, x.symbol.dtype)
         self._node("all_reduce", [x], [y], {}, mesh_axis=mesh_axis, label=label, loc=loc)

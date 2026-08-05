@@ -177,7 +177,20 @@ def reshape(x: Tensor, shape, *a, **k) -> Tensor:
         dist = _remap_dist(x.dist, {i: mapping.get(i) for i in range(len(local))})
         return recorder.emit("identity", [x], logical, dist, base="view")
     logical = [d * scale.get(i, 1) for i, d in enumerate(shape)]
-    return recorder.emit("identity", [x], logical, x.dist, base="reshape")
+    # A rank-reducing reshape can drop the axis a shard sits on (e.g. [1,1,R,H] ->
+    # [R,H] with H fractured): keeping x.dist would leave the shard pointing past
+    # the new rank, where `a % ndim` later silently reinterprets it as a leading
+    # axis. Remap each shard onto the destination axis whose extent matches its
+    # own (unique match); if none resolves, hand off to the analyzer's identity
+    # spec with the shard dropped rather than stranded (blocker 17).
+    new_shard = list(x.dist.shard)
+    for mesh_axis, a in enumerate(x.dist.shard):
+        if a is None or a % len(local) < len(shape):
+            continue
+        ext = local[a % len(local)]
+        cands = [j for j, d in enumerate(shape) if d == ext]
+        new_shard[mesh_axis] = cands[0] if len(cands) == 1 else None
+    return recorder.emit("identity", [x], logical, Dist(tuple(new_shard), x.dist.partial), base="reshape")
 
 
 def unsqueeze(x: Tensor, dim: int, **k) -> Tensor:
@@ -255,6 +268,36 @@ def slice_axis(x: Tensor, axis: int, lo: int, hi: int) -> Tensor:
     return recorder.emit("slice", [x], logical, x.dist, attrs={"axis": axis, "start": lo, "stop": hi}, base="slice")
 
 
+def slice_op(x: Tensor, starts, ends, steps=None, **k) -> Tensor:
+    """``ttnn.slice(x, starts, ends)``: per-axis bounds on the *local* view.
+
+    Model code slices the per-device tensor, so a bound on a sharded axis is a
+    local extent; lift it to logical by the mesh factor. The MiniMax-H3 AdaLN
+    modulation slices one param block ``[p*h_local : (p+1)*h_local]`` out of a
+    TP-fractured ``[param | h]`` feature axis, so the result is a cleanly
+    TP-fractured ``h``. Emits one slice node per axis actually restricted."""
+    starts = [int(s) for s in starts]
+    ends = [int(e) for e in ends]
+    local = list(local_shape(x.logical, x.dist))
+    scale = {}
+    for mesh_axis, a in enumerate(x.dist.shard):
+        if a is not None:
+            scale[a % len(x.logical)] = CTX.mesh.shape[mesh_axis]
+    result = x
+    for i in range(len(x.logical)):
+        lo = starts[i] if i < len(starts) else 0
+        hi = min(ends[i] if i < len(ends) else local[i], local[i])
+        if lo <= 0 and hi >= local[i]:
+            continue  # full axis, untouched
+        sc = scale.get(i, 1)
+        logical = list(result.logical)
+        logical[i] = (hi - lo) * sc
+        result = recorder.emit(
+            "slice", [result], logical, result.dist, attrs={"axis": i, "start": lo * sc, "stop": hi * sc}, base="slice"
+        )
+    return result
+
+
 def chunk(x: Tensor, count: int, dim: int = 0, **k) -> List[Tensor]:
     step = x.logical[dim] // count
     return [slice_axis(x, dim, i * step, (i + 1) * step) for i in range(count)]
@@ -330,6 +373,19 @@ def all_reduce_async(input_tensor=None, *a, **k) -> Tensor:
     m = _cluster_axis(k, "all_reduce_async")
     return recorder.emit(
         "all_reduce", [x], x.logical, x.dist.with_partial(m, False).with_shard(m, None), mesh_axis=m, base="ar"
+    )
+
+
+def mesh_partition(input_tensor=None, dim=None, *a, **k) -> Tensor:
+    """``ttnn.mesh_partition(x, dim, cluster_axis=m)``: scatter over ``m`` on ``dim``.
+
+    A replicated tensor becomes fractured on ``dim`` -- the dual of all_gather.
+    MiniMax-H3 fractures the assembled packed sequence onto SP with this."""
+    x = _t(input_tensor, "input_tensor", a, k)
+    m = _cluster_axis(k, "mesh_partition")
+    d = (dim if dim is not None else k.get("dim", 0)) % len(x.logical)
+    return recorder.emit(
+        "mesh_partition", [x], x.logical, x.dist.with_shard(m, d), attrs={"dim": d}, mesh_axis=m, base="partition"
     )
 
 
@@ -732,9 +788,23 @@ def embedding(inp: Tensor, weight: Tensor, **k) -> Tensor:
     """
     hidden = weight.logical[-1]
     out_logical = list(inp.logical) + [hidden]
-    wl, ol = len(weight.logical), len(out_logical)
-    out_dist = _remap_dist(weight.dist, {wl - 1: ol - 1})
-    return recorder.emit("embedding", [inp, weight], out_logical, out_dist, base="embed")
+    il, wl, ol = len(inp.logical), len(weight.logical), len(out_logical)
+    # The output carries *both* the indices' row-sharding (its leading axes map
+    # straight onto the output's, since the output prepends nothing) and the
+    # weight's hidden-sharding on the last axis. MiniMax-H3 gathers AdaLN tables
+    # with SP-fractured indices and a TP-fractured table, so the result is
+    # fractured on both -- dropping either misaligns it against the hidden stream.
+    shard = []
+    for m in range(len(CTX.mesh.shape)):
+        ai, aw = inp.dist.shard[m], weight.dist.shard[m]
+        if ai is not None:
+            shard.append(ai % il)
+        elif aw is not None and aw % wl == wl - 1:
+            shard.append(ol - 1)
+        else:
+            shard.append(None)
+    partial = tuple(a or b for a, b in zip(inp.dist.partial, weight.dist.partial))
+    return recorder.emit("embedding", [inp, weight], out_logical, Dist(tuple(shard), partial), base="embed")
 
 
 # -----------------------------------------------------------------------------
@@ -768,6 +838,8 @@ TENSOR_OPS = {
     "group_norm": group_norm,
     "softmax": softmax,
     "embedding": embedding,
+    "slice": slice_op,
+    "mesh_partition": mesh_partition,
     "copy": copy,
     "add_": _inplace("add"),
     "multiply_": _inplace("mul"),

@@ -268,6 +268,36 @@ def test_embedding_output_is_hidden_fractured_like_the_weight():
         assert st.regions[dev].bounds(2) == (8 * t, 8 * t + 8), dev  # 32 / 4 hidden per device
 
 
+def test_mesh_partition_scatters_a_replicated_tensor_onto_a_mesh_axis():
+    """Dual of all_gather: each device keeps its own shard of the given dim (MiniMax-H3
+    fractures the assembled packed sequence onto SP this way)."""
+    b = GraphBuilder("mp", MESH)
+    x = b.input("x", [1, 1, 2048, 512], shard={TP: 3})  # TP-fractured hidden, SP-replicated
+    y = b.mesh_partition(x, dim=2, mesh_axis=SP, label="scatter")  # now also SP-fractured on seq
+    fwd = run_forward(b.finish([y]))
+    st = fwd.final[y.id]
+    assert st.dist.shard[SP] == 2 and st.dist.shard[TP] == 3  # fractured on both axes
+    for dev in MESH.devices():
+        t = MESH.index_in_group(dev, SP)  # which SP slice
+        assert st.regions[dev].bounds(2) == (1024 * t, 1024 * t + 1024), dev  # 2048 / 2 rows
+
+
+def test_embedding_with_sharded_indices_carries_both_shardings():
+    """AdaLN table gather (MiniMax-H3): SP-fractured indices x TP-fractured table ->
+    output fractured on *both* the sequence (from the indices) and hidden (from the table)."""
+    b = GraphBuilder("emb2", MESH)
+    ids = b.input("ids", [1, 2048], shard={SP: 1}, dtype="int32")  # SP-fractured packed rows
+    w = b.param("adaln", [6, 512], shard={TP: 1})  # [rows, hidden], TP-fractured hidden
+    y = b.embedding(ids, w)  # -> [1, 2048, 512]
+    fwd = run_forward(b.finish([y]))
+    st = fwd.final[y.id]
+    assert st.dist.shard[SP] == 1 and st.dist.shard[TP] == 2  # seq from ids, hidden from table
+    for dev in MESH.devices():
+        s, t = MESH.index_in_group(dev, SP), MESH.index_in_group(dev, TP)
+        assert st.regions[dev].bounds(1) == (1024 * s, 1024 * s + 1024), dev  # seq shard (2048 / 2)
+        assert st.regions[dev].bounds(2) == (128 * t, 128 * t + 128), dev  # hidden shard (512 / 4)
+
+
 def test_mergeable_hint_is_not_a_redundancy_finding():
     report = analyze_graph(load_graph("example:sd35_block"))
     assert report.findings == []

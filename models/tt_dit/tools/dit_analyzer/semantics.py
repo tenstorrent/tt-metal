@@ -373,6 +373,47 @@ register(
 )
 
 
+def _mesh_partition_apply(c: ApplyCtx) -> None:
+    """Scatter a replicated tensor across a mesh axis: each device keeps one shard.
+
+    The dual of all_gather -- it *drops* the peers' shares rather than summing them
+    (no partial-sum handling, unlike reduce_scatter). MiniMax-H3 fractures the
+    assembled packed sequence onto SP this way before the block stack.
+    """
+    x = c.in_state(0)
+    ys = c.out_sym(0)
+    m = c.node.mesh_axis
+    dim = _axis(int(c.node.attrs["dim"]), ys.ndim)
+    regions = {}
+    for dev in c.mesh.devices():
+        idx = c.mesh.index_in_group(dev, m)
+        regions[dev] = x.regions[dev].intersect(RegionSet.shard(ys.shape, dim, idx, c.mesh.size(m)))
+    c.define(0, x.dist.with_shard(m, dim), regions, x.value_id, x.tainted)
+
+
+def _mesh_partition_demand(c: DemandCtx) -> None:
+    # Pure selection of a local shard: a device needs exactly what it keeps, from
+    # its own copy -- no peer contributes (nothing is summed).
+    xid = c.node.inputs[0]
+    dem = c.demand_out(0)
+    for dev in c.mesh.devices():
+        if not dem[dev].is_empty:
+            c.need(xid, dev, dem[dev])
+
+
+register(
+    OpSpec(
+        "mesh_partition",
+        COMM,
+        _mesh_partition_apply,
+        _mesh_partition_demand,
+        preserves_value=True,
+        doc="Scatter a replicated tensor across a mesh axis; each device keeps one shard of the given dim.",
+    ),
+    aliases=("ttnn.mesh_partition", "ccl.mesh_partition"),
+)
+
+
 # -----------------------------------------------------------------------------
 # matmul family
 # -----------------------------------------------------------------------------
@@ -506,7 +547,14 @@ def _embedding_apply(c: ApplyCtx) -> None:
     from .state import device_region
 
     ys = c.out_sym(0)
+    xs = c.in_sym(0)  # indices
     dist = Dist.replicated(c.mesh)
+    # the indices' row-sharding carries onto the output's leading axes (same index)
+    x = c.in_state(0)
+    for m in range(len(c.mesh.shape)):
+        a = x.dist.shard[m]
+        if a is not None:
+            dist = dist.with_shard(m, _axis(a, xs.ndim))
     if len(c.node.inputs) > 1:
         w, ws = c.in_state(1), c.in_sym(1)
         for m in range(len(c.mesh.shape)):
@@ -860,6 +908,8 @@ GENERIC_OPS: Dict[str, Tuple[str, str, Optional[str]]] = {
     "reciprocal": ("pointwise", "unary", "reciprocal"),
     "neg": ("pointwise", "unary", "neg"),
     "clamp": ("pointwise", "unary", "clamp"),
+    "cos": ("pointwise", "unary", "cos"),
+    "sin": ("pointwise", "unary", "sin"),
     "add": ("pointwise", "binary", "add"),
     "sub": ("pointwise", "binary", "sub"),
     "subtract": ("pointwise", "binary", "sub"),  # fn normalised to sub

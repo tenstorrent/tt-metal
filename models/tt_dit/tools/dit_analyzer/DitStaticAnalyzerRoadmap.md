@@ -456,6 +456,24 @@ generator (phase 8) already emits both halves for a new such op.
   like a col-parallel matmul; the id tensor is replicated), `minimal_matmul_split`,
   `dit_minimal_matmul_addcmul_fused`, `dit_rms_norm_unary_fused`,
   `exp_ring_joint_sdpa`, `rotary_embedding_hf`.
+- **MiniMax-H3 DiT** (`kevinmi/minimax-h3-t2va`, the t2va video+audio transformer,
+  TP **and** sequence-parallel, ring attention) — now dry-runs end to end with **0
+  unregistered ops**. Getting there: (a) fixed the reshape-tracking blocker that
+  crashed the run — registered `ttnn.slice` (its bounds are on the *local* view, so
+  a bound on a sharded axis lifts to logical by the mesh factor; the AdaLN
+  modulation slices one param block out of a packed `[param | h]` feature axis), and
+  hardened the general `reshape` so a rank reduction can no longer strand a shard on
+  a dropped axis; (b) registered `ttnn.mesh_partition` (scatter, the dual of
+  all_gather — MiniMax-H3 fractures the assembled packed sequence onto SP with it)
+  and `ttnn.cos`/`ttnn.sin`; (c) fixed the `embedding` op to carry the **indices'**
+  row-sharding as well as the weight's hidden-sharding (SP-fractured AdaLN indices ×
+  TP-fractured table). **Still open (residual blocker 17):** the modulation *fold*
+  reshape `[1,1,T, M*P*H] -> [1,1, T*M, P*H]` (a feature sub-axis folded into rows)
+  is still `OPAQUE_RESHAPE` → taints the modulation tables; a few `LAYOUT_MISMATCH`
+  remain. The findings so far point at the **SP-replicated token refiner** (computed
+  on all 8 SP positions, consumed only on the ~2 holding text rows — the
+  assemble-then-partition pattern); real-looking but the "delete the collective" fix
+  is wrong (it's structural), so these want device conformance before acting.
 - **Grouped-query attention** — `nlp_create_qkv_heads` now branches on its call
   shape: `num_kv_heads == 0` (LTX / Ideogram / Wan, `out, _, _ = …`) is the plain
   single-tensor head split; `num_kv_heads > 0` (Qwen3-VL / Gemma / **MiniMax-H3**,

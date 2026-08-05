@@ -440,6 +440,29 @@ def test_ellipsis_slicing_targets_the_trailing_axis():
     assert "ok" in proc.stdout, proc.stdout
 
 
+def test_ttnn_slice_reads_local_bounds_and_lifts_to_logical():
+    """`ttnn.slice(x, starts, ends)` bounds are on the per-device view. Slicing one
+    param block out of a TP-fractured `[param | h]` feature axis (MiniMax-H3 AdaLN)
+    must give a cleanly TP-fractured `h`: local extent 1344 -> logical 5376, shard kept."""
+    snippet = (
+        "from dit_analyzer.dryrun import install, recorder, start;"
+        "from dit_analyzer.ir import Dist;"
+        "from dit_analyzer.dryrun.context import CTX;"
+        "md = install((4, 8), 'blackhole');"
+        "start(md, axis_names=('tp', 'sp'), name='t', topology='Ring');"
+        # [1, 1, 6, 6*5376] TP-fractured on the last axis: local last = 6*1344 = 8064
+        "x = recorder.entry([1, 1, 6, 32256], Dist.make(CTX.mesh, {0: 3}), base='x');"
+        "import ttnn;"
+        "one = ttnn.slice(x, [0, 0, 0, 1 * 1344], [1, 1, 6, 2 * 1344]);"
+        "assert list(one.logical) == [1, 1, 6, 5376], one.logical;"
+        "assert one.dist.shard[0] == 3, one.dist.shard;"  # TP still on the last axis
+        "print('ok')"
+    )
+    proc = _python("-c", snippet)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ok" in proc.stdout, proc.stdout
+
+
 def test_fused_swiglu_preprocessing_runs_on_meta_and_preserves_shape():
     # the roadmap's "run the real _prepare_torch_state on meta tensors": the
     # swiglu reorder is a pure reshape/permute, so it runs with no bytes and is
