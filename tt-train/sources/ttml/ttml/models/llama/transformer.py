@@ -169,7 +169,8 @@ class LlamaBlock(AbstractModuleBase):
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
         use_tp: bool = False,
-        residual_proj_init: Optional[Callable] = None,
+        out_proj_init: Optional[Callable] = None,
+        down_proj_init: Optional[Callable] = None,
     ) -> None:
         super().__init__()
 
@@ -178,7 +179,7 @@ class LlamaBlock(AbstractModuleBase):
             intermediate_size,
             mlp_dropout,
             use_tp=use_tp,
-            down_proj_init=residual_proj_init,
+            down_proj_init=down_proj_init,
         )
         self.attention_norm = RMSNormLayer(hidden_size)
         self.mlp_norm = RMSNormLayer(hidden_size)
@@ -190,7 +191,7 @@ class LlamaBlock(AbstractModuleBase):
             rope_params=rope_params,
             bias_linears=attention_bias,
             use_tp=use_tp,
-            out_proj_init=residual_proj_init,
+            out_proj_init=out_proj_init,
         )
 
     def forward(
