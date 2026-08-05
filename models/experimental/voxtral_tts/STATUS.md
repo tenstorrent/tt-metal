@@ -1602,10 +1602,10 @@ each showed a factor of ~3 shortfall. The difference is what the change *does*: 
 layout-neutral, so nothing downstream re-optimises around it. Grid and blocking changes alter how
 every consumer receives its data, which is exactly why they measure differently in isolation.
 
-**Two things to keep straight if this is ever touched.** The 48-core qkv shard is now
-**load-bearing**, not cosmetic — drop it back to 8 and `overlap_qk_coregrid=False` fails to build and
-the chain collapses. And rope reading the wrong core does **not raise**; it returns ~FLT_MAX, so any
-future change to head placement must re-check the rope tables rather than trust a clean run.
+**⚠ SUPERSEDED BY §6.22.** The chain above (48-core shard, `overlap_qk_coregrid=False`, a second
+rope table) works and is what shipped first, but it moves **K**. Moving **V** instead reaches the same
+place with none of the coupling, measures the same end to end, and is what ships now. The fused write
+itself, and everything above about why it needs non-overlapping cores, still stands.
 
 ### 6.21 — how to quote RTF, and a harness confound that cost an hour
 
@@ -1641,6 +1641,45 @@ and its KV cache are reused across cases. **Determinism is not independence:** t
 match exactly (verified, 0 of 15 cases differ), which is what made the artifact look trustworthy.
 **So a changed frame count in a multi-case run is not evidence of a changed model.** Confirm it by
 running that case alone before believing it.
+
+### 6.22 — move V, not K: same speed, none of the coupling (from the xtts branch)
+
+Asked to look at how `lserbedzija/xtts-gpt-ttnn` does the same fusing, since it is "a bit different".
+It is, and it is better. `xtts_v2/tt/ttnn_xtts_gpt.py` keeps `nlp_create_qkv_heads_decode` at its
+default and **moves V to core (1,0)** with one `to_memory_config`, where §6.20 moved **K** via
+`overlap_qk_coregrid=False`.
+
+That branch is GPT-2 with learned positional embeddings, so it never had the RoPE problem that made
+moving K awkward here. **Moving V sidesteps it entirely** — V never passes through RoPE.
+
+| | moves | launches added | isolated ms/step | pipeline mean RTF, 12 like-for-like cases |
+|---|---|---|---|---|
+| baseline, 2 writes | — | — | 24.405 | 0.6539 |
+| §6.20, `overlap_qk_coregrid=False` | K | 4 / frame | 23.953 (+0.452) | 0.6485 |
+| **§6.22, `to_memory_config(v)`** | **V** | **26 / frame** | 24.000 (+0.405) | **0.6483** |
+
+Both bit-exact. Moving K is 0.047 ms/step faster in isolation — **and indistinguishable end to end**
+(0.6485 vs 0.6483, where per-case RTF resolution is 0.01). The 22 extra launches cost ~2.1 µs each,
+much less than the 5-20 µs a launch usually runs here, because moving V is an 8 KB hop between
+adjacent cores.
+
+**So V ships, for robustness at no measurable cost.** Moving K carried two hazards, both now gone:
+- `_QKV_SHARD` had to be **48 cores** (a whole head per core) or `overlap_qk_coregrid=False` would not
+  build — a load-bearing constraint on a value §6.19 had just established as inert, i.e. exactly the
+  kind of coupling that reads as free to change and is not.
+- K then went through RoPE on a core whose cos/sin table lived elsewhere, which **does not raise** —
+  it returns 3.4e38 from uninitialised L1. A second table fixed it, but the failure mode stayed.
+
+Moving V needs neither: the shard width is free again and there is one rope table.
+
+**A reporting slip worth recording, since §6.21 had just warned about it.** My first read of this
+comparison said move-V was *worse* — mean RTF 0.7227 → 0.7302 over 13 cases. That mean included case
+0, whose 1.6 RTF is a first-call compile, and it swamped everything. Excluding case 0 and any case
+whose frame count moved gives 0.6485 vs 0.6483. **I wrote the convention an hour earlier and then
+broke it in the next measurement.**
+
+Gates: `--gate decode` byte-identical on all six columns, long-form WER 0 of 298, 15/15
+`[END_AUDIO]`, voice identity PASS, 122/122 tests, long-form RTF 0.61–0.66.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
