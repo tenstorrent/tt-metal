@@ -50,8 +50,8 @@ constexpr std::chrono::nanoseconds placement_error(std::chrono::nanoseconds brac
 // Loose enough that ordinary spread survives; only reads serviced late are cut.
 constexpr int kFitBracketOutlierFactor = 2;
 
-// Lets a rapid MeshDevice reopen skip the bring-up fit via one anchor probe; device WALL_CLOCK free-runs across
-// close, so only frequency (not offset) is worth caching.
+// Lets a rapid MeshDevice reopen skip the bring-up fit: the device WALL_CLOCK free-runs across close, so the rate
+// measured last time still holds.
 struct FrequencyCache {
     struct Entry {
         double frequency = 0.0;
@@ -74,13 +74,7 @@ void RealtimeProfilerClockModel::seed_frequency(double frequency) {
     seed_frequency_ = frequency;
 }
 
-void RealtimeProfilerClockModel::set_anchor(std::chrono::steady_clock::time_point host_time, uint64_t device_ticks) {
-    const double host_ns = static_cast<double>(host_time.time_since_epoch().count());
-    device_cycle_offset_ = std::llround(static_cast<double>(device_ticks) - frequency_ * host_ns);
-}
-
-void RealtimeProfilerClockModel::adopt_chord(
-    double rate, std::chrono::steady_clock::time_point host_time, uint64_t device_ticks) {
+void RealtimeProfilerClockModel::adopt_rate(double rate) {
     if (rate <= 0.0 ||
         std::abs(rate - seed_frequency_) > seed_frequency_ * RealtimeProfilerClockSync::kRateClampFraction) {
         log_debug(
@@ -92,17 +86,11 @@ void RealtimeProfilerClockModel::adopt_chord(
         return;
     }
     frequency_ = rate;
-    set_anchor(host_time, device_ticks);
-    last_reanchor_at_ = host_time;
 }
 
 std::optional<RealtimeProfilerClockModel::FitResidual> RealtimeProfilerClockModel::fit(
     std::span<const ClockProbe> probes, std::chrono::steady_clock::time_point host_start) {
     if (probes.size() < 2) {
-        // A slope needs two, but the offset needs only one and the seeded frequency is already a usable slope.
-        if (probes.size() == 1) {
-            try_reanchor(probes.front());
-        }
         return std::nullopt;
     }
 
@@ -160,8 +148,6 @@ std::optional<RealtimeProfilerClockModel::FitResidual> RealtimeProfilerClockMode
         }
     }
 
-    set_anchor(host_start, static_cast<uint64_t>(device_mean - frequency_ * host_mean));
-
     FitResidual residual;
     double residual_sumsq_ns = 0.0;
     for (const auto& p : fitted_probes) {
@@ -174,49 +160,7 @@ std::optional<RealtimeProfilerClockModel::FitResidual> RealtimeProfilerClockMode
     residual.num_probes_fitted = fitted_probes.size();
     residual.num_probes_offered = probes.size();
 
-    bracket_ = median_bracket;
-    last_reanchor_at_ = probes.back().host_time;
     return residual;
-}
-
-std::chrono::nanoseconds RealtimeProfilerClockModel::drift_at(const ClockProbe& probe) const {
-    if (!last_reanchor_at_.has_value()) {
-        return {};
-    }
-    const double at_ns =
-        static_cast<double>((probe.host_time + placement_error(probe.bracket)).time_since_epoch().count());
-    const double predicted = frequency_ * at_ns + static_cast<double>(device_cycle_offset_);
-    return std::chrono::nanoseconds(
-        std::llround(std::abs(static_cast<double>(probe.device_ticks) - predicted) / frequency_));
-}
-
-bool RealtimeProfilerClockModel::try_reanchor(const ClockProbe& probe) {
-    if (last_reanchor_at_.has_value()) {
-        last_drift_ = drift_at(probe);
-
-        if (placement_error(probe.bracket) >= last_drift_ &&
-            placement_error(probe.bracket) >= placement_error(bracket_)) {
-            return false;
-        }
-    }
-    bracket_ = probe.bracket;
-    set_anchor(probe.host_time + placement_error(probe.bracket), probe.device_ticks);
-    last_reanchor_at_ = probe.host_time;
-    return true;
-}
-
-std::chrono::nanoseconds RealtimeProfilerClockModel::sync_error() const {
-    // The only definition of sync error in the profiler: how well the standing anchor is placed, plus the drift the
-    // last probe measured against it. Every path -- bring-up fit, accepted re-anchor, rejected re-anchor -- reports
-    // this same expression off the same state, so a record's error never depends on which path last ran.
-    return placement_error(bracket_) + last_drift_;
-}
-
-experimental::ProgramRealtimeClockSync RealtimeProfilerClockModel::mapping() const {
-    return experimental::ProgramRealtimeClockSync{
-        .device_cycle_offset = device_cycle_offset_,
-        .sync_error = sync_error(),
-    };
 }
 
 RealtimeProfilerClockSync::RealtimeProfilerClockSync(ContextId context_id, IDevice* device, CoreCoord profiler_core) :
@@ -265,8 +209,7 @@ void RealtimeProfilerClockSync::configure_clock_read_path() {
 
 void RealtimeProfilerClockSync::retire_probes_before(uint64_t ticks) {
     // Two probes are kept preceding `ticks`, not one: a near side has to be far enough from the far side to take a
-    // slope from, so retiring down to the single probe before the oldest record leaves pairs that get rejected and
-    // records that strand.
+    // slope from, and a single retained probe cannot span anything.
     while (probes_.size() > 3 && probes_[2].ticks <= ticks) {
         probes_.pop_front();
     }
@@ -289,13 +232,12 @@ RealtimeProfilerClockSync::probes_bracketing(uint64_t start_ticks, uint64_t end_
     }
     size_t close_index = static_cast<size_t>(close_it - probes_.begin());
     if (close_index == 0) {
-        // The record predates everything retained, so the two oldest are the closest thing to a chord around it.
+        // The record predates everything retained; the two oldest are the closest thing to a chord around it.
         close_index = 1;
     }
 
     // Near side: the newest probe at or before the record that is also far enough from the far side to take a slope
-    // from. Selecting a pair the chord logic would reject is what strands records -- they would wait on the history
-    // moving rather than on a probe.
+    // from. The span requirement is applied here so a pair is never offered that plan_chord_mapping would refuse.
     const Anchor& close_anchor = probes_[close_index];
     const auto start_it = std::upper_bound(
         probes_.begin(), probes_.begin() + close_index, start_ticks, [](uint64_t ticks, const Anchor& a) {
@@ -462,8 +404,7 @@ bool RealtimeProfilerClockSync::try_cached_calibration() {
     }
 
     model_.seed_frequency(*frequency);
-    resync();
-    if (!model_.is_anchored()) {
+    if (!resync()) {
         return false;  // the read failed, so fall back to a full fit
     }
     log_debug(
@@ -573,11 +514,6 @@ bool RealtimeProfilerClockSync::resync() {
         return false;
     }
     probes_.push_back(Anchor{p->host_time + placement_error(p->bracket), p->device_ticks, p->bracket});
-    model_.try_reanchor(*p);
-    cost_.bracket_sum += p->bracket;
-    cost_.bracket_max = std::max(cost_.bracket_max, p->bracket);
-    cost_.drift_sum += model_.last_drift();
-    cost_.drift_max = std::max(cost_.drift_max, model_.last_drift());
     cost_.busy += std::chrono::steady_clock::now() - started_at;
     return true;
 }

@@ -5,13 +5,13 @@
 #pragma once
 
 #include <chrono>
-#include <deque>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
-#include <utility>
 #include <span>
+#include <utility>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
@@ -32,8 +32,9 @@ struct ClockProbe {
     uint64_t device_ticks = 0;
 };
 
-// host_ns = (device_ticks - device_cycle_offset) / frequency. frequency is fit once at bring-up and held fixed;
-// device_cycle_offset is re-anchored whenever a probe finds the mapping has moved.
+// The device clock's rate in ticks per host nanosecond: regressed over the bring-up probes, then re-measured from
+// each chord the receiver closes. Records are mapped from their own pair of probes, not from here -- this rate is
+// what a chord's slope is sanity-checked against, and what stands in before the first chord exists.
 class RealtimeProfilerClockModel {
 public:
     struct FitResidual {
@@ -45,54 +46,28 @@ public:
 
     void seed_frequency(double frequency);
 
-    // Empty when there were fewer than two probes to regress; the seeded frequency then stands, though a lone probe
-    // is still anchored on.
+    // Empty when there were fewer than two probes to regress; the seeded frequency then stands.
     std::optional<FitResidual> fit(
         std::span<const ClockProbe> probes, std::chrono::steady_clock::time_point host_start);
 
-    // Re-anchors only if the probe would place the mapping better than its current error.
-    bool try_reanchor(const ClockProbe& probe);
-
-    [[nodiscard]] experimental::ProgramRealtimeClockSync mapping() const;
-
-    // Placement error of the standing anchor plus the drift last measured against it. The single definition of sync
-    // error; mapping() publishes exactly this.
-    [[nodiscard]] std::chrono::nanoseconds sync_error() const;
-
     [[nodiscard]] double frequency() const { return frequency_; }
 
-    // Zero before the first anchor.
-    [[nodiscard]] std::chrono::nanoseconds anchor_bracket() const { return bracket_; }
-
-    [[nodiscard]] std::chrono::nanoseconds last_drift() const { return last_drift_; }
-
-    // What the standing mapping is out by at `probe`, without moving the anchor.
-    [[nodiscard]] std::chrono::nanoseconds drift_at(const ClockProbe& probe) const;
-
-    [[nodiscard]] bool is_anchored() const { return last_reanchor_at_.has_value(); }
-
-    // Adopts a measured chord -- its slope is the local AICLK and its endpoint is a real probe, so this replaces both
-    // halves of the mapping at once. Slope and offset must move together: offset is ticks - frequency * host_ns over a
-    // host_ns of ~1e14, so a new slope against a stale offset misses by seconds. Ignored unless the slope lands in the
-    // band around the commanded clock, so one bad pair of reads cannot mismap every record after it.
-    void adopt_chord(double rate, std::chrono::steady_clock::time_point host_time, uint64_t device_ticks);
+    // Adopts a rate measured elsewhere -- the secant across a closed interval, which is the local AICLK. Ignored
+    // unless it lands in the band around the commanded clock, so one bad pair of reads cannot mismap the records that
+    // follow.
+    void adopt_rate(double rate);
 
 private:
-    void set_anchor(std::chrono::steady_clock::time_point host_time, uint64_t device_ticks);
-
     double frequency_ = 0.0;
     double seed_frequency_ = 0.0;
-    int64_t device_cycle_offset_ = 0;
-    std::chrono::nanoseconds bracket_{};
-    std::chrono::nanoseconds last_drift_{};
-    std::optional<std::chrono::steady_clock::time_point> last_reanchor_at_;
 };
 
-// Reads the profiler core's cycle counter and drives a RealtimeProfilerClockModel from the probes. Nothing runs on
-// device for this: the NOC serves the counter directly, so a read cannot be delayed by the profiler core's push loop.
+// Reads the profiler core's cycle counter and keeps the probes a record needs to be interpolated between. Nothing
+// runs on device for this: the NOC serves the counter directly, so a read cannot be delayed by the profiler core's
+// push loop.
 //
 // bring_up() runs before the receiver thread starts and every later call belongs to that thread, so nothing here is
-// shared and the mapping needs no publication protocol.
+// shared and none of it needs a publication protocol.
 class RealtimeProfilerClockSync {
 public:
     // How far a measured rate may sit from the commanded AICLK and still be believed. Guards every place a rate is
@@ -111,18 +86,12 @@ public:
     // 0.7-0.9us here.
     static constexpr int kResyncProbes = 4;
 
-    // What the sync path costs its caller. `busy` is wall time inside resync(), which is dominated by blocking
-    // clock reads, so on the receiver thread it is time not spent draining.
+    // What the sync path costs its caller. `busy` is wall time inside resync(), which is dominated by the blocking
+    // clock read, so on the receiver thread it is time not spent draining.
     struct Cost {
         uint64_t resyncs = 0;
         uint64_t clock_reads = 0;
         std::chrono::nanoseconds busy{};
-        // The two terms sync_error() sums, tracked apart: which one dominates decides whether a tail is the clock
-        // moving or the read path being slow.
-        std::chrono::nanoseconds bracket_sum{};
-        std::chrono::nanoseconds bracket_max{};
-        std::chrono::nanoseconds drift_sum{};
-        std::chrono::nanoseconds drift_max{};
     };
 
     // `profiler_core` is the reserved tensix running the profiler kernels on `device`.
@@ -132,40 +101,26 @@ public:
     // The commanded AICLK stands if every fit attempt fails, so the mapping is usable either way.
     void bring_up();
 
-    // One probe, offered to the model. False only when the device did not answer.
+    // Takes one probe and retains it. False only when the device did not answer.
     bool resync();
-
-    [[nodiscard]] experimental::ProgramRealtimeClockSync mapping() const { return model_.mapping(); }
 
     [[nodiscard]] double frequency() const { return model_.frequency(); }
 
-    // Two probes bracket an interval, and the secant between them maps any device timestamp inside it without
-    // assuming anything about what the clock did in between.
+    // A probe, placed at the midpoint of the bracket its read fell in. Two of them map any device timestamp between
+    // them via their secant, whatever the clock did in between.
     struct Anchor {
         std::chrono::steady_clock::time_point host;
         uint64_t ticks = 0;
         std::chrono::nanoseconds bracket{};
     };
 
-    // Probes are retained, newest last, for exactly as long as a record might still need one as its near side: a
-    // record is drained well after it ran, so the probe standing when it arrives is usually *after* it, and keeping
-    // only that one would force every late record to be extrapolated backwards. There is no fixed depth -- the owner
-    // retires them against the oldest record it still holds, so the history is as deep as the outstanding work makes
-    // it and no deeper.
-
-    // The tightest pair of probes around [start_ticks, end_ticks]. Nullopt only while no probe has yet read past the
-    // record, which is the one thing worth waiting for. If the history no longer reaches back before the record, the
-    // oldest probe still held is used as the near side rather than refusing: a record that can never be bracketed must
-    // still go out, or staging never drains and the backlog feeds itself.
+    // The tightest pair of probes around [start_ticks, end_ticks], or nullopt while no probe has yet read past the
+    // record.
     [[nodiscard]] std::optional<std::pair<Anchor, Anchor>> probes_bracketing(
         uint64_t start_ticks, uint64_t end_ticks) const;
 
-    [[nodiscard]] std::optional<Anchor> last_probe() const {
-        return probes_.empty() ? std::nullopt : std::optional<Anchor>(probes_.back());
-    }
-
-    // Drops probes no record can need any more: everything before the newest one at or preceding `ticks`, which is the
-    // oldest timestamp its owner still has staged. Called after publishing, so the retained span tracks the backlog.
+    // Drops probes older than `ticks`, the oldest timestamp its owner still holds. This is what bounds the history:
+    // a probe is kept only while some record might still need it as a near side.
     void retire_probes_before(uint64_t ticks);
 
     // What a closed interval publishes its records with.
@@ -177,9 +132,7 @@ public:
     };
 
     // Chooses what a closed interval publishes with, given its two probes and the previous interval's slope, or
-    // nullopt when the pair cannot be taken as a chord at all. Pure by construction -- no device, no clock, no state --
-    // so the judgements it makes (when a chord is too short to take a slope from, how much of a rate change is real,
-    // what error the records carry) are testable without silicon, which is the only way they get to be trustworthy.
+    // nullopt when the pair cannot be taken as a chord at all. Pure: no device, no clock, no state.
     [[nodiscard]] static std::optional<ChordMapping> plan_chord_mapping(
         const Anchor& open,
         const Anchor& closing,
@@ -187,20 +140,19 @@ public:
         double previous_rate_noise,
         double sanity_rate);
 
-    // Error a device timestamp interpolated between `open` and `close` carries: it lands on the secant through two
-    // measured points, so it can only be out by however far those points themselves are placed.
+    // The endpoint term of an interpolated timestamp's error: it lands on the secant through two measured points, so
+    // it inherits how well those points are placed. A clock that moved within the interval adds to this; see the
+    // curvature term in plan_chord_mapping.
     [[nodiscard]] static std::chrono::nanoseconds interpolation_error(const Anchor& open, const Anchor& close) {
         return std::max(open.bracket, close.bracket) / 2;
     }
 
     [[nodiscard]] Cost cost() const { return cost_; }
 
-    void adopt_chord(double rate, std::chrono::steady_clock::time_point host_time, uint64_t device_ticks) {
-        model_.adopt_chord(rate, host_time, device_ticks);
-    }
+    void adopt_rate(double rate) { model_.adopt_rate(rate); }
 
 private:
-    // False when there is no usable cache entry, or the anchor probe failed and a full fit is needed.
+    // False when there is no usable cache entry, or the probe failed and a full fit is needed.
     bool try_cached_calibration();
     // False when the fit is not worth keeping and another attempt is likely to beat it.
     bool calibrate();
@@ -228,9 +180,9 @@ private:
     std::deque<Anchor> probes_;
     double wrap_period_frequency_ = 0.0;
     std::chrono::nanoseconds wrap_period_{};
-    // Recent tightest-read bracket, as an EMA. best_of stops early against this rather than an absolute target
-    // because the whole bracket distribution shifts with record load, so a fixed target would either never be met
-    // under load or never filter when quiet.
+    // Recent tightest-read bracket, as an EMA. best_of stops early against this rather than an absolute target: the
+    // whole bracket distribution shifts with record load, so a fixed target would never be met under load or never
+    // filter when quiet.
     std::chrono::nanoseconds typical_bracket_{};
 
     RealtimeProfilerClockModel model_;

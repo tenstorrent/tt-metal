@@ -88,11 +88,11 @@ private:
         // Records decoded but not yet published, waiting for the anchor that closes the interval they ran in. Their
         // host-facing fields are unset until then.
         std::vector<ProgramRealtimeRecord> staged;
-        // Secant rate of the last closed interval, and how uncertain that rate was. How much the next interval's rate
-        // differs from it is the only evidence available that the clock moved *within* an interval, which is what the
-        // chord cannot see -- but only the part of the difference neither measurement could have invented.
+        // How much the next chord's rate differs from these is the only evidence that the clock moved *within* an
+        // interval, which a chord cannot otherwise see.
         double last_interval_rate = 0.0;
         double last_interval_rate_noise = 0.0;
+        std::chrono::nanoseconds last_published_sync_error{};
 
         DeviceState();
         ~DeviceState();

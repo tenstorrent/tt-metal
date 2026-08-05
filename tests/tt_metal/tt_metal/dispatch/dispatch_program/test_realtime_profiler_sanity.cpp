@@ -387,30 +387,8 @@ TEST(RealtimeProfilerClockModel, FitRecoversTheDeviceClockFrequency) {
 
     ASSERT_TRUE(residual.has_value());
     EXPECT_NEAR(model.frequency(), 1.35, 1e-9);
-    EXPECT_TRUE(model.is_anchored());
     // Residual is bounded by truncation of device_ticks to whole cycles, i.e. under one cycle.
     EXPECT_LT(residual->rms_ns, 1.0);
-}
-
-// A slope needs two points, but the offset only needs one, and the seeded frequency is already a usable slope.
-TEST(RealtimeProfilerClockModel, OneProbeAnchorsWithoutFittingAFrequency) {
-    RealtimeProfilerClockModel model;
-    model.seed_frequency(1.35);
-    const auto start = host_instant(1'000'000'000);
-
-    EXPECT_FALSE(model.fit(make_fit_probes(start, /*frequency=*/0.5, 0, /*count=*/1), start).has_value());
-    EXPECT_EQ(model.frequency(), 1.35);
-    EXPECT_TRUE(model.is_anchored());
-}
-
-TEST(RealtimeProfilerClockModel, NoProbesLeaveTheModelUnanchored) {
-    RealtimeProfilerClockModel model;
-    model.seed_frequency(1.35);
-    const auto start = host_instant(1'000'000'000);
-
-    EXPECT_FALSE(model.fit({}, start).has_value());
-    EXPECT_EQ(model.frequency(), 1.35);
-    EXPECT_FALSE(model.is_anchored()) << "a mapping with no probe behind it must not look anchored";
 }
 
 // Consumers divide by the frequency, so a device whose tick count appears to run backwards must not reach them.
@@ -429,80 +407,6 @@ TEST(RealtimeProfilerClockModel, NonPositiveFittedSlopeKeepsTheSeededFrequency) 
     model.fit(probes, start);
 
     EXPECT_EQ(model.frequency(), 1.35);
-}
-
-TEST(RealtimeProfilerClockModel, AnchorSitsAtTheBracketMidpoint) {
-    RealtimeProfilerClockModel model;
-    model.seed_frequency(1.0);  // one tick per ns, so the mapping arithmetic below is exact
-    const auto now = host_instant(1'000'000'000);
-    constexpr auto kBracket = std::chrono::nanoseconds(1000);
-    const ClockProbe probe{.host_time = now, .bracket = kBracket, .device_ticks = 500'000};
-
-    EXPECT_TRUE(model.try_reanchor(probe));
-
-    const auto mapping = model.mapping();
-    const int64_t mapped_host_ns = static_cast<int64_t>(
-        (static_cast<double>(probe.device_ticks) - static_cast<double>(mapping.device_cycle_offset)) /
-        model.frequency());
-    EXPECT_EQ(mapped_host_ns, (now + kBracket / 2).time_since_epoch().count())
-        << "the device timestamp must map back to the midpoint of the bracket it was read inside";
-    EXPECT_EQ(mapping.sync_error, kBracket / 2);
-}
-
-TEST(RealtimeProfilerClockModel, FirstProbeIsAcceptedHoweverWide) {
-    RealtimeProfilerClockModel model;
-    model.seed_frequency(1.0);
-    EXPECT_TRUE(model.try_reanchor(ClockProbe{.host_time = host_instant(0), .bracket = std::chrono::seconds(1)}));
-}
-
-// A probe on a mapping that is still accurate says nothing the mapping does not already know, so taking it would
-// only trade a well-placed anchor for a noisier one.
-TEST(RealtimeProfilerClockModel, ProbeIsRejectedWhileTheMappingStillPredictsIt) {
-    RealtimeProfilerClockModel model;
-    model.seed_frequency(1.0);  // one tick per ns, so the mapping is simply device_ticks == host_ns
-    const auto anchored_at = host_instant(1'000'000'000);
-    // A probe sits exactly on the mapping when its device_ticks equal the host time at its bracket's midpoint.
-    const auto on_line = [](std::chrono::steady_clock::time_point at, std::chrono::nanoseconds bracket) {
-        return static_cast<uint64_t>((at + bracket / 2).time_since_epoch().count());
-    };
-    constexpr auto kBracket = std::chrono::nanoseconds(1200);
-    ASSERT_TRUE(model.try_reanchor(
-        ClockProbe{.host_time = anchored_at, .bracket = kBracket, .device_ticks = on_line(anchored_at, kBracket)}));
-
-    const auto later = anchored_at + std::chrono::milliseconds(1);
-    constexpr auto kWide = std::chrono::microseconds(30);
-    EXPECT_FALSE(
-        model.try_reanchor(ClockProbe{.host_time = later, .bracket = kWide, .device_ticks = on_line(later, kWide)}));
-    EXPECT_EQ(model.last_drift(), std::chrono::nanoseconds::zero());
-
-    // A tighter probe is taken regardless: it strictly improves where the anchor sits.
-    constexpr auto kTight = std::chrono::nanoseconds(600);
-    EXPECT_TRUE(
-        model.try_reanchor(ClockProbe{.host_time = later, .bracket = kTight, .device_ticks = on_line(later, kTight)}));
-}
-
-// A probe worse than the anchor it replaces is still worth taking once the miss exceeds its own resolution: a 30us
-// miss corrected to within 30us beats leaving the 30us standing.
-TEST(RealtimeProfilerClockModel, WideProbeIsTakenOnceTheMissExceedsIt) {
-    RealtimeProfilerClockModel model;
-    model.seed_frequency(1.0);
-    const auto anchored_at = host_instant(1'000'000'000);
-    // A probe sits exactly on the mapping when its device_ticks equal the host time at its bracket's midpoint.
-    const auto on_line = [](std::chrono::steady_clock::time_point at, std::chrono::nanoseconds bracket) {
-        return static_cast<uint64_t>((at + bracket / 2).time_since_epoch().count());
-    };
-    constexpr auto kBracket = std::chrono::nanoseconds(1200);
-    ASSERT_TRUE(model.try_reanchor(
-        ClockProbe{.host_time = anchored_at, .bracket = kBracket, .device_ticks = on_line(anchored_at, kBracket)}));
-
-    const auto later = anchored_at + std::chrono::milliseconds(1);
-    constexpr auto kWide = std::chrono::microseconds(60);  // half of it, 30us, is what this probe can resolve
-
-    EXPECT_FALSE(model.try_reanchor(
-        ClockProbe{.host_time = later, .bracket = kWide, .device_ticks = on_line(later, kWide) + 10'000}));
-    EXPECT_TRUE(model.try_reanchor(
-        ClockProbe{.host_time = later, .bracket = kWide, .device_ticks = on_line(later, kWide) + 100'000}))
-        << "a miss larger than the probe's own resolution is real and worth correcting";
 }
 
 // Drives RealtimeProfilerService directly rather than opening a mesh: a MeshDevice contributes exactly one record

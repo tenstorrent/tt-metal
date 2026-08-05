@@ -428,17 +428,12 @@ RealtimeProfilerReceiver::DeviceState::~DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::DeviceState(DeviceState&&) noexcept = default;
 
 void RealtimeProfilerReceiver::sync_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now) {
-    // Probed whether or not a consumer is attached: records are stamped by interpolating between the probes that
-    // bracket them, so a consumer attaching mid-stream gets correctly mapped records without a re-anchor on arrival --
-    // and skipping probes here would leave staged records with no chord to close them.
     if (now < dev_state.next_poll_at) {
         return;
     }
     constexpr auto interval = RealtimeProfilerClockSync::kSyncInterval;
-    // Advanced from the scheduled time rather than from `now` so a device keeps the phase it was seeded with in
-    // stagger_sync_phases(); scheduling off `now` would let every device converge onto whichever pass ran late and
-    // put all of the blocking clock reads in one drain pass. Falling a whole interval behind gives up the phase
-    // rather than issuing a burst of catch-up probes.
+    // Advanced from the scheduled time, not from `now`, so a device keeps its staggered phase; scheduling off `now`
+    // would let every device converge onto whichever pass ran late and put all the blocking reads in one drain pass.
     dev_state.next_poll_at += interval;
     if (dev_state.next_poll_at < now) {
         dev_state.next_poll_at = now + interval;
@@ -474,19 +469,10 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
         total.resyncs += cost.resyncs;
         total.clock_reads += cost.clock_reads;
         total.busy += cost.busy;
-        total.bracket_sum += cost.bracket_sum;
-        total.bracket_max = std::max(total.bracket_max, cost.bracket_max);
-        total.drift_sum += cost.drift_sum;
-        total.drift_max = std::max(total.drift_max, cost.drift_max);
     }
     const uint64_t resyncs = total.resyncs - sync_cost_at_last_report_.resyncs;
     const uint64_t reads = total.clock_reads - sync_cost_at_last_report_.clock_reads;
     const auto busy = total.busy - sync_cost_at_last_report_.busy;
-    const auto per_resync = [resyncs](std::chrono::nanoseconds total_ns) {
-        return resyncs == 0 ? std::chrono::nanoseconds::zero() : total_ns / static_cast<int64_t>(resyncs);
-    };
-    const auto bracket_mean = per_resync(total.bracket_sum - sync_cost_at_last_report_.bracket_sum);
-    const auto drift_mean = per_resync(total.drift_sum - sync_cost_at_last_report_.drift_sum);
     const auto window = now - last_sync_cost_report_;
     sync_cost_at_last_report_ = total;
     last_sync_cost_report_ = now;
@@ -497,19 +483,14 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
     log_info(
         tt::LogMetal,
         "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.2f} per resync), "
-        "{:.2f}us mean per resync, {:.2f}% of the receiver thread | chosen bracket mean {:.2f}us max {:.2f}us, "
-        "measured drift mean {:.2f}us max {:.2f}us",
+        "{:.2f}us mean per resync, {:.2f}% of the receiver thread",
         std::chrono::duration<double>{window}.count(),
         devices_.size(),
         resyncs,
         reads,
         static_cast<double>(reads) / static_cast<double>(resyncs),
         std::chrono::duration<double, std::micro>{busy}.count() / static_cast<double>(resyncs),
-        100.0 * std::chrono::duration<double>{busy}.count() / std::chrono::duration<double>{window}.count(),
-        std::chrono::duration<double, std::micro>{bracket_mean}.count(),
-        std::chrono::duration<double, std::micro>{total.bracket_max}.count(),
-        std::chrono::duration<double, std::micro>{drift_mean}.count(),
-        std::chrono::duration<double, std::micro>{total.drift_max}.count());
+        100.0 * std::chrono::duration<double>{busy}.count() / std::chrono::duration<double>{window}.count());
 }
 
 void RealtimeProfilerReceiver::report_stalled_syncs(std::chrono::steady_clock::time_point now) {
@@ -585,19 +566,13 @@ void RealtimeProfilerReceiver::stage_pages(
     }
 }
 
-// Publishes staged records, each stamped from the secant between the two probes that surround it.
-//
-// A record is drained well after it ran, so the probe standing when it arrives is usually after it; the pair that
-// brackets it comes from the probe history rather than being assumed to be the newest. Records no probe has yet read
-// past stay staged -- that is the only thing they wait for -- so nothing is extrapolated forward and there is no
-// second mapping to fall back to.
+// Publishes staged records, each stamped from the secant between the two probes that surround it. A record no probe
+// has yet read past stays staged until one does.
 bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
     if (dev_state.staged.empty()) {
         return false;
     }
 
-    // Each record is stamped from its own pair of probes, but they all go out in one batch: a batch carries per-record
-    // mappings, so splitting it per pair would only multiply ring publishes and consumer wakeups.
     size_t ready = 0;
     while (ready < dev_state.staged.size()) {
         const ProgramRealtimeRecord& first = dev_state.staged[ready];
@@ -625,13 +600,11 @@ bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
 
         dev_state.last_interval_rate = chord->frequency;
         dev_state.last_interval_rate_noise = chord->rate_noise;
-        // The chord measures the local AICLK directly, so it is what the next chord is sanity-checked against.
-        dev_state.clock_sync->adopt_chord(chord->frequency, closing.host, closing.ticks);
+        dev_state.last_published_sync_error = chord->mapping.sync_error;
+        dev_state.clock_sync->adopt_rate(chord->frequency);
     }
 
-    // Retired whatever the remaining backlog can no longer reach back to, published or not: probes accrue at the sync
-    // rate, so leaving them for a successful publish lets the history grow without bound exactly when records are
-    // already struggling to drain.
+    // Retired even when nothing published: probes accrue whether or not records drain.
     dev_state.clock_sync->retire_probes_before(
         ready < dev_state.staged.size() ? dev_state.staged[ready].start_timestamp
                                         : std::numeric_limits<uint64_t>::max());
@@ -908,7 +881,7 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
             fifo_pages_window_max_ = 0;
             std::chrono::nanoseconds worst_sync_error{};
             for (const auto& dev_state : devices_) {
-                worst_sync_error = std::max(worst_sync_error, dev_state.clock_sync->mapping().sync_error);
+                worst_sync_error = std::max(worst_sync_error, dev_state.last_published_sync_error);
             }
             TracyPlot(
                 "RT profiler sync error (us)", (std::chrono::duration<double, std::micro>{worst_sync_error}.count()));
@@ -971,8 +944,7 @@ uint64_t RealtimeProfilerReceiver::drain_on_shutdown(std::vector<uint32_t>& page
             std::this_thread::sleep_for(kShutdownDrainQuietBackoff);
         }
     }
-    // Nothing will close these intervals after the thread stops, so a last probe is taken to close them properly and
-    // anything it cannot cover is published against the standing mapping rather than held.
+    // Nothing probes after this thread stops, so the last records need their far side now.
     bool published = false;
     for (auto& dev_state : devices_) {
         dev_state.clock_sync->resync();
