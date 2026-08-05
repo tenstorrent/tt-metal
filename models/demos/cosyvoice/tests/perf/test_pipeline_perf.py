@@ -139,14 +139,16 @@ def test_device_end_to_end_rtf(device):
     sine_g = load_golden("hift.sinegen")
     phase = dev(as_torch(sine_g["call0.in_phase_vec"]), dtype=ttnn.float32)
     noise = dev(as_torch(sine_g["call0.out_noise"]).permute(0, 2, 1).contiguous(), dtype=ttnn.float32)
-    wav, _ = hift.inference(mel, mel_len2, phase_vec=phase, sine_noise=noise)  # warm-up
+    wav, _, src = hift.inference(mel, mel_len2, phase_vec=phase, sine_noise=noise)  # warm-up
+    ttnn.deallocate(src)
     ttnn.deallocate(wav)
     ttnn.synchronize_device(device)
     t0 = time.perf_counter()
-    wav, _ = hift.inference(mel, mel_len2, phase_vec=phase, sine_noise=noise)
+    wav, _, src = hift.inference(mel, mel_len2, phase_vec=phase, sine_noise=noise)
     ttnn.synchronize_device(device)
     hift_s = time.perf_counter() - t0
     ttnn.deallocate(wav)
+    ttnn.deallocate(src)
     ttnn.deallocate(mel)
 
     total_s = llm_total_s + flow_s + hift_s
