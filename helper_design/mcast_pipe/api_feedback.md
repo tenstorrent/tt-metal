@@ -245,7 +245,7 @@ the rollout remains `MCAST_PIPE_API_VERSION=10`.
 ## API-004 — Support offset grids in `Mcast1D`
 
 - **Date:** 2026-08-04
-- **Status:** Open
+- **Status:** Implemented
 - **Surface:** `ttnn::kernel_lib::host::Mcast1D`
 - **Production evidence:** the in1 multicast family in
   `matmul_multicore_reuse_mcast_2d_program_factory.cpp`
@@ -316,6 +316,23 @@ potentially enlarged `all_cores` used to accommodate extra in0-sharded cores.
   sequentially run both transpose orientations and the mapped matmul inventory.
 - If caller-facing semantics change, bump `MCAST_PIPE_API_VERSION` and record
   the result in `changelog.md`.
+
+### Resolution
+
+Implemented in Gate 3. `Mcast1D` now accepts any dense rectangular
+`CoreRangeSet`, retains its logical origin, and derives sender placement, line
+indices, coordinates, multicast bounds, and semaphore coverage relative to
+that origin. Sparse sets are rejected by comparing their size with the
+bounding rectangle.
+
+Both legacy and descriptor matmul-2D paths now use one offset-aware `Mcast1D`
+over `all_cores_with_work`, selecting `PerRow` or `PerColumn` from
+`transpose_mcast`. Host coverage exercises offset grids on both NoCs, uniform
+and diagonal placement, coordinate and line-index lookup, semaphore ranges,
+and one-core degeneracy. `McastHostFixture` passed 25/25; focused 1D and both
+2D orientations passed; and `MM-IN1-ALL` passed 302 cases with 188 expected
+skips. The change did not alter the wire, so the API remained v9 until the
+independent self-describing-wire v10 bump in Gate 4.
 
 ## API-005 — Make payload source-L1 lifetime explicit per send
 

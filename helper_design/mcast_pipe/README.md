@@ -4,47 +4,31 @@
 the active review queue, and where to look next. Do not read the historical
 design and migration artifacts unless a task below links to them.
 
-- Last reviewed: 2026-08-04
+- Last reviewed: 2026-08-05
 - Branch: `sjovic/mcast-migration`
 - Baseline: `origin/llk_helper_library` at `4a1d6a97ca9`
 - Current helper API: v10
 
 ## Where the effort is now
 
-The v10 rollout is reconciled through the self-describing rotating-wire migration at the
-current branch HEAD. The machine-readable ledger records:
+The v10 rollout is reconciled through the final release gate at the current
+branch HEAD. The machine-readable ledger records:
 
 - 13 migrated kernel rows;
 - 12 migrated host bindings;
 - 78 deferred kernel rows;
 - no pending or `needs_recheck` rows.
 
-The completed migrations have correctness and JIT-path evidence, but the API
-and migration review is not finished. Newly recorded feedback is intentionally
-outside the old rollout report and is the active work queue.
+The completed migrations have correctness, fresh-JIT, and matched performance
+evidence. All seven gates in `mcast_feedback_plan_2026-08-04.md` are green.
 
-## Choosing the next work
+## Remaining review work
 
-At the start of a new session, review every **Open** item in both feedback logs,
-inspect the current code and tests, and choose the next coherent unit based on
-dependency, risk, and validation cost. The document order and item numbers are
-identifiers, not a priority list. Implemented API entries are retained as
-contract context, not pending work.
-
-Known coupling constrains what can be made atomic without prescribing which
-unit must be selected first:
-
-| Candidate work | Coupling to account for |
-| --- | --- |
-| API-001 | Changes the wire offsets exercised by MIG-001 and MIG-003. |
-| API-002 | May share a self-describing metadata word with API-001, but role enforcement can be designed independently of RT compaction. |
-| API-003 + MIG-002 | Signal-only handshake semantics unblock absorption of sort's row-start readiness gate. |
-| API-004 + MIG-003 | Offset-grid `Mcast1D` uses matmul-2D as its first production test; semaphore ownership and opaque argument insertion should be handled in the same binding change. |
-| MIG-004 | Independent GroupNorm wrapped-shape performance validation. |
-
-An agent should select and state its proposed unit after checking these
-relationships; it should not mechanically follow this table from top to
-bottom.
+API-002 face metadata and RT compaction remain intentionally open and were
+explicitly deferred from this rollout. API-001, API-003 through API-006, and
+MIG-001 through MIG-004 are implemented. Any future API-002 work should begin
+as a separate planned wire revision rather than extending this completed gate
+sequence.
 
 ## Active review queue
 

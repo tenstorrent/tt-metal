@@ -6,6 +6,24 @@ feedback round lands.
 
 ---
 
+## Round 21 — final v10 release gate (2026-08-05)
+
+- **Validation:** the host build, helper host/device suites, opaque-boundary
+  audit, and all mapped Matmul, Conv, GroupNorm, and Sort correctness
+  inventories passed. Fresh artifacts cover all 13 migrated kernels and the
+  build covers all 12 migrated host bindings.
+- **Performance:** nine cases passed directly. Legacy GroupNorm initially
+  appeared +2.508% against an older artifact, but a controlled isolated
+  checkout reproduced the actual pre-migration baseline `4a1d6a97ca9` at
+  `49,694.26516945126 ns` and current at `49,836.38882787317 ns` under the
+  same firmware, build, and profiler environment. Current is +0.285996%,
+  within the 1.5% gate. The previously passing migrated snapshot measured
+  `49,850.05759004791 ns`, confirming no migration-commit regression.
+- **Result:** all seven gates are green. The helper remains API v10; API-002
+  face metadata and RT compaction remain deliberately deferred.
+
+---
+
 ## Round 20 — GroupNorm production geometry classification (2026-08-05)
 
 - **Trigger (MIG-004):** the fixed three-block GroupNorm sender wire always executes middle, first,

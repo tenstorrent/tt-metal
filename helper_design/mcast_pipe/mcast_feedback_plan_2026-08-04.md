@@ -338,7 +338,7 @@ This section is the durable record of the automated execution of this plan. Comm
 - Gate 6 is green. The host coverage and metadata are committed as `fc4f251be19`
   (`Close GroupNorm mcast geometry coverage`).
 
-### 2026-08-05 — Gate 7 (not green)
+### 2026-08-05 — Gate 7 (green after controlled baseline rerun)
 
 - `./build_metal.sh` passed. `McastHostFixture.*` and the three GroupNorm geometry tests passed 28/28;
   the complete helper device suite passed 77/77 from an initially empty cache with 0/133 cache hits;
@@ -366,7 +366,29 @@ This section is the durable record of the automated execution of this plan. Comm
   baseline while later records form the failing median. The existing historical baseline artifact
   is stable across all 20 records, so a same-environment historical checkout is required to distinguish
   a code regression from a current profiler/dispatch-state effect before making a broader kernel change.
-- Gate 7 is not green. Further isolation requires running the baseline and intermediate commits in a
-  separate checkout; the primary checkout has unrelated dirty state and the repository instructions
-  prohibit creating a TT-Metal worktree without explicit permission. No correctness or production-code
-  change is left uncommitted.
+- The user authorized an isolated checkout, so the apparent blocker was reproduced in
+  `/localdev/sjovic/tt-metal.worktrees/mcast-perf-bisect` with its own recursively initialized submodules,
+  Release build, and Python environment. Import verification resolved `ttnn` from that worktree. Because
+  the realtime benchmark was added after the older snapshots, the same harness from `f568dfe62ef` was
+  carried into those snapshots as a test-only untracked file.
+- Same-environment runs used the same Blackhole p100a, firmware `19.6.0`, realtime-profiler frequency of
+  approximately 1.35 GHz, three warmups, and 20 measured records. The actual pre-migration baseline
+  `4a1d6a97ca9` measured `49,694.26516945126 ns`; the previously passing migrated snapshot
+  `28356d43846` measured `49,850.05759004791 ns`; and current `2699996541a` measured
+  `49,836.38882787317 ns`.
+- Current is +0.285996% versus the freshly reproduced pre-migration baseline and -0.027420% versus the
+  previously passing migrated snapshot. The current result is `603.2903191198566 ns` below the 1.5%
+  limit of `50,439.679146993025 ns` — **PASS**. Raw artifacts are under the worktree's
+  `generated/mcast_migration_rt/` directory with `-worktree` commit tags.
+- The old `48,593.7037037037 ns` artifact does not reproduce for either the baseline or the previously
+  passing migrated snapshot under the current environment. The controlled comparison therefore rules
+  out a migration-commit regression; no intermediate bisect or speculative production-code change is
+  warranted.
+- Final consistency cleanup marked API-004 and MIG-003 implemented with their Gate 2/3 evidence,
+  corrected the ledger aggregate and test-map metadata to v10, and refreshed the README, changelog,
+  report, and dashboard. API-002 remains the one deliberately open/deferred API item. The machine
+  checks report API v10, 13 migrated kernels, 12 migrated host bindings, and zero open
+  `needs_recheck` flags; both JSON files parse, the source audit passes 10/10, and `git diff --check`
+  is clean.
+- Gate 7 is green. All seven ordered gates are complete, and no correctness or production-code change is
+  left uncommitted.
