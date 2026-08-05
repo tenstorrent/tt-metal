@@ -1,19 +1,20 @@
 ---
 name: tt-dit-loop
 description: >-
-  Run a long-lived models/tt_dit campaign — many rounds, across many sessions,
-  unattended — for either bringup or performance. Use when the work will not
-  finish in one sitting: "run this to convergence", "keep going until it hits the
-  target", "resume the campaign", "what's the state of X", "pick this back up",
-  or any request to drive a model from where it is now to a stated goal without
-  supervision. Owns the outer loop only: fixed baseline, round lifecycle,
-  checkpoint, ledgers, stop gates, recovery after an interrupt or device hang.
-  Work inside a round is delegated — tt-dit-add-model for correctness,
-  tt-dit-benchmark-profile for measurement, tt-dit-performance for lever choice,
-  tt-dit-kernel-research for missing ops. A single-phase question ("profile this
-  layer", "why is this PCC low", "does a fused op exist") goes to those directly.
-  Not for one-shot tasks, and not the built-in `loop` skill — that reruns a
-  prompt on a timer; this drives a model to a measured target.
+  Use for multi-round, multi-session work on models/tt_dit models (bringup or
+  performance) where one exchange won't finish it. Trigger whenever the ask is
+  open-ended and goal-driven rather than a single question: bring a model or
+  all its components up until every gate is green, push a latency toward a
+  target, run unattended for hours or days, resume or check the state of work
+  already in progress, or decide whether an in-flight loop should keep going,
+  change approach, or stop. Also trigger on the problems this solves even when
+  no loop is mentioned: a state or STATE.md file grown too large to load,
+  losing track of what was already tried, or re-investigating the same op or
+  source across sessions. Assume this skill when the scope spans many rounds,
+  even if the user never says "campaign" or "loop". Delegate single-phase asks
+  instead (profile one layer, debug one PCC, find one op, one benchmark
+  number). Not the built-in `loop` skill, which just reruns a prompt on a
+  timer.
 ---
 
 # TT-DiT Loop
