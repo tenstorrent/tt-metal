@@ -829,8 +829,9 @@ Result conv2d_L1(
     // wrong data. Uses the base per_core_N * K product (a lower bound: the factory's *kernel_size/*2 multipliers
     // only push it higher), so this never false-FATALs a conv that actually fits.
     if (arch_is_quasar && height_sharded_conv && !mm_conv) {
+        const DataType resolved_weights_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
         const uint32_t weight_units_per_tile =
-            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(conv_config.weights_dtype)) / 16u;
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(resolved_weights_dtype)) / 16u;
         const uint64_t per_core_weight_ring_units =
             static_cast<uint64_t>(opt_conv_op_parallel_config.per_core_out_matrix_width_ntile) *
             opt_conv_op_block_config.act_block_w_ntiles * weight_units_per_tile;
