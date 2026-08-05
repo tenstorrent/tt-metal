@@ -240,7 +240,13 @@ def main():
     args.lang = "en"
     args.ref_seconds = 30  # conditioning window (coqui gpt_cond_len)
     args.spk_seconds = 8  # speaker-embedding window (device mel frontend caps long audio)
-    args.max_tokens = 400  # cap on audio codes (sampling usually stops earlier)
+    # Cap on audio codes. This is NOT a "stop earlier if you can" budget: the traced decode loop
+    # replays a fixed max_tokens steps and treats STOP as a post-loop trim (a captured trace cannot
+    # branch), so every step above what the text actually needs is ~9.4 ms of pure waste — 400 cost
+    # ~2 s per pass while real single-pass generations land at 160-210 codes. 240 sits above
+    # MAX_SINGLE_PASS_CODES (205) with margin for the overshoot the sampler is entitled to, and it
+    # also shrinks the KV cache (max_seq scales with it), so nothing that fits the pass is truncated.
+    args.max_tokens = 240
     # args.min_tokens comes from --min-tokens. It stays 0 by default because a floor is only right
     # for *long* prompts. Greedy, on this reference text (96 wrapped tokens, needs ~196 codes):
     # 0 stops at 152 codes and transcribes at CER 0.151, cut after "remarkable accuracy"; -1
@@ -257,6 +263,7 @@ def main():
 
     from scipy.signal import resample_poly
 
+    t_wall0 = time.time()  # end-to-end wall clock (weights + audio prep + generation + write)
     logger.info("loading XTTS-v2 weights ...")
     sd = load_xtts_state_dict()
 
@@ -312,14 +319,21 @@ def main():
 
     # Each take runs on its own freshly-opened device (see _take_on_device); best-of-N keeps
     # the lowest-CER take. A single take (default) is just one open/generate/close.
-    wav_tt, codes, best_score, best_detail = None, None, None, None
+    wav_tt, codes, best_score, best_detail, best_metrics = None, None, None, None, None
     gap = np.zeros(int(0.12 * OUTPUT_SAMPLE_RATE), dtype="float32")  # ~120 ms between chunks
     for i in range(n):
         pieces, code_parts, dt = [], [], 0.0
+        # Latency is measured around the WHOLE take (device open + model build + generate + vocode),
+        # not just the traced compute, because that is what a caller actually waits for. dt (the sum
+        # of the _generate_one timings) is the device-compute part of it, reported alongside.
+        t_take0 = time.time()
+        ttfc = None  # time-to-first-chunk: when the first chunk's audio became playable
         for j, (clean, w) in enumerate(chunks):
             args.min_tokens_resolved = resolve_min_tokens(w.shape[1])
             wav_j, codes_j, dt_j = _take_on_device(sd, reference.decoder_full, w, wav, spk_wav, args, i)
             dt += dt_j
+            if ttfc is None:
+                ttfc = time.time() - t_take0
             pieces.append(wav_j.astype("float32"))
             code_parts.append(codes_j)
             nc = codes_j.shape[1]
@@ -329,6 +343,7 @@ def main():
                     f"({'stop' if nc < args.max_tokens else 'max'}), "
                     f"{wav_j.shape[0] / OUTPUT_SAMPLE_RATE:.2f}s, {dt_j:.1f}s"
                 )
+        latency = time.time() - t_take0
         # single pass -> the waveform IS the output, no join
         wav_i = (
             pieces[0]
@@ -338,13 +353,22 @@ def main():
         codes_i = torch.cat(code_parts, dim=1)
         n_codes = codes_i.shape[1]
         stopped = n_codes < args.max_tokens
+        audio_s = wav_i.shape[0] / OUTPUT_SAMPLE_RATE
+        metrics = {
+            "latency": latency,  # wall time for the full clip
+            "device": dt,  # of which: traced device generate + vocode
+            "ttfc": ttfc,  # delay until the first chunk is playable (== latency when unchunked)
+            "audio_s": audio_s,
+            "rtf": latency / max(audio_s, 1e-9),  # < 1 => faster than real time
+            "codes": n_codes,
+        }
         score, detail = _score_take(wav_i, args.text, codes_i) if n > 1 else (0.0, "")
         logger.info(
             f"take {i + 1}/{n}: {n_codes} codes ({'stop' if stopped else 'max'}), "
-            f"{wav_i.shape[0] / OUTPUT_SAMPLE_RATE:.2f}s, {dt:.1f}s" + (f" | {detail}" if detail else "")
+            f"{audio_s:.2f}s audio, {latency:.1f}s wall (RTF {metrics['rtf']:.2f})" + (f" | {detail}" if detail else "")
         )
         if best_score is None or score < best_score:
-            wav_tt, codes, best_score, best_detail = wav_i, codes_i, score, detail
+            wav_tt, codes, best_score, best_detail, best_metrics = wav_i, codes_i, score, detail, metrics
     if n > 1:
         logger.info(f"selected best of {n} -> {best_detail}")
 
@@ -353,6 +377,21 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     sf.write(args.output, wav_tt, OUTPUT_SAMPLE_RATE)
     logger.info(f"wrote device audio -> {os.path.abspath(args.output)}")
+
+    m = best_metrics
+    e2e = time.time() - t_wall0
+    logger.info("---- performance ----")
+    logger.info(f"  audio duration      : {m['audio_s']:.2f} s  ({m['codes']} audio codes)")
+    logger.info(f"  wall time / latency : {m['latency']:.2f} s  (device generate+vocode {m['device']:.2f} s)")
+    logger.info(
+        f"  time-to-first-chunk : {m['ttfc']:.2f} s"
+        + ("  (single pass -> same as wall time)" if len(chunks) == 1 else f"  (1 of {len(chunks)} chunks)")
+    )
+    logger.info(
+        f"  RTF                 : {m['rtf']:.2f}  "
+        f"({'faster' if m['rtf'] < 1 else 'slower'} than real time; {1.0 / m['rtf']:.2f}x)"
+    )
+    logger.info(f"  end-to-end          : {e2e:.2f} s  (incl. weight load + audio prep + write)")
 
     if args.write_torch_ref:
         # A/B on the SAME codes the best device take produced (teacher-forced), so the two WAVs
