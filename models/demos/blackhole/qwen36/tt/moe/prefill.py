@@ -2,16 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """On-device expert prefill forward using sparse_matmul (seq_len > 1).
 
-Mirrors the gpt_oss experts prefill path (all-ones sparsity computes every expert; the
-dense routing weights zero out the inactive ones after down_proj) with SwiGLU and the
-qwen reduce-scatter. The sequence is processed in chunks of PREFILL_CHUNK_SIZE tokens;
-within a chunk gate and up run as ONE fused sparse_matmul over concatenated weights
-(N = 2*intermediate), which doubles the N-gridded core count (4 -> 8) vs two separate
-matmuls; the fused output stays [up | gate] and is consumed directly by ttnn.swiglu
-(up * silu(gate)) — no split slices. group_size = chunk/32
-folds into the sparse batch dim so per_core_M stays 1 tile. The down projection's M *is*
-the chunk length, so its program config is sized from the real chunk_len (per_core_M =
-chunk_len/32); PREFILL_CHUNK_SIZE bounds that so the down grid/L1 never overflows.
+Follows the gpt_oss experts prefill path (routing weights zero out inactive experts after
+down_proj) with SwiGLU and the qwen reduce-scatter. The sequence runs in chunks of
+PREFILL_CHUNK_SIZE tokens; gate and up fuse into ONE sparse_matmul over concatenated
+weights (N = 2*intermediate), feeding ttnn.swiglu directly as [up | gate] with no split.
+group_size = chunk/32 folds into the sparse batch dim so gate/up keep per_core_M = 1,
+while down's M is the whole chunk_len; PREFILL_CHUNK_SIZE bounds down's grid/L1.
 """
 
 import torch
@@ -145,9 +141,16 @@ def prefill_forward(
         hidden_chunks = [hidden_states]
         routing_chunks = [routing_weights]
 
+    chunked = len(hidden_chunks) > 1
     result_acc = None
     for h_chunk, r_chunk in zip(hidden_chunks, routing_chunks):
         chunk_result = _process_prefill_chunk(h_chunk, r_chunk, weights, config, prefill_sparsity)
+        if chunked:
+            # split() produced fresh per-chunk copies (not the caller's x/routing that the shared
+            # expert reuses on the single-chunk path), so free them as we go instead of holding
+            # every chunk resident for the whole loop.
+            h_chunk.deallocate(True)
+            r_chunk.deallocate(True)
         if result_acc is None:
             result_acc = chunk_result
         else:

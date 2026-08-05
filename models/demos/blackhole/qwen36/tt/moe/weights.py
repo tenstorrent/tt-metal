@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Weight loading for Qwen3.5-MoE routed experts.
+"""Weight loading for the routed experts.
 
 The 35B-A3B checkpoint stores experts FUSED as 3D nn.Parameters (no `.weight`):
   mlp.experts.gate_up_proj  [E, 2*I, H]  (rows [:I]=gate, [I:]=up)
@@ -29,8 +29,6 @@ TILE_SIZE = 32
 
 @dataclass(frozen=True)
 class ExpertWeights:
-    gate_proj: ttnn.Tensor  # [1, E, H, I_per_device]
-    up_proj: ttnn.Tensor  # [1, E, H, I_per_device]
     down_proj: ttnn.Tensor  # [1, E, I_per_device, H]
     intermediate_size_per_device: int
     gate_up_proj: ttnn.Tensor = None  # [1, E, H, 2*I_per_device] = concat(up, gate) on N
@@ -134,10 +132,12 @@ def load_expert_weights(
     # so a local concat yields [up | gate] with N = 2*full_intermediate. This order matches
     # ttnn.swiglu's first_half * silu(second_half) contract.
     gate_up_proj_tt = ttnn.concat([up_proj_tt, gate_proj_tt], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # Only the fused gate_up_proj is consumed by decode/prefill; free the standalone gate/up copies
+    # so they do not sit resident in DRAM for the model's lifetime (they are still disk-cached).
+    up_proj_tt.deallocate(True)
+    gate_proj_tt.deallocate(True)
 
     return ExpertWeights(
-        gate_proj=gate_proj_tt,
-        up_proj=up_proj_tt,
         down_proj=down_proj_tt,
         intermediate_size_per_device=per_device_intermediate,
         gate_up_proj=gate_up_proj_tt,

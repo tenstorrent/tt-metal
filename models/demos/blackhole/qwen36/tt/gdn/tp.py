@@ -148,8 +148,8 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
     # Depthwise conv1d weight [qkv_dim, 1, K], host-held mesh-sharded (dim=0) for prepare_conv_weights /
-    # _conv1d_prefill. Split into gdn_conv_channel_chunks per-device channel chunks (list) so each native
-    # L1_FULL conv call fits L1 on the wide 35B-A3B GDN; chunks=1 keeps the single tensor (27B unchanged).
+    # _conv1d_prefill. When gdn_conv_channel_chunks > 1 it is a list of per-device channel-chunk weights
+    # (see TPGatedDeltaNet.__init__ for why); chunks=1 keeps the single tensor.
     W1d = torch.stack(taps, dim=-1).reshape(args.gdn_qkv_dim, 1, args.gdn_conv_kernel_size).contiguous()
     n_cc = getattr(args, "gdn_conv_channel_chunks", 1)
 
@@ -163,6 +163,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
 
     if n_cc > 1:
         C_dev = args.gdn_qkv_dim // tp
+        assert C_dev % n_cc == 0, f"GDN per-device channels {C_dev} not divisible by gdn_conv_channel_chunks {n_cc}"
         cw = C_dev // n_cc
         Wd = W1d.reshape(tp, C_dev, 1, args.gdn_conv_kernel_size)  # per-device channel block
         tw["conv_w1d"] = [
@@ -336,11 +337,12 @@ class TPGatedDeltaNet:
             weights_dtype=ttnn.bfloat16,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
-        # Depthwise conv over channel chunks (per-channel-independent → exact); each native L1_FULL
-        # conv call handles C/n_cc channels so the channel-dominated CB fits L1. n_cc=1 (27B) is the
-        # original single call. Weights prepped once per chunk (warmup); trace replay stays device-only.
+        # Depthwise conv over channel chunks (per-channel-independent → concatenation is exact);
+        # n_cc=1 (27B) is the original single call. Weights prepped once per chunk (warmup) so trace
+        # replay stays device-only.
         w1d_chunks = self.tw["conv_w1d"] if isinstance(self.tw["conv_w1d"], list) else [self.tw["conv_w1d"]]
         n_cc = len(w1d_chunks)
+        assert C % n_cc == 0, f"GDN conv channels {C} not divisible by n_cc {n_cc}"
         cw = C // n_cc
         if self._conv1d_wprep is None:
             self._conv1d_wprep = [
