@@ -177,7 +177,9 @@ class TtTransformerLM:
         length = prefix.shape[1]
         caches = self.decoder.empty_cache(max_len, length)
         mask = self._dev_mask(right_aligned_bias(max_len, length, length, causal=True))
-        return self.decoder.forward_chunk_fixed(prefix, caches, max_len, valid=length, mask=mask)
+        out = self.decoder.forward_chunk_fixed(prefix, caches, max_len, valid=length, mask=mask)
+        ttnn.deallocate(mask)
+        return out
 
     def decode_step(self, token_id: int, caches, max_len: int, valid: int):
         """One token in, one `[1, 1, 1024]` hidden state out.
@@ -193,10 +195,27 @@ class TtTransformerLM:
         mask = self._dev_mask(right_aligned_bias(max_len, min(valid, max_len), 1))
         ys, caches = self.decoder.forward_chunk_fixed(x, caches, max_len, valid=valid, mask=mask)
         ttnn.deallocate(x)
+        # Freed every step, not cached: the *values* change with `valid` even though
+        # the shape does not, and a few hundred decode steps of un-freed masks is
+        # enough to exhaust the allocator part-way through a sweep.
+        ttnn.deallocate(mask)
         return ys, caches
 
     def _dev_mask(self, m):
         return ttnn.from_torch(m, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+    def release_caches(self):
+        """Drop the per-length constants held between utterances.
+
+        `positional()` and `causal_mask()` memoise by size, which is right within
+        one utterance and wrong across a sweep: every utterance has its own prefix
+        length and its own bucket, so the tables grow without bound and the
+        allocator runs out somewhere in the middle. The weights are untouched.
+        """
+        for cache in (self._causal, self.decoder._pos_cache):
+            for t in cache.values():
+                ttnn.deallocate(t)
+            cache.clear()
 
     # ----------------------------------------------------------------------
     def generate(
