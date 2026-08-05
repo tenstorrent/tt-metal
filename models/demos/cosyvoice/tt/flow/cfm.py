@@ -107,18 +107,25 @@ class TtConditionalCFM:
         traced region is exactly the 16 resnet + 64 transformer blocks that cost
         something.
 
-        **This does not work yet, and `use_trace` defaults to False because of it.**
-        Capture fails with `!trace_id_.has_value()` raised from
-        `write_shard_to_device` -- a host->device write during capture. The cause is
-        `TtConv1d`/`TtConvTranspose1d`: both build their weight with
-        `ttnn.from_torch(..., layout=ROW_MAJOR)` and **no `device=`**, so the weight
-        is a *host* tensor that `ttnn.conv1d` uploads on every call. The estimator
-        has ~37 convolutions, so a capture can never be clean until those weights
-        are device-resident.
+        **This does not work, and `use_trace` defaults to False because of it.**
+        Capture fails with `!trace_id_.has_value()` -- a host->device write while a
+        trace is open. **`ttnn.conv1d` is not trace-compatible in this build**, and
+        the estimator has ~37 convolutions.
 
-        That is worth fixing for more than tracing: it is a per-call upload the flow
-        decoder and the vocoder have both been paying on every convolution. It is
-        the next lever, and it is why the flow's 0.352 RTF share is still untouched.
+        Measured directly (see the probe recorded in the notes): a bare `conv1d`
+        captured on its own fails with a host weight at
+        `fd_mesh_command_queue.cpp:762` and with a **device-resident** weight at
+        `:809` -- a different write, but a write either way. Making the weights
+        device-resident is therefore not the fix; it is accepted and gives
+        bit-identical output (`max|d| 0.000e+00`), but the op writes internally
+        regardless.
+
+        This is why the AR decoder traced cleanly and this does not: the decoder
+        contains **no convolutions**. The same limit blocks tracing the vocoder,
+        which has ~40. Until `ttnn.conv1d` can be captured, trace capture is
+        available to attention stacks and not to conv stacks -- worth carrying into
+        `03_plan.md`, since it constrains every conv-based model on this stack, not
+        just this one.
         """
         b, t_len, ch = x.shape
         self._x_buf = ttnn.concat([x, x], dim=0)
