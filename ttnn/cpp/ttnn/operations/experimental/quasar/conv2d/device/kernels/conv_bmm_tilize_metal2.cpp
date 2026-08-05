@@ -752,6 +752,22 @@ void kernel_main() {
                             MATH(DPRINT("MMMVOK i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                         }
 
+#ifdef ARCH_QUASAR
+                        // [#48552] Per-subblock FPU dest-dvalid clear (exact parallel of the tilize fix in
+                        // tilize.h:173). The matmul MVMULs above SET the FPU dest-dvalid on the DEST bank they
+                        // wrote, but tile_regs_commit (llk_math_dest_section_done) only SEMPOSTs MATH_PACK +
+                        // advances the SyncHalf bank -- it NEVER clears the FPU dvalid, and the semaphore-scheme
+                        // pack section_done (_llk_pack_dest_semaphore_section_done_) only ZEROACCs + SEMGETs; no
+                        // client issues a CLEARDVALID for the FPU. With SyncHalf (2 DEST banks) subblock 0->bank0,
+                        // subblock 1->bank1, subblock 2 REUSES bank0 whose FPU dvalid is still set -> the first
+                        // MVMUL of subblock 2 stalls at issue -> MATH MOP timeout ERROR_TRISC1 0x0119. Pulse-clear
+                        // the FPU dvalid once per subblock (after all K accumulation, before the section flip).
+                        // DEST data persists (CLEARDVALID clears only the sync bit); PACK still reads via the
+                        // semaphore, so this only frees the FPU ring. Safe when subblocks<=2 (re-set next MVMUL).
+                        // NOT the dest-dvalid CTRL-mask scheme (set_up_dest_dvalid_per_thread); no mixing.
+                        MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));
+#endif
+
 #ifdef SFPU_OP_INIT_ACTIVATION
                         if constexpr (!fuse_bias) {
                             if (last_inner_dim_block) {
