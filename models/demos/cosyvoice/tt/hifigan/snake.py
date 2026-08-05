@@ -40,24 +40,32 @@ import ttnn
 
 
 class TtSnake:
-    """Per-channel Snake. `alpha` is [C]; tensors are [B, C, T]."""
+    """Per-channel Snake.
+
+    `alpha` is [C]. Activations are **channels-last `[B, T, C]`**, matching
+    conv.py's convention for the whole vocoder, so alpha broadcasts over the LAST
+    axis. The reference works in `[B, C, T]` and broadcasts over the middle axis;
+    getting that backwards does not produce a wrong answer, it produces a
+    TT_FATAL broadcasting-rule violation -- which is the good outcome, and is how
+    this was caught.
+    """
 
     EPS = 1e-9  # matches the reference's alpha.reciprocal() guard
 
     def __init__(self, device, alpha: torch.Tensor, dtype=ttnn.bfloat16, alpha_logscale: bool = False):
         if alpha_logscale:
             alpha = torch.exp(alpha)
-        alpha = alpha.detach().float().reshape(1, -1, 1)
+        alpha = alpha.detach().float().reshape(1, 1, -1)
 
         self.device = device
-        self.channels = alpha.shape[1]
+        self.channels = alpha.shape[-1]
         self.alpha = ttnn.from_torch(alpha, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
         # Folded on host: constant at inference, so the reference's per-call
         # reciprocal is pure overhead.
         self.inv_alpha = ttnn.from_torch(1.0 / (alpha + self.EPS), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     def __call__(self, x):
-        """x: ttnn [B, C, T] -> ttnn [B, C, T].
+        """x: ttnn [B, T, C] (channels-last) -> ttnn [B, T, C].
 
         Intermediates are deallocated as they die; at 512 channels and audio-rate
         length these are not small, and L1 pressure is the constraint that decides
@@ -75,10 +83,16 @@ class TtSnake:
         return out
 
     @staticmethod
-    def torch_reference(x: torch.Tensor, alpha: torch.Tensor, alpha_logscale: bool = False) -> torch.Tensor:
+    def torch_reference(
+        x: torch.Tensor, alpha: torch.Tensor, alpha_logscale: bool = False, channels_last: bool = False
+    ) -> torch.Tensor:
         """cosyvoice.transformer.activation.Snake.forward (:73), verbatim in shape
         semantics. HiFT constructs it at generator.py:102,106 with
-        alpha_logscale=False, so only the direct-alpha branch is reachable here."""
+        alpha_logscale=False, so only the direct-alpha branch is reachable here.
+
+        Defaults to the reference's [B, C, T]; pass channels_last=True to compare
+        against the device path directly.
+        """
         a = torch.exp(alpha) if alpha_logscale else alpha
-        a = a.reshape(1, -1, 1)
+        a = a.reshape(1, 1, -1) if channels_last else a.reshape(1, -1, 1)
         return x + (1.0 / (a + TtSnake.EPS)) * torch.sin(a * x).pow(2)

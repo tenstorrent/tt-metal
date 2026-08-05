@@ -65,17 +65,31 @@ def test_alpha_broadcasts_per_channel_not_per_sample():
         assert torch.allclose(got[0, c], want_c.expand(5), atol=1e-6)
 
 
+def test_channels_last_and_channels_first_agree():
+    """The device path is channels-last while the reference is channels-first.
+    Both spellings must produce the same values under transposition -- otherwise
+    alpha is broadcasting along the wrong axis, which is a silent wrong answer
+    whenever C happens to equal T."""
+    torch.manual_seed(5)
+    C, T = 8, 16
+    x_cf = torch.randn(1, C, T)
+    alpha = torch.rand(C) + 0.5
+    cf = TtSnake.torch_reference(x_cf, alpha)
+    cl = TtSnake.torch_reference(x_cf.permute(0, 2, 1).contiguous(), alpha, channels_last=True)
+    assert torch.allclose(cf, cl.permute(0, 2, 1), atol=1e-6), (cf - cl.permute(0, 2, 1)).abs().max()
+
+
 @needs_l1_small
 @pytest.mark.parametrize("channels,length", [(64, 256), (512, 4096)])
 def test_device_snake_matches_host(device, channels, length):
-    """The composed five-op form on device. 512 x 4096 is the shape HiFT actually
-    hits after the second upsample stage."""
+    """The composed five-op form on device, channels-last as HiFT carries it.
+    512 x 4096 is the shape it actually hits after the second upsample stage."""
     import ttnn
 
     torch.manual_seed(3)
-    x_t = torch.randn(1, channels, length)
+    x_t = torch.randn(1, length, channels)  # [B, T, C]
     alpha_t = torch.rand(channels) * 1.5 + 0.25  # away from 0, where 1/alpha explodes
-    want = TtSnake.torch_reference(x_t, alpha_t)
+    want = TtSnake.torch_reference(x_t, alpha_t, channels_last=True)
 
     op = TtSnake(device, alpha_t)
     x = ttnn.from_torch(x_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -83,4 +97,5 @@ def test_device_snake_matches_host(device, channels, length):
 
     p = pcc(got, want)
     print(f"\n  snake C={channels} T={length} PCC {p:.10f}  max|d| {(got - want).abs().max():.3e}")
+    assert got.shape == want.shape, (got.shape, want.shape)
     assert p >= GATE, p
