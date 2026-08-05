@@ -42,6 +42,36 @@ import torch
 import ttnn
 
 
+def espnet_rel_positional_encoding(size: int, d_model: int) -> torch.Tensor:
+    """`EspnetRelPositionalEncoding.position_encoding(offset=0, size=T)`.
+
+    Deterministic given (T, d_model), so it is generated rather than shipped in
+    the weight export -- there is nothing learned here.
+
+    The layout is the shifting trick from arXiv:1901.02860: positive positions
+    reversed, then negative positions from index 1, concatenated to length
+    2*max_len - 1, and then the middle 2T-1 window is taken. That reversal is
+    what makes `rel_shift` in the attention meaningful; sampling it forwards
+    instead produces a plausible-looking encoding with time running backwards.
+    """
+    max_len = size
+    position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
+    div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float32) * -(math.log(10000.0) / d_model))
+    pe_pos = torch.zeros(max_len, d_model)
+    pe_neg = torch.zeros(max_len, d_model)
+    pe_pos[:, 0::2] = torch.sin(position * div_term)
+    pe_pos[:, 1::2] = torch.cos(position * div_term)
+    pe_neg[:, 0::2] = torch.sin(-1 * position * div_term)
+    pe_neg[:, 1::2] = torch.cos(-1 * position * div_term)
+
+    pe_pos = torch.flip(pe_pos, [0]).unsqueeze(0)
+    pe_neg = pe_neg[1:].unsqueeze(0)
+    pe = torch.cat([pe_pos, pe_neg], dim=1)  # [1, 2*max_len - 1, d_model]
+
+    mid = pe.size(1) // 2
+    return pe[:, mid - size + 1 : mid + size]
+
+
 def _linear(device, bag, name, dtype):
     """Weights arrive as torch [out, in]; ttnn.linear wants [in, out]."""
     sub = bag.sub(name)
