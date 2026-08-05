@@ -54,6 +54,10 @@ hunyuanvideo_1_5/
 ## How to run
 
 ```bash
+# --- setup (once per shell) ---
+source python_env/bin/activate
+export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd)
+
 PY=./python_env/bin/python
 DIR=models/demos/hf_eager/hunyuanvideo_1_5
 
