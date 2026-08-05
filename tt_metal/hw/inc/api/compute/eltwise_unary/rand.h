@@ -20,6 +20,8 @@ namespace ckernel {
  * This call is blocking and is only available on the compute engine.
  * This operation records replay slots 0-17 on Blackhole and Wormhole. Callers
  * sharing the replay buffer with other SFPU operations must reinitialize it as needed.
+ * On Wormhole, this operation also programs LREG12 and LREG13. Callers must
+ * restore those programmable constants before another SFPU operation relies on them.
  *
  * Return value: None
  *
@@ -35,9 +37,7 @@ ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
 }
 
 /**
- * Please refer to documentation for any_init. On Wormhole, this operation
- * programs LREG12-LREG14; callers must restore those constants before another
- * SFPU operation that relies on them.
+ * Please refer to documentation for any_init.
  */
 ALWI void rand_tile_init(uint32_t seed = 0) { MATH(SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (APPROX), seed)); }
 
