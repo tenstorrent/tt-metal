@@ -316,3 +316,24 @@ This section is the durable record of the automated execution of this plan. Comm
   `generated/mcast_migration_rt/gate5_20260805_sort_single_row_524288{,_r2,_r3}.json`.
 - Gate 5 is green. The implementation and metadata are committed as `160effde4fc`
   (`Make mcast signal handshakes explicit`).
+
+### 2026-08-05 — Gate 6
+
+- Audited the actual GroupNorm sharded-v2 group construction, its rectangular-grid requirement,
+  row/column traversal, batch/group divisibility checks, and every mapped block- and height-sharded
+  production configuration. The mapped production inventory generates only rectangular groups, so
+  its supported performance class is zero-edge. No mapped production configuration reaches a one-
+  or two-edge wrapped partition.
+- Added direct host coverage of the production `split_and_form_rectangle_grids` implementation.
+  `GroupNormMcastGeometry` passes zero-edge, one-edge, and two-edge coordinate sequences 3/3; the
+  latter two preserve defensive coverage for currently unreachable wrapped classes.
+- `./build_metal.sh` passed. The combined `GroupNormMcastGeometry.*:McastHostFixture.*` run passed
+  28/28 (3 geometry plus 25 helper-host cases).
+- Reused the matched Blackhole p100a zero-edge results recorded before this gate, as the plan permits:
+  SDXL `(1, 1920, 32, 32)` legacy is +0.248% and Welford is -0.485% versus baseline. Both pass the
+  1.5% gate, so no helper/kernel hot-path change or new wrapped baseline was warranted.
+- MIG-004 is marked implemented; the changelog, report, migration log, ledger JSON/Markdown, and
+  validation evidence now record the production/synthetic distinction. The ledger JSON parses and
+  `git diff --check` is clean.
+- Gate 6 is green. The host coverage and metadata are committed as `fc4f251be19`
+  (`Close GroupNorm mcast geometry coverage`).
