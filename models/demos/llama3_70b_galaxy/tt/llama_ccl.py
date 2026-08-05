@@ -59,6 +59,10 @@ class TT_CCL:
         # through the stable/standard op (worker-pinned) instead of the fused galaxy CCLs, whose
         # 1D-multicast writers no-op on the BH 2D-torus fabric. Gated the same way as the model/attention.
         self.use_unfused_ccl = getattr(model_args, "use_unfused_ccl", False)
+        # BH "prefetcher + fused op": fuse the FF1/FF3 ring matmul with the BH-working
+        # reduce_scatter_minimal_async via ttnn.experimental.matmul_reduce_scatter_async. See
+        # qwen_model_config.py and matmul_reduce_scatter_async wrapper below.
+        self.use_bh_fused_async_rs_matmul = getattr(model_args, "use_bh_fused_async_rs_matmul", False)
         # Blackhole galaxy exposes only 2 ethernet links between column neighbours (Wormhole has 4). The
         # prefill ring CCLs below historically forced 4 links whenever use_prefetcher was set (previously
         # WH-only); with the prefetcher now enabled on BH that request goes out of bounds, so cap to the
@@ -67,6 +71,7 @@ class TT_CCL:
         all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
 
         self.mesh_device = mesh_device
+        self.model_args = model_args
         # If no worker subdevice is provided (e.g. prefetcher disabled), keep CCL on the full core set.
         self.sub_device_crs = (
             all_crs if mode == "prefill" or worker_sub_device_id is None else model_args.sub_core_grids
@@ -165,6 +170,10 @@ class TT_CCL:
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
+            self.fused_rs_matmul_buffers = (
+                self.get_decode_fused_rs_matmul_buffers() if self.use_bh_fused_async_rs_matmul else None
+            )
+            self.fused_rs_matmul_buffer_idx = [0, 0]
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
             self.support_seqlens = [4096, 2048, 1024, 128]
@@ -571,6 +580,57 @@ class TT_CCL:
             persistent_buffers[cluster_axis].append(tt_buffer)
 
         return persistent_buffers
+
+    def get_decode_fused_rs_matmul_buffers(self):
+        """Double-buffered persistent buffers for ttnn.experimental.matmul_reduce_scatter_async
+        (BH prefetcher + fused FF1/FF3 reduce-scatter).
+
+        The fused op requires two caller-owned tensors:
+          - persistent_intermediate: the reduce_scatter_minimal ring scratch; same per-device layout as
+            the FF ring-matmul output (SHARDED_FF12_OUT_RING_MEMCFG, [32, 3840] width-sharded on the
+            24 ring cores).
+          - persistent_output: the scattered result, returned as the op's reduce_scatter output
+            (REDUCE_SCATTER_OUT_MEMCFG, [32, 960] width-sharded on 30 cores).
+        Two of each (num_cbs) so w1 and w3 (and successive layers under trace) never alias.
+        """
+        cluster_shape = (8, 4)
+        cluster_axis = 1
+        num_col_devices = cluster_shape[cluster_axis]
+        # LOGICAL FF-hidden width per device (matmul output before the column reduce-scatter). This is the
+        # UNPADDED width (3200 for Qwen3-32B); the ring memcfg physically pads it to 3840 across 24 cores.
+        # The persistent buffers MUST carry the logical width, not the padded one: the fused op returns
+        # persistent_output verbatim as the reduce-scatter result, and the RS derives its scatter partition
+        # from the matmul output's logical width (3200 -> 800/device). Allocating at the padded width (3840 ->
+        # 960/device) misaligns the scatter and folds the 640 padding columns into the logical result,
+        # corrupting downstream (observed as a ~0.984 vs 0.9975 decode PCC drop).
+        n_logical = self.model_args.intermediate_dim_per_tp  # 3200
+        interim_memcfg = self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"]
+        out_memcfg = self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
+        shard_h = out_memcfg.shard_spec.shape[0]  # decode_shard_height (32 for batch-32)
+
+        buffers = {"intermediate": [], "output": []}
+        for _ in range(self.num_cbs):
+            buffers["intermediate"].append(
+                ttnn.from_torch(
+                    torch.zeros((*cluster_shape, shard_h, n_logical)),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=interim_memcfg,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+                )
+            )
+            buffers["output"].append(
+                ttnn.from_torch(
+                    torch.zeros((*cluster_shape, shard_h, n_logical // num_col_devices)),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=out_memcfg,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+                )
+            )
+        return buffers
 
     def get_decode_rs_create_heads_buffers(self):
         """
@@ -1063,6 +1123,62 @@ class TT_CCL:
         self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out, w3_out
+
+    def matmul_reduce_scatter_async(
+        self,
+        matmul_input,
+        matmul_weight,
+        compute_kernel_config=None,
+        dtype=None,
+        program_config=None,
+        memory_config_mm=None,
+        memory_config_rs=None,
+        global_cb=None,
+        sub_device_id=None,
+        dim=3,
+        num_links=1,
+        cluster_axis=1,
+    ):
+        """BH prefetcher + fused op: fuse the FF1/FF3 prefetcher ring matmul (streaming global-CB
+        weights) with the BH-working reduce_scatter_minimal_async backend, using the REDUCE_SCATTER
+        OpSignaler co-design. Returns the reduce-scattered output only (the matmul partial is internal).
+
+        reduce_scatter_sub_core_grid confines the RS reader/worker cores to columns 4-10, clear of the
+        ring-matmul cores (cols 1-3), the prefetcher senders (col 0) and the dispatch column (col 11).
+        An additive core_grid_offset cannot express this: the worker grid already reaches col 10, so
+        offsetting overflows off-grid (col 13). This disjointness is required because, unlike the unfused
+        path, the matmul and reduce-scatter run in the SAME program here.
+        """
+        idx = self.gather_idx[cluster_axis]
+        buf_idx = self.fused_rs_matmul_buffer_idx[cluster_axis]
+        persistent_intermediate = self.fused_rs_matmul_buffers["intermediate"][buf_idx]
+        persistent_output = self.fused_rs_matmul_buffers["output"][buf_idx]
+        rs_sub_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(10, 9))])
+
+        _, rs_out = ttnn.experimental.matmul_reduce_scatter_async(
+            matmul_input,
+            matmul_weight,
+            persistent_intermediate_buffer=persistent_intermediate,
+            persistent_output_buffer=persistent_output,
+            dim=dim,
+            multi_device_global_semaphore=self.rs_min_semaphore_handles[cluster_axis][idx],
+            reduce_scatter_core_grid_offset=(0, 0),
+            reduce_scatter_sub_core_grid=rs_sub_core_grid,
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            num_links=num_links,
+            memory_config_rs=memory_config_rs,
+            memory_config_mm=memory_config_mm,
+            topology=self.model_config["CCL_TOPOLOGY"],
+            subdevice_id=sub_device_id,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            cluster_axis=cluster_axis,
+            global_cb=global_cb,
+        )
+        self.gather_idx[cluster_axis] = (idx + 1) % self.num_cbs
+        self.fused_rs_matmul_buffer_idx[cluster_axis] = (buf_idx + 1) % self.num_cbs
+        return rs_out
 
     def matmul_line_reduce_scatter(
         self,

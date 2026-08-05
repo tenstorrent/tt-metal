@@ -304,4 +304,10 @@ void kernel_main() {
         sem_target = 0;
         sem2_target = 0;
     }
+
+    if constexpr (fuse_op) {
+        // Zero the matmul->RS signal semaphore now that every batch has been consumed, so the next
+        // (program-cached) dispatch of this fused op does not inherit a stale accumulated value.
+        matmul_receiver.reset();
+    }
 }

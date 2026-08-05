@@ -16,6 +16,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::experimental {
 
@@ -41,6 +42,9 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
+    std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
+    const std::optional<tt::tt_metal::CoreRangeSet>& reduce_scatter_sub_core_grid = std::nullopt);
 
 }  // namespace ttnn::experimental

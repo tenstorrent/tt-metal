@@ -15,6 +15,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -85,9 +86,13 @@ void kernel_main() {
 
     uint32_t rt_args_idx = 0;
     constexpr bool needs_signaler = get_compile_time_arg_val(11) == 1;
+    // When set, the fused reduce-scatter uses the reduce_scatter_minimal_async OpSignaler protocol
+    // (worker cores sync, master increments the RS reader's semaphore) instead of the llama do_signaling
+    // multicast. Idle/hop cores are not matmul workers and do not participate in that sync.
+    constexpr bool fuse_op_reduce_scatter = get_compile_time_arg_val(12) == 1;
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
-        if constexpr (needs_signaler) {
+        if constexpr (needs_signaler && !fuse_op_reduce_scatter) {
             Noc early_noc;
             do_signaling(early_noc, rt_args_idx);
             early_noc.async_write_barrier();
@@ -110,7 +115,7 @@ void kernel_main() {
     constexpr uint32_t sync_cb = get_named_compile_time_arg_val("cb_sync");
     constexpr uint32_t sync_cb2 = get_named_compile_time_arg_val("cb_sync2");
     constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
-    constexpr auto in1_args = TensorAccessorArgs<12>();
+    constexpr auto in1_args = TensorAccessorArgs<13>();
 
     const uint32_t in1_block_num_tiles = in1_block_height_in_tiles * in1_block_width_in_tiles;
 
@@ -134,6 +139,14 @@ void kernel_main() {
         in1_shard_width_offset_bytes = in1_shard_width_in_dram * in1_single_tile_size_bytes;
         in1_dram_shard_block_size_bytes = in1_shard_width_offset_bytes * in1_block_height_in_tiles;
         dram_read_offset_bytes = dram_read_offset * in1_block_width_in_tiles * in1_single_tile_size_bytes;
+    }
+
+    // Fused reduce_scatter_minimal_async signaler (worker cores only; idle/hop returned early). Its
+    // runtime args follow the normal per-worker args. Constructed once here, then the matmul workers
+    // sync and the master increments the RS reader's semaphore once per batch (wait_for_matmul_batch).
+    OpSignaler op_signaler;
+    if constexpr (needs_signaler && fuse_op_reduce_scatter) {
+        op_signaler = OpSignaler(rt_args_idx);
     }
 
     for (uint32_t b = 0; b < batch; ++b) {
@@ -186,7 +199,15 @@ void kernel_main() {
             experimental::remote_cb_pop_front(remote_cb_id, 1);
         }
         if constexpr (needs_signaler) {
-            if (b == 0) {
+            if constexpr (fuse_op_reduce_scatter) {
+                // Wait for compute to publish "batch output fully packed" (cb_sync) before releasing the
+                // reduce_scatter, otherwise RS could read output tiles the packer has not written yet.
+                // On the streaming path the compute kernel emits this credit only under RS_STREAMING_SYNC,
+                // which the factory sets exactly when this fused-RS reader is active.
+                cb_sync.wait_front(1);
+                cb_sync.pop_front(1);
+                op_signaler.synchronize_workers_and_signal_op(0);
+            } else if (b == 0) {
                 do_signaling(noc, rt_args_idx);
             }
         }
@@ -259,7 +280,9 @@ void kernel_main() {
 #endif
         // Signal Here
         if constexpr (needs_signaler) {
-            if (b == 0) {
+            if constexpr (fuse_op_reduce_scatter) {
+                op_signaler.synchronize_workers_and_signal_op(0);
+            } else if (b == 0) {
                 do_signaling(noc, rt_args_idx);
             }
         }

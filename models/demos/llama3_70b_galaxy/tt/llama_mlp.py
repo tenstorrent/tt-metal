@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -53,6 +55,12 @@ class TtLlamaMLP(LightweightModule):
         # (the fused llama_rs_matmul / llama_reduce_scatter 1D-multicast writers no-op on the BH
         # 2D-torus fabric). Gated identically to the attention/model unfused-CCL flag.
         self.use_unfused_ccl = getattr(args, "use_unfused_ccl", False)
+        # Narrow bring-up: route just the FF1/FF3 reduce-scatter through the fused llama_rs_matmul on
+        # Blackhole prefetcher, while leaving every other collective unfused. See qwen_model_config.py.
+        self.use_bh_fused_rs_matmul = getattr(args, "use_bh_fused_rs_matmul", False)
+        # BH prefetcher + fused op: fuse FF1/FF3 ring matmul with reduce_scatter_minimal_async via
+        # ttnn.experimental.matmul_reduce_scatter_async (see qwen_model_config.py / llama_ccl.py).
+        self.use_bh_fused_async_rs_matmul = getattr(args, "use_bh_fused_async_rs_matmul", False)
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
@@ -175,7 +183,49 @@ class TtLlamaMLP(LightweightModule):
                 use_noc1_only=False,
             )
             ttnn.deallocate(w1_out)
-        elif self.use_prefetcher and self.use_unfused_ccl:
+        elif self.use_prefetcher and self.use_bh_fused_async_rs_matmul:
+            # BH prefetcher + fused op: FF1 and FF3 each run as a single fused matmul_reduce_scatter_async
+            # (the prefetcher ring matmul streaming global-CB weights, fused with the BH-working
+            # reduce_scatter_minimal_async). Produces the reduce-scattered outputs directly, replacing
+            # the separate ring matmul -> DRAM -> reduce_scatter round-trip of the unfused path.
+            mm_ckc = (
+                self.args.compute_kernel_config_lofi if self.four_bit_mlp else self.args.compute_kernel_config_hifi2
+            )
+            w1_out_reduced = self.tt_ccl.matmul_reduce_scatter_async(
+                x,
+                self.w1,
+                program_config=pc_1_3,
+                memory_config_mm=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                memory_config_rs=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                compute_kernel_config=mm_ckc,
+                dtype=ttnn.bfloat8_b,
+                global_cb=self.prefetcher_setup.global_circular_buffer,
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                cluster_axis=1,
+            )
+            w3_out_reduced = self.tt_ccl.matmul_reduce_scatter_async(
+                x,
+                self.w3,
+                program_config=pc_1_3,
+                memory_config_mm=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                memory_config_rs=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                compute_kernel_config=mm_ckc,
+                dtype=ttnn.bfloat8_b,
+                global_cb=self.prefetcher_setup.global_circular_buffer,
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                cluster_axis=1,
+            )
+            ttnn.deallocate(x)
+            w3_out = None  # already reduce-scattered; skip the post-branch line_reduce_scatter
+            if os.environ.get("QWEN_DBG_FUSED_SYNC") == "1":
+                # Diagnostic: drain the worker sub-device after the fused ops to test whether the
+                # token-2 deadlock is an async overlap hazard (fused RS not fully ordered before the
+                # next op reuses its cores/buffers). If this removes the hang, the op needs a real
+                # completion barrier rather than a full host synchronize.
+                ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.prefetcher_setup.worker_sub_device_id])
+        elif self.use_prefetcher and self.use_unfused_ccl and not self.use_bh_fused_rs_matmul:
             # BH prefetcher + unfused CCL: run the FF1/FF3 ring matmuls separately so they still consume
             # the prefetched global-CB weights (self.w1/self.w3) on the worker sub-device, but replace the
             # fused reduce_scatter with the stable worker-pinned ttnn.reduce_scatter (via line_reduce_scatter,
@@ -244,14 +294,15 @@ class TtLlamaMLP(LightweightModule):
             )
             ttnn.deallocate(x)
 
-        w3_out_reduced = self.tt_ccl.line_reduce_scatter(
-            w3_out,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-            use_noc1_only=False,
-        )
-        ttnn.deallocate(w3_out)
+        if w3_out is not None:
+            w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w3_out,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                use_noc1_only=False,
+            )
+            ttnn.deallocate(w3_out)
         if return_intermediates:
             intermediates["ff1_reduced"] = w1_out_reduced
             intermediates["ff3_reduced"] = w3_out_reduced
@@ -266,7 +317,10 @@ class TtLlamaMLP(LightweightModule):
 
         if return_intermediates:
             intermediates["activation"] = ff1ff3
-        else:
+        elif not self.use_bh_fused_async_rs_matmul:
+            # In the fused-async-RS path w1/w3_out_reduced ARE the TT_CCL persistent output buffers
+            # (double-buffered, reused every layer). They were just consumed by the mul above, so they
+            # must NOT be deallocated here or the next layer's fused op finds them unallocated.
             ttnn.deallocate(w3_out_reduced)
             ttnn.deallocate(w1_out_reduced)
 

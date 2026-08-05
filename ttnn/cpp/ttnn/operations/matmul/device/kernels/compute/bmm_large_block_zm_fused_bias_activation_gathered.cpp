@@ -512,5 +512,13 @@ void kernel_main() {
         UNPACK((update_rd_ptr_to_ring_index(
             in1_cb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));  // update to next tensor addr
 #endif
+#if defined(ENABLE_GLOBAL_CB) && defined(STREAMING_IN1) && defined(RS_STREAMING_SYNC)
+        // Fused reduce_scatter handshake (streaming path): the whole batch's output is now packed into
+        // mm_out_cb, so publish a cb_sync credit to the in1 reader. The reader waits on this before it
+        // increments the reduce_scatter reader's semaphore, guaranteeing RS never reads output tiles the
+        // packer has not written. Mirrors the non-streaming release above.
+        sync_buf.reserve_back(1);
+        sync_buf.push_back(1);
+#endif
     }
 }

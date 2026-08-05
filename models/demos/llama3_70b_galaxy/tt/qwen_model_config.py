@@ -231,6 +231,34 @@ class TtQwenModelArgs(TtModelArgs):
         self.use_unfused_ccl = (
             self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_UNFUSED_CCL", "1") == "1"
         )
+        # Repro harness for bringing up the FUSED matmul+reduce-scatter (llama_rs_matmul) on the
+        # Blackhole prefetcher path, isolated to the MLP FF1/FF3 reduce-scatter. Enabling it routes the
+        # FF matmul through the WH fused double_matmul_line_reduce_scatter unchanged. Unlike the fused
+        # all-gather CCLs, the RS writer is unicast (fabric_set_unicast_route, no to_chip_multicast) and
+        # num_links=2 places its senders at cores {5,3},{6,3} (clear of the prefetcher columns 0-3 and
+        # dispatch column 11), so it is NOT a core-placement or multicast problem.
+        # STATUS (2026-08): still DEADLOCKS on BH. The stall is inside llama_reduce_scatter's own
+        # internal reduce-scatter (device freezes immediately after the fused gathered matmul dispatches,
+        # before any downstream collective). Captured via TT_METAL_WATCHER=1 TT_METAL_WATCHER_DISABLE_ETH=1
+        # TT_METAL_WATCHER_DISABLE_ASSERT=1 (plain watcher trips a benign watcher-only ASSERT in the norm
+        # all_gather first, and the fabric firmware does not fit on BH ACTIVE_ETH with watcher). Root cause
+        # is llama_reduce_scatter's ring/fabric-hop setup on BH's 2-link fabric vs the working standalone
+        # reduce_scatter_minimal_async; needs CCL-op-level fabric debugging. Off by default.
+        # Enable with QWEN_BH_FUSED_RS_MATMUL=1.
+        self.use_bh_fused_rs_matmul = (
+            self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_FUSED_RS_MATMUL", "0") == "1"
+        )
+        # BH "prefetcher + fused op" path for the MLP FF1/FF3 reduce-scatter. Unlike use_bh_fused_rs_matmul
+        # (which routes through the WH llama_rs_matmul / llama_reduce_scatter that deadlocks on BH's
+        # 2D-torus fabric), this uses ttnn.experimental.matmul_reduce_scatter_async, which fuses the
+        # prefetcher's 1D gathered ring matmul (streaming the global-CB weights) with the BH-working
+        # reduce_scatter_minimal_async backend. The ring matmul signals the RS reader via the
+        # REDUCE_SCATTER OpSignaler protocol added to reader_bmm_tile_layout_in1_ring_all_gather.cpp.
+        # Keeps the prefetcher AND removes the matmul->DRAM->RS round-trip. Off by default.
+        # Enable with QWEN_BH_FUSED_ASYNC_RS_MATMUL=1 (requires QWEN_BH_UNFUSED_CCL=1 for the semaphore pool).
+        self.use_bh_fused_async_rs_matmul = (
+            self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_FUSED_ASYNC_RS_MATMUL", "0") == "1"
+        )
 
         # Set up prefetcher stuff (Blackhole galaxy: 8 readers x 3 receivers; Wormhole: 12 x 2)
         if self.is_blackhole:

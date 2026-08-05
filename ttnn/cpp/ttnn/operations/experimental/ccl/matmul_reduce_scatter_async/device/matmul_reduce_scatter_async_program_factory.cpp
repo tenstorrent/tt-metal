@@ -100,7 +100,8 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         std::nullopt,
         std::nullopt,
         args.reduce_scatter_core_grid_offset,
-        std::nullopt);
+        std::nullopt,
+        args.reduce_scatter_sub_core_grid);
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
@@ -112,7 +113,48 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         reduce_scatter_fused_op_signaler->fused_op_receiver_signal_semaphores,
         reduce_scatter_fused_op_signaler->fused_op_signaler_mode);
 
-    // Matmul
+    // Matmul front-end. The 1D gathered ring matmul is selected when the program config is 1D multicast
+    // (the prefetcher path with a global circular buffer). It runs on the ring worker cores and is
+    // restricted away from the reduce-scatter reader cores so the two do not clash; the ring matmul
+    // signals the RS reader via the OpSignaler REDUCE_SCATTER protocol wired above. Otherwise the 2D
+    // multicast matmul (DRAM weights) is used.
+    const bool is_1d_matmul =
+        std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
+
+    if (is_1d_matmul) {
+        // Keep the ring matmul off the reduce-scatter reader cores (mirrors llama_rs_matmul, which passes
+        // its rs_cores as restricted_cores). The RS artifacts expose their cores as a flat list; wrap each
+        // as a single-core range to build the CoreRangeSet the 1D helper expects.
+        std::vector<CoreRange> rs_core_ranges;
+        rs_core_ranges.reserve(reduce_scatter_artifacts.all_cores.size());
+        for (const auto& c : reduce_scatter_artifacts.all_cores) {
+            rs_core_ranges.emplace_back(c, c);
+        }
+        std::optional<CoreRangeSet> rs_restricted_cores = CoreRangeSet(rs_core_ranges);
+
+        auto matmul_1d_shared_variables = ttnn::prim::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+            program,
+            tensor_args.input,
+            {tensor_args.weight},
+            /*bias=*/std::nullopt,
+            {output_tensors.mm},
+            bcast_batch,
+            compute_kernel_config,
+            program_config,
+            untilize_out,
+            matmul_fused_op_signaler,
+            args.matmul_struct.global_cb,
+            sub_device_id,
+            tt::CBIndex::c_6 /*start cb index*/,
+            rs_restricted_cores /*keep matmul off the RS reader cores*/);
+
+        return cached_program_t{
+            std::move(program),
+            {.reduce_scatter_artifacts = std::move(reduce_scatter_artifacts),
+             .is_1d_matmul = true,
+             .matmul_1d_shared_variables = std::move(matmul_1d_shared_variables)}};
+    }
+
     auto matmul_cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_2d_optimized_helper(
         program,
         tensor_args.input,
@@ -128,6 +170,7 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
     return cached_program_t{
         std::move(matmul_cached_program.program),
         {.reduce_scatter_artifacts = std::move(reduce_scatter_artifacts),
+         .is_1d_matmul = false,
          .matmul_shared_variables = std::move(matmul_cached_program.shared_variables)}};
 }
 
@@ -140,14 +183,24 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
         std::vector<Tensor> matmul_output_tensors = {output_tensors.mm};
-        ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
-            program,
-            shared_vars.matmul_shared_variables,
-            args.matmul_struct,
-            {.input_tensors = {tensor_args.input, tensor_args.weight},
-             .optional_input_tensors = {tensor_args.bias},
-             .optional_output_tensors = {output_tensors.mm}},
-            matmul_output_tensors);
+        if (shared_vars.is_1d_matmul) {
+            // 1D gathered matmul override refreshes the (global-CB-backed) matmul addresses in place.
+            ttnn::prim::reuse_mcast_1d_optimized_helpers::override_program_parameters(
+                shared_vars.matmul_1d_shared_variables.value(),
+                args.matmul_struct.global_cb,
+                program,
+                {{tensor_args.input, tensor_args.weight}, {}},
+                {output_tensors.mm});
+        } else {
+            ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+                program,
+                shared_vars.matmul_shared_variables.value(),
+                args.matmul_struct,
+                {.input_tensors = {tensor_args.input, tensor_args.weight},
+                 .optional_input_tensors = {tensor_args.bias},
+                 .optional_output_tensors = {output_tensors.mm}},
+                matmul_output_tensors);
+        }
 
         // Call reduce scatter runtime arguments override directly using artifacts
         ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(

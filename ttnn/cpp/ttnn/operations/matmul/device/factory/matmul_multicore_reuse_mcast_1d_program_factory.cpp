@@ -2278,6 +2278,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         (std::uint32_t)in1_block_width_num_pages,
         (std::uint32_t)in1_shard_width_in_dram,
         (std::uint32_t)fused_op_signaler.has_value(),
+        (std::uint32_t)(fused_op_signaler.has_value() && fused_op_signaler->is_reduce_scatter()),
     };
     tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
 
@@ -2346,6 +2347,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                 resident_blocks);
             mm_in1_kernel_defines["STREAMING_IN1"] = "1";
             mm_kernel_defines["STREAMING_IN1"] = "1";
+            // Fused reduce_scatter_minimal_async: on the streaming path the compute kernel otherwise
+            // has no way to tell the in1 reader that this batch's output is fully packed (the
+            // non-streaming compute->reader cb_sync handshake is compiled out). Without it the reader
+            // would signal the reduce-scatter off the in1 drain alone, letting RS read output tiles the
+            // packer has not written yet (systematic PCC loss). Re-enable a per-batch cb_sync push in
+            // compute, matched by a wait in the reader, only for the RS fusion so the plain prefetcher
+            // path is untouched.
+            if (fused_op_signaler.has_value() && fused_op_signaler->is_reduce_scatter()) {
+                mm_kernel_defines["RS_STREAMING_SYNC"] = "1";
+            }
         }
     } else {
         TT_FATAL(!stream_in1, "stream_in1 requires a DRAM-sender global circular buffer (use_global_cb)");
@@ -2385,8 +2396,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     tt_metal::NOC_MODE noc_mode =
         use_dedicated_noc ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
 
-    // Init the signaler
-    if (fused_op_signaler.has_value()) {
+    // Init the signaler. The llama reduce-scatter path initializes here (it signals from all matmul cores
+    // via a privileged core). The reduce_scatter_minimal_async path (is_reduce_scatter) instead uses the
+    // OpSignaler worker-sync protocol and is initialized below once the worker core list is known.
+    if (fused_op_signaler.has_value() && !fused_op_signaler->is_reduce_scatter()) {
         ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
         signaler.init_llama_rs_cores_mm(all_cores, program, device, 0);
     }
@@ -2435,6 +2448,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     auto all_cores_vec = corerange_to_cores(all_cores, std::nullopt, row_major);
     auto worker_cores_vec = corerange_to_cores(all_worker_cores, std::nullopt, row_major);
     auto hop_cores_vec = corerange_to_cores(hop_cores, std::nullopt, row_major);
+
+    // For the reduce_scatter_minimal_async fusion, initialize the OpSignaler protocol now that the matmul
+    // worker cores are known: the workers sync among themselves and the master signals the RS reader. The
+    // worker sync semaphore is created over the worker bounding box (extra cores in the box are harmless).
+    if (fused_op_signaler.has_value() && fused_op_signaler->is_reduce_scatter()) {
+        ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
+        signaler.init_fused_op(program, device, all_worker_cores.bounding_box(), worker_cores_vec);
+    }
     for (auto core : all_cores_vec) {
         auto all_worker_cores_iter = std::find(worker_cores_vec.begin(), worker_cores_vec.end(), core);
         auto hop_cores_iter = std::find(hop_cores_vec.begin(), hop_cores_vec.end(), core);
@@ -2454,7 +2475,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             // in1
             std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
             mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
-            if (fused_op_signaler.has_value()) {
+            // Idle cores participate in the llama privileged-core signaling, but are NOT matmul workers in
+            // the reduce_scatter_minimal_async OpSignaler protocol, so they push no signaling args there.
+            if (fused_op_signaler.has_value() && !fused_op_signaler->is_reduce_scatter()) {
                 ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
                 signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
             }
@@ -2648,7 +2671,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         }
         if (fused_op_signaler.has_value()) {
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-            signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, device);
+            if (signaler.is_reduce_scatter()) {
+                // OpSignaler args: match this worker to its index in matmul_worker_cores via (y, x).
+                signaler.push_matmul_fused_op_rt_args(mm_in1_args, core.y, core.x);
+            } else {
+                signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, device);
+            }
         }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
 
@@ -2691,7 +2719,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         // in1
         std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
         mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
-        if (fused_op_signaler.has_value()) {
+        // Hop cores relay the ring but are not matmul workers; they do not signal in the RS-minimal protocol.
+        if (fused_op_signaler.has_value() && !fused_op_signaler->is_reduce_scatter()) {
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
             signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
         }

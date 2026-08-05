@@ -20,6 +20,11 @@ struct MatmulReduceScatterAsyncParams {
     ReduceScatterMinimalAsyncParams reduce_scatter_params;
     ttnn::prim::MatmulParams matmul_struct;
     CoreCoord reduce_scatter_core_grid_offset;
+    // Optional grid confining the reduce-scatter worker cores. Unlike reduce_scatter_core_grid_offset
+    // (which is *added* to every enumerated worker core, and so overflows a grid that already reaches the
+    // last column), this restricts choose_worker_cores to a sub-set of the worker sub-device. Used by the
+    // BH prefetcher fused path to keep the reduce-scatter off the ring-matmul columns (1-3).
+    std::optional<CoreRangeSet> reduce_scatter_sub_core_grid;
     std::vector<IDevice*> devices;
 
     // Constructor required because operation structs are not default constructible.
@@ -27,10 +32,12 @@ struct MatmulReduceScatterAsyncParams {
         ReduceScatterMinimalAsyncParams reduce_scatter_params,
         ttnn::prim::MatmulParams matmul_struct,
         CoreCoord reduce_scatter_core_grid_offset,
+        std::optional<CoreRangeSet> reduce_scatter_sub_core_grid,
         std::vector<IDevice*> devices) :
         reduce_scatter_params(std::move(reduce_scatter_params)),
         matmul_struct(std::move(matmul_struct)),
         reduce_scatter_core_grid_offset(reduce_scatter_core_grid_offset),
+        reduce_scatter_sub_core_grid(std::move(reduce_scatter_sub_core_grid)),
         devices(std::move(devices)) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "reduce_scatter_core_grid_offset");

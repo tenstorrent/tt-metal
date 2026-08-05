@@ -426,4 +426,10 @@ void kernel_main() {
     }
     // Reset my output ready semaphore
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+
+    if constexpr (fuse_op) {
+        // Zero the matmul->RS signal semaphore so a program-cached re-dispatch starts fresh (see
+        // ReduceScatterOpReceiver::reset for the full rationale).
+        matmul_receiver.reset();
+    }
 }

@@ -38,11 +38,19 @@ void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
         std::visit(
             [&](const auto& config) {
                 using ProgramConfigType = std::decay_t<decltype(config)>;
+                // 2D multicast matmul (DRAM weights) is the default fused front-end. The 1D gathered ring
+                // matmul (MatmulMultiCoreReuseMultiCast1DProgramConfig) is also supported and is the path
+                // used with the prefetcher's global circular buffer: the ring matmul streams weights from
+                // the GCB and signals the reduce_scatter_minimal_async reader via the OpSignaler protocol.
                 if (not(std::is_same_v<
-                        ProgramConfigType,
-                        operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>)) {
+                            ProgramConfigType,
+                            operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                        std::is_same_v<
+                            ProgramConfigType,
+                            operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>)) {
                     TT_THROW(
-                        "Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 2D Multicast.");
+                        "Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 2D Multicast "
+                        "or 1D Multicast (gathered).");
                 }
             },
             args.matmul_struct.program_config.value());
@@ -141,9 +149,17 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid) {
+    const std::optional<const ttnn::CoreGrid> core_grid,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<CoreRangeSet>& reduce_scatter_sub_core_grid) {
     using OperationType = ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
+
+    // Ring size is the number of devices participating in the reduce-scatter. When a cluster_axis is
+    // provided (e.g. galaxy column RS on cluster_axis=1) this is the mesh extent along that axis, not
+    // the whole mesh. Mirrors ttnn::experimental::reduce_scatter_minimal_async.
+    uint32_t rs_ring_size = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     /* Matmul setup */
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
@@ -169,7 +185,9 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
             transpose_a,
             transpose_b,
             /*output_tile=*/std::nullopt,
-            /*global_cb=*/std::nullopt},
+            /*global_cb=*/
+            (global_cb.has_value() ? std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>(*global_cb)
+                                   : std::nullopt)},
         {});
 
     // Not using persistent buffers not currently supported by the RSMM API
@@ -180,7 +198,7 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     ttnn::experimental::prim::ReduceScatterMinimalAsyncParams reduce_scatter_params{
         .dim = dim,
         .num_links = num_links,
-        .ring_size = static_cast<uint32_t>(devices.size()),
+        .ring_size = rs_ring_size,
         .output_mem_config = memory_config_rs.value_or(input_tensor.memory_config()),
         .optional_intermediate_mem_config = intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
         .topology = topology,
@@ -188,14 +206,14 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
         .barrier_semaphore = barrier_semaphore,
         .using_persistent_buffers = using_persistent_buffers,
         .sub_device_id = sub_device_id,
-        .cluster_axis = std::nullopt,
+        .cluster_axis = cluster_axis,
         .chunks_per_sync = std::nullopt,
         .num_workers_per_link = DEFAULT_WORKERS_PER_LINK,
         .num_buffers_per_channel = std::nullopt,
     };
 
     auto operation_attributes = OperationType::operation_attributes_t(
-        reduce_scatter_params, matmul_struct, reduce_scatter_core_grid_offset, devices);
+        reduce_scatter_params, matmul_struct, reduce_scatter_core_grid_offset, reduce_scatter_sub_core_grid, devices);
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .weight = weight_tensor,

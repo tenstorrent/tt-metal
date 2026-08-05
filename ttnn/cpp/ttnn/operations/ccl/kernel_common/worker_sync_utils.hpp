@@ -300,4 +300,19 @@ struct ReduceScatterOpReceiver {
         ASSERT(this->initialized);
         Semaphore<>(this->signal_op_semaphore_id).wait_min(batch_idx + 1);
     }
+
+    // The signal semaphore uses a cumulative wait_min (batch_idx + 1) and is created once at program
+    // build (CreateSemaphore(..., 0)). Under program caching the same program is re-dispatched every
+    // decode iteration, so the L1 value persists and keeps accumulating across invocations. Left unreset,
+    // the next invocation's wait_min(1) is satisfied by the stale value before this iteration's matmul has
+    // actually produced its output -> the matmul/reduce-scatter handshake desyncs (RS races ahead reading
+    // stale tiles) and eventually corrupts shared-core state. Zero it after the batch loop has consumed all
+    // matmul signals so the next dispatch starts fresh. Safe because matmul + reduce-scatter are a single
+    // fused program serialized on the command queue: by the last batch's wait the matmul has emitted every
+    // signal, and the next invocation cannot begin until this program (including this reset) completes.
+    void reset() {
+        if (this->initialized) {
+            Semaphore<>(this->signal_op_semaphore_id).set(0);
+        }
+    }
 };
