@@ -1322,8 +1322,14 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
 
 // Picks the read loop for this command. The two flags are fixed for the whole command, so the choice is made once
 // per chunk and each loop body is free of it.
+//
+// Deliberately out of line. Inlined, the three loops below were emitted at both call sites and for both values of
+// is_dram -- twelve read loops, half of them redundant, and 1.7 KB of dispatch code that the eth prefetcher's 22 KB
+// kernel region does not have. Out of line the loops are still inlined here, so the per-page work is unchanged, and
+// the one call per scratch buffer is amortized over every page read into it: on Blackhole a 64 MB paged read holds
+// to within 0.5% from 32 B pages up, on DRAM and on L1.
 template <bool is_dram, typename AddrGen>
-FORCE_INLINE uint32_t read_pages_into_scratch(
+__attribute__((noinline)) uint32_t read_pages_into_scratch(
     bool single_read,
     bool folded_offset,
     const AddrGen& addr_gen,
