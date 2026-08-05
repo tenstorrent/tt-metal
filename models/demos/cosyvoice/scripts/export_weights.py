@@ -91,6 +91,65 @@ def flow_meta(flow) -> dict:
     }
 
 
+def llm_meta(llm) -> dict:
+    """Constants for both encoders in TransformerLM.
+
+    Two stacks with different shapes share one checkpoint: a 6-block Conformer
+    text encoder (`text_encoder`) and a 14-block Transformer AR decoder (`llm`).
+    They differ in more than depth -- the decoder's input layer is
+    `LegacyLinearNoSubsampling`, which appends a **ReLU** after the LayerNorm that
+    the plain `LinearNoSubsampling` does not have. Missing that produces a network
+    that runs and drifts.
+    """
+
+    def stack(enc):
+        layer0 = enc.encoders[0]
+        attn = layer0.self_attn
+        return {
+            "n_layers": len(enc.encoders),
+            "n_head": int(attn.h),
+            "d_k": int(attn.d_k),
+            "d_model": int(attn.h * attn.d_k),
+            "ffn_dim": int(layer0.feed_forward.w_1.out_features),
+            "normalize_before": bool(layer0.normalize_before),
+            # encoder_layer.py pins 1e-12 on the block norms; subsampling.py pins
+            # 1e-5 on the embedding norm. They are genuinely different.
+            "layer_norm_eps": 1e-12,
+            "embed_norm_eps": 1e-5,
+            "embed_has_relu": bool(enc.embed.__class__.__name__.startswith("Legacy")),
+            "input_size": int(enc.embed.out[0].in_features),
+            # ConformerEncoder defaults activation_type to "swish" (SiLU);
+            # TransformerEncoder defaults it to "relu". Both defaults are taken --
+            # cosyvoice.yaml overrides neither -- so the two stacks in this one
+            # checkpoint have *different* feed-forward activations.
+            "ffn_activation": type(layer0.feed_forward.activation).__name__.lower(),
+        }
+
+    text = stack(llm.text_encoder)
+    text.update(
+        {
+            "has_macaron": llm.text_encoder.encoders[0].feed_forward_macaron is not None,
+            "has_conv_module": llm.text_encoder.encoders[0].conv_module is not None,
+            "ff_scale": float(llm.text_encoder.encoders[0].ff_scale),
+        }
+    )
+    return {
+        "module": "llm",
+        "text_encoder": text,
+        "ar_decoder": stack(llm.llm),
+        "llm_input_size": int(llm.llm_input_size),
+        "speech_token_size": int(llm.speech_token_size),
+        "text_token_size": int(llm.text_embedding.num_embeddings),
+        "sos": int(llm.sos),
+        "task_id": int(llm.task_id),
+        "eos_token": int(llm.eos_token),
+        # ras_sampling defaults from cosyvoice.yaml
+        "sampling": {"top_p": 0.8, "top_k": 25, "win_size": 10, "tau_r": 0.1, "sampling": 25},
+        "max_token_text_ratio": 20,
+        "min_token_text_ratio": 2,
+    }
+
+
 def fold_weight_norm_inplace(model: torch.nn.Module) -> int:
     """Bake weight_norm into `.weight` for every submodule, either API. Returns
     how many modules were folded."""
@@ -114,7 +173,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cosyvoice-root", default=DEFAULT_ROOT)
     ap.add_argument("--checkpoint", default="CosyVoice-300M")
-    ap.add_argument("--module", default="hift", choices=["hift", "flow"], help="which submodule to export")
+    ap.add_argument("--module", default="hift", choices=["hift", "flow", "llm"], help="which submodule to export")
     ap.add_argument("--out", default=None, help="default <this file>/../tests/golden/hift_weights.npz")
     ap.add_argument("--fp16", action="store_true", help="halve the file; the device carries bf16 anyway")
     args = ap.parse_args()
@@ -146,8 +205,8 @@ def main() -> int:
         if delta > 1e-4:
             raise SystemExit(f"fold changed the output by {delta} -- refusing to export")
     else:
-        # The flow module uses no weight_norm anywhere; assert rather than assume.
-        assert fold_weight_norm_inplace(model) == 0, "flow unexpectedly has weight_norm"
+        # Neither flow nor llm uses weight_norm anywhere; assert rather than assume.
+        assert fold_weight_norm_inplace(model) == 0, f"{args.module} unexpectedly has weight_norm"
 
     arrays, total = {}, 0
     for name, tensor in model.state_dict().items():
@@ -173,8 +232,10 @@ def main() -> int:
                 "weight_norm_folded": True,
             }
         )
-    else:
+    elif args.module == "flow":
         meta.update(flow_meta(model))
+    else:
+        meta.update(llm_meta(model))
     arrays["__meta__"] = np.frombuffer(json.dumps(meta).encode(), dtype=np.uint8)
 
     os.makedirs(os.path.dirname(out), exist_ok=True)
