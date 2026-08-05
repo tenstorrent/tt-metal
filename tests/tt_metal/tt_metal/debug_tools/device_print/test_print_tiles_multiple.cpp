@@ -107,7 +107,7 @@ void RunTest(
         expected_output_read += fmt::format("Read tile {}:{}\n", i, golden_output);
     }
 
-    distributed::WriteShard(cq, src_dram_buffer, u32_vec, zero_coord, true);
+    distributed::WriteShard(cq, *src_dram_buffer, u32_vec, zero_coord, true);
     fixture->RunProgram(mesh_device, workload);
 
     auto filename = tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() +

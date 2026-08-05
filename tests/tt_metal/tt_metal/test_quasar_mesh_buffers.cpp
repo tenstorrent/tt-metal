@@ -50,10 +50,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadDRAM) {
     std::vector<uint32_t> src(num_elems);
     std::iota(src.begin(), src.end(), 0xabcd0000u);
 
-    distributed::EnqueueWriteMeshBuffer(cq, buf, src);
+    distributed::EnqueueWriteMeshBuffer(cq, *buf, src);
 
     std::vector<uint32_t> dst;
-    distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);
+    distributed::EnqueueReadMeshBuffer(cq, dst, *buf, /*blocking=*/true);
 
     ASSERT_EQ(dst.size(), src.size());
     ASSERT_EQ(dst, src);
@@ -72,10 +72,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsDRAM)
         std::vector<uint32_t> src(num_elems);
         std::iota(src.begin(), src.end(), round * 1000u);
 
-        distributed::EnqueueWriteMeshBuffer(cq, buf, src);
+        distributed::EnqueueWriteMeshBuffer(cq, *buf, src);
 
         std::vector<uint32_t> dst;
-        distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);
+        distributed::EnqueueReadMeshBuffer(cq, dst, *buf, /*blocking=*/true);
 
         ASSERT_EQ(dst, src);
     }
@@ -93,10 +93,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadL1) {
     std::vector<uint32_t> src(num_elems);
     std::iota(src.begin(), src.end(), 0xabcd0000u);
 
-    distributed::EnqueueWriteMeshBuffer(cq, buf, src);
+    distributed::EnqueueWriteMeshBuffer(cq, *buf, src);
 
     std::vector<uint32_t> dst;
-    distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);
+    distributed::EnqueueReadMeshBuffer(cq, dst, *buf, /*blocking=*/true);
 
     ASSERT_EQ(dst.size(), src.size());
     ASSERT_EQ(dst, src);
@@ -115,10 +115,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsL1) {
         std::vector<uint32_t> src(num_elems);
         std::iota(src.begin(), src.end(), round * 1000u);
 
-        distributed::EnqueueWriteMeshBuffer(cq, buf, src);
+        distributed::EnqueueWriteMeshBuffer(cq, *buf, src);
 
         std::vector<uint32_t> dst;
-        distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);
+        distributed::EnqueueReadMeshBuffer(cq, dst, *buf, /*blocking=*/true);
 
         ASSERT_EQ(dst, src);
     }
@@ -138,12 +138,12 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, MeshBufferCrossCQWriteReadRound
         std::vector<uint32_t> src(num_elems);
         std::iota(src.begin(), src.end(), round * 1000u);
 
-        distributed::EnqueueWriteMeshBuffer(cq0, buf, src);
+        distributed::EnqueueWriteMeshBuffer(cq0, *buf, src);
         distributed::MeshEvent write_event = cq0.enqueue_record_event();
         cq1.enqueue_wait_for_event(write_event);
 
         std::vector<uint32_t> dst;
-        distributed::EnqueueReadMeshBuffer(cq1, dst, buf, /*blocking=*/true);
+        distributed::EnqueueReadMeshBuffer(cq1, dst, *buf, /*blocking=*/true);
 
         ASSERT_EQ(dst, src);
     }

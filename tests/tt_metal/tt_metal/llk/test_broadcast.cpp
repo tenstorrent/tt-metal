@@ -466,14 +466,14 @@ void run_single_core_broadcast(
     auto tilized_input0 = ::unit_tests::compute::gold_standard_tilize(packed_input0, config);
     auto tilized_input1 = ::unit_tests::compute::gold_standard_tilize(packed_input1, config);
 
-    distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
-    distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
+    distributed::WriteShard(cq, *src_a_dram_buffer, tilized_input0, zero_coord);
+    distributed::WriteShard(cq, *src_b_dram_buffer, tilized_input1, zero_coord);
 
     distributed::EnqueueMeshWorkload(cq, workload, is_quasar);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, dst_dram_buffer, zero_coord);
+    distributed::ReadShard(cq, dest_buffer_data, *dst_dram_buffer, zero_coord);
     auto dest_buffer_data_untilized = ::unit_tests::compute::gold_standard_untilize(dest_buffer_data, config);
 
     bool result = is_close_packed_vectors<bfloat16, uint32_t>(

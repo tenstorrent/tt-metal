@@ -601,11 +601,11 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
 
         std::vector<uint32_t> src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
         std::iota(src_vec.begin(), src_vec.end(), 42);
-        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), mesh_buffer, src_vec);
+        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), *mesh_buffer, src_vec);
         Finish(mesh_device->mesh_command_queue());
 
         std::vector<uint32_t> dst_vec = {};
-        EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst_vec, mesh_buffer, true);
+        EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst_vec, *mesh_buffer, true);
         EXPECT_EQ(dst_vec, src_vec) << "Buffer operations failed with full grid in slow dispatch mode";
     }
 }

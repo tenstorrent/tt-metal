@@ -1053,7 +1053,7 @@ int main(int argc, char** argv) {
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         tt_metal::distributed::WriteShard(
             device->mesh_command_queue(0),
-            in0_buffer,
+            *in0_buffer,
             activations,
             tt::tt_metal::distributed::MeshCoordinate(0, 0),
             true);
@@ -1064,7 +1064,7 @@ int main(int argc, char** argv) {
             convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::distributed::WriteShard(
-            device->mesh_command_queue(0), in1_buffer, weights, tt::tt_metal::distributed::MeshCoordinate(0, 0), true);
+            device->mesh_command_queue(0), *in1_buffer, weights, tt::tt_metal::distributed::MeshCoordinate(0, 0), true);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Matmul Parameters Setup
@@ -1138,7 +1138,7 @@ int main(int argc, char** argv) {
         tt_metal::distributed::ReadShard(
             device->mesh_command_queue(0),
             result_vec,
-            out_buffer,
+            *out_buffer,
             tt::tt_metal::distributed::MeshCoordinate(0, 0),
             true);
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);

@@ -43,11 +43,11 @@ int main() {
     // Enqueue a write to the distributed buffer (L1 banks across devices) with random data.
     std::vector<uint32_t> src_data = create_random_vector_of_bfloat16(
         distributed_buffer_size_bytes, 1, std::chrono::system_clock::now().time_since_epoch().count());
-    EnqueueWriteMeshBuffer(cq, mesh_buffer, src_data);
+    EnqueueWriteMeshBuffer(cq, *mesh_buffer, src_data);
 
     // Enqueue a read from the distributed buffer (L1 banks across devices) to a local buffer.
     std::vector<uint32_t> read_back_data{};
-    EnqueueReadMeshBuffer(cq, read_back_data, mesh_buffer, true /* blocking */);
+    EnqueueReadMeshBuffer(cq, read_back_data, *mesh_buffer, true /* blocking */);
 
     // Data read back across all devices in the mesh should match the original data.
     assert(src_data == read_back_data);

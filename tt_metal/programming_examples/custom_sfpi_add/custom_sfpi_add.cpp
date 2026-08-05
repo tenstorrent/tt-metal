@@ -146,8 +146,8 @@ int main() {
         // upload is complete. This is useful for performance reasons, as it allows the host to continue while the
         // upload is in progress. Note that the host is responsible for ensuring that the upload is complete before the
         // memory holding the data is freed.
-        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, /*blocking=*/false);
-        distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, /*blocking=*/false);
+        distributed::EnqueueWriteMeshBuffer(cq, *src0_dram_buffer, a_data, /*blocking=*/false);
+        distributed::EnqueueWriteMeshBuffer(cq, *src1_dram_buffer, b_data, /*blocking=*/false);
 
         // Set the runtime arguments for the kernels. This also registers the kernels with the program.
         SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
@@ -164,7 +164,7 @@ int main() {
         // Read the result back from the shard at mesh coordinate {0,0}. Use blocking=true to wait for completion.
         // The vector is automatically resized to fit the data.
         std::vector<bfloat16> result_vec;
-        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking*/ true);
+        distributed::EnqueueReadMeshBuffer(cq, result_vec, *dst_dram_buffer, /*blocking*/ true);
 
         // Compare the result with the input. The result should be the input plus val_to_add.
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16

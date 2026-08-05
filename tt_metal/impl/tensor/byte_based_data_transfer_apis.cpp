@@ -19,7 +19,7 @@ void enqueue_read_tensor(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, device_tensor.impl().raw_mesh_buffer(), blocking);
+    queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer(), blocking);
 }
 
 void enqueue_write_tensor(
@@ -32,7 +32,7 @@ void enqueue_write_tensor(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<std::byte*>(src))
             .region(region)};
-    queue.enqueue_write_shards(device_tensor.impl().raw_mesh_buffer(), shard_data_transfers, false);
+    queue.enqueue_write_shards(device_tensor.mesh_buffer(), shard_data_transfers, false);
 }
 
 }  // namespace tt::tt_metal

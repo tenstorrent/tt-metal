@@ -96,7 +96,7 @@ static void BM_write(
         mesh_device.get());
 
     for ([[maybe_unused]] auto _ : state) {
-        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), device_buffer, host_buffer, true);
+        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), *device_buffer, host_buffer, true);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());
@@ -158,7 +158,7 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
 
     for ([[maybe_unused]] auto _ : state) {
         bool blocking = true;
-        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, blocking);
+        mesh_device->mesh_command_queue().enqueue_write_shards(*device_buffer, {write_transfer}, blocking);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());
@@ -270,7 +270,7 @@ static void BM_write_sharded(benchmark::State& state, const std::shared_ptr<Mesh
                               .region(BufferRegion(0, static_cast<std::size_t>(actual_buf_size)));
 
     for ([[maybe_unused]] auto _ : state) {
-        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/true);
+        mesh_device->mesh_command_queue().enqueue_write_shards(*device_buffer, {write_transfer}, /*blocking=*/true);
     }
 
     state.SetBytesProcessed(actual_buf_size * state.iterations());
@@ -323,7 +323,7 @@ static void BM_write_pinned_memory_sharded(benchmark::State& state, const std::s
 
     bool used_pinned_memory = false;
     for ([[maybe_unused]] auto _ : state) {
-        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, /*blocking=*/false);
+        mesh_device->mesh_command_queue().enqueue_write_shards(*device_buffer, {write_transfer}, /*blocking=*/false);
         used_pinned_memory = pinned_mem->lock_may_block();
         mesh_device->mesh_command_queue().finish();
     }
@@ -355,7 +355,7 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
 
     for ([[maybe_unused]] auto _ : state) {
         // EnqueueReadMeshBuffer cannot read from a replicated buffer yet, have to use ReadShard
-        ReadShard(mesh_device->mesh_command_queue(), host_buffer, device_buffer, MeshCoordinate(0, 0), true);
+        ReadShard(mesh_device->mesh_command_queue(), host_buffer, *device_buffer, MeshCoordinate(0, 0), true);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());
@@ -402,7 +402,7 @@ static void BM_read_pinned_memory(benchmark::State& state, const std::shared_ptr
     experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_mem);
 
     for ([[maybe_unused]] auto _ : state) {
-        mesh_device->mesh_command_queue().enqueue_read_shards({read_transfer}, device_buffer, /*blocking=*/true);
+        mesh_device->mesh_command_queue().enqueue_read_shards({read_transfer}, *device_buffer, /*blocking=*/true);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());

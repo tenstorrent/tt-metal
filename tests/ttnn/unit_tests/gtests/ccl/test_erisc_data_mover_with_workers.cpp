@@ -404,8 +404,8 @@ bool RunWriteBWTest(
     auto remote_input_buffer =
         distributed::MeshBuffer::create(buffer_config, local_input_config, receiver_mesh_device.get());
 
-    distributed::WriteShard(sender_cq, local_input_buffer, inputs, zero_coord);
-    distributed::WriteShard(receiver_cq, remote_input_buffer, inputs, zero_coord);
+    distributed::WriteShard(sender_cq, *local_input_buffer, inputs, zero_coord);
+    distributed::WriteShard(receiver_cq, *remote_input_buffer, inputs, zero_coord);
 
     std::vector<uint32_t> local_input_buffer_addresses(num_local_sender_channels, local_input_buffer->address());
     std::vector<uint32_t> remote_input_buffer_addresses(num_remote_sender_channels, remote_input_buffer->address());
@@ -437,10 +437,10 @@ bool RunWriteBWTest(
     }
 
     for (const auto& buffer_id : local_output_buffers) {
-        distributed::WriteShard(sender_cq, buffer_id, all_zeros, zero_coord);
+        distributed::WriteShard(sender_cq, *buffer_id, all_zeros, zero_coord);
     }
     for (const auto& buffer_id : remote_output_buffers) {
-        distributed::WriteShard(receiver_cq, buffer_id, all_zeros, zero_coord);
+        distributed::WriteShard(receiver_cq, *buffer_id, all_zeros, zero_coord);
     }
 
     uint32_t erisc_handshake_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
@@ -645,7 +645,7 @@ bool RunWriteBWTest(
         distributed::ReadShard(
             output_buffer->device()->mesh_command_queue(),
             readback_data_vec,
-            output_buffer,
+            *output_buffer,
             distributed::MeshCoordinate(0, 0));
         log_info(tt::LogTest, "Checking outputs");
         if (readback_data_vec.size() != inputs.size()) {

@@ -456,7 +456,7 @@ void validation(
         tt_metal::distributed::ReadShard(
             device->mesh_command_queue(),
             result_vec,
-            buffer_to_validate,
+            *buffer_to_validate,
             tt_metal::distributed::MeshCoordinate(0, 0),
             true  // blocking read
         );

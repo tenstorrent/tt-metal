@@ -256,12 +256,12 @@ void matmul_multi_core(
     // 3. Read back the result from DRAM to host memory
     // The 'true' parameter in EnqueueReadMeshBuffer ensures we wait for completion (so when the function
     // returns, the output vector is fully populated).
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    distributed::EnqueueWriteMeshBuffer(cq, *src0_dram_buffer, a, false);
+    distributed::EnqueueWriteMeshBuffer(cq, *src1_dram_buffer, b, false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     // Blocking read waits for completion before returning and resizes 'output' as needed
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    distributed::EnqueueReadMeshBuffer(cq, output, *dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////

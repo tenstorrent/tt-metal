@@ -224,7 +224,7 @@ void run_single_core_copy_block_matmul_partials(
     auto& program_run = workload.get_programs().at(device_range);
 
     std::vector<uint32_t> src_vec = generate_copy_block_stimulus(dram_buffer_size, test_config);
-    distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
+    distributed::WriteShard(cq, *src_dram_buffer, src_vec, zero_coord);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -256,7 +256,7 @@ void run_single_core_copy_block_matmul_partials(
     distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
-    distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
+    distributed::ReadShard(cq, result_vec, *dst_dram_buffer, zero_coord);
 
     EXPECT_EQ(src_vec.size(), result_vec.size());
     EXPECT_EQ(src_vec, result_vec);

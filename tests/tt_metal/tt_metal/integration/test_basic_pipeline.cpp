@@ -244,7 +244,7 @@ void create_and_run_row_pipeline(
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     log_info(LogTest, "Writing to device buffer->..");
-    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec);
+    distributed::EnqueueWriteMeshBuffer(cq, *src_buffer, src_vec);
     log_info(LogTest, "Writing to device buffer Done.");
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
@@ -253,7 +253,7 @@ void create_and_run_row_pipeline(
 
     log_info(LogTest, "Reading results from device...");
     std::vector<uint32_t> result_vec;
-    distributed::ReadShard(cq, result_vec, dst_buffer, distributed::MeshCoordinate(0, 0));
+    distributed::ReadShard(cq, result_vec, *dst_buffer, distributed::MeshCoordinate(0, 0));
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown

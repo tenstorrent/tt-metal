@@ -89,7 +89,7 @@ private:
 
     friend void tt::tt_metal::experimental::core_subset_write::enqueue_write(
         tt::tt_metal::distributed::MeshCommandQueue& cq,
-        tt::tt_metal::distributed::MeshBuffer& mesh_buffer,
+        const tt::tt_metal::distributed::MeshBuffer& mesh_buffer,
         const tt::tt_metal::DistributedHostBuffer& host_buffer,
         bool blocking,
         const tt::tt_metal::CoreRangeSet& logical_core_filter);

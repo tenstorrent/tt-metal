@@ -60,7 +60,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_ReadShard_SanityCheck) {
     DeallocateBuffer(*buffer);
 
     std::vector<uint8_t> out(1024);
-    EXPECT_DEATH(detail::ReadShard(*buffer, out.data(), /*core_id=*/0), ".*Use-After-Free.*ReadShard.*");
+    EXPECT_DEATH(detail::ReadShard(*buffer, out.data(), * /*core_id=*/0), ".*Use-After-Free.*ReadShard.*");
 }
 
 TEST_F(MeshDeviceFixture, Host_UAF_CoreSubsetWriteToBuffer_SanityCheck) {

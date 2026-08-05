@@ -155,7 +155,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     distributed::Synchronize(device, std::nullopt);
 
     // Test blocking write buffer doesn't stall
-    distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), buffer_1, input_1, true);
+    distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), *buffer_1, input_1, true);
 
     // Test record event won't cause a stall
 
@@ -164,7 +164,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
 
     // Test blocking read buffer doesn't stall
     std::vector<uint32_t> output_1;
-    distributed::ReadShard(device->mesh_command_queue(), output_1, buffer_1, zero_coord, true);
+    distributed::ReadShard(device->mesh_command_queue(), output_1, *buffer_1, zero_coord, true);
     EXPECT_EQ(input_1, output_1);
     auto input_1_it = input_1.begin();
     for (const auto& physical_core : physical_cores_1) {

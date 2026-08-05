@@ -440,11 +440,11 @@ void matmul_multicore_reuse_mcast(
 
     /* Launch program & read in output buffer result into the host vector */
 
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    distributed::EnqueueWriteMeshBuffer(cq, *src0_dram_buffer, a, false);
+    distributed::EnqueueWriteMeshBuffer(cq, *src1_dram_buffer, b, false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    distributed::EnqueueReadMeshBuffer(cq, output, *dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////

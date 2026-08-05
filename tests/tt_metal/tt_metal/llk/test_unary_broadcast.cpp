@@ -548,13 +548,13 @@ void run_single_core_unary_broadcast(
     std::vector<uint32_t> golden_packed_tilized_output;
     get_packed_tilized_input_output_pair(
         in_t, out_t, num_tiles, test_config.broadcast_dim, packed_tilized_input, golden_packed_tilized_output);
-    distributed::WriteShard(cq, src_dram_buffer, packed_tilized_input, zero_coord);
+    distributed::WriteShard(cq, *src_dram_buffer, packed_tilized_input, zero_coord);
 
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, dst_dram_buffer, zero_coord);
+    distributed::ReadShard(cq, dest_buffer_data, *dst_dram_buffer, zero_coord);
 
     ASSERT_TRUE(check_is_close(golden_packed_tilized_output, dest_buffer_data, out_t, "unary_broadcast_dram_out"));
 }

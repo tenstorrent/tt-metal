@@ -247,7 +247,7 @@ void H2DSocket::write_socket_metadata(
             device, recv_core_.core_coord, static_cast<uint32_t>(config_buffer_->address()), bytes);
     } else {
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(0), config_buffer_, config_data, recv_core_.device_coord, true);
+            mesh_device->mesh_command_queue(0), *config_buffer_, config_data, recv_core_.device_coord, true);
     }
 }
 

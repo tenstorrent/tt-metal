@@ -193,18 +193,18 @@ TEST_F(GenericMeshDeviceFixture, PCIeHostReadBandwidthSweep) {
 
         // Seed device buffer
         vector<uint32_t> src(buf_size / sizeof(uint32_t), 0xDEADBEEF);
-        distributed::WriteShard(cq, buffer, src, device_coord, false);
+        distributed::WriteShard(cq, *buffer, src, device_coord, false);
         distributed::Finish(cq);
 
         vector<uint32_t> dst;
 
         // Warmup
-        distributed::ReadShard(cq, dst, buffer, device_coord, true);
+        distributed::ReadShard(cq, dst, *buffer, device_coord, true);
 
         // Timed
         auto start = chrono::high_resolution_clock::now();
         for (uint32_t i = 0; i < num_iterations; i++) {
-            distributed::ReadShard(cq, dst, buffer, device_coord, true);
+            distributed::ReadShard(cq, dst, *buffer, device_coord, true);
         }
         auto end = chrono::high_resolution_clock::now();
 

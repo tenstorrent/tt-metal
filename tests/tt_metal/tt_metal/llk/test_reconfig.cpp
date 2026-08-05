@@ -535,12 +535,12 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     auto src4 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1005);
     auto src5 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x1006);
 
-    distributed::WriteShard(cq, inp0_dram, src0, zero_coord, false);
-    distributed::WriteShard(cq, inp1_dram, src1, zero_coord, false);
-    distributed::WriteShard(cq, inp2_dram, src2, zero_coord, false);
-    distributed::WriteShard(cq, inp3_dram, src3, zero_coord, false);
-    distributed::WriteShard(cq, inp4_dram, src4, zero_coord, false);
-    distributed::WriteShard(cq, inp5_dram, src5, zero_coord, false);
+    distributed::WriteShard(cq, *inp0_dram, src0, zero_coord, false);
+    distributed::WriteShard(cq, *inp1_dram, src1, zero_coord, false);
+    distributed::WriteShard(cq, *inp2_dram, src2, zero_coord, false);
+    distributed::WriteShard(cq, *inp3_dram, src3, zero_coord, false);
+    distributed::WriteShard(cq, *inp4_dram, src4, zero_coord, false);
+    distributed::WriteShard(cq, *inp5_dram, src5, zero_coord, false);
 
     auto in0 = unpack_uint32_vec_into_bfloat16_vec(src0);
     auto in1 = unpack_uint32_vec_into_bfloat16_vec(src1);
@@ -626,7 +626,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, out_dram, zero_coord, false);
+    distributed::ReadShard(cq, dest_buffer_data, *out_dram, zero_coord, false);
 
     auto device_unpacked = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);
     auto golden_unpacked = unpack_vector<bfloat16, uint32_t>(packed_golden);
@@ -872,12 +872,12 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     auto src4 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x2005);
     auto src5 = create_random_vector_of_bfloat16(f16_tile_size, kRandMax, /*seed=*/0x2006);
 
-    distributed::WriteShard(cq, inp0_dram, src0, zero_coord, false);
-    distributed::WriteShard(cq, inp1_dram, src1, zero_coord, false);
-    distributed::WriteShard(cq, inp2_dram, src2, zero_coord, false);
-    distributed::WriteShard(cq, inp3_dram, src3, zero_coord, false);
-    distributed::WriteShard(cq, inp4_dram, src4, zero_coord, false);
-    distributed::WriteShard(cq, inp5_dram, src5, zero_coord, false);
+    distributed::WriteShard(cq, *inp0_dram, src0, zero_coord, false);
+    distributed::WriteShard(cq, *inp1_dram, src1, zero_coord, false);
+    distributed::WriteShard(cq, *inp2_dram, src2, zero_coord, false);
+    distributed::WriteShard(cq, *inp3_dram, src3, zero_coord, false);
+    distributed::WriteShard(cq, *inp4_dram, src4, zero_coord, false);
+    distributed::WriteShard(cq, *inp5_dram, src5, zero_coord, false);
 
     auto in0 = unpack_uint32_vec_into_bfloat16_vec(src0);
     auto in1 = unpack_uint32_vec_into_bfloat16_vec(src1);
@@ -983,9 +983,9 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     std::vector<uint32_t> out0_data;
     std::vector<uint32_t> out1_data;
     std::vector<uint32_t> out2_data;
-    distributed::ReadShard(cq, out0_data, out0_dram, zero_coord, false);
-    distributed::ReadShard(cq, out1_data, out1_dram, zero_coord, false);
-    distributed::ReadShard(cq, out2_data, out2_dram, zero_coord, false);
+    distributed::ReadShard(cq, out0_data, *out0_dram, zero_coord, false);
+    distributed::ReadShard(cq, out1_data, *out1_dram, zero_coord, false);
+    distributed::ReadShard(cq, out2_data, *out2_dram, zero_coord, false);
 
     bool pass = true;
 

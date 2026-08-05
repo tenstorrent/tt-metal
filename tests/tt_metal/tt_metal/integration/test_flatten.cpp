@@ -285,7 +285,7 @@ bool flatten_stress(
         SetRuntimeArgs(program_on_workload, unary_writer_kernel, core, writer_runtime_args);
 
         // Async write input
-        distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, *src_vec, false);
+        distributed::EnqueueWriteMeshBuffer(cq, *src_dram_buffer, *src_vec, false);
         // Share ownership of buffer with program
         AssignGlobalBufferToProgram(
             std::shared_ptr<Buffer>(src_dram_buffer->get_backing_buffer()), program_on_workload);
@@ -296,7 +296,7 @@ bool flatten_stress(
         distributed::EnqueueMeshWorkload(cq, workload, false);
         // Blocking read
         std::vector<uint32_t> result_vec;
-        distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord, true);
+        distributed::ReadShard(cq, result_vec, *dst_dram_buffer, zero_coord, true);
 
         // Validation of data
         TT_FATAL(

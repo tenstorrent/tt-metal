@@ -290,7 +290,7 @@ bool noc_reader_and_writer_kernels(
         });
 
     auto reader_inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    distributed::WriteShard(cq, reader_dram_buffer, reader_inputs, zero_coord);
+    distributed::WriteShard(cq, *reader_dram_buffer, reader_inputs, zero_coord);
 
     auto writer_inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -300,7 +300,7 @@ bool noc_reader_and_writer_kernels(
     std::vector<uint32_t> all_zeros(byte_size / sizeof(uint32_t), 0);
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         device->id(), eth_noc_xy, all_zeros, eth_dst_l1_address);
-    distributed::WriteShard(cq, writer_dram_buffer, all_zeros, zero_coord);
+    distributed::WriteShard(cq, *writer_dram_buffer, all_zeros, zero_coord);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -316,7 +316,7 @@ bool noc_reader_and_writer_kernels(
             logical_eth_core.str());
     }
     std::vector<uint32_t> dram_readback_vec;
-    distributed::ReadShard(cq, dram_readback_vec, writer_dram_buffer, zero_coord);
+    distributed::ReadShard(cq, dram_readback_vec, *writer_dram_buffer, zero_coord);
     pass &= (dram_readback_vec == writer_inputs);
     if (not pass) {
         log_info(

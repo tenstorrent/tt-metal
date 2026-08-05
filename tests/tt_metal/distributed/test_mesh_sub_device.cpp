@@ -143,7 +143,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         // Block after this write on host, since the global semaphore update starting the
         // program goes through an independent path (UMD) and can go out of order wrt the
         // buffer data
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), *input_buf, src_vec, true);
 
         for (auto* device : mesh_device_->get_devices()) {
             MetalContext::instance().get_cluster().write_core(
@@ -154,7 +154,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
             for (std::size_t logical_y = 0; logical_y < output_buf->device()->num_rows(); logical_y++) {
                 std::vector<uint32_t> dst_vec;
                 ReadShard(
-                    mesh_device_->mesh_command_queue(), dst_vec, output_buf, MeshCoordinate(logical_y, logical_x));
+                    mesh_device_->mesh_command_queue(), dst_vec, *output_buf, MeshCoordinate(logical_y, logical_x));
                 EXPECT_EQ(dst_vec, src_vec);
             }
         }

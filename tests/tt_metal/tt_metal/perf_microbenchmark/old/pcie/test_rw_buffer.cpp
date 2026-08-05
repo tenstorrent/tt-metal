@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
                 begin = std::chrono::steady_clock::now();
                 tt_metal::distributed::WriteShard(
                     device->mesh_command_queue(0),
-                    buffer,
+                    *buffer,
                     src_vec,
                     tt::tt_metal::distributed::MeshCoordinate(0, 0),
                     true);
@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
                 tt_metal::distributed::ReadShard(
                     device->mesh_command_queue(0),
                     result_vec,
-                    buffer,
+                    *buffer,
                     tt::tt_metal::distributed::MeshCoordinate(0, 0),
                     true);
                 end = std::chrono::steady_clock::now();

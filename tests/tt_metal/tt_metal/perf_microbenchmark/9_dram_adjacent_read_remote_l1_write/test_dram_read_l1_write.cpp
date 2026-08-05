@@ -619,7 +619,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Copy Input To DRAM or L1
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
+        tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), *input_buffer, input_vec, false);
         tt_metal::distributed::Finish(device->mesh_command_queue());
 
         ////////////////////////////////////////////////////////////////////////////

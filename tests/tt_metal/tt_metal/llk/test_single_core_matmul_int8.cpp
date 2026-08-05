@@ -181,9 +181,9 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     ////////////////////////////////////////////////////////////////////////////
 
     convert_to_sign_mag(input_0);
-    distributed::EnqueueWriteMeshBuffer(cq, input0_dram_buffer, input_0);
+    distributed::EnqueueWriteMeshBuffer(cq, *input0_dram_buffer, input_0);
     convert_to_sign_mag(input_1);
-    distributed::EnqueueWriteMeshBuffer(cq, input1_dram_buffer, input_1);
+    distributed::EnqueueWriteMeshBuffer(cq, *input1_dram_buffer, input_1);
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -213,7 +213,7 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<int8_t> dest_buffer_data;
-    distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, output_dram_buffer);
+    distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, *output_dram_buffer);
     pass = dest_buffer_data == golden_output;
 
     for (int i = 0; i < 1024; i++) {

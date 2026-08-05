@@ -127,8 +127,8 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     // Blocking writes so data is resident before kernels run
     auto& mcq = mesh->mesh_command_queue();
-    Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
-    Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
+    Dist::WriteShard(mcq, *src_buf, tx, src_coord, /*blocking=*/true);
+    Dist::WriteShard(mcq, *dst_buf, zeros, dst_coord, /*blocking=*/true);
 
     // === Build the multicast receiver set from a rectangular sub-mesh ===
     std::vector<Dist::MeshCoordinate> dst_coords;
@@ -157,9 +157,9 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
         return;
     }
     for (const auto& c : dst_coords) {
-        Dist::WriteShard(mcq, dst_buf, zeros, c, /*blocking=*/true);
+        Dist::WriteShard(mcq, *dst_buf, zeros, c, /*blocking=*/true);
     }
-    Dist::WriteShard(mcq, dst_buf, zeros, src_coord, /*blocking=*/true);
+    Dist::WriteShard(mcq, *dst_buf, zeros, src_coord, /*blocking=*/true);
 
     // Build RX programs: one per receiver chip
     std::vector<tt::tt_metal::Program> receiver_progs;
@@ -412,7 +412,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     // Read back and verify
     for (const auto& mc : dst_coords) {
         std::vector<uint32_t> rx(n_words, 0u);
-        Dist::ReadShard(mcq, rx, dst_buf, mc, /*blocking=*/true);
+        Dist::ReadShard(mcq, rx, *dst_buf, mc, /*blocking=*/true);
         verify_payload_words(rx, tx);
     }
 }

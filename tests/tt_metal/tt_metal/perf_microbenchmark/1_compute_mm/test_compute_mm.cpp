@@ -1487,7 +1487,7 @@ bool validation_single_core(
     bool pass = true;
 
     std::vector<uint32_t> result;
-    tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, out_buffer, {0, 0}, true);
+    tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, *out_buffer, {0, 0}, true);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
@@ -1536,7 +1536,7 @@ bool validation_single_core_fp8(
     bool pass = true;
 
     std::vector<uint32_t> result;
-    tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, out_buffer, {0, 0}, true);
+    tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, *out_buffer, {0, 0}, true);
 
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
     auto result_untilized = untilize_swizzled(result_bfp8, Mt * 32, Nt * 32);
@@ -1665,7 +1665,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_and_transfer_data_
 
     // Write data to the mesh buffer
     auto& mesh_cq = device->mesh_command_queue();
-    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(mesh_cq, input_buffer, activations, true);
+    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(mesh_cq, *input_buffer, activations, true);
 
     return input_buffer;
 }
@@ -1696,7 +1696,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_and_transfer_data_
 
     // Write data to the mesh buffer
     auto& mesh_cq = device->mesh_command_queue();
-    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(mesh_cq, input_buffer, activations, true);
+    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(mesh_cq, *input_buffer, activations, true);
 
     return input_buffer;
 }

@@ -118,7 +118,7 @@ void RunTest(
     std::vector<uint32_t> u32_vec = GenerateInputTile(data_format);
 
     // Send input tile to dram
-    distributed::WriteShard(cq, src_dram_buffer, u32_vec, zero_coord);
+    distributed::WriteShard(cq, *src_dram_buffer, u32_vec, zero_coord);
 
     // Run the program
     fixture->RunProgram(mesh_device, workload);

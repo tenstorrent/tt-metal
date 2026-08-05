@@ -241,8 +241,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    EnqueueWriteMeshBuffer(cq, a, a_data, false);
-    EnqueueWriteMeshBuffer(cq, b, b_data, false);
+    EnqueueWriteMeshBuffer(cq, *a, a_data, false);
+    EnqueueWriteMeshBuffer(cq, *b, b_data, false);
     // Enqueue the program
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;
-    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
+    distributed::EnqueueReadMeshBuffer(cq, c_data, *c, true);
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)

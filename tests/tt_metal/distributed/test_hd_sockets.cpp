@@ -149,7 +149,7 @@ void test_d2h_socket(
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
-    WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, sender_core.device_coord);
+    WriteShard(mesh_device->mesh_command_queue(), *sender_data_buffer, src_vec, sender_core.device_coord);
 
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices = MeshCoordinateRange(sender_core.device_coord);

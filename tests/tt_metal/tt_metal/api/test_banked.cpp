@@ -182,16 +182,16 @@ bool reader_cb_writer(
     ////////////////////////////////////////////////////////////////////////////
     auto input_packed =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
-    distributed::WriteShard(cq, input_buffer, input_packed, zero_coord, false);
+    distributed::WriteShard(cq, *input_buffer, input_packed, zero_coord, false);
     SetRuntimeArgs(program_, reader_kernel, cfg.logical_core, reader_runtime_args);
     SetRuntimeArgs(program_, writer_kernel, cfg.logical_core, writer_runtime_args);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     std::vector<uint32_t> reread_input_packed;
-    distributed::ReadShard(cq, reread_input_packed, input_buffer, zero_coord, false);
+    distributed::ReadShard(cq, reread_input_packed, *input_buffer, zero_coord, false);
 
     std::vector<uint32_t> output_packed;
-    distributed::ReadShard(cq, output_packed, output_buffer, zero_coord, false);
+    distributed::ReadShard(cq, output_packed, *output_buffer, zero_coord, false);
 
     pass &= (output_packed == input_packed);
 
@@ -287,7 +287,7 @@ bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh
     //                      Compile and Execute Appli   cation
     ////////////////////////////////////////////////////////////////////////////
 
-    distributed::WriteShard(cq, input_buffer, input_packed, zero_coord, false);
+    distributed::WriteShard(cq, *input_buffer, input_packed, zero_coord, false);
 
     SetRuntimeArgs(
         program_,
@@ -307,7 +307,7 @@ bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh
         });
     distributed::EnqueueMeshWorkload(cq, workload, false);
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, output_buffer, zero_coord, false);
+    distributed::ReadShard(cq, dest_buffer_data, *output_buffer, zero_coord, false);
     pass &= input_packed == dest_buffer_data;
 
     return pass;

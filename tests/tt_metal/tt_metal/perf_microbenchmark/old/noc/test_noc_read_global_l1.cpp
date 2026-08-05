@@ -224,7 +224,7 @@ int main(int argc, char** argv) {
                     tt_metal::distributed::MeshBuffer::create(replicated_config, local_config, device.get()));
                 tt_metal::distributed::WriteShard(
                     device->mesh_command_queue(0),
-                    l1_buffers[(r * num_cores_c) + c],
+                    *l1_buffers[(r * num_cores_c) + c],
                     packed_tensors[(r * num_cores_c) + c],
                     tt::tt_metal::distributed::MeshCoordinate(0, 0),
                     true);
@@ -245,7 +245,7 @@ int main(int argc, char** argv) {
                 tt::tt_metal::distributed::ReadShard(
                     device->mesh_command_queue(0),
                     result_vec,
-                    l1_buffers[(r * num_cores_c) + c],
+                    *l1_buffers[(r * num_cores_c) + c],
                     tt::tt_metal::distributed::MeshCoordinate(0, 0),
                     true);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);

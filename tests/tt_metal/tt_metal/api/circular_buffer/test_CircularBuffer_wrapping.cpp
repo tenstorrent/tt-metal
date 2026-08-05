@@ -59,7 +59,7 @@ std::shared_ptr<distributed::MeshBuffer> create_result_buffer(
     auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
     std::vector<DataT> init_data(RESULT_BUFFER_SIZE / sizeof(DataT), 0);
     distributed::WriteShard(
-        mesh_device->mesh_command_queue(), result_buffer, init_data, distributed::MeshCoordinate(0, 0));
+        mesh_device->mesh_command_queue(), *result_buffer, init_data, distributed::MeshCoordinate(0, 0));
     return result_buffer;
 }
 
@@ -241,7 +241,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
     std::vector<DataT> host_buffer;
     auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
 
-    // distributed::ReadShard(cq, host_buffer, result_buffer, distributed::MeshCoordinate(0, 0));
+    // distributed::ReadShard(cq, host_buffer, *result_buffer, distributed::MeshCoordinate(0, 0));
     detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
     EXPECT_EQ(host_buffer.front(), SUCCESS_TOKEN) << "Reader should have detected that the CB is full.";
 }

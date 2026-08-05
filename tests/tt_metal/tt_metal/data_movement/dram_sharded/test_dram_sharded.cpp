@@ -159,7 +159,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     vector<uint32_t> packed_output;
 
     auto& cq = mesh_device->mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, mesh_buffer, packed_input);
+    distributed::EnqueueWriteMeshBuffer(cq, *mesh_buffer, packed_input);
 
     auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};

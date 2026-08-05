@@ -254,12 +254,12 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         auto fd_buf = MeshBuffer::create(fd_l1_global, fd_l1_config, mesh_device.get());
         std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(fd_src_vec.begin(), fd_src_vec.end(), 100);
-        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), fd_buf, fd_src_vec);
+        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), *fd_buf, fd_src_vec);
         Finish(mesh_device->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
             std::vector<uint32_t> dst;
-            ReadShard(mesh_device->mesh_command_queue(), dst, fd_buf, coord);
+            ReadShard(mesh_device->mesh_command_queue(), dst, *fd_buf, coord);
             EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 readback failed in FD mode at " << coord;
         }
         assert_counter_incrementing(read_counter, "FD steady-state (cycle " + std::to_string(cycle) + ")");

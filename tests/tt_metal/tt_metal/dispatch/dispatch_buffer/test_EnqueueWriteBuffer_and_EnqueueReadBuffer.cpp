@@ -144,7 +144,7 @@ vector<uint32_t> generate_arange_vector(uint32_t size_bytes) {
 void clear_buffer(distributed::MeshCommandQueue& cq, const std::shared_ptr<distributed::MeshBuffer>& buffer) {
     TT_FATAL(buffer->size() % sizeof(uint32_t) == 0, "Error");
     vector<uint32_t> zeroes(buffer->size() / sizeof(uint32_t), 0);
-    distributed::WriteShard(cq, buffer, zeroes, distributed::MeshCoordinate(0, 0));
+    distributed::WriteShard(cq, *buffer, zeroes, distributed::MeshCoordinate(0, 0));
 }
 
 vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_configs(uint32_t max_buffer_size) {
@@ -271,7 +271,7 @@ void EnqueueWriteMeshSubBuffer(
                                    .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
                                    .region(region);
 
-    cq.enqueue_write_shards(buffer, {shard_data_transfer}, blocking);
+    cq.enqueue_write_shards(*buffer, {shard_data_transfer}, blocking);
 }
 
 void EnqueueReadMeshSubBuffer(
@@ -283,7 +283,7 @@ void EnqueueReadMeshSubBuffer(
     auto shard_data_transfer =
         distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst.data()).region(region);
 
-    cq.enqueue_read_shards({shard_data_transfer}, buffer, blocking);
+    cq.enqueue_read_shards({shard_data_transfer}, *buffer, blocking);
 }
 
 template <bool cq_dispatch_only = false>
@@ -356,7 +356,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             vector<uint32_t> src = generate_arange_vector(bufa->size());
 
             if (cq_write) {
-                distributed::WriteShard(cq, bufa, src, device_coord);
+                distributed::WriteShard(cq, *bufa, src, device_coord);
             } else {
                 WriteToUnitMeshBuffer(mesh_device, config, src, bufa, config.sharding_args);
                 if (config.buftype == BufferType::DRAM) {
@@ -374,7 +374,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             }
 
             if (cq_read) {
-                distributed::ReadShard(cq, result, bufa, device_coord);
+                distributed::ReadShard(cq, result, *bufa, device_coord);
             } else {
                 ReadFromUnitMeshBuffer(mesh_device, config, result, bufa, config.sharding_args);
             }
@@ -433,16 +433,16 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             buf = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
         }
         auto coord = distributed::MeshCoordinate(0, 0);
-        distributed::WriteShard(cq, buf, src, coord);
+        distributed::WriteShard(cq, *buf, src, coord);
         vector<uint32_t> dst;
         if constexpr (blocking) {
-            distributed::ReadShard(cq, dst, buf, coord);
+            distributed::ReadShard(cq, dst, *buf, coord);
             EXPECT_EQ(src, dst);
         } else {
             srcs.push_back(std::move(src));
             dsts.push_back(dst);
             buffers.push_back(std::move(buf));  // Ensures that buffer not destroyed when moved out of scope
-            distributed::ReadShard(cq, dsts[dsts.size() - 1], buffers[buffers.size() - 1], coord);
+            distributed::ReadShard(cq, dsts[dsts.size() - 1], *buffers[buffers.size() - 1], coord);
         }
     }
 
@@ -500,7 +500,7 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
 
                 vector<uint32_t> src2 = src;
                 if (cq_write) {
-                    distributed::WriteShard(cq, buf, src, device_coord, false);
+                    distributed::WriteShard(cq, *buf, src, device_coord, false);
                 } else {
                     local_test_functions::WriteToUnitMeshBuffer(mesh_device, test_config, src, buf, std::nullopt);
                     if (buftype == BufferType::DRAM) {
@@ -517,7 +517,7 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 vector<uint32_t> res;
                 res.resize(buf_size / sizeof(uint32_t));
                 if (cq_read) {
-                    distributed::ReadShard(cq, res, buf, device_coord, true);
+                    distributed::ReadShard(cq, res, *buf, device_coord, true);
                 } else {
                     local_test_functions::ReadFromUnitMeshBuffer(mesh_device, test_config, res, buf, std::nullopt);
                 }
@@ -543,7 +543,7 @@ std::pair<std::shared_ptr<distributed::MeshBuffer>, std::vector<uint32_t>> Enque
     std::vector<uint32_t> src =
         create_random_vector_of_bfloat16(buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    distributed::WriteShard(cq, buffer, src, distributed::MeshCoordinate(0, 0), false);
+    distributed::WriteShard(cq, *buffer, src, distributed::MeshCoordinate(0, 0), false);
     return std::make_pair(std::move(buffer), src);
 }
 
@@ -553,7 +553,7 @@ void test_EnqueueWrap_on_EnqueueReadBuffer(
     const TestBufferConfig& config) {
     auto [buffer, src] = EnqueueWriteShard_prior_to_wrap(mesh_device, cq, config);
     vector<uint32_t> dst;
-    distributed::ReadShard(cq, dst, buffer, distributed::MeshCoordinate(0, 0), true);
+    distributed::ReadShard(cq, dst, *buffer, distributed::MeshCoordinate(0, 0), true);
 
     EXPECT_EQ(src, dst);
 }
@@ -590,7 +590,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
         }
         distributed::WriteShard(
             cq,
-            bufs[bufs.size() - 1],
+            *bufs[bufs.size() - 1],
             unique_vectors[i % unique_vectors.size()],
             distributed::MeshCoordinate(0, 0),
             false);
@@ -601,7 +601,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
     vector<uint32_t> dst;
     uint32_t idx = start;
     for (const auto& buffer : bufs) {
-        distributed::ReadShard(cq, dst, buffer, distributed::MeshCoordinate(0, 0), true);
+        distributed::ReadShard(cq, dst, *buffer, distributed::MeshCoordinate(0, 0), true);
         pass &= dst == unique_vectors[idx % unique_vectors.size()];
         idx++;
     }
@@ -628,16 +628,16 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(
 
             buffers.push_back(distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get()));
             srcs.push_back(generate_arange_vector(buffers[i]->size()));
-            distributed::WriteShard(cqs[i], buffers[i], srcs[i], distributed::MeshCoordinate(0, 0), false);
+            distributed::WriteShard(cqs[i], *buffers[i], srcs[i], distributed::MeshCoordinate(0, 0), false);
         }
 
         for (uint i = 0; i < cqs.size(); i++) {
             std::vector<uint32_t> result;
             if (use_void_star_api) {
                 result.resize(buf_size / sizeof(uint32_t));
-                distributed::ReadShard(cqs[i], result, buffers[i], distributed::MeshCoordinate(0, 0), true);
+                distributed::ReadShard(cqs[i], result, *buffers[i], distributed::MeshCoordinate(0, 0), true);
             } else {
-                distributed::ReadShard(cqs[i], result, buffers[i], distributed::MeshCoordinate(0, 0), true);
+                distributed::ReadShard(cqs[i], result, *buffers[i], distributed::MeshCoordinate(0, 0), true);
             }
             bool local_pass = (srcs[i] == result);
             pass &= local_pass;
@@ -1145,10 +1145,10 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
 
         auto src_1 = local_test_functions::generate_arange_vector(buff_1->size());
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), buff_1, src_1, distributed::MeshCoordinate(0, 0), false);
+            mesh_device->mesh_command_queue(), *buff_1, src_1, distributed::MeshCoordinate(0, 0), false);
         vector<uint32_t> result_1(first_buffer_size / sizeof(uint32_t));
         distributed::ReadShard(
-            mesh_device->mesh_command_queue(), result_1, buff_1, distributed::MeshCoordinate(0, 0), true);
+            mesh_device->mesh_command_queue(), result_1, *buff_1, distributed::MeshCoordinate(0, 0), true);
         EXPECT_EQ(src_1, result_1);
 
         distributed::DeviceLocalBufferConfig dram_config2{
@@ -1159,10 +1159,10 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
         auto src_2 = local_test_functions::generate_arange_vector(buff_2->size());
 
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), buff_2, src_2, distributed::MeshCoordinate(0, 0), false);
+            mesh_device->mesh_command_queue(), *buff_2, src_2, distributed::MeshCoordinate(0, 0), false);
         vector<uint32_t> result_2(num_pages_second_buffer * small_page_size / sizeof(uint32_t));
         distributed::ReadShard(
-            mesh_device->mesh_command_queue(), result_2, buff_2, distributed::MeshCoordinate(0, 0), true);
+            mesh_device->mesh_command_queue(), result_2, *buff_2, distributed::MeshCoordinate(0, 0), true);
         EXPECT_EQ(src_2, result_2);
 
         distributed::DeviceLocalBufferConfig dram_config3{
@@ -1173,10 +1173,10 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
         auto src_3 = local_test_functions::generate_arange_vector(buff_3->size());
 
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), buff_3, src_3, distributed::MeshCoordinate(0, 0), false);
+            mesh_device->mesh_command_queue(), *buff_3, src_3, distributed::MeshCoordinate(0, 0), false);
         vector<uint32_t> result_3(32 * large_page_size / sizeof(uint32_t));
         distributed::ReadShard(
-            mesh_device->mesh_command_queue(), result_3, buff_3, distributed::MeshCoordinate(0, 0), true);
+            mesh_device->mesh_command_queue(), result_3, *buff_3, distributed::MeshCoordinate(0, 0), true);
         EXPECT_EQ(src_3, result_3);
     }
 }
@@ -1291,7 +1291,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadBufferWriteSubBuffer) {
         local_test_functions::EnqueueWriteMeshSubBuffer(mesh_device->mesh_command_queue(), buffer, src, region, false);
         vector<uint32_t> read_buf_result(buffer_region_size / sizeof(uint32_t));
         distributed::ReadShard(
-            mesh_device->mesh_command_queue(), read_buf_result, buffer, distributed::MeshCoordinate(0, 0), true);
+            mesh_device->mesh_command_queue(), read_buf_result, *buffer, distributed::MeshCoordinate(0, 0), true);
         vector<uint32_t> result;
         for (uint32_t i = buffer_region_offset / sizeof(uint32_t);
              i < (buffer_region_offset + buffer_region_size) / sizeof(uint32_t);
@@ -1318,7 +1318,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadSubBufferWriteBuffer) {
         auto buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
         auto src = local_test_functions::generate_arange_vector(buffer_size);
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), buffer, src, distributed::MeshCoordinate(0, 0), false);
+            mesh_device->mesh_command_queue(), *buffer, src, distributed::MeshCoordinate(0, 0), false);
         vector<uint32_t> result(buffer_region_size / sizeof(uint32_t));
         local_test_functions::EnqueueReadMeshSubBuffer(mesh_device->mesh_command_queue(), result, buffer, region, true);
         vector<uint32_t> expected_result;
@@ -1393,10 +1393,10 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
 
         auto src_1 = local_test_functions::generate_arange_vector(buff_1->size());
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), buff_1, src_1, distributed::MeshCoordinate(0, 0), false);
+            mesh_device->mesh_command_queue(), *buff_1, src_1, distributed::MeshCoordinate(0, 0), false);
         vector<uint32_t> result_1(buff_1->size() / sizeof(uint32_t));
         distributed::ReadShard(
-            mesh_device->mesh_command_queue(), result_1, buff_1, distributed::MeshCoordinate(0, 0), true);
+            mesh_device->mesh_command_queue(), result_1, *buff_1, distributed::MeshCoordinate(0, 0), true);
         EXPECT_EQ(src_1, result_1);
 
         distributed::DeviceLocalBufferConfig dram_config2{
@@ -1406,10 +1406,10 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
         auto wrap_buff = distributed::MeshBuffer::create(buffer_config2, dram_config2, mesh_device.get());
         auto src_2 = local_test_functions::generate_arange_vector(wrap_buff->size());
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), wrap_buff, src_2, distributed::MeshCoordinate(0, 0), false);
+            mesh_device->mesh_command_queue(), *wrap_buff, src_2, distributed::MeshCoordinate(0, 0), false);
         vector<uint32_t> result_2(wrap_buff->size() / sizeof(uint32_t));
         distributed::ReadShard(
-            mesh_device->mesh_command_queue(), result_2, wrap_buff, distributed::MeshCoordinate(0, 0), true);
+            mesh_device->mesh_command_queue(), result_2, *wrap_buff, distributed::MeshCoordinate(0, 0), true);
         EXPECT_EQ(src_2, result_2);
     }
 }
@@ -1855,7 +1855,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleNonOverlappingWrites
 
         vector<uint32_t> result(buffer_size / sizeof(uint32_t));
         distributed::ReadShard(
-            mesh_device->mesh_command_queue(), result, buffer, distributed::MeshCoordinate(0, 0), true);
+            mesh_device->mesh_command_queue(), result, *buffer, distributed::MeshCoordinate(0, 0), true);
 
         EXPECT_EQ(expected, result);
     }
@@ -2010,7 +2010,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleNonOverlappingReadsS
 
         vector<uint32_t> expected = local_test_functions::generate_arange_vector(buffer_size);
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), buffer, expected, distributed::MeshCoordinate(0, 0), true);
+            mesh_device->mesh_command_queue(), *buffer, expected, distributed::MeshCoordinate(0, 0), true);
 
         vector<uint32_t> first_read(buffer_region_size / sizeof(uint32_t));
         BufferRegion region(0, buffer_region_size);
@@ -2177,22 +2177,22 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestBackToBackNon32BAlignedPageS
         auto bufa = distributed::MeshBuffer::create(buffer_config1, l1_config1, mesh_device.get());
         auto src_a = local_test_functions::generate_arange_vector(bufa->size());
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), bufa, src_a, distributed::MeshCoordinate(0, 0), false);
+            mesh_device->mesh_command_queue(), *bufa, src_a, distributed::MeshCoordinate(0, 0), false);
 
         distributed::DeviceLocalBufferConfig l1_config2{.page_size = 152, .buffer_type = buff_type, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config2{.size = 152000};
         auto bufb = distributed::MeshBuffer::create(buffer_config2, l1_config2, mesh_device.get());
         auto src_b = local_test_functions::generate_arange_vector(bufb->size());
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), bufb, src_b, distributed::MeshCoordinate(0, 0), false);
+            mesh_device->mesh_command_queue(), *bufb, src_b, distributed::MeshCoordinate(0, 0), false);
 
         vector<uint32_t> result_a(bufa->size() / sizeof(uint32_t));
         distributed::ReadShard(
-            mesh_device->mesh_command_queue(), result_a, bufa, distributed::MeshCoordinate(0, 0), true);
+            mesh_device->mesh_command_queue(), result_a, *bufa, distributed::MeshCoordinate(0, 0), true);
 
         vector<uint32_t> result_b(bufb->size() / sizeof(uint32_t));
         distributed::ReadShard(
-            mesh_device->mesh_command_queue(), result_b, bufb, distributed::MeshCoordinate(0, 0), true);
+            mesh_device->mesh_command_queue(), result_b, *bufb, distributed::MeshCoordinate(0, 0), true);
 
         EXPECT_EQ(src_a, result_a);
         EXPECT_EQ(src_b, result_b);
@@ -2336,7 +2336,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestNonblockingReads) {
         auto bufa = distributed::MeshBuffer::create(buffer_config1, l1_config1, mesh_device.get());
         auto src_a = local_test_functions::generate_arange_vector(bufa->size());
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), bufa, src_a, distributed::MeshCoordinate(0, 0), false);
+            mesh_device->mesh_command_queue(), *bufa, src_a, distributed::MeshCoordinate(0, 0), false);
 
         distributed::DeviceLocalBufferConfig l1_config2{
             .page_size = 2048, .buffer_type = buff_type, .bottom_up = false};
@@ -2345,13 +2345,13 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestNonblockingReads) {
 
         auto src_b = local_test_functions::generate_arange_vector(bufb->size());
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(), bufb, src_b, distributed::MeshCoordinate(0, 0), false);
+            mesh_device->mesh_command_queue(), *bufb, src_b, distributed::MeshCoordinate(0, 0), false);
 
         vector<uint32_t> result_a(bufa->size() / sizeof(uint32_t));
-        distributed::ReadShard(mesh_device->mesh_command_queue(), result_a, bufa, distributed::MeshCoordinate(0, 0));
+        distributed::ReadShard(mesh_device->mesh_command_queue(), result_a, *bufa, distributed::MeshCoordinate(0, 0));
 
         vector<uint32_t> result_b(bufb->size() / sizeof(uint32_t));
-        distributed::ReadShard(mesh_device->mesh_command_queue(), result_b, bufb, distributed::MeshCoordinate(0, 0));
+        distributed::ReadShard(mesh_device->mesh_command_queue(), result_b, *bufb, distributed::MeshCoordinate(0, 0));
         distributed::Finish(mesh_device->mesh_command_queue());
 
         EXPECT_EQ(src_a, result_a);
@@ -2379,10 +2379,10 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, EnqueueBufferVariousDims) {
             auto buf = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
             auto src = local_test_functions::generate_arange_vector(buf->size());
 
-            EXPECT_NO_THROW(distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buf, src, false));
+            EXPECT_NO_THROW(distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), *buf, src, false));
 
             std::vector<uint32_t> dst;
-            EXPECT_NO_THROW(distributed::EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst, buf, true));
+            EXPECT_NO_THROW(distributed::EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst, *buf, true));
 
             EXPECT_EQ(src, dst);
         }

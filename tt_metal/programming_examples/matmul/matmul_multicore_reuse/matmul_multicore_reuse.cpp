@@ -332,12 +332,12 @@ void matmul_multicore_reuse(
     /* Launch program & read back results */
 
     // Non-blocking uploads allow overlapping host setup with device transfers
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    distributed::EnqueueWriteMeshBuffer(cq, *src0_dram_buffer, a, false);
+    distributed::EnqueueWriteMeshBuffer(cq, *src1_dram_buffer, b, false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     // Blocking read from shard {0,0} waits for completion and populates 'output'
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    distributed::EnqueueReadMeshBuffer(cq, output, *dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////

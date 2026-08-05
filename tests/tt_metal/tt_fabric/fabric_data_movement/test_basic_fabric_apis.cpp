@@ -74,7 +74,7 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> PrepareBuffer(
     };
     auto buffer = tt_metal::distributed::MeshBuffer::create(global_buffer_config, device_local_config, device.get());
     tt_metal::distributed::WriteShard(
-        device->mesh_command_queue(), buffer, fill_data, tt::tt_metal::distributed::MeshCoordinate({0, 0}), true);
+        device->mesh_command_queue(), *buffer, fill_data, tt::tt_metal::distributed::MeshCoordinate({0, 0}), true);
     return buffer;
 }
 
@@ -144,7 +144,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         tt::tt_metal::distributed::ReadShard(
             src_device->mesh_command_queue(),
             result_data,
-            result_buffers[src_idx],
+            *result_buffers[src_idx],
             tt::tt_metal::distributed::MeshCoordinate({0, 0}));
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =

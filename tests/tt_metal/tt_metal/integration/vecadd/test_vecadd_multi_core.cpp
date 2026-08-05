@@ -139,8 +139,8 @@ bool vecadd_multi_core(
         SetRuntimeArgs(program, compute, core, {tiles_per_core, i});
     }
 
-    distributed::WriteShard(cq, a, a_data, zero_coord);
-    distributed::WriteShard(cq, b, b_data, zero_coord);
+    distributed::WriteShard(cq, *a, a_data, zero_coord);
+    distributed::WriteShard(cq, *b, b_data, zero_coord);
     // Enqueue the program
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -149,7 +149,7 @@ bool vecadd_multi_core(
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;
-    distributed::ReadShard(cq, c_data, c, zero_coord);
+    distributed::ReadShard(cq, c_data, *c, zero_coord);
 
     size_t data_per_core = tile_size * tiles_per_core;
 

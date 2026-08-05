@@ -116,11 +116,11 @@ static void run_basic_checkpoint(
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, s.input_dram, input, s.zero);
+    distributed::WriteShard(cq, *s.input_dram, input, s.zero);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> output;
-    distributed::ReadShard(cq, output, s.output_dram, s.zero);
+    distributed::ReadShard(cq, output, *s.output_dram, s.zero);
     EXPECT_EQ(input, output);
     EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"=== CKPT basic RISC* CBs ===", "CB0 sz=*"}));
 }
@@ -170,11 +170,11 @@ static void run_checkpoint_loop(
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, s.input_dram, input, s.zero);
+    distributed::WriteShard(cq, *s.input_dram, input, s.zero);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> output;
-    distributed::ReadShard(cq, output, s.output_dram, s.zero);
+    distributed::ReadShard(cq, output, *s.output_dram, s.zero);
     EXPECT_EQ(input, output);
     EXPECT_TRUE(FileContainsAllStrings(
         fixture->dprint_file_name, {"=== CKPT loop_iter RISC* CBs ===", "=== CKPT dump_dest dest regs ==="}));
@@ -274,13 +274,13 @@ static void run_global_checkpoint(
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
     auto data1 =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, in0, data0, zero);
-    distributed::WriteShard(cq, in1, data1, zero);
+    distributed::WriteShard(cq, *in0, data0, zero);
+    distributed::WriteShard(cq, *in1, data1, zero);
     fixture->RunProgram(mesh_device, workload);
 
     std::vector<uint32_t> o0, o1;
-    distributed::ReadShard(cq, o0, out0, zero);
-    distributed::ReadShard(cq, o1, out1, zero);
+    distributed::ReadShard(cq, o0, *out0, zero);
+    distributed::ReadShard(cq, o1, *out1, zero);
     EXPECT_EQ(data0, o0);
     EXPECT_EQ(data1, o1);
     EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"=== CKPT global_sync RISC* CBs ===", "CB0 sz=*"}));
@@ -334,11 +334,11 @@ static void run_dump_cb(DevicePrintFixture* fixture, const std::shared_ptr<distr
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, s.input_dram, input, s.zero);
+    distributed::WriteShard(cq, *s.input_dram, input, s.zero);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> output;
-    distributed::ReadShard(cq, output, s.output_dram, s.zero);
+    distributed::ReadShard(cq, output, *s.output_dram, s.zero);
     EXPECT_EQ(input, output);
     EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"CB0 sz=*", "[0]*"}));
 }
@@ -390,11 +390,11 @@ static void run_dump_l1(DevicePrintFixture* fixture, const std::shared_ptr<distr
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, s.input_dram, input, s.zero);
+    distributed::WriteShard(cq, *s.input_dram, input, s.zero);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> output;
-    distributed::ReadShard(cq, output, s.output_dram, s.zero);
+    distributed::ReadShard(cq, output, *s.output_dram, s.zero);
     EXPECT_EQ(input, output);
     EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"CB0 sz=*", "L1[*"}));
 }
@@ -446,11 +446,11 @@ static void run_dump_typed(DevicePrintFixture* fixture, const std::shared_ptr<di
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
-    distributed::WriteShard(cq, s.input_dram, input, s.zero);
+    distributed::WriteShard(cq, *s.input_dram, input, s.zero);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> output;
-    distributed::ReadShard(cq, output, s.output_dram, s.zero);
+    distributed::ReadShard(cq, output, *s.output_dram, s.zero);
     EXPECT_EQ(input, output);
     EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"CB0 tile 0 (typed):*"}));
 }

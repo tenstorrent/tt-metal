@@ -935,12 +935,12 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
 
             std::vector<uint32_t> dst_data;
             if (i & 1) {
-                distributed::EnqueueWriteMeshBuffer(cq, buffer, src_data_1, false);
-                distributed::ReadShard(cq, dst_data, buffer, distributed::MeshCoordinate{0, 0}, true);
+                distributed::EnqueueWriteMeshBuffer(cq, *buffer, src_data_1, false);
+                distributed::ReadShard(cq, dst_data, *buffer, distributed::MeshCoordinate{0, 0}, true);
                 EXPECT_EQ(src_data_1, dst_data);
             } else {
-                distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, src_data_2, false);
-                distributed::ReadShard(cq, dst_data, dram_buffer, distributed::MeshCoordinate{0, 0}, true);
+                distributed::EnqueueWriteMeshBuffer(cq, *dram_buffer, src_data_2, false);
+                distributed::ReadShard(cq, dst_data, *dram_buffer, distributed::MeshCoordinate{0, 0}, true);
                 EXPECT_EQ(src_data_2, dst_data);
             }
         }
@@ -949,14 +949,14 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
     // non blocking fast data movement APIs
     for (int iteration = 0; iteration < k_Iterations; ++iteration) {
         for (int i = 0; i < k_LoopPerDev; ++i) {
-            distributed::EnqueueWriteMeshBuffer(cq, buffer, src_data_1, false);
+            distributed::EnqueueWriteMeshBuffer(cq, *buffer, src_data_1, false);
         }
     }
 
     std::vector<uint32_t> dst_data;
     for (int iteration = 0; iteration < k_Iterations; ++iteration) {
         for (int i = 0; i < k_LoopPerDev; ++i) {
-            distributed::ReadShard(cq, dst_data, buffer, distributed::MeshCoordinate{0, 0}, true);
+            distributed::ReadShard(cq, dst_data, *buffer, distributed::MeshCoordinate{0, 0}, true);
         }
     }
 

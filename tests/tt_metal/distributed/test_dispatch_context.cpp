@@ -71,7 +71,7 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
 
     for (std::size_t logical_x = 0; logical_x < mesh_buffer->device()->num_cols(); logical_x++) {
         for (std::size_t logical_y = 0; logical_y < mesh_buffer->device()->num_rows(); logical_y++) {
-            WriteShard(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec, MeshCoordinate(logical_y, logical_x));
+            WriteShard(mesh_device_->mesh_command_queue(), *mesh_buffer, src_vec, MeshCoordinate(logical_y, logical_x));
         }
     }
     Finish(mesh_device_->mesh_command_queue());
@@ -96,7 +96,7 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
     for (std::size_t logical_x = 0; logical_x < mesh_buffer->device()->num_cols(); logical_x++) {
         for (std::size_t logical_y = 0; logical_y < mesh_buffer->device()->num_rows(); logical_y++) {
             std::vector<uint32_t> dst_vec = {};
-            ReadShard(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer, MeshCoordinate(logical_y, logical_x));
+            ReadShard(mesh_device_->mesh_command_queue(), dst_vec, *mesh_buffer, MeshCoordinate(logical_y, logical_x));
             EXPECT_EQ(dst_vec, src_vec);
         }
     }
@@ -207,12 +207,12 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         auto fd_buf = MeshBuffer::create(fd_l1_global, fd_l1_config, mesh_device_.get());
         std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(fd_src_vec.begin(), fd_src_vec.end(), base + 100);
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), *fd_buf, fd_src_vec);
         Finish(mesh_device_->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             std::vector<uint32_t> dst;
-            ReadShard(mesh_device_->mesh_command_queue(), dst, fd_buf, coord);
+            ReadShard(mesh_device_->mesh_command_queue(), dst, *fd_buf, coord);
             EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 readback failed in FD mode at " << coord;
         }
 
@@ -222,7 +222,7 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         // Verify FD-written sharded buffer is still readable after FD->SD transition.
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             std::vector<uint32_t> dst;
-            ReadShard(mesh_device_->mesh_command_queue(), dst, fd_buf, coord);
+            ReadShard(mesh_device_->mesh_command_queue(), dst, *fd_buf, coord);
             EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 data mismatch after FD->SD transition at "
                                        << coord;
         }
@@ -232,12 +232,12 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         auto sd_buf = MeshBuffer::create(sd_l1_global, sd_l1_config, mesh_device_.get());
         std::vector<uint32_t> sd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(sd_src_vec.begin(), sd_src_vec.end(), base + 200);
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), *sd_buf, sd_src_vec);
         Finish(mesh_device_->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             std::vector<uint32_t> dst;
-            ReadShard(mesh_device_->mesh_command_queue(), dst, sd_buf, coord);
+            ReadShard(mesh_device_->mesh_command_queue(), dst, *sd_buf, coord);
             EXPECT_EQ(dst, sd_src_vec) << "Cycle " << cycle << ": SD interleaved L1 verification failed at " << coord;
         }
 
@@ -257,7 +257,7 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         // Verify SD buffer is uncorrupted after running workloads.
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             std::vector<uint32_t> dst;
-            ReadShard(mesh_device_->mesh_command_queue(), dst, sd_buf, coord);
+            ReadShard(mesh_device_->mesh_command_queue(), dst, *sd_buf, coord);
             EXPECT_EQ(dst, sd_src_vec) << "Cycle " << cycle << ": SD buffer corrupted after running workloads at "
                                        << coord;
         }
@@ -270,7 +270,7 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         std::iota(fd2_src_vec.begin(), fd2_src_vec.end(), base + 300);
         for (std::size_t y = 0; y < mesh_device_->num_rows(); y++) {
             for (std::size_t x = 0; x < mesh_device_->num_cols(); x++) {
-                WriteShard(mesh_device_->mesh_command_queue(), fd2_buf, fd2_src_vec, MeshCoordinate(y, x));
+                WriteShard(mesh_device_->mesh_command_queue(), *fd2_buf, fd2_src_vec, MeshCoordinate(y, x));
             }
         }
         Finish(mesh_device_->mesh_command_queue());
@@ -278,7 +278,7 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         for (std::size_t y = 0; y < mesh_device_->num_rows(); y++) {
             for (std::size_t x = 0; x < mesh_device_->num_cols(); x++) {
                 std::vector<uint32_t> dst;
-                ReadShard(mesh_device_->mesh_command_queue(), dst, fd2_buf, MeshCoordinate(y, x));
+                ReadShard(mesh_device_->mesh_command_queue(), dst, *fd2_buf, MeshCoordinate(y, x));
                 EXPECT_EQ(dst, fd2_src_vec)
                     << "Cycle " << cycle << ": DRAM readback failed in FD mode at (" << y << "," << x << ")";
             }

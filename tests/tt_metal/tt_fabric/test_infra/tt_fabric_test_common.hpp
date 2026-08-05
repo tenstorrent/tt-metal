@@ -539,7 +539,7 @@ public:
         tt::tt_metal::distributed::ReadShard(
             mesh_device_->mesh_command_queue(),
             data,
-            mesh_buffer,
+            *mesh_buffer,
             device_coord,
             false  // blocking=false
         );
@@ -646,7 +646,7 @@ public:
         const auto total_size = size_bytes * cores.size();
         std::vector<uint32_t> zero_buffer(total_size / sizeof(uint32_t), 0);
         tt::tt_metal::distributed::WriteShard(
-            mesh_device_->mesh_command_queue(), mesh_buffer, zero_buffer, device_coord, true);
+            mesh_device_->mesh_command_queue(), *mesh_buffer, zero_buffer, device_coord, true);
     }
 
     // Local runtime args function - writes args to local args buffer instead of using SetRuntimeArgs
@@ -663,7 +663,7 @@ public:
         all_args_buffer.insert(all_args_buffer.end(), args.begin(), args.end());
 
         tt::tt_metal::distributed::WriteShard(
-            mesh_device_->mesh_command_queue(), mesh_buffer, all_args_buffer, device_coord, true);
+            mesh_device_->mesh_command_queue(), *mesh_buffer, all_args_buffer, device_coord, true);
     }
 
     // ======================================================================================

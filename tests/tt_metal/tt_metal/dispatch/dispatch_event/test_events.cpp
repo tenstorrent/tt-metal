@@ -73,9 +73,9 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
             buffers.push_back(distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get()));
 
             if (data_movement_mode == DataMovementMode::WRITE) {
-                distributed::WriteShard(cq, buffers.back(), page, distributed::MeshCoordinate(0, 0), true);
+                distributed::WriteShard(cq, *buffers.back(), page, distributed::MeshCoordinate(0, 0), true);
             } else if (data_movement_mode == DataMovementMode::READ) {
-                distributed::ReadShard(cq, page, buffers.back(), distributed::MeshCoordinate(0, 0), true);
+                distributed::ReadShard(cq, page, *buffers.back(), distributed::MeshCoordinate(0, 0), true);
             }
         }
         distributed::Finish(cq);
@@ -266,7 +266,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
         distributed::ReplicatedBufferConfig buffer_config{.size = page_size};
         std::shared_ptr<distributed::MeshBuffer> buf =
             distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
-        distributed::WriteShard(cq, buf, page, distributed::MeshCoordinate(0, 0), true);
+        distributed::WriteShard(cq, *buf, page, distributed::MeshCoordinate(0, 0), true);
         cq.enqueue_wait_for_event(*event);
 
         if (i % 10 == 0) {

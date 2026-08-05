@@ -17,7 +17,7 @@ namespace tt::tt_metal::experimental::core_subset_write {
 // EXPERIMENTAL: may evolve into a method on MeshCommandQueue.
 void enqueue_write(
     distributed::MeshCommandQueue& cq,
-    distributed::MeshBuffer& mesh_buffer,
+    const distributed::MeshBuffer& mesh_buffer,
     const DistributedHostBuffer& host_buffer,
     bool blocking,
     const CoreRangeSet& logical_core_filter);

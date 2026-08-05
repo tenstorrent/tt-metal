@@ -195,7 +195,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
             dram_buffer_size, std::chrono::system_clock::now().time_since_epoch().count());
 
         tt_metal::distributed::WriteShard(
-            device->mesh_command_queue(0), src_dram_buffer, src_vec, tt::tt_metal::distributed::MeshCoordinate(0, 0));
+            device->mesh_command_queue(0), *src_dram_buffer, src_vec, tt::tt_metal::distributed::MeshCoordinate(0, 0));
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -222,7 +222,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         tt_metal::distributed::ReadShard(
             device->mesh_command_queue(0),
             result_vec,
-            dst_dram_buffer,
+            *dst_dram_buffer,
             tt::tt_metal::distributed::MeshCoordinate(0, 0));
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

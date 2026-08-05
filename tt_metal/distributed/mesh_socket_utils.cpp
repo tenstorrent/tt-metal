@@ -398,7 +398,8 @@ void write_socket_configs(
                     config_data[receiver_enc_offset + 3] = recv_virtual_core.x;  // downstream_noc_x
                 }
             }
-            distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            distributed::WriteShard(
+                mesh_device->mesh_command_queue(0), *config_buffer, config_data, device_coord, true);
         }
     } else {
         std::vector<receiver_socket_md> config_data(
@@ -443,7 +444,8 @@ void write_socket_configs(
                 md.d2d.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
                                                    sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
             }
-            distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            distributed::WriteShard(
+                mesh_device->mesh_command_queue(0), *config_buffer, config_data, device_coord, true);
         }
     }
 }

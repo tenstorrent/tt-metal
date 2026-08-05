@@ -174,12 +174,12 @@ StochasticRoundingResult run_stochastic_rounding(
 
     mesh_workload.add_program(distributed::MeshCoordinateRange(cq.device()->shape()), std::move(program));
 
-    distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, packed_input, false);
+    distributed::EnqueueWriteMeshBuffer(cq, *input_dram_buffer, packed_input, false);
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, output_dram_buffer, distributed::MeshCoordinate(0, 0));
+    distributed::ReadShard(cq, dest_buffer_data, *output_dram_buffer, distributed::MeshCoordinate(0, 0));
 
     // Unpack BFloat16 results and count how many rounded up vs down
     auto output = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);

@@ -481,14 +481,14 @@ static bool reader_datacopy_writer(
     auto input_data = generate_inputs(config);
 
     // Write input data to input DRAM buffer
-    distributed::WriteShard(cq, input_dram_buffer, input_data, zero_coord);
+    distributed::WriteShard(cq, *input_dram_buffer, input_data, zero_coord);
 
     // Run the program
     fixture->RunProgram(mesh_device, workload);
 
     // Read output data from output DRAM buffer
     std::vector<uint32_t> output_data;
-    distributed::ReadShard(cq, output_data, output_dram_buffer, zero_coord);
+    distributed::ReadShard(cq, output_data, *output_dram_buffer, zero_coord);
 
     auto golden_output = generate_golden_output(input_data, config.data_format);
     // Check the print log against golden output.

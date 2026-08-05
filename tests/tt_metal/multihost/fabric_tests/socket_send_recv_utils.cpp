@@ -159,7 +159,7 @@ bool test_socket_send_recv(
                 auto sender_core = connection.sender_core.core_coord;
                 WriteShard(
                     mesh_device_->mesh_command_queue(),
-                    sender_data_buffer,
+                    *sender_data_buffer,
                     src_vec,
                     connection.sender_core.device_coord);
 
@@ -258,7 +258,7 @@ bool test_socket_send_recv(
                     ReadShard(
                         mesh_device_->mesh_command_queue(),
                         recv_data_readback,
-                        recv_data_buffer,
+                        *recv_data_buffer,
                         connection.receiver_core.device_coord);
                     uint32_t idx = core_to_core_id.at(connection.receiver_core.core_coord);
                     std::vector<uint32_t> recv_data_readback_per_core(

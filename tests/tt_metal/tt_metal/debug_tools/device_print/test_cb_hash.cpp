@@ -151,7 +151,7 @@ uint32_t run_once(
         s.core,
         {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
 
-    distributed::WriteShard(cq, s.input_dram, const_cast<std::vector<uint32_t>&>(input), s.zero);
+    distributed::WriteShard(cq, *s.input_dram, const_cast<std::vector<uint32_t>&>(input), s.zero);
     fixture->RunProgram(mesh_device, s.workload);
 
     return extract_hash(fixture->dprint_file_name, LABEL, INPUT_CB, NUM_TILES);
@@ -191,11 +191,11 @@ uint32_t run_once_sfpu(
     SetRuntimeArgs(
         *s.program, writer, s.core, {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
 
-    distributed::WriteShard(cq, s.input_dram, const_cast<std::vector<uint32_t>&>(input), s.zero);
+    distributed::WriteShard(cq, *s.input_dram, const_cast<std::vector<uint32_t>&>(input), s.zero);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> result(NUM_TILES * 1024, 0u);
-    distributed::ReadShard(cq, result, s.output_dram, s.zero);
+    distributed::ReadShard(cq, result, *s.output_dram, s.zero);
 
     uint32_t h = 0u;
     for (uint32_t w : result) {

@@ -27,8 +27,7 @@ void enqueue_write_tensor(
 
     // Pure data write into the device tensor's existing buffer; spec/topology of the device tensor
     // are intentionally not modified by a partial host->device copy.
-    enqueue_write(
-        cq, *device_tensor.impl().raw_mesh_buffer(), host_tensor.buffer(), /*blocking=*/false, logical_core_filter);
+    enqueue_write(cq, device_tensor.mesh_buffer(), host_tensor.buffer(), /*blocking=*/false, logical_core_filter);
 }
 
 }  // namespace tt::tt_metal::experimental::core_subset_write

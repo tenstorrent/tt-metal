@@ -254,7 +254,7 @@ void verify_transfer(
     // Load the sender backing tensor on every participating coord and make sure
     // the writes land before we trigger the sender.
     for (const auto& coord : coords) {
-        WriteShard(sender_mesh->mesh_command_queue(), sender_mesh_buffer, iota, coord);
+        WriteShard(sender_mesh->mesh_command_queue(), *sender_mesh_buffer, iota, coord);
     }
     Finish(sender_mesh->mesh_command_queue());
 
@@ -281,7 +281,7 @@ void verify_transfer(
         all_match = true;
         for (const auto& coord : coords) {
             readback.clear();
-            ReadShard(receiver_mesh->mesh_command_queue(), readback, receiver_mesh_buffer, coord);
+            ReadShard(receiver_mesh->mesh_command_queue(), readback, *receiver_mesh_buffer, coord);
             if (readback != iota) {
                 all_match = false;
                 break;
@@ -458,7 +458,7 @@ void expect_receiver_backing_iota(
     std::vector<uint32_t> readback;
     for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
         readback.clear();
-        ReadShard(mesh->mesh_command_queue(), readback, mesh_buffer, coord);
+        ReadShard(mesh->mesh_command_queue(), readback, *mesh_buffer, coord);
         EXPECT_EQ(readback, expected) << "receiver backing mismatch at " << coord << " (iota base " << base << ")";
     }
 }
@@ -811,7 +811,7 @@ void expect_output_tensor_iota(
     std::vector<uint32_t> readback;
     for (const auto& coord : output_tensor.tensor_topology().mesh_coords()) {
         readback.clear();
-        ReadShard(mesh->mesh_command_queue(), readback, mesh_buffer, coord);
+        ReadShard(mesh->mesh_command_queue(), readback, *mesh_buffer, coord);
         EXPECT_EQ(readback, expected) << "output tensor mismatch at " << coord << " (iota base " << base << ")";
     }
 }

@@ -133,8 +133,8 @@ int main() {
     // is not released before the operation is complete.
     // In this case, we will wait for the program to finish eventually in the same scope, so we can set it
     // to false safely.
-    EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
-    EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
+    EnqueueWriteMeshBuffer(cq, *src0_dram_buffer, src0_vec, false);
+    EnqueueWriteMeshBuffer(cq, *src1_dram_buffer, src1_vec, false);
 
     // Setup arguments for the kernels in the program.
     // Unlike OpenCL/CUDA, every kernel can have its own set of arguments.
@@ -155,7 +155,7 @@ int main() {
     // specific shard of a MeshBuffer. The shard is specified by the MeshCoordinate. The last argument indicates if the
     // operation is blocking or not.
     std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, *dst_dram_buffer, true);
 
     // compare the results with the expected values.
     bool success = true;

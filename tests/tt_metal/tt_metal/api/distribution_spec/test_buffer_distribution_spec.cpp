@@ -327,7 +327,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
     if (cq_write) {
         log_info(tt::LogTest, "Writing with: FDMeshCommandQueue EnqueueWriteMeshBuffer");
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src, /*blocking=*/false);
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), *mesh_buffer, src, /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
     } else {
         log_info(tt::LogTest, "Writing with: WriteToBuffer (equivalent to SDMeshCommandQueue enqueue_write_shards)");
@@ -392,7 +392,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         ReadShard(
             mesh_device_->mesh_command_queue(),
             dst,
-            mesh_buffer,
+            *mesh_buffer,
             tt::tt_metal::distributed::MeshCoordinate{0, 0},
             /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());

@@ -206,9 +206,9 @@ static BinaryBuffers create_and_populate_binary_buffers(
     buffers.input2 = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     buffers.output = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
-    distributed::WriteShard(cq, buffers.input0, stimulus.packed_input0, zero_coord, false);
-    distributed::WriteShard(cq, buffers.input1, stimulus.packed_input1, zero_coord, false);
-    distributed::WriteShard(cq, buffers.input2, stimulus.packed_input2, zero_coord, false);
+    distributed::WriteShard(cq, *buffers.input0, stimulus.packed_input0, zero_coord, false);
+    distributed::WriteShard(cq, *buffers.input1, stimulus.packed_input1, zero_coord, false);
+    distributed::WriteShard(cq, *buffers.input2, stimulus.packed_input2, zero_coord, false);
 
     return buffers;
 }
@@ -219,7 +219,7 @@ static bool read_and_validate_binary_result(
     const distributed::MeshCoordinate& zero_coord,
     const BinaryStimulus& stimulus) {
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, output_dram_buffer, zero_coord, false);
+    distributed::ReadShard(cq, dest_buffer_data, *output_dram_buffer, zero_coord, false);
 
     return is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data, stimulus.packed_golden, [&](const bfloat16& a, const bfloat16& b) {

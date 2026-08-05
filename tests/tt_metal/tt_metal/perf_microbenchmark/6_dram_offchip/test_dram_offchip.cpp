@@ -243,7 +243,8 @@ int main(int argc, char** argv) {
         //                      Copy Input To DRAM or L1
         ////////////////////////////////////////////////////////////////////////////
         if (access_type == 0) {
-            tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
+            tt_metal::distributed::EnqueueWriteMeshBuffer(
+                device->mesh_command_queue(), *input_buffer, input_vec, false);
             tt_metal::distributed::Finish(device->mesh_command_queue());
         } else {
             uint64_t input_offset = 0;
@@ -504,7 +505,7 @@ bool validation(
         std::vector<uint32_t> result_vec;
         log_info(LogTest, "ReadShard API may take a long time if the input size is large");
         tt_metal::distributed::ReadShard(
-            device->mesh_command_queue(), result_vec, input_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
+            device->mesh_command_queue(), result_vec, *input_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
         log_info(LogTest, "ReadShard API done");
 
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {

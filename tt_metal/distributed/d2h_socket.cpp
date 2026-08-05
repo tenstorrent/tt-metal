@@ -222,7 +222,7 @@ void D2HSocket::write_socket_metadata(
     // ctor owns config_buffer_; use fast-dispatch WriteShard like pre-RT-profiler path.
     if (config_buffer_) {
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
+            mesh_device->mesh_command_queue(0), *config_buffer_, config_data, sender_core_.device_coord, true);
     } else {
         IDevice* device = mesh_device->get_device(sender_core_.device_coord);
         tt::tt_metal::detail::WriteToDeviceL1(

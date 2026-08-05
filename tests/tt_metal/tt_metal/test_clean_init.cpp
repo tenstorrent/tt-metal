@@ -110,7 +110,7 @@ int main(int argc, char** /*argv*/) {
              */
             std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
                 dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-            distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, false);
+            distributed::EnqueueWriteMeshBuffer(cq, *input_dram_buffer, input_vec, false);
 
             const std::array<uint32_t, 4> runtime_args = {
                 l1_buffer->address(),
@@ -129,7 +129,7 @@ int main(int argc, char** /*argv*/) {
              * Validation & Teardown
              */
             std::vector<uint32_t> result_vec;
-            distributed::ReadShard(cq, result_vec, output_dram_buffer, distributed::MeshCoordinate(0, 0));
+            distributed::ReadShard(cq, result_vec, *output_dram_buffer, distributed::MeshCoordinate(0, 0));
 
             pass &= input_vec == result_vec;
 

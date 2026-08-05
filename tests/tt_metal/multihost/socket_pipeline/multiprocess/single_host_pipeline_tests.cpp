@@ -105,7 +105,7 @@ void run_single_host_loopback_pipeline(
         mesh_device.get());
     // Write 0 to latency measurement buffer (initializes credit/barrier to 0)
     std::vector<uint32_t> latency_init_data(latency_measurement_buffer_size / sizeof(uint32_t), 0);
-    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
+    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), *latency_measurement_buffer, latency_init_data, true);
     const uint32_t latency_measurement_address = latency_measurement_buffer->address();
     log_info(tt::LogTest, "Latency measurement buffer address: {}", latency_measurement_address);
 
@@ -128,7 +128,7 @@ void run_single_host_loopback_pipeline(
     }
 
     // Write data to device buffer
-    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
+    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), *input_mesh_buffer, host_data, true);
 
     // Extract buffer pointer for metal-level operations
     Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
@@ -251,7 +251,7 @@ void run_single_host_rate_pipeline(
     for (uint32_t j = 0; j < num_elems; j++) {
         host_data[j] = j;
     }
-    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
+    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), *input_mesh_buffer, host_data, true);
     Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
 
     // Warmup: run the full pipeline with a small iteration count to trigger kernel compilation

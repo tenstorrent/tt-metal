@@ -246,12 +246,12 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
 
     mesh_workload.add_program(device_range, std::move(program));
 
-    distributed::WriteShard(cq, input_dram_buffer, packed_input, local_coord);
+    distributed::WriteShard(cq, *input_dram_buffer, packed_input, local_coord);
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, output_dram_buffer, local_coord);
+    distributed::ReadShard(cq, dest_buffer_data, *output_dram_buffer, local_coord);
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }

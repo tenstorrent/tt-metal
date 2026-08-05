@@ -1049,7 +1049,7 @@ int main(int argc, char** argv) {
             create_random_vector_of_bfloat16(buffer_size_bytes, /*rand_max_float=*/100, seed);
 
         auto& cq = mesh_device->mesh_command_queue();
-        distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input_data, /*blocking=*/false);
+        distributed::EnqueueWriteMeshBuffer(cq, *input_buffer, input_data, /*blocking=*/false);
         // Drain the input upload before trace capture: host writes are not allowed while
         // a trace is being recorded (see FDMeshCommandQueue "Writes are not supported
         // during trace capture"). Warmup's Finish used to hide this; --no-warmup needs
@@ -1189,7 +1189,7 @@ int main(int argc, char** argv) {
 
         if (!cfg.read_only && !cfg.skip_output_validation) {
             std::vector<uint32_t> output_data;
-            distributed::EnqueueReadMeshBuffer(cq, output_data, output_buffer, /*blocking=*/true);
+            distributed::EnqueueReadMeshBuffer(cq, output_data, *output_buffer, /*blocking=*/true);
 
             if (output_data.size() != input_data.size()) {
                 log_error(
