@@ -21,7 +21,16 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
+#if !defined(ARCH_QUASAR)
+// ckernel.h provides mailbox_write/mailbox_base for the batch-sparsity is_batch_valid handoff below.
+// On Quasar it is compute-only (pulls ckernel_addrmod.h -> ckernel_trisc_id.h, which #errors unless
+// COMPILE_FOR_TRISC is set) and cannot be included from this DM kernel. The handoff it feeds is disabled
+// on Quasar anyway (see the guarded mailbox_write block) — the DM-writer -> TRISC-reader mailbox sync is
+// broken there (compute reads its OWN slot -> 0x19 loopback), an ops-owned redesign flagged in
+// rtawfik/quasar-cb-l1-read-api-watcher-test (add51617651). ckernel_defs.h (ThreadId) is self-contained
+// and DM-safe, so it stays unguarded.
 #include "ckernel.h"
+#endif
 #include "ckernel_defs.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -209,9 +218,18 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
+#if !defined(ARCH_QUASAR)
                     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_batch_valid);
                     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_batch_valid);
                     ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_batch_valid);
+#else
+                    // Quasar: the DM-writer -> TRISC-reader is_batch_valid mailbox handoff is broken (the
+                    // compute reader reads its own mailbox slot -> 0x19 loopback IB-interrupt). Disabled
+                    // until the ops-owned mailbox-sync redesign lands (see rtawfik/quasar-cb-l1-read-api-
+                    // watcher-test add51617651, which static_asserts the matching read side). This
+                    // batch-sparsity / get_batch_from_reader path is not exercised by resnet.
+                    (void)is_batch_valid;
+#endif
                 }
 
                 if (!is_batch_valid) {
