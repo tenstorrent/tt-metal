@@ -38,7 +38,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 _TP_TRACE_REGION_SIZE = 1024 * 1024 * 1024
 DEVICE_PARAMS = [
@@ -242,7 +242,7 @@ def test_demo_text(
 
     device = mesh_device
     if batch > 1 and not _MULTI:
-        pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=P150x4")
+        pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=P150x4 or P150x8")
     device.enable_program_cache()
     # Block budget → max_seq_len, KV cache, and RoPE table
     num_blocks = _blocks_for(seqlen, max_generated_tokens)

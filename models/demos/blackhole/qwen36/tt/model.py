@@ -40,11 +40,10 @@ class Qwen36Model:
         self.sampling_dp = 1
         # RoPE is host-recomputed each step, so refresh all decode trace inputs.
         self._tt_vllm_always_refresh_decode_trace_inputs = True
-        # Certified on-device sampling topology: P150x4 (1x4 TP). Qwen's 248,320-token
-        # vocabulary becomes 62,080 logits/device, below the Top-K path's 64K shard limit.
+        # On-device sampling: allowlist 1x4/1x8 TP only — vocab/TP must fit Top-K's 64K shard limit (TP=2 does not).
         mesh_shape = tuple(int(dim) for dim in mesh_device.shape)
         self._supports_on_device_sampling = (
-            mesh_shape == (1, 4)
+            mesh_shape in ((1, 4), (1, 8))
             and args.vocab_size % self.num_devices == 0
             and (args.vocab_size // self.num_devices <= 64 * 1024)
         )
@@ -3261,11 +3260,10 @@ class Qwen36Model:
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """Convert decode output to host torch. Host-sampling returns logits [B,S,vocab];
-        on-device sampling (is_tokens) returns sampled token ids. Log-probs out of scope.
+        on-device sampling returns sampled token ids or sampled-token log-probs.
         """
-        assert not is_log_probs, "on-device log-probs unsupported"
-        if is_tokens:
-            # Sampled ids are identical across devices; read one, flatten, take B.
+        if is_tokens or is_log_probs:
+            # Sampled ids and old-path sampled-token log-probs are replicated across devices.
             if self.num_devices > 1:
                 return ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)[:B]
             return ttnn.to_torch(tt_out).reshape(-1)[:B]

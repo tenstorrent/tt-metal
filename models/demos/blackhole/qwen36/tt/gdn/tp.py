@@ -385,6 +385,7 @@ class TPGatedDeltaNet:
                     weight.shape[-2],
                     weight.shape[-1],
                     max_cols=getattr(self.args, "decode_grid_w", 8),
+                    tuning=getattr(self.args, "prefill_tuning", None),
                 )
                 return ttnn.linear(
                     x, weight, compute_kernel_config=self.cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -740,25 +741,28 @@ class TPGatedDeltaNet:
         assert (
             grid_size.x >= 8 and grid_size.y >= 6
         ), f"GDN prefix state write needs an 8x6 core rectangle, got {grid_size.x}x{grid_size.y}"
-        grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 5),
-                )
-            }
-        )
         nhw = B * self.Nv * self.Dk
-        assert nhw % 48 == 0 and (nhw // 48) % ttnn.TILE_SIZE == 0, (
-            f"GDN prefix state shape B={B}, Nv={self.Nv}, Dk={self.Dk} "
-            "does not height-shard into 48 tile-aligned cores"
-        )
+        assert (
+            nhw % ttnn.TILE_SIZE == 0
+        ), f"GDN prefix state rows B={B}, Nv={self.Nv}, Dk={self.Dk} -> {nhw} is not tile-aligned"
+        n_tiles = nhw // ttnn.TILE_SIZE
+
+        # Prefer the tuned 8x6=48-core rectangle, which every TP=4 shape hits (Nv=12 -> nhw=B*1536
+        # -> 48*B tiles). At TP=8 Nv halves to 6, so B=1 gives only 24 tiles and cannot fill 48
+        # cores with tile-aligned shards — fall back to the largest core count that divides evenly.
+        if n_tiles % 48 == 0:
+            num_cores = 48
+            grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))})
+        else:
+            num_cores = max(c for c in range(1, min(48, grid_size.x * grid_size.y) + 1) if n_tiles % c == 0)
+            grid = ttnn.num_cores_to_corerangeset(num_cores, grid_size, row_wise=True)
+
         shard_memcfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 grid,
-                (nhw // 48, self.Dv),
+                (nhw // num_cores, self.Dv),
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )

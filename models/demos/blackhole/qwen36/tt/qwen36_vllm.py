@@ -66,7 +66,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             mesh_shape = tuple(int(dim) for dim in model.mesh_device.shape)
             logits_per_device = math.ceil(model.args.vocab_size / model.num_devices)
             raise RuntimeError(
-                "Qwen3.6 on-device sampling requires the certified 1x4 TP topology "
+                "Qwen3.6 on-device sampling requires a certified TP topology (1x4 or 1x8) "
                 f"with at most 65536 logits/device; got mesh={mesh_shape}, "
                 f"vocab={model.args.vocab_size}, logits/device={logits_per_device}. "
                 "Unset sample_on_device_mode for host sampling."

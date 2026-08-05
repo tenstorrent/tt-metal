@@ -10,6 +10,7 @@ Run:
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 import ttnn
@@ -65,7 +66,8 @@ def test_decode_only_unseeded_sampling_initializes_rng(mesh_device, reset_seeds,
     Sampling traces are disabled so this test isolates seed initialization
     from the separate sampling-trace correctness issue.
     """
-    assert mesh_device.get_num_devices() == 4, "Qwen3.6-27B sampling requires the P150x4 mesh"
+    if mesh_device.get_num_devices() == 1:
+        pytest.skip("Qwen3.6-27B sampling is the TP path; run with MESH_DEVICE=P150x4 or P150x8")
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=128)
     args.sampling_dp = 1
 

@@ -78,7 +78,7 @@ def test_unsupported_device_sampling_fails_at_startup(expect_error):
     wrapper = SimpleNamespace(model=[model])
 
     Qwen36ForCausalLM._validate_device_sampling_request(wrapper, False)
-    with expect_error(RuntimeError, "requires the certified 1x4 TP topology"):
+    with expect_error(RuntimeError, "requires a certified TP topology"):
         Qwen36ForCausalLM._validate_device_sampling_request(wrapper, True)
 
 
@@ -179,6 +179,71 @@ def test_bucketed_host_logits_are_padded_to_serving_width(monkeypatch, width):
     assert torch.count_nonzero(got[width:]) == 0
 
 
+def test_tp8_device_logprobs_complete_full_decode_warmup(monkeypatch):
+    """TP8 returns old-path sampled-token log-probs that Qwen must read from one replica."""
+    from models.common.warmup import WarmupForwardMixin
+    from models.tt_transformers.tt.generator import Generator
+
+    batch_size, sampler_batch = 4, 32
+    token_output, logprob_output = object(), object()
+    device_outputs = {
+        token_output: torch.arange(sampler_batch, dtype=torch.int32).reshape(1, 1, sampler_batch, 1),
+        logprob_output: torch.linspace(-1.0, -2.0, sampler_batch).reshape(1, 1, 1, sampler_batch),
+    }
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda tensor: [device_outputs[tensor]])
+    monkeypatch.setattr(ttnn, "to_torch", lambda tensor: tensor)
+    monkeypatch.delenv("TT_LEAN_DECODE_WARMUP", raising=False)
+
+    model = SimpleNamespace(num_devices=8)
+
+    def process_output_decode(tt_out, B, S=1, is_tokens=False, is_log_probs=False):
+        return Qwen36Model.process_output_decode(
+            model,
+            tt_out,
+            B,
+            S=S,
+            is_tokens=is_tokens,
+            is_log_probs=is_log_probs,
+        )
+
+    model.process_output_decode = process_output_decode
+    generator = object.__new__(Generator)
+    generator.model = [model]
+    generator.model_args = [SimpleNamespace(max_batch_size=batch_size)]
+    generator.data_parallel = 1
+
+    class WarmupHarness(WarmupForwardMixin):
+        def __init__(self):
+            self.logprob_outputs = []
+
+        def decode_forward(self, sampling_params=None, **_):
+            enabled = sampling_params is not None and sampling_params.enable_log_probs
+            if isinstance(enabled, list):
+                enabled = any(enabled)
+            if enabled:
+                self.logprob_outputs.append(
+                    generator.process_decode_output_host(
+                        [(token_output, logprob_output)],
+                        is_tokens=True,
+                    )
+                )
+
+    harness = WarmupHarness()
+    harness.warmup_model_decode(
+        kv_cache=None,
+        enable_trace=False,
+        max_batch_size=batch_size,
+        num_blocks=1,
+        can_sample_on_device=True,
+    )
+
+    # Full warmup covers log-probs with penalties both enabled and disabled.
+    assert len(harness.logprob_outputs) == 2
+    for sampled_tokens, sampled_logprobs in harness.logprob_outputs:
+        assert torch.equal(sampled_tokens, device_outputs[token_output].reshape(-1)[:batch_size])
+        assert torch.equal(sampled_logprobs, device_outputs[logprob_output].reshape(-1)[:batch_size])
+
+
 def _build(mesh_device, bmax):
     model = Qwen36Model.from_pretrained(
         mesh_device, max_batch_size=bmax, max_seq_len=CTX, n_layers=N_LAYERS, hf_model="Qwen/Qwen3.6-27B"
@@ -229,7 +294,7 @@ def test_bucketed_decode_matches_full_width(mesh_device, reset_seeds, ensure_gc)
     logger.info("PASSED: bucket widths 1, 2, and 4 are numerically equivalent to full width")
 
 
-def _parametrize_traced(max_tp=4, trace_bytes=1073741824):
+def _parametrize_traced(max_tp=8, trace_bytes=1073741824):
     """Same mesh/fabric params as parametrize_mesh_tp, plus a trace region (needed to capture)."""
     from models.demos.blackhole.qwen36.tests.test_factory import _resolve_mesh_shape
     from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE

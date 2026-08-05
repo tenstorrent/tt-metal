@@ -19,6 +19,9 @@ GDN_CONV1D_L1_SMALL_SIZE = 24576
 class Qwen36ModelArgs(ModelArgs):
     """Qwen3.5-9B ModelArgs for Blackhole P150."""
 
+    # Opt into base ModelArgs TP > n_kv_heads path; attention/tp.py replicates via replicate_kv_weight.
+    SUPPORTS_KV_REPLICATION = True
+
     def __init__(
         self,
         mesh_device=None,
@@ -227,8 +230,9 @@ class Qwen36ModelArgs(ModelArgs):
 
         # Prefill matmul factory (M = seq_len)
         self._prefill_grid = tpc.prefill_grid_default()
+        self.prefill_tuning = tpc.prefill_tuning(tp)
         self.prefill_progcfg = lambda seq_len, k, n: tpc.create_prefill_matmul_program_config(
-            seq_len, k, n, grid_size=self._prefill_grid
+            seq_len, k, n, grid_size=self._prefill_grid, tuning=self.prefill_tuning
         )
 
         # Activation shard configs
