@@ -15,6 +15,61 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 _SHARDED_NORM_MAX_HEIGHT = 1024
 
 
+def decode_width_shard_spec(mesh_device, dim):
+    """``(input_memcfg, program_config, num_cores)`` for width-sharding a
+    single-tile-tall ``[*, dim]`` decode activation, or ``None`` if no usable core
+    grid divides its tile-width evenly.
+
+    Pulled out of ``RMSNorm`` so that PRODUCERS of a decode activation can emit
+    exactly this layout and skip the interleaved->sharded reshard the norm would
+    otherwise do. ``ccl.ccl_allreduce`` uses it to have its all-gather write
+    width-sharded L1 directly: measured 47.2 -> 43.5 us per all-reduce
+    (-0.45 ms/decode step on 31B), bit-exact.
+
+    Both sides MUST derive the layout from this one function -- a producer that
+    hands the norm a shard spec differing in core count or block width silently
+    costs a re-shard instead of saving one.
+    """
+    if dim % ttnn.TILE_SIZE != 0:
+        return None
+    tiles = dim // ttnn.TILE_SIZE
+    grid = mesh_device.compute_with_storage_grid_size()
+    best = None  # (num_cores, gx, gy) — largest core count whose count divides tiles
+    for gy in range(1, grid.y + 1):
+        for gx in range(1, grid.x + 1):
+            n = gx * gy
+            if tiles % n == 0 and (best is None or n > best[0]):
+                best = (n, gx, gy)
+    if best is None or best[0] == 1:
+        return None
+    num_cores, gx, gy = best
+    block_w = tiles // num_cores
+    subblock_w = 4
+    while subblock_w > 1 and block_w % subblock_w != 0:
+        subblock_w -= 1
+    input_memcfg = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, dim // num_cores),
+        core_grid=ttnn.CoreGrid(x=gx, y=gy),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[gx, gy],
+        subblock_w=subblock_w,
+        block_h=1,
+        block_w=block_w,
+        inplace=False,
+    )
+    return (input_memcfg, program_config, num_cores)
+
+
+def decode_width_shard_memcfg(mesh_device, dim):
+    """Just the input memory config from :func:`decode_width_shard_spec`."""
+    spec = decode_width_shard_spec(mesh_device, dim)
+    return spec[0] if spec else None
+
+
 class RMSNorm(nn.Module):
     def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, mesh_config=None, with_scale=True):
         super().__init__()
@@ -61,12 +116,18 @@ class RMSNorm(nn.Module):
         self._sharded_height = None
 
     def _build_sharded_cfg(self, dim, height):
-        """Pick the largest core grid whose core count divides dim/32 and build
-        the width-sharded input memcfg + LayerNorm program config for an
-        activation of ``height`` rows (a multiple of TILE_SIZE — 32 for a
-        decode/small-batch tile, or the prefill seq length otherwise). Returns
-        None if no usable grid divides the tile-width evenly (falls back to
-        plain)."""
+        """Width-sharded input memcfg + LayerNorm program config, or None.
+
+        For decode (``height == TILE_SIZE``), delegates to
+        :func:`decode_width_shard_spec` so producers (``ccl.ccl_allreduce``) can
+        emit byte-for-byte the same layout and skip the reshard entirely. For
+        prefill (``height > TILE_SIZE``), builds a height-aware config up to
+        ``_SHARDED_NORM_MAX_HEIGHT``.
+        """
+        if height == ttnn.TILE_SIZE:
+            spec = decode_width_shard_spec(self.mesh_device, dim)
+            return (spec[0], spec[1]) if spec else None
+
         if dim % ttnn.TILE_SIZE != 0:
             return None
         tiles = dim // ttnn.TILE_SIZE
@@ -100,16 +161,26 @@ class RMSNorm(nn.Module):
         )
         return (input_memcfg, program_config)
 
-    def _forward_sharded(self, x):
-        """Width-sharded decode RMSNorm: I2S -> sharded rms_norm -> S2I."""
-        x_sh = ttnn.to_memory_config(x, self._sharded_cfg[0])
+    def _forward_sharded(self, x, already_sharded=False):
+        """Width-sharded RMSNorm: [I2S ->] sharded rms_norm -> S2I.
+
+        ``already_sharded`` means the producer handed us this exact layout (see
+        :func:`decode_width_shard_spec`), so the interleaved->sharded reshard is
+        skipped. The norm itself is unchanged, so the result is bit-identical --
+        verified with ``torch.equal`` in ops_list/tools/sweeps/l1_stream.py
+        (17.7 -> 10.8 us for the norm + its reshards)."""
+        if already_sharded:
+            x_sh = x
+        else:
+            x_sh = ttnn.to_memory_config(x, self._sharded_cfg[0])
         out = ttnn.rms_norm(
             x_sh,
             weight=self.tt_weight,
             epsilon=self.eps,
             program_config=self._sharded_cfg[1],
         )
-        x_sh.deallocate(True)
+        if not already_sharded:
+            x_sh.deallocate(True)
         out_interleaved = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         out.deallocate(True)
         return out_interleaved
@@ -156,18 +227,15 @@ class RMSNorm(nn.Module):
             return tt_output
         else:
             # Width-sharded fast path: a tile-aligned-height activation with a
-            # learned weight and an interleaved layout → width-sharded rms_norm.
-            # Covers both decode (height <= 32, padded to one tile) and prefill
-            # (height a multiple of 32). The no-weight per-head norms keep the
-            # plain path. Sharded config is (width, height)-specific, so rebuild
-            # if either ever changes.
+            # learned weight. Covers decode (height <= 32) and short prefill
+            # (height <= _SHARDED_NORM_MAX_HEIGHT). The no-weight per-head norms
+            # keep the plain path. Sharded config is (width, height)-specific.
             padded_height = ((int(x.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
             if (
                 self.with_scale
                 and self.tt_weight is not None
                 and len(x.shape) == 4
                 and 1 <= padded_height <= _SHARDED_NORM_MAX_HEIGHT
-                and not x.is_sharded()
             ):
                 dim = x.shape[-1]
                 if self._sharded_cfg is None or self._sharded_dim != dim or self._sharded_height != padded_height:
@@ -175,7 +243,14 @@ class RMSNorm(nn.Module):
                     self._sharded_height = padded_height
                     self._sharded_cfg = self._build_sharded_cfg(dim, padded_height)
                 if self._sharded_cfg:
-                    return self._forward_sharded(x)
+                    # Decode only: a producer may already have written the exact
+                    # layout we want (ccl_allreduce does). Prefill activations are
+                    # too large for the L1-gather path and always take I2S here.
+                    if x.is_sharded():
+                        if padded_height <= ttnn.TILE_SIZE and x.memory_config() == self._sharded_cfg[0]:
+                            return self._forward_sharded(x, already_sharded=True)
+                    else:
+                        return self._forward_sharded(x)
 
             if self.with_scale:
                 tt_output = ttnn.rms_norm(

@@ -316,6 +316,45 @@ class CCLManager:
         return [inter, out]
 
 
+def ccl_l1_gather_enabled() -> bool:
+    """Let the TP all-reduce's gather write width-sharded L1 instead of DRAM.
+    Default ON; ``GEMMA4_CCL_L1_GATHER=0`` opts back out."""
+    return os.environ.get("GEMMA4_CCL_L1_GATHER", "1").lower() not in ("0", "false", "no")
+
+
+def _decode_l1_gather_memcfg(tensor, ccl_manager):
+    """Width-sharded L1 memory config for the all-gather output, or None to keep DRAM.
+
+    Every ``ccl_allreduce`` call site in the decode path feeds its result straight
+    into an ``RMSNorm`` (layer.py: post_attention_layernorm, post_feedforward_
+    layernorm{,_1,_2}), and that norm's first act is to width-shard its input. So
+    having the gather write that layout directly removes an
+    InterleavedToSharded per all-reduce -- measured 47.2 -> 43.5 us
+    (-0.45 ms/decode step on 31B), bit-exact (ops_list/tools/sweeps/l1_stream.py).
+
+    The layout comes from ``rms_norm.decode_width_shard_spec``, the same function
+    the norm uses, so the two provably agree; ``RMSNorm.forward`` compares
+    ``memory_config()`` and only takes the input in place on an exact match, so a
+    mismatch degrades to today's behaviour rather than corrupting anything.
+
+    Guarded to the decode shape (a single tile of rows). Prefill activations are
+    far too large to sit width-sharded in L1, and their norms use the plain path
+    anyway.
+    """
+    if not ccl_l1_gather_enabled():
+        return None
+    try:
+        shape = tensor.shape
+        if len(shape) != 4 or not (1 <= shape[-2] <= ttnn.TILE_SIZE):
+            return None
+        from models.demos.gemma4.tt.rms_norm import decode_width_shard_memcfg
+
+        return decode_width_shard_memcfg(ccl_manager.mesh_device, shape[-1])
+    except Exception as e:  # never let a layout optimization break the model
+        logger.debug(f"ccl L1 gather memcfg unavailable ({e}); keeping DRAM")
+        return None
+
+
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     """All-reduce across TP devices.
 
@@ -332,9 +371,17 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
+    # None means the caller expressed no preference, so we are free to pick the
+    # layout its consumer wants. Capture it before the DRAM default is applied.
+    caller_memory_config = memory_config
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     tp_axis = mesh_config.tp_axis
     topology = ccl_manager.topology
+    # Computed while ``tensor`` is still alive -- the split path deallocates it
+    # before the all-gather runs.
+    gather_memory_config = memory_config
+    if caller_memory_config is None:
+        gather_memory_config = _decode_l1_gather_memcfg(tensor, ccl_manager) or memory_config
 
     chunks = ccl_chunks_per_sync()
     workers = ccl_num_workers_per_link()
@@ -398,7 +445,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             cluster_axis=tp_axis,
             num_links=ccl_manager.num_links,
             topology=topology,
-            memory_config=memory_config,
+            memory_config=gather_memory_config,
         )
         scattered.deallocate(True)
         return result
