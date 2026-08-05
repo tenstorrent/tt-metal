@@ -275,7 +275,10 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     m2::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = std::filesystem::path{COMPUTE_SRC},
-        .compiler_options = {.defines = compute_defines},
+        // Compute kernels must build at -O3 (legacy default). Metal 2.0 CompilerOptions defaults to
+        // -O2; the O2 compute binary misbehaves at runtime (the sim deadlocks — the dataflow kernels
+        // block at CB reserve/wait waiting on a compute that never produces/consumes the right tiles).
+        .compiler_options = {.defines = compute_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings = compute_dfb_bindings,
         // W_tiles / H_tiles / elem_size are dead in the compute body (preserved verbatim).
         .compile_time_args =
@@ -672,7 +675,9 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             kernel_specs.push_back(m2::KernelSpec{
                 .unique_id = name,
                 .source = std::filesystem::path{COMPUTE_SRC},
-                .compiler_options = {.defines = cd},
+                // Compute kernels must build at -O3 (legacy default); Metal 2.0 defaults to -O2, whose
+                // compute binary deadlocks the sharded sim (see the DRAM factory's compute note).
+                .compiler_options = {.defines = cd, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
                 .dfb_bindings = cb,
                 // W_tiles(=effective_W) / H_tiles(=key.H) / elem_size are dead in the compute body
                 // (preserved verbatim per the audit's Misc-anomalies note).
