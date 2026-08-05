@@ -615,6 +615,29 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
     ]
 
 
+def generate_perf_input_dimensions(dest_acc, tile_dimensions=None):
+    """Generate SyncHalf perf shapes for fixed overhead and dest synchronization.
+
+    The first shape is one tile. The remaining wide/tall pairs contain exactly
+    one, two, or three destination-register fills so each block is full and
+    multi-block cases cross deterministic synchronization boundaries.
+    """
+    tile_rows, tile_cols = tile_dimensions or TILE_DIMENSIONS
+    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    tiles_per_fill = DEST_SYNC_TILE_LIMITS[DestSync.Half] // capacity_divisor
+
+    dimensions = [[tile_rows, tile_cols]]
+    for fill_count in (1, 2, 3):
+        tile_count = tiles_per_fill * fill_count
+        dimensions.extend(
+            [
+                [tile_rows, tile_cols * tile_count],
+                [tile_rows * tile_count, tile_cols],
+            ]
+        )
+    return dimensions
+
+
 def get_num_blocks_and_num_tiles_in_block(
     dest_sync: DestSync,
     dest_acc: DestAccumulation,

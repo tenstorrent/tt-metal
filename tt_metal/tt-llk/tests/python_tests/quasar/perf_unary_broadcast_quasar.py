@@ -9,7 +9,6 @@ from helpers.llk_params import (
 )
 from helpers.param_config import parametrize, runtime
 from quasar.test_unary_broadcast_quasar import (
-    INPUT_DIMENSIONS,
     UNARY_BROADCAST_FORMATS,
     get_valid_dest_acc_unary_broadcast,
 )
@@ -19,6 +18,7 @@ from quasar.test_unary_broadcast_quasar import (
 from quasar.test_unary_broadcast_quasar import (
     unary_broadcast_dest_sync_modes,
     unary_broadcast_implied_math_formats,
+    unary_broadcast_input_dimensions,
 )
 
 
@@ -27,12 +27,18 @@ from quasar.test_unary_broadcast_quasar import (
 @parametrize(
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=get_valid_dest_acc_unary_broadcast,
-    broadcast_type=[BroadcastType.Scalar],
+    broadcast_type=[
+        BroadcastType.Scalar,
+        BroadcastType.Column,
+        BroadcastType.Row,
+    ],
     implied_math_format=lambda formats: unary_broadcast_implied_math_formats(
         formats, is_perf=True
     ),
     dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=True),
-    input_dimensions=runtime(INPUT_DIMENSIONS),
+    input_dimensions=runtime(
+        lambda dest_acc: unary_broadcast_input_dimensions(dest_acc, is_perf=True)
+    ),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],

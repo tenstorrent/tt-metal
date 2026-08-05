@@ -23,6 +23,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
+    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -54,6 +55,7 @@ from helpers.utils import passed_test
 INPUT_DIMENSIONS = [
     [512, 32],
 ]
+PERF_INPUT_DIMENSIONS = generate_perf_input_dimensions(DestAccumulation.No)[1:]
 OUTPUT_DIMENSIONS = [
     [128, 32],
 ]

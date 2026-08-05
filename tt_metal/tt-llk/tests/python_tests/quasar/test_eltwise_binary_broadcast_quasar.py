@@ -23,6 +23,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -84,9 +85,7 @@ def binary_broadcast_math_fidelities(format, mathop, *, is_perf=False):
 
 def binary_broadcast_input_dimensions(dest_acc, dest_sync_mode, *, is_perf=False):
     if is_perf:
-        # Nested list: parametrize treats a flat list as multiple values, so
-        # [32, 32] would become input_dimensions=32 (int) and break generate_stimuli.
-        return [[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]]
+        return generate_perf_input_dimensions(dest_acc)
     return generate_unary_input_dimensions(dest_acc, dest_sync_mode)
 
 

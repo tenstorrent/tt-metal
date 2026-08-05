@@ -18,6 +18,9 @@ from quasar.test_eltwise_binary_quasar import (
     eltwise_binary_input_dimensions,
 )
 from quasar.test_eltwise_binary_quasar import test_eltwise_binary as run_eltwise_binary
+from quasar.test_eltwise_binary_quasar import (
+    valid_acc_to_dest,
+)
 
 
 @pytest.mark.perf
@@ -35,7 +38,7 @@ from quasar.test_eltwise_binary_quasar import test_eltwise_binary as run_eltwise
     input_dimensions=lambda dest_sync_dest_acc: eltwise_binary_input_dimensions(
         dest_sync_dest_acc, is_perf=True
     ),
-    acc_to_dest=[False],
+    acc_to_dest=valid_acc_to_dest,
     num_faces=[4],
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],

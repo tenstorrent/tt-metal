@@ -19,6 +19,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
+    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -105,6 +106,12 @@ def get_valid_dest_acc_unary_broadcast(formats):
     ]  # 32bit dest is not supported for the unpack_to_dest=False case, ISSUE: #47560
 
 
+def unary_broadcast_input_dimensions(dest_acc, *, is_perf=False):
+    if is_perf:
+        return generate_perf_input_dimensions(dest_acc, TILE_DIMENSIONS)
+    return INPUT_DIMENSIONS
+
+
 @pytest.mark.quasar
 @parametrize(
     formats=UNARY_BROADCAST_FORMATS,
@@ -116,7 +123,9 @@ def get_valid_dest_acc_unary_broadcast(formats):
     ],
     implied_math_format=lambda formats: unary_broadcast_implied_math_formats(formats),
     dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=False),
-    input_dimensions=runtime(INPUT_DIMENSIONS),
+    input_dimensions=runtime(
+        lambda dest_acc: unary_broadcast_input_dimensions(dest_acc, is_perf=False)
+    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )

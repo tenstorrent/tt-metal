@@ -30,7 +30,11 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
     formats=BINARY_BROADCAST_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
     mathop=PERF_FPU_MATHOPS,
-    broadcast_type=[BroadcastType.Scalar],
+    broadcast_type=[
+        BroadcastType.Column,
+        BroadcastType.Row,
+        BroadcastType.Scalar,
+    ],
     math_fidelity=lambda formats, mathop: get_perf_fpu_math_fidelities(formats, mathop),
     implied_math_format=lambda formats: binary_broadcast_implied_math_formats(
         formats, is_perf=True

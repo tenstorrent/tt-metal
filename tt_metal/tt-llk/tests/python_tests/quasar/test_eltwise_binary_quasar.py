@@ -18,6 +18,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -88,9 +89,7 @@ def eltwise_binary_math_fidelities(mathop, formats, *, is_perf=False):
 
 def eltwise_binary_input_dimensions(dest_sync_dest_acc, *, is_perf=False):
     if is_perf:
-        # Nested list: parametrize treats a flat list as multiple values, so
-        # [32, 32] would become input_dimensions=32 (int) and break generate_stimuli.
-        return [[32, 32]]
+        return generate_perf_input_dimensions(dest_sync_dest_acc[1])
     return generate_unary_input_dimensions(dest_sync_dest_acc[1], dest_sync_dest_acc[0])
 
 

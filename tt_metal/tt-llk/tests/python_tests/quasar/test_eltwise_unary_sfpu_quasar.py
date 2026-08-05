@@ -21,6 +21,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     input_output_formats,
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
@@ -770,7 +771,11 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
                     if is_perf
                     else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
                 )
-                input_dims = ([32, 32],) if is_perf else cfg.input_dims
+                input_dims = (
+                    generate_perf_input_dimensions(dest_acc)
+                    if is_perf
+                    else cfg.input_dims
+                )
                 for dest_sync in dest_sync_modes:
                     for implied_math_format in implied_math_formats:
                         for approx_mode in approx_modes:
