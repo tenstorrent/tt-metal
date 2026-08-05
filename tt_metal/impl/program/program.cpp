@@ -2342,11 +2342,17 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     TTZoneScopedD(PROGRAM);
 
     const ContextId device_context_id = extract_context_id(device);
+    // Metal 1.0 CreateProgram() always stores DEFAULT_CONTEXT_ID because no MetalEnv/device is
+    // available at construction. MetalContext::instance(DEFAULT_CONTEXT_ID) already bridges that
+    // case: when slot 0 is empty it aliases to a live non-default context (mock-only /
+    // coexistence) instead of opening silicon. Allow DEFAULT programs on any device so that
+    // bridge keeps working; do not overwrite context_id_. Reject only a real mismatch where the
+    // program was explicitly bound (Metal 2.0 MakeProgramFromSpec) to a different context.
     TT_FATAL(
-        context_id_ == device_context_id,
+        context_id_ == DEFAULT_CONTEXT_ID || context_id_ == device_context_id,
         "Program {} was created for context_id {} but is being compiled on a device from context_id {}. "
-        "Metal 1.0 CreateProgram() binds DEFAULT_CONTEXT_ID; use Metal 2.0 MakeProgramFromSpec (or a future "
-        "CreateProgram that takes MetalEnv) when compiling against a non-default context.",
+        "A program bound to a non-default context must be compiled on a device from that same context "
+        "(Metal 2.0 MakeProgramFromSpec / future CreateProgram(MetalEnv)).",
         this->id,
         context_id_.get(),
         device_context_id.get());
