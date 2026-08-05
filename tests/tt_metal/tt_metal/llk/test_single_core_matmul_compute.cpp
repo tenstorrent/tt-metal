@@ -1034,7 +1034,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreSingleBlockComp
         .in1_fmt = tt::DataFormat::MxFp4,
         .out_fmt = tt::DataFormat::Float16_b,
         .enable_2x_src_format = true};
-    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
+    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->device_, config));
 }
 
 // FP8 variants of the multi-block matmul. Blackhole-gated because Fp8_e4m3 only exists on BH

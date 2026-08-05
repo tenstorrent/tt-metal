@@ -451,9 +451,8 @@ namespace mxfp8_tc = unit_tests::llk::mxfp8_typecast;
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16b) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8R,
         tt::DataFormat::Float16_b,
         /*rtol=*/0.0f,
@@ -463,9 +462,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16b) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16bFp32Dest) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8R,
         tt::DataFormat::Float16_b,
         /*rtol=*/0.0f,
@@ -482,9 +480,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16bFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16b) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8P,
         tt::DataFormat::Float16_b,
         /*rtol=*/0.0f,
@@ -494,9 +491,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16b) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16bFp32Dest) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8P,
         tt::DataFormat::Float16_b,
         /*rtol=*/0.0f,
@@ -512,9 +508,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16bFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8R) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8R,
         /*rtol=*/0.25f,
@@ -524,9 +519,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8R) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RFp32Dest) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8R,
         /*rtol=*/0.25f,
@@ -542,9 +536,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8P) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8P,
         /*rtol=*/0.125f,
@@ -554,9 +547,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8P) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PFp32Dest) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8P,
         /*rtol=*/0.125f,
@@ -571,9 +563,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8R) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8R,
         tt::DataFormat::MxFp8R,
         /*rtol=*/0.0f,
@@ -583,9 +574,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8R) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8RFp32Dest) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8R,
         tt::DataFormat::MxFp8R,
         /*rtol=*/0.0f,
@@ -600,9 +590,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8RFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8P) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8P,
         tt::DataFormat::MxFp8P,
         /*rtol=*/0.0f,
@@ -612,9 +601,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8P) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8PFp32Dest) {
-    auto& mesh_device = *devices_[0];
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8P,
         tt::DataFormat::MxFp8P,
         /*rtol=*/0.0f,
@@ -632,7 +620,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8PFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToBf16SpecialCases) {
-    auto& mesh_device = *devices_[0];
     auto layout = mxfp8_tc::get_e5m2_tile_layout();
 
     // Block 0: scale = 0xFF → all 32 elements should be NaN (rule 1).
@@ -647,7 +634,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToBf16SpecialCases) {
         {{32, 0x7C}, {33, 0xFC}, {34, 0x7D}, {35, 0x7E}, {36, 0x7F}, {64, 0x7B}, {65, 0xFB}, {96, 0x3C}});
 
     auto result = mxfp8_tc::run_mxfp8_typecast(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8R,
         tt::DataFormat::Float16_b,
         packed,
@@ -670,7 +657,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToBf16SpecialCases) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToBf16SpecialCases) {
-    auto& mesh_device = *devices_[0];
     auto layout = mxfp8_tc::get_e4m3_tile_layout();
 
     // Block 0: scale = 0xFF → all 32 elements should be NaN (rule 1).
@@ -686,7 +672,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToBf16SpecialCases) {
         {{32, 0x7F}, {33, 0x78}, {34, 0x7B}, {35, 0x7E}, {64, 0x7E}, {65, 0xFE}, {96, 0x38}});
 
     auto result = mxfp8_tc::run_mxfp8_typecast(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8P,
         tt::DataFormat::Float16_b,
         packed,
@@ -742,8 +728,6 @@ static vector<uint32_t> build_bf16_tile_with_block_values(std::initializer_list<
 }  // namespace unit_tests::llk::mxfp8_typecast
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
-    auto& mesh_device = *devices_[0];
-
     // Block layout (32 BF16 elements per block):
     //   0: all +NaN  → block must read as NaN (NaN propagation).
     //   1: all +Inf  → +Inf, NaN, or +max-normal (saturation when ovf_en=0).
@@ -757,7 +741,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
     auto src = mxfp8_tc::build_bf16_tile_with_block_values({kBf16PosNaN, kBf16PosInf, kBf16NegInf, kBf16PosOne});
 
     auto result = mxfp8_tc::run_mxfp8_typecast(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8R,
         src,
@@ -803,8 +787,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PSpecialCases) {
-    auto& mesh_device = *devices_[0];
-
     // Block layout, mirroring the E5M2 test. E4M3 has no Inf encoding, so the
     // ±Inf blocks must produce either NaN or saturate to ±max-normal.
     //   0: all +NaN  → block must read as NaN.
@@ -819,7 +801,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PSpecialCases) {
     auto src = mxfp8_tc::build_bf16_tile_with_block_values({kBf16PosNaN, kBf16PosInf, kBf16NegInf, kBf16PosOne});
 
     auto result = mxfp8_tc::run_mxfp8_typecast(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8P,
         src,

@@ -354,7 +354,7 @@ bool single_core_reconfig(
     return pass;
 }
 
-bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+bool single_core_unpack_reconfig_quasar(distributed::MeshDevice& mesh_device) {
     // Three matmul_tiles ops with unpack reconfig between pairs; see reconfig_unpack_quasar.cpp.
     constexpr uint32_t kNumOps = 3;
     const uint32_t f16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
@@ -362,7 +362,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     const uint32_t out_bytes = kNumOps * f16_tile_size;
 
     const CoreCoord core = {0, 0};
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     const experimental::NodeCoord node{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
 
@@ -374,13 +374,13 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     distributed::ReplicatedBufferConfig f32_buf_cfg{.size = f32_tile_size};
     distributed::ReplicatedBufferConfig out_buf_cfg{.size = out_bytes};
 
-    auto inp0_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto inp1_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto inp2_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
-    auto inp3_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
-    auto inp4_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto inp0_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, &mesh_device);
+    auto inp1_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, &mesh_device);
+    auto inp2_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, &mesh_device);
+    auto inp3_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, &mesh_device);
+    auto inp4_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, &mesh_device);
+    auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, &mesh_device);
+    auto out_dram = distributed::MeshBuffer::create(out_buf_cfg, f16_dram_cfg, &mesh_device);
 
     const experimental::DFBSpecName INP0_DFB{"in0"};
     const experimental::DFBSpecName INP1_DFB{"in1"};
@@ -512,7 +512,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     // Random stimulus: U(0, 1) per element (keep magnitudes small so matmul output
     // stays in a sensible bfloat16 range; each output element is sum of 32 products).
@@ -622,7 +622,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     };
     experimental::SetProgramRunArgs(program, params);
 
-    auto* dev = mesh_device->get_devices()[0];
+    auto* dev = mesh_device.get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dest_buffer_data;
@@ -667,14 +667,14 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     return pass;
 }
 
-bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+bool single_core_pack_reconfig_quasar(distributed::MeshDevice& mesh_device) {
     // Same 3×2 matmul flow as unpack reconfig; pack reconfig+init per output at pack time; see
     // reconfig_pack_quasar.cpp.
     const uint32_t f16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t f32_tile_size = tt::tile_size(tt::DataFormat::Float32);
 
     const CoreCoord core = {0, 0};
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     const experimental::NodeCoord node{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
 
@@ -685,15 +685,15 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     distributed::ReplicatedBufferConfig f16_buf_cfg{.size = f16_tile_size};
     distributed::ReplicatedBufferConfig f32_buf_cfg{.size = f32_tile_size};
 
-    auto inp0_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto inp1_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto inp2_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
-    auto inp3_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
-    auto inp4_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto out0_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
-    auto out1_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, mesh_device.get());
-    auto out2_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, mesh_device.get());
+    auto inp0_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, &mesh_device);
+    auto inp1_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, &mesh_device);
+    auto inp2_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, &mesh_device);
+    auto inp3_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, &mesh_device);
+    auto inp4_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, &mesh_device);
+    auto inp5_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, &mesh_device);
+    auto out0_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, &mesh_device);
+    auto out1_dram = distributed::MeshBuffer::create(f32_buf_cfg, f32_dram_cfg, &mesh_device);
+    auto out2_dram = distributed::MeshBuffer::create(f16_buf_cfg, f16_dram_cfg, &mesh_device);
 
     const experimental::DFBSpecName INP0_DFB{"in0"};
     const experimental::DFBSpecName INP1_DFB{"in1"};
@@ -852,7 +852,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     constexpr int kRandMax = 1;
     constexpr uint32_t elems_per_tile = tt::constants::TILE_HW;
@@ -977,7 +977,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     };
     experimental::SetProgramRunArgs(program, params);
 
-    auto* dev = mesh_device->get_devices()[0];
+    auto* dev = mesh_device.get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> out0_data;
@@ -1127,15 +1127,11 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
 }
 
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixUnpackReconfigQuasarDfb) {
-    for (auto& device : this->devices_) {
-        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_unpack_reconfig_quasar(device));
-    }
+    ASSERT_TRUE(unit_tests::compute::reconfig::single_core_unpack_reconfig_quasar(this->device()));
 }
 
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixPackReconfigQuasarDfb) {
-    for (auto& device : this->devices_) {
-        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(device));
-    }
+    ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(this->device()));
 }
 
 }  // namespace tt::tt_metal

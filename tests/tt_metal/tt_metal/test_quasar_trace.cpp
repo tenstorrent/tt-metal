@@ -29,16 +29,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
-    auto mesh_device = devices_[0];
+    IDevice* dev = this->device().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t value = 0xcafe1234;
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(this->device().shape());
 
     const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
     experimental::KernelSpec dm_kernel_spec{
@@ -52,7 +51,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
     experimental::ProgramSpec spec{.name = "trace_test", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
 
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, experimental::MakeProgramFromSpec(this->device(), spec));
     Program& prog = workload.get_programs().at(device_range);
 
     experimental::ProgramRunArgs params;
@@ -73,17 +72,17 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
 
     // Capture trace
     tt_metal::detail::WriteToDeviceL1(dev, node, address, zeros);
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), 0);
+    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(&this->device(), 0);
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    mesh_device->end_mesh_trace(0, trace_id);
+    this->device().end_mesh_trace(0, trace_id);
 
     // Replay trace
-    mesh_device->replay_mesh_trace(0, trace_id, true);
+    this->device().replay_mesh_trace(0, trace_id, true);
     std::vector<uint32_t> trace_result(1, 0);
     tt_metal::detail::ReadFromDeviceL1(dev, node, address, sizeof(uint32_t), trace_result);
     ASSERT_EQ(trace_result[0], value);
 
-    mesh_device->release_mesh_trace(trace_id);
+    this->device().release_mesh_trace(trace_id);
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
@@ -92,16 +91,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
-    auto mesh_device = devices_[0];
+    IDevice* dev = this->device().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t value = 0x5a5a5a5a;
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(this->device().shape());
 
     const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
     experimental::KernelSpec dm_kernel_spec{
@@ -116,7 +114,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
         .name = "trace_multi_replay_test", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
 
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, experimental::MakeProgramFromSpec(this->device(), spec));
     Program& prog = workload.get_programs().at(device_range);
 
     experimental::ProgramRunArgs params;
@@ -136,9 +134,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
     ASSERT_EQ(warm_up_result[0], value);
 
     // Capture trace
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), 0);
+    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(&this->device(), 0);
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    mesh_device->end_mesh_trace(0, trace_id);
+    this->device().end_mesh_trace(0, trace_id);
 
     // Replay trace
     constexpr uint32_t num_replays = 5;
@@ -146,14 +144,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
         std::vector<uint32_t> zeros(1, 0);
         tt_metal::detail::WriteToDeviceL1(dev, node, address, zeros);
 
-        mesh_device->replay_mesh_trace(0, trace_id, true);
+        this->device().replay_mesh_trace(0, trace_id, true);
 
         std::vector<uint32_t> result(1, 0);
         tt_metal::detail::ReadFromDeviceL1(dev, node, address, sizeof(uint32_t), result);
         ASSERT_EQ(result[0], value);
     }
 
-    mesh_device->release_mesh_trace(trace_id);
+    this->device().release_mesh_trace(trace_id);
 }
 
 TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcrossCQs) {
@@ -162,8 +160,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
-    auto mesh_device = devices_[0];
+    IDevice* dev = this->device().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address_0 = MetalContext::instance().hal().get_dev_addr(
@@ -173,7 +170,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
     const uint32_t value_0 = 0xcafe0000;
     const uint32_t value_1 = 0xcafe1111;
 
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(this->device().shape());
 
     auto make_workload = [&](uint32_t address, uint32_t value, const char* kernel_id) {
         distributed::MeshWorkload wl;
@@ -188,7 +185,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
         experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
         experimental::ProgramSpec spec{
             .name = std::string("trace_across_cqs_") + kernel_id, .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
-        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        Program program = experimental::MakeProgramFromSpec(this->device(), spec);
         experimental::ProgramRunArgs params;
         params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_KERNEL,
@@ -203,8 +200,8 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
     auto wl0 = make_workload(address_0, value_0, "trace_dm_0");
     auto wl1 = make_workload(address_1, value_1, "trace_dm_1");
 
-    distributed::MeshCommandQueue& cq0 = mesh_device->mesh_command_queue(0);
-    distributed::MeshCommandQueue& cq1 = mesh_device->mesh_command_queue(1);
+    distributed::MeshCommandQueue& cq0 = this->device().mesh_command_queue(0);
+    distributed::MeshCommandQueue& cq1 = this->device().mesh_command_queue(1);
 
     std::vector<uint32_t> zeros(1, 0);
 
@@ -215,9 +212,9 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
     tt_metal::detail::ReadFromDeviceL1(dev, node, address_0, sizeof(uint32_t), warm_up_0);
     ASSERT_EQ(warm_up_0[0], value_0);
 
-    distributed::MeshTraceId trace_id_0 = distributed::BeginTraceCapture(mesh_device.get(), 0);
+    distributed::MeshTraceId trace_id_0 = distributed::BeginTraceCapture(&this->device(), 0);
     distributed::EnqueueMeshWorkload(cq0, wl0, false);
-    mesh_device->end_mesh_trace(0, trace_id_0);
+    this->device().end_mesh_trace(0, trace_id_0);
 
     // Warm up + capture the CQ1 trace.
     tt_metal::detail::WriteToDeviceL1(dev, node, address_1, zeros);
@@ -226,9 +223,9 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
     tt_metal::detail::ReadFromDeviceL1(dev, node, address_1, sizeof(uint32_t), warm_up_1);
     ASSERT_EQ(warm_up_1[0], value_1);
 
-    distributed::MeshTraceId trace_id_1 = distributed::BeginTraceCapture(mesh_device.get(), 1);
+    distributed::MeshTraceId trace_id_1 = distributed::BeginTraceCapture(&this->device(), 1);
     distributed::EnqueueMeshWorkload(cq1, wl1, false);
-    mesh_device->end_mesh_trace(1, trace_id_1);
+    this->device().end_mesh_trace(1, trace_id_1);
 
     // Interleave replays of both CQs' traces and verify each lands its own value each round.
     constexpr uint32_t num_replays = 5;
@@ -236,8 +233,8 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
         tt_metal::detail::WriteToDeviceL1(dev, node, address_0, zeros);
         tt_metal::detail::WriteToDeviceL1(dev, node, address_1, zeros);
 
-        mesh_device->replay_mesh_trace(0, trace_id_0, true);
-        mesh_device->replay_mesh_trace(1, trace_id_1, true);
+        this->device().replay_mesh_trace(0, trace_id_0, true);
+        this->device().replay_mesh_trace(1, trace_id_1, true);
 
         std::vector<uint32_t> result_0(1, 0);
         tt_metal::detail::ReadFromDeviceL1(dev, node, address_0, sizeof(uint32_t), result_0);
@@ -248,6 +245,6 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
         ASSERT_EQ(result_1[0], value_1);
     }
 
-    mesh_device->release_mesh_trace(trace_id_0);
-    mesh_device->release_mesh_trace(trace_id_1);
+    this->device().release_mesh_trace(trace_id_0);
+    this->device().release_mesh_trace(trace_id_1);
 }

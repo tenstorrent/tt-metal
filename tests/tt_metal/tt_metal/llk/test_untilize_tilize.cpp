@@ -566,8 +566,8 @@ void run_single_core_unpack_tilizeA_B_program(
 // Uses REDUCE_COL + MAX: tilizes row-major src0 data, reduces each tile independently
 // (column-wise max within each tile), producing output tiles with only row 0 populated.
 void run_single_core_unpack_tilizeA_B_reduce_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshDevice& mesh_device, const TestConfig& test_config) {
+    auto& cq = mesh_device.mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
     const std::uint32_t num_tiles_in = test_config.num_tiles_r * test_config.num_tiles_c;
@@ -584,9 +584,9 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     };
 
     auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_tensor_spec(test_config.input_single_tile_size, num_tiles_in));
+        mesh_device, make_flat_tensor_spec(test_config.input_single_tile_size, num_tiles_in));
     auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_tensor_spec(test_config.output_single_tile_size, num_tiles_out));
+        mesh_device, make_flat_tensor_spec(test_config.output_single_tile_size, num_tiles_out));
 
     const experimental::DFBSpecName INP_DATA_DFB{"inp_data_dfb"};
     const experimental::DFBSpecName INP_SCALER_DFB{"inp_scaler_dfb"};
@@ -618,7 +618,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     };
 
     experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         reader_hw_config = experimental::DataMovementGen1Config{
@@ -648,7 +648,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     };
 
     experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         writer_hw_config = experimental::DataMovementGen1Config{
@@ -673,7 +673,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .enable_32_bit_dest = test_config.fp32_dest_acc_en,
             .double_buffer_dest = !test_config.dst_full_sync_en,
@@ -731,7 +731,7 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -946,7 +946,7 @@ Following tests are for Quasar
 enum class QuasarTestMode { TILIZE, UNTILIZE, UNTILIZE_DST };
 
 static void run_quasar_tilize_untilize_test(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     std::uint32_t num_tiles_r,
     std::uint32_t num_tiles_c,
     QuasarTestMode mode,
@@ -959,8 +959,8 @@ static void run_quasar_tilize_untilize_test(
     bool tilize_cross_tile_rows = false) {
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
-    IDevice* dev = mesh_device->get_devices()[0];
-    auto& cq = mesh_device->mesh_command_queue();
+    IDevice* dev = mesh_device.get_devices()[0];
+    auto& cq = mesh_device.mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
     constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
@@ -1072,7 +1072,7 @@ static void run_quasar_tilize_untilize_test(
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .enable_32_bit_dest = fp32_dest_acc_en,
             .double_buffer_dest = !dst_full_sync_en,
@@ -1117,7 +1117,7 @@ static void run_quasar_tilize_untilize_test(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -1237,7 +1237,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
                         continue;  // Int16 + 32-bit dest mode is not supported on Quasar
                     }
                     run_quasar_tilize_untilize_test(
-                        this->devices_.at(0),
+                        this->device(),
                         cfg[0],
                         cfg[1],
                         QuasarTestMode::UNTILIZE,
@@ -1262,7 +1262,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
                         continue;  // Int16 + 32-bit dest mode is not supported on Quasar
                     }
                     run_quasar_tilize_untilize_test(
-                        this->devices_.at(0),
+                        this->device(),
                         cfg[0],
                         cfg[1],
                         QuasarTestMode::UNTILIZE_DST,
@@ -1285,7 +1285,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTile) 
         for (auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
-                    this->devices_.at(0),
+                    this->device(),
                     cfg[0],
                     cfg[1],
                     QuasarTestMode::UNTILIZE,
@@ -1309,7 +1309,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTil
         for (auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
-                    this->devices_.at(0),
+                    this->device(),
                     cfg[0],
                     cfg[1],
                     QuasarTestMode::UNTILIZE_DST,
@@ -1336,7 +1336,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
                     }
 
                     run_quasar_tilize_untilize_test(
-                        this->devices_.at(0),
+                        this->device(),
                         cfg[0],
                         cfg[1],
                         QuasarTestMode::TILIZE,
@@ -1359,7 +1359,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTile) 
         for (auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
-                    this->devices_.at(0),
+                    this->device(),
                     cfg[0],
                     cfg[1],
                     QuasarTestMode::TILIZE,
@@ -1384,7 +1384,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeTinyTileCr
         for (auto& cfg : test_configs) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
-                    this->devices_.at(0),
+                    this->device(),
                     cfg[0],
                     cfg[1],
                     QuasarTestMode::TILIZE,
@@ -1422,7 +1422,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeA_B) {
                     .output_fmt = output_data_format,
                     .golden_function = ::unit_tests::compute::gold_standard_tilize_w_reduce_col_max};
                 unit_tests::compute::tilize::run_single_core_unpack_tilizeA_B_reduce_program(
-                    this->devices_.at(0), test_config);
+                    this->device(), test_config);
             }
         }
     }
@@ -1434,7 +1434,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
             run_quasar_tilize_untilize_test(
-                this->devices_.at(0),
+                this->device(),
                 cfg[0],
                 cfg[1],
                 QuasarTestMode::UNTILIZE,
@@ -1452,7 +1452,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) 
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
             run_quasar_tilize_untilize_test(
-                this->devices_.at(0),
+                this->device(),
                 cfg[0],
                 cfg[1],
                 QuasarTestMode::UNTILIZE_DST,
@@ -1481,7 +1481,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastUntilize) {
             .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
             .output_fmt = tt::DataFormat::Float16_b,
             .golden_function = ::unit_tests::compute::gold_standard_untilize};
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->device_, test_config);
     }
 }
 
@@ -1503,7 +1503,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastTilize) {
                     .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
                     .output_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
                     .golden_function = ::unit_tests::compute::gold_standard_tilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+                unit_tests::compute::tilize::run_single_core_tilize_program(this->device_, test_config);
             }
         }
     }

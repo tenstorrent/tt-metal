@@ -288,27 +288,27 @@ namespace mxint_tc = unit_tests::llk::mxint_typecast;
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToFloat16b) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt8, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt8, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToFloat16bFp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt8, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt8, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToFloat16b) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt4, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt4, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToFloat16bFp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt4, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt4, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToFloat16b) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt2, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt2, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToFloat16bFp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt2, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt2, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
@@ -318,22 +318,22 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToFloat16bFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt8) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt8, /*atol=*/0.125f, /*fp32_dest_acc_en=*/false);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt8, /*atol=*/0.125f, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt8Fp32Dest) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt8, /*atol=*/0.125f, /*fp32_dest_acc_en=*/true);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt8, /*atol=*/0.125f, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt4) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt4, /*atol=*/2.0f, /*fp32_dest_acc_en=*/false);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt4, /*atol=*/2.0f, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt4Fp32Dest) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt4, /*atol=*/2.0f, /*fp32_dest_acc_en=*/true);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt4, /*atol=*/2.0f, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt2) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt2, /*atol=*/8.0f, /*fp32_dest_acc_en=*/false);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt2, /*atol=*/8.0f, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt2Fp32Dest) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt2, /*atol=*/8.0f, /*fp32_dest_acc_en=*/true);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt2, /*atol=*/8.0f, /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
@@ -342,27 +342,27 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt2Fp32Dest) {
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToMxInt8) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt8, tt::DataFormat::MxInt8, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt8, tt::DataFormat::MxInt8, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToMxInt8Fp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt8, tt::DataFormat::MxInt8, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt8, tt::DataFormat::MxInt8, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToMxInt4) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt4, tt::DataFormat::MxInt4, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt4, tt::DataFormat::MxInt4, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToMxInt4Fp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt4, tt::DataFormat::MxInt4, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt4, tt::DataFormat::MxInt4, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToMxInt2) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt2, tt::DataFormat::MxInt2, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt2, tt::DataFormat::MxInt2, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToMxInt2Fp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt2, tt::DataFormat::MxInt2, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt2, tt::DataFormat::MxInt2, /*fp32_dest_acc_en=*/true);
 }
 
 }  // namespace tt::tt_metal

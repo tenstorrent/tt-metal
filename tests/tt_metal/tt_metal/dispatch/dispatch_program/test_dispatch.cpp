@@ -499,10 +499,7 @@ std::optional<CoreCoord> quasar_dispatch_s_virtual_core(IDevice* device) {
 }
 
 Program create_quasar_l1_write_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const experimental::NodeCoord& node,
-    uint32_t l1_address,
-    uint32_t value) {
+    distributed::MeshDevice& mesh_device, const experimental::NodeCoord& node, uint32_t l1_address, uint32_t value) {
     const experimental::KernelSpecName dm_kernel_name{"dispatch_s_test_dm"};
     experimental::KernelSpec dm_kernel_spec{
         .unique_id = dm_kernel_name,
@@ -523,7 +520,7 @@ Program create_quasar_l1_write_program(
             }},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = dm_kernel_name,
@@ -542,8 +539,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
     }
 
     const bool use_tensix_fallback = MetalContext::instance().rtoptions().get_use_quasar_tensix_dispatch_cores();
-    auto mesh_device = devices_.front();
-    IDevice* device = mesh_device->get_devices().front();
+    IDevice* device = this->device().get_devices().front();
     if (!use_tensix_fallback && detail::sd_cq_kernel_tests_should_skip(device)) {
         GTEST_SKIP() << "No dispatch-engine cores in soc descriptor";
     }
@@ -579,15 +575,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
     std::vector<uint32_t> cleared_l1(1, 0);
     detail::WriteToDeviceL1(device, worker_node, l1_address, cleared_l1);
 
-    auto& cq = mesh_device->mesh_command_queue();
-    const distributed::MeshCoordinateRange device_range =
-        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
-
-    distributed::MeshWorkload workload;
-    workload.add_program(
-        device_range, create_quasar_l1_write_program(mesh_device, worker_node, l1_address, test_value));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    this->RunProgram(create_quasar_l1_write_program(this->device(), worker_node, l1_address, test_value));
 
     std::vector<uint32_t> result(1, 0);
     detail::ReadFromDeviceL1(device, worker_node, l1_address, sizeof(uint32_t), result);

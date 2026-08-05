@@ -116,7 +116,7 @@ so per-test setup is bounded to copying a few handles.
 | `LLKMeshDeviceFixture` | The test works under both dispatch modes. (Most tests.) | yes | yes |
 | `LLKMeshDeviceSingleCardFixture` | You need the canonical single-card mesh; works under both modes. | yes | yes |
 | `LLKBlackholeSingleCardFixture` | Blackhole-only test. Auto-`GTEST_SKIP` on other archs. | yes (BH HW) | yes (BH HW) |
-| `LLKQuasarMeshDeviceSingleCardFixture` | Quasar-only test. Auto-`GTEST_SKIP` on other archs. | yes (Quasar HW) | yes (Quasar HW) |
+| `LLKQuasarMeshDeviceSingleCardFixture` | Quasar-only UnitMesh test (`device()` / `RunProgram` / `WriteBuffer` / `ReadBuffer` via `QuasarMeshDeviceSingleCardFixture`). Auto-`GTEST_SKIP` on other archs. Suite-shared device. | yes (Quasar HW) | yes (Quasar HW) |
 | `LLKMeshDeviceFixtureSlowDispatchOnly` | The test is only correct under SD (e.g. uses async write/read patterns broken under FD). | skip | yes |
 | `UnitMeshCQFixture` *(from `tests/tt_metal/tt_metal/common/`)* | The test is only meaningful under FD (uses host command-queue APIs directly). | yes | skip |
 
@@ -215,8 +215,9 @@ merge-gate SD jobs (and the L2 nightly) will still cover it.
 ### What if my test is architecture-specific?
 
 Use `LLKBlackholeSingleCardFixture` for a Blackhole-only test, or
-`LLKQuasarMeshDeviceSingleCardFixture` for a Quasar-only test. They auto-skip
-on the wrong architecture and run on the right one wherever it is available.
+`LLKQuasarMeshDeviceSingleCardFixture` for a Quasar-only test (UnitMesh style:
+`this->device()`, `this->RunProgram(...)`). They auto-skip on the wrong
+architecture and run on the right one wherever it is available.
 
 ---
 

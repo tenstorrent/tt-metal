@@ -323,12 +323,16 @@ namespace mxfp4_tc = unit_tests::llk::mxfp4_typecast;
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
-    auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
     auto result_vec = mxfp4_tc::run_mxfp4_typecast(
-        mesh_device, tt::DataFormat::MxFp4, tt::DataFormat::Float16_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
+        this->device(),
+        tt::DataFormat::MxFp4,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false);
     auto src_floats = mxfp4_tc::mx_to_floats(tt::DataFormat::MxFp4, src_vec);
     auto dst_floats = mxfp4_tc::bf16_to_floats(result_vec);
     EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
@@ -338,12 +342,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
-    auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
     auto result_vec = mxfp4_tc::run_mxfp4_typecast(
-        mesh_device, tt::DataFormat::MxFp4, tt::DataFormat::Float16_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
+        this->device(),
+        tt::DataFormat::MxFp4,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/true);
     auto src_floats = mxfp4_tc::mx_to_floats(tt::DataFormat::MxFp4, src_vec);
     auto dst_floats = mxfp4_tc::bf16_to_floats(result_vec);
     EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
@@ -359,12 +367,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4) {
-    auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
     auto result_vec = mxfp4_tc::run_mxfp4_typecast(
-        mesh_device, tt::DataFormat::Float16_b, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
+        this->device(),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::MxFp4,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false);
     auto src_floats = mxfp4_tc::bf16_to_floats(src_vec);
     auto dst_floats = mxfp4_tc::mx_to_floats(tt::DataFormat::MxFp4, result_vec);
     EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
@@ -374,12 +386,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
-    auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
     auto result_vec = mxfp4_tc::run_mxfp4_typecast(
-        mesh_device, tt::DataFormat::Float16_b, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
+        this->device(),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::MxFp4,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/true);
     auto src_floats = mxfp4_tc::bf16_to_floats(src_vec);
     auto dst_floats = mxfp4_tc::mx_to_floats(tt::DataFormat::MxFp4, result_vec);
     EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
@@ -394,12 +410,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4) {
-    auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
     auto result_vec = mxfp4_tc::run_mxfp4_typecast(
-        mesh_device, tt::DataFormat::MxFp4, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxFp4, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
     auto src_floats = mxfp4_tc::mx_to_floats(tt::DataFormat::MxFp4, src_vec);
     auto dst_floats = mxfp4_tc::mx_to_floats(tt::DataFormat::MxFp4, result_vec);
     EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
@@ -409,12 +424,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
-    auto& mesh_device = *devices_[0];
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
     auto result_vec = mxfp4_tc::run_mxfp4_typecast(
-        mesh_device, tt::DataFormat::MxFp4, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxFp4, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
     auto src_floats = mxfp4_tc::mx_to_floats(tt::DataFormat::MxFp4, src_vec);
     auto dst_floats = mxfp4_tc::mx_to_floats(tt::DataFormat::MxFp4, result_vec);
     EXPECT_TRUE(mxfp4_tc::is_close_vectors<float>(src_floats, dst_floats, [](float a, float b) {
@@ -444,7 +458,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToBf16SpecialCases) {
-    auto& mesh_device = *devices_[0];
     auto layout = mxfp4_tc::get_mxfp4_tile_layout();
 
     // Block 0: scale = 0xFF → all 32 elements should be NaN (rule 1).
@@ -467,7 +480,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToBf16SpecialCases) {
         {{32, 0x6}, {33, 0x7}, {34, 0xE}, {35, 0xF}, {64, 0x7}, {65, 0xF}, {96, 0x2}, {128, 0x1}, {129, 0x9}});
 
     auto result = mxfp4_tc::run_mxfp4_typecast(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp4,
         tt::DataFormat::Float16_b,
         packed,

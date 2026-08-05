@@ -28,9 +28,8 @@ bool should_skip_test() { return std::getenv("TT_METAL_SIMULATOR") == nullptr; }
 
 // Runs one write pass of `size_bytes` via `write_path` (0=uncached,1=cached+flush)
 // on a single DM core, then reads back and verifies the byte pattern landed.
-bool run_cache_write(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t size_bytes, std::uint32_t write_path) {
-    IDevice* device = mesh_device->get_devices()[0];
+bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_bytes, std::uint32_t write_path) {
+    IDevice* device = mesh_device.get_devices()[0];
     constexpr CoreCoord core = {0, 0};
     const experimental::NodeCoord node{0, 0};
 
@@ -51,7 +50,7 @@ bool run_cache_write(
     };
     experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
     experimental::ProgramSpec spec{.name = "cache_write_perf", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -67,9 +66,9 @@ bool run_cache_write(
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    distributed::MeshCoordinateRange device_range(mesh_device.shape());
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<std::uint32_t> out;
     tt_metal::detail::ReadFromDeviceL1(device, core, BASE_ADDR, ((size_bytes + 3) / 4) * 4, out);
@@ -101,7 +100,7 @@ TEST_F(QuasarCacheWrite, SizeSweep) {
     // mode: 0=uncached 1B, 1=uncached 8B, 2=cached+range flush (April), 3=cached+fast flush
     for (std::uint32_t mode : {0u, 1u, 2u, 3u}) {
         for (std::uint32_t size_bytes : unit_tests::dm::quasar_cache_perf::kSizesBytes) {
-            pass &= unit_tests::dm::quasar_cache_perf::run_cache_write(devices_[0], size_bytes, mode);
+            pass &= unit_tests::dm::quasar_cache_perf::run_cache_write(this->device(), size_bytes, mode);
         }
     }
     EXPECT_TRUE(pass);

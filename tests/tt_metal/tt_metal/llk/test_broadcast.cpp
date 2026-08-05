@@ -203,17 +203,15 @@ std::vector<bfloat16> gold_broadcast(
 
 constexpr uint32_t k_num_tiles_broadcast_test = 1;
 
-auto CreateDramBufferForPageSize(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t page_size_bytes, uint32_t num_pages) {
+auto CreateDramBufferForPageSize(distributed::MeshDevice& mesh_device, uint32_t page_size_bytes, uint32_t num_pages) {
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = page_size_bytes, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
     distributed::ReplicatedBufferConfig buffer_config{.size = page_size_bytes * num_pages};
-    return distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    return distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
 }
 
-void run_single_core_broadcast(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const BroadcastConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
+void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const BroadcastConfig& test_config) {
+    auto& cq = mesh_device.mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
@@ -238,7 +236,7 @@ void run_single_core_broadcast(
     auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, k_num_tiles_broadcast_test);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    auto* device = mesh_device->get_devices().empty() ? nullptr : mesh_device->get_devices().front();
+    auto* device = mesh_device.get_devices().empty() ? nullptr : mesh_device.get_devices().front();
     TT_FATAL(device != nullptr, "mesh_device has no backing devices");
     const bool is_quasar = device->arch() == ARCH::QUASAR;
 
@@ -313,7 +311,7 @@ void run_single_core_broadcast(
     experimental::DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB);
 
     experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         reader_hw_config = experimental::DataMovementGen1Config{
@@ -344,7 +342,7 @@ void run_single_core_broadcast(
     };
 
     experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         writer_hw_config = experimental::DataMovementGen1Config{
@@ -362,7 +360,7 @@ void run_single_core_broadcast(
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{.fpu_math_fidelity = test_config.math_fidelity};
     } else {
         compute_hw_config = experimental::ComputeGen1Config{.fpu_math_fidelity = test_config.math_fidelity};
@@ -410,7 +408,7 @@ void run_single_core_broadcast(
         .work_units = {wu},
     };
 
-    Program built_program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program built_program = experimental::MakeProgramFromSpec(mesh_device, spec);
     workload.add_program(device_range, std::move(built_program));
     auto& program_run = workload.get_programs().at(device_range);
 
@@ -494,7 +492,7 @@ TEST_P(BroadcastParameterizedDeviceFixture, TensixComputeSingleTileBroadcast) {
     }
     unit_tests::compute::broadcast::BroadcastConfig test_config = GetParam();
     test_config.math_fidelity = MathFidelity::HiFi2;
-    unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), test_config);
+    unit_tests::compute::broadcast::run_single_core_broadcast(*this->devices_.at(0), test_config);
 }
 
 using namespace unit_tests::compute::broadcast;
@@ -606,7 +604,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb)
                     eltwise_op_to_type.at(EltwiseOp(op)),
                     broadcast_dim_to_type.at(BroadcastDim(dim)),
                     math_fid);
-                unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), cfg);
+                unit_tests::compute::broadcast::run_single_core_broadcast(this->device(), cfg);
             }
         }
     }

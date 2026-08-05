@@ -188,7 +188,7 @@ public:
         MeshDispatchFixture::ReadBuffer(device_, out_buffer, dst_vec);
     }
 
-private:
+protected:
     void create_devices() override {
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
@@ -213,13 +213,15 @@ protected:
     }
 };
 
-class QuasarMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
+class QuasarMeshDeviceSingleCardFixture : public UnitMeshFixture {
 protected:
     void SetUp() override {
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (this->arch_ != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "Not a Quasar device";
         }
+        // Quasar tests are dispatch-agnostic; skip the slow-dispatch gate from MeshDeviceSingleCardFixture.
+        this->DetectDispatchMode();
         this->create_devices();
         init_max_cbs();
     }

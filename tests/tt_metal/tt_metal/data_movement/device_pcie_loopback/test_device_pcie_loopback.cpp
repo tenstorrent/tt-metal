@@ -64,8 +64,7 @@ void sync_debug_servers_before_teardown() {
 }  // namespace
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
-    auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = this->device().get_devices()[0];
     TT_FATAL(device->is_mmio_capable(), "Host hugepage test requires an MMIO-capable device");
 
     auto& cluster = MetalContext::instance().get_cluster();
@@ -101,10 +100,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
     tt_driver_atomics::sfence();
 
     // Step 2-4: Kernel reads host src -> L1, then L1 -> host dst (via compile-time args).
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-
     const experimental::KernelSpecName DM_KERNEL{"device_pcie_loopback"};
 
     experimental::KernelSpec dm_kernel_spec{
@@ -131,10 +126,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    this->RunProgram(std::move(program));
 
     // Step 5: Host verifies dst hugepage region matches src.
     std::vector<uint32_t> host_dst_readback(expected.size());

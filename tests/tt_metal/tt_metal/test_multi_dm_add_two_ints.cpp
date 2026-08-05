@@ -28,8 +28,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
-    auto mesh_device = devices_[0];
-    if (mesh_device->compute_with_storage_grid_size().x < 2) {
+    if (this->device().compute_with_storage_grid_size().x < 2) {
         GTEST_SKIP() << "This test requires at least 2 worker nodes.";
     }
     if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
@@ -40,11 +39,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         log_error(tt::LogTest, "For example, export TT_METAL_DPRINT_CORES=(0,0),(1,0)");
     }
 
-    IDevice* dev = mesh_device->get_devices()[0];
-
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    IDevice* dev = this->device().get_devices()[0];
 
     const experimental::KernelSpecName KERNEL_0{"kernel_0"};
     const experimental::KernelSpecName KERNEL_1{"kernel_1"};
@@ -92,7 +87,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         .kernels = {k0, k1, k2, k3},
         .work_units = {wu_core0, wu_core1},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -117,8 +112,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     };
     experimental::SetProgramRunArgs(program, params);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    this->RunProgram(std::move(program));
 
     std::vector<uint32_t> result_core_0(3, 0);
     tt_metal::detail::ReadFromDeviceL1(

@@ -161,9 +161,8 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry
     return tt::tt_metal::TensorSpec(tt::tt_metal::Shape{total_entries, entry_size_words}, tensor_layout);
 }
 
-void run_single_core_transpose(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TransposeConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
+void run_single_core_transpose(distributed::MeshDevice& mesh_device, const TransposeConfig& test_config) {
+    auto& cq = mesh_device.mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
     const TransposeDims dims = compute_and_validate_transpose_dims(test_config.shape);
@@ -172,9 +171,9 @@ void run_single_core_transpose(
     uint32_t dram_buffer_size = test_config.single_tile_size * num_tensor_tiles;
 
     auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles));
+        mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles));
     auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles));
+        mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles));
 
     constexpr uint32_t num_buffer_tiles = 32;
     constexpr uint32_t num_output_buffer_tiles = 32;
@@ -201,7 +200,7 @@ void run_single_core_transpose(
     };
 
     experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         reader_hw_config = experimental::DataMovementGen1Config{
@@ -220,7 +219,7 @@ void run_single_core_transpose(
     };
 
     experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         writer_hw_config = experimental::DataMovementGen1Config{
@@ -256,7 +255,7 @@ void run_single_core_transpose(
     if (test_config.unpack_to_dest) {
         unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .enable_32_bit_dest = fp32_dest_acc_en,
             .double_buffer_dest = !test_config.dst_full_sync_en,
@@ -309,7 +308,7 @@ void run_single_core_transpose(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -379,7 +378,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWH) {
         .single_tile_size = 2 * 1024,
         .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
-    unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+    unit_tests::compute::transpose::run_single_core_transpose(*this->devices_.at(0), test_config);
 }
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWHShortInit) {
@@ -389,7 +388,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWHShortInit) {
         .single_tile_size = 2 * 1024,
         .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
-    unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+    unit_tests::compute::transpose::run_single_core_transpose(*this->devices_.at(0), test_config);
 }
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWHDest) {
@@ -402,7 +401,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWHDest) {
         .single_tile_size = 2 * 1024,
         .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
-    unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+    unit_tests::compute::transpose::run_single_core_transpose(*this->devices_.at(0), test_config);
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
@@ -419,7 +418,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
             .dst_full_sync_en = dst_full_sync_en,
             .unpack_to_dest = true,
         };
-        unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+        unit_tests::compute::transpose::run_single_core_transpose(this->device(), test_config);
     }
 }
 
@@ -438,7 +437,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat16b) {
             .dst_full_sync_en = dst_full_sync_en,
             .unpack_to_dest = true,
         };
-        unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+        unit_tests::compute::transpose::run_single_core_transpose(this->device(), test_config);
     }
 }
 

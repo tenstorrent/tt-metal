@@ -23,13 +23,13 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 distributed::MeshWorkload make_l1_write_workload(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const experimental::NodeCoord& node,
     uint32_t address,
     uint32_t value,
     const std::string& kernel_id) {
     distributed::MeshWorkload wl;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device.shape());
     const experimental::KernelSpecName DM_KERNEL{kernel_id};
     experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
@@ -41,7 +41,7 @@ distributed::MeshWorkload make_l1_write_workload(
     experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
     experimental::ProgramSpec spec{
         .name = std::string("l1_write_") + kernel_id, .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
@@ -53,9 +53,8 @@ distributed::MeshWorkload make_l1_write_workload(
     return wl;
 }
 
-void run_cross_cq_handoff(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint8_t producer_cq, uint8_t consumer_cq) {
-    IDevice* dev = mesh_device->get_devices()[0];
+void run_cross_cq_handoff(distributed::MeshDevice& mesh_device, uint8_t producer_cq, uint8_t consumer_cq) {
+    IDevice* dev = mesh_device.get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t producer_address = MetalContext::instance().hal().get_dev_addr(
@@ -67,8 +66,8 @@ void run_cross_cq_handoff(
     std::vector<uint32_t> zeros(2, 0);
     tt_metal::detail::WriteToDeviceL1(dev, node, producer_address, zeros);
 
-    distributed::MeshCommandQueue& producer = mesh_device->mesh_command_queue(producer_cq);
-    distributed::MeshCommandQueue& consumer = mesh_device->mesh_command_queue(consumer_cq);
+    distributed::MeshCommandQueue& producer = mesh_device.mesh_command_queue(producer_cq);
+    distributed::MeshCommandQueue& consumer = mesh_device.mesh_command_queue(consumer_cq);
 
     auto producer_wl = make_l1_write_workload(
         mesh_device, node, producer_address, producer_value, "producer_cq" + std::to_string(producer_cq));
@@ -99,8 +98,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventSynchronize) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = this->device().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
@@ -110,8 +108,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventSynchronize) {
     std::vector<uint32_t> zeros(1, 0);
     tt_metal::detail::WriteToDeviceL1(dev, node, address, zeros);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload = make_l1_write_workload(mesh_device, node, address, value, "cq_kernel");
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshWorkload workload = make_l1_write_workload(this->device(), node, address, value, "cq_kernel");
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::MeshEvent event = cq.enqueue_record_event_to_host();
 
@@ -129,8 +127,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventQuery) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
 
     distributed::MeshEvent event = cq.enqueue_record_event_to_host();
 
@@ -146,8 +143,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventBetweenWorkloads) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = this->device().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
@@ -159,10 +155,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventBetweenWorkloads) {
     std::vector<uint32_t> zeros(2, 0);
     tt_metal::detail::WriteToDeviceL1(dev, node, address_1, zeros);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
 
-    auto wl1 = make_l1_write_workload(mesh_device, node, address_1, value_1, "dm_kernel_1");
-    auto wl2 = make_l1_write_workload(mesh_device, node, address_2, value_2, "dm_kernel_2");
+    auto wl1 = make_l1_write_workload(this->device(), node, address_1, value_1, "dm_kernel_1");
+    auto wl2 = make_l1_write_workload(this->device(), node, address_2, value_2, "dm_kernel_2");
 
     // Enqueue both non-blocking; record event after first to observe ordering.
     distributed::EnqueueMeshWorkload(cq, wl1, false);
@@ -189,7 +185,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, CrossCQEventHandoffCQ0ToCQ1) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
-    run_cross_cq_handoff(devices_[0], /*producer_cq=*/0, /*consumer_cq=*/1);
+    run_cross_cq_handoff(this->device(), /*producer_cq=*/0, /*consumer_cq=*/1);
 }
 
 // Reverse direction: issue_record_event_commands / issue_wait_for_event_commands branch on
@@ -199,7 +195,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, CrossCQEventHandoffCQ1ToCQ0) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
-    run_cross_cq_handoff(devices_[0], /*producer_cq=*/1, /*consumer_cq=*/0);
+    run_cross_cq_handoff(this->device(), /*producer_cq=*/1, /*consumer_cq=*/0);
 }
 
 TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, RecordEventToHostFromBothCQs) {
@@ -208,8 +204,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, RecordEventToHostFromBothCQs) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
+    IDevice* dev = this->device().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t address_0 = MetalContext::instance().hal().get_dev_addr(
@@ -221,11 +216,11 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, RecordEventToHostFromBothCQs) {
     std::vector<uint32_t> zeros(2, 0);
     tt_metal::detail::WriteToDeviceL1(dev, node, address_0, zeros);
 
-    distributed::MeshCommandQueue& cq0 = mesh_device->mesh_command_queue(0);
-    distributed::MeshCommandQueue& cq1 = mesh_device->mesh_command_queue(1);
+    distributed::MeshCommandQueue& cq0 = this->device().mesh_command_queue(0);
+    distributed::MeshCommandQueue& cq1 = this->device().mesh_command_queue(1);
 
-    auto wl0 = make_l1_write_workload(mesh_device, node, address_0, value_0, "cq0_kernel");
-    auto wl1 = make_l1_write_workload(mesh_device, node, address_1, value_1, "cq1_kernel");
+    auto wl0 = make_l1_write_workload(this->device(), node, address_0, value_0, "cq0_kernel");
+    auto wl1 = make_l1_write_workload(this->device(), node, address_1, value_1, "cq1_kernel");
 
     distributed::EnqueueMeshWorkload(cq0, wl0, false);
     distributed::MeshEvent event_0 = cq0.enqueue_record_event_to_host();

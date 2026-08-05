@@ -886,7 +886,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
         .input_format = tt::DataFormat::MxFp4,
         .enable_2x_src_format = true,
     };
-    run_single_core_reduce_program(this->devices_.at(0), test_config);
+    run_single_core_reduce_program(this->device_, test_config);
 }
 
 }  // namespace tt::tt_metal

@@ -36,11 +36,8 @@ struct L2FlushTestConfig {
     bool expect_new_values = true;  // true for flush tests, false for invalidate tests
 };
 
-bool run_l2_flush_test(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const L2FlushTestConfig& config) {
-
-    IDevice* device = mesh_device->get_devices()[0];
+bool run_l2_flush_test(distributed::MeshDevice& mesh_device, const L2FlushTestConfig& config) {
+    IDevice* device = mesh_device.get_devices()[0];
     constexpr CoreCoord core = {0, 0};
     const experimental::NodeCoord node{0, 0};
 
@@ -75,7 +72,7 @@ bool run_l2_flush_test(
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -87,10 +84,10 @@ bool run_l2_flush_test(
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    distributed::MeshCoordinateRange device_range(mesh_device.shape());
     workload.add_program(device_range, std::move(program));
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     // Read back and verify
@@ -123,11 +120,8 @@ struct L1DCacheTestConfig {
     bool expect_new_values;  // true for flush tests, false for invalidate tests
 };
 
-bool run_l1_dcache_test(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const L1DCacheTestConfig& config) {
-
-    IDevice* device = mesh_device->get_devices()[0];
+bool run_l1_dcache_test(distributed::MeshDevice& mesh_device, const L1DCacheTestConfig& config) {
+    IDevice* device = mesh_device.get_devices()[0];
     constexpr CoreCoord core = {0, 0};
     const experimental::NodeCoord node{0, 0};
 
@@ -162,7 +156,7 @@ bool run_l1_dcache_test(
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -174,10 +168,10 @@ bool run_l1_dcache_test(
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    distributed::MeshCoordinateRange device_range(mesh_device.shape());
     workload.add_program(device_range, std::move(program));
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     // Read back and verify
@@ -217,7 +211,7 @@ TEST_F(QuasarL2CacheOps, FlushLine) {
         .value = 0x12340000,
         .test_mode = 0  // line flush
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(this->device(), config));
 }
 
 TEST_F(QuasarL2CacheOps, FlushRange) {
@@ -231,7 +225,7 @@ TEST_F(QuasarL2CacheOps, FlushRange) {
         .value = 0xABCD0000,
         .test_mode = 1  // range flush
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(this->device(), config));
 }
 
 TEST_F(QuasarL2CacheOps, FlushFull) {
@@ -245,7 +239,7 @@ TEST_F(QuasarL2CacheOps, FlushFull) {
         .value = 0x55550000,
         .test_mode = 2  // full flush
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(this->device(), config));
 }
 
 TEST_F(QuasarL2CacheOps, InvalidateLine) {
@@ -260,7 +254,7 @@ TEST_F(QuasarL2CacheOps, InvalidateLine) {
         .test_mode = 3,  // invalidate line
         .expect_new_values = false  // Invalidate doesn't write back, so old values should remain
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(this->device(), config));
 }
 
 TEST_F(QuasarL2CacheOps, InvalidateFreshRead) {
@@ -277,7 +271,7 @@ TEST_F(QuasarL2CacheOps, InvalidateFreshRead) {
         .test_mode = 4,  // invalidate fresh read
         .expect_new_values = true  // After invalidation, new values written via uncached path should be visible
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(this->device(), config));
 }
 
 // =============================================================================
@@ -298,7 +292,7 @@ TEST_F(QuasarL1DCacheOps, FlushLine) {
         .test_mode = 0,  // flush line
         .expect_new_values = true
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(devices_[0], config));
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(this->device(), config));
 }
 
 TEST_F(QuasarL1DCacheOps, FlushFull) {
@@ -313,7 +307,7 @@ TEST_F(QuasarL1DCacheOps, FlushFull) {
         .test_mode = 1,  // flush full
         .expect_new_values = true
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(devices_[0], config));
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(this->device(), config));
 }
 
 TEST_F(QuasarL1DCacheOps, InvalidateLine) {
@@ -329,7 +323,7 @@ TEST_F(QuasarL1DCacheOps, InvalidateLine) {
         .test_mode = 2,  // invalidate line
         .expect_new_values = false  // should see old values
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(devices_[0], config));
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(this->device(), config));
 }
 
 TEST_F(QuasarL1DCacheOps, InvalidateFull) {
@@ -345,7 +339,7 @@ TEST_F(QuasarL1DCacheOps, InvalidateFull) {
         .test_mode = 3,  // invalidate full
         .expect_new_values = false  // should see old values
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(devices_[0], config));
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(this->device(), config));
 }
 
 TEST_F(QuasarL1DCacheOps, InvalidateFreshRead) {
@@ -362,7 +356,7 @@ TEST_F(QuasarL1DCacheOps, InvalidateFreshRead) {
         .test_mode = 4,  // invalidate fresh read
         .expect_new_values = true  // After invalidation, new values written via uncached path should be visible
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(devices_[0], config));
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(this->device(), config));
 }
 
 }  // namespace tt::tt_metal

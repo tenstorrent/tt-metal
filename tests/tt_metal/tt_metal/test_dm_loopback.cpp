@@ -34,8 +34,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
-    auto mesh_device = devices_[0];
+    IDevice* dev = this->device().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
@@ -45,10 +44,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
 
     tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_address, value);
     MetalContext::instance().get_cluster().dram_barrier(dev->id());
-
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     // Metal 2.0 reserves DM0/DM1; max 6 user DM threads per node.
     // Reduced from 4+4=8 to 3+3=6 loopback stages to fit within the limit.
@@ -118,7 +113,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         .semaphores = {sem},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     const experimental::KernelSpecName dram_to_l1_names[] = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2};
     const experimental::KernelSpecName l1_to_dram_names[] = {L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2};
@@ -152,8 +147,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     }
     experimental::SetProgramRunArgs(program, params);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    this->RunProgram(std::move(program));
 
     std::vector<uint32_t> outputs{0};
     tt_metal::detail::ReadFromDeviceDRAMChannel(dev, 0, dram_address, sizeof(uint32_t), outputs);
