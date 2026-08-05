@@ -5,18 +5,18 @@
 // Welford HW-reduction writer kernel.
 //
 // Phase 1 (per output): Reads Wt partial (mean, var) tile pairs from
-// cb_partial (written by the compute kernel using
+// dfb::partial (written by the compute kernel using
 // welford_finalize_to_row), combines their equal-sized populations across W,
-// applies Bessel's correction, and writes the combined scalar into cb_combined
+// applies Bessel's correction, and writes the combined scalar into dfb::combined
 // for the compute kernel to apply
-// sqrtf (if std) and re-pack in the output format. cb_combined is
+// sqrtf (if std) and re-pack in the output format. dfb::combined is
 // normally fp32, but for variance output to bf16 the program
 // factory may declare it as bf16 to save SRAM with no precision loss
 // since data is packed to bf16 output anyways and there is no math before
 // the final pack. combined_is_bf16 compile-time arg selects the path.
 //
 // Phase 2 (per output): Waits for the compute kernel to pack the
-// output tile into cb_out (in the correct output data format), then
+// output tile into dfb::out (in the correct output data format), then
 // NOC-writes it to DRAM.
 
 #include <cstdint>
@@ -27,6 +27,7 @@
 #include "api/numeric/bfloat16.h"
 #include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
+#include "experimental/kernel_args.h"
 
 namespace {
 
@@ -107,17 +108,16 @@ inline void finalize_tree(const WelfordBlockStats* tree, WelfordBlockStats& resu
 }  // namespace
 
 void kernel_main() {
-    const std::uint32_t dst_addr = get_arg_val<std::uint32_t>(0);
-    const std::uint32_t NC_per_core = get_arg_val<std::uint32_t>(1);
-    const std::uint32_t output_tile_start_id = get_arg_val<std::uint32_t>(2);
+    const std::uint32_t NC_per_core = get_arg(args::NC_per_core);
+    const std::uint32_t output_tile_start_id = get_arg(args::output_tile_start_id);
 
-    constexpr std::uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr std::uint32_t W = get_compile_time_arg_val(1);
-    constexpr std::uint32_t tile_width = get_compile_time_arg_val(2);
-    constexpr std::uint32_t H = get_compile_time_arg_val(3);
-    constexpr bool correction = get_compile_time_arg_val(4) != 0;
-    constexpr std::uint32_t reduce_batch_size = get_compile_time_arg_val(5);
-    constexpr bool combined_is_bf16 = get_compile_time_arg_val(6) != 0;
+    constexpr std::uint32_t Wt = get_arg(args::Wt);
+    constexpr std::uint32_t W = get_arg(args::W);
+    constexpr std::uint32_t tile_width = get_arg(args::tile_width);
+    constexpr std::uint32_t H = get_arg(args::H);
+    constexpr bool correction = get_arg(args::correction) != 0;
+    constexpr std::uint32_t reduce_batch_size = get_arg(args::reduce_batch_size);
+    constexpr bool combined_is_bf16 = get_arg(args::combined_is_bf16) != 0;
     static_assert(tile_width == welford_block_size);
 
     constexpr std::uint32_t num_partials = reduce_batch_size * W;
@@ -126,16 +126,6 @@ void kernel_main() {
     constexpr std::uint32_t tail_size = num_partials % welford_block_size;
     constexpr std::uint32_t num_tree_levels = tree_levels_for(num_full_blocks);
 
-    constexpr auto dfb_partial = tt::CBIndex::c_21;
-    // cb_combined: combined scalar tile written by this kernel, read back by
-    // compute for repacking into the output data format. Format is Float32 by
-    // default; bf16 when combined_is_bf16 is true (variance-to-bf16 path).
-    constexpr auto dfb_combined = tt::CBIndex::c_22;
-    // cb_out: output tile packed by compute in the correct data format.
-    constexpr auto dfb_out = tt::CBIndex::c_16;
-
-    constexpr auto dst_args = TensorAccessorArgs<7>();
-
     // welford_finalize_to_row stores 32 per-column values in tile row 0.
     // In tile format, row 0 spans Face 0 (columns 0-15) and Face 1 (columns 16-31).
     // Each face has FACE_W rows × FACE_W columns elements.
@@ -143,15 +133,20 @@ void kernel_main() {
     constexpr std::uint32_t FACE_ELEMENTS = FACE_W * FACE_W;
     constexpr std::uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
-    const std::uint32_t partial_tile_size_bytes = get_tile_size(dfb_partial);
-    const std::uint32_t out_tile_size_bytes = get_tile_size(dfb_out);
-
     Noc noc;
-    DataflowBuffer dfb_partial_obj(dfb_partial);
-    DataflowBuffer dfb_combined_obj(dfb_combined);
-    DataflowBuffer dfb_out_obj(dfb_out);
+    // dfb::partial holds the per-column (mean, var) tile pairs produced by the compute kernel.
+    DataflowBuffer dfb_partial(dfb::partial);
+    // dfb::combined: combined scalar tile written by this kernel, read back by compute for repacking
+    // into the output data format. Format is Float32 by default; bf16 when combined_is_bf16 is true
+    // (variance-to-bf16 path).
+    DataflowBuffer dfb_combined(dfb::combined);
+    // dfb::out: output tile packed by compute in the correct data format.
+    DataflowBuffer dfb_out(dfb::out);
 
-    const auto tensor_out = TensorAccessor(dst_args, dst_addr);
+    const std::uint32_t partial_tile_size_bytes = dfb_partial.get_tile_size();
+    const std::uint32_t out_tile_size_bytes = dfb_out.get_tile_size();
+
+    const auto tensor_out = TensorAccessor(tensor::dst);
 
     // NC_per_core is the total number of NC slices assigned to this core.
     // Each output element is produced by combining reduce_batch_size
@@ -174,12 +169,12 @@ void kernel_main() {
 
         for (std::uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (std::uint32_t wt = 0; wt < Wt; ++wt) {
-                dfb_partial_obj.wait_front(2);
+                dfb_partial.wait_front(2);
 
-                auto means_addr = dfb_partial_obj.get_read_ptr();
+                auto means_addr = dfb_partial.get_read_ptr();
                 auto vars_addr = means_addr + partial_tile_size_bytes;
 
-                // cb_partial is Float32: each element is 4 bytes.
+                // dfb::partial is Float32: each element is 4 bytes.
                 auto* means_ptr = reinterpret_cast<volatile float*>(means_addr);
                 auto* vars_ptr = reinterpret_cast<volatile float*>(vars_addr);
 
@@ -216,7 +211,7 @@ void kernel_main() {
                     }
                 }
 
-                dfb_partial_obj.pop_front(2);
+                dfb_partial.pop_front(2);
             }
         }
 
@@ -252,8 +247,8 @@ void kernel_main() {
             final_var = combined.variance_sum * inv_num_partials;
         }
 
-        // Write the combined scalar into a tile in cb_combined.  The compute
-        // kernel will unpack this and re-pack into cb_out in the correct
+        // Write the combined scalar into a tile in dfb::combined.  The compute
+        // kernel will unpack this and re-pack into dfb::out in the correct
         // output data format (using the packer hardware).
         //
         // Only Face 0 row 0 (FACE_W elements) needs zeroing.  The scalar
@@ -263,9 +258,9 @@ void kernel_main() {
         // BFLOAT8_B output.  Other face rows have independent exponents
         // and are never read (the output is a single scalar), so stale
         // L1 contents there are harmless.
-        dfb_combined_obj.reserve_back(1);
+        dfb_combined.reserve_back(1);
         if constexpr (combined_is_bf16) {
-            auto* combined_ptr = reinterpret_cast<std::uint16_t*>(dfb_combined_obj.get_write_ptr());
+            auto* combined_ptr = reinterpret_cast<std::uint16_t*>(dfb_combined.get_write_ptr());
             for (std::uint32_t i = 0; i < FACE_W; ++i) {
                 combined_ptr[i] = 0;
             }
@@ -273,20 +268,20 @@ void kernel_main() {
             // hardware so the output is bit-identical to a packer-produced bf16.
             combined_ptr[0] = fp32_to_bf16(final_var);
         } else {
-            auto* combined_ptr = reinterpret_cast<float*>(dfb_combined_obj.get_write_ptr());
+            auto* combined_ptr = reinterpret_cast<float*>(dfb_combined.get_write_ptr());
             for (std::uint32_t i = 0; i < FACE_W; ++i) {
                 combined_ptr[i] = 0.0f;
             }
             combined_ptr[0] = final_var;
         }
-        dfb_combined_obj.push_back(1);
+        dfb_combined.push_back(1);
 
         // --- Phase 2: NOC-write the output tile (packed by compute) to DRAM ---
-        dfb_out_obj.wait_front(1);
+        dfb_out.wait_front(1);
         std::uint32_t out_tile_id = output_tile_start_id + out;
-        noc.async_write(dfb_out_obj, tensor_out, out_tile_size_bytes, {}, {.page_id = out_tile_id});
+        noc.async_write(dfb_out, tensor_out, out_tile_size_bytes, {}, {.page_id = out_tile_id});
         noc.async_writes_flushed();
-        dfb_out_obj.pop_front(1);
+        dfb_out.pop_front(1);
     }
 
     noc.async_write_barrier();
