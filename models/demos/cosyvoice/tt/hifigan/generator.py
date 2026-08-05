@@ -243,17 +243,29 @@ class TtHiFTGenerator:
         return out, mel_frames * total
 
     def inference(
-        self, mel, mel_frames: int, phase_vec=None, sine_noise=None, sine_noise_unit=None, batch_size: int = 1
+        self,
+        mel,
+        mel_frames: int,
+        phase_vec=None,
+        sine_noise=None,
+        sine_noise_unit=None,
+        cache_source=None,
+        batch_size: int = 1,
     ):
         """`HiFTGenerator.inference`: mel in, waveform out, source branch included.
 
-        mel is `[B, T_mel, 80]` channels-last; the result is `[B, T_audio, 1]`.
+        mel is `[B, T_mel, 80]` channels-last; returns `(waveform, n_samples, source)`.
 
         `phase_vec` and `sine_noise` are `SineGen`'s two draws. The reference makes
         both **unconditionally** -- there is no `if self.training` guard on either --
         so a vocoder that ignores them is not merely unseeded, it is a different
         function. Pass the captured arrays to reproduce a reference run; pass None
         to get the deterministic zero-phase, zero-noise excitation.
+
+        `cache_source` is the previous chunk's excitation tail, spliced over the
+        front of this one so streaming does not restart the oscillator's phase at
+        every seam. The excitation is returned as well as the waveform because the
+        caller needs its tail for the next chunk.
         """
         if self.f0_predictor is None or self.m_source is None:
             raise RuntimeError("this generator was built without the source branch; use decode()")
@@ -262,6 +274,27 @@ class TtHiFTGenerator:
         ttnn.deallocate(f0)
         s, _, _ = self.m_source(up, phase_vec=phase_vec, sine_noise=sine_noise, sine_noise_unit=sine_noise_unit)
         ttnn.deallocate(up)
+
+        if cache_source is not None and cache_source.shape[1] > 0:
+            # `s[:, :, :cache_len] = cache_source` upstream. The excitation is a
+            # phase-continuous oscillator, and a streaming chunk restarts its phase
+            # accumulator from zero -- so without splicing the previous chunk's tail
+            # back in, every boundary is a phase discontinuity, which is audible as a
+            # click. This is the single line that makes streaming sound like speech.
+            n = cache_source.shape[1]
+            tail = ttnn.slice(s, [0, n, 0], [batch_size, s.shape[1], s.shape[2]])
+            # The cache was saved from the *cast* excitation the vocoder consumed,
+            # while `s` here is still the wide fp32 one -- concat rejects mixed
+            # dtypes, and the error names neither tensor.
+            head = cache_source
+            if head.dtype != s.dtype:
+                head = ttnn.typecast(cache_source, s.dtype)
+            spliced = ttnn.concat([head, tail], dim=1)
+            if head is not cache_source:
+                ttnn.deallocate(head)
+            ttnn.deallocate(tail)
+            ttnn.deallocate(s)
+            s = spliced
         # SineGen accumulates its phase in fp32 on purpose -- the cumsum runs over
         # 72k samples and bfloat16 there is catastrophic (see tt/hifigan/source.py).
         # The rest of the vocoder is bfloat16, so the excitation is cast back at
@@ -272,8 +305,17 @@ class TtHiFTGenerator:
             ttnn.deallocate(s)
             s = cast
         wav = self.decode(mel, s, mel_frames, batch_size)
-        ttnn.deallocate(s)
-        return wav, audio_len
+        # Normalise to `[B, T_audio, 1]`. `decode` inherits the iSTFT's rank-4 NHWC
+        # from `conv_transpose2d`, which every caller then reshapes away -- and the
+        # streaming path slices this on the time axis, so an unnormalised rank here
+        # fails inside a helper several frames from the cause.
+        if len(wav.shape) != 3:
+            reshaped = ttnn.reshape(wav, (batch_size, audio_len, 1))
+            ttnn.deallocate(wav)
+            wav = reshaped
+        # `s` is returned, not freed: streaming needs its tail as the next chunk's
+        # cache_source. The caller owns it.
+        return wav, audio_len, s
 
     def decode(self, mel, s, mel_frames: int, batch_size: int = 1):
         """mel: ttnn [B, T_mel, 80]; s: ttnn [B, T_audio, 1] -> [B, L, 1] waveform."""

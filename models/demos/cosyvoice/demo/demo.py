@@ -181,7 +181,7 @@ def main() -> int:
 
         t0 = time.perf_counter()
         hift = TtHiFTGenerator(device, WeightBag.load(hift_path))
-        wav, audio_len = hift.inference(
+        wav, audio_len, src = hift.inference(
             mel,
             src["mel_len2"],
             phase_vec=dev(src["phase_vec"], dtype=ttnn.float32),
@@ -189,8 +189,8 @@ def main() -> int:
         )
         out = ttnn.to_torch(wav).float().reshape(1, -1)
         print(f"  vocoder: {audio_len} samples in {time.perf_counter() - t0:.2f} s")
-        ttnn.deallocate(mel)
-        ttnn.deallocate(wav)
+        for _t in (mel, wav, src):
+            ttnn.deallocate(_t)
     finally:
         ttnn.close_device(device)
 
