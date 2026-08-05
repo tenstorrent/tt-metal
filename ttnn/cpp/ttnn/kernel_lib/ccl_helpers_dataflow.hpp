@@ -8,11 +8,10 @@
  * @file ccl_helpers_dataflow.hpp
  * @brief Multi-device CCL (fabric) dataflow-kernel helpers — a safety-by-construction API.
  *
- * The multi-device analog of the single-device dataflow-helper library (#45698,
- * @c reduce/dfb/tilize_helpers_dataflow). It gives op authors an intent-level surface for the
- * footgun-heavy fabric egress plumbing — connection lifecycle + direction, packet-header
- * allocation, 1-D route programming, the stateful set_state/with_state @c UpdateMask dance,
- * flow-controlled fabric writes, and cross-device atomic-inc.
+ * It gives op authors an intent-level surface for the footgun-heavy fabric egress plumbing —
+ * connection lifecycle + direction, packet-header allocation, 1-D route programming, the stateful
+ * set_state/with_state @c UpdateMask dance, flow-controlled fabric writes, and cross-device
+ * atomic-inc.
  *
  * This is PURE DATA MOVEMENT: no compute/unpack/math/pack appears here. It covers the fabric
  * egress that point_to_point and all_gather need — unicast writes, <=4-destination scatter writes,
@@ -102,7 +101,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
