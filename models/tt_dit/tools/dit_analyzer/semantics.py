@@ -1184,19 +1184,22 @@ def _concat_apply(c: ApplyCtx) -> None:
     axis = _axis(int(c.node.attrs["axis"]), ys.ndim)
     regions = {d: RegionSet.empty(ys.ndim) for d in c.mesh.devices()}
     offset = 0
-    dist = None
+    # The result inherits the richest operand's distribution, not input 0's: a per-device
+    # auxiliary built from `x.shape` (which is local) -- e.g. MiniMax-H3 conv3d's causal
+    # zero-frames -- is replicated at local scale and must not make the whole concat look
+    # replicated, which would then read every downstream gather as redundant.
+    prim = max(range(len(c.node.inputs)), key=lambda i: (c.in_sym(i).ndim, sum(c.in_sym(i).shape)))
+    dist = c.in_state(prim).dist
     for i, sid in enumerate(c.node.inputs):
         st = c.in_state(i)
         s = c.sym(sid)
-        if dist is None:
-            dist = st.dist
         for dev in c.mesh.devices():
             shifted = st.regions[dev].map_axis(axis, lambda lo, hi, o=offset: (lo + o, hi + o))
             regions[dev] = regions[dev].union(_expand_to(shifted, ys.shape))
         offset += s.shape[axis]
     c.define(
         0,
-        dist or Dist.replicated(c.mesh),
+        dist,
         regions,
         derive_value_id("concat", c.value_of_inputs(), {"axis": axis}),
         c.tainted_inputs(),

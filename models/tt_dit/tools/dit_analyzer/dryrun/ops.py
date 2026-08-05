@@ -104,7 +104,9 @@ def creation(*shape, **k) -> Tensor:
         shape = tuple(shape[0])
     mapper = k.get("mesh_mapper")
     dist = Dist.make(CTX.mesh, mapper.shard()) if isinstance(mapper, MeshMapper) and mapper.dims else None
-    return recorder.entry(list(shape) or [1], dist or Dist.replicated(CTX.mesh), k.get("dtype"), base="const")
+    return recorder.entry(
+        list(shape) or [1], dist or Dist.replicated(CTX.mesh), k.get("dtype"), base="const", layout=k.get("layout")
+    )
 
 
 def to_torch(x, mesh_composer=None, **k):
@@ -313,7 +315,7 @@ def concat(tensors: Sequence[Tensor], dim: int = 0, **k) -> Tensor:
     primary = max(ts, key=lambda t: (len(t.logical), sum(t.logical)))
     logical = list(primary.logical)
     logical[dim] = sum(t.logical[dim] for t in ts)
-    return recorder.emit("concat", ts, logical, primary.dist, attrs={"axis": dim}, base="concat")
+    return recorder.emit("concat", ts, logical, primary.dist, attrs={"axis": dim}, base="concat", layout=primary.layout)
 
 
 def permute(x: Tensor, dims, **k) -> Tensor:

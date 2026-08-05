@@ -331,6 +331,23 @@ def test_halo_exchange_overlaps_shards_and_feeds_a_valid_conv3d():
     assert not any(f.rule == "dead_collective" for f in report.findings)  # the halo is consumed
 
 
+def test_concat_keeps_the_sharded_operands_distribution():
+    """A per-device auxiliary (built from ``x.shape``, so local-scale and replicated)
+    concatenated *first* must not collapse a sharded operand to replicated.
+
+    This is the bug that invented ten phantom `unused_gather` findings on the MiniMax-H3
+    VAE encoder: conv3d prepends causal zero-frames with ``concat([zeros, x])``, and the
+    concat took input 0's (the zeros') distribution, so every downstream group-norm gather
+    read as gathering already-replicated data.
+    """
+    b = GraphBuilder("cat", MESH)
+    aux = b.input("aux", [1, 2, 64])  # replicated, concatenated first
+    x = b.input("x", [1, 5, 64], shard={SP: 2})  # sharded on dim 2 over SP
+    y = b.concat([aux, x], axis=1)  # -> [1, 7, 64]
+    st = run_forward(b.finish([y])).final[y.id]
+    assert st.dist.shard[SP] == 2, st.dist.shard  # the shard survives the concat
+
+
 def test_reduce_sum_over_a_sharded_axis_is_a_partial_sum():
     """MiniMax-H3 group-norm stats: summing the sharded spatial axis leaves each device a
     partial sum on that mesh axis (all-reduced afterwards), not a finished reduction."""

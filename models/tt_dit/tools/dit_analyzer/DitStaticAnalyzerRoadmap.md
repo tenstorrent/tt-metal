@@ -505,12 +505,20 @@ generator (phase 8) already emits both halves for a new such op.
   - Plus `reduce_sum` (partial sum over a sharded axis — group-norm stats), `rsqrt`,
     and a **`concat` fix** (pick the richest operand as primary, so a per-device
     auxiliary built from `x.shape` — e.g. the causal zero-frames — can't shrink a
-    sharded operand). With these the encoder dry-runs through **two full conv+halo
-    blocks (~160 nodes)**, validating the halo/conv3d semantics on real model code.
-  - **Still open:** a layout-tracking gap in the resnet/downsample path (an op yields
-    `TILE` where a later conv asserts `ROW_MAJOR`) blocks the *full* encoder dry-run.
-    Orthogonal to the halo; part of the longer conv-VAE tail. The **audio VAE** is
-    unscouted.
+    sharded operand). Two more shim fixes cleared the rest of the forward: `creation`
+    now honours the `layout` kwarg (`ttnn.zeros(layout=ROW_MAJOR)` was silently TILE, so
+    the causal concat handed a later conv a TILE tensor), and **both** the shim *and* the
+    analyzer `concat` inherit the **richest** operand's dist/layout, not input 0's.
+  - The encoder now **fully dry-runs — 361 nodes, 0 unregistered** — and analyses:
+    **10 collectives necessary, 7 flagged** (6.4 MiB). Verifying the first result caught
+    a real bug: the analyzer concat lost the shard, inventing **10 phantom
+    `unused_gather` findings (39.5 MiB that don't exist)** — gone once the concat
+    inherited the sharded operand. The surviving 7 are `participant_shrink` on the halo
+    nodes (MEDIUM/likely): the model's **asymmetric downsampler halos** (`(0,1)` pad)
+    don't need every participant. Suggestive, resting on the newest halo-demand code +
+    "the shim believes" — want device conformance before acting.
+  - **Still open:** the **audio VAE** is unscouted; the halo demand's 2-D corner
+    (diagonal neighbour) is over-approximated — safe, imprecise.
 - **Grouped-query attention** — `nlp_create_qkv_heads` now branches on its call
   shape: `num_kv_heads == 0` (LTX / Ideogram / Wan, `out, _, _ = …`) is the plain
   single-tensor head split; `num_kv_heads > 0` (Qwen3-VL / Gemma / **MiniMax-H3**,
