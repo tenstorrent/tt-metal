@@ -54,63 +54,14 @@ def _compute_per_device_vocab(vocab_size, num_tp):
 def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
     """Build a 1D-mcast matmul program config for the LM head.
 
-    LM head shape is [B, 1, H] x [H, V_per_dev] with B padded to 32 for
-    decode (so M_tiles=1). Primary target is gemma-4-31B-it on T3K (1x8):
-    H=5376 (K_tiles=168), vocab=262144, V_per_dev=32768 (N_tiles=1024).
-    Layout: the activation tile is small,
-    the weight slab is large — mcast in0 across the whole compute grid and
-    split N evenly across cores.
-
-    Picks per_core_N = ceil(N_tiles / num_cores) — the kernel pads the
-    trailing core when num_cores doesn't divide N_tiles (e.g. 80 BH cores
-    against 1024 tiles → 13 per core with a partial tail). in0_block_w is
-    the largest power of 2 dividing K_tiles, capped at 32 so the in0 CB
-    stays small. out_subblock_w stays <=4 to fit the dest register file.
+    Delegates to :func:`dram_sharded.lm_head_decode_config` (``1d_c64_bw1`` sweep
+    winner). Returns ``None`` outside the decode / last-token tile regime so
+    ``ttnn.linear`` keeps its L1-safe auto heuristic.
     """
-    tile_size = 32
-    grid = mesh_device.compute_with_storage_grid_size()
-    num_cores = grid.x * grid.y
+    from models.demos.gemma4.tt.dram_sharded import lm_head_decode_config
 
-    m_tiles = max(1, (m + tile_size - 1) // tile_size)
-    k_tiles = max(1, k // tile_size)
-    n_tiles = max(1, n // tile_size)
-
-    # Scope the explicit 1D-mcast config to the regime it is tuned for:
-    # the sharded-vocab decode / last-token shape [B<=32, 1, H] x [H, V_per_dev]
-    # with M_tiles==1 and a per-device vocab shard bounded at 64K (the same
-    # width at which on-device sampling stays enabled, i.e. TP shards the 262144
-    # vocab down to <=64K). Outside that regime this config overruns L1:
-    #   - tp==1 (e.g. E2B on a single WH N150) keeps the full 262144-wide vocab
-    #     on one chip, so per_core_N explodes and the in1 CB grows to ~8 MB,
-    #     well past the ~1.4 MB L1 (program.cpp circular-buffer validation throw);
-    #   - a non-last-token prefill slice (get_last_token==-1 -> M==seq_len) scales
-    #     the output CB by M_tiles.
-    # In those cases return None so ttnn.linear falls back to its default matmul
-    # heuristic, which blocks N/M to fit L1 (the pre-tuning behaviour).
-    if m_tiles > 1 or n > 64 * 1024:
-        return None
-
-    per_core_n = max(1, (n_tiles + num_cores - 1) // num_cores)
-
-    in0_block_w = 32
-    while in0_block_w > 1 and k_tiles % in0_block_w != 0:
-        in0_block_w //= 2
-
-    out_subblock_w = min(per_core_n, 4)
-    while out_subblock_w > 1 and per_core_n % out_subblock_w != 0:
-        out_subblock_w -= 1
-
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
-        in0_block_w=in0_block_w,
-        out_subblock_h=1,
-        out_subblock_w=out_subblock_w,
-        per_core_M=m_tiles,
-        per_core_N=per_core_n,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    )
+    program_config, _, _ = lm_head_decode_config(mesh_device, m, k, n)
+    return program_config
 
 
 def create_rope_caches(mesh_device, hf_config, max_seq_len):
@@ -1109,13 +1060,19 @@ class Gemma4Model:
         if is_decode:
             signpost(header=LM_HEAD_SIGNPOST)
         if self.lm_head_weight is not None:
-            lm_head_pc = _get_lm_head_program_config(
-                self.mesh_device,
-                m=hidden_states.shape[2],
-                k=self.hidden_size,
-                n=self.lm_head_weight.shape[-1],
+            from models.demos.gemma4.tt.dram_sharded import lm_head_decode_config
+
+            m = hidden_states.shape[2]
+            k = self.hidden_size
+            n = self.lm_head_weight.shape[-1]
+            program_config, out_memcfg, compute_kernel_config = lm_head_decode_config(self.mesh_device, m, k, n)
+            logits = ttnn.linear(
+                hidden_states,
+                self.lm_head_weight,
+                program_config=program_config,
+                memory_config=out_memcfg,
+                compute_kernel_config=compute_kernel_config,
             )
-            logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc)
             hidden_states.deallocate(True)
         else:
             logits = hidden_states

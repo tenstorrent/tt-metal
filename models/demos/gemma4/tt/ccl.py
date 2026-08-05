@@ -332,24 +332,27 @@ def _decode_l1_gather_memcfg(tensor, ccl_manager):
     InterleavedToSharded per all-reduce -- measured 47.2 -> 43.5 us
     (-0.45 ms/decode step on 31B), bit-exact (ops_list/tools/sweeps/l1_stream.py).
 
-    The layout comes from ``rms_norm.decode_width_shard_spec``, the same function
+    Extended to short prefill (tile-aligned height <= ``_SHARDED_NORM_MAX_HEIGHT``,
+    typically ISL <= 1024): same layout as ``RMSNorm._build_sharded_cfg`` so
+    ``post_feedforward_layernorm`` skips I2S after the MLP all-reduce (~6 us/layer).
+
+    The layout comes from ``rms_norm.width_shard_input_memcfg``, the same function
     the norm uses, so the two provably agree; ``RMSNorm.forward`` compares
     ``memory_config()`` and only takes the input in place on an exact match, so a
     mismatch degrades to today's behaviour rather than corrupting anything.
-
-    Guarded to the decode shape (a single tile of rows). Prefill activations are
-    far too large to sit width-sharded in L1, and their norms use the plain path
-    anyway.
     """
     if not ccl_l1_gather_enabled():
         return None
     try:
         shape = tensor.shape
-        if len(shape) != 4 or not (1 <= shape[-2] <= ttnn.TILE_SIZE):
+        if len(shape) != 4:
             return None
-        from models.demos.gemma4.tt.rms_norm import decode_width_shard_memcfg
+        padded_height = ((int(shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        from models.demos.gemma4.tt.rms_norm import _SHARDED_NORM_MAX_HEIGHT, width_shard_input_memcfg
 
-        return decode_width_shard_memcfg(ccl_manager.mesh_device, shape[-1])
+        if not (1 <= padded_height <= _SHARDED_NORM_MAX_HEIGHT):
+            return None
+        return width_shard_input_memcfg(ccl_manager.mesh_device, shape[-1], padded_height)
     except Exception as e:  # never let a layout optimization break the model
         logger.debug(f"ccl L1 gather memcfg unavailable ({e}); keeping DRAM")
         return None
