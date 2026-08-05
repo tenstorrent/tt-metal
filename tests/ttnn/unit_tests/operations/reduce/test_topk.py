@@ -159,6 +159,50 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
 )
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k",
+    (
+        (1, 1, 32, 64, 3, 32),    # W=64 -> single-core path
+        (1, 1, 32, 256, 3, 32),   # W=256 -> single-core path
+        (1, 1, 32, 4096, 3, 32),  # W=4096 -> single-core path (< 8192 threshold)
+    ),
+)
+@pytest.mark.parametrize(
+    "sorted",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "largest",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "pass_indices_tensor",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    [
+        None,
+    ],
+)
+def test_topk_single_core_indices_tensor(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids, pass_indices_tensor):
+    """Regression test for GH #51921: indices_tensor was silently ignored on the single-core path."""
+    run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16,),
+    ids=[
+        "BFLOAT16_B",
+    ],
+)
+@pytest.mark.parametrize(
+    "N, C, H, W, dim, k",
     ((1, 1, 32, 16 * 1024, 3, 32), (8, 16, 18, 22, 3, 22)),
 )
 @pytest.mark.parametrize(

@@ -196,7 +196,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
         tt::tt_metal::TensorAccessorArgs(tensor_args.indices->mesh_tensor()).append_to(reader_compile_time_args);
     }
     const std::map<std::string, std::string> reader_defines_map = {
-        {"GENERATE_INDICES", "1"},  // tensor_args.indices.has_value() ? "0" : "1" - GH issue: #36329
+        {"GENERATE_INDICES", tensor_args.indices.has_value() ? "0" : "1"},
     };
     KernelDescriptor::Defines reader_defines(reader_defines_map.begin(), reader_defines_map.end());
 

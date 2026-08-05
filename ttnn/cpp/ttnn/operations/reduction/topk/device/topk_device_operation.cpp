@@ -165,6 +165,21 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             indices_tensor_dtype == DataType::UINT16 || indices_tensor_dtype == DataType::UINT32,
             "Optional input tensor must be UINT16, or UINT32, got: {}",
             indices_tensor_dtype);
+
+        const bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max());
+        const DataType expected_index_dtype = uint16_output ? DataType::UINT16 : DataType::UINT32;
+        TT_FATAL(
+            indices_tensor_dtype == expected_index_dtype,
+            "Optional input indices tensor dtype {} does not match expected dtype {} for input shape {}",
+            indices_tensor_dtype,
+            expected_index_dtype,
+            input_shape[args.dim]);
+
+        TT_FATAL(
+            indices_tensor->padded_shape() == input_shape,
+            "Optional input indices tensor shape {} must match input tensor shape {}",
+            indices_tensor->padded_shape(),
+            input_shape);
     }
 
     // Preallocated output tensor validation
