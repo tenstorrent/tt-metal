@@ -66,7 +66,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
+          # network=host: the docker-container driver runs BuildKit as its
+          # own nested container on a Docker bridge network, not the
+          # runner's host network. Proxied traffic (ghcr.io etc.) still
+          # reaches its destination fine via the proxy above, but anything
+          # NO_PROXY excludes - i.e. harbor.ci.tenstorrent.net, which is on
+          # the runner's internal VLAN - has to route directly out of that
+          # bridge instead, and that path has been observed to silently
+          # time out (dial tcp ...: i/o timeout) even though a plain `docker
+          # pull` from the runner's own dockerd reaches the same host fine
+          # in the same job (run 31015384936, job 92342670213). Putting the
+          # builder on host networking removes that extra NAT hop entirely.
           driver-opts: |
+            network=host
             env.HTTP_PROXY=${{ env.PROXY_HTTP }}
             env.HTTPS_PROXY=${{ env.PROXY_HTTPS }}
             env.NO_PROXY=${{ env.PROXY_NO_PROXY }}
