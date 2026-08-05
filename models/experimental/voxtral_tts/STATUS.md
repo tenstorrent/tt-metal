@@ -1496,6 +1496,47 @@ stable measurement and no worse on any accuracy column — not because 0.5% matt
 turned out inert, while the one that *had* been measured and closed (the core count) was closed on
 the wrong measurement. Re-check closed doors when the thing you closed them with was a proxy.
 
+### 6.19 — `_QKV_SHARD`'s core count re-swept: inert above 6, and a different divisor set
+
+Asked whether the qkv shard's core count had been tried. It had -- 8/12/16/24/48, recorded flat at
+31.36-31.46 ms -- but on a build with w2 in BFP8 and the norm on 8x1, so it needed redoing against
+what ships. It also only swept DOWN TO 8, and §6.18 had just shown a curve with an interior minimum.
+
+5 interleaved rounds, mean ms/step, shipped build:
+
+| cores | grid | cols/core | heads/core | ms/step | output diff |
+|---|---|---|---|---|---|
+| 1 | 1x1 | 6144 | 48 | 24.683 | 0.0 |
+| 2 | 2x1 | 3072 | 24 | 24.520 | 0.0 |
+| 4 | 4x1 | 1536 | 12 | 24.436 | 0.0 |
+| 6 | 6x1 | 1024 | 8 | 24.416 | 0.0 |
+| **8 ← ships** | **8x1** | **768** | **6** | **24.410** | **0.0** |
+| 12 / 16 / 24 | 6x2 / 8x2 / 8x3 | 512 / 384 / 256 | 4 / 3 / 2 | 24.412 / 24.419 / 24.409 | 0.0 |
+| 32 | 8x4 | 192 | **1.5** | **illegal** | — |
+| 48 | 8x6 | 128 | 1 | 24.424 | 0.0 |
+
+**Inert from 6 cores up** -- the whole 6-to-48 range sits inside the 0.020 ms within-config spread,
+and 24's nominal 0.002 ms lead is 10x below the noise. **Below 6 it does cost**: one core is
++0.273 ms. So the old "it does not matter" needs the qualifier *at or above ~6*. Nothing to ship.
+
+**The output is BIT-IDENTICAL at every count**, because this shard is pure data placement with no
+reduction to reorder — the opposite of the norm, where changing the reduce tree moved the 26-layer
+result by 1.0 absolute (§6.18).
+
+**Two different divisor sets, and it explains why 32 is the norm's optimum and illegal here.** The
+qkv shard's unit is the HEAD: 6144 = 48 heads x 128 and the consumers want whole heads per core, so
+the count must divide **48**. The norm's unit is the 32-wide TILE, so its count must divide **96**.
+32 divides 96 but not 48. Read the unit before assuming a grid transfers between ops.
+
+**Fixed a footgun while in there.** The config read `(TILE, _QKV_WIDTH // 8)` next to
+`core_grid=CoreGrid(y=1, x=8)` -- one number written twice, where changing the grid and forgetting
+the divisor yields a *silently wrong shard* rather than an error. Both now derive from `_QKV_GRID_X`.
+
+**And a correction to `NOTES.md [gpt-05]`**, which argued the norm's count "DOES matter: 16.2 us on 8
+cores against 21.2 on 32" as a contrast to this one. Those are isolated-norm timings, the metric
+§6.18 showed is anti-correlated with end-to-end. The real contrast is much narrower: both grids are
+nearly free, the norm's end-to-end spread is 0.16 ms and this one's is 0.02.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.

@@ -300,16 +300,25 @@ TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 # no cache slice and no attention mask (sdpa_decode bounds the cache with cur_pos instead).
 # Worth 6.6 ms/frame over a hand-rolled interior, at the same decode PCC.
 #
-# THE 8 IS NOT THE CORE COUNT and it does not matter -- measured, so nobody re-asks. The device has
-# 64 Tensix cores (8x8); this uses one row. Swept over every head-aligned option (6144 = 48 heads x
-# 128, so the core count must divide 48: 8/12/16/24/48 qualify, 32 does not) and the whole decode
-# step reads 31.36-31.46 ms across all of them, identical PCC. The shard fill plus the head split
-# is a fraction of a millisecond out of a step that is ~20 ms of pure weight streaming, so how the
-# 393 KB is spread is invisible.
+# THE 8 IS NOT THE CORE COUNT, and above ~6 cores it does not matter. The device has 64 Tensix cores
+# (8x8); this uses one row. THE UNIT HERE IS THE HEAD, NOT THE TILE: 6144 = 48 heads x 128 and the
+# consumers want whole heads per core, so the count must divide 48 -- which admits
+# 1,2,3,4,6,8,12,16,24,48 and rules out 32 at 1.5 heads/core. (The norm's grid must divide 96 TILES
+# instead, so 32 is legal there and is in fact its optimum. Different op, different divisor set.)
 #
-# Contrast the NORM's grid (_NORM_SHARD in ttnn_voxtral_flow), where the count DOES matter: 16.2 us
-# on 8 cores against 21.2 on 32. That op is a REDUCTION across the row, so more cores means more
-# partial sums to combine and more cores to wait on -- and there the op IS the thing being timed.
+# Re-swept on the shipped config, 5 interleaved rounds, mean ms/step:
+#     1c 24.683   2c 24.520   3c 24.470   4c 24.436   6c 24.416
+#     8c 24.410 <- ships       12c 24.412  16c 24.419  24c 24.409  48c 24.424
+# Everything from 6 up sits inside the 0.020 ms within-config spread, and the output is BIT-IDENTICAL
+# at every count -- this shard is pure data placement, with no reduction to reorder. Below 6 it does
+# cost: one core is +0.273 ms. The earlier sweep only went down to 8 and recorded a flat 31.36-31.46
+# ms, which was true but on a build with w2 in BFP8 and the norm on 8x1.
+#
+# THIS NOTE USED TO ARGUE THE OPPOSITE ABOUT THE NORM -- that its count "DOES matter: 16.2 us on 8
+# cores against 21.2 on 32". Those are ISOLATED norm timings, and STATUS.md 6.18 showed that metric is
+# ANTI-CORRELATED with end-to-end: 32 cores is the slowest norm in isolation and the fastest step
+# overall. The real contrast is narrower than it looked -- both grids are nearly free; the norm's
+# spread end to end is 0.16 ms and this one's is 0.02.
 ```
 
 ### [gpt-06] `module level` — WEIGHT PRECISION -- load-bearing for CORRECTNESS, not...
