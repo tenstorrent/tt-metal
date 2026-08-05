@@ -68,9 +68,13 @@ def test_tp_fracture_credited_only_with_shard_and_ccl(tmp_path, monkeypatch):
     ok = perf_mcp.record_kernel_attempt("MatmulDeviceOperation", "tp-fracture", 1.0, True)
     assert ok["attempt"]["kernel_detected_in_source"] is True
 
+    # A DIFFERENT op for the second probe. tp-fracture is a deep rung and gets ONE permitted attempt
+    # per op, so a second attempt on MatmulDeviceOperation is now refused as a closed rung -- the
+    # no-retry enforcement, not the crediting rule this test is about.
     (tmp_path / "model.py").write_text("w = ShardTensorToMesh(mesh, dim=-1)\n")
     _measured("tp-2")
-    bad = perf_mcp.record_kernel_attempt("MatmulDeviceOperation", "tp-fracture", 1.0, True)
+    bad = perf_mcp.record_kernel_attempt("LayerNormDeviceOperation", "tp-fracture", 1.0, True)
+    assert "attempt" in bad, bad
     assert bad["attempt"]["kernel_detected_in_source"] is False
 
 

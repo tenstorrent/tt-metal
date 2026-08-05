@@ -369,8 +369,8 @@ def test_published_figures_render_exactly(tmp_path, monkeypatch):
     sm = _sm()
     out = "\n".join(sm._roofline_lines(_snap(), 534.44, {"per_token_ms": 19.4}, "m", "main"))
     # Labels say SUSTAINED, and both are derived from the numbers rather than hardcoded strings.
-    assert "theoretical ceiling : 64.0 tok/s/u" in out, out
-    assert "achievable (60-80%) : 38.4 - 51.2 tok/s/u" in out, out
+    assert "64.0 tok/s/u" in out, out
+    assert "60-80%" in out and "38.4 – 51.2" in out, out
     assert "51.5 tok/s/u" in out and "412 GB/s" in out
 
 
@@ -393,8 +393,13 @@ def test_the_report_never_hands_a_per_profile_sum_to_a_per_token_ceiling(tmp_pat
         json.dumps([{"op_signature": "Matmul", "kernel_kind": "grid", "measured_ms": 534.44, "beat_baseline": True}])
     )
     out = sm.render_summary(kl, model="m", task="main", finalized=True, throughput=_snap(), baseline_profile={})
-    assert "3%" not in out and "1.9 tok/s/u" not in out, out
-    assert "measured            : n/a" in out, out
+    # Scoped to the BANDWIDTH row. A bare `"3%" not in out` also matched "23% used" on the capacity
+    # row, so the guard fired on an unrelated healthy number instead of the fabricated utilisation
+    # it was written to catch.
+    assert "1.9 tok/s/u" not in out, out
+    _bw = [l for l in out.splitlines() if "DRAM bandwidth" in l]
+    assert _bw and not any("3%" in l for l in _bw), _bw
+    assert "n/a — not measured" in out, out
 
 
 def test_rates_carry_the_profiling_depth_when_the_window_is_truncated(tmp_path, monkeypatch):
@@ -406,8 +411,11 @@ def test_rates_carry_the_profiling_depth_when_the_window_is_truncated(tmp_path, 
     snap = dict(_snap(), perf_layers="16")
     out = "\n".join(sm._roofline_lines(snap, None, {"per_token_ms": 9.34}, "m", "main"))
     assert "[16-layer window, NOT the full model]" in out, out
-    assert out.count("[16-layer window") == 2, out  # ceiling AND measured
-    assert "GB/s" in out and "utilization" in out
+    # ONE qualifier, not two. The old five-line form printed the ceiling and the measurement on
+    # separate lines and each needed its own tag; the table puts both rates on one row, so a single
+    # line beneath it qualifies both. The depth-invariant GB/s row stays unqualified either way.
+    assert out.count("[16-layer window") == 1, out
+    assert "GB/s" in out and "Utilization" in out
 
 
 def test_a_full_depth_profile_needs_no_qualifier(tmp_path, monkeypatch):
@@ -427,7 +435,7 @@ def test_a_truncated_measurement_is_refused_against_a_full_model_ceiling(tmp_pat
     snap = dict(_snap(), perf_layers="all")
     out = "\n".join(sm._roofline_lines(snap, None, None, "m", "main", per_token_ms=9.34, measured_depth="16"))
     assert "107.1" not in out and "357 GB/s" not in out, out
-    assert "measured            : n/a" in out and "16-layer window" in out and "full depth" in out
+    assert "n/a — not measured" in out and "16-layer window" in out and "full depth" in out
 
 
 def test_matching_depths_are_reported_normally(tmp_path, monkeypatch):
@@ -508,9 +516,12 @@ def test_the_anchored_ceiling_uses_the_sustained_fraction_not_a_second_copy_of_t
     txt = "\n".join(sm._roofline_lines(snap, None, {"per_token_ms": 17.0}, "m", "main"))
 
     # (512*0.8) / 6.0947 GB = 67.2 tok/s/u from the ANCHOR.
-    assert "67.2 tok/s/u" in txt, txt
+    # 67.2 is the BAND TOP -- rate_and_band returns spec peak as the ceiling and folds the sustained
+    # fraction into the band, so the table shows 84.0 in THEORETICAL and 50.4 - 67.2 in ACHIEVABLE.
+    # The unit suffix now lives in the ceiling column, so the band is asserted as bare values.
+    assert "84.0 tok/s/u" in txt, txt
+    assert "50.4 – 67.2" in txt, txt
     assert "153.8" not in txt, txt  # the stale snapshot value
-    assert "50.4 - 67.2 tok/s/u" in txt, txt
 
 
 def test_an_anchored_snapshot_without_the_fraction_keeps_its_old_reading(tmp_path, monkeypatch):

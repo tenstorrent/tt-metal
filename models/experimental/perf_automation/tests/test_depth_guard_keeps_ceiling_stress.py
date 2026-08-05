@@ -254,7 +254,9 @@ def test_s6_mismatched_snapshot_still_renders_a_ceiling(tmp_path):
     """
     scoped = _SCOPE(_snap("16"), "all")
     text = _render(scoped, tmp_path)
-    assert "theoretical ceiling" in text, f"ceiling missing from report:\n{text[:1500]}"
+    # The three-block table heads the column THEORETICAL rather than printing a "theoretical
+    # ceiling :" line; the claim under test -- that a ceiling is rendered at all -- is unchanged.
+    assert "THEORETICAL" in text or "theoretical ceiling" in text, f"ceiling missing from report:\n{text[:1500]}"
     assert "NO_BAND" not in text, f"report fell back to NO_BAND despite a valid ceiling:\n{text[:1500]}"
 
 

@@ -596,6 +596,21 @@ _BAR_W = 20
 _DISPATCH_FLAG_PCT = 10
 
 
+def _wrap_note(text: str, width: int) -> list:
+    """Wrap a withheld-reason to the table width. Kept local rather than using textwrap so the
+    report has no import that could fail while it is being written."""
+    words, lines, cur = str(text).split(), [], ""
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = (cur + " " + w) if cur else w
+    if cur:
+        lines.append(cur)
+    return lines or [""]
+
+
 def _split(width):
     """Divider aligned to the column format: first break at 46, second at 69."""
     return "\u2500" * 46 + "\u253c" + "\u2500" * 23 + "\u253c" + "\u2500" * max(0, width - 70)
@@ -695,7 +710,9 @@ def _fidelity_breakdown(profile):
         return None, None
 
 
-def _roofline_tables(*, unit, theo, band, measured, bw_gbps, peak_bw_gbps, active_bytes, per_unit_ms, profile, tag=""):
+def _roofline_tables(
+    *, unit, theo, band, measured, bw_gbps, peak_bw_gbps, active_bytes, per_unit_ms, profile, tag="", note=""
+):
     """The Roofline / Overheads / Utilization blocks.
 
     Three blocks rather than one, because the middle column means different things. A roofline row
@@ -706,6 +723,13 @@ def _roofline_tables(*, unit, theo, band, measured, bw_gbps, peak_bw_gbps, activ
 
     Every row renders only from inputs that exist; a missing one prints `not measured` instead of
     being dropped, so the report states what it does not know.
+
+    `tag` and `note` are the two things a rate cannot be published without. `tag` is the profiling
+    depth: tok/s/u is an ABSOLUTE throughput, so a 16-layer window on a 32-layer model reads about
+    twice the real figure, and a rate printed bare is a rate somebody will quote. `note` is the
+    reason a measurement was withheld -- "not measured" alone reads as a gap in the harness when the
+    truth is that the value was computable and refused (a truncated window against a full-depth
+    ceiling makes the ratio meaningless, not merely optimistic).
     """
     W = 93
     rule = "\u2500" * W
@@ -719,12 +743,27 @@ def _roofline_tables(*, unit, theo, band, measured, bw_gbps, peak_bw_gbps, activ
     out.append("%-26s %-18s \u2502 %-21s \u2502 %s" % ("", "THEORETICAL", "ACHIEVABLE" + _pct, "MEASURED"))
     out.append(_split(W))
 
+    # A MEASUREMENT ABOVE THE CEILING IS NOT A GOOD SCORE. The ceiling is peak bandwidth over the
+    # model's bytes -- exceeding it means the pair is inconsistent (a stale target, or a reading from
+    # a shallower window), not that the model beat physics. Judging in-band on `measured >= band[0]`
+    # alone ticked those runs green, which is the one verdict they must never get.
+    _exceeds = bool(measured and theo and measured > theo)
     _ach = "%.1f \u2013 %.1f" % (band[0], band[1]) if (band and band[0]) else "n/a"
-    _meas = ("%.1f %s" % (measured, unit)) if measured else "not measured"
-    _ok = "\u2714" if (measured and band and band[0] and measured >= band[0]) else "\u2717"
+    _meas = ("%.1f %s" % (measured, unit)) if measured else "n/a \u2014 not measured"
+    _ok = "\u2714" if (measured and band and band[0] and measured >= band[0] and not _exceeds) else "\u2717"
     out.append(
         " %-25s %-18s \u2502 %-21s \u2502 %s   %s" % ("DRAM bandwidth", "%.1f %s" % (theo, unit), _ach, _meas, _ok)
     )
+    # The depth qualifier goes on its OWN line, not appended to the rate: inline it ran the row to
+    # 133 characters against a 93-wide rule and pushed the verdict glyph off the table. One line
+    # covers both rates, because in this layout the ceiling and the measurement share a row.
+    if tag:
+        out.append(" %-25s %s" % ("", tag.strip()))
+    if _exceeds:
+        out.append(" %-25s %s" % ("", "\u2717 measured EXCEEDS ceiling \u2014 target stale/suspect (re-profile)"))
+    if note and not measured:
+        for _ln in _wrap_note(str(note), W - 28):
+            out.append(" %-25s %s" % ("", _ln))
     if peak_bw_gbps:
         _bwb = ("%.0f \u2013 %.0f GB/s" % (peak_bw_gbps * 0.60, peak_bw_gbps * 0.80)) if band and band[0] else ""
         _bwm = ("%.0f GB/s" % bw_gbps) if bw_gbps else "\u2014"
@@ -819,12 +858,19 @@ def _roofline_tables(*, unit, theo, band, measured, bw_gbps, peak_bw_gbps, activ
     # direction to want when there is no number.
     out.append("Utilization")
     out.append(rule)
-    _u1 = (measured / theo) if (measured and theo) else None
+    # An over-ceiling ratio is withheld, not drawn. _bar clamps at full, so 129% rendered as a
+    # SATURATED bar -- the inconsistent pair reading as a flawless score, which is the opposite of
+    # what it means.
+    _u1 = None if _exceeds else ((measured / theo) if (measured and theo) else None)
     _rows = [
         (
             "DRAM bandwidth",
             _u1,
-            ("%.0f / %.0f GB/s" % (bw_gbps, peak_bw_gbps)) if (bw_gbps and peak_bw_gbps) else "no data",
+            (
+                "inconsistent \u2014 see above"
+                if _exceeds
+                else (("%.0f / %.0f GB/s" % (bw_gbps, peak_bw_gbps)) if (bw_gbps and peak_bw_gbps) else "no data")
+            ),
             "\u2191 better" if _u1 else "",
         ),
         ("Compute (prefill)", None, "TTFT never measured", ""),
@@ -971,6 +1017,16 @@ def _roofline_lines(
                     per_unit_ms=fm,
                     profile=profile,
                     tag=_tag,
+                    # WHY the measurement is absent, not merely that it is. A depth mismatch means the
+                    # value was computable and REFUSED: a truncated window streams a fraction of the
+                    # bytes the ceiling assumes, so the ratio is meaningless rather than optimistic.
+                    # Rendered as "n/a" alone it reads as a harness gap, and the next run repeats it.
+                    note=(
+                        "the per-token reading is from a %s-layer window, the ceiling is for %s layers "
+                        "(re-profile at full depth)" % (_meas_depth, _ceil_depth)
+                        if _mismatch
+                        else ""
+                    ),
                 )
             except Exception:  # noqa: BLE001
                 pass  # fall through to the legacy lines rather than losing the section entirely

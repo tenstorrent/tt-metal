@@ -73,14 +73,20 @@ def test_host_ladder_asks_for_trace_not_structural_and_avoids_irreducible():
     host_op = {"bound_by": "host", "bucket": "host_fallback", "grid": "", "weight_dtype": ""}
     done, rung, reason = perf_mcp._op_ladder_status(host_op, "host_overhead", [])
     assert not done and rung == "trace-capture"
-    # tried state must NOT blanket-declare irreducible (that was the word the agent parroted)
-    done2, _, reason2 = perf_mcp._op_ladder_status(
-        host_op,
-        "host_overhead",
-        [{"kernel_kind": "trace-capture", "op_signature": "host_overhead", "beat_baseline": False}],
-    )
+    # One failed attempt no longer closes the rung -- see test_the_host_rung_clears_on_a_measurement.
+    # It retires on a measured win or at the attempt cap, and the surviving intent of this test is
+    # what the reason says WHEN it retires: never a blanket "irreducible" (the word the agent
+    # parroted), but a hand-off to the KV-cache lever.
+    _tried = [
+        {"kernel_kind": k, "op_signature": "host_overhead", "beat_baseline": False, "measured_ms": 400.0}
+        for k in ("trace-capture", "trace", "structural")
+    ]
+    done_once, _, _ = perf_mcp._op_ladder_status(host_op, "host_overhead", _tried[:1])
+    assert not done_once, "a single measured-no-gain attempt must not seal the dispatch axis"
+    done2, _, reason2 = perf_mcp._op_ladder_status(host_op, "host_overhead", _tried)
     assert done2
     assert "kv-cache" in reason2.lower()
+    assert "not irreducible" in reason2.lower()
 
 
 # --- wedge tolerance: a KV-cache attempt that WEDGES the device must count as "tried" ------------

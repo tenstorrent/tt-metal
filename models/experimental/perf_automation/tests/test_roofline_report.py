@@ -27,11 +27,13 @@ _LLM = {
 
 def test_llm_decode_form_matches_bandwidth_math():
     out = "\n".join(S._roofline_lines(_LLM, 19.4))
-    assert "theoretical ceiling : 64.0 tok/s/u" in out
-    assert "38.4 - 51.2 tok/s/u" in out
-    assert "measured            : 51.5 tok/s/u" in out  # 1000 / 19.4
+    # The three-block table states the same four figures; only the layout changed. Asserted as
+    # values, not as fixed-width label lines, so a column-width change is not a test failure.
+    assert "64.0 tok/s/u" in out  # ceiling
+    assert "38.4 – 51.2" in out  # sustained band
+    assert "51.5 tok/s/u" in out  # 1000 / 19.4
     assert "412 GB/s" in out  # 8 GB / 19.4 ms
-    assert "%" in out and "utilization" in out
+    assert "%" in out and "Utilization" in out
 
 
 def test_module_floor_form_when_not_llm():
@@ -67,8 +69,8 @@ def test_stale_guard_renders_na_not_zero():
     # invalid forward ms must NOT produce a fake 0.0 tok/s/u / 0% — it renders n/a
     out = S._roofline_lines(_LLM, 0.0)
     joined = "\n".join(out)
-    assert "measured            : n/a" in joined
-    assert "utilization         : n/a" in joined
+    assert "n/a — not measured" in joined
+    assert "—" in joined  # the utilization bar reads unknown, not 0%
     # the ONLY place a "0" appears is the static band label; no fabricated measured/util zero
     assert "0.0 tok/s/u   (1000" not in joined
     assert "0%   (measured / ceiling)" not in joined
@@ -103,6 +105,9 @@ def test_llm_form_flags_stale_when_measured_exceeds_ceiling():
         )
     )
     # 1000/19.4 = 51.5 tok/s > 40 ceiling => flag, not "129%"
+    # Both halves matter. The ROOFLINE row must flag it, and the UTILIZATION row must not publish
+    # the ratio: _bar clamps at full, so 129% drew a saturated bar -- an impossible measurement
+    # rendering as a flawless score.
     assert "EXCEEDS ceiling" in out and "129%" not in out
 
 
@@ -118,7 +123,7 @@ def test_render_summary_accepts_throughput_kwarg(tmp_path):
     log = tmp_path / "k.json"
     log.write_text("[]")
     txt = S.render_summary(str(log), 19.4, model="m", task="main", throughput=_LLM, final_override_ms=19.4)
-    assert "Roofline & utilization" in txt and "51.5 tok/s/u" in txt
+    assert "Roofline" in txt and "51.5 tok/s/u" in txt
     # and with no throughput it still renders (table just absent)
     txt2 = S.render_summary(str(log), 19.4, model="m", task="main")
-    assert "Roofline & utilization" not in txt2
+    assert "Roofline" not in txt2

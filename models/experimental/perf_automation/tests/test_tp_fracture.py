@@ -2,7 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """TP fracture correctness on a real mesh: a column-fractured matmul + all_gather must reproduce the
 dense single-chip matmul (PCC ~ 1). Skips when ttnn / a multi-chip mesh is unavailable, so it is inert
-in the offline venv and runs only on hardware. Proven on a QB2 (2,2) mesh: PCC 0.99997 across shapes."""
+in the offline venv and runs only on hardware. Proven on a QB2 (2,2) mesh: PCC 0.99997 across shapes.
+
+The axis-selection tests below are NOT hardware tests and must not skip offline -- they assert which
+cluster_axis all_gather_full picks for a given mesh shape, which is the logic that made this module
+work on a (1,4) mesh and fail on a (2,2) one. They stub ttnn.all_gather with raising=False because
+`pytest.importorskip("ttnn")` does not guard what it looks like it guards: offline, ttnn resolves to
+the repo's source directory as a NAMESPACE PACKAGE, so the import succeeds and it is the first
+attribute access that fails. The guard passed and the tests errored instead of skipping OR running."""
 from pathlib import Path
 
 import pytest
@@ -82,7 +89,7 @@ def test_all_gather_full_picks_axes_from_the_mesh_shape(rows, cols, expect_axes,
         seen.append(cluster_axis)
         return t
 
-    monkeypatch.setattr(ttnn, "all_gather", _ag)
+    monkeypatch.setattr(ttnn, "all_gather", _ag, raising=False)
     out = tp_fracture.all_gather_full(_fake_mesh(rows, cols), object(), dim=-1)
     assert seen == expect_axes, "mesh (%d,%d) gathered along %s" % (rows, cols, seen)
     assert out is not None
@@ -94,7 +101,7 @@ def test_all_gather_full_on_a_single_device_mesh_is_a_no_op(monkeypatch):
     from cc_optimize import tp_fracture
 
     called = []
-    monkeypatch.setattr(ttnn, "all_gather", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(ttnn, "all_gather", lambda *a, **k: called.append(1), raising=False)
     sentinel = object()
     assert tp_fracture.all_gather_full(_fake_mesh(1, 1), sentinel, dim=-1) is sentinel
     assert not called, "a 1-device mesh has nothing to gather"
@@ -107,7 +114,9 @@ def test_all_gather_full_falls_back_when_the_shape_is_unreadable(monkeypatch):
     from cc_optimize import tp_fracture
 
     seen = []
-    monkeypatch.setattr(ttnn, "all_gather", lambda t, dim=None, cluster_axis=None, **k: seen.append(cluster_axis) or t)
+    monkeypatch.setattr(
+        ttnn, "all_gather", lambda t, dim=None, cluster_axis=None, **k: seen.append(cluster_axis) or t, raising=False
+    )
 
     class _Opaque:
         @property

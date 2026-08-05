@@ -178,7 +178,13 @@ def test_host_bucket_is_still_exempt_from_device_knobs():
     exclusion is by KIND, not by a roofline estimate, so the sweep must not reach it."""
     _, rung, _ = ladder({"bound_by": "host", "bucket": "host_fallback"}, "host_overhead", [])
     assert rung == "trace-capture", rung
-    host_att = [{"op_signature": "host_overhead", "kernel_kind": "structural"}]
+    # The rung retires on a measured win or at the attempt cap, not on one recorded row -- see
+    # test_the_host_rung_clears_on_a_measurement.py. What this test guards is unchanged either way:
+    # the device-knob sweep must never reach a host bucket.
+    host_att = [
+        {"op_signature": "host_overhead", "kernel_kind": k, "measured_ms": 400.0, "beat_baseline": False}
+        for k in ("structural", "trace", "trace-capture")
+    ]
     done, rung, _ = ladder({"bound_by": "host", "bucket": "host_fallback"}, "host_overhead", host_att)
     assert done and rung == "done"
 
