@@ -133,17 +133,25 @@ void kernel_main() {
     constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(28);
     // Byte size of one row-major x element: x is bf16 in the row-major path.
     constexpr uint32_t X_RM_ELEM_BYTES = get_compile_time_arg_val(29);
-    // SHARD_GRID_N: the ND-shard grid's N extent (the program factory passes GRID_X).
-    // Under WEIGHTS_ND_SHARDED the weights are DRAM ND-sharded with a one-tile-row
-    // shard whose width is exactly this core's N slice, so one request per K-row
-    // fetches the whole slice. The linear ROUND_ROBIN_1D shard id is
-    // k * SHARD_GRID_N + my_nt, so consecutive K-rows land in DIFFERENT banks —
-    // the bank rotation is what buys the bandwidth.
-    constexpr uint32_t SHARD_GRID_N = get_compile_time_arg_val(30);
+    // ND-shard grid N extents. Under WEIGHTS_ND_SHARDED the weights are DRAM
+    // ND-sharded with a one-tile-row shard whose width is exactly this core's N
+    // slice, so one request per K-row fetches the whole slice (contiguous in one
+    // bank). The linear ROUND_ROBIN_1D shard id is k * extent + my_nt, so
+    // consecutive K-rows land in DIFFERENT banks — that rotation is what buys the
+    // bandwidth.
+    //
+    // The extent is ceil(N_tiles / per_core_N), NOT GRID_X: per_core_N is itself
+    // ceil(N_tiles / GRID_X), so the round trip lands back on GRID_X only when that
+    // division is tight. It does for every shipped shape, but e.g. N = 12 tiles gives
+    // per_core_N = 2 and extent = 6, where GRID_X = 11 would index the WRONG shard on
+    // every K-row after the first — silently, since the id stays in range. gate/up and
+    // down differ in general, hence two args.
+    constexpr uint32_t SHARD_GRID_N_GU = get_compile_time_arg_val(30);
+    constexpr uint32_t SHARD_GRID_N_D = get_compile_time_arg_val(31);
     // DOWN_SPLIT: K-rows of each down block THIS RISC reads. The writer reads the
     // rest, [down_split_k, in0_block_w_d), on NoC 1. Equals in0_block_w_d when the
     // split is off.
-    constexpr uint32_t down_split_k = get_compile_time_arg_val(31);
+    constexpr uint32_t down_split_k = get_compile_time_arg_val(32);
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
@@ -163,8 +171,7 @@ void kernel_main() {
     constexpr uint32_t d_in1_block_num_tiles = per_core_N_d * in0_block_w_d;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
-
-    constexpr uint32_t x_accessor_offset = 32;
+    constexpr uint32_t x_accessor_offset = 33;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -638,7 +645,7 @@ void kernel_main() {
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                         const uint32_t krow = kb * in0_block_w_gu + k;
                         const uint64_t src =
-                            gate_acc.get_shard_noc_addr(krow * SHARD_GRID_N + my_nt_gu, 0, noc_read.get_noc_id());
+                            gate_acc.get_shard_noc_addr(krow * SHARD_GRID_N_GU + my_nt_gu, 0, noc_read.get_noc_id());
                         noc_async_read(src, l1_w_gate, gate_slice_bytes, noc_read.get_noc_id());
                         l1_w_gate += gate_slice_bytes;
                     }
@@ -843,7 +850,7 @@ void kernel_main() {
                         const uint32_t krow = kb * in0_block_w_d + k;
                         if (krow < K_down_tiles) {
                             const uint64_t src =
-                                down_acc.get_shard_noc_addr(krow * SHARD_GRID_N + my_nt_d, 0, noc_read.get_noc_id());
+                                down_acc.get_shard_noc_addr(krow * SHARD_GRID_N_D + my_nt_d, 0, noc_read.get_noc_id());
                             noc_async_read(src, l1_w, down_slice_bytes, noc_read.get_noc_id());
                         }
                         l1_w += down_slice_bytes;
