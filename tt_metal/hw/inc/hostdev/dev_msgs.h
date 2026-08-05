@@ -416,7 +416,7 @@ struct mailboxes_t {
     volatile uint32_t launch_msg_rd_ptr;  // Volatile so this can be manually reset by host. TODO: remove volatile when
                                           // dispatch init moves to one-shot.
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) struct launch_msg_t launch[launch_msg_buffer_num_entries];
-    volatile struct go_msg_t go_messages[go_message_num_entries];
+    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) volatile struct go_msg_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
     volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4 for
@@ -430,6 +430,8 @@ struct mailboxes_t {
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
         profiler_msg_t profiler;
 };
+
+static_assert(offsetof(mailboxes_t, go_messages) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 
 // DevicePrintMemoryLayout asserts
 static_assert(sizeof(DevicePrintMemoryLayout) == DPRINT_BUFFER_SIZE * PROCESSOR_COUNT);

@@ -21,6 +21,7 @@ static constexpr uint32_t TENSIX_PROFILER_CHECK =
     (MEM_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static_assert(TENSIX_LAUNCH_CHECK == 0);
 static_assert(TENSIX_PROFILER_CHECK == 0);
+static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, go_messages)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(
     MaxProcessorsPerCoreType <= kernel_profiler::PROFILER_MAX_RISC_COUNT,
     "PROFILER_MAX_RISC_COUNT must be >= MaxProcessorsPerCoreType");

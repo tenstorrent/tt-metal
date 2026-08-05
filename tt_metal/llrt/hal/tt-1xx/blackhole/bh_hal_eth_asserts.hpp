@@ -25,6 +25,8 @@ static constexpr uint32_t ETH_PROFILER_CHECK =
     TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static_assert(ETH_LAUNCH_CHECK == 0);
 static_assert(ETH_PROFILER_CHECK == 0);
+static_assert((MEM_IERISC_MAILBOX_BASE + offsetof(mailboxes_t, go_messages)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+static_assert((MEM_AERISC_MAILBOX_BASE + offsetof(mailboxes_t, go_messages)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(
     (MEM_IERISC_MAILBOX_BASE + offsetof(mailboxes_t, go_message_index)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(
