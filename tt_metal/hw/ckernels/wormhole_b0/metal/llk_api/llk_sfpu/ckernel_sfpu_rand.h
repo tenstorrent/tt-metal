@@ -38,19 +38,19 @@ inline void make_lane_salt() {
     // arbitrary SFPU operations have clobbered the mutable LREGs. LTILEID is
     // the ISA-defined LREG15, whose lane i contains 2*i. Offset LTILEID first
     // so lane zero also receives a nonzero salt. The immediate shift encodings
-    // select LREG4 and LREG7 as their respective sources.
+    // select LREG4 and LREG5 as their respective sources.
     TTI_SFPIADD(
-        (-1800) & 0xFFF, p_sfpu::LTILEID, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPSHFT2(20, 0, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
-    TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG7, 0);
-    TTI_SFPSHFT2((-9) & 0xFFF, 0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
-    TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG3, 0);
+        (-151) & 0xFFF, p_sfpu::LTILEID, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSHFT2(20, 0, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+    TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
+    TTI_SFPSHFT2(5, 0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
+    TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG3, 0);
 }
 
 inline void begin_mix_uint32_fast() {
     // A bijective ARX permutation scheduled around SFPSHFT2's independent
     // source and destination registers. LREG4, LREG7, LREG12, and LREG13 hold
-    // -14, 8, -5, and 11, respectively. LREG1 holds x on entry and LREG0 holds
+    // -16, 10, -6, and 13, respectively. LREG1 holds x on entry and LREG0 holds
     // the result on exit.
     TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
 }
@@ -95,7 +95,7 @@ inline void rand_row() {
 template <bool APPROXIMATION_MODE>
 inline void rand(std::uint32_t from, std::uint32_t scale) {
     make_lane_salt();
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_SHORT, 8);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_SHORT, 10);
 
     // Load scale param to lreg5
     TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, scale & 0xFFFF);
@@ -106,10 +106,10 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, from >> 16);
 
     // Keep the remaining shift counts outside the replayed row body.
-    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_SHORT, (-14) & 0xFFFF);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, (-5) & 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_SHORT, (-16) & 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, (-6) & 0xFFFF);
     TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, 11);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_SHORT, 13);
     TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
 
     rand_prng<p_sfpu::LREG1>();
