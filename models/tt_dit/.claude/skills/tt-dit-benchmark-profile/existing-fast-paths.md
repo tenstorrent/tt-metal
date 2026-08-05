@@ -12,9 +12,15 @@ Two questions when you find a hot spot:
    always a shape guard, a dtype mismatch, a layout mismatch, or a call site that
    predates the op. That is a config fix, not kernel work.
 
-Verified against the installed build. Re-check with
-`./python_env/bin/python -c "import ttnn; help(ttnn.experimental.<op>)"` —
-availability moves.
+**Scope: ops usable from a DiT forward pass.** Ops whose constraints exclude DiT
+shapes are deliberately absent — e.g. `rotary_embedding_llama_fused_qk` is
+decode-only (`seq_len=1`) and `convert_to_chw` caps channels at a tile height, so
+neither applies here. If an op you expect is missing, that is usually why.
+
+Verify against the source tree, not a locally built ttnn — a branch build can
+carry ops that are not on `main`:
+`grep -rl "<op>" ttnn/cpp/ttnn/operations/` then
+`./python_env/bin/python -c "import ttnn; help(ttnn.experimental.<op>)"`.
 
 ---
 
@@ -30,12 +36,11 @@ normalization by hand, stop.
 | `ttnn.experimental.dit_layernorm_pre_allgather` / `dit_layernorm_post_allgather` | The two halves separately, when you need to place the all-gather yourself | `tests/unit/test_distributed_rmsnorm_fused.py` |
 | `ttnn.experimental.dit_rms_norm_unary_fused` | **RMSNorm + activation in one kernel pass.** Equivalent to `ttnn.silu(ttnn.rms_norm(x))` / `gelu`, without the intermediate write+read | `layers/normalization.py`, `encoders/gemma/` |
 
-**There is no fused distributed GroupNorm.** RMSNorm and LayerNorm have one;
-GroupNorm does not. `layers/normalization.py::GroupNorm3D` routes through the
-DRAM-interleaved `ttnn.group_norm` with the grid pinned by
-`determine_expected_group_norm_dram_grid_size`, which is local per device — any
-cross-device statistics have to be assembled by hand. Do not go looking for a
-`dit_fused_distributed_groupnorm`; it does not exist.
+**GroupNorm has no fused distributed variant** — RMSNorm and LayerNorm do, which
+makes the gap surprising. `layers/normalization.py::GroupNorm3D` drives the local
+`ttnn.group_norm` with the grid pinned by
+`determine_expected_group_norm_dram_grid_size`; cross-device statistics are yours
+to assemble.
 
 **Workflow rule.** A profile showing `RMSNorm` immediately followed by `Silu` or
 `Gelu` means `dit_rms_norm_unary_fused` is not engaged. A profile showing
@@ -132,7 +137,6 @@ writing anything.
 |---|---|---|
 | `ttnn.experimental.rotary_embedding_llama` | Fused RoPE | Mochi, LTX, Ideogram attention and `rope_ltx.py` |
 | `ttnn.experimental.rotary_embedding_hf` | HF-convention RoPE | tt_dit transformers |
-| `ttnn.experimental.rotary_embedding_llama_fused_qk` | RoPE on Q and K in one dispatch — but **decode-only**: the device op rejects anything but `seq_len=1` | **Not usable for DiT.** Listed so you don't rediscover it and lose an iteration |
 | `ttnn.experimental.rotate_half` | Primitive, if you must compose | — |
 
 ---
@@ -145,7 +149,6 @@ writing anything.
 | `ttnn.conv1d` / `ttnn.conv2d` / `ttnn.conv_transpose2d` | 1D/2D convolution. All need `l1_small_size` | Audio VAEs, image VAEs |
 | **`ttnn.experimental.neighbor_pad_async`** | **Halo padding across devices.** Padding values come from the neighbour device's shard, or from `padding_mode` (`zeros`, `replicate`) at the mesh edge. Supports **1D or fused 2D padding in one dispatch** (`dim=[2]` or `[2,3]`), per-dim `cluster_axis`, `num_links`, `persistent_output_buffer` | `parallel/manager.py`, `parallel/config.py` |
 | `ttnn.upsample`, `ttnn.grid_sample` | Spatial resampling | VAE decoders |
-| `ttnn.experimental.convert_to_chw` / `convert_to_hwc` | Layout conversion for CNN-shaped tensors | *bound, no tt_dit caller yet* — check before hand-rolling a permute around a conv |
 
 **Workflow rule.** If you are writing halo exchange by hand for a sharded
 convolution, use `neighbor_pad_async` — and use the **fused 2D form** when both
@@ -257,7 +260,6 @@ where the cheapest wins live.
 | `Matmul` → `BinaryNg` chain in an AdaLN block | `dit_minimal_matmul_addcmul_fused` |
 | `AllGather`/`ReduceScatter` adjacent to `Matmul` | `all_gather_minimal_matmul_async`, `minimal_matmul_strided_reduce_scatter_async` |
 | `Permute`/`Reshape`/`Transpose` around attention | `nlp_create_qkv_heads`, `nlp_concat_heads` |
-| Two RoPE dispatches per layer | No fusion available — `rotary_embedding_llama_fused_qk` is decode-only (`seq_len=1`) |
 | Hand-rolled halo slicing before a sharded conv | `neighbor_pad_async` (fused 2D) |
 | `Matmul` → `Silu`/`Gelu` | `fused_activation=` on the matmul |
 | A collective and a compute op whose durations **add up** instead of overlapping | Missing `ccl_core_grid_offset` — they're fighting for the same cores |
