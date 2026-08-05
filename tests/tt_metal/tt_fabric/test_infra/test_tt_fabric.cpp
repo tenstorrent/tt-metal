@@ -144,8 +144,12 @@ private:
 
     // Dump the debug slot every ~30s (kPollIntervalMs * 150).
     static constexpr int kSlotDumpEveryRounds = 150;
-    static constexpr uint64_t kDbgSlotBase = 0x6F220;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE
-    static constexpr std::size_t kDbgSlotWords = 16;
+    static constexpr uint64_t kDbgSlotBase =
+        0x6F210;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the region grows
+                  // DOWNWARD from MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so changing
+                  // MEM_AERISC_RESUME_PHASE_SIZE MOVES this base.
+    // 18 words: 16 original + words 16/17 for the per-channel send-gate probe.
+    static constexpr std::size_t kDbgSlotWords = 20;
     static constexpr uint64_t kErisc0Heartbeat = 0x7CC70;
 
     void dump_slots(const std::vector<MonitoredCore>& cores) {
@@ -180,8 +184,10 @@ private:
 // (no second process needed). Emits the same "SLOT <dev> <chan> w0..w15 hb0 hb1" lines the external
 // `run_link_control dump_dbg_slot` produces, so one parser handles both.
 void dump_erisc_debug_slots_from_host() {
-    constexpr uint64_t DBG_SLOT_BASE = 0x6F220;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE
-    constexpr std::size_t DBG_SLOT_WORDS = 16;
+    constexpr uint64_t DBG_SLOT_BASE = 0x6F210;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the
+                                                 // region grows DOWNWARD from MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so
+                                                 // changing MEM_AERISC_RESUME_PHASE_SIZE MOVES this base.
+    constexpr std::size_t DBG_SLOT_WORDS = 20;   // incl. words 16/17 send-gate probe
     constexpr uint64_t ERISC0_HEARTBEAT = 0x7CC70;
 
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -200,6 +206,23 @@ void dump_erisc_debug_slots_from_host() {
                 cluster.read_core(hb, 2 * sizeof(uint32_t), tt_cxy_pair(chip_id, virtual_core), ERISC0_HEARTBEAT);
             } catch (...) {
                 continue;
+            }
+            // [BASE SANITY] word[0] is the resume-phase code, always 0x5E5E_xxxx on a core where the
+            // router has run. If it isn't, DBG_SLOT_BASE has drifted from MEM_AERISC_RESUME_PHASE_BASE
+            // and every word below is shifted -- which silently produces plausible-looking garbage.
+            // Warn once rather than let a misaligned dump be analysed as real data.
+            static bool base_warned = false;
+            if (!base_warned && words[0] != 0 && (words[0] & 0xFFFF0000u) != 0x5E5E0000u) {
+                log_warning(
+                    tt::LogTest,
+                    "SLOT dump base looks WRONG: word[0]=0x{:x} on device {} core {} (expected 0x5E5Exxxx). "
+                    "DBG_SLOT_BASE (0x{:X}) is probably out of sync with MEM_AERISC_RESUME_PHASE_BASE -- "
+                    "all dumped words are shifted; do not trust this data.",
+                    words[0],
+                    chip_id,
+                    logical_core.str(),
+                    DBG_SLOT_BASE);
+                base_warned = true;
             }
             std::string line = fmt::format("SLOT {} {}", chip_id, logical_core.y);
             for (auto w : words) {
