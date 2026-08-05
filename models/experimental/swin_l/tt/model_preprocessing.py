@@ -94,6 +94,8 @@ def load_backbone_weights(
     num_heads: Tuple[int, ...] = (6, 12, 24, 48),
     window_size: int = 12,
     out_indices: Tuple[int, ...] = (0, 1, 2, 3),
+    high_precision_attn_stages: Tuple[int, ...] = (),
+    high_precision_mlp_stages: Tuple[int, ...] = (),
 ) -> dict:
     """
     Load backbone weights from mmdet checkpoint and return TTNN parameter dict.
@@ -121,6 +123,9 @@ def load_backbone_weights(
 
     params: Dict = {}
 
+    hp_attn = set(high_precision_attn_stages)
+    hp_mlp = set(high_precision_mlp_stages)
+
     # -- Patch embedding --
     params["patch_embed"] = {
         "projection": {
@@ -141,6 +146,11 @@ def load_backbone_weights(
         dim = embed_dim * (2**s)
         heads = num_heads[s]
         params["stages"][s] = {"blocks": {}}
+
+        # For high-precision stages, keep the directly-used linear weights (attn proj,
+        # MLP fc1/fc2) in bf16 instead of bf8_b to match the promoted matmul fidelity.
+        proj_weight_dtype = ttnn.bfloat16 if s in hp_attn else ttnn.bfloat8_b
+        mlp_weight_dtype = ttnn.bfloat16 if s in hp_mlp else ttnn.bfloat8_b
 
         for b in range(depths[s]):
             prefix = f"backbone.stages.{s}.blocks.{b}"
@@ -166,7 +176,7 @@ def load_backbone_weights(
                     },
                     "proj": {
                         "weight": _to_ttnn_linear_weight(
-                            _get(sd, f"{prefix}.attn.w_msa.proj.weight"), dtype=ttnn.bfloat8_b
+                            _get(sd, f"{prefix}.attn.w_msa.proj.weight"), dtype=proj_weight_dtype
                         ),
                         "bias": _to_ttnn_linear_bias(_get(sd, f"{prefix}.attn.w_msa.proj.bias")),
                     },
@@ -175,13 +185,13 @@ def load_backbone_weights(
                 "mlp": {
                     "fc1": {
                         "weight": _to_ttnn_linear_weight(
-                            _get(sd, f"{prefix}.ffn.layers.0.0.weight"), dtype=ttnn.bfloat8_b
+                            _get(sd, f"{prefix}.ffn.layers.0.0.weight"), dtype=mlp_weight_dtype
                         ),
                         "bias": _to_ttnn_linear_bias(_get(sd, f"{prefix}.ffn.layers.0.0.bias")),
                     },
                     "fc2": {
                         "weight": _to_ttnn_linear_weight(
-                            _get(sd, f"{prefix}.ffn.layers.1.weight"), dtype=ttnn.bfloat8_b
+                            _get(sd, f"{prefix}.ffn.layers.1.weight"), dtype=mlp_weight_dtype
                         ),
                         "bias": _to_ttnn_linear_bias(_get(sd, f"{prefix}.ffn.layers.1.bias")),
                     },

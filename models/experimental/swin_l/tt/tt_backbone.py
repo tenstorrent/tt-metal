@@ -42,6 +42,8 @@ class TtSwinLBackbone:
         mlp_ratio=4.0,
         attn_masks=None,
         out_indices=(0, 1, 2, 3),
+        high_precision_attn_stages=(),
+        high_precision_mlp_stages=(),
     ):
         self.device = device
         self.parameters = parameters
@@ -51,6 +53,11 @@ class TtSwinLBackbone:
         self.window_size = [window_size, window_size] if isinstance(window_size, int) else list(window_size)
         self.mlp_ratio = mlp_ratio
         self.out_indices = out_indices
+        # Per-stage opt-in precision promotion. Stages listed here run their attention
+        # and/or MLP matmuls at HiFi2/bf16 instead of the default LoFi/bf8_b. Default is
+        # empty so standalone Swin-L and other consumers keep the tuned fast path.
+        self.high_precision_attn_stages = set(high_precision_attn_stages)
+        self.high_precision_mlp_stages = set(high_precision_mlp_stages)
 
         # Patch embedding conv (4x4 stride 4)
         self.patch_embed_weight = parameters["patch_embed"]["projection"]["weight"]
@@ -64,6 +71,8 @@ class TtSwinLBackbone:
             dim = embed_dim * (2**s)
             heads = num_heads[s]
             blocks = []
+            hp_attn = s in self.high_precision_attn_stages
+            hp_mlp = s in self.high_precision_mlp_stages
             for b in range(depths[s]):
                 shift = [0, 0] if b % 2 == 0 else [self.window_size[0] // 2, self.window_size[1] // 2]
                 mask = attn_masks[s] if attn_masks is not None else None
@@ -77,6 +86,8 @@ class TtSwinLBackbone:
                         shift_size=shift,
                         mlp_ratio=mlp_ratio,
                         attn_mask=mask,
+                        high_precision_attn=hp_attn,
+                        high_precision_mlp=hp_mlp,
                     )
                 )
             self.stages.append(blocks)

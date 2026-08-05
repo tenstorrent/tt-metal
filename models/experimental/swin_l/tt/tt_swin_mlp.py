@@ -65,9 +65,9 @@ _TUNED_FC1_PROGRAM_CONFIGS = {
 
 # Each (K, N) entry's expected M_tiles_effective for the canonical input shape.
 _EXPECTED_M_TILES = {
-    (768, 3072): 80,    # Stage 2: 40 * 2
-    (384, 1536): 240,   # Stage 1: 80 * 3
-    (192, 768): 800,    # Stage 0: 160 * 5
+    (768, 3072): 80,  # Stage 2: 40 * 2
+    (384, 1536): 240,  # Stage 1: 80 * 3
+    (192, 768): 800,  # Stage 0: 160 * 5
 }
 
 # Per-(K, N) tuned program_config for fc2. Same shape logic as fc1.
@@ -93,18 +93,29 @@ _TUNED_FC2_PROGRAM_CONFIGS = {
 }
 
 _EXPECTED_M_TILES_FC2 = {
-    (768, 192): 800,    # Stage 0
+    (768, 192): 800,  # Stage 0
 }
 
 
 class TtSwinMLP:
     """Two-layer MLP with GELU activation."""
 
-    def __init__(self, device, parameters, dim, mlp_ratio=4.0):
+    def __init__(self, device, parameters, dim, mlp_ratio=4.0, high_precision=False):
         self.device = device
         self.parameters = parameters
         self.hidden_dim = int(dim * mlp_ratio)
         self.dim = dim
+        # When high_precision is set (used for deep stages whose accumulated LoFi+bf8
+        # error dominates downstream PCC), run the fc1/fc2 matmuls at HiFi2 with a bf16
+        # output while retaining the tuned program configs and bf8_b weights.
+        # NOTE: fp32_dest_acc_en stays False here — the tuned stage-2 fc1 config uses an
+        # out_subblock of 2x4 (=8 regs), which exceeds the 4-reg limit that fp32 dest
+        # accumulation imposes. HiFi2 (full bf16 mantissa) + bf16 output is the dominant
+        # precision win; fp32 accumulation would require re-tuning the program configs.
+        self.high_precision = high_precision
+        self._mlp_fidelity = ttnn.MathFidelity.HiFi2 if high_precision else ttnn.MathFidelity.LoFi
+        self._mlp_fp32_acc = False
+        self._mlp_out_dtype = ttnn.bfloat16 if high_precision else ttnn.bfloat8_b
         # Pre-resolve fc1 program_config off the static (K, N) shape.
         w = parameters["fc1"]["weight"]
         K_w = int(w.shape[-2])
@@ -137,13 +148,13 @@ class TtSwinMLP:
                 self.parameters["fc1"]["weight"],
                 bias=self.parameters["fc1"]["bias"],
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.LoFi,
-                    fp32_dest_acc_en=False,
+                    math_fidelity=self._mlp_fidelity,
+                    fp32_dest_acc_en=self._mlp_fp32_acc,
                     packer_l1_acc=True,
                 ),
                 program_config=self._fc1_pcfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=self._mlp_out_dtype,
             )
         else:
             output = ttnn.linear(
@@ -152,13 +163,13 @@ class TtSwinMLP:
                 bias=self.parameters["fc1"]["bias"],
                 activation="gelu",
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.LoFi,
-                    fp32_dest_acc_en=False,
+                    math_fidelity=self._mlp_fidelity,
+                    fp32_dest_acc_en=self._mlp_fp32_acc,
                     packer_l1_acc=True,
                 ),
                 core_grid=ttnn.CoreGrid(y=8, x=8),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=self._mlp_out_dtype,
             )
 
         # fc2 — same shape-guarded tuned path as fc1.
@@ -176,24 +187,24 @@ class TtSwinMLP:
                 self.parameters["fc2"]["weight"],
                 bias=self.parameters["fc2"]["bias"],
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.LoFi,
-                    fp32_dest_acc_en=False,
+                    math_fidelity=self._mlp_fidelity,
+                    fp32_dest_acc_en=self._mlp_fp32_acc,
                     packer_l1_acc=True,
                 ),
                 program_config=self._fc2_pcfg,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=self._mlp_out_dtype,
             )
         return ttnn.linear(
             output,
             self.parameters["fc2"]["weight"],
             bias=self.parameters["fc2"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                fp32_dest_acc_en=False,
+                math_fidelity=self._mlp_fidelity,
+                fp32_dest_acc_en=self._mlp_fp32_acc,
                 packer_l1_acc=True,
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=self._mlp_out_dtype,
         )

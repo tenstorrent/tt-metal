@@ -48,7 +48,9 @@ def roll(tensor, shifts, dims):
 class TtSwinAttention:
     """Shifted window multi-head self-attention (TTNN)."""
 
-    def __init__(self, device, parameters, dim, window_size, shift_size, num_heads, attn_mask=None):
+    def __init__(
+        self, device, parameters, dim, window_size, shift_size, num_heads, attn_mask=None, high_precision=False
+    ):
         import torch
 
         self.device = device
@@ -58,6 +60,14 @@ class TtSwinAttention:
         self.shift_size = list(shift_size) if not isinstance(shift_size, list) else shift_size
         self.num_heads = num_heads
         self.attn_mask = attn_mask
+        # High-precision mode (used for deep stages): keep qkv/proj weights and the
+        # combined attention bias in bf16, and run the qkv / attn / proj matmuls at HiFi2
+        # with bf16 outputs to cut the accumulated LoFi+bf8 error.
+        self.high_precision = bool(high_precision)
+        self._attn_fidelity = ttnn.MathFidelity.HiFi2 if high_precision else ttnn.MathFidelity.LoFi
+        self._attn_fp32_acc = bool(high_precision)
+        self._attn_out_dtype = ttnn.bfloat16 if high_precision else ttnn.bfloat8_b
+        self._attn_weight_dtype = ttnn.bfloat16 if high_precision else ttnn.bfloat8_b
 
         # Pre-scale the Q rows of qkv.weight (and qkv.bias) by 1/sqrt(head_dim) so we don't
         # need a per-call `q *= scale` pass on the full (B*nW, H, S, D) tensor.
@@ -71,7 +81,7 @@ class TtSwinAttention:
         # head stages). Bias kept in bf16 (smaller, precision-sensitive).
         self.parameters["qkv"] = {
             "weight": ttnn.from_torch(
-                qkv_w.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+                qkv_w.to(torch.bfloat16), dtype=self._attn_weight_dtype, layout=ttnn.TILE_LAYOUT, device=device
             ),
             "bias": ttnn.from_torch(
                 qkv_b.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
@@ -94,13 +104,13 @@ class TtSwinAttention:
             mask_t = mask_t.reshape(nW, 1, N, N)
             combined = (rpb_t + mask_t).to(torch.bfloat16)  # (nW, H, N, N)
             self.combined_attn_bias = ttnn.from_torch(
-                combined, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+                combined, dtype=self._attn_out_dtype, layout=ttnn.TILE_LAYOUT, device=device
             )
         else:
             # rpb arrives as BF16 from parameters; convert once on host to BFP8_B.
             rpb_t = _to_torch_replica(rpb).to(torch.bfloat16)
             self.combined_attn_bias = ttnn.from_torch(
-                rpb_t, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+                rpb_t, dtype=self._attn_out_dtype, layout=ttnn.TILE_LAYOUT, device=device
             )
 
     def __call__(self, input_tensor):
@@ -152,11 +162,11 @@ class TtSwinAttention:
             self.parameters["qkv"]["weight"],
             bias=self.parameters["qkv"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
+                math_fidelity=self._attn_fidelity, fp32_dest_acc_en=self._attn_fp32_acc, packer_l1_acc=True
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=self._attn_out_dtype,
         )
         ttnn.deallocate(input_tensor)
 
@@ -180,11 +190,11 @@ class TtSwinAttention:
             q,
             k_t,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
+                math_fidelity=self._attn_fidelity, fp32_dest_acc_en=self._attn_fp32_acc, packer_l1_acc=True
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=self._attn_out_dtype,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k_t)
@@ -199,11 +209,11 @@ class TtSwinAttention:
             attn,
             v,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False
+                math_fidelity=self._attn_fidelity, fp32_dest_acc_en=self._attn_fp32_acc
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=self._attn_out_dtype,
         )
         ttnn.deallocate(v)
         ttnn.deallocate(attn)
@@ -218,11 +228,11 @@ class TtSwinAttention:
             self.parameters["proj"]["weight"],
             bias=self.parameters["proj"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False
+                math_fidelity=self._attn_fidelity, fp32_dest_acc_en=self._attn_fp32_acc
             ),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=self._attn_out_dtype,
         )
 
         output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)

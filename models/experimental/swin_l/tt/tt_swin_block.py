@@ -14,13 +14,32 @@ from models.experimental.swin_l.tt.tt_swin_mlp import TtSwinMLP
 class TtSwinBlock:
     """Pre-norm Swin Transformer block: LN -> Attention -> residual -> LN -> MLP -> residual."""
 
-    def __init__(self, device, parameters, dim, num_heads, window_size, shift_size, mlp_ratio=4.0, attn_mask=None):
+    def __init__(
+        self,
+        device,
+        parameters,
+        dim,
+        num_heads,
+        window_size,
+        shift_size,
+        mlp_ratio=4.0,
+        attn_mask=None,
+        high_precision_attn=False,
+        high_precision_mlp=False,
+    ):
         self.device = device
         self.parameters = parameters
         self.attn = TtSwinAttention(
-            device, parameters["attn"], dim, window_size, shift_size, num_heads, attn_mask=attn_mask
+            device,
+            parameters["attn"],
+            dim,
+            window_size,
+            shift_size,
+            num_heads,
+            attn_mask=attn_mask,
+            high_precision=high_precision_attn,
         )
-        self.mlp = TtSwinMLP(device, parameters["mlp"], dim, mlp_ratio=mlp_ratio)
+        self.mlp = TtSwinMLP(device, parameters["mlp"], dim, mlp_ratio=mlp_ratio, high_precision=high_precision_mlp)
         # Match ViT's LN compute config: HiFi2 + math_approx + packer L1 acc — faster than
         # the default while staying numerically adequate for pre-norm transformer blocks.
         self._ln_compute_config = ttnn.WormholeComputeKernelConfig(
