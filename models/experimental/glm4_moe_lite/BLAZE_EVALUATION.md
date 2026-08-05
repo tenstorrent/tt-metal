@@ -105,6 +105,38 @@ only way to know what lands is a **step-level** measurement of the traced model,
 GLM running under blaze's tree (F9). That is the next real milestone, and no further cluster
 A/B changes it.
 
+### The step-level answer so far: NO measurable improvement
+
+Two experiments, both in the shipping traced regime on the real model.
+
+**1. ttnn with blaze's core layout — no gain.** blaze's matmul wins partly by pinning one worker
+per DRAM bank (8) where ttnn spreads over up to 80. That choice is expressible in ttnn today, so
+`GLM4_MOE_LITE_DS_CORE_CAP` caps the activation-sharding count and the model was measured both
+ways:
+
+| `DS_CORE_CAP` | ms/token |
+|---|---:|
+| 0 (ttnn default, up to 80 cores) | **33.2** |
+| 8 (blaze's bank-matched layout) | **33.4** |
+
+No improvement — very slightly worse. So the core-count component of blaze's 1.75x–9.17x
+per-op advantage does **not** reach the step. This is the most direct evidence in this document
+that those per-op deltas are off the critical path, and it agrees with the arithmetic: they sum
+to 31.5% of a step whose entire weight-bandwidth budget is 11.7%.
+
+**2. No blaze op has been substituted into the model yet**, so no blaze-attributable step
+improvement has been measured at all. The model is still at **33.2 ms/token** — exactly the
+pre-blaze baseline.
+
+What was achieved toward it: GLM-4.7-Flash now **runs end to end inside blaze's tt-metal tree**
+— eager decode, correct output ("Canberra"), 559.7 ms/token. That is the process where blaze ops
+and the model can coexist. But eager is dispatch-bound and ~17x slower than traced, so a ~1.6 ms
+kernel win is invisible there; the measurement has to be traced. Traced in blaze's tree is
+blocked by one remaining divergence: a `ttnn.copy` whose destination is `Shape([1,1,32,64])`
+against a `[1,1,1,64]` source. Reproducing the obvious allocation path in isolation copies
+**fine** on that ttnn, so the 32-row destination comes from a different site in the
+trace-capture path than the one inspected — that is where to resume.
+
 ### rmsnorm — REGRESSION, do not adopt
 
 | config | ttnn µs | blaze µs | speedup | ttnn PCC | blaze PCC | verdict |

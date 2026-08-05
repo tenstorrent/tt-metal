@@ -31,6 +31,7 @@ from models.experimental.glm4_moe_lite.tt.layer0_tt import _alloc_contiguous_pag
 from models.experimental.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT  # noqa: E402
 from models.experimental.glm4_moe_lite.tt.runtime_config import (  # noqa: E402
     dispatch_core_config,
+    dispatch_core_label,
     galaxy_fabric_config,
 )
 from models.experimental.glm4_moe_lite.tt.weights import (  # noqa: E402
@@ -544,8 +545,7 @@ def main() -> int:
             # literal "ETH", which was already wrong on WH Galaxy (that path passed
             # DispatchCoreAxis.ROW, i.e. WORKER cores) and is wrong on BH (WORKER/COL).
             f"kv_cache_dtype={args.kv_cache_dtype} "
-            f"dispatch={ttnn.device.get_default_dispatch_core_type().name}/"
-            f"{ttnn.device.get_default_dispatch_core_axis(ttnn.FabricTensixConfig.DISABLED).name} "
+            f"dispatch={dispatch_core_label()} "
             f"phase={phase} batch_size={batch_size}",
             flush=True,
         )

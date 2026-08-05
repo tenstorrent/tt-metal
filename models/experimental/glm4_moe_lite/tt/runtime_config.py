@@ -191,6 +191,22 @@ def dispatch_core_config() -> Any:
         return ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, axis)
 
 
+def dispatch_core_label() -> str:
+    """Human-readable "TYPE/AXIS" for the resolved dispatch, for run summaries.
+
+    Goes through dispatch_core_config() rather than calling the ttnn default-resolving helpers
+    directly, because those do not exist on older tt-metal and a REPORTING line must never be
+    what makes the model unrunnable there.
+    """
+    cfg = dispatch_core_config()
+    for type_attr, axis_attr in (("get_core_type", "get_dispatch_core_axis"), ("core_type", "dispatch_core_axis")):
+        t, a = getattr(cfg, type_attr, None), getattr(cfg, axis_attr, None)
+        if t is not None and a is not None:
+            t, a = (t() if callable(t) else t), (a() if callable(a) else a)
+            return f"{getattr(t, 'name', t)}/{getattr(a, 'name', a)}"
+    return "WORKER/COL" if is_blackhole_galaxy() else "WORKER/ROW"
+
+
 _CCL_CLAMP_WARNED: set[str] = set()
 
 

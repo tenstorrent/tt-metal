@@ -254,7 +254,7 @@ def _ds_act_mc(device: Any, width: int) -> ttnn.MemoryConfig:
 
     grid = device.compute_with_storage_grid_size()
     max_cores = grid.x * grid.y
-    cores = max(get_activation_sharding_core_counts_for_dram_matmul(width, max_cores))
+    cores = _ds_cap(max(get_activation_sharding_core_counts_for_dram_matmul(width, max_cores)))
     return ttnn.create_sharded_memory_config_(
         shape=(_DS_BATCH, width // cores),
         core_grid=ttnn.num_cores_to_corerangeset(
@@ -267,6 +267,32 @@ def _ds_act_mc(device: Any, width: int) -> ttnn.MemoryConfig:
         tile_layout=True,
         use_height_and_width_as_shard_shape=True,
     )
+
+
+# Optional cap on the activation-sharding core count for DRAM-sharded decode matmuls.
+#
+# ttnn's convention is to spread the activation over as many cores as divide the dimension --
+# up to 80 of 120 for K=5120. blaze's DRAMStreamingMatmul instead pins exactly ONE worker per
+# DRAM bank (8 on Blackhole) and measured 1.75x-9.17x faster on kernel time at every one of this
+# model's decode matmul shapes, with the largest gaps on the SMALL-N projections where ttnn is
+# overhead-dominated (q_a 2048x768: 44.7 us on 64 cores vs 4.9 us on 8).
+#
+# Two things differ there: the core count and blaze's 1x32 decode tile. This knob isolates the
+# first, which is expressible in ttnn today, so the question "is blaze's win mostly a core-count
+# choice we could just make?" is answerable without adopting blaze at all.
+# Unset (0) keeps ttnn's default. See BLAZE_EVALUATION.md.
+_DS_CORE_CAP = int(os.environ.get("GLM4_MOE_LITE_DS_CORE_CAP", "0").strip() or "0")
+
+
+def _ds_cap(cores: int) -> int:
+    """Apply _DS_CORE_CAP, keeping the value legal: it must still divide the dimension, so fall
+    back to the largest capped divisor rather than the cap itself."""
+    if _DS_CORE_CAP <= 0 or cores <= _DS_CORE_CAP:
+        return cores
+    for c in range(_DS_CORE_CAP, 0, -1):
+        if cores % c == 0:
+            return c
+    return cores
 
 
 def dram_sharded_linear(
@@ -286,8 +312,8 @@ def dram_sharded_linear(
     max_cores = grid.x * grid.y
     K = int(b.shape[2])
     N = int(b.shape[3])
-    input_cores = max(get_activation_sharding_core_counts_for_dram_matmul(K, max_cores))
-    output_cores = max(get_activation_sharding_core_counts_for_dram_matmul(N, max_cores))
+    input_cores = _ds_cap(max(get_activation_sharding_core_counts_for_dram_matmul(K, max_cores)))
+    output_cores = _ds_cap(max(get_activation_sharding_core_counts_for_dram_matmul(N, max_cores)))
 
     a_sharded = ttnn.to_memory_config(a, _ds_act_mc(device, K))
 
@@ -338,9 +364,9 @@ def dram_sharded_mlp(
     K_down = int(w_down.shape[2])
     N_down = int(w_down.shape[3])
 
-    input_cores = max(get_activation_sharding_core_counts_for_dram_matmul(K_gate, max_cores))
-    inner_cores = max(get_activation_sharding_core_counts_for_dram_matmul(N_gate, max_cores))
-    output_cores = max(get_activation_sharding_core_counts_for_dram_matmul(N_down, max_cores))
+    input_cores = _ds_cap(max(get_activation_sharding_core_counts_for_dram_matmul(K_gate, max_cores)))
+    inner_cores = _ds_cap(max(get_activation_sharding_core_counts_for_dram_matmul(N_gate, max_cores)))
+    output_cores = _ds_cap(max(get_activation_sharding_core_counts_for_dram_matmul(N_down, max_cores)))
 
     x_sharded = ttnn.to_memory_config(x, _ds_act_mc(device, K_gate))
 
