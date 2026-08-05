@@ -20,6 +20,8 @@ from models.common.models.llama32_3b import executor as llama32_3b_executor
 from models.common.models.llama32_3b import generator as llama32_3b_generator
 from models.common.models.qwen2_7b import executor as qwen2_executor
 from models.common.models.qwen2_7b import generator as qwen2_generator
+from models.common.models.qwen25_7b import executor as qwen25_executor
+from models.common.models.qwen25_7b import generator as qwen25_generator
 
 EXECUTOR_BINDINGS = {
     "llama32_1b": SimpleNamespace(
@@ -72,6 +74,25 @@ EXECUTOR_BINDINGS = {
         make_product=lambda mesh_device, max_batch_size: _make_qwen2_product(mesh_device, max_batch_size),
         make_lane=lambda llm, config: _FakeLane(llm, config),
         hf_model="Qwen/Qwen2-7B-Instruct",
+    ),
+    "qwen25_7b": SimpleNamespace(
+        executor_module=qwen25_executor,
+        executor_class=qwen25_executor.Qwen25Executor,
+        executor_config_class=qwen25_executor.Qwen25ExecutorConfig,
+        generator_module=qwen25_generator,
+        generator_class=qwen25_generator.Qwen25Generator,
+        generator_config_class=qwen25_generator.Qwen25GeneratorConfig,
+        build_generator_name="build_qwen25_7b_generator",
+        build_executor_name="build_qwen25_7b_executor",
+        make_model=lambda **kwargs: _make_qwen2_model(**kwargs),
+        make_runtime_config=lambda: _make_qwen2_runtime_config(max_prefill_batch_size=8),
+        make_executor_config=lambda mode="none": _make_qwen2_executor_config(mode, module=qwen25_executor),
+        make_recording_target=lambda **kwargs: _RecordingTarget(_make_qwen2_model(), **kwargs),
+        make_product=lambda mesh_device, max_batch_size: _make_qwen2_product(
+            mesh_device, max_batch_size, max_prefill_batch_size=8
+        ),
+        make_lane=lambda llm, config: _FakeLane(llm, config),
+        hf_model="Qwen/Qwen2.5-7B-Instruct",
     ),
 }
 
@@ -175,15 +196,17 @@ def _make_qwen2_model(max_batch_size=4):
     return model
 
 
-def _make_qwen2_runtime_config():
+def _make_qwen2_runtime_config(*, max_prefill_batch_size=32):
     runtime = _make_llama32_runtime_config()
     runtime.trace_prefill_supported_seq_lens = (128, 1024)
     runtime.can_enable_trace = lambda length, num_cached_tokens=0: length in (128, 1024)
+    runtime.max_prefill_batch_size = max_prefill_batch_size
     return runtime
 
 
-def _make_qwen2_executor_config(mode="none"):
-    return qwen2_executor.Qwen2ExecutorConfig(
+def _make_qwen2_executor_config(mode="none", *, module=qwen2_executor):
+    config_class = getattr(module, "Qwen2ExecutorConfig", None) or module.Qwen25ExecutorConfig
+    return config_class(
         trace=TraceConfig(mode),
         warmup=WarmupConfig(prefill_seq_lens=(128, 1024), prefill_batch_sizes=(1,)),
         paged_kv_cache=PagedKVCacheConfig(block_size=32, max_num_blocks=132, dtype=ttnn.bfloat8_b),
@@ -191,10 +214,13 @@ def _make_qwen2_executor_config(mode="none"):
     )
 
 
-def _make_qwen2_product(mesh_device, max_batch_size):
+def _make_qwen2_product(mesh_device, max_batch_size, *, max_prefill_batch_size=32):
     model = _make_qwen2_model(max_batch_size=max_batch_size)
     model.config.mesh_device = mesh_device
-    return SimpleNamespace(model=model, runtime_config=_make_qwen2_runtime_config())
+    return SimpleNamespace(
+        model=model,
+        runtime_config=_make_qwen2_runtime_config(max_prefill_batch_size=max_prefill_batch_size),
+    )
 
 
 def test_qwen2_binding_preserves_tp2_runtime_and_sampling_defaults():

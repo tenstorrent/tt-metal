@@ -13,6 +13,7 @@ import pytest
 from models.common.models.llama32_1b import model as llama32_model
 from models.common.models.llama32_3b import model as llama32_3b_model
 from models.common.models.qwen2_7b import model as qwen2_model
+from models.common.models.qwen25_7b import model as qwen25_model
 
 MODEL_CONTRACTS = {
     "llama32_1b": SimpleNamespace(
@@ -68,6 +69,28 @@ MODEL_CONTRACTS = {
         make_config=lambda **kwargs: _make_qwen2_config(**kwargs),
         make_layer=lambda attention_config=None: _make_llama32_layer(attention_config),
         construct_model=lambda monkeypatch: _construct_qwen2_model(monkeypatch),
+        expected_module_names=(
+            "layer[0].attn_norm",
+            "layer[0].attention",
+            "layer[0].ff_norm",
+            "layer[0].mlp",
+            "layer[1].attn_norm",
+            "layer[1].attention",
+            "layer[1].ff_norm",
+            "layer[1].mlp",
+            "final_norm",
+            "lm_head",
+        ),
+    ),
+    "qwen25_7b": SimpleNamespace(
+        module=qwen25_model,
+        model_class=qwen25_model.Qwen25_7B,
+        config_class=qwen25_model.Qwen25_7BTransformerConfig,
+        attention_config_class=qwen25_model.Attention1DConfig,
+        make_attention_config=lambda **kwargs: _make_llama32_attention_config(**kwargs),
+        make_config=lambda **kwargs: _make_qwen2_config(module=qwen25_model, **kwargs),
+        make_layer=lambda attention_config=None: _make_llama32_layer(attention_config),
+        construct_model=lambda monkeypatch: _construct_qwen2_model(monkeypatch, module=qwen25_model),
         expected_module_names=(
             "layer[0].attn_norm",
             "layer[0].attention",
@@ -163,11 +186,12 @@ def _construct_llama32_model(monkeypatch, *, module=llama32_model):
     return model_class(config), config, sentinels
 
 
-def _make_qwen2_config(*, n_layers=1, num_devices=2, n_kv_heads=4, sampling_config=None):
+def _make_qwen2_config(*, module=qwen2_model, n_layers=1, num_devices=2, n_kv_heads=4, sampling_config=None):
     block_configs = [
         SimpleNamespace(attention_config=_make_llama32_attention_config(n_kv_heads=n_kv_heads)) for _ in range(n_layers)
     ]
-    return qwen2_model.Qwen2_7BTransformerConfig(
+    config_class = getattr(module, "Qwen2_7BTransformerConfig", None) or module.Qwen25_7BTransformerConfig
+    return config_class(
         n_layers=n_layers,
         vocab_size=152064,
         max_batch_size=4,
@@ -185,7 +209,7 @@ def _make_qwen2_config(*, n_layers=1, num_devices=2, n_kv_heads=4, sampling_conf
     )
 
 
-def _construct_qwen2_model(monkeypatch):
+def _construct_qwen2_model(monkeypatch, *, module=qwen2_model):
     sentinels = {
         "embedding": object(),
         "rope_setup": object(),
@@ -194,21 +218,23 @@ def _construct_qwen2_model(monkeypatch):
         "lm_head": object(),
         "sampling": object(),
     }
+    layer_class = "Qwen2_7BDecoderLayer" if module is qwen2_model else "Qwen25_7BDecoderLayer"
     for owner_name, sentinel_name in (
         ("Embedding1D", "embedding"),
         ("RotarySetup1D", "rope_setup"),
-        ("Qwen2_7BDecoderLayer", "layer"),
+        (layer_class, "layer"),
         ("RMSNorm1D", "norm"),
         ("LMHead1D", "lm_head"),
         ("Sampling1D", "sampling"),
     ):
         monkeypatch.setattr(
-            getattr(qwen2_model, owner_name),
+            getattr(module, owner_name),
             "from_config",
             MagicMock(return_value=sentinels[sentinel_name]),
         )
-    config = _make_qwen2_config(sampling_config=object())
-    return qwen2_model.Qwen2_7B(config), config, sentinels
+    config = _make_qwen2_config(module=module, sampling_config=object())
+    model_class = getattr(module, "Qwen2_7B", None) or module.Qwen25_7B
+    return model_class(config), config, sentinels
 
 
 def test_config_exposes_complete_runtime_metadata(contract):
