@@ -14,12 +14,6 @@
 
 namespace tt::tt_metal {
 
-// Resolve a relative kernel file path using rtoptions from the given context.
-// Absolute paths are returned unchanged. KernelSource itself does not store a ContextId;
-// Program-backed factories should call this before constructing a FILE_PATH KernelSource.
-std::filesystem::path resolve_kernel_file_path(
-    const std::filesystem::path& given_file_name, ContextId context_id = DEFAULT_CONTEXT_ID);
-
 struct KernelSource {
     enum SourceType { FILE_PATH, SOURCE_CODE };
 
@@ -28,7 +22,11 @@ struct KernelSource {
     // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
     std::filesystem::path path_;
 
-    KernelSource(const std::string& source, const SourceType& source_type);
+    // Resolve path using rtoptions from context_id and construct a FILE_PATH KernelSource.
+    static KernelSource from_path(ContextId context_id, const std::filesystem::path& path);
+
+    // Construct a SOURCE_CODE KernelSource from inline source.
+    static KernelSource from_source(const std::string& source_code);
 
     std::string name() const {
         if (this->source_type_ == SourceType::FILE_PATH) {
@@ -56,6 +54,9 @@ struct KernelSource {
         }
         ttsl::unreachable();
     }
+
+private:
+    KernelSource(std::string source, SourceType source_type, std::filesystem::path path);
 };
 
 }  // namespace tt::tt_metal
