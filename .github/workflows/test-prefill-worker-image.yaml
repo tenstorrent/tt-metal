@@ -1,14 +1,32 @@
 name: "(TEMPORARY) Test prefill-worker image build"
 
-# Scaffolding to validate the prefill-worker image end to end WITHOUT running a
-# release: it builds the same bake target the release job builds, with the same
-# two injected bases and the same BuildKit secret, and pushes to a throwaway tag.
+# Off-branch dry run of what the NIGHTLY release does for the disaggregated
+# prefill-worker image, without running a full release. It imitates the release's
+# create-prefill-worker-image job (-> publish-release-image.yaml, derived-image
+# path): derive FROM the published release-models image, COPY _migration_client
+# out of the prebuilt tt-llm-engine migration image, and push with the exact same
+# bake target + compression/output settings + SBOM/attestation (the shared
+# manual-docker-bake action) the release uses.
+#
+# Deviations from the real nightly (so it's safe to run repeatedly off a branch):
+#   * It layers on an ALREADY-PUBLISHED release-models tag (base-version, default
+#     'latest') and pushes to a throwaway '<test-tag>' instead of a single shared
+#     release version. The real job uses the release version for both.
+#   * No on-device smoke test / retag-as-latest - those are release management,
+#     not part of building this image.
+# Everything else (derive-from-release-models, the prebuilt-engine COPY, the
+# derived output line, attestations) matches the nightly.
+#
+# Platforms: both 22.04 and 24.04, exactly as the package-and-release matrix
+# drives the nightly. The 24.04 leg is EXPECTED to fail the in-build import check
+# until tt-llm-engine publishes a Python-3.12 migration-worker image (the module
+# is a version-specific nanobind extension; today the image is 3.10 only).
+# fail-fast:false so the 22.04 leg still completes and pushes.
 #
 # Why a `push` trigger and not just workflow_dispatch: `gh workflow run` resolves
-# workflows from the DEFAULT branch only, so a brand-new dispatch-only workflow on
-# a feature branch cannot be triggered (404). A push trigger runs the definition
-# from the pushed branch itself. Once this is on main, the workflow_dispatch form
-# below works too.
+# workflows from the DEFAULT branch only, so a dispatch-only workflow on a feature
+# branch cannot be triggered (404). A push trigger runs the definition from the
+# pushed branch itself.
 #
 # DELETE THIS FILE once the prefill-worker release job has run green.
 
@@ -25,15 +43,12 @@ on:
         required: false
         default: prefill-worker-buildtest
         type: string
-      stub-migration-client:
+      tt-llm-engine-image:
         description: >-
-          'true' (default) replaces the llm-build stage with a stub context holding a
-          fake _migration_client, so the whole pipeline can be validated WITHOUT a
-          token that can read the private tt-llm-engine. Set 'false' once such a
-          secret exists to do the real clone+compile. A stub build is tagged
-          '<test-tag>-stub' so it can never be mistaken for a real worker.
+          Prebuilt tt-llm-engine migration image to COPY _migration_client from.
+          Leave empty to use the pinned default in dockerfile/docker-bake.hcl.
         required: false
-        default: "true"
+        default: ""
         type: string
   push:
     branches-ignore:
@@ -82,28 +97,19 @@ jobs:
         env:
           BASE_VERSION: ${{ inputs.base-version || 'latest' }}
           TEST_TAG: ${{ inputs.test-tag || 'prefill-worker-buildtest' }}
-          STUB: ${{ inputs.stub-migration-client || 'true' }}
+          ENGINE: ${{ inputs.tt-llm-engine-image || '' }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
+          # Same image naming the release uses: tt-metalium-<platform>-<image>-amd64.
           BASE="ghcr.io/${GITHUB_REPOSITORY}/tt-metalium-${PLATFORM}-release-models-amd64:${BASE_VERSION}"
-          # The dev image tag is content-addressed, so resolve it the same way the
-          # real build does rather than hardcoding a hash.
-          PLATFORM_DATA=$(.github/scripts/compute-platform-data.sh "${PLATFORM#ubuntu-}" "$GITHUB_REPOSITORY" --no-check-exists)
-          BUILDER=$(echo "$PLATFORM_DATA" | jq -r '.dev_tag')
-          # A stubbed build must never share a tag with a real one.
-          if [ "$STUB" = "true" ]; then
-            TEST_TAG="${TEST_TAG}-stub"
-          fi
           OUT="ghcr.io/${GITHUB_REPOSITORY}/tt-metalium-${PLATFORM}-prefill-worker-amd64:${TEST_TAG}"
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
-          echo "builder=$BUILDER" >> "$GITHUB_OUTPUT"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
-          echo "stub=$STUB" >> "$GITHUB_OUTPUT"
-          echo "Base:    $BASE"
-          echo "Builder: $BUILDER"
-          echo "Output:  $OUT"
-          echo "Stubbed: $STUB"
+          echo "engine=$ENGINE" >> "$GITHUB_OUTPUT"
+          echo "Base:   $BASE"
+          echo "Output: $OUT"
+          echo "Engine: ${ENGINE:-<bake default>}"
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -112,158 +118,64 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Which org secret can actually clone the private engine repo is not
-      # discoverable without running a job (secret VALUES are never readable, and
-      # read:org - what the org-read PATs carry - does not imply contents read).
-      # Probe every plausible candidate in ONE run and print a verdict table, so
-      # picking the right secret costs one run rather than one run per guess.
-      # SELECTED_SECRET is the one the build below (and the release job) uses; only
-      # that one failing is fatal.
-      - name: Probe candidate secrets for tt-llm-engine read access
+      - name: Verify base + engine images are readable
         env:
-          SELECTED_SECRET: VLLM_TT_PLUGIN_READ_TOKEN
-          # A stubbed build does no clone, so a missing/under-scoped token must not
-          # fail it - the probe still runs and reports, purely for information.
-          ADVISORY_ONLY: ${{ steps.refs.outputs.stub }}
-          VLLM_TT_PLUGIN_READ_TOKEN: ${{ secrets.VLLM_TT_PLUGIN_READ_TOKEN }}
-          TENSTORRENT_ORG_READ_TOKEN: ${{ secrets.TENSTORRENT_ORG_READ_TOKEN }}
-          ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
-          AI_GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
-          TT_METAL_RELEASE_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
-          LLK_UPLIFT_PAT: ${{ secrets.LLK_UPLIFT_PAT }}
-          CODEOWNERS_GROUP_ANALYSIS_PAT: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
-          RETRY_WORKFLOW_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          BASE: ${{ steps.refs.outputs.base }}
+          ENGINE: ${{ steps.refs.outputs.engine }}
         run: |
           set -uo pipefail
-          ENGINE_REPO="tenstorrent/tt-llm-engine"
-          CANDIDATES=(
-            VLLM_TT_PLUGIN_READ_TOKEN
-            TENSTORRENT_ORG_READ_TOKEN
-            ORG_READ_GITHUB_TOKEN
-            AI_GH_TOKEN
-            TT_METAL_RELEASE_TOKEN
-            LLK_UPLIFT_PAT
-            CODEOWNERS_GROUP_ANALYSIS_PAT
-            RETRY_WORKFLOW_TOKEN
-          )
-          echo "Read access to ${ENGINE_REPO} by secret:"
-          WORKING=()
-          for name in "${CANDIDATES[@]}"; do
-            value="${!name:-}"
-            if [ -z "$value" ]; then
-              printf '  %-32s EMPTY / not set\n' "$name"
-            elif GIT_TERMINAL_PROMPT=0 git ls-remote \
-                   "https://x-access-token:${value}@github.com/${ENGINE_REPO}.git" \
-                   > /dev/null 2>&1; then
-              printf '  %-32s CAN READ\n' "$name"
-              WORKING+=("$name")
-            else
-              printf '  %-32s set, but CANNOT read (scope)\n' "$name"
-            fi
-          done
-          echo ""
-          if [ "${#WORKING[@]}" -gt 0 ]; then
-            echo "Secrets that work: ${WORKING[*]}"
-          else
-            echo "::warning::No candidate secret can read ${ENGINE_REPO}. A new token" \
-              "with contents read on that repo has to be provisioned."
-          fi
-          # Only the secret the build actually uses is fatal, and only for a real
-          # (non-stubbed) build.
-          for name in "${WORKING[@]}"; do
-            if [ "$name" = "$SELECTED_SECRET" ]; then
-              echo "Selected secret ${SELECTED_SECRET} can read ${ENGINE_REPO} - proceeding."
-              exit 0
-            fi
-          done
-          if [ "$ADVISORY_ONLY" = "true" ]; then
-            echo "Stubbed build: no clone happens, so ${SELECTED_SECRET} is not needed" \
-              "for this run. Continuing."
-            exit 0
-          fi
-          echo "::error::Selected secret ${SELECTED_SECRET} cannot read ${ENGINE_REPO}." \
-            "Point gh-token at one of the working secrets listed above (in" \
-            ".github/workflows/publish-release-image.yaml and this file), or provision" \
-            "a token with contents read on ${ENGINE_REPO}."
-          exit 1
-
-      - name: Verify the release-models base exists
-        run: |
-          set -euo pipefail
-          if ! docker manifest inspect "${{ steps.refs.outputs.base }}" > /dev/null 2>&1; then
-            echo "::error::Base image ${{ steps.refs.outputs.base }} not found in GHCR." \
-              "Re-run with base-version set to a release-models tag that exists."
+          if ! docker manifest inspect "$BASE" > /dev/null 2>&1; then
+            echo "::error::Base image $BASE not found in GHCR." \
+              "Re-run with base-version set to a release-models tag that exists for this platform."
             exit 1
           fi
           echo "Base image found."
+          # ENGINE empty => the bake default is used; the build's own pull would
+          # surface a missing image. Only preflight an explicitly-passed override.
+          if [ -n "$ENGINE" ] && ! docker manifest inspect "$ENGINE" > /dev/null 2>&1; then
+            echo "::error::tt-llm-engine image $ENGINE not found / not readable in GHCR."
+            exit 1
+          fi
+          [ -n "$ENGINE" ] && echo "Engine image found." || echo "Engine image: using bake default."
 
-      # A named build context whose name matches a Dockerfile STAGE replaces that
-      # stage wholesale, so pointing `llm-build` at a local directory skips the
-      # engine clone and the nanobind compile entirely - no token needed. Paths in
-      # `COPY --from=llm-build` then resolve inside this directory, so the tree
-      # mirrors the real stage's layout. The fake module satisfies the Dockerfile's
-      # import check, which is the point: everything downstream of the compile
-      # (COPY, import check, push, attestation, digest, retag) gets exercised.
-      - name: Create stub migration-client context
-        id: stub
-        if: ${{ steps.refs.outputs.stub == 'true' }}
+      # Same as the release: the SBOM attestation needs our self-hosted syft-scanner
+      # + oras tool images, resolved to their content-addressed ghcr tags.
+      - name: Compute tool tags
+        id: tool-tags
         run: |
-          set -euo pipefail
-          # MUST live under the workspace, not $RUNNER_TEMP: `bake` enforces
-          # filesystem entitlements and rejects a local-directory context outside the
-          # bake project root with "ERROR: additional privileges requested" unless
-          # --allow=fs.read=<path> is passed. A path under the repo root needs no
-          # entitlement, which avoids teaching the shared manual-docker-bake action
-          # an --allow passthrough just for this temporary test.
-          STUB_DIR="${GITHUB_WORKSPACE}/.tmp-stub-llm-build"
-          MOD_DIR="${STUB_DIR}/src/ttllm/disaggregation/migration/build_RelWithDebInfo/python"
-          mkdir -p "$MOD_DIR"
-          # printf, not a heredoc: a heredoc body inside a YAML block scalar has to
-          # stay at the block's indentation, which makes python indentation unreadable.
+          TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "${{ github.repository }}")
           {
-            printf '%s\n' '# STUB - not the real nanobind _migration_client. Exists only so a'
-            printf '%s\n' '# token-free CI run can validate the image pipeline. Any image built'
-            printf '%s\n' "# with this is tagged '*-stub' and must never be deployed."
-            printf '%s\n' 'class MigrationLayerClient:'
-            printf '%s\n' '    def __init__(self, *args, **kwargs):'
-            printf '%s\n' '        raise RuntimeError("stub _migration_client - not a real build")'
-          } > "${MOD_DIR}/_migration_client.py"
-          python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "${MOD_DIR}/_migration_client.py"
-          echo "stub-dir=${STUB_DIR}" >> "$GITHUB_OUTPUT"
-          echo "::warning::Stubbed build: _migration_client is a FAKE python module." \
-            "This validates the pipeline only; the resulting '-stub' image is not deployable."
-          find "$STUB_DIR" -type f
+            echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')"
+            echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Prepare bake overrides
         id: bake
         env:
           BASE: ${{ steps.refs.outputs.base }}
-          BUILDER: ${{ steps.refs.outputs.builder }}
           OUT: ${{ steps.refs.outputs.out }}
-          STUB: ${{ steps.refs.outputs.stub }}
-          STUB_DIR: ${{ steps.stub.outputs.stub-dir }}
+          ENGINE: ${{ steps.refs.outputs.engine }}
           PROXY_HTTP: ${{ env.PROXY_HTTP }}
           PROXY_HTTPS: ${{ env.PROXY_HTTPS }}
           PROXY_NO_PROXY: ${{ env.PROXY_NO_PROXY }}
         run: |
           set -euo pipefail
           SET=""
+          # derive-from release-models: layer on the published base image (exactly
+          # what publish-release-image.yaml sets for a derived image).
           SET+="prefill-worker.contexts.release-base=docker-image://${BASE}"$'\n'
-          SET+="prefill-worker.contexts.llm-build-base=docker-image://${BUILDER}"$'\n'
-          if [ "$STUB" = "true" ]; then
-            # Overrides the llm-build STAGE, so llm-build-base above goes unused.
-            SET+="prefill-worker.contexts.llm-build=${STUB_DIR}"$'\n'
-          fi
           SET+="prefill-worker.tags=${OUT}"$'\n'
-          # No force-compression here. This worker layers on a REMOTE base image
-          # (release-base = docker-image://.../release-models) whose layers are
-          # referenced lazily, not pulled. force-compression=true makes BuildKit
-          # recompress every layer - including those lazy base blobs - to zstd at
-          # export, which fails with 'failed to get compression blob "zstd": not
-          # found'. Without it, the base layers are reused by digest (and stay
-          # shared with release-models in the registry) and only the two new
-          # worker layers get zstd-compressed. oci-mediatypes allows the resulting
-          # mixed-compression (gzip base + zstd new) image.
+          # Override the engine image only when one was passed; otherwise the pinned
+          # default in dockerfile/docker-bake.hcl applies.
+          if [ -n "$ENGINE" ]; then
+            SET+="prefill-worker.args.TT_LLM_ENGINE_IMAGE=${ENGINE}"$'\n'
+          fi
+          # Derived-image output line: zstd but NO force-compression. This worker
+          # layers on a REMOTE base whose layers are referenced lazily;
+          # force-compression=true would make BuildKit recompress those lazy base
+          # blobs to zstd at export and fail with 'failed to get compression blob
+          # "zstd": not found'. Without it the base layers are reused by digest and
+          # only the new worker layer is zstd. Matches the release's derived branch.
           SET+="prefill-worker.output=type=image,push=true,compression=zstd,compression-level=22,oci-mediatypes=true"$'\n'
           if [ -n "$PROXY_HTTP" ]; then
             SET+="prefill-worker.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
@@ -276,11 +188,14 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # Same composite action the release uses - so this exercises the identical
+      # bake invocation, SBOM attestation and enrichment path.
       - name: Build and push prefill-worker
         uses: ./.github/actions/manual-docker-bake
         with:
           targets: prefill-worker
           set-lines: ${{ steps.bake.outputs.set }}
-          gh-token: ${{ secrets.VLLM_TT_PLUGIN_READ_TOKEN }}
+          syft-scanner-image: ${{ steps.tool-tags.outputs.syft-scanner-image }}
+          oras-image: ${{ steps.tool-tags.outputs.oras-image }}
           retries: "2"
           retry-delay-seconds: "15"
