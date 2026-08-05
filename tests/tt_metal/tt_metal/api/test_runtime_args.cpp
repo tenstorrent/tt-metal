@@ -418,25 +418,33 @@ void verify_results(
     }
 }
 
+}  // namespace unit_tests::runtime_args
+
+namespace tt::tt_metal {
+
+class QuasarRuntimeArgsFixture : public QuasarUnitMeshFixture {
+protected:
+    void verify_quasar_crtas(
+        const CoreCoord& core, const std::vector<std::vector<uint32_t>>& per_user_dm_crtas, bool expect_shared_address);
+};
+
 // `per_user_dm_crtas` is indexed by user-DM index (0..kQuasarNumUserDms-1), corresponding to
 // physical DMs DM2..DM(2+kQuasarNumUserDms-1). DM0/DM1 are reserved by Metal 2.0 runtime.
 // The kernel uses raw `hartid` (= 2..7) to index into a MAX_DMS-wide L1 region anchored at DM0's slot.
-void verify_quasar_crtas(
-    UnitMeshFixture& fixture,
-    const CoreCoord& core,
-    const std::vector<std::vector<uint32_t>>& per_user_dm_crtas,
-    bool expect_shared_address) {
-    uint32_t l1_base = fixture.device().allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    uint32_t results_base = get_runtime_arg_addr(l1_base, tt::tt_metal::HalProcessorClassType::DM, 0, true);
+void QuasarRuntimeArgsFixture::verify_quasar_crtas(
+    const CoreCoord& core, const std::vector<std::vector<uint32_t>>& per_user_dm_crtas, bool expect_shared_address) {
+    uint32_t l1_base = this->device().allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint32_t results_base =
+        unit_tests::runtime_args::get_runtime_arg_addr(l1_base, tt::tt_metal::HalProcessorClassType::DM, 0, true);
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
 
     uint32_t num_verified_user_dms = per_user_dm_crtas.size();
     TT_ASSERT(
-        num_verified_user_dms <= kQuasarNumUserDms,
+        num_verified_user_dms <= unit_tests::runtime_args::kQuasarNumUserDms,
         "per_user_dm_crtas.size() ({}) exceeds the {} user DMs available on Quasar Metal 2.0",
         num_verified_user_dms,
-        kQuasarNumUserDms);
+        unit_tests::runtime_args::kQuasarNumUserDms);
 
     constexpr uint32_t kCommonRTASeparation = 1024;
     // For this test, all CRTAs in all kernels are the same size
@@ -444,12 +452,12 @@ void verify_quasar_crtas(
     std::vector<uint32_t> crta_addrs;
 
     for (uint32_t user_dm_idx = 0; user_dm_idx < num_verified_user_dms; user_dm_idx++) {
-        uint32_t physical_dm_id = kQuasarFirstUserDm + user_dm_idx;
+        uint32_t physical_dm_id = unit_tests::runtime_args::kQuasarFirstUserDm + user_dm_idx;
         const auto& expected_crtas = per_user_dm_crtas[user_dm_idx];
         uint32_t crta_addr = results_base + ((kCommonRTASeparation + physical_dm_id * num_crtas) * sizeof(uint32_t));
 
         std::vector<uint32_t> observed;
-        fixture.ReadFromL1(core, crta_addr, num_crtas * sizeof(uint32_t), observed);
+        this->ReadFromL1(core, crta_addr, num_crtas * sizeof(uint32_t), observed);
 
         for (size_t j = 0; j < num_crtas; j++) {
             EXPECT_EQ(observed[j], expected_crtas[j]) << "DM" << physical_dm_id << " CRTA[" << j << "]";
@@ -458,10 +466,10 @@ void verify_quasar_crtas(
 
     uint32_t addr_base = results_base + ((kCommonRTASeparation + max_dms * num_crtas) * sizeof(uint32_t));
     for (uint32_t user_dm_idx = 0; user_dm_idx < num_verified_user_dms; user_dm_idx++) {
-        uint32_t physical_dm_id = kQuasarFirstUserDm + user_dm_idx;
+        uint32_t physical_dm_id = unit_tests::runtime_args::kQuasarFirstUserDm + user_dm_idx;
         uint32_t addr_offset = addr_base + (physical_dm_id * sizeof(uint32_t));
         std::vector<uint32_t> addr;
-        fixture.ReadFromL1(core, addr_offset, sizeof(uint32_t), addr);
+        this->ReadFromL1(core, addr_offset, sizeof(uint32_t), addr);
         crta_addrs.push_back(addr[0]);
     }
 
@@ -474,18 +482,14 @@ void verify_quasar_crtas(
         // All DMs should have different CRTA addresses
         for (size_t i = 0; i < crta_addrs.size(); i++) {
             for (size_t j = i + 1; j < crta_addrs.size(); j++) {
-                uint32_t physical_dm_i = kQuasarFirstUserDm + i;
-                uint32_t physical_dm_j = kQuasarFirstUserDm + j;
+                uint32_t physical_dm_i = unit_tests::runtime_args::kQuasarFirstUserDm + i;
+                uint32_t physical_dm_j = unit_tests::runtime_args::kQuasarFirstUserDm + j;
                 EXPECT_NE(crta_addrs[i], crta_addrs[j]) << "DM" << physical_dm_i << " and DM" << physical_dm_j
                                                         << " have same CRTA address: 0x" << std::hex << crta_addrs[i];
             }
         }
     }
 }
-
-}  // namespace unit_tests::runtime_args
-
-namespace tt::tt_metal {
 
 // Write unique and common runtime args to device and readback to verify written correctly.
 TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
@@ -1034,7 +1038,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
 // Metal 2.0 reserves DM0/DM1 on Quasar, leaving DM2..DM7 (6 cores) available for user kernels.
 // TODO: Once SW supports multiple quasar clusters/cores, expand to multiple NodeRangeSets
 // to verify CRTA dispatch across different Kernel groups
-TEST_F(QuasarUnitMeshFixture, QuasarCRTASharedL1Address) {
+TEST_F(QuasarRuntimeArgsFixture, QuasarCRTASharedL1Address) {
     constexpr CoreCoord core = {0, 0};
     CoreRange core_range(core);
     CoreRangeSet core_range_set(std::vector{core_range});
@@ -1068,7 +1072,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarCRTASharedL1Address) {
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
     // Verify all 6 user DMs (DM2..DM7) share the same CRTA L1 address
-    unit_tests::runtime_args::verify_quasar_crtas(*this, core, all_crtas, /*expect_shared_address*/ true);
+    this->verify_quasar_crtas(core, all_crtas, /*expect_shared_address*/ true);
 }
 
 // Quasar only test: 6 separate kernels, each running on a unique user DM processor (DM2..DM7), with unique CRTAs.
@@ -1076,7 +1080,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarCRTASharedL1Address) {
 // Metal 2.0 reserves DM0/DM1 on Quasar, leaving DM2..DM7 (6 cores) available -- one kernel per user DM
 // TODO: Once SW supports multiple quasar clusters/cores, expand to multiple NodeRangeSets
 // to verify CRTA dispatch across different Kernel groups
-TEST_F(QuasarUnitMeshFixture, QuasarCRTAUniqueL1Addresses) {
+TEST_F(QuasarRuntimeArgsFixture, QuasarCRTAUniqueL1Addresses) {
     constexpr CoreCoord core = {0, 0};
     CoreRange core_range(core);
     CoreRangeSet core_range_set(std::vector{core_range});
@@ -1110,7 +1114,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarCRTAUniqueL1Addresses) {
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
     // Verify each user DM (DM2..DM7) has a unique CRTA L1 address
-    unit_tests::runtime_args::verify_quasar_crtas(*this, core, all_crtas, /*expect_shared_address*/ false);
+    this->verify_quasar_crtas(core, all_crtas, /*expect_shared_address*/ false);
 }
 
 TEST_F(QuasarUnitMeshFixture, QuasarMergeProgramRunArgs) {

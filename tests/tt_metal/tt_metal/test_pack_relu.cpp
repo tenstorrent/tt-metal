@@ -33,10 +33,14 @@ uint32_t make_relu_config(PackReluMode mode, float threshold = 0.0f) {
     return (static_cast<uint32_t>(thresh_bf16) << 16) | static_cast<uint32_t>(mode);
 }
 
+class PackReluFixture : public QuasarUnitMeshFixture {
+protected:
+    void run_pack_relu_test(uint32_t relu_config, const std::function<float(float)>& golden_fn);
+};
+
 // Run a pack relu test using the same infrastructure as test_direct.cpp's quasar path:
 // direct_reader_unary.cpp → eltwise_copy.cpp (with PACK_RELU) → direct_writer_unary.cpp
-static void run_pack_relu_test(
-    UnitMeshFixture& fixture, uint32_t relu_config, const std::function<float(float)>& golden_fn) {
+void PackReluFixture::run_pack_relu_test(uint32_t relu_config, const std::function<float(float)>& golden_fn) {
     const experimental::NodeCoord node{0, 0};
 
     uint32_t single_tile_size = 2 * 1024;
@@ -46,8 +50,8 @@ static void run_pack_relu_test(
     distributed::DeviceLocalBufferConfig dram_config{.page_size = single_tile_size, .buffer_type = BufferType::DRAM};
     distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
 
-    auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &fixture.device());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &fixture.device());
+    auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
@@ -133,11 +137,11 @@ static void run_pack_relu_test(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(fixture.device(), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     // Stimulus: random bfloat16 in [-1, 1]
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 1.0f, 0xCAFE);
-    fixture.WriteBuffer(src_dram_buffer, src_vec);
+    this->WriteBuffer(src_dram_buffer, src_vec);
 
     const uint32_t src_aligned_page_size =
         static_cast<uint32_t>(src_dram_buffer->get_reference_buffer()->aligned_page_size());
@@ -171,10 +175,10 @@ static void run_pack_relu_test(
     };
     experimental::SetProgramRunArgs(program, params);
 
-    fixture.RunProgram(std::move(program));
+    this->RunProgram(std::move(program));
 
     std::vector<uint32_t> result_vec;
-    fixture.ReadBuffer(dst_dram_buffer, result_vec);
+    this->ReadBuffer(dst_dram_buffer, result_vec);
 
     // Build golden
     std::vector<uint32_t> golden(src_vec.size());
@@ -199,22 +203,22 @@ static void run_pack_relu_test(
 }
 
 // ZERO_RELU: max(0, x)
-TEST_F(QuasarUnitMeshFixture, PackReluZero) {
-    run_pack_relu_test(*this, make_relu_config(PackReluMode::ZERO_RELU), [](float x) { return std::max(0.0f, x); });
+TEST_F(PackReluFixture, PackReluZero) {
+    this->run_pack_relu_test(make_relu_config(PackReluMode::ZERO_RELU), [](float x) { return std::max(0.0f, x); });
 }
 
 // MIN_THRESHOLD_RELU: x <= threshold ? 0 : x (threshold = 0.25)
-TEST_F(QuasarUnitMeshFixture, PackReluMinThreshold) {
+TEST_F(PackReluFixture, PackReluMinThreshold) {
     const float threshold = 0.25f;
-    run_pack_relu_test(*this, make_relu_config(PackReluMode::MIN_THRESHOLD_RELU, threshold), [threshold](float x) {
+    this->run_pack_relu_test(make_relu_config(PackReluMode::MIN_THRESHOLD_RELU, threshold), [threshold](float x) {
         return x <= threshold ? 0.0f : x;
     });
 }
 
 // MAX_THRESHOLD_RELU: clamp to [0, threshold] (threshold = 0.5)
-TEST_F(QuasarUnitMeshFixture, PackReluMaxThreshold) {
+TEST_F(PackReluFixture, PackReluMaxThreshold) {
     const float threshold = 0.5f;
-    run_pack_relu_test(*this, make_relu_config(PackReluMode::MAX_THRESHOLD_RELU, threshold), [threshold](float x) {
+    this->run_pack_relu_test(make_relu_config(PackReluMode::MAX_THRESHOLD_RELU, threshold), [threshold](float x) {
         return x < 0.0f ? 0.0f : std::min(x, threshold);
     });
 }

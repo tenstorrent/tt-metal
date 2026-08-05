@@ -28,10 +28,24 @@ constexpr auto kIdmaBasic =
 constexpr auto kIdma1DStrided =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_idma/kernels/idma_1d_strided_example.cpp";
 
-static void run_kernel(
-    distributed::MeshDevice& mesh_device,
-    const std::string& kernel_path,
-    experimental::KernelSpec::CompileTimeArgs compile_time_args) {
+// Allocates a pair of same-sized replicated L1 buffers on the mesh for use as IDMA src/dst.
+// Buffers are returned (not just their addresses) so the caller keeps them alive for the
+// lifetime of the test; letting the MeshBuffers be destroyed would free the allocation.
+struct IdmaSrcDstBuffers {
+    std::shared_ptr<distributed::MeshBuffer> src;
+    std::shared_ptr<distributed::MeshBuffer> dst;
+};
+
+class QuasarIdmaOps : public QuasarUnitMeshFixture {
+protected:
+    void run_kernel(const std::string& kernel_path, experimental::KernelSpec::CompileTimeArgs compile_time_args);
+    IdmaSrcDstBuffers make_idma_src_dst_buffers(uint32_t total_bytes);
+    bool run_idma_basic_test();
+    bool run_idma_1d_strided_test();
+};
+
+void QuasarIdmaOps::run_kernel(
+    const std::string& kernel_path, experimental::KernelSpec::CompileTimeArgs compile_time_args) {
     const experimental::KernelSpecName DM_KERNEL{"idma"};
     const experimental::NodeCoord node{0, 0};
 
@@ -54,47 +68,38 @@ static void run_kernel(
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(mesh_device.shape());
+    distributed::MeshCoordinateRange device_range(this->device().shape());
     workload.add_program(device_range, std::move(program));
-    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, true);
 }
 
-// Allocates a pair of same-sized replicated L1 buffers on the mesh for use as IDMA src/dst.
-// Buffers are returned (not just their addresses) so the caller keeps them alive for the
-// lifetime of the test; letting the MeshBuffers be destroyed would free the allocation.
-struct IdmaSrcDstBuffers {
-    std::shared_ptr<distributed::MeshBuffer> src;
-    std::shared_ptr<distributed::MeshBuffer> dst;
-};
-
-IdmaSrcDstBuffers make_idma_src_dst_buffers(distributed::MeshDevice& mesh_device, uint32_t total_bytes) {
+IdmaSrcDstBuffers QuasarIdmaOps::make_idma_src_dst_buffers(uint32_t total_bytes) {
     distributed::DeviceLocalBufferConfig local_buffer_config = {
         .page_size = total_bytes, .buffer_type = tt::tt_metal::BufferType::L1};
     distributed::ReplicatedBufferConfig buffer_config = {.size = total_bytes};
     return {
-        .src = distributed::MeshBuffer::create(buffer_config, local_buffer_config, &mesh_device),
-        .dst = distributed::MeshBuffer::create(buffer_config, local_buffer_config, &mesh_device),
+        .src = distributed::MeshBuffer::create(buffer_config, local_buffer_config, &this->device()),
+        .dst = distributed::MeshBuffer::create(buffer_config, local_buffer_config, &this->device()),
     };
 }
 
 // Basic: 16 elements * 8 B = 128 B linear copy from src to dst
-bool run_idma_basic_test(UnitMeshFixture& fixture) {
+bool QuasarIdmaOps::run_idma_basic_test() {
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t num_elements = 16;
     constexpr uint32_t elem_size = 8;
     constexpr uint32_t total_bytes = num_elements * elem_size;
     constexpr uint32_t num_words = total_bytes / sizeof(uint32_t);
 
-    auto& mesh_device = fixture.device();
-    auto buffers = make_idma_src_dst_buffers(mesh_device, total_bytes);
+    auto buffers = make_idma_src_dst_buffers(total_bytes);
     const uint32_t src_base = buffers.src->address();
     const uint32_t dst_base = buffers.dst->address();
 
@@ -102,12 +107,12 @@ bool run_idma_basic_test(UnitMeshFixture& fixture) {
     for (uint32_t i = 0; i < num_words; i++) {
         src_data[i] = 0xA0000000 + i;
     }
-    fixture.WriteToL1(core, src_base, src_data);
+    this->WriteToL1(core, src_base, src_data);
 
-    run_kernel(mesh_device, kIdmaBasic, {{"src_addr", src_base}, {"dst_addr", dst_base}});
+    run_kernel(kIdmaBasic, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
-    fixture.ReadFromL1(core, dst_base, total_bytes, dst_data);
+    this->ReadFromL1(core, dst_base, total_bytes, dst_data);
 
     bool pass = (dst_data == src_data);
     if (!pass) {
@@ -127,14 +132,13 @@ bool run_idma_basic_test(UnitMeshFixture& fixture) {
 
 // 1D strided: 10 elements, src_stride=16 B, dst linear.
 // dst[i] = src[i * src_stride] (every other 8 B element from src)
-bool run_idma_1d_strided_test(UnitMeshFixture& fixture) {
+bool QuasarIdmaOps::run_idma_1d_strided_test() {
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t num_elements = 10;
     constexpr uint32_t elem_size = 8;
     constexpr uint32_t src_stride = 2 * elem_size;  // 16 B
     constexpr uint32_t total_bytes = num_elements * src_stride;
-    auto& mesh_device = fixture.device();
-    auto buffers = make_idma_src_dst_buffers(mesh_device, total_bytes);
+    auto buffers = make_idma_src_dst_buffers(total_bytes);
     const uint32_t src_base = buffers.src->address();
     const uint32_t dst_base = buffers.dst->address();
 
@@ -146,7 +150,7 @@ bool run_idma_1d_strided_test(UnitMeshFixture& fixture) {
     for (uint32_t i = 0; i < src_num_words; i++) {
         src_data[i] = 0xB0000000 + i;
     }
-    fixture.WriteToL1(core, src_base, src_data);
+    this->WriteToL1(core, src_base, src_data);
 
     // Build expected: for each element i, copy elem_size bytes from src_base + i*src_stride
     constexpr uint32_t words_per_elem = elem_size / sizeof(uint32_t);     // 2
@@ -158,10 +162,10 @@ bool run_idma_1d_strided_test(UnitMeshFixture& fixture) {
         }
     }
 
-    run_kernel(mesh_device, kIdma1DStrided, {{"src_addr", src_base}, {"dst_addr", dst_base}});
+    run_kernel(kIdma1DStrided, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
-    fixture.ReadFromL1(core, dst_base, num_elements * elem_size, dst_data);
+    this->ReadFromL1(core, dst_base, num_elements * elem_size, dst_data);
 
     bool pass = (dst_data == expected);
     if (!pass) {
@@ -179,28 +183,26 @@ bool run_idma_1d_strided_test(UnitMeshFixture& fixture) {
     return pass;
 }
 
-}  // namespace unit_tests::dm::quasar_idma
-
 // =============================================================================
 // Test Suite: Quasar IDMA
 // =============================================================================
 
-class QuasarIdmaOps : public QuasarUnitMeshFixture {};
-
 TEST_F(QuasarIdmaOps, IDMA_Basic) {
-    if (unit_tests::dm::quasar_idma::should_skip_test()) {
+    if (should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     // Host writes pattern to src, kernel copies 16*8=128 B to dst, host verifies dst==src
-    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_basic_test(*this));
+    EXPECT_TRUE(this->run_idma_basic_test());
 }
 
 TEST_F(QuasarIdmaOps, IDMA_1D_Strided) {
-    if (unit_tests::dm::quasar_idma::should_skip_test()) {
+    if (should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     // Host writes pattern to src, kernel copies 10 elements with src_stride=16 B to dst linearly
-    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_1d_strided_test(*this));
+    EXPECT_TRUE(this->run_idma_1d_strided_test());
 }
+
+}  // namespace unit_tests::dm::quasar_idma
 
 }  // namespace tt::tt_metal

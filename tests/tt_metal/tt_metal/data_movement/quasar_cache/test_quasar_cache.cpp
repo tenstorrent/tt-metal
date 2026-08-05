@@ -36,8 +36,14 @@ struct L2FlushTestConfig {
     bool expect_new_values = true;  // true for flush tests, false for invalidate tests
 };
 
-bool run_l2_flush_test(UnitMeshFixture& fixture, const L2FlushTestConfig& config) {
-    auto& mesh_device = fixture.device();
+}  // namespace unit_tests::dm::quasar_cache
+
+class QuasarL2CacheOps : public QuasarUnitMeshFixture {
+protected:
+    bool run_l2_flush_test(const unit_tests::dm::quasar_cache::L2FlushTestConfig& config);
+};
+
+bool QuasarL2CacheOps::run_l2_flush_test(const unit_tests::dm::quasar_cache::L2FlushTestConfig& config) {
     constexpr CoreCoord core = {0, 0};
     const experimental::NodeCoord node{0, 0};
 
@@ -45,7 +51,7 @@ bool run_l2_flush_test(UnitMeshFixture& fixture, const L2FlushTestConfig& config
     // that should persist after invalidation (since invalidate doesn't write back)
     uint32_t old_value = 0xDEADBEEF;
     std::vector<uint32_t> init_data(config.num_words, config.expect_new_values ? 0 : old_value);
-    fixture.WriteToL1(core, config.base_addr, init_data);
+    this->WriteToL1(core, config.base_addr, init_data);
 
     const experimental::KernelSpecName DM_KERNEL{"l2_flush"};
 
@@ -72,7 +78,7 @@ bool run_l2_flush_test(UnitMeshFixture& fixture, const L2FlushTestConfig& config
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -83,16 +89,11 @@ bool run_l2_flush_test(UnitMeshFixture& fixture, const L2FlushTestConfig& config
     }};
     experimental::SetProgramRunArgs(program, params);
 
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(mesh_device.shape());
-    workload.add_program(device_range, std::move(program));
-
-    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    this->RunProgram(std::move(program));
 
     // Read back and verify
     std::vector<uint32_t> output_data;
-    fixture.ReadFromL1(core, config.base_addr, config.num_words * sizeof(uint32_t), output_data);
+    this->ReadFromL1(core, config.base_addr, config.num_words * sizeof(uint32_t), output_data);
 
     bool pass = true;
     for (uint32_t i = 0; i < config.num_words; i++) {
@@ -111,6 +112,7 @@ bool run_l2_flush_test(UnitMeshFixture& fixture, const L2FlushTestConfig& config
 // L1 D$ Tests
 // =============================================================================
 
+namespace unit_tests::dm::quasar_cache {
 struct L1DCacheTestConfig {
     uint32_t base_addr;
     uint32_t num_words;
@@ -118,9 +120,14 @@ struct L1DCacheTestConfig {
     uint32_t test_mode;  // 0=flush_line, 1=flush_full, 2=invalidate_line, 3=invalidate_full
     bool expect_new_values;  // true for flush tests, false for invalidate tests
 };
+}  // namespace unit_tests::dm::quasar_cache
 
-bool run_l1_dcache_test(UnitMeshFixture& fixture, const L1DCacheTestConfig& config) {
-    auto& mesh_device = fixture.device();
+class QuasarL1DCacheOps : public QuasarUnitMeshFixture {
+protected:
+    bool run_l1_dcache_test(const unit_tests::dm::quasar_cache::L1DCacheTestConfig& config);
+};
+
+bool QuasarL1DCacheOps::run_l1_dcache_test(const unit_tests::dm::quasar_cache::L1DCacheTestConfig& config) {
     constexpr CoreCoord core = {0, 0};
     const experimental::NodeCoord node{0, 0};
 
@@ -128,7 +135,7 @@ bool run_l1_dcache_test(UnitMeshFixture& fixture, const L1DCacheTestConfig& conf
     // that should persist after invalidation (since invalidate doesn't write back)
     uint32_t old_value = 0xDEADBEEF;
     std::vector<uint32_t> init_data(config.num_words, old_value);
-    fixture.WriteToL1(core, config.base_addr, init_data);
+    this->WriteToL1(core, config.base_addr, init_data);
 
     const experimental::KernelSpecName DM_KERNEL{"l1_dcache"};
 
@@ -155,7 +162,7 @@ bool run_l1_dcache_test(UnitMeshFixture& fixture, const L1DCacheTestConfig& conf
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -166,16 +173,11 @@ bool run_l1_dcache_test(UnitMeshFixture& fixture, const L1DCacheTestConfig& conf
     }};
     experimental::SetProgramRunArgs(program, params);
 
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(mesh_device.shape());
-    workload.add_program(device_range, std::move(program));
-
-    distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    this->RunProgram(std::move(program));
 
     // Read back and verify
     std::vector<uint32_t> output_data;
-    fixture.ReadFromL1(core, config.base_addr, config.num_words * sizeof(uint32_t), output_data);
+    this->ReadFromL1(core, config.base_addr, config.num_words * sizeof(uint32_t), output_data);
 
     bool pass = true;
     for (uint32_t i = 0; i < config.num_words; i++) {
@@ -190,13 +192,9 @@ bool run_l1_dcache_test(UnitMeshFixture& fixture, const L1DCacheTestConfig& conf
     return pass;
 }
 
-}  // namespace unit_tests::dm::quasar_cache
-
 // =============================================================================
 // Test Suite: L2 Cache Operations
 // =============================================================================
-
-class QuasarL2CacheOps : public QuasarUnitMeshFixture {};
 
 TEST_F(QuasarL2CacheOps, FlushLine) {
     if (unit_tests::dm::quasar_cache::should_skip_test()) {
@@ -209,7 +207,7 @@ TEST_F(QuasarL2CacheOps, FlushLine) {
         .value = 0x12340000,
         .test_mode = 0  // line flush
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(*this, config));
+    EXPECT_TRUE(this->run_l2_flush_test(config));
 }
 
 TEST_F(QuasarL2CacheOps, FlushRange) {
@@ -223,7 +221,7 @@ TEST_F(QuasarL2CacheOps, FlushRange) {
         .value = 0xABCD0000,
         .test_mode = 1  // range flush
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(*this, config));
+    EXPECT_TRUE(this->run_l2_flush_test(config));
 }
 
 TEST_F(QuasarL2CacheOps, FlushFull) {
@@ -237,7 +235,7 @@ TEST_F(QuasarL2CacheOps, FlushFull) {
         .value = 0x55550000,
         .test_mode = 2  // full flush
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(*this, config));
+    EXPECT_TRUE(this->run_l2_flush_test(config));
 }
 
 TEST_F(QuasarL2CacheOps, InvalidateLine) {
@@ -252,7 +250,7 @@ TEST_F(QuasarL2CacheOps, InvalidateLine) {
         .test_mode = 3,  // invalidate line
         .expect_new_values = false  // Invalidate doesn't write back, so old values should remain
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(*this, config));
+    EXPECT_TRUE(this->run_l2_flush_test(config));
 }
 
 TEST_F(QuasarL2CacheOps, InvalidateFreshRead) {
@@ -269,14 +267,12 @@ TEST_F(QuasarL2CacheOps, InvalidateFreshRead) {
         .test_mode = 4,  // invalidate fresh read
         .expect_new_values = true  // After invalidation, new values written via uncached path should be visible
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(*this, config));
+    EXPECT_TRUE(this->run_l2_flush_test(config));
 }
 
 // =============================================================================
 // Test Suite: L1 Data Cache Operations
 // =============================================================================
-
-class QuasarL1DCacheOps : public QuasarUnitMeshFixture {};
 
 TEST_F(QuasarL1DCacheOps, FlushLine) {
     if (unit_tests::dm::quasar_cache::should_skip_test()) {
@@ -290,7 +286,7 @@ TEST_F(QuasarL1DCacheOps, FlushLine) {
         .test_mode = 0,  // flush line
         .expect_new_values = true
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(*this, config));
+    EXPECT_TRUE(this->run_l1_dcache_test(config));
 }
 
 TEST_F(QuasarL1DCacheOps, FlushFull) {
@@ -305,7 +301,7 @@ TEST_F(QuasarL1DCacheOps, FlushFull) {
         .test_mode = 1,  // flush full
         .expect_new_values = true
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(*this, config));
+    EXPECT_TRUE(this->run_l1_dcache_test(config));
 }
 
 TEST_F(QuasarL1DCacheOps, InvalidateLine) {
@@ -321,7 +317,7 @@ TEST_F(QuasarL1DCacheOps, InvalidateLine) {
         .test_mode = 2,  // invalidate line
         .expect_new_values = false  // should see old values
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(*this, config));
+    EXPECT_TRUE(this->run_l1_dcache_test(config));
 }
 
 TEST_F(QuasarL1DCacheOps, InvalidateFull) {
@@ -337,7 +333,7 @@ TEST_F(QuasarL1DCacheOps, InvalidateFull) {
         .test_mode = 3,  // invalidate full
         .expect_new_values = false  // should see old values
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(*this, config));
+    EXPECT_TRUE(this->run_l1_dcache_test(config));
 }
 
 TEST_F(QuasarL1DCacheOps, InvalidateFreshRead) {
@@ -354,7 +350,7 @@ TEST_F(QuasarL1DCacheOps, InvalidateFreshRead) {
         .test_mode = 4,  // invalidate fresh read
         .expect_new_values = true  // After invalidation, new values written via uncached path should be visible
     };
-    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(*this, config));
+    EXPECT_TRUE(this->run_l1_dcache_test(config));
 }
 
 }  // namespace tt::tt_metal
