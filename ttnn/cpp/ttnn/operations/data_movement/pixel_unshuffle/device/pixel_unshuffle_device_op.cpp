@@ -66,7 +66,7 @@ PixelUnshuffle::spec_return_value_t PixelUnshuffle::compute_output_specs(
             ? in_dt
             : tt::tt_metal::DataType::BFLOAT16;
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), op_attr.output_mem_config));
