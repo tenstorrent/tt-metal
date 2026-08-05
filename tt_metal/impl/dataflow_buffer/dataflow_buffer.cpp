@@ -2089,9 +2089,13 @@ void ProgramImpl::finalize_single_dfb_config(
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
 
+    // One risc id per bit of the risc masks: bits 0-7 are DM riscs, bits 8-15 are Tensix riscs.
+    constexpr uint8_t num_risc_ids = std::numeric_limits<decltype(config.producer_risc_mask)>::digits;
     std::vector<uint8_t> producer_risc_ids;
+    producer_risc_ids.reserve(num_risc_ids);
     std::vector<uint8_t> consumer_risc_ids;
-    for (uint8_t risc_id = 0; risc_id < 16; risc_id++) {
+    consumer_risc_ids.reserve(num_risc_ids);
+    for (uint8_t risc_id = 0; risc_id < num_risc_ids; risc_id++) {
         if (config.producer_risc_mask & (1 << risc_id)) {
             producer_risc_ids.push_back(risc_id);
         }
@@ -2099,6 +2103,7 @@ void ProgramImpl::finalize_single_dfb_config(
             consumer_risc_ids.push_back(risc_id);
         }
     }
+    new_hw_risc_configs.reserve(producer_risc_ids.size() + consumer_risc_ids.size());
 
     // Determine tensix_id based on which RISC in the pair is Tensix
     // Without remapper,Tensix RISCs can only access TCs from their own tensix_id
@@ -2638,6 +2643,7 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
 std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
 ProgramImpl::dataflow_buffers_on_core(const CoreCoord& core) const {
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dfbs_on_core;
+    dfbs_on_core.reserve(dataflow_buffers_.size());
     for (const auto& dfb : dataflow_buffers_) {
         if (dfb->core_ranges.intersects(core)) {
             dfbs_on_core.push_back(dfb);
@@ -2648,6 +2654,7 @@ ProgramImpl::dataflow_buffers_on_core(const CoreCoord& core) const {
 
 std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> ProgramImpl::dataflow_buffers_on_corerange(const CoreRange& cr) const {
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dfbs_on_core;
+    dfbs_on_core.reserve(dataflow_buffers_.size());
     for (const auto& dfb : dataflow_buffers_) {
         if (dfb->core_ranges.intersects(cr)) {
             dfbs_on_core.push_back(dfb);
@@ -2658,6 +2665,12 @@ std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBuf
 
 std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
     std::vector<CoreRange> core_ranges;
+    size_t max_core_ranges = 0;
+    for (const auto& dfb : dataflow_buffers_) {
+        max_core_ranges += dfb->core_ranges.ranges().size();
+    }
+    core_ranges.reserve(max_core_ranges);
+
     for (const auto& dfb : dataflow_buffers_) {
         for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
             if (std::find(core_ranges.begin(), core_ranges.end(), core_range) == core_ranges.end()) {
