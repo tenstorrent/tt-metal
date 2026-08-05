@@ -1,10 +1,17 @@
 # MiniMax-H3 on Blackhole Galaxy — state
 
-**Status: t2va and all three fl2va modes green end to end.** Fully warm 63–74 s; denoise is 92 % of it.
+**Status: t2va and all three fl2va modes green end to end**, re-gated after the merge onto
+`cglagovich/minimax-h3`. Denoise is 92 % of e2e.
 
-History lives in git, not here. The full 113-amendment journal is `git show c0a1a7029b3:STATE.md`, and
-every amendment after it is its own commit message (`git log --follow -- STATE.md`). "am. N" below points
-there. New amendments continue from **114** per `shared/journal-protocol.md`.
+Latency: **fully warm 63–74 s was measured before that merge and is not yet re-measured on this base.**
+cglagovich's fused FF matmul and AdaLN precompute both land in the hot path, so treat that range as
+stale until `test_performance_pipeline_minimax_h3.py` has run here. The e2e correctness gates run cold
+and their per-stage numbers (denoise 129.3 s) are not comparable to it.
+
+History lives in git, not here. `git log --follow -- STATE.md` walks every amendment as its own commit
+message; the last full journal text is `git show c0a1a7029b3:STATE.md` (amendments 1–**111**), with
+**112** at `def2705bed3` and **113** at `f011cba1bd9`. "am. N" below points there. New amendments
+continue from **114** per `shared/journal-protocol.md`.
 
 ## Working point
 
@@ -12,7 +19,8 @@ Numbers taken at any other shape are evidence about that shape alone (am. 76).
 
 1344x768, 124 frames @ 24 fps → 37 latent frames / 207 audio latents, 50 steps → 49 forwards. Mesh 4x8,
 TP=4 axis 0 / SP=8 axis 1, ring, 2 links. Layout `[text | cond | audio | target]`, `rows_per_frame` 1008.
-`padded_len` 37888 (t2va) / ~39936 (fl2va); `seq_local` 4736 / 4992. Artifacts `~/h3_t2va_artifacts/`.
+`padded_len` 37888 (t2va) / 39936 (one keyframe, 39773 + 1008 cond rows) / **41984** (two keyframes);
+`seq_local` 4736 / 4992. Artifacts `~/h3_t2va_artifacts/`.
 
 ```bash
 export MINIMAX_H3_DIFFUSERS_DIR=/data/cglagovich/MiniMax-H3-diffusers
@@ -67,13 +75,19 @@ and transformers 4.33. `TT_DIT_CACHE_DIR` unset degrades **silently**: 713 s ins
   moving the data.
 
 **Metrics that lie.** The fl2va anchor keyframe is frame 0 of the t2va run, so a pipeline *ignoring* the
-keyframe scored ~0.997 too — use a discriminator the null hypothesis fails (mirrored/fractal keyframe:
-0.9964 vs 0.4108). A seam ratio near 1.0 is what a smooth scene gives, not a correct one (am. 87).
+keyframe scores ~0.997 on it too — the anchor PCC alone cannot tell conditioning from a no-op. Use a
+discriminator the null hypothesis fails: with a fractal keyframe, frame 0 correlates **0.9963** with what
+was supplied and only **0.2972** with t2va's own frame. A seam ratio near 1.0 is what a smooth scene
+gives, not what a correct one gives (am. 87).
 `imaging_quality` is no-reference IQA — a perfect night scene scored 0.4884 against a 0.64 bar; prompt and
 thresholds are a matched pair. Nothing gates **mesh reassembly order** — every numerics test is
 single-device or per-shard; the e2e CLIP gate is what caught it (37.37 → 19.58). Feeding rows *other rows'*
-metadata still read 0.999888. t2va's no-regression bar is std **46.05** / frame delta **9.88** / audio peak
-**0.076** / CLIP **37.37**, to every digit.
+metadata still read 0.999888. t2va's no-regression fingerprint on **this** base is std **45.78** / frame
+delta **8.59** / audio peak **0.095** / CLIP **37.38**; it was 46.05 / 9.88 / 0.076 / 37.37 before the
+merge onto cglagovich's tip, and moved because the fused FF matmul and the AdaLN precompute change the
+numerics, so a 49-step trajectory diverges. **Only CLIP is a quality signal** — it held to 0.01. Re-pin
+the other three whenever the base moves rather than reading a change as a regression; what they catch is
+an *unexplained* move.
 
 **ttnn.** `l1_small_size` is mandatory (65536 for audio) and a bare `ttnn.open_device(device_id=0)` omits
 it — this bit three times; the error is `bank_manager.cpp:462` / "bank size is 0 B", which never names the
