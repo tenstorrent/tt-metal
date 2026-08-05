@@ -251,6 +251,7 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
     }
 
     std::vector<RelativeCoreCoord> compute_cores;
+    compute_cores.reserve(compute_grid_size.x * compute_grid_size.y);
     for (auto x = 0; x < compute_grid_size.x; x++) {
         for (auto y = 0; y < compute_grid_size.y; y++) {
             const RelativeCoreCoord relative_coord{.x = x, .y = y};
@@ -271,6 +272,7 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
         logical_active_eth_cores = get_control_plane().get_active_ethernet_cores(device_id);
     }
 
+    dispatch_cores.reserve(desc_yaml[dispatch_cores_string].size());
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
         RelativeCoreCoord coord = {};
         if (core_node.IsSequence()) {
@@ -294,6 +296,7 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
     // Parse fabric_mux_cores
     std::vector<RelativeCoreCoord> fabric_mux_cores;
     if (desc_yaml["fabric_mux_cores"]) {
+        fabric_mux_cores.reserve(desc_yaml["fabric_mux_cores"].size());
         for (const auto& core_node : desc_yaml["fabric_mux_cores"]) {
             RelativeCoreCoord coord = {};
             if (core_node.IsSequence()) {
@@ -416,6 +419,7 @@ std::vector<tt::tt_metal::CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_f
 
     tt::tt_metal::CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores;
+    logical_fabric_mux_cores.reserve(desc_yaml["fabric_mux_cores"].size());
     for (const auto& core_node : desc_yaml["fabric_mux_cores"]) {
         if (!core_node.IsSequence()) {
             continue;
