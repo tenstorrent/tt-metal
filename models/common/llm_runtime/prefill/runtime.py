@@ -346,7 +346,10 @@ class PrefillRuntime:
         )
         ttnn.copy_host_to_device_tensor(host_tokens, persistent.device_inputs.tokens)
         ttnn.copy_host_to_device_tensor(host_page_table, persistent.device_inputs.page_table)
-        if not self._uses_static_q128_topk(request, prepared.sampling_path):
+        uses_static_single_logits = (
+            prepared.sampling_params is None and request.kind == "single" and not request.uses_chunked_prefill
+        )
+        if not self._uses_static_q128_topk(request, prepared.sampling_path) and not uses_static_single_logits:
             position_value = relative_last
             position_signature = persistent.position_signature
             if position_signature is None or position_signature[0] != position_value:
@@ -460,6 +463,8 @@ class PrefillRuntime:
                             )
                 else:
                     relative_last = (request.last_token_indices[0] - request.cached_tokens[0]) % _TILE_SIZE
+                    if request.kind == "single" and not request.uses_chunked_prefill:
+                        relative_last = 0
                     output_logits[request.source_rows[0]] = _process_output_prefill(
                         host_primary,
                         relative_last,
@@ -814,14 +819,16 @@ class PrefillRuntime:
                 request.padded_batch_size,
                 request.padded_sequence_length,
             )
-        elif self._uses_static_q128_topk(request, prepared.sampling_path):
+        elif self._uses_static_q128_topk(request, prepared.sampling_path) or (
+            prepared.sampling_params is None and request.kind == "single" and not request.uses_chunked_prefill
+        ):
             logits = self.config.model.post_process_prefill_output(hidden, relative_last[0])
         else:
             logits = self.config.model.post_process_prefill_output(
                 hidden,
                 relative_last[0],
                 last_token_slice=(position_inputs.slice_start, position_inputs.slice_end),
-                last_token_index=(position_inputs.row_index if prepared.sampling_params is not None else None),
+                last_token_index=position_inputs.row_index,
             )
         _retain_owned(owned, logits)
         if prepared.sampling_params is not None:
@@ -830,6 +837,10 @@ class PrefillRuntime:
             output = self._sample_device(selected, kpt, sampled_output)
         else:
             output = ttnn.untilize(logits, use_multicore=True)
+            if request.kind == "single" and not request.uses_chunked_prefill:
+                _retain_owned(owned, output)
+                row = relative_last[0] % _TILE_SIZE
+                output = ttnn.slice(output, (0, 0, row, 0), (1, 1, row + 1, int(output.shape[-1])))
         _retain_owned(owned, output)
         return output
 

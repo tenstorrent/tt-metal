@@ -328,6 +328,39 @@ def test_trace_refresh_skips_unchanged_position_and_sampling_inputs(monkeypatch)
     assert copied == [("host-tokens", "tokens"), ("host-page", "page")]
 
 
+def test_trace_refresh_skips_dynamic_position_inputs_for_static_single_logits(monkeypatch):
+    runtime = _runtime()
+    request = _plan(prompt_length=80)[0]
+    prepared = SimpleNamespace(request=request, sampling_params=None, sampling_path="logits")
+    persistent = PrefillPersistentInputs(
+        device_inputs=PrefillDeviceInputs("tokens", "cos", "sin", "page", None, "positions", None),
+        position_inputs=PrefillPositionInputs("start", "end", "row"),
+        kpt=None,
+        position_signature=[0],
+    )
+    monkeypatch.setattr(prefill_module.ttnn, "ReplicateTensorToMesh", lambda mesh: "mapper")
+    monkeypatch.setattr(
+        prefill_module.ttnn,
+        "from_torch",
+        lambda value, **kwargs: "host-page" if value.dtype == torch.int32 else "host-tokens",
+    )
+    copied = []
+    monkeypatch.setattr(
+        prefill_module.ttnn,
+        "copy_host_to_device_tensor",
+        lambda host, device: copied.append((host, device)),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_prepare_position_inputs_host",
+        lambda *args: pytest.fail("position refreshed"),
+    )
+
+    runtime.refresh_trace(prepared, persistent)
+
+    assert copied == [("host-tokens", "tokens"), ("host-page", "page")]
+
+
 def test_eager_sampled_prefill_uses_preallocated_output(monkeypatch):
     runtime = _runtime()
     request = _plan(prompt_length=80)[0]
@@ -1285,7 +1318,7 @@ def test_partial_batched_group_is_trace_ineligible_while_full_group_keeps_trace(
 @pytest.mark.parametrize(
     ("sampling_path", "sampling_params", "expected_tail"),
     [
-        ("logits", None, ["postprocess", "untilize"]),
+        ("logits", None, ["postprocess", "untilize", "slice"]),
         (
             "argmax",
             SamplingParams(temperature=0.0, top_k=1, top_p=1.0),
@@ -1348,7 +1381,12 @@ def test_regular_logits_and_argmax_preserve_operation_order(
     monkeypatch.setattr(
         prefill_module.ttnn,
         "untilize",
-        lambda *args, **kwargs: events.append("untilize") or "untilized",
+        lambda *args, **kwargs: events.append("untilize") or torch.zeros(1, 1, 32, 64),
+    )
+    monkeypatch.setattr(
+        prefill_module.ttnn,
+        "slice",
+        lambda *args, **kwargs: events.append("slice") or torch.zeros(1, 1, 1, 64),
     )
     monkeypatch.setattr(runtime, "_make_sampling_output", lambda batch_size: pytest.fail("output preallocated"))
 
@@ -1910,8 +1948,8 @@ def test_assemble_restores_source_rows_and_releases_each_owned_result(monkeypatc
     prepared = [SimpleNamespace(request=request, sampling_params=None) for request in requests]
     first = torch.zeros(1, 1, 32, runtime.config.model.vocab_size)
     second = torch.zeros_like(first)
-    first[0, 0, 15, :] = 1
-    second[0, 0, 15, :] = 2
+    first[0, 0, 0, :] = 1
+    second[0, 0, 0, :] = 2
     released = []
     monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda value: released.append(value) or [])
 
@@ -1924,6 +1962,39 @@ def test_assemble_restores_source_rows_and_releases_each_owned_result(monkeypatc
     assert torch.equal(output[0, 0], torch.ones(runtime.config.model.vocab_size))
     assert torch.equal(output[1, 0], torch.full((runtime.config.model.vocab_size,), 2.0))
     assert released == ["owned-0", "owned-1"]
+
+
+def test_single_logits_prefill_uses_static_tile_then_selects_exact_row_before_readback(monkeypatch):
+    runtime = _runtime()
+    request = _plan(prompt_length=80)[0]
+    prepared = SimpleNamespace(request=request, sampling_params=None, sampling_path="logits")
+    seen = []
+
+    def post_process_prefill_output(
+        hidden_states,
+        last_token_idx,
+        last_token_slice=None,
+        last_token_index=None,
+    ):
+        seen.append((hidden_states, last_token_idx, last_token_slice, last_token_index))
+        return torch.ones(1, 1, 32, runtime.config.model.vocab_size)
+
+    runtime.config.model.post_process_prefill_output = post_process_prefill_output
+    monkeypatch.setattr(prefill_module.ttnn, "untilize", lambda logits, **kwargs: logits)
+    sliced = []
+
+    def slice_output(value, start, end):
+        sliced.append((start, end))
+        return value[:, :, start[2] : end[2], :]
+
+    monkeypatch.setattr(prefill_module.ttnn, "slice", slice_output)
+    positions = PrefillPositionInputs("slice-start", "slice-end", "row-index")
+    logits = runtime._finish_regular_prefill(prepared, "hidden", None, positions)
+
+    assert seen == [("hidden", 79, None, None)]
+    assert sliced == [((0, 0, 15, 0), (1, 1, 16, runtime.config.model.vocab_size))]
+    output = runtime.assemble([(prepared, InvocationResult(logits, "owned"))], batch_size=1)
+    assert torch.equal(output, logits[:, 0])
 
 
 def test_assemble_maps_batched_extract_rows_independently_of_physical_slots(monkeypatch):
