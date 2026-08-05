@@ -3,20 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Gather reader – streaming mode (NCRISC).
-// For large Wt_input (>60 tiles) where the full input row cannot fit in L1.
+// For large Wt_input where the full input row cannot fit in L1 alongside a
+// Wt_index-deep output CB (see gather_interleaved_fits_l1).
 //
 // Work is split by Wt_index across cores (not Ht like the row-buffered mode).
 // Each core processes a strided subset of output columns across ALL Ht rows.
 //
 // For each assigned index tile:
 //   1. Read the index tile from DRAM
-//   2. For each of Wt_input input tiles (streamed one at a time by writer):
+//   2. For each chunk_tiles-deep block of the input row (streamed by the writer):
 //      - Scan all 1024 index elements
-//      - If index points to the current input tile, copy the value to output
+//      - If the index lands in this block, copy the value to output
 //      - Otherwise skip
 //   3. Push completed output tile
 //
-// This trades bandwidth (re-reading input per index tile) for L1 budget.
+// The scan is repeated once per block, so chunk_tiles -- as many input pages as
+// L1 affords -- is what separates this from the row-buffered reader's single
+// scan. It still trades bandwidth (re-reading the row per index tile) for L1.
 
 #include "codegen_gather_common.hpp"
 #include "api/dataflow/dataflow_api.h"
@@ -43,9 +46,11 @@ void kernel_main() {
     constexpr uint32_t index_valid_h_last = get_compile_time_arg_val(7);
     constexpr uint32_t index_valid_w_last = get_compile_time_arg_val(8);
     constexpr uint32_t index_ht_per_batch = get_compile_time_arg_val(9);
-    constexpr auto index_ta_args = TensorAccessorArgs<10>();
+    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(10);
+    constexpr auto index_ta_args = TensorAccessorArgs<11>();
 
     constexpr uint32_t one_tile = 1;
+    constexpr uint32_t n_chunks = (Wt_input + chunk_tiles - 1) / chunk_tiles;
     const uint32_t tile_width_mask = tile_width - 1;
 
     // Index tensor accessor
@@ -91,16 +96,20 @@ void kernel_main() {
 
             output_buffer.reserve_back(one_tile);
 
-            // Stream through all Wt_input tiles, gathering matching elements
-            for (uint32_t wi = 0; wi < Wt_input; wi++) {
-                // Wait for writer to provide next input tile
-                input_buffer.wait_front(one_tile);
+            // Walk the input row one resident block at a time, gathering the elements that land in
+            // each block. The output tile stays reserved across all blocks: every element's index
+            // falls in exactly one block, so each output position is written exactly once.
+            for (uint32_t chunk = 0; chunk < n_chunks; chunk++) {
+                const uint32_t chunk_first_tile = chunk * chunk_tiles;
+                // The writer always pushes a full chunk_tiles-deep block (tail padded), so this
+                // matches its push cadence and leaves the CB empty for the next block.
+                input_buffer.wait_front(chunk_tiles);
 
                 const uint32_t input_l1 = input_buffer.get_read_ptr();
                 const uint32_t index_l1 = index_buffer.get_read_ptr();
                 const uint32_t output_l1 = output_buffer.get_write_ptr();
 
-                // Scan all elements in index tile, copy those pointing to tile wi
+                // Scan all elements in the index tile, copy those pointing into this block
                 uint32_t count = 0;
                 for (uint32_t i = 0; i < tile_faces; ++i) {
                     for (uint32_t j = 0; j < tile_faces; ++j) {
@@ -112,9 +121,11 @@ void kernel_main() {
                                                                   ? get_value_from_tile(index_l1, count, index_df_size)
                                                                   : 0;
 
-                                const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
+                                // Unsigned wrap folds "before this block" into the same >= test.
+                                const uint32_t tile_in_chunk =
+                                    (global_index >> __builtin_ctz(tile_width)) - chunk_first_tile;
 
-                                if (tile_idx != wi) {
+                                if (tile_in_chunk >= chunk_tiles) {
                                     count++;
                                     continue;
                                 }
@@ -123,7 +134,8 @@ void kernel_main() {
                                 const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
                                 const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
 
-                                const uint16_t local_index = which_row * (face_size * face_size) + k * face_size +
+                                const uint32_t local_index = tile_in_chunk * (tile_width * tile_height) +
+                                                             which_row * (face_size * face_size) + k * face_size +
                                                              which_col + i * (tile_width * face_size);
 
                                 const uint32_t value = get_value_from_tile(input_l1, local_index, input_df_size);
@@ -133,9 +145,9 @@ void kernel_main() {
                         }
                     }
                 }
-                // Release input tile so writer can reuse the CB slot
-                input_buffer.pop_front(one_tile);
-            }  // Wt_input loop
+                // Release the block so the writer can refill the CB
+                input_buffer.pop_front(chunk_tiles);
+            }  // chunk loop
 
             output_buffer.push_back(one_tile);
             index_buffer.pop_front(one_tile);

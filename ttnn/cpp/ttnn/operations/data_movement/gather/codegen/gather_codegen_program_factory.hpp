@@ -34,6 +34,13 @@ GatherGeometry compute_gather_geometry(const Tensor& input_tensor, const Tensor&
 bool gather_interleaved_fits_l1(
     const Tensor& input_tensor, const Tensor& input_index_tensor, uint32_t Wt_input, uint32_t Wt_index);
 
+// Depth of the streaming factory's input CB, in input tile pages. The streaming reader rescans the
+// whole index tile once per resident block of input tiles, so its scalar cost per output tile is
+// ceil(Wt_input / depth) * TILE_HW: a block deep enough to hold the entire row costs the single scan
+// the row-buffered reader pays. Fills whatever L1 the fixed index and output pages leave, capped at
+// the row length.
+uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& input_index_tensor, uint32_t Wt_input);
+
 // Row-buffered: full Wt_input row resident in L1 (kernels/gather_reader.cpp, gather_writer.cpp).
 struct GatherCodegenProgramFactoryInterleaved {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
@@ -47,8 +54,9 @@ struct GatherCodegenProgramFactoryTiled {
         const GatherCodegenParams& attributes, const GatherCodegenInputs& tensor_args, Tensor& output_tensor);
 };
 
-// Double-buffered streaming: large Wt_input that doesn't fit the row-buffered L1 budget
-// (kernels/gather_reader_streaming.cpp, gather_writer_streaming.cpp).
+// Chunked streaming: large Wt_input that doesn't fit the row-buffered L1 budget, walked in
+// gather_streaming_chunk_tiles()-deep blocks (kernels/gather_reader_streaming.cpp,
+// gather_writer_streaming.cpp).
 struct GatherCodegenProgramFactoryStreaming {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const GatherCodegenParams& attributes, const GatherCodegenInputs& tensor_args, Tensor& output_tensor);

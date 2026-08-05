@@ -127,6 +127,20 @@ bool gather_interleaved_fits_l1(
     return footprint <= usable_l1;
 }
 
+uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& input_index_tensor, uint32_t Wt_input) {
+    auto* device = input_tensor.device();
+    const uint64_t usable_l1 = static_cast<uint64_t>(device->l1_size_per_core()) -
+                               device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t input_page = input_tensor.buffer()->aligned_page_size();
+    const uint64_t index_page = input_index_tensor.buffer()->aligned_page_size();
+    // Output dtype always equals input dtype, same as gather_interleaved_fits_l1's reasoning.
+    const uint64_t fixed_pages = index_page + input_page;
+    const uint64_t affordable = usable_l1 > fixed_pages ? (usable_l1 - fixed_pages) / input_page : 0;
+    // Two keeps the reader's DRAM reads overlapping its scan when L1 is too tight for more; the row
+    // length is the ceiling because a deeper block would just hold pages no index can select.
+    return static_cast<uint32_t>(std::min<uint64_t>(std::max<uint64_t>(affordable, 2), Wt_input));
+}
+
 tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_descriptor(
     const GatherCodegenParams& attributes, const GatherCodegenInputs& tensor_args, Tensor& output_tensor) {
     const auto& in_t = tensor_args.input_tensor;
@@ -310,12 +324,14 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
 
     const uint32_t tile_width = in_t.tensor_spec().tile().get_width();
     const uint32_t tile_height = in_t.tensor_spec().tile().get_height();
+    const uint32_t chunk_tiles = gather_streaming_chunk_tiles(in_t, index_t, geometry.Wt_input);
 
     ProgramDescriptor desc;
-    // Fixed, width-independent footprint (2 input-tile double-buffer + 1 index + 1 output page): the
-    // bounded fallback whenever gather_interleaved_fits_l1() rejects the row-buffered plan, so no
-    // per-core L1 ceiling check is needed here (unlike Interleaved/Tiled).
-    desc.cbs.push_back(make_tile_cb(kCbInput, in_t, 2, split.core_range));
+    // The input CB holds one chunk_tiles-deep block of the row rather than the whole row, which is
+    // what makes this the fallback when gather_interleaved_fits_l1() rejects the row-buffered plan.
+    // Both kernels walk ceil(Wt_input / chunk_tiles) blocks of exactly chunk_tiles pages (the tail
+    // padded), so the CB is emptied every block and never wraps mid-block.
+    desc.cbs.push_back(make_tile_cb(kCbInput, in_t, chunk_tiles, split.core_range));
     desc.cbs.push_back(make_tile_cb(kCbIndex, index_t, 1, split.core_range));
     desc.cbs.push_back(make_tile_cb(kCbOutput, output_tensor, 1, split.core_range));
 
@@ -330,6 +346,7 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
         geometry.index_valid_h_last,
         geometry.index_valid_w_last,
         geometry.index_ht_per_batch,
+        chunk_tiles,
     };
     TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
 
@@ -341,7 +358,7 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
     reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor::CompileTimeArgs writer_ct = {
-        kCbInput, kCbOutput, geometry.Ht, geometry.Wt_input, geometry.Wt_index, split.num_cores};
+        kCbInput, kCbOutput, geometry.Ht, geometry.Wt_input, geometry.Wt_index, split.num_cores, chunk_tiles};
     TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
 
