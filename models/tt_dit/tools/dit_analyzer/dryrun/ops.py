@@ -113,7 +113,7 @@ def to_torch(x, mesh_composer=None, **k):
 
     if not isinstance(x, Tensor):
         return x
-    recorder.emit("host_read", [x], x.logical, x.dist, attrs={"devices": [0]}, base="readback")
+    recorder.emit("host_read", [x], x.logical, x.dist, attrs={"devices": [0], "boundary": True}, base="readback")
     return host_tensor(x.logical)
 
 
@@ -122,7 +122,13 @@ def get_device_tensors(x, **k) -> List[Tensor]:
         return [x]
     local = local_shape(x.logical, x.dist)
     out = recorder.emit(
-        "host_read", [x], x.logical, x.dist, attrs={"devices": [0]}, base="device_tensor", label="device 0"
+        "host_read",
+        [x],
+        x.logical,
+        x.dist,
+        attrs={"devices": [0], "boundary": True},
+        base="device_tensor",
+        label="device 0",
     )
     return [Tensor(local, Dist.replicated(CTX.mesh), x.dtype, sym=out.sym, host=True)]
 

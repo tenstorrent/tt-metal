@@ -290,6 +290,26 @@ class Graph:
     def consumers_of(self, sid: str) -> List[Node]:
         return [n for n in self.nodes if sid in n.inputs]
 
+    def segments(self) -> List[List["Node"]]:
+        """Node lists split at readback boundaries (roadmap blocker 43).
+
+        A ``host_read`` marked ``boundary`` ends a device segment: everything
+        after it runs on host data (the scheduler/guidance code between forwards),
+        or is the next stage of a pipeline. A single block has no readback, so it
+        is one segment; a whole-pipeline graph is a sequence of them. The
+        foundation for linking encoder → DiT → VAE stages (phase 10).
+        """
+        segs: List[List[Node]] = []
+        cur: List[Node] = []
+        for n in self.nodes:
+            cur.append(n)
+            if n.op == "host_read" and n.attrs.get("boundary"):
+                segs.append(cur)
+                cur = []
+        if cur:
+            segs.append(cur)
+        return segs
+
     # -- serialization --------------------------------------------------------
     def to_dict(self) -> Dict[str, Any]:
         return {

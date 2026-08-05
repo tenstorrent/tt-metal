@@ -72,6 +72,9 @@ def render_header(graph: Graph) -> str:
     ]
     for k, v in sorted(graph.meta.items()):
         lines.append("%-6s %s" % (k + ":", v))
+    n_seg = len(graph.segments())
+    if n_seg > 1:
+        lines.append("segments: %d device segments split at readbacks (phase 10: stage boundaries)" % n_seg)
     lines.append(render_trust(graph))
     lines.append("=" * 100)
     return "\n".join(lines)

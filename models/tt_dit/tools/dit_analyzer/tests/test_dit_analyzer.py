@@ -312,6 +312,27 @@ def test_trace_to_graph_lifts_local_shapes_and_flags_assumptions():
     assert graph2.meta["assumptions"]
 
 
+def test_readback_boundary_splits_graph_into_segments():
+    # a readback (host_read marked boundary) ends a device segment, so a whole-
+    # pipeline graph is a sequence of stages (phase 10, blocker 43). A block with
+    # no readback is one segment.
+    from dit_analyzer.ir import Graph, Node
+
+    one = Graph(name="one_stage", mesh=MESH)
+    one.nodes = [Node(id="n0", op="matmul")]
+    assert len(one.segments()) == 1  # no readback
+
+    pipe = Graph(name="pipeline", mesh=MESH)
+    pipe.nodes = [
+        Node(id="n0", op="matmul"),
+        Node(id="rb", op="host_read", attrs={"boundary": True}),  # stage boundary
+        Node(id="n1", op="matmul"),
+    ]
+    segs = pipe.segments()
+    assert len(segs) == 2, [[n.id for n in s] for s in segs]
+    assert segs[0][-1].op == "host_read" and segs[1][0].id == "n1"
+
+
 def test_report_declares_trust_and_flags_shim_belief():
     # Requirement: every report must state its provenance, and say "the shim
     # believes" whenever a finding rests on shim-computed (not device-verified)
