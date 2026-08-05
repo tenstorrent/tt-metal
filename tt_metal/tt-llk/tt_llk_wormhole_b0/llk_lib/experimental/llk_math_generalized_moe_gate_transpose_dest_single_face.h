@@ -185,7 +185,6 @@ template <bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_()
 {
     generalized_moe_gate_transpose_dest_single_face_step0_configure_mop<4, is_32bit>();
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
 }
 
 // Initialize for single face transpose
@@ -205,6 +204,32 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init
     generalized_moe_gate_transpose_dest_single_face_step2_configure_mop<3, is_32bit>();
 }
 
+/**
+ * @brief Shared prologue for every MOP runner below: point DEST at tile 0, reset the RWC counters,
+ *        and wait for the SFPU and SrcB.
+ *
+ * These ops take no dst_index, so without the DEST offset write the MOP addresses whatever tile the
+ * previous op left in DEST_TARGET_REG_CFG_MATH_Offset. The gate reaches them only at tile 0.
+ *
+ * @note Call immediately before ckernel_template::run() in a MOP runner; the matching init must
+ *       already have programmed the template. @ref _llk_math_generalized_moe_gate_copy4rows_
+ * @note Writes DEST_TARGET_REG_CFG_MATH_Offset and the SrcA/SrcB/DEST RWC counters, and leaves the
+ *       zero-flag state at MOV_OPS. @ref _configure_mov_ops_zero_flag_state_
+ */
+inline void generalized_moe_gate_mop_prologue()
+{
+    // set_dst_write_addr is a RISC MMIO write to DEST_TARGET_REG_CFG_MATH_Offset, which the op
+    // reaches straight out of an SFPU call whose loads and stores address DEST through that same
+    // register. A RISC write runs ahead of queued Tensix work, so stall the config unit on MATH and
+    // SFPU1 first, the way dest_section_flip does before writing the same register.
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_mov_ops_zero_flag_state_(); // MOVB2D must not flush datums with a zero low byte
+    // MOVD2B does not wait for SrcB to come back to the Matrix Unit on its own, so wait here.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+}
+
 // copy4rows init/runner.
 template <std::uint32_t src = 0, std::uint32_t dst = 0, bool is_32bit = false, std::uint32_t srcb = 16>
 inline void _llk_math_generalized_moe_gate_copy4rows_init_()
@@ -216,8 +241,7 @@ template <bool is_fp32_dest_acc_en, bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_copy4rows_()
 {
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit / fp32 dest accum not supported");
-    math::reset_counters(p_setrwc::SET_ABD_F);
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    generalized_moe_gate_mop_prologue();
     ckernel_template::run();
 }
 
@@ -232,8 +256,7 @@ template <bool is_fp32_dest_acc_en, bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_()
 {
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
-    math::reset_counters(p_setrwc::SET_ABD_F);
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    generalized_moe_gate_mop_prologue();
     ckernel_template::run();
 }
 
@@ -241,10 +264,7 @@ template <bool is_fp32_dest_acc_en, bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_()
 {
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
-    math::reset_counters(p_setrwc::SET_ABD_F);
-
-    // Wait for SFPU and SrcB to be available
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    generalized_moe_gate_mop_prologue();
 
     // Run the 16-bit single-face transpose MOP
     ckernel_template::run();
@@ -258,10 +278,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_()
 {
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
 
-    math::reset_counters(p_setrwc::SET_ABD_F);
-
-    // Wait for SFPU and SrcB to be available
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    generalized_moe_gate_mop_prologue();
 
     // Run the 16-bit single-face transpose MOP
     ckernel_template::run();
@@ -275,10 +292,7 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_()
 {
     static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
 
-    math::reset_counters(p_setrwc::SET_ABD_F);
-
-    // Wait for SFPU and SrcB to be available
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    generalized_moe_gate_mop_prologue();
 
     ckernel_template::run();
 
