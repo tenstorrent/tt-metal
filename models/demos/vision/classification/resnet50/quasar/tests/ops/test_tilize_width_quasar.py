@@ -68,13 +68,14 @@ def test_quasar_tilize_width(mesh_device, width_tiles, height_tiles):
     print(f"tilize width_tiles={width_tiles} height_tiles={height_tiles} PASSED (no 0x19)")
 
 
-# Reproduce the conv-internal failing tilize IN ISOLATION (no conv reader, no matmul): a HEIGHT_SHARDED
-# row-major input tilized via the quasar tilize op, which selects TilizeMultiCoreShardedProgramFactory --
-# the SAME factory the failing 1x1_256to128_s1_56x56 conv uses (per-core [1568,256] = 49 height-tiles x
-# 8 width-tiles). The existing test above uses DRAM-interleaved input (a DIFFERENT factory) and only tiny
-# heights, so it never exercises this. Sweep h/w to separate "block width == 8" from "block count == 49":
-#   h49_w8 = the exact failing config; if it alone reproduces PCC~0.16 while the controls pass, the tilize
-#   itself (not the conv/matmul) is the bug and this is the minimal repro.
+# HEIGHT_SHARDED row-major input tilized via the quasar tilize op. ROOT CAUSE (isolated here): the borrowed-DFB
+# TilizeMultiCoreShardedProgramFactory delivers correct data for only the first 64 tiles/shard, then repeats --
+# a fixed 64-entry limit in the borrowed-DFB credit/tile-counter path (PROVEN: PCC == 64/num_tiles_per_shard
+# exactly; tile-count driven, not block-count: h8_w16(128t/8blk) == h16_w8(128t/16blk)). The tilize LLK is fine
+# (test_quasar_tilize_width, non-borrowed factory, tilizes 49 blocks correctly).
+# WORKAROUND applied (tilize_device_operation.cpp can_use_sharded_optimized_factories): HEIGHT_SHARDED shards
+# with > 64 tiles route to the NON-borrowed TilizeMultiCoreDefaultProgramFactory -> so ALL cases below now PASS.
+# This test is therefore a REGRESSION GUARD for the reroute; without it the > 64-tile cases fail PCC == 64/N.
 _SHARDED_CASES = [
     (49, 8, "h49_w8_FAILCONFIG"),  # 256ch activation, 56x56/2-core: the exact failing tilize
     (49, 4, "h49_w4"),  # same block count, narrower -> isolates width-8 vs block-count
