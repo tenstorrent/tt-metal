@@ -20,7 +20,10 @@ class Qwen36SharedExpert:
     def __init__(self, mesh_device, mlp_state, tensor_cache_path=None, args=None, tt_ccl=None):
         shared_state = substate(mlp_state, "shared_expert")  # gate_proj/up_proj/down_proj .weight
         shared_cache = (tensor_cache_path / "shared_expert") if tensor_cache_path else None
-        self.mlp = Qwen36MLP(mesh_device, shared_state, shared_cache, args=args, tt_ccl=tt_ccl)
+        # The shared expert receives already-gathered (full/replicated) hidden — the MoE layer's
+        # ff_norm does its own all-gather (layer._fuse_ff_agmm is off for MoE). So it must NOT run
+        # the fused gate/up all-gather-matmul (that would re-gather full input → K mismatch).
+        self.mlp = Qwen36MLP(mesh_device, shared_state, shared_cache, args=args, tt_ccl=tt_ccl, use_gateup_agmm=False)
 
         # shared_expert_gate.weight is [1, H] -> [1,1,H,1] for ttnn.linear, replicated.
         is_mesh = hasattr(mesh_device, "shape")
