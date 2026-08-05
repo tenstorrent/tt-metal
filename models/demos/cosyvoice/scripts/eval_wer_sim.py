@@ -67,10 +67,39 @@ SIM_MODEL = "microsoft/wavlm-base-plus-sv"
 _PUNCT = re.compile(r"[\s\.,!?;:\"'`~@#$%^&*()\[\]{}<>/\\|+=_-–—…、。，！？；：" "''（）《》【】〈〉「」『』·]+")
 
 
+def _to_simplified(text: str) -> str:
+    """Fold Traditional Chinese to Simplified before scoring.
+
+    Whisper chooses its script freely and is not consistent about it -- the same
+    Chinese audio transcribes as 以後 on one run and 以后 on another. Against a
+    Simplified reference every such pair is counted as a substitution, so the CER
+    ends up reporting *which script the ASR happened to pick* rather than what was
+    said.
+
+    Measured: the PyTorch reference's own audio for the golden utterance scored
+    **35.71 % CER** because Whisper emitted Traditional, while TTNN audio for the
+    same sentence scored 7.14 % purely because it drew Simplified. Two implementations
+    that sound the same, a 5x apparent difference, and the model had nothing to do
+    with it. Folding first drops the reference to 14.29 % and TTNN to 7.14 %, both
+    now genuine homophone confusions (得/的, 哟/呦).
+
+    Degrades to a no-op rather than failing if `zhconv` is absent, since it is a
+    scoring refinement and not a dependency of the port.
+    """
+    try:
+        import zhconv
+    except ImportError:
+        return text
+    return zhconv.convert(text, "zh-cn")
+
+
 def normalize(text: str, lang: str) -> list[str]:
     """Lowercase, strip punctuation, then split into the scoring unit."""
     text = unicodedata.normalize("NFKC", text).lower()
     if lang in CER_LANGS:
+        # Script folding must happen before the split, and applies to zh and yue
+        # both -- Cantonese transcripts come back in either script too.
+        text = _to_simplified(text)
         # characters, with all separators and punctuation removed
         return [c for c in _PUNCT.sub("", text) if c.strip()]
     return [w for w in _PUNCT.sub(" ", text).split() if w]
