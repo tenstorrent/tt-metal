@@ -1572,6 +1572,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self._prev_on_device_sampling = on_device_sampling
         sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
         reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed
+        # EXPERIMENT ONLY (#52176) — do not merge. Re-stage every decode trace input from host
+        # each step, so the device-side token feedback and plus_one position increments can never
+        # be the authoritative state. Isolates device-feedback drift from the sampling trace.
+        reset_inputs = True
         page_table_changed = page_table is not None and (
             self.prev_page_table is None
             or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
