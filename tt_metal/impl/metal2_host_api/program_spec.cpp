@@ -2940,7 +2940,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     }
 
     // Step 3: Build the Program
-    auto program_impl = std::make_shared<detail::ProgramImpl>();
+    auto program_impl = std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device));
     program_impl->mark_created_from_spec();  // mark as Metal 2.0 ProgramSpec-created (for legality checks)
 
     // Register TensorParameters with the program for ValidateProgramRunArgs to consult at enqueue.
