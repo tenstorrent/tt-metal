@@ -348,6 +348,31 @@ def test_concat_keeps_the_sharded_operands_distribution():
     assert st.dist.shard[SP] == 2, st.dist.shard  # the shard survives the concat
 
 
+def test_symmetric_halo_is_necessary_but_asymmetric_halo_shrinks():
+    """participant_shrink compares needed (output frame) with local (input frame). A halo
+    grows the frame by pad_left, so without reconciling the two a *symmetric* halo -- where
+    both devices read each other's border -- reads as one-sided and is wrongly flagged. This
+    is the audio-vocoder false-positive storm (382 symmetric halos flagged, 884 phantom MiB).
+
+    Symmetric (pad_left == pad_right): both devices are senders -> necessary, no finding.
+    Asymmetric (one-sided pad): only one device's border is read -> participant_shrink.
+    """
+    from dit_analyzer.ir import Mesh
+
+    m = Mesh(shape=(2, 2), axis_names=("h", "w"))
+
+    def shrink_findings(pad_left, pad_right):
+        b = GraphBuilder("halo", m)
+        x = b.input("x", [1, 2, 64, 8, 16], shard={0: 2})  # H (dim2) sharded over axis0 (factor 2)
+        padded = b.neighbor_pad(x, dims=[2], pad_left=[pad_left], pad_right=[pad_right], axes=[0], label="halo")
+        y = b.conv3d(padded, out_channels=16, kernel=(1, 3, 3), stride=(1, 1, 1), label="conv")
+        report = analyze_graph(b.finish([y]))
+        return [f for f in report.findings if f.rule == "participant_shrink"]
+
+    assert shrink_findings(1, 1) == [], "a symmetric halo must not be participant_shrink"
+    assert len(shrink_findings(0, 1)) == 1, "an asymmetric (one-sided) halo should shrink"
+
+
 def test_two_dim_halo_routes_the_corner_to_the_diagonal_neighbour():
     """A 2-D spatial halo (H *and* W sharded): the corner past the border on both axes
     belongs to the *diagonal* neighbour, not to either axis-neighbour.

@@ -203,6 +203,25 @@ class CollectiveView:
         return tuple(out)
 
 
+def _to_input_frame(graph: Graph, node: Node, region: RegionSet) -> RegionSet:
+    """Map an output-frame region back to the input frame for a shape-growing collective.
+
+    The sender/needer rules compare ``needed`` / ``gained`` (output frame) against
+    ``local`` (input frame), which only aligns when the collective preserves the logical
+    shape -- true for gather / reduce_scatter / mesh_partition. ``neighbor_pad`` grows each
+    padded dim by ``pad_left + pad_right`` (input row ``i`` sits at output row ``i +
+    pad_left``), so its frames are offset by ``pad_left``; without this shift a *symmetric*
+    halo looks one-sided and is wrongly flagged ``participant_shrink``. Identity otherwise.
+    """
+    if node.op != "neighbor_pad" or region.is_empty:
+        return region
+    xs = graph.symbol(node.inputs[0])
+    r = region
+    for dim, pl in zip(node.attrs["dims"], node.attrs["pad_left"]):
+        r = r.map_axis(dim % xs.ndim, lambda lo, hi, p=pl: (lo - p, hi - p))
+    return r.intersect(RegionSet.full(xs.shape))
+
+
 def collect_views(graph: Graph, fwd: ForwardResult, bwd: DemandResult) -> List[CollectiveView]:
     views: List[CollectiveView] = []
     for node in graph.nodes:
@@ -216,11 +235,17 @@ def collect_views(graph: Graph, fwd: ForwardResult, bwd: DemandResult) -> List[C
         nd = graph.symbol(yid).ndim
         reduces = x.dist.partial[node.mesh_axis] and not y.dist.partial[node.mesh_axis]
         for group in graph.mesh_of(node).groups(node.mesh_axis):  # the node's mesh (blocker 22)
-            needed = {d: bwd.of(yid, d, nd) for d in group}
+            # needed / gained are in the output frame; local is the input frame. For a
+            # shape-growing halo they must be reconciled or a symmetric halo reads as
+            # one-sided (the audio-vocoder false-positive storm).
+            needed = {d: _to_input_frame(graph, node, bwd.of(yid, d, nd)) for d in group}
             local = {d: x.regions[d] for d in group}
             # For a reduction the pre-state is an unreduced partial sum, so none of
             # it counts as "already available"; everything the op materialises is new.
-            gained = {d: (y.regions[d] if reduces else y.regions[d].subtract(local[d])) for d in group}
+            gained = {
+                d: (y.regions[d] if reduces else _to_input_frame(graph, node, y.regions[d]).subtract(local[d]))
+                for d in group
+            }
             views.append(
                 CollectiveView(
                     node=node,

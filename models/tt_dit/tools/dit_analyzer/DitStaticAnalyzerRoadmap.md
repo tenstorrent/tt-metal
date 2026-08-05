@@ -510,19 +510,26 @@ generator (phase 8) already emits both halves for a new such op.
     the causal concat handed a later conv a TILE tensor), and **both** the shim *and* the
     analyzer `concat` inherit the **richest** operand's dist/layout, not input 0's.
   - The encoder now **fully dry-runs — 361 nodes, 0 unregistered** — and analyses:
-    **10 collectives necessary, 7 flagged** (6.4 MiB). Verifying the first result caught
-    a real bug: the analyzer concat lost the shard, inventing **10 phantom
-    `unused_gather` findings (39.5 MiB that don't exist)** — gone once the concat
-    inherited the sharded operand. The surviving 7 are `participant_shrink` on the halo
-    nodes (MEDIUM/likely): the model's **asymmetric downsampler halos** (`(0,1)` pad)
-    don't need every participant. Suggestive, resting on the newest halo-demand code +
-    "the shim believes" — want device conformance before acting.
+    **16 collectives necessary, 1 flagged**. Verifying the first result caught a real
+    bug: the analyzer concat lost the shard, inventing **10 phantom `unused_gather`
+    findings (39.5 MiB that don't exist)** — gone once the concat inherited the sharded
+    operand. Then the participant-frame fix below dropped a further 6 false halo
+    findings (7 → 1); the surviving one is a genuinely asymmetric downsampler halo.
   - **Halo demand is now exact in 2-D.** `neighbor_pad`'s backward demand splits as a
     *product* over the padded axes, routing the corner (past the border on both H and W)
     to the **diagonal** neighbour that owns it — no device is ever demanded for data
     outside the shard it holds. This makes the `participant_shrink` accounting trustworthy
     on 2-D-haloed sites; the confidence tier stays MEDIUM/likely (participant_shrink is an
     opportunity requiring a code change, not a provable dead collective).
+  - **Participant-frame fix.** The sender/needer rules compared `needed` (output frame)
+    against `local` (input frame) — fine for shape-preserving collectives, but a halo
+    grows the frame by `pad_left`, so a *symmetric* halo (both devices read each other's
+    border) read as one-sided and was wrongly flagged. `collect_views` now maps the
+    halo's `needed`/`gained` back into the input frame. This dropped the VAE encoder's
+    halo findings 7 → 1 (6 were the bug) and is what the **audio T-parallel scout**
+    surfaced — it had reported **382 `participant_shrink` / 884 phantom MiB**, essentially
+    all of them symmetric halos. Regression-tested (symmetric → necessary, asymmetric →
+    shrink). Suite 69 passed.
 - **MiniMax-H3 audio VAE decoder** (`cglagovich/minimax-h3`, the shared LTX **BigVGAN
   vocoder** `vocoder_ltx.py`) — dry-runs **fully clean, 3783 nodes, 0 unregistered**.
   Most of it is `conv3d` with `(k,1,1)` kernels (already covered — a payoff from the
@@ -530,9 +537,13 @@ generator (phase 8) already emits both halves for a new such op.
   tensor; a `conv2d` with `W=1`, returns ttnn's `(out, out_length, (weight, bias))`
   tuple — the missing tuple was what tripped the vocoder's 3-way unpack) and
   **`snake_beta`** (the BigVGAN activation, a pointwise unary). Both generic — `conv1d`
-  benefits LTX audio too (shared vocoder). Single-device in this test, so no collective
-  findings; the T-parallel path (`AudioTParallelConfig`, `_all_gather_t` / `_partition_t`)
-  is where those would surface.
+  benefits LTX audio too (shared vocoder). **T-parallel scouted** (time sharded over a
+  mesh axis): it runs (4544 nodes, 4 segments) and surfaced the participant-frame bug
+  above, but its findings are **not yet trustworthy** — `conv1d` reuses conv2d's
+  channel-parallel spec and so **drops the time-shard** (replicates), which then reads the
+  downstream T-halos as redundant. Fixing it means making `conv1d` spatial-parallel
+  (preserve the input shard, like `conv3d`), which then collides with the vocoder's
+  per-device local-scale reshapes under sharding — a deeper follow-up, not the frame bug.
 - **Grouped-query attention** — `nlp_create_qkv_heads` now branches on its call
   shape: `num_kv_heads == 0` (LTX / Ideogram / Wan, `out, _, _ = …`) is the plain
   single-tensor head split; `num_kv_heads > 0` (Qwen3-VL / Gemma / **MiniMax-H3**,
