@@ -1038,11 +1038,13 @@ void EthernetKernel::read_binaries(IDevice* device, const std::string& binary_ro
 
 void ComputeKernel::read_binaries(IDevice* device, const std::string& binary_root) {
     TT_ASSERT(this->binaries_exist_on_disk(device, binary_root));
+    constexpr int num_trisc_binaries = 3;
     std::vector<const ll_api::memory*> binaries;
+    binaries.reserve(num_trisc_binaries);
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
+    for (int trisc_id = 0; trisc_id < num_trisc_binaries; trisc_id++) {
         auto load_type = MetalContext::instance()
                              .hal()
                              .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
@@ -1307,6 +1309,7 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
 void QuasarDataMovementKernel::read_binaries(IDevice* device, const std::string& binary_root) {
     TT_ASSERT(this->binaries_exist_on_disk(device, binary_root));
     std::vector<const ll_api::memory*> binaries;
+    binaries.reserve(this->dm_processors_.size());
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
@@ -1433,6 +1436,7 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
 void QuasarComputeKernel::read_binaries(IDevice* device, const std::string& binary_root) {
     TT_ASSERT(this->binaries_exist_on_disk(device, binary_root));
     std::vector<const ll_api::memory*> binaries;
+    binaries.reserve(this->trisc_binary_groups_.size());
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);

@@ -201,9 +201,6 @@ void kernel_main() {
 
     in0_valid_sem.set(VALID);
 
-    const uint64_t in0_sender_semaphore_noc_addr =
-        get_noc_addr(in0_sender_noc_x, in0_sender_noc_y, in0_sender_semaphore_addr);
-
     const uint64_t in0_receiver_semaphore_noc_addr =
         get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
 
@@ -335,7 +332,7 @@ void kernel_main() {
                 } else {
                     // Get from previous device
                     in0_receiver_sem.set(INVALID);
-                    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
+                    in0_sender_sem.up(noc, in0_sender_noc_x, in0_sender_noc_y, 1);
                     in0_receiver_sem.wait(VALID);
                 }
 

@@ -290,6 +290,8 @@ public:
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
 
+    uint32_t assign_dfb_device_slot(const experimental::dfb::detail::DataflowBufferImpl& dfb) const;
+
     // Declare an alias relationship: secondary shares primary's L1 address.
     void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);
 

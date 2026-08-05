@@ -6,15 +6,21 @@ from fuser.fused_operand import Operand
 from fuser.wormhole.packer.common import (  # noqa: F401
     configure_pack,
     l1_accumulation_config,
-    pack_dest_init,
     pack_reduce_mask_clear,
     pack_reduce_mask_config,
     packer_dest_section_done,
     packer_sync_with_unpacker,
     packer_wait_for_math,
     relu_config,
+    untilize_l1_address,
 )
 from helpers.format_config import DataFormat
+
+
+def pack_dest_init(
+    dest_sync: str, dest_acc: str, pack_mode: str = "PackMode::Default", **kwargs
+) -> str:
+    return f"_llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
 
 
 def hw_configure_pack(
