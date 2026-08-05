@@ -23,6 +23,7 @@
 import pytest
 import torch
 import transformers
+from loguru import logger
 
 import ttnn
 
@@ -270,3 +271,135 @@ def test_vision_scatter_only_touches_the_vision_rows(mesh_device, submesh_shape)
     scattered = run(bf16_tensor(torch.randn(1, 16, HIDDEN) * 10, device=submesh))
     assert torch.allclose(plain[:, :32], scattered[:, :32], atol=1e-2), "rows before the run changed"
     assert not torch.allclose(plain[:, 32:48], scattered[:, 32:48], atol=1e-2), "the run itself did not change"
+
+
+# --------------------------------------------------------------------------- tile boundaries
+
+# The real conditioner width, used by the production cases below so nothing about the row slicing is
+# being measured at a toy hidden size.
+HIDDEN_REAL = 5120
+
+# `(seq, runs, id)` -- row geometries chosen for where they sit relative to TILE_SIZE = 32.
+#
+# Every case above this point fits its runs INSIDE one tile row-block: SEQ is 64 and the runs are
+# (8,16), (0,8), (56,8), (4,8)+(20,12), none of which spans row 32. The reduced fused-conditioner test
+# is narrower still at seq_len 19 -- a single row-block. So the branch's whole green record for
+# `_scatter_rows` was collected without a run ever crossing a tile boundary, while the released-weights
+# case crosses 6 and production crosses 31.
+#
+# STATE.md amendment 75 is why this is worth its own gate rather than an assumption: TILE row
+# granularity is 32, an unaligned cut there *asserted* in the DiT's packed-sequence path, and the fix
+# was to assemble in ROW_MAJOR and convert once. `_scatter_rows` slices a TILE_LAYOUT tensor at
+# arbitrary row offsets, so it is the same hazard in a different module.
+_TILE_RUNS = [
+    pytest.param(19, [(5, 6)], HIDDEN, id="reduced_control_one_tile"),
+    pytest.param(206, [(5, 196)], HIDDEN, id="released_448sq_crosses_6"),
+    pytest.param(1054, [(5, 1008)], HIDDEN_REAL, id="production_keyframe_crosses_31"),
+    pytest.param(2067, [(5, 1008), (1018, 1008)], HIDDEN_REAL, id="production_two_keyframes"),
+]
+
+
+@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+@pytest.mark.parametrize(("seq", "runs", "hidden"), _TILE_RUNS)
+def test_scatter_rows_is_exact_across_tile_boundaries(mesh_device, submesh_shape, seq, runs, hidden):
+    """`_scatter_rows` is BIT-EXACT for a replace, at every row geometry `fl2va` produces.
+
+    Gated on `torch.equal`, not PCC. A replace is pure data movement: it selects rows and concatenates
+    them, so there is no arithmetic to lose precision in and no numerical excuse for a mismatch. A PCC
+    bar on a data movement would pass a scatter that placed a few rows one tile off, which is exactly
+    the failure mode tile boundaries invite -- and the sibling `test_scatter_rows_matches_torch` gates
+    at pcc=0.999, which at these row counts would tolerate ~1 row in 1000 being wrong.
+
+    Inputs are pre-rounded to bf16 so the comparison is against what the device was actually given;
+    otherwise this would be measuring the host's fp32 -> bf16 cast, not the scatter.
+    """
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    total = sum(length for _, length in runs)
+    assert (
+        all(start % ttnn.TILE_SIZE or length % ttnn.TILE_SIZE for start, length in runs) or seq == 19
+    ), "every production run should be unaligned on at least one end, or this gates nothing"
+
+    torch.manual_seed(0)
+    # Pre-rounded through bf16: the device holds exactly these values, so any difference on readback is
+    # the scatter's and not the cast's.
+    base = torch.randn(1, seq, hidden).bfloat16().float()
+    values = torch.randn(1, total, hidden).bfloat16().float()
+
+    golden = base.clone()
+    taken = 0
+    for start, length in runs:
+        golden[:, start : start + length, :] = values[:, taken : taken + length, :]
+        taken += length
+
+    out = _scatter_rows(bf16_tensor(base, device=submesh), bf16_tensor(values, device=submesh), runs, add=False)
+    actual = tensor.to_torch(out, mesh_axes=[None, None, None]).float()
+    assert actual.shape[-2:] == (seq, hidden), f"{tuple(actual.shape)} != (…, {seq}, {hidden})"
+
+    if not torch.equal(golden, actual):
+        wrong = (golden != actual).any(dim=-1).nonzero().flatten().tolist()
+        # Report which tile row-block the damage starts in -- that is the diagnostic that separates
+        # "wrong rows selected" from "rows landed one tile off".
+        raise AssertionError(
+            f"{len(wrong)} of {seq} rows differ; first 10 at {wrong[:10]} "
+            f"(tile row-blocks {sorted({r // ttnn.TILE_SIZE for r in wrong[:10]})}), runs={runs}"
+        )
+
+
+@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+@pytest.mark.parametrize(("seq", "runs", "hidden"), _TILE_RUNS)
+def test_scatter_rows_add_is_exact_across_tile_boundaries(mesh_device, submesh_shape, seq, runs, hidden):
+    """The deepstack path (`add=True`) at the same geometries.
+
+    Untouched rows must be bit-exact -- they are a pure pass-through and an `add` has no business
+    perturbing them.
+
+    The written rows are compared at the bf16 floor instead, because they are not a data movement:
+    `ttnn.add` and torch do not round a bf16 sum identically. Measured here -- the `seq=19`
+    single-tile control disagrees just as much as the 2067-row production case (max abs 3.125e-2 on
+    values of magnitude ~4, i.e. exactly one bf16 ulp, on ~11 % of elements), which is what settles
+    that this is a rounding-mode difference and not a tile-boundary effect. Two earlier bars were both
+    wrong for the same reason and are recorded so nobody re-derives them: a 2**-8 relative tolerance
+    (that is *half* a bf16 ulp -- 7 stored mantissa bits put the spacing at 2**-7 relative), and
+    bit-exactness against a bf16-rounded golden (which assumes both sides round the same way). The
+    trap STATE.md amendment 76 names, twice.
+
+    A ~50 % differing fraction is expected for a rounding-mode difference, so unlike the rope-table
+    gate there is no bound on *how many* entries differ. The systematic-bias check below is what
+    replaces it: truncation instead of round-to-nearest would show up as a mean error of ~half an ulp
+    with a consistent sign, which a per-element magnitude bar alone would wave through.
+    """
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    total = sum(length for _, length in runs)
+
+    torch.manual_seed(0)
+    base = torch.randn(1, seq, hidden).bfloat16().float()
+    values = torch.randn(1, total, hidden).bfloat16().float()
+
+    golden = base.clone()
+    written = torch.zeros(seq, dtype=torch.bool)
+    taken = 0
+    for start, length in runs:
+        golden[:, start : start + length, :] += values[:, taken : taken + length, :]
+        written[start : start + length] = True
+        taken += length
+
+    out = _scatter_rows(bf16_tensor(base, device=submesh), bf16_tensor(values, device=submesh), runs, add=True)
+    actual = tensor.to_torch(out, mesh_axes=[None, None, None]).float()
+
+    assert torch.equal(golden[:, ~written], actual[:, ~written]), (
+        f"pass-through rows changed under add; "
+        f"{(golden[:, ~written] != actual[:, ~written]).any(dim=-1).sum().item()} of "
+        f"{int((~written).sum())} untouched rows differ"
+    )
+    expected, got = golden[:, written], actual[:, written]
+    # One bf16 ulp is 2**-7 of the value's binade; allow two so an entry sitting on a rounding
+    # boundary can fall either way.
+    ulp = torch.ldexp(torch.ones_like(expected), torch.floor(torch.log2(expected.abs().clamp(min=1e-30))).int() - 7)
+    diff = (expected - got).abs()
+    worst = (diff / ulp).max().item()
+    assert worst <= 2.0, f"written rows are {worst:.2f} bf16 ulps out, past the 2-ulp floor"
+
+    # No systematic bias: round-to-nearest is unbiased, truncation is not.
+    bias = ((got - expected) / ulp).mean().item()
+    assert abs(bias) < 0.1, f"mean error {bias:+.3f} ulps suggests truncation rather than round-to-nearest"
+    logger.info(f"scatter add @ seq={seq}: worst {worst:.2f} ulps, mean bias {bias:+.3f} ulps")
