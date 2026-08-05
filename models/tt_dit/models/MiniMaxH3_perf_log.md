@@ -33,7 +33,7 @@ python models/tt_dit/tests/models/minimax_h3/project_block_perf.py 5s=<csv>
 | 5 | 2026-08-04 | all-gather folded into the matmuls (AGMM), placeholder block sizes | 18.20 ms | 43.22 ms | 78.26 ms | `0928969663b` |
 | 6 | 2026-08-04 | AGMM block sizes from a measured sweep | 17.79 ms | 42.43 ms | 77.01 ms | `9587b239154` |
 | 7 | 2026-08-04 | attention gate addcmul folded into the to_out AGMM epilogue | 17.58 ms | 42.31 ms | 76.96 ms | `989f329d0c9` |
-| 8 | 2026-08-04 | ff2 + reduce-scatter + gated residual fused, blocking swept | 17.19 ms | 41.12 ms | 75.33 ms | `12d6fb043ca` |
+| 8 | 2026-08-04 | ff2 + reduce-scatter + gated residual fused, blocking swept | 17.19 ms | 41.12 ms | 75.33 ms | `f7f1795a7e3` |
 
 Cumulative at 5s: **26.03 -> 17.19 ms, -34.0%**; 1.30 -> 0.86 s per 50-layer step, 65.1 -> 43.0 s per video.
 At 10s: 57.65 -> 41.12 ms (-28.7%). At 15s: 98.72 -> 75.33 ms (-23.7%).
@@ -142,7 +142,7 @@ General lesson, now twice observed: **fusing an op without tuning its blocking c
 fusing it.** AGMM was +1.8% before its sweep and +2.3% after; MMRS is -3.3% before a sweep it has not
 had.
 
-> **RESOLVED by entry 8** (`12d6fb043ca`), which is where the numbers now live. The diagnosis above
+> **RESOLVED by entry 8** (`f7f1795a7e3`), which is where the numbers now live. The diagnosis above
 > held exactly: with a swept blocking the same fusion is -25.0% on the stage instead of +45%, and
 > nothing but `get_fused_mmrs_config`'s table changed. Two corrections to the prerequisites as written
 > above -- the entries do *not* need to be one per duration (the blocking carries across M, and
