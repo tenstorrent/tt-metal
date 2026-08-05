@@ -1138,10 +1138,10 @@ performs exactly the same compute as at isl-256 while carrying 4x fewer real tok
 every core runs per_core_M=1 either way, so skipping idle cores' math would not shorten the
 critical path. (The down phase already skips MAC and pack for OOB rows; section 13's ring fix.)
 
-Per-core tile-MACs at per_core_M=1: gate 1x224x6 = 1344, up 1344, down 1x66x21 = 1386 =
-**4074**. 84.7 us x 1.35 GHz / 4074 = **28 cy per tile-matmul**, against a bf16 tile-matmul
-issue rate of roughly 16-19 cy. So the floor is within ~1.5-1.75x of the FPU limit: this is a
-compute-bound regime, not a bandwidth-bound one.
+**RETRACTED (see 14e): the floor is NOT attributable to the matmul MACs.** An earlier draft
+divided 84.7 us by the 4074 per-core tile-MACs to get 28 cy/tile-matmul and concluded "near the
+FPU limit". That is an inference from a total, not a measurement of the term, and direct
+ablation contradicts it.
 
 ### 14c. Answers to the six proposed experiments
 
@@ -1188,3 +1188,67 @@ the 13-21% that traffic-side changes are bounded by.
 Secondary, smaller: the floor's 23 us fixed term is ~31k cy/chunk of pure orchestration across
 25 block iterations (~1240 cy each), and the 28 vs 16-19 cy/tile-matmul gap suggests ~1.5x in
 subblock sizing / reconfig / SFPU overlap. Both are LLK-level work.
+
+### 14e. Corrections after review
+
+**(d) The weight read and the weight multicast share NoC 0. My earlier "already dual-NoC"
+claim was WRONG.** `kernel_types.hpp:134`: `preferred_noc_for_dram_read` returns NOC_0 for
+Blackhole (the `default` arm) and `ReaderDataMovementConfig` uses RISCV_1 with that NoC. So in
+the reader, `Noc noc_read(0)` and the default-constructed `Noc noc` used for the mcast are the
+SAME NoC. The comment at `reader.cpp:233` claiming "dual-NoC parallelism" for the mcast is
+misleading; the only genuine dual-NoC work is the writer's NoC-1 `up` read (UP_SPLIT) and its
+output writes.
+
+So a **reader-issued** NoC-1 multicast is untried, and is distinct from the retired
+UP_WRITER_MCAST (which was the WRITER multicasting on NoC 1). Its ceiling is still 19.7 us
+(14a), since removing the mcast entirely already captures any NoC-0 contention relief.
+Attempting it — data mcast on NoC 1 with the ordering semaphore left on NoC 0, which breaks the
+`linked=true` path ordering by construction — **wedged the device**: the first multi-core op of
+the next run (a Tilize, per `dump_running_operations`) hung with no lightweight assert. Any real
+attempt must move the valid-sem multicast onto the same NoC as the data.
+
+**(a)/(c) The 84.7 us floor is measured, but NOT yet attributed.** Two attempts failed:
+
+1. *Ablating the MACs* (`#ifndef DS_NO_MATH` around all three `matmul_block` calls) is
+   unreliable: with the MAC gone, `dst` holds uninitialised garbage, and NaN/denormal inputs
+   change SFPU (silu/sigmoid) timing. It produced physically impossible results — at isl-128 the
+   floor got 11 us SLOWER without the MACs (84.8 -> 96.1), while isl-512 got 35 us faster.
+2. *Per-RISC kernel durations* do not separate work from waiting. At isl-128 every RISC spans
+   essentially the whole op in both configurations:
+
+   | | TOTAL | BRISC (reader) | NCRISC (writer) | TRISC0 unpack | TRISC1 math | TRISC2 pack |
+   |---|---|---|---|---|---|---|
+   | base | 147.0 | 146.9 | 142.2 | 144.4 | 143.9 | 146.1 |
+   | no traffic | 90.0 | 89.8 | 87.6 | 89.8 | 89.3 | 89.7 |
+
+What still stands: the floor is 84.7 us, invariant to 0.05% across isl 64/128/256, and fits
+`23 us + 61 us x per_core_M`. **Decomposing it is OPEN.** The right instrument is
+`DeviceZoneScopedSumN1` / `DeviceZoneScopedSumN2` (`kernel_profiler.hpp:1043`), which ACCUMULATE
+a zone across loop iterations — two slots per RISC per run, so several runs are needed. Plan:
+in the reader, one zone around the ready-sem wait and one around read-issue+barrier; in the
+compute kernel, one around `cb_wait_front` for weights (starved time) and one around the
+matmul+pack subblock loop (busy time). That distinguishes "compute starved" from "compute busy"
+directly, which neither attempt above could.
+
+**(e) minimal_matmul (unicast) benched on our shape — it is 1.89x SLOWER, not faster.**
+`ttnn.experimental.minimal_matmul` contains no multicast at all. On the isl-64 gate shape
+[64, 7168] @ [7168, 2048] with bfp4 weights, grid 11x8, best of 8 configs:
+
+| cfg (Mb,Kb,Nb,sh,sw) | us | weight traffic | GB/s |
+|---|---|---|---|
+| (1,16,4,1,4) | **90.0** | 16.51 MB (2x dup) | 183 |
+| (1,32,1,1,1) | 119.3 | 16.51 MB | 138 |
+| (2,16,2,2,2) | 106.9 | 8.26 MB (no dup) | 77 |
+| (2,8,1,2,1) | 169.4 | 8.26 MB | 49 |
+
+90 us for ONE matmul; our op does gate+up+down+SwiGLU in 143 us, so 3x = 270 us. Note the
+fastest config only reaches 183 GB/s by reading the weights TWICE (M split into 2 blocks); its
+useful rate is 92 GB/s, and every duplication-free config is slower. minimal_matmul reaches high
+utilisation at M=4096 (the shape its own test uses), where weights amortise over many rows; at
+M=64 there is nothing to amortise and unicast strictly loses to a shared multicast.
+
+**(f) Confirmed for WEIGHTS specifically: 54 KB per multicast, already 6.75x the 8 KB
+threshold.** `gate_block_bytes = in0_block_w_gu * per_core_N_gu * 576` = 16 * 6 * 576 = 55,296 B
+for gate, the same for up, and 126 * 576 = 72,576 B per down block; 2.35 MB per sender per
+chunk. Independent of ISL (weights do not scale with per_core_M). 13d already measured that
+wider blocks (w=28 -> 96 KB, w=56 -> 192 KB) buy ~2 us and then nothing.
