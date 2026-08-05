@@ -54,9 +54,11 @@ Thank you for your interest in this project.
 If you are interested in making a contribution, then please familiarize
 yourself with our technical contribution standards as set forth in this guide.
 
-Next, please request appropriate write permissions by [opening an
-issue](https://github.com/tenstorrent/tt-metal/issues/new/choose) for
-GitHub permissions.
+You do not need write access to contribute. Fork the repository and open your
+pull request from the fork; maintainers will mirror the branch internally to
+run CI as needed. Write access to push branches directly to this repo is
+reserved for maintainers and ongoing contributors, and is granted separately
+from the PR process described here.
 
 All contributions require:
 - an issue
