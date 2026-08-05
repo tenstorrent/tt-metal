@@ -2496,6 +2496,11 @@ protected:
                         packed_write_max_unicast_sub_cmds_,
                         no_stride,
                         l1_alignment_);
+                    if (xfer_size_bytes == 0) {
+                        // No payload fits alongside this many sub-commands. Emitting the command anyway would give the
+                        // dispatcher a zero-length write to issue per sub-command.
+                        return std::nullopt;
+                    }
 
                     const CoreCoord& fw = worker_cores[0];
                     // Capture address before updating device_data
@@ -2635,9 +2640,9 @@ public:
         pgcfg.min_xfer_size_bytes = this->cfg_.min_xfer_size_bytes;
         pgcfg.max_xfer_size_bytes = this->cfg_.max_xfer_size_bytes;
         std::random_device rd;
-        pgcfg.seed = rd();
+        pgcfg.seed = tt::parse_env("TT_METAL_SEED", static_cast<uint32_t>(rd()));
         this->payload_generator_ = std::make_unique<Common::DispatchPayloadGenerator>(pgcfg);
-        log_info(tt::LogTest, "Random seed set to {}", pgcfg.seed);
+        log_info(tt::LogTest, "Random seed set to {} (set TT_METAL_SEED to replay)", pgcfg.seed);
 
         this->dispatch_buffer_page_size_ = this->cfg_.dispatch_buffer_page_size;
         this->send_to_all_ = this->cfg_.send_to_all;
