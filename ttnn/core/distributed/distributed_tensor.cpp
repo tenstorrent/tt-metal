@@ -33,6 +33,7 @@
 #include "distribution_mode.hpp"
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::distributed {
 namespace {
@@ -175,6 +176,7 @@ public:
             case tt::tt_metal::DataType::UINT8: return extract_logical_data.template operator()<uint8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return extract_logical_data.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return extract_logical_data.template operator()<int32_t>(tensor);
+            case tt::tt_metal::DataType::INT8: return extract_logical_data.template operator()<int8_t>(tensor);
             case tt::tt_metal::DataType::INVALID: TT_THROW("Invalid data type: {}", tensor.tensor_spec().data_type());
         }
         TT_THROW("Unreachable");
@@ -226,8 +228,8 @@ public:
             const auto tensor_topology =
                 tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, buffer_coords);
 
-            return Tensor(
-                tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), tensor_spec, tensor_topology));
+            return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
+                std::move(distributed_buffer), tensor_spec, tensor_topology));
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -318,7 +320,8 @@ private:
             if (buffer_pin == nullptr) {
                 return false;
             }
-            if (!tt::tt_metal::logical_matches_physical(shard_spec)) {
+            if (shard_spec.layout() != tt::tt_metal::Layout::ROW_MAJOR ||
+                shard_spec.logical_2d_shape() != shard_spec.physical_shape()) {
                 return false;
             }
             if (tt::tt_metal::convert_to_data_type<std::remove_const_t<T>>() != shard_spec.data_type()) {
@@ -399,8 +402,8 @@ private:
         const auto tensor_topology =
             tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, buffer_coords);
 
-        return Tensor(
-            tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), shard_spec, tensor_topology));
+        return Tensor(tt::tt_metal::host_tensor_from_buffer_with_topology(
+            std::move(distributed_buffer), shard_spec, tensor_topology));
     }
 
     // Mesh parameters. `mesh_device_view_` is empty when constructed from a `MeshShape` only.
@@ -448,12 +451,16 @@ public:
         // is never reached. Guard explicitly so a future regression fails loudly instead of
         // silently skipping the conversion.
         if constexpr (std::is_same_v<T, float8_e4m3>) {
+            const auto& tensor_spec = tensor.tensor_spec();
             TT_FATAL(
-                tt::tt_metal::logical_matches_physical(tensor.tensor_spec()),
+                tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                    tensor_spec.logical_2d_shape() == tensor_spec.physical_shape(),
                 "float8_e4m3 tensors must have logical layout matching physical (row-major-only); "
                 "logical-to-physical conversion is not supported for FP8");
         } else {
-            if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
+            const auto& tensor_spec = tensor.tensor_spec();
+            if (tensor_spec.layout() != tt::tt_metal::Layout::ROW_MAJOR ||
+                tensor_spec.logical_2d_shape() != tensor_spec.physical_shape()) {
                 dst_buffer = dst_buffer.transform(
                     [&tensor](const tt::tt_metal::HostBuffer& shard) {
                         return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
@@ -511,6 +518,7 @@ public:
             case tt::tt_metal::DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tensor);
             case tt::tt_metal::DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tensor);
             case tt::tt_metal::DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tensor);
+            case tt::tt_metal::DataType::INT8: return dispatch_to_concrete.template operator()<int8_t>(tensor);
             case tt::tt_metal::DataType::INVALID: TT_THROW("Invalid data type: {}", tensor.dtype());
         }
         TT_THROW("Unreachable");
@@ -737,6 +745,7 @@ Tensor create_distributed_tensor(
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(bfloat16)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(float)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(int32_t)
+INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(int8_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint8_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint16_t)
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(uint32_t)
@@ -749,6 +758,7 @@ template std::pair<std::vector<uint32_t>, Shape> MeshToTensor::compose<uint32_t>
 template std::pair<std::vector<float>, Shape> MeshToTensor::compose<float>(const Tensor& tensor) const;
 template std::pair<std::vector<bfloat16>, Shape> MeshToTensor::compose<bfloat16>(const Tensor& tensor) const;
 template std::pair<std::vector<int32_t>, Shape> MeshToTensor::compose<int32_t>(const Tensor& tensor) const;
+template std::pair<std::vector<int8_t>, Shape> MeshToTensor::compose<int8_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint8_t>, Shape> MeshToTensor::compose<uint8_t>(const Tensor& tensor) const;
 template std::pair<std::vector<uint16_t>, Shape> MeshToTensor::compose<uint16_t>(const Tensor& tensor) const;
 template std::pair<std::vector<float8_e4m3>, Shape> MeshToTensor::compose<float8_e4m3>(const Tensor& tensor) const;

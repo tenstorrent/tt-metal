@@ -38,6 +38,8 @@ file(
     repeat/device/kernels/*.cpp
     repeat_interleave/codegen/kernels/*.cpp
     repeat_interleave/codegen/kernels/*.h
+    repeat/codegen/kernels/*.cpp
+    repeat/codegen/kernels/*.h
     roll/device/kernels/*.cpp
     reshape_view/device/device/*.cpp
     scatter/device/kernels/*.hpp

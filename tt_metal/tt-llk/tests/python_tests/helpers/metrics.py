@@ -54,6 +54,16 @@ All metrics are bounded 0-100% unless noted otherwise.
 import pandas as pd
 from loguru import logger
 
+from .perf_schema import (
+    MARKER,
+    MEAN,
+    STD,
+    counter_base,
+    cycles_of,
+    metric_column,
+    stat_column,
+)
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -259,7 +269,7 @@ def export_metrics(
     for zone in zones:
         zone_metrics = [m for m in computed if m["zone"] == zone]
         marker_name = zone_to_marker.get(zone, zone)
-        row = {"marker": marker_name}
+        row = {MARKER: marker_name}
 
         # Only export efficiency percentages to the main CSV
         def _exportable(key: str) -> bool:
@@ -272,13 +282,17 @@ def export_metrics(
                     continue
                 values = metrics_df[col].dropna()
                 if len(values) >= 2:
-                    row[f"{run_type_name}_mean({col})"] = float(values.mean())
-                    row[f"{run_type_name}_std({col})"] = float(values.std())
+                    row[metric_column(run_type_name, stat_column(col, MEAN))] = float(
+                        values.mean()
+                    )
+                    row[metric_column(run_type_name, stat_column(col, STD))] = float(
+                        values.std()
+                    )
         else:
             for k, v in zone_metrics[0].items():
                 if not _exportable(k):
                     continue
-                row[f"{run_type_name}_{k}"] = v
+                row[metric_column(run_type_name, k)] = v
 
         rows.append(row)
 
@@ -324,7 +338,7 @@ def export_counters(
     for zone in zones:
         zone_df = all_counters[all_counters["zone"] == zone]
         marker_name = zone_to_marker.get(zone, zone)
-        row = {"marker": marker_name}
+        row = {MARKER: marker_name}
 
         # Get unique counters in this zone (preserving discovery order)
         counter_keys = (
@@ -333,33 +347,41 @@ def export_counters(
 
         for bank, counter_name in counter_keys:
             mask = (zone_df["bank"] == bank) & (zone_df["counter_name"] == counter_name)
-            col_name = f"{bank}.{counter_name}"
+            col_name = counter_base(bank, counter_name)
 
             if has_runs:
                 per_run = zone_df.loc[mask].groupby("run_index")["count"].mean()
                 if len(per_run) >= 2:
-                    row[f"{run_type_name}_mean({col_name})"] = float(per_run.mean())
-                    row[f"{run_type_name}_std({col_name})"] = float(per_run.std())
+                    row[metric_column(run_type_name, stat_column(col_name, MEAN))] = (
+                        float(per_run.mean())
+                    )
+                    row[metric_column(run_type_name, stat_column(col_name, STD))] = (
+                        float(per_run.std())
+                    )
                 elif len(per_run) == 1:
-                    row[f"{run_type_name}_{col_name}"] = float(per_run.iloc[0])
+                    row[metric_column(run_type_name, col_name)] = float(per_run.iloc[0])
             else:
                 values = zone_df.loc[mask, "count"]
-                row[f"{run_type_name}_{col_name}"] = float(values.mean())
+                row[metric_column(run_type_name, col_name)] = float(values.mean())
 
             # Also export cycles for this counter
-            col_cycles = f"{col_name}.cycles"
+            col_cycles = cycles_of(col_name)
             if has_runs:
                 per_run_cyc = zone_df.loc[mask].groupby("run_index")["cycles"].mean()
                 if len(per_run_cyc) >= 2:
-                    row[f"{run_type_name}_mean({col_cycles})"] = float(
-                        per_run_cyc.mean()
+                    row[metric_column(run_type_name, stat_column(col_cycles, MEAN))] = (
+                        float(per_run_cyc.mean())
                     )
-                    row[f"{run_type_name}_std({col_cycles})"] = float(per_run_cyc.std())
+                    row[metric_column(run_type_name, stat_column(col_cycles, STD))] = (
+                        float(per_run_cyc.std())
+                    )
                 elif len(per_run_cyc) == 1:
-                    row[f"{run_type_name}_{col_cycles}"] = float(per_run_cyc.iloc[0])
+                    row[metric_column(run_type_name, col_cycles)] = float(
+                        per_run_cyc.iloc[0]
+                    )
             else:
                 cyc_values = zone_df.loc[mask, "cycles"]
-                row[f"{run_type_name}_{col_cycles}"] = float(cyc_values.mean())
+                row[metric_column(run_type_name, col_cycles)] = float(cyc_values.mean())
 
         rows.append(row)
 

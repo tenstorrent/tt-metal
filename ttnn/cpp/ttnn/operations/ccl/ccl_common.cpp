@@ -477,6 +477,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
     const ttsl::SmallVector<uint32_t>& unpad_elements,
     const int dim) {
     std::vector<ttnn::Tensor> combined_tensors;
+    combined_tensors.reserve(num_devices);
 
     ttsl::SmallVector<uint32_t> begins = {0, 0, 0, 0};
     ttsl::SmallVector<uint32_t> ends = {1, 1, 1, 1};
@@ -489,7 +490,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
 
         ttnn::Tensor sliced_tensor = ttnn::slice(output_tensor.at(0), begins, ends, step);
 
-        combined_tensors.push_back(sliced_tensor);
+        combined_tensors.push_back(std::move(sliced_tensor));
     }
     ttnn::Tensor concat_tensor = ttnn::concat(combined_tensors, dim);
     return {concat_tensor};

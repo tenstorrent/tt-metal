@@ -170,9 +170,6 @@ void kernel_main() {
 
     in1_valid_sem.set(VALID);
 
-    const uint64_t in1_sender_semaphore_noc_addr =
-        get_noc_addr(in1_sender_noc_x, in1_sender_noc_y, in1_sender_semaphore_addr);
-
     const uint64_t in1_receiver_semaphore_noc_addr =
         get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_receiver_semaphore_addr);
 
@@ -288,7 +285,7 @@ void kernel_main() {
                         n_tile_end);
                 } else {
                     in1_receiver_sem.set(INVALID);
-                    noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
+                    in1_sender_sem.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
                     in1_receiver_sem.wait(VALID);
                 }
 
