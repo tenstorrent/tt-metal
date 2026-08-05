@@ -6,6 +6,71 @@ skips (32 passed: single layer, the 60-layer body, and the full graph through
 lm_head; all chunk sizes, eager and traced). See Implementation status.
 **Scope:** Prefill only. Decode is disaggregated and runs outside this path.
 
+## Multi-chunk / long context (ring attention)
+
+Single-chunk CP needs no history. Multi-chunk does, and a CP-sharded cache cannot
+serve it directly: at chunk n>0 a rank owns a *strided* subset of the prefix, and
+`chunked_prefill_sdpa`'s `base_offset` is a scalar that cannot vary per rank.
+
+`ring_joint_scaled_dot_product_attention` solves it — it reads the CP-sharded
+cache and gathers the prefix around the CP ring internally with online softmax, so
+no AllGather materializes the history. This is what minimax_m3 does for its dense
+GQA layers.
+
+**It needed a ttnn change.** The chunked sliding path was gated to GPT-OSS's exact
+geometry (window 128, 8Q:1K:1V, head_dim 64). The implementation beneath is
+general — `build_sliding_q_work_plan` and `chunked_sliding_halo_tile_rows` derive
+everything from the runtime window / k_chunk / slab sizes, and the program
+factory's CB sizing scales with DHt/vDHt — so those were a tested-configuration
+allowlist. Replaced with the structural conditions, plus a real bug fix: the halo
+check computed from the hardcoded 128 rather than the runtime window.
+
+Validated at the op level with Gemma4's sliding geometry (window 1024, 4Q:2K:2V,
+head_dim 256, ring 4): PCC 0.99975, flat across chunks 1-3 of a 16K 4x4096 prefill
+with `reuse_max` buffers.
+
+### Why chunk 4096 specifically
+
+The halo is the window rounded up to whole k chunks, and it must fit one per-rank
+slab (the work plan covers at most the local slab and its cyclic predecessor —
+`max_source_ranges == 2`). At CP=4:
+
+| chunk | slab = chunk/4 | halo (W=1024) | fits |
+| --- | --- | --- | --- |
+| 4096 | 1024 | 1024 | yes, exactly |
+| 2048 | 512 | 1024 | no — needs multi-hop |
+
+So 4096 is the smallest workable chunk, and it lands exactly on the boundary —
+a case GPT-OSS never reaches (4 tiles against a 20-tile slab).
+
+### Chunk 0 is different
+
+The chunked mode needs a complete predecessor Q group (`logical_n >= 2*cp*L`)
+because the sliding halo wraps onto it; chunk 0 has none and the op refuses.
+minimax_m3 handles this with a separate non-chunked ring_joint over the chunk's
+own K/V. Gemma4 already has an equivalent — the mask-based CP path — so chunk 0
+uses that and still writes the ring cache so chunk 1 has history.
+
+### Two things that are easy to get wrong
+
+- The ring gather buffer must span the **full cache capacity**, not `logical_n`.
+  Sizing to `logical_n` survives a 2-chunk run (where the final chunk's logical_n
+  equals max_seq_len) and then fails "gather dim 2 too small".
+- `kv_cache_batch_idx` must fold the layer in as `slot*num_layers + layer`, or
+  every layer reads layer 0's cache.
+
+### RoPE under multi-chunk
+
+Position-sharding the RoPE cache only works when `max_seq_len == chunk`. For chunk
+n, rank r needs global positions `[n*C + r*L, +L)`; with a position-sharded cache
+the local index would be `n*C - r*(C-L)`, which is rank-dependent and a mesh-wide
+scalar cannot express. The cache rows are therefore laid out chunk-major per rank:
+
+    row m = r*(max_seq_len/cp) + n*L + j   holds position   n*C + r*L + j
+
+so a contiguous CP shard gives each rank its own positions in chunk order, and the
+slice for chunk n is `[n*L, +L)` on every rank — i.e. `chunk_start_idx // cp`.
+
 ## Implementation status
 
 Landed on `svuckovic/gemma4-prefill`:
