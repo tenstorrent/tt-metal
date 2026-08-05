@@ -289,9 +289,12 @@ void kernel_main() {
             // all three threads read ThreadId::BriscThreadId -- a slot that does not exist on
             // Quasar (the enum only covers the 4 Tensix compute roles). Mailbox addressing is also
             // asymmetric (mailbox_write takes the destination slot, mailbox_read the source slot),
-            // and ckernel::mailbox_write cannot address a TRISC mailbox from a DM core at all: the
-            // writer must issue a raw NOC write to the queue's NEO-cluster address, impersonating
-            // a writer slot agreed with the reader. That is an ops-owned fix, not something to
+            // and ckernel::mailbox_write builds TRISC-local addresses, so a DM core cannot use
+            // that helper; the DM writer instead targets the queue's NEO-cluster address
+            // directly -- a plain MMIO store or a NOC write are both valid for that --
+            // impersonating a writer slot agreed with the reader. (DM->TRISC mailbox delivery
+            // currently fails due to a separate HW bug under investigation, not because of an
+            // addressing restriction on DM cores.) That is an ops-owned fix, not something to
             // guess at here, so this path is kept unreachable rather than silently compiling
             // unverified synchronization.
             static_assert(

@@ -6,10 +6,12 @@
 #include "api/compute/common.h"
 #include "dev_mem_map.h"
 
-// Canonical correct mailbox usage: a thread must never read or write its OWN mailbox slot (that
-// "loopback" is what trips the Watcher IB-interrupt fault, 0x19). TRISC0 (UNPACK) writes into
-// TRISC1's (MathThreadId) mailbox, and TRISC1 (MATH) reads TRISC0's (UnpackThreadId) mailbox --
-// each thread only ever touches a slot other than its own.
+// Canonical mailbox usage for synchronizing threads with one another: each thread only ever
+// touches a slot other than its own. (Loopback -- a thread using its OWN slot -- is legal
+// hardware behavior, but must be avoided for inter-thread synchronization; an accidental
+// self-loopback is what tripped the Watcher IB-interrupt fault, 0x19.) TRISC0 (UNPACK) writes
+// into TRISC1's (MathThreadId) mailbox, and TRISC1 (MATH) reads TRISC0's (UnpackThreadId)
+// mailbox.
 void kernel_main() {
     constexpr std::uint32_t kValue = 0xfaceface;
 
