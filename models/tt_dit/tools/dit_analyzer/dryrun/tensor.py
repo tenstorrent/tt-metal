@@ -196,12 +196,25 @@ class Tensor:
 
         if not isinstance(key, tuple):
             key = (key,)
-        for axis, k in enumerate(key):
+        ndim = len(self.logical)
+        # Expand a single Ellipsis so trailing slices land on trailing axes, not on
+        # the key's positional index. `x[..., : d // 2]` must slice the *last* axis
+        # (rotate_half in Qwen3-VL / MiniMax-H3 RoPE), not axis 1.
+        if Ellipsis in key:
+            i = key.index(Ellipsis)
+            before, after = key[:i], key[i + 1 :]
+            axes = list(range(len(before))) + list(range(ndim - len(after), ndim))
+            entries = list(before) + list(after)
+        else:
+            entries, axes = list(key), list(range(len(key)))
+        result = self
+        for axis, k in zip(axes, entries):
             if isinstance(k, slice) and (k.start or k.stop):
-                lo = k.start or 0
-                hi = k.stop if k.stop is not None else self.logical[axis]
-                return ops.slice_axis(self, axis, lo, hi)
-        return self
+                n = result.logical[axis]
+                lo = (k.start or 0) % n if k.start else 0
+                hi = (k.stop % n if k.stop < 0 else k.stop) if k.stop is not None else n
+                result = ops.slice_axis(result, axis, lo, hi)
+        return result
 
     def __repr__(self) -> str:
         return "DryRunTensor(logical=%s, local=%s, shard=%s)" % (

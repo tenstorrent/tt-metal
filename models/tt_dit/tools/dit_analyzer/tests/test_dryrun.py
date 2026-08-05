@@ -412,6 +412,34 @@ def test_weight_chunk_width_matches_torch_chunk():
         assert widths == [w for w in expected if w > 0], (n_cols, count, widths, expected)
 
 
+def test_ellipsis_slicing_targets_the_trailing_axis():
+    """`x[..., : d // 2]` must slice the *last* axis, not the key's positional index.
+
+    RoPE's rotate_half (Qwen3-VL / MiniMax-H3) is the first model code to slice a
+    shim tensor with an Ellipsis. The earlier `enumerate(key)` sent the slice to
+    axis 1 (heads): it zeroed q's second half and drove the 8-head GQA k/v to a
+    *negative* head count, collapsing attention to empty and inventing 13 false
+    dead_collective findings. Runs in a subprocess -- install() shadows ttnn.
+    """
+    snippet = (
+        "from dit_analyzer.dryrun import install, recorder, start;"
+        "from dit_analyzer.ir import Dist;"
+        "from dit_analyzer.dryrun.context import CTX;"
+        "md = install((1, 4), 'blackhole');"
+        "start(md, axis_names=('sp', 'tp'), name='t', topology='Linear');"
+        "x = recorder.entry([1, 64, 128, 128], Dist.replicated(CTX.mesh), base='x');"
+        "kv = recorder.entry([1, 8, 128, 128], Dist.replicated(CTX.mesh), base='kv');"
+        "assert list(x[..., :64].logical) == [1, 64, 128, 64], x[..., :64].logical;"
+        "assert list(x[..., 64:].logical) == [1, 64, 128, 64], x[..., 64:].logical;"
+        "assert list(kv[..., 64:].logical) == [1, 8, 128, 64], kv[..., 64:].logical;"
+        "assert list(x[..., -1:].logical) == [1, 64, 128, 1], x[..., -1:].logical;"
+        "print('ok')"
+    )
+    proc = _python("-c", snippet)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ok" in proc.stdout, proc.stdout
+
+
 def test_fused_swiglu_preprocessing_runs_on_meta_and_preserves_shape():
     # the roadmap's "run the real _prepare_torch_state on meta tensors": the
     # swiglu reorder is a pure reshape/permute, so it runs with no bytes and is
