@@ -2128,9 +2128,7 @@ void ProgramImpl::finalize_single_dfb_config(
     // For remapper mode, pre-allocate clientTypes for each consumer
     // Also allocate producer clientTypes (clientL)
     std::vector<uint8_t> consumer_client_types;
-    consumer_client_types.reserve(consumer_risc_ids.size());
     std::vector<uint8_t> producer_client_types;
-    producer_client_types.reserve(producer_risc_ids.size());
     ClientTypeAllocator client_type_allocator;
 
     if (use_remapper) {

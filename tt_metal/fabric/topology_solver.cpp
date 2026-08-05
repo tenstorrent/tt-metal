@@ -137,11 +137,9 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_phy
     for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
         auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
                                        const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {
-            const auto neighbors = physical_system_descriptor.get_asic_neighbors(asic_id);
             std::vector<tt::tt_metal::AsicID> adjacents;
-            adjacents.reserve(neighbors.size());
 
-            for (const auto& neighbor : neighbors) {
+            for (const auto& neighbor : physical_system_descriptor.get_asic_neighbors(asic_id)) {
                 // Skip self-connections
                 if (neighbor == asic_id) {
                     continue;
