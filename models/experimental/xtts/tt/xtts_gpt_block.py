@@ -153,6 +153,11 @@ def _mm_1d_config(device, m, k, n, fused_activation=None):
         ncols = math.ceil(nt / pcn)
         cx = min(gx, ncols)
         cy = math.ceil(ncols / cx)
+        if cy > gy:
+            cy = gy
+            cx = min(gx, math.ceil(ncols / cy))
+            pcn = math.ceil(nt / (cx * cy))
+            osw = 2 if pcn % 2 == 0 else 1
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(cx, cy),
             in0_block_w=ibw,
