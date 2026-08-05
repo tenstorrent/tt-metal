@@ -11,8 +11,7 @@ Handoff package for the 1-week bh-galaxy optimization sprint.
 - **Branch:** https://github.com/tenstorrent/tt-metal/tree/nkira/hunyuanimage3-bringup_bh_glx  ·  working: `hunyuan-image3-unified` @ `~/nkira/tt-metal-xtts`
 
 ## Files in this folder
-- **`PERF_SHEET.csv`** — current perf ladder, benchlines, roofline, and targets (open in Excel/Sheets).
 - **`OPTIMIZATIONS_BY_DATE.md`** — every lever landed, dated, with perf deltas + phase summaries.
 - **`STATUS_AND_MODEL_DETAILS.md`** — full model / TP-EP-DP details, roofline, ranked near-term levers, and how-to-run.
 
-Deepest ladder detail lives in the branch's `UNIFIED_STACK.md`.
+The **performance sheet** is the conventional [`PERF.md`](../PERF.md) at the model root (config table, E2E performance, optimization ladder, targets, references). Deepest ladder detail lives in the branch's `UNIFIED_STACK.md`.
