@@ -30,6 +30,8 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import DEST_SYNC, TOPK_XL
 from helpers.utils import passed_test
 
+pytestmark = [skip_for_wormhole, skip_for_quasar]
+
 ELEMENTS_PER_TILE = 1024
 BF16_NEG_INF_HI16 = 0xFF80  # high 16 bits of bf16 -inf, padding
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt32)
@@ -118,7 +120,7 @@ def _make_row(search_len: int, seed: int, mode: str) -> torch.Tensor:
     raise ValueError(f"unknown mode {mode}")
 
 
-def _build_input(K, num_chunks, tail_elements, num_rows, mode, as_float32=False):
+def _build_input(K, num_chunks, tail_elements, num_rows, mode, as_float32):
     """
     Build the flat input buffer and the per-row value tensor for the golden.
     Returns (src_A, rows_fp32).
@@ -146,15 +148,15 @@ def _build_input(K, num_chunks, tail_elements, num_rows, mode, as_float32=False)
     return (src if as_float32 else src.to(torch.bfloat16)), rows
 
 
-def _config(
+def _variant(
     K,
-    num_chunks,
-    tail_elements,
-    num_rows,
-    src_A,
+    num_chunks=1,
+    tail_elements=None,
+    num_rows=1,
+    mode="positive",
     index_op=TopKXLIndexOp.RowMajor,
     group_id=0,
-    group_shift=16,
+    group_shift=GROUP_SHIFT,
     core_id=0,
     sort_direction=TopKSortDirection.Descending,
     fused_reduce=False,
@@ -164,11 +166,13 @@ def _config(
     formats=FORMATS,
 ):
     """
-    Build the TestConfig for one variant.
+    Build the stimulus and the TestConfig for one variant. Returns (config, rows).
 
+    `tail_elements` defaults to K, i.e. full chunks with no -inf padding.
     RemoveMsb packs one region in place, every other index op packs two.
     The fused path splits indices at the end, so it packs two regions as well.
     """
+    tail_elements = K if tail_elements is None else tail_elements
     tiles_per_seq = _tiles_per_sequence(K)
     result_tiles = (1 if index_op == TopKXLIndexOp.RemoveMsb else 2) * tiles_per_seq
     # 32-bit input does unpack_to_dest (is_32bit_input), while bf16 goes
@@ -178,7 +182,9 @@ def _config(
     # to follow it or the stimuli packer is handed a mislabeled tensor.
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=format_dict[formats.input_format])
 
-    return TestConfig(
+    src_A, rows = _build_input(K, num_chunks, tail_elements, num_rows, mode, is_32bit)
+
+    config = TestConfig(
         test_name="sources/topk_xl_test.cpp",
         formats=formats,
         templates=[
@@ -211,30 +217,26 @@ def _config(
         dest_acc=DestAccumulation.Yes,  # 32-bit fused value|index words in Dest.
         unpack_to_dest=is_32bit,
     )
+    return config, rows
 
 
-def _result_words(result):
-    """
-    Read the flat L1 uint32 result. format_dict maps uint32 to torch.int64,
-    so shifts and masks below don't need any special handling of the sign bit.
-    """
-    return torch.tensor(result, dtype=format_dict[FORMATS.output_format])
+def _run(K, **kwargs):
+    """Build and run one variant. Returns (result, rows)."""
+    config, rows = _variant(K, **kwargs)
+    return config.run().result, rows
 
 
-def _finite_lanes(value_words):
-    """Lane mask that drops the bf16 -inf padding the copy path writes."""
-    return ((value_words >> 16) & 0xFFFF) != BF16_NEG_INF_HI16
-
-
-def _extract_hw_topk(result, K, num_rows):
+def _extract_hw_topk(result, K, num_rows, num_regions=2):
     """
     Per row, pair value[j] with index[j] and drop bf16 -inf padding lanes.
     Returns a list of (index_words, values_float32): the surviving top-K.
+
+    `num_regions` is 1 for the index ops that pack the fused word in place; the
+    fused word doubles as the index word there.
     """
-    tiles_per_seq = _tiles_per_sequence(K)
-    res = _result_words(result)
-    per_row = 2 * tiles_per_seq * ELEMENTS_PER_TILE
-    region = tiles_per_seq * ELEMENTS_PER_TILE
+    res = torch.tensor(result, dtype=format_dict[FORMATS.output_format])
+    region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
+    per_row = num_regions * region
     assert (
         res.numel() == num_rows * per_row
     ), f"result size {res.numel()} != expected {num_rows * per_row}"
@@ -243,18 +245,24 @@ def _extract_hw_topk(result, K, num_rows):
     for r in range(num_rows):
         block = res[r * per_row : (r + 1) * per_row]
         value_words = block[:region]
-        index_words = block[region:]
-        finite = _finite_lanes(value_words)
+        index_words = block[region:] if num_regions == 2 else value_words
+        # Lane mask that drops the bf16 -inf padding the copy path writes.
+        finite = ((value_words >> 16) & 0xFFFF) != BF16_NEG_INF_HI16
         out.append((index_words[finite], _bitcast_float32(value_words[finite])))
     return out
+
+
+def _check_values(r, hw_val, gold_val, value_format=FORMATS.input_format):
+    """The returned values are the top-K, as a multiset: Dest lane order is internal."""
+    assert passed_test(
+        torch.sort(gold_val).values, torch.sort(hw_val).values, value_format
+    ), f"row {r}: top-K value mismatch"
 
 
 def _check(
     result,
     K,
-    num_rows,
     rows,
-    gold_indices,
     compare_index_set,
     index_offset=0,
     value_format=FORMATS.input_format,
@@ -271,6 +279,8 @@ def _check(
     `index_offset` is the starting chunk_base, which the LLK ORs into every
     reported index, so the golden positions shift by it.
     """
+    num_rows = rows.shape[0]
+    gold_indices = get_golden_generator(TopKXLGolden)(rows, K)
     gold_values = rows.gather(1, gold_indices)  # [num_rows, K] top-K values per row
 
     for r, (hw_idx, hw_val) in enumerate(_extract_hw_topk(result, K, num_rows)):
@@ -294,12 +304,7 @@ def _check(
                 f"  extra   (in hw, not golden): {sorted(hw_set - gold_set)[:16]}"
             )
 
-        # Sort both: Dest tile order is internal. Correct even under ties.
-        hw_vals_sorted = torch.sort(hw_val).values
-        gold_vals_sorted = torch.sort(gold_values[r]).values
-        assert passed_test(
-            gold_vals_sorted, hw_vals_sorted, value_format
-        ), f"row {r}: top-K value mismatch"
+        _check_values(r, hw_val, gold_values[r], value_format)
 
         # Index <-> value pairing. Exact, because every stimulus here is exactly
         # representable in bf16 and the value word is [bf16 << 16 | 0].
@@ -308,6 +313,64 @@ def _check(
             assert float(row[idx]) == float(
                 val
             ), f"row {r}: index {idx} value {val} != input {float(row[idx])}"
+
+
+def _check_coordinates(
+    result,
+    K,
+    rows,
+    num_chunks=1,
+    group_id=0,
+    group_shift=GROUP_SHIFT,
+    core_id=None,
+):
+    """
+    Validate the index ops that report a tile coordinate instead of a flat index:
+    index word is [group_id<<shift | core_id<<11 | tile coordinate].
+
+    Checks the group_id and core_id fields, that every coordinate identifies its
+    element's position, and that the values are the top-K. With num_chunks == 1
+    the coordinates must additionally be the full 0..K-1 set, since the top-K is
+    then the whole row.
+
+    `core_id=None` skips the core_id check: a group_shift of 11 or less puts the
+    group id over bits [15:11], leaving no separable core bits to read back.
+    """
+    num_rows = rows.shape[0]
+    for r, (hw_iw, hw_val) in enumerate(_extract_hw_topk(result, K, num_rows)):
+        assert hw_iw.numel() == K, f"row {r}: expected {K} lanes, got {hw_iw.numel()}"
+
+        group = hw_iw >> group_shift
+        raw = hw_iw & ((1 << group_shift) - 1)
+        assert (group == group_id).all(), (
+            f"row {r}: group_id bits wrong at shift {group_shift}; got "
+            f"{sorted(set(int(g) for g in group.tolist()))[:4]}, want {group_id}"
+        )
+
+        if core_id is not None:
+            hw_core = (raw >> CORE_ID_SHIFT) & CORE_ID_MASK
+            assert (hw_core == core_id).all(), (
+                f"row {r}: core_id bits [15:11] wrong; got "
+                f"{sorted(set(int(c) for c in hw_core.tolist()))[:4]}, want {core_id}"
+            )
+
+        pos = [_decode_row_major(int(x), K) for x in raw.tolist()]
+        if num_chunks == 1:
+            assert set(pos) == set(range(K)), f"row {r}: decoded positions != 0..K-1"
+        else:
+            assert all(0 <= p < K for p in pos), f"row {r}: coordinate outside 0..K-1"
+
+        # A coordinate is per-chunk, so it must match its value in one of the
+        # chunks. Exact, since `positive` is consecutive bf16 patterns, so any
+        # tolerance would admit a coordinate several positions off.
+        row = rows[r]
+        for p, v in zip(pos, hw_val.tolist()):
+            candidates = [float(row[c * K + p]) for c in range(num_chunks)]
+            assert (
+                float(v) in candidates
+            ), f"row {r}: coordinate {p} value {v} matches no chunk ({candidates})"
+
+        _check_values(r, hw_val, torch.topk(row, K).values)
 
 
 # num_chunks == 1 is the single-chunk path (copy -> local_sort -> separate ->
@@ -321,54 +384,28 @@ def _check(
     num_chunks=[1, 2, 4],
     partial_tail=lambda num_chunks: [False] if num_chunks == 1 else [False, True],
 )
-@skip_for_wormhole
-@skip_for_quasar
 def test_topk_xl(K, num_chunks, partial_tail):
-    num_rows = 2
-    tail_elements = (K // 2) if partial_tail else K
-
-    src_A, rows = _build_input(K, num_chunks, tail_elements, num_rows, "positive")
-    gold_indices = get_golden_generator(TopKXLGolden)(rows, K)
-    result = _config(K, num_chunks, tail_elements, num_rows, src_A).run().result
-    _check(result, K, num_rows, rows, gold_indices, compare_index_set=True)
-
-
-# Distinct values spanning negatives and positives: the top-K are the largest
-# (positive) values, so negatives must sort below them. Exercises bf16 sign
-# handling under the INT32 SFPSWAP compare.
-@parametrize(K=[512, 1024, 2048])
-@skip_for_wormhole
-@skip_for_quasar
-def test_topk_xl_signed(K):
-    (K,) = K
-    num_rows, num_chunks = 1, 2
-    tail_elements = K  # full chunks, no padding
-
-    src_A, rows = _build_input(K, num_chunks, tail_elements, num_rows, "signed")
-    gold_indices = get_golden_generator(TopKXLGolden)(rows, K)
-    result = _config(K, num_chunks, tail_elements, num_rows, src_A).run().result
-    _check(result, K, num_rows, rows, gold_indices, compare_index_set=True)
+    result, rows = _run(
+        K,
+        num_chunks=num_chunks,
+        tail_elements=(K // 2) if partial_tail else K,
+        num_rows=2,
+    )
+    _check(result, K, rows, compare_index_set=True)
 
 
-# Random bf16, so ties are likely. The tie-break makes the chosen indices
-# ambiguous, so validate K distinct indices + the top-K value multiset only.
-@parametrize(K=[512, 1024, 2048])
-@skip_for_wormhole
-@skip_for_quasar
-def test_topk_xl_ties(K):
-    (K,) = K
-    num_rows, num_chunks = 1, 2
-    tail_elements = K  # full chunks, no padding: all lanes finite
-
-    src_A, rows = _build_input(K, num_chunks, tail_elements, num_rows, "random")
-    gold_indices = get_golden_generator(TopKXLGolden)(rows, K)
-    result = _config(K, num_chunks, tail_elements, num_rows, src_A).run().result
-    _check(result, K, num_rows, rows, gold_indices, compare_index_set=False)
+# "signed": distinct values spanning negatives and positives, so the top-K are the
+# largest (positive) ones and negatives must sort below them. Exercises bf16 sign
+# handling under the INT32 SFPSWAP compare; the index set is unambiguous.
+# "random": raw bf16, so ties are likely and the tie-break makes the chosen indices
+# ambiguous. Validate K distinct indices + the top-K value multiset only.
+@parametrize(K=[512, 1024, 2048], mode=["signed", "random"])
+def test_topk_xl_input_modes(K, mode):
+    result, rows = _run(K, num_chunks=2, mode=mode)
+    _check(result, K, rows, compare_index_set=(mode == "signed"))
 
 
 @parametrize(K=[512, 1024, 2048])
-@skip_for_wormhole
-@skip_for_quasar
 def test_topk_xl_all_equal(K):
     """
     Every key is identical, so every compare-exchange in local_sort
@@ -376,8 +413,7 @@ def test_topk_xl_all_equal(K):
     """
     (K,) = K
 
-    src_A, rows = _build_input(K, 1, K, 1, "all_equal")  # single chunk
-    result = _config(K, 1, K, 1, src_A).run().result
+    result, rows = _run(K, mode="all_equal")  # single chunk
     hw_idx, hw_val = _extract_hw_topk(result, K, 1)[0]
 
     idx = sorted(int(i) for i in hw_idx.tolist())
@@ -385,116 +421,77 @@ def test_topk_xl_all_equal(K):
     assert (hw_val == rows[0][0].item()).all(), "all-equal row returned a changed value"
 
 
-def _check_separate(
-    result, K, num_rows, rows, group_id=GROUP_ID, group_shift=GROUP_SHIFT, core_id=0
-):
+# separate_indices splits the fused word into a value region and an index region.
+# core_id lands in index bits [15:11] (5 bits, up to 32 cores) and the positions must
+# come out unchanged. group_id_bit_shift is a runtime value saved in LREG12, so the
+# group id can sit anywhere above the coordinate: 11 puts it immediately above the
+# widest coordinate (and over the core_id field, so core_id must be 0), and 20 clears
+# that field entirely.
+@parametrize(
+    K=[512, 1024, 2048],
+    core_id=[0, 1, 31],
+    group_shift=lambda core_id: [16, 11, 20] if core_id == 0 else [16],
+)
+def test_topk_xl_separate_indices(K, core_id, group_shift):
+    result, rows = _run(
+        K,
+        index_op=TopKXLIndexOp.Separate,
+        group_id=GROUP_ID,
+        group_shift=group_shift,
+        core_id=core_id,
+    )
+    _check_coordinates(
+        result,
+        K,
+        rows,
+        group_id=GROUP_ID,
+        group_shift=group_shift,
+        # Below bit 11 the group id covers the core_id field: nothing to read back.
+        core_id=core_id if group_shift > CORE_ID_SHIFT else None,
+    )
+
+
+@parametrize(K=[512, 1024, 2048])
+def test_topk_xl_remove_msb(K):
     """
-    separate_indices: value region [value|0], index region
-    [group_id<<shift | core_id<<11 | tile coordinate]. Checks the group_id and
-    core_id fields, that the coordinate identifies each element's position, and
-    the values.
+    remove_msb_values: fused region -> [0 | raw], packed in place as one region.
+    Check the value half is zeroed and the decoded positions form the full 0..K-1 set.
     """
-    res = _result_words(result)
-    region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
-    per_row = 2 * region
-    assert res.numel() == num_rows * per_row
+    (K,) = K
 
-    for r in range(num_rows):
-        block = res[r * per_row : (r + 1) * per_row]
-        value_words = block[:region]
-        index_words = block[region:]
-        finite = _finite_lanes(value_words)
-
-        hw_val = _bitcast_float32(value_words[finite])
-        hw_iw = index_words[finite]
-        assert hw_iw.numel() == K, f"row {r}: expected {K} lanes, got {hw_iw.numel()}"
-
-        group = hw_iw >> group_shift
-        raw = hw_iw & ((1 << group_shift) - 1)
-        assert (group == group_id).all(), (
-            f"row {r}: group_id bits wrong at shift {group_shift}; got "
-            f"{sorted(set(int(g) for g in group.tolist()))[:4]}, want {group_id}"
-        )
-
-        # core_id sits in bits [15:11]. A group_shift of 11 or less puts the group
-        # id over that field, leaving no separable core bits to read back.
-        if group_shift > CORE_ID_SHIFT:
-            hw_core = (raw >> CORE_ID_SHIFT) & CORE_ID_MASK
-            assert (hw_core == core_id).all(), (
-                f"row {r}: core_id bits [15:11] wrong; got "
-                f"{sorted(set(int(c) for c in hw_core.tolist()))[:4]}, want {core_id}"
-            )
-
-        pos = [_decode_row_major(int(x), K) for x in raw.tolist()]
-        assert set(pos) == set(range(K)), f"row {r}: decoded positions != 0..K-1"
-
-        # The coordinate names a position: input[pos] must be the value paired with
-        # it. Exact, since `positive` is consecutive bf16 patterns, so any tolerance
-        # would admit a coordinate several positions off.
-        row = rows[r]
-        for p, v in zip(pos, hw_val.tolist()):
-            assert float(row[p]) == float(
-                v
-            ), f"row {r}: pos {p} value {v} != input {float(row[p])}"
-        # value multiset matches the input (single chunk => all values).
-        assert passed_test(
-            torch.sort(rows[r]).values,
-            torch.sort(hw_val).values,
-            FORMATS.input_format,
-        )
-
-
-def _check_remove_msb(result, K, num_rows):
-    """
-    remove_msb_values: fused region -> [0 | raw]. Check the value half is
-    zeroed and the decoded positions form the full 0..K-1 set.
-    """
-    res = _result_words(result)
-    region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
-    assert res.numel() == num_rows * region
-
-    for r in range(num_rows):
-        block = res[r * region : (r + 1) * region]
-        finite = _finite_lanes(block)  # padding lanes are still -inf
-        real = block[finite]
-        assert real.numel() == K, f"row {r}: expected {K} lanes, got {real.numel()}"
-
-        untouched = int(torch.count_nonzero(real >> 16))
+    result, rows = _run(
+        K, index_op=TopKXLIndexOp.RemoveMsb, group_id=GROUP_ID, group_shift=GROUP_SHIFT
+    )
+    for r, (fused, _) in enumerate(_extract_hw_topk(result, K, rows.shape[0], 1)):
+        assert fused.numel() == K, f"row {r}: expected {K} lanes, got {fused.numel()}"
+        untouched = int(torch.count_nonzero(fused >> 16))
         assert untouched == 0, f"row {r}: value half not zeroed in {untouched} lanes"
 
-        raw = real & 0xFFFF
-        pos = [_decode_row_major(int(x), K) for x in raw.tolist()]
+        pos = [_decode_row_major(int(x), K) for x in (fused & 0xFFFF).tolist()]
         assert set(pos) == set(
             range(K)
         ), f"row {r}: decoded positions are not the full 0..K-1 set"
 
 
-@parametrize(
-    K=[512, 1024, 2048],
-    index_op=[TopKXLIndexOp.Separate, TopKXLIndexOp.RemoveMsb],
-)
-@skip_for_wormhole
-@skip_for_quasar
-def test_topk_xl_index_ops(K, index_op):
-    num_rows = 1
+# chunk_base is saved by one of three inits, based on a template argument:
+# - init_static<hi, lo> takes both
+# - init_upper<hi>(lo) only the high half
+# - init(base) takes neither
+# All three send an (upper16, lower16) pair to _sfpu_load_config32_, but the split varies.
+# 0x1F800 is nonzero in both halves, and it's a multiple of every valid K.
+@parametrize(K=[512, 1024, 2048], chunk_base_mode=list(TopKXLChunkBaseMode))
+def test_topk_xl_chunk_base(K, chunk_base_mode):
+    """Assert that the reported index is chunk_base + position."""
+    chunk_base = 0x1F800
 
-    src_A, rows = _build_input(K, 1, K, num_rows, "positive")  # single chunk
-    configuration = _config(
+    result, rows = _run(
         K,
-        1,
-        K,
-        num_rows,
-        src_A,
-        index_op=index_op,
-        group_id=GROUP_ID,
-        group_shift=GROUP_SHIFT,
+        num_chunks=2,
+        num_rows=2,
+        chunk_base_mode=chunk_base_mode,
+        chunk_base=chunk_base,
     )
-    result = configuration.run().result
-
-    if index_op == TopKXLIndexOp.Separate:
-        _check_separate(result, K, num_rows, rows)
-    else:
-        _check_remove_msb(result, K, num_rows)
+    _check(result, K, rows, compare_index_set=True, index_offset=chunk_base)
 
 
 def _positional_rank(values, descending):
@@ -508,95 +505,7 @@ def _positional_rank(values, descending):
     return rank
 
 
-@parametrize(K=[512, 1024, 2048], core_id=[1, 31])
-@skip_for_wormhole
-@skip_for_quasar
-def test_topk_xl_core_id(K, core_id):
-    """add_lsb_indices<K, core_id> puts core_id in index bits [15:11] (5 bits, up
-    to 32 cores). The positions must come out unchanged."""
-    num_rows = 1
-
-    src_A, rows = _build_input(K, 1, K, num_rows, "positive")
-    configuration = _config(
-        K,
-        1,
-        K,
-        num_rows,
-        src_A,
-        index_op=TopKXLIndexOp.Separate,
-        group_id=GROUP_ID,
-        group_shift=GROUP_SHIFT,
-        core_id=core_id,
-    )
-    result = configuration.run().result
-    _check_separate(result, K, num_rows, rows, core_id=core_id)
-
-
-# group_id_bit_shift is a runtime value saved in LREG12, so the group id can
-# sit anywhere above the coordinate. 11 puts it immediately above the widest
-# coordinate (and over the core_id field, so core_id must be 0), and at 20
-# it clears the field entirely.
-@parametrize(K=[512, 1024, 2048], group_shift=[11, 20])
-@skip_for_wormhole
-@skip_for_quasar
-def test_topk_xl_group_shift(K, group_shift):
-    num_rows = 1
-
-    src_A, rows = _build_input(K, 1, K, num_rows, "positive")
-    configuration = _config(
-        K,
-        1,
-        K,
-        num_rows,
-        src_A,
-        index_op=TopKXLIndexOp.Separate,
-        group_id=GROUP_ID,
-        group_shift=group_shift,
-    )
-    result = configuration.run().result
-    _check_separate(result, K, num_rows, rows, group_shift=group_shift)
-
-
-# chunk_base is saved by one of three inits, based on a template argument:
-# - init_static<hi, lo> takes both
-# - init_upper<hi>(lo) only the high half
-# - init(base) takes neither
-# All three send an (upper16, lower16) pair to _sfpu_load_config32_, but the split varies.
-# 0x1F800 is nonzero in both halves, and it's a multiple of every valid K.
-@parametrize(K=[512, 1024, 2048], chunk_base_mode=list(TopKXLChunkBaseMode))
-@skip_for_wormhole
-@skip_for_quasar
-def test_topk_xl_chunk_base(K, chunk_base_mode):
-    """Assert that the reported index is chunk_base + position."""
-    num_rows, num_chunks = 2, 2
-    chunk_base = 0x1F800
-
-    src_A, rows = _build_input(K, num_chunks, K, num_rows, "positive")
-    gold_indices = get_golden_generator(TopKXLGolden)(rows, K)
-    configuration = _config(
-        K,
-        num_chunks,
-        K,
-        num_rows,
-        src_A,
-        chunk_base_mode=chunk_base_mode,
-        chunk_base=chunk_base,
-    )
-    result = configuration.run().result
-    _check(
-        result,
-        K,
-        num_rows,
-        rows,
-        gold_indices,
-        compare_index_set=True,
-        index_offset=chunk_base,
-    )
-
-
 @parametrize(K=[512, 1024, 2048])
-@skip_for_wormhole
-@skip_for_quasar
 def test_topk_xl_rebuild_ascending(K):
     """
     rebuild(..., ascending=true). `_topk_xl_merge_` has no direction argument and
@@ -608,17 +517,12 @@ def test_topk_xl_rebuild_ascending(K):
     alone, because rebuild does not leave Dest sorted in lane order.
     """
     (K,) = K
-    num_rows, num_chunks = 1, 2
+    num_rows = 1
 
-    src_A, rows = _build_input(K, num_chunks, K, num_rows, "positive")
-    gold_indices = get_golden_generator(TopKXLGolden)(rows, K)
-
-    desc_cfg = _config(
-        K, num_chunks, K, num_rows, src_A, sort_direction=TopKSortDirection.Descending
+    desc_cfg, rows = _variant(
+        K, num_chunks=2, sort_direction=TopKSortDirection.Descending
     )
-    asc_cfg = _config(
-        K, num_chunks, K, num_rows, src_A, sort_direction=TopKSortDirection.Ascending
-    )
+    asc_cfg, _ = _variant(K, num_chunks=2, sort_direction=TopKSortDirection.Ascending)
     # Build both before running either: `prepare()` is the build half of `run()`,
     # and under --compile-producer `run()` skips as soon as the first variant is
     # built, so the second would otherwise never emit its ELF.
@@ -626,8 +530,8 @@ def test_topk_xl_rebuild_ascending(K):
     asc_cfg.prepare()
     desc, asc = desc_cfg.run().result, asc_cfg.run().result
 
-    _check(desc, K, num_rows, rows, gold_indices, compare_index_set=True)
-    _check(asc, K, num_rows, rows, gold_indices, compare_index_set=True)
+    _check(desc, K, rows, compare_index_set=True)
+    _check(asc, K, rows, compare_index_set=True)
 
     for r, ((_, desc_val), (_, asc_val)) in enumerate(
         zip(
@@ -646,66 +550,30 @@ def test_topk_xl_rebuild_ascending(K):
         )
 
 
-def _check_fused_reduce(result, K, num_rows, num_chunks, rows):
+@parametrize(K=[512, 1024, 2048])
+def test_topk_xl_denormal_fused_word(K):
     """
-    Checks the group_id bits, the top-K values, and each returned coordinate
-    against the value paired with it.
+    Assert a legal input containing +0 returns the correct set and indices.
+
+    The +0 lanes must come back with their own coordinates intact. A +0 value
+    zeroes bits 30:23 of the fused word, so the 32-bit word is an fp32 denormal
+    and an FP32-mode move would flush it, taking the index with it.
+
+    Runs fused, because that is where the value and the index share one word. On
+    the unfused path they sit in separate regions, so a value word is plain
+    0x00000000 and flushing it is a no-op.
     """
-    res = _result_words(result)
-    region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
-    per_row = 2 * region
-    assert res.numel() == num_rows * per_row
+    (K,) = K
 
-    for r in range(num_rows):
-        block = res[r * per_row : (r + 1) * per_row]
-        value_words = block[:region]
-        index_words = block[region:]
-        finite = _finite_lanes(value_words)
-
-        hw_val = _bitcast_float32(value_words[finite])
-        hw_iw = index_words[finite]
-        assert hw_iw.numel() == K, f"row {r}: expected {K} lanes, got {hw_iw.numel()}"
-        assert (
-            (hw_iw >> GROUP_SHIFT) == GROUP_ID
-        ).all(), f"row {r}: group_id bits wrong"
-
-        raw = hw_iw & ((1 << GROUP_SHIFT) - 1)
-        pos = [_decode_row_major(int(x), K) for x in raw.tolist()]
-        assert all(0 <= p < K for p in pos), f"row {r}: coordinate outside 0..K-1"
-
-        # A coordinate is per-chunk, so it must match its value in one of the
-        # chunks. Exact, for the same reason as in _check.
-        row = rows[r]
-        for p, v in zip(pos, hw_val.tolist()):
-            candidates = [float(row[c * K + p]) for c in range(num_chunks)]
-            assert (
-                float(v) in candidates
-            ), f"row {r}: coordinate {p} value {v} matches no chunk ({candidates})"
-
-        # The surviving values are the top-K of the whole row.
-        gold = torch.topk(rows[r], K).values
-        assert passed_test(
-            torch.sort(gold).values,
-            torch.sort(hw_val).values,
-            FORMATS.input_format,
-        ), f"row {r}: fused-reduce top-K value mismatch"
-
-
-def _check_denormal_fused_word(result, K, rows):
-    """
-    The +0 lanes must come back with their own coordinates intact.
-    A +0 value zeroes bits 30:23 of the fused word, so the 32-bit word is an fp32
-    denormal. An FP32-mode move would flush it and take the index with it.
-    """
-    res = _result_words(result)
-    region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
-    block = res[: 2 * region]
-    value_words = block[:region]
-    index_words = block[region:]
-    finite = _finite_lanes(value_words)
-
-    hw_val = _bitcast_float32(value_words[finite])
-    hw_iw = index_words[finite]
+    result, rows = _run(
+        K,
+        num_chunks=2,
+        mode="zeros_win",
+        fused_reduce=True,
+        group_id=GROUP_ID,
+        group_shift=GROUP_SHIFT,
+    )
+    hw_iw, hw_val = _extract_hw_topk(result, K, 1)[0]
     assert hw_iw.numel() == K, f"expected {K} lanes, got {hw_iw.numel()}"
 
     row = rows[0]
@@ -729,64 +597,26 @@ def _check_denormal_fused_word(result, K, rows):
     )
 
 
-@parametrize(K=[512, 1024, 2048])
-@skip_for_wormhole
-@skip_for_quasar
-def test_topk_xl_denormal_fused_word(K):
-    """
-    Assert a legal input containing +0 returns the correct set and indices.
-
-    Runs fused, because that is where the value and the index share one word. On
-    the unfused path they sit in separate regions, so a value word is plain
-    0x00000000 and flushing it is a no-op.
-    """
-    (K,) = K
-    num_rows, num_chunks = 1, 2
-
-    src_A, rows = _build_input(K, num_chunks, K, num_rows, "zeros_win")
-    configuration = _config(
-        K,
-        num_chunks,
-        K,
-        num_rows,
-        src_A,
-        fused_reduce=True,
-        group_id=GROUP_ID,
-        group_shift=GROUP_SHIFT,
-    )
-    result = configuration.run().result
-    _check_denormal_fused_word(result, K, rows)
-
-
 @parametrize(K=[512, 1024, 2048], num_chunks=[2, 4])
-@skip_for_wormhole
-@skip_for_quasar
 def test_topk_xl_fused_reduce(K, num_chunks):
     """
     merge/rebuild with fused=true: half the operand distance (there's no index
     region between the slots), 16 instead of 18 instructions in the MOP, and
     half the iteration count.
     """
-    num_rows = 1
-
-    src_A, rows = _build_input(K, num_chunks, K, num_rows, "positive")
-    configuration = _config(
+    result, rows = _run(
         K,
-        num_chunks,
-        K,
-        num_rows,
-        src_A,
+        num_chunks=num_chunks,
         fused_reduce=True,
         group_id=GROUP_ID,
         group_shift=GROUP_SHIFT,
     )
-    result = configuration.run().result
-    _check_fused_reduce(result, K, num_rows, num_chunks, rows)
+    _check_coordinates(
+        result, K, rows, num_chunks=num_chunks, group_id=GROUP_ID, core_id=None
+    )
 
 
 @parametrize(K=[512, 1024, 2048], partial_tail=[False, True])
-@skip_for_wormhole
-@skip_for_quasar
 def test_topk_xl_input_float32(K, partial_tail):
     """
     fp32 input does unpack_to_dest instead of A2D datacopy.
@@ -795,41 +625,23 @@ def test_topk_xl_input_float32(K, partial_tail):
       - K=1024: the copy clears SrcA with -inf instead of doing ZEROACC
       - K=2048: the tail's second tile is empty, so both threads return early
     """
-    num_rows, num_chunks = 1, 2
-    tail_elements = (K // 2) if partial_tail else K
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt32)
 
-    src_A, rows = _build_input(
-        K, num_chunks, tail_elements, num_rows, "positive", as_float32=True
-    )
-    gold_indices = get_golden_generator(TopKXLGolden)(rows, K)
-    configuration = _config(
-        K, num_chunks, tail_elements, num_rows, src_A, formats=formats
-    )
-    result = configuration.run().result
-    _check(
-        result,
+    result, rows = _run(
         K,
-        num_rows,
-        rows,
-        gold_indices,
-        compare_index_set=True,
-        value_format=formats.input_format,
+        num_chunks=2,
+        tail_elements=(K // 2) if partial_tail else K,
+        formats=formats,
     )
+    _check(result, K, rows, compare_index_set=True, value_format=formats.input_format)
 
 
 # DestSync.Half halves the Dest budget (4 fp32 tiles), which the unfused merge tree
 # fits only for K <= 1024: K=2048 needs two 2-tile value regions plus their index
 # regions, so 8 tiles under fp32 SyncFull.
 @parametrize(K=[512, 1024])
-@skip_for_wormhole
-@skip_for_quasar
 def test_topk_xl_dest_sync_half(K):
     (K,) = K
-    num_rows, num_chunks = 2, 2
 
-    src_A, rows = _build_input(K, num_chunks, K, num_rows, "positive")
-    gold_indices = get_golden_generator(TopKXLGolden)(rows, K)
-    configuration = _config(K, num_chunks, K, num_rows, src_A, dest_sync=DestSync.Half)
-    result = configuration.run().result
-    _check(result, K, num_rows, rows, gold_indices, compare_index_set=True)
+    result, rows = _run(K, num_chunks=2, num_rows=2, dest_sync=DestSync.Half)
+    _check(result, K, rows, compare_index_set=True)
