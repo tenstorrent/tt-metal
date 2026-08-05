@@ -7,7 +7,7 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import is_blackhole, nearest_32
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
 from models.demos.gpt_oss.utils.substate import substate
@@ -221,6 +221,14 @@ class Model:
 
         # Initialize on-device sampling (supported when padded per-device vocab fits in 64K)
         self._supports_on_device_sampling = per_device_padded <= 64 * 1024
+        # #52176: on multi-device Blackhole, replaying a captured sampling trace alongside the
+        # decode trace corrupts decode from the 2nd token onward. Re-stage the decode trace
+        # inputs from host every step and run sampling eagerly, as qwen3_vl/qwen25_vl do for
+        # the same failure. Single-device Blackhole uses the host argmax fallback and Wormhole
+        # is unaffected, so both keep the traced path.
+        if is_blackhole() and mesh_device.get_num_devices() > 1:
+            self._tt_vllm_always_refresh_decode_trace_inputs = True
+            self._tt_disable_sampling_trace = True
         self._prefill_sampling_active = False
         # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
         self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1

@@ -1501,7 +1501,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
-            sampling_trace_enabled = on_device_sampling and sampling_module is not None
+            sampling_trace_enabled = (
+                on_device_sampling
+                and sampling_module is not None
+                and not getattr(self.model[i], "_tt_disable_sampling_trace", False)
+            )
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
