@@ -72,6 +72,15 @@ void kernel_main() {
     constexpr uint32_t per_core_M_max = get_compile_time_arg_val(2);
     constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(3);
     constexpr uint32_t per_core_N_d = get_compile_time_arg_val(4);
+    // DOWN_SPLIT (26..32): the writer reads the UPPER K-rows of each down block on
+    // NoC 1 while the reader reads [0, down_split_k) on NoC 0.
+    constexpr uint32_t cb_in1_down = get_compile_time_arg_val(26);
+    constexpr uint32_t in0_block_w_d = get_compile_time_arg_val(27);
+    constexpr uint32_t K_down_tiles = get_compile_time_arg_val(28);
+    constexpr uint32_t num_blocks_d = get_compile_time_arg_val(29);
+    constexpr uint32_t d_in1_block_num_tiles = get_compile_time_arg_val(30);
+    constexpr uint32_t down_split_k = get_compile_time_arg_val(31);
+    constexpr bool writer_split_down = get_compile_time_arg_val(32) != 0;
     constexpr uint32_t d_out_subblock_h = get_compile_time_arg_val(7);
     constexpr uint32_t d_out_subblock_w = get_compile_time_arg_val(8);
     constexpr uint32_t N_gate_tiles_full = get_compile_time_arg_val(9);
@@ -128,7 +137,8 @@ void kernel_main() {
     // out, then start (direct-write), then up (UP_SPLIT). The accessors are
     // constructed unconditionally; start_acc is used only when direct_write,
     // up_acc only when writer_split_up.
-    constexpr uint32_t out_accessor_offset = 26;
+    // 7 DOWN_SPLIT compile args (26..32) precede the accessor stream.
+    constexpr uint32_t out_accessor_offset = 33;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -139,6 +149,11 @@ void kernel_main() {
     constexpr uint32_t up_accessor_offset = start_args.next_compile_time_args_offset();
     constexpr auto up_args = TensorAccessorArgs<up_accessor_offset>();
     const auto up_acc = TensorAccessor(up_args, up_addr, get_tile_size(cb_in1_up));
+    // DOWN_SPLIT: down accessor follows up in the compile-arg stream.
+    constexpr uint32_t down_accessor_offset = up_args.next_compile_time_args_offset();
+    constexpr auto down_args = TensorAccessorArgs<down_accessor_offset>();
+    const uint32_t down_addr = get_arg_val<uint32_t>(9);
+    const auto down_acc = TensorAccessor(down_args, down_addr, get_tile_size(cb_in1_down));
 
     const uint32_t out_tile_bytes = cb_out_buf.get_tile_size();
 
@@ -187,6 +202,13 @@ void kernel_main() {
     const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
     Semaphore<> up_go_sem(up_go_sem_id);
     Semaphore<> up_done_sem(up_done_sem_id);
+    // CB slot cadence must be tracked PER CB with counters that run across chunks:
+    // the reader pushes cb_in1_up once per gate/up block and cb_in1_down once per
+    // down block, and neither count is even (14 and 11 for kimi), so the live slot
+    // parity carries over between chunks. Deriving a slot from the shared up_seq
+    // breaks as soon as there is more than one chunk (measured: isl >= 2048 failed).
+    uint32_t up_blk = 0;
+    uint32_t down_blk = 0;
     uint32_t up_seq = 0;
 
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
@@ -211,7 +233,8 @@ void kernel_main() {
                 for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                     ++up_seq;
                     up_go_sem.wait_min(up_seq);
-                    uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+                    uint32_t l1_w_up = up_cb_base + (up_blk % kUpNumSlots) * up_slot_bytes;
+                    ++up_blk;
 #ifdef WEIGHTS_ND_SHARDED
                     {
                         constexpr uint32_t up_slice_bytes = per_core_N_gu * 576;  // bfp4 tile
@@ -252,6 +275,79 @@ void kernel_main() {
                     noc_up.async_read_barrier();
                     up_done_sem.set(up_seq);
                 }
+            }
+        }
+
+        // ---- DOWN_SPLIT: read the UPPER K-rows of each down block on NoC 1 ----
+        // Mirrors the UP_SPLIT block above. The reader owns cb_in1_down's
+        // reserve/push and reads rows [0, down_split_k) on NoC 0; this RISC reads
+        // [down_split_k, in0_block_w_d) concurrently. Per K-block: wait for the
+        // reader's go, read, barrier, signal done so the reader can multicast.
+        // The go/done counter continues the same up_seq the UP_SPLIT phase used —
+        // both kernels advance it once per block, gated on the same sender core, so
+        // they stay in lockstep across the phase boundary.
+        if constexpr (writer_split_down) {
+            if (is_up_sender) {
+                // cb_in1_down is double-buffered with one push per down K-block, so
+                // the live slot is down_blk % 2 — a counter that runs across chunks
+                // (see up_blk/down_blk above for why kb % 2 is wrong).
+                constexpr uint32_t kDownNumSlots = 2;
+                constexpr uint32_t kRowsForWriter = in0_block_w_d - down_split_k;
+                CircularBuffer cb_in1_down_buf(cb_in1_down);
+                const uint32_t down_cb_base = cb_in1_down_buf.get_write_ptr();
+                const uint32_t down_tile_bytes = get_tile_size(cb_in1_down);
+                const uint32_t down_slot_bytes = d_in1_block_num_tiles * down_tile_bytes;
+                for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
+                    ++up_seq;
+                    up_go_sem.wait_min(up_seq);
+                    uint32_t l1_w = down_cb_base + (down_blk % kDownNumSlots) * down_slot_bytes +
+                                    down_split_k * per_core_N_d * down_tile_bytes;
+                    ++down_blk;
+#ifdef WEIGHTS_ND_SHARDED
+                    {
+                        const uint32_t down_slice_bytes = per_core_N_d * down_tile_bytes;
+                        for (uint32_t k = down_split_k; k < in0_block_w_d; ++k) {
+                            const uint32_t krow = kb * in0_block_w_d + k;
+                            if (krow < K_down_tiles) {
+                                const uint64_t src =
+                                    down_acc.get_shard_noc_addr(krow * SHARD_GRID_N + my_nt_d, 0, noc_up.get_noc_id());
+                                noc_async_read(src, l1_w, down_slice_bytes, noc_up.get_noc_id());
+                            } else if constexpr (!down_k_tail_skip) {
+                                volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
+                                for (uint32_t b = 0; b < down_slice_bytes / 8; ++b) {
+                                    p[b] = 0;
+                                }
+                            }
+                            l1_w += down_slice_bytes;
+                        }
+                    }
+#else
+                    for (uint32_t k = down_split_k; k < in0_block_w_d; ++k) {
+                        for (uint32_t n = 0; n < per_core_N_d; ++n) {
+                            const uint32_t row = kb * in0_block_w_d + k;
+                            const uint32_t col = my_nt_d * per_core_N_d + n;
+                            if (row < K_down_tiles && col < N_down_tiles_full) {
+                                const uint32_t tile_idx = row * N_down_tiles_full + col;
+                                noc_up.async_read(
+                                    down_acc, CoreLocalMem<uint32_t>(l1_w), down_tile_bytes, {.page_id = tile_idx}, {});
+                            } else if (row >= K_down_tiles) {
+                                // K-OOB: matched to the reader's identical zero-fill.
+                                if constexpr (!down_k_tail_skip) {
+                                    volatile tt_l1_ptr uint64_t* p =
+                                        reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
+                                    for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {
+                                        p[i] = 0;
+                                    }
+                                }
+                            }
+                            l1_w += down_tile_bytes;
+                        }
+                    }
+#endif  // WEIGHTS_ND_SHARDED
+                    noc_up.async_read_barrier();
+                    up_done_sem.set(up_seq);
+                }
+                (void)kRowsForWriter;
             }
         }
 

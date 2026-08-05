@@ -147,6 +147,10 @@ void kernel_main() {
     // linear ROUND_ROBIN_1D shard id is k * SHARD_GRID_N + my_nt — consecutive K-rows
     // therefore land in DIFFERENT banks, which is what buys the bandwidth.
     constexpr uint32_t SHARD_GRID_N = get_compile_time_arg_val(31);
+    // DOWN_SPLIT: K-rows of each down block THIS RISC reads. The writer reads the
+    // rest, [down_split_k, in0_block_w_d), on NoC 1. Equals in0_block_w_d when the
+    // split is off.
+    constexpr uint32_t down_split_k = get_compile_time_arg_val(32);
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
@@ -166,7 +170,7 @@ void kernel_main() {
     // always agree. When false the matmul reads those rows and the fill stays.
     constexpr bool down_k_tail_skip = (K_down_tiles_padded - K_down_tiles) < in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 32;
+    constexpr uint32_t x_accessor_offset = 33;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -795,6 +799,13 @@ void kernel_main() {
             cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
             cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
 
+            // DOWN_SPLIT: slot reserved -> release the writer to read the upper
+            // K-rows on NoC 1, concurrent with this RISC's NoC-0 read below.
+            if (down_split_k < in0_block_w_d && is_in1_sender) {
+                ++up_seq;
+                up_go_sem.set(up_seq);
+            }
+
             // Step 1: receivers ack BOTH senders (in1_down and act) at the
             // top of the K-block iter. The in1_down ack lets the in1_down
             // sender immediately start DRAM reads; the act ack lets the act
@@ -826,7 +837,7 @@ void kernel_main() {
                     // One request per K-row, as for gate above. K-rows past K_down_tiles
                     // have no shard, so they keep the interleaved path's zero-fill.
                     constexpr uint32_t down_slice_bytes = per_core_N_d * 576;  // bfp4 tile
-                    for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                    for (uint32_t k = 0; k < down_split_k; ++k) {
                         const uint32_t krow = kb * in0_block_w_d + k;
                         if (krow < K_down_tiles) {
                             const uint64_t src =
@@ -842,7 +853,7 @@ void kernel_main() {
                     }
                 }
 #else
-                for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                for (uint32_t k = 0; k < down_split_k; ++k) {
                     for (uint32_t n = 0; n < per_core_N_d; ++n) {
                         const uint32_t row = kb * in0_block_w_d + k;
                         const uint32_t col = my_nt_d * per_core_N_d + n;
@@ -879,6 +890,11 @@ void kernel_main() {
             // longer hidden under the activated wait — measure before keeping.
             if (is_in1_sender) {
                 noc_read.async_read_barrier();
+                // DOWN_SPLIT: the writer's upper K-rows must have landed before the
+                // block is multicast (or consumed locally at GRID_Y == 1).
+                if (down_split_k < in0_block_w_d) {
+                    up_done_sem.wait_min(up_seq);
+                }
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
                 // core consumes the locally-read down weight directly.
                 if (in1_num_receivers > 0) {

@@ -18,7 +18,7 @@ weight memory layouts are covered, DRAM-interleaved and DRAM ND-sharded, each wi
 its own baselines, so a regression in either is caught and the gap between them
 stays visible (see ``_WEIGHTS_IDS``).
 
-Baselines in ``_EXPECTED_NS`` were MEASURED LOCALLY on a BH board on 2026-08-04
+Baselines in ``_EXPECTED_NS`` were MEASURED LOCALLY on a BH board on 2026-08-05
 and must be RECALIBRATED on the perf CI runner: device times are DDR-speed
 dependent, so the canonical baselines have to come from the CI runner the check
 actually runs on (mirrors the dated recalibration comments in the sibling
@@ -73,90 +73,92 @@ _LAYOUT_IDS = ("x_rm", "x_tile")
 _WEIGHTS_IDS = ("w_interleaved", "w_ndshard")
 
 # Per-(x layout, weights layout, model, active) UnifiedRoutedExpertFfnDeviceOperation
-# device time in ns, measured on a Blackhole P150 (2026-08-04, card 0, single sample per
-# case except the two x_rm/w_ndshard isl-512 cells, which are the median of three).
+# device time in ns, measured on a Blackhole P150 (2026-08-05, card 0, single sample per
+# case). Re-measured after the DOWN_SPLIT two-RISC down-weight read, which is worth
+# 1.06-1.18x at isl <= 512 on DRAM-interleaved weights (both x layouts) and is neutral
+# from isl 1024 up and on ND-sharded weights.
 # Recalibrate on the perf CI runner — device times are HW/DDR-speed dependent.
 _EXPECTED_NS: dict[tuple[str, str, str, int], int] = {
     # ---- x_rm, w_interleaved, kimi_k26 ----
-    ("x_rm", "w_interleaved", "kimi_k26", 0): 3_974,
-    ("x_rm", "w_interleaved", "kimi_k26", 64): 143_402,
-    ("x_rm", "w_interleaved", "kimi_k26", 128): 146_822,
-    ("x_rm", "w_interleaved", "kimi_k26", 256): 157_270,
-    ("x_rm", "w_interleaved", "kimi_k26", 512): 202_118,  # median of 4: 191,997 / 201,655 / 202,582 / 209,754
-    ("x_rm", "w_interleaved", "kimi_k26", 1024): 302_813,
-    ("x_rm", "w_interleaved", "kimi_k26", 2048): 600_780,
-    ("x_rm", "w_interleaved", "kimi_k26", 4096): 1_182_065,
-    ("x_rm", "w_interleaved", "kimi_k26", 5120): 1_474_070,
+    ("x_rm", "w_interleaved", "kimi_k26", 0): 3_938,
+    ("x_rm", "w_interleaved", "kimi_k26", 64): 126_664,
+    ("x_rm", "w_interleaved", "kimi_k26", 128): 130_063,
+    ("x_rm", "w_interleaved", "kimi_k26", 256): 136_740,
+    ("x_rm", "w_interleaved", "kimi_k26", 512): 191_253,
+    ("x_rm", "w_interleaved", "kimi_k26", 1024): 318_801,
+    ("x_rm", "w_interleaved", "kimi_k26", 2048): 596_930,
+    ("x_rm", "w_interleaved", "kimi_k26", 4096): 1_177_078,
+    ("x_rm", "w_interleaved", "kimi_k26", 5120): 1_477_543,
     # ---- x_rm, w_interleaved, glm_51 ----
-    ("x_rm", "w_interleaved", "glm_51", 0): 4_034,
-    ("x_rm", "w_interleaved", "glm_51", 64): 131_728,
-    ("x_rm", "w_interleaved", "glm_51", 128): 128_137,
-    ("x_rm", "w_interleaved", "glm_51", 256): 134_068,
-    ("x_rm", "w_interleaved", "glm_51", 512): 182_172,
-    ("x_rm", "w_interleaved", "glm_51", 1024): 267_038,
-    ("x_rm", "w_interleaved", "glm_51", 2048): 518_590,
-    ("x_rm", "w_interleaved", "glm_51", 4096): 1_029_836,
-    ("x_rm", "w_interleaved", "glm_51", 5120): 1_309_436,
+    ("x_rm", "w_interleaved", "glm_51", 0): 3_948,
+    ("x_rm", "w_interleaved", "glm_51", 64): 112_002,
+    ("x_rm", "w_interleaved", "glm_51", 128): 113_821,
+    ("x_rm", "w_interleaved", "glm_51", 256): 120_488,
+    ("x_rm", "w_interleaved", "glm_51", 512): 177_421,
+    ("x_rm", "w_interleaved", "glm_51", 1024): 267_296,
+    ("x_rm", "w_interleaved", "glm_51", 2048): 517_673,
+    ("x_rm", "w_interleaved", "glm_51", 4096): 1_082_301,
+    ("x_rm", "w_interleaved", "glm_51", 5120): 1_281_589,
     # ---- x_rm, w_ndshard, kimi_k26 ----
-    ("x_rm", "w_ndshard", "kimi_k26", 0): 4_061,
-    ("x_rm", "w_ndshard", "kimi_k26", 64): 124_270,
-    ("x_rm", "w_ndshard", "kimi_k26", 128): 130_336,
-    ("x_rm", "w_ndshard", "kimi_k26", 256): 148_230,
-    ("x_rm", "w_ndshard", "kimi_k26", 512): 196_139,
-    ("x_rm", "w_ndshard", "kimi_k26", 1024): 300_452,
-    ("x_rm", "w_ndshard", "kimi_k26", 2048): 586_801,
-    ("x_rm", "w_ndshard", "kimi_k26", 4096): 1_164_910,
-    ("x_rm", "w_ndshard", "kimi_k26", 5120): 1_460_956,
+    ("x_rm", "w_ndshard", "kimi_k26", 0): 3_902,
+    ("x_rm", "w_ndshard", "kimi_k26", 64): 116_570,
+    ("x_rm", "w_ndshard", "kimi_k26", 128): 127_144,
+    ("x_rm", "w_ndshard", "kimi_k26", 256): 146_735,
+    ("x_rm", "w_ndshard", "kimi_k26", 512): 180_393,
+    ("x_rm", "w_ndshard", "kimi_k26", 1024): 300_025,
+    ("x_rm", "w_ndshard", "kimi_k26", 2048): 589_709,
+    ("x_rm", "w_ndshard", "kimi_k26", 4096): 1_170_085,
+    ("x_rm", "w_ndshard", "kimi_k26", 5120): 1_455_277,
     # ---- x_rm, w_ndshard, glm_51 ----
-    ("x_rm", "w_ndshard", "glm_51", 0): 4_008,
-    ("x_rm", "w_ndshard", "glm_51", 64): 111_154,
-    ("x_rm", "w_ndshard", "glm_51", 128): 120_854,  # median of 4: 115,641 / 115,724 / 125,984 / 126,724
-    ("x_rm", "w_ndshard", "glm_51", 256): 128_213,
-    ("x_rm", "w_ndshard", "glm_51", 512): 170_537,
-    ("x_rm", "w_ndshard", "glm_51", 1024): 263_096,
-    ("x_rm", "w_ndshard", "glm_51", 2048): 516_244,
-    ("x_rm", "w_ndshard", "glm_51", 4096): 1_021_266,
-    ("x_rm", "w_ndshard", "glm_51", 5120): 1_268_990,
+    ("x_rm", "w_ndshard", "glm_51", 0): 4_133,
+    ("x_rm", "w_ndshard", "glm_51", 64): 104_253,
+    ("x_rm", "w_ndshard", "glm_51", 128): 111_343,
+    ("x_rm", "w_ndshard", "glm_51", 256): 125_372,
+    ("x_rm", "w_ndshard", "glm_51", 512): 157_579,
+    ("x_rm", "w_ndshard", "glm_51", 1024): 266_990,
+    ("x_rm", "w_ndshard", "glm_51", 2048): 513_814,
+    ("x_rm", "w_ndshard", "glm_51", 4096): 1_028_036,
+    ("x_rm", "w_ndshard", "glm_51", 5120): 1_273_404,
     # ---- x_tile, w_interleaved, kimi_k26 ----
-    ("x_tile", "w_interleaved", "kimi_k26", 0): 4_141,
-    ("x_tile", "w_interleaved", "kimi_k26", 64): 144_059,
-    ("x_tile", "w_interleaved", "kimi_k26", 128): 146_428,
-    ("x_tile", "w_interleaved", "kimi_k26", 256): 149_935,
-    ("x_tile", "w_interleaved", "kimi_k26", 512): 175_210,
-    ("x_tile", "w_interleaved", "kimi_k26", 1024): 274_818,
-    ("x_tile", "w_interleaved", "kimi_k26", 2048): 538_877,
-    ("x_tile", "w_interleaved", "kimi_k26", 4096): 1_059_844,
-    ("x_tile", "w_interleaved", "kimi_k26", 5120): 1_327_143,
+    ("x_tile", "w_interleaved", "kimi_k26", 0): 4_088,
+    ("x_tile", "w_interleaved", "kimi_k26", 64): 127_379,
+    ("x_tile", "w_interleaved", "kimi_k26", 128): 132_069,
+    ("x_tile", "w_interleaved", "kimi_k26", 256): 134_367,
+    ("x_tile", "w_interleaved", "kimi_k26", 512): 156_947,
+    ("x_tile", "w_interleaved", "kimi_k26", 1024): 275_946,
+    ("x_tile", "w_interleaved", "kimi_k26", 2048): 535_527,
+    ("x_tile", "w_interleaved", "kimi_k26", 4096): 1_058_557,
+    ("x_tile", "w_interleaved", "kimi_k26", 5120): 1_325_944,
     # ---- x_tile, w_interleaved, glm_51 ----
-    ("x_tile", "w_interleaved", "glm_51", 0): 4_108,
-    ("x_tile", "w_interleaved", "glm_51", 64): 125_851,
-    ("x_tile", "w_interleaved", "glm_51", 128): 128_503,
-    ("x_tile", "w_interleaved", "glm_51", 256): 129_864,
-    ("x_tile", "w_interleaved", "glm_51", 512): 150_180,
-    ("x_tile", "w_interleaved", "glm_51", 1024): 240_994,
-    ("x_tile", "w_interleaved", "glm_51", 2048): 473_384,
-    ("x_tile", "w_interleaved", "glm_51", 4096): 927_045,
-    ("x_tile", "w_interleaved", "glm_51", 5120): 1_181_216,
+    ("x_tile", "w_interleaved", "glm_51", 0): 4_041,
+    ("x_tile", "w_interleaved", "glm_51", 64): 113_427,
+    ("x_tile", "w_interleaved", "glm_51", 128): 120_631,
+    ("x_tile", "w_interleaved", "glm_51", 256): 116_389,
+    ("x_tile", "w_interleaved", "glm_51", 512): 137_347,
+    ("x_tile", "w_interleaved", "glm_51", 1024): 239_600,
+    ("x_tile", "w_interleaved", "glm_51", 2048): 467_721,
+    ("x_tile", "w_interleaved", "glm_51", 4096): 930_212,
+    ("x_tile", "w_interleaved", "glm_51", 5120): 1_169_606,
     # ---- x_tile, w_ndshard, kimi_k26 ----
-    ("x_tile", "w_ndshard", "kimi_k26", 0): 4_005,
-    ("x_tile", "w_ndshard", "kimi_k26", 64): 119_066,  # median of 5: 116,118 / 116,742 / 119,066 / 122,199 / 135,516
-    ("x_tile", "w_ndshard", "kimi_k26", 128): 134_356,
-    ("x_tile", "w_ndshard", "kimi_k26", 256): 141_341,
-    ("x_tile", "w_ndshard", "kimi_k26", 512): 163_760,  # median of 4: 157,821 / 162,901 / 164,619 / 175,358
-    ("x_tile", "w_ndshard", "kimi_k26", 1024): 271_916,
-    ("x_tile", "w_ndshard", "kimi_k26", 2048): 534_853,
-    ("x_tile", "w_ndshard", "kimi_k26", 4096): 1_059_513,
-    ("x_tile", "w_ndshard", "kimi_k26", 5120): 1_315_653,
+    ("x_tile", "w_ndshard", "kimi_k26", 0): 4_124,
+    ("x_tile", "w_ndshard", "kimi_k26", 64): 114_107,
+    ("x_tile", "w_ndshard", "kimi_k26", 128): 128_243,
+    ("x_tile", "w_ndshard", "kimi_k26", 256): 125_615,
+    ("x_tile", "w_ndshard", "kimi_k26", 512): 166_313,
+    ("x_tile", "w_ndshard", "kimi_k26", 1024): 275_992,
+    ("x_tile", "w_ndshard", "kimi_k26", 2048): 533_737,
+    ("x_tile", "w_ndshard", "kimi_k26", 4096): 1_059_316,
+    ("x_tile", "w_ndshard", "kimi_k26", 5120): 1_315_324,
     # ---- x_tile, w_ndshard, glm_51 ----
-    ("x_tile", "w_ndshard", "glm_51", 0): 4_077,
-    ("x_tile", "w_ndshard", "glm_51", 64): 106_466,
-    ("x_tile", "w_ndshard", "glm_51", 128): 119_309,
-    ("x_tile", "w_ndshard", "glm_51", 256): 129_819,  # median of 4: 116,797 / 124,962 / 134,676 / 134,843
-    ("x_tile", "w_ndshard", "glm_51", 512): 145_490,  # median of 4: 141,610 / 142,120 / 148,861 / 158,885
-    ("x_tile", "w_ndshard", "glm_51", 1024): 237_970,
-    ("x_tile", "w_ndshard", "glm_51", 2048): 468_583,
-    ("x_tile", "w_ndshard", "glm_51", 4096): 922_356,
-    ("x_tile", "w_ndshard", "glm_51", 5120): 1_146_731,
+    ("x_tile", "w_ndshard", "glm_51", 0): 3_913,
+    ("x_tile", "w_ndshard", "glm_51", 64): 102_853,
+    ("x_tile", "w_ndshard", "glm_51", 128): 115_464,
+    ("x_tile", "w_ndshard", "glm_51", 256): 112_594,
+    ("x_tile", "w_ndshard", "glm_51", 512): 141_131,
+    ("x_tile", "w_ndshard", "glm_51", 1024): 245_976,
+    ("x_tile", "w_ndshard", "glm_51", 2048): 466_882,
+    ("x_tile", "w_ndshard", "glm_51", 4096): 922_344,
+    ("x_tile", "w_ndshard", "glm_51", 5120): 1_154_307,
 }
 
 # Wider than the usual 3%, and ISL-dependent because the spread is structurally

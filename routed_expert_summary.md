@@ -1291,3 +1291,109 @@ transitively, and without it the macro fails to compile inside a template with
 `TT_METAL_PROFILER_ACCUMULATE=1` is NOT needed: plain `DeviceZoneScopedN` emits begin/end pairs
 per iteration that can be paired and summed offline, which also keeps the per-op perf report
 that accumulate mode disables (it warns it is "for INTERNAL RUNTIME-TEAM use only").
+
+## 15. DOWN_SPLIT: two-RISC down-weight read (2026-08-05)
+
+### 15a. Why the down read specifically
+
+Section 14a measured the weight DRAM read at 31.2 us of a 146 us isl-128 op. Ablating the
+**down** read alone saved **30.2 us** — essentially all of it. So gate/up reads are already
+hidden (UP_SPLIT has the writer read `up` on NoC 1 concurrent with the reader's NoC-0 `gate`
+read) and the down read was the only weight read left on the critical path. It ran on the
+reader alone, in phase 4, while the writer was idle apart from output writes that cost 3.0 us.
+
+### 15b. The change
+
+Mirror UP_SPLIT one phase later: the reader reads down K-rows `[0, down_split_k)` on NoC 0 and
+the writer reads `[down_split_k, in0_block_w_d)` on NoC 1 into the same `cb_in1_down` slot,
+with `down_split_k = in0_block_w_d / 2`. Per down K-block: reader reserves the slot and sets
+`up_go`, both RISCs read concurrently, reader barriers, waits `up_done`, then multicasts the
+block. The reader still owns reserve/push. Gated on `in0_block_w_d >= 2` (it is `per_core_N_gu`
+= 6 for the shipped models, but a narrow model could make it 1, where no split is possible).
+
+New writer plumbing: CT args 26-32 (CB_IN1_DOWN, in0_block_w_d, K_down_tiles, num_blocks_d,
+d_in1_block_num_tiles, down_split_k, writer_split_down), a down TensorAccessor after `up` in
+the accessor stream, and the down buffer address as RT arg 9. **Both accessor offsets shifted:**
+reader `x_accessor_offset` 32 -> 33 and writer `out_accessor_offset` 26 -> 33. That is the same
+class of off-by-one that once produced silent all-zero output, so it is asserted in the patch
+rather than eyeballed.
+
+### 15c. Measured (72/72 functional pass, 72/72 perf cases captured, 0 infra errors)
+
+Speedup vs the pre-change baselines:
+
+| isl | kimi x_rm/int | kimi x_tile/int | kimi x_rm/nds | glm x_rm/int | glm x_tile/int |
+|---|---|---|---|---|---|
+| 64 | **1.13x** | **1.13x** | 1.07x | **1.18x** | 1.11x |
+| 128 | **1.13x** | 1.11x | 1.03x | **1.13x** | 1.07x |
+| 256 | **1.15x** | 1.12x | 1.01x | **1.11x** | 1.12x |
+| 512 | 1.06x | 1.12x | 1.09x | 1.03x | 1.09x |
+| 1024+ | 0.95-1.01x | 1.00-1.01x | 0.99-1.00x | 1.00x | 1.00-1.01x |
+
+Overall: isl <= 512 median **1.086x**, max 1.176x, min 0.985 (no regression); isl >= 1024
+median 1.000x. The gain is on **DRAM-interleaved** weights on BOTH x layouts, and neutral on
+ND-sharded — because interleaved issues 126 per-tile requests per down block while ND-shard
+issues 6 large per-K-row ones that were already cheap. A first A/B that only tested
+x_tile + ND-sharded therefore read as "neutral on x_tile", which the full matrix corrected.
+
+An apparent +28 us regression at x_tile/ndshard isl-512 did not survive resampling
+(split 169.9/161.8/169.9 vs no-split 168.5/161.6/162.1) — a bimodal-jitter outlier of the kind
+section 12b documents.
+
+### 15d. The bug this introduced, and why single-chunk testing would have missed it
+
+The first version failed **24 of 72** functional cases: uniformly 6 per layout combination,
+which resolved to isl 2048/4096/5120 x 2 models — i.e. **multi-chunk only**. Cause: CB slot
+indices derived from the shared `up_seq` and from `kb % 2`. The reader pushes `cb_in1_up` 14x
+and `cb_in1_down` 11x per chunk; both counts are ODD, so the live-slot parity carries over
+between chunks. It also broke the pre-existing `up` slot calculation, because `up_seq` now
+advances by num_blocks_gu + num_blocks_d = 25 per chunk instead of 14.
+
+Fix: separate per-CB counters (`up_blk`, `down_blk`) that run across chunks, so each CB's slot
+follows its own push cadence. **Any change that derives a CB slot from a shared sequence
+counter must be tested at an ISL with more than one chunk** (isl >= 2048 at chunk_M_tiles=32);
+every single-chunk ISL passed.
+
+## 16. ROOT CAUSE of the NoC-1 multicast hang: the rectangle must be corner-swapped
+
+Both attempts at 14e/(d) — weight data multicast on NoC 1, first with the valid semaphore left
+on NoC 0 and then with data and semaphore moved together — wedged the device. The cause is NOT
+a hardware limitation and NOT the fabric collision that retired UP_WRITER_MCAST. **It was a bug
+in my change**, and the failure mode is documented in-tree.
+
+`tt_metal/impl/device/device.cpp:818`:
+
+```
+// NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
+if (noc_index == 0) {
+    return hal.noc_multicast_encoding(start.x, start.y, end.x, end.y);
+}
+return hal.noc_multicast_encoding(end.x, end.y, start.x, start.y);   // <- swapped
+```
+
+`tt_metal/impl/emulation/emulated_program_runner.cpp:397` names the exact symptom:
+
+> "Without this, canonical NOC1 in0/in1-mcast ops (matmul/linear, multicore argmax) present
+> start>end and the torus walk misreads it as a wraparound -> **receivers never see their
+> semaphore -> quiescent deadlock**."
+
+So a NoC-1 multicast needs its rectangle corners SWAPPED relative to NoC 0. Our kernels receive
+`in1_mcast_n{x,y}_{start,end}` as runtime args computed in the NoC-0 frame; passing them
+unchanged to a NoC-1 multicast makes the NoC read the rectangle as a torus wraparound, so no
+receiver gets the data or the valid semaphore. That matches every observation: a quiescent hang
+with **no lightweight assert**, and `dump_running_operations` showing the *next* program's first
+multi-core op (a Tilize) stuck rather than the FFN itself.
+
+Note what is NOT the cause, checked and ruled out: coordinate mirroring. Blackhole's
+`DYNAMIC_NOC_X(noc, x)` resolves to `NOC_0_X(noc, noc_size_x, x)` which is the **identity** macro
+(`noc_nonblocking_api.h:44`); the mirroring form is `NOC_0_X_PHYS_COORD` on a different path. So
+`get_noc_multicast_addr` does no per-NoC coordinate transform on this arch, and the corner order
+is the only thing that differs.
+
+**Consequence for (d).** A reader-issued NoC-1 weight multicast is technically viable after all —
+it needs a second set of mcast rectangle args with the corners swapped (or the swap applied
+kernel-side under the NoC-1 path). Its ceiling remains the 17-19.7 us that removing the multicast
+entirely recovers (14a), and the fabric concern that retired UP_WRITER_MCAST still applies to
+shipping it: NoC-1 worker multicasts collide with fabric CCL ops, and the perf test runs without
+fabric so it would measure green regardless. Worth doing only if ~15 us at low ISL justifies
+carrying a fabric-unsafe path.

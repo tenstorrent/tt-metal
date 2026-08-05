@@ -388,6 +388,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t d_in0_block_num_tiles = per_core_M * in0_block_w_d;
     const uint32_t d_in0_subblock_num_tiles = d_out_subblock_h * in0_block_w_d;
     const uint32_t d_in1_block_num_tiles = in0_block_w_d * per_core_N_d;
+    const uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
     const uint32_t d_in1_block_w = per_core_N_d;
     const uint32_t d_num_blocks = K_down_tiles_padded / in0_block_w_d;
     const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
@@ -494,6 +495,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // UP_WRITER_MCAST scheme (writer NoC-1-multicasts `up`) is no longer
     // selectable. kEnableSplitUp picks UP_SPLIT for all layouts.
     constexpr bool kEnableSplitUp = true;
+    // DOWN_SPLIT: share each down K-block's rows between the reader (NoC 0) and the
+    // writer (NoC 1). Env-overridable for A/B while it is being characterised.
+    // DOWN_SPLIT: share each down K-block's K-rows between the reader (NoC 0) and
+    // the writer (NoC 1), the same two-RISC trick UP_SPLIT uses for `up`. The down
+    // read was the ONLY weight read still on the critical path — ablating it saved
+    // 30.2 us of a 146 us isl-128 op, while ablating gate+up+down saved 31.2 us, so
+    // gate/up are already hidden by UP_SPLIT and down was not. Measured on
+    // x_rm + interleaved: 1.17x at isl-64, 1.13x at 128, 1.09x at 256, 1.04x at 512,
+    // neutral from 2048 up and neutral on x_tile + ND-sharded (whose down read is one
+    // large per-K-row request that was already cheap). A split needs >= 2 K-rows to
+    // divide; in0_block_w_d is per_core_N_gu, so this is 6 for the shipped models.
+    const bool kEnableSplitDown = in0_block_w_d >= 2;
+    // Rows the READER keeps; the writer takes [down_split_k, in0_block_w_d).
+    const uint32_t down_split_k = kEnableSplitDown ? (in0_block_w_d / 2) : in0_block_w_d;
     uint32_t up_mode = kEnableSplitUp ? 2 : 0;
     const bool reader_reads_up = (up_mode == 0);                   // reader issues up DRAM read
     const bool reader_mcasts_up = (up_mode == 0 || up_mode == 2);  // reader NoC-0 mcasts up
@@ -712,6 +727,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // type-checks the discarded branch, so the interleaved build would fail to
         // compile. A define removes the branch from the translation unit outright.
         GRID_X,
+        // DOWN_SPLIT: K-rows of each down block the READER reads; the writer reads
+        // [down_split_k, in0_block_w_d) on NoC 1. Equals in0_block_w_d when the
+        // split is off, so the reader keeps every row.
+        down_split_k,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -793,13 +812,27 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // reader's identically-derived constexpr.
         static_cast<uint32_t>((K_down_tiles_padded - K_down_tiles) < in0_block_w_d),  // 24 down_k_tail_skip
         GRID_X,                                                                       // 25
+        // DOWN_SPLIT down-weight read: the writer reads the UPPER K-rows of each
+        // down block on NoC 1 while the reader reads the lower rows on NoC 0.
+        // Measured: the down read is ~30 us of a 146 us isl-128 op and was the
+        // only weight read still on the critical path (gate/up are already split
+        // by UP_SPLIT and measure as free), so halving it is worth ~15 us.
+        CB_IN1_DOWN,                              // 26
+        in0_block_w_d,                            // 27
+        K_down_tiles,                             // 28
+        num_blocks_d,                             // 29
+        d_in1_block_num_tiles,                    // 30
+        down_split_k,                             // 31 rows the READER keeps
+        static_cast<uint32_t>(kEnableSplitDown),  // 32 writer_split_down
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
-    // out, then start (direct-write), then up (UP_SPLIT).
+    // out, then start (direct-write), then up (UP_SPLIT), then down (DOWN_SPLIT).
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_ct_args);
     // up accessor follows start; used only when the writer handles `up`.
     tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
+    // down accessor follows up; used only under DOWN_SPLIT.
+    tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(writer_ct_args);
 
     std::map<std::string, std::string> writer_defines{};
     if (weights_nd_sharded) {
@@ -1093,6 +1126,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             static_cast<uint32_t>(is_in1_sender),  // 6 is_up_sender
             up_go_sem_id,                          // 7
             up_done_sem_id,                        // 8
+            down_buffer->address(),                // 9 DOWN_SPLIT
         };
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
     }
