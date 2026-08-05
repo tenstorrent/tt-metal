@@ -1,55 +1,38 @@
 {
-  "last_run": "2026-08-05T07:14:39Z",
-  "run_id": "30984001006",
-  "tasks_run": ["task1_triage", "task2_comment", "task5_maintain_prs_check", "task8_monthly_summary"],
-  "monthly_activity_issue": {
-    "number": 51865,
-    "month": "2026-08",
-    "status": "updated"
+  "last_run": "2026-08-05T09:45:00Z",
+  "run_id": 31007662684,
+  "open_prs": {
+    "51999": {"issue": 51420, "status": "action_required (maintainer approval needed on pr-gate.yaml); checks not individually re-verified this run"},
+    "52106": {"issue": 51660, "status": "check-runs green (RTL Sim CI, Cycode x4); pr-gate.yaml workflow run itself action_required"},
+    "51868": {"issue": 51866, "status": "check-runs green; pr-gate.yaml action_required after latest push; already had a full review-response cycle (fixed tail overflow, reverted quasar hunk, ULP fix); one perf/predication concern deferred by reviewer"}
   },
-  "issues_labeled": [
-    {"number": 52141, "label": "bug", "timestamp": "2026-08-05T07:14:39Z"},
-    {"number": 52114, "label": "bug", "timestamp": "2026-08-05T07:14:39Z"},
-    {"number": 52131, "label": "bug", "timestamp": "2026-08-05T07:14:39Z"},
-    {"number": 52155, "label": "bug", "timestamp": "2026-08-05T07:14:39Z"}
-  ],
-  "issues_commented": [
-    {"number": 51660, "timestamp": "2026-08-04T18:53:08Z", "note": "linked new fix PR for erfinv small-arg collapse"},
-    {"number": 52141, "timestamp": "2026-08-05T07:14:39Z", "note": "confirmed root cause against current source (binary_ng_device_operation.cpp:19-29), deferred fix to maintainer decision given #51060 dependency"}
-  ],
-  "welcomed_contributors": [],
-  "stale_pr_actions": {
-    "51024": {"action": "codeowners_ping", "timestamp": "2026-07-28T06:46:32Z", "note": "merged same day, no longer tracked"},
-    "50525": {"action": "codeowners_ping", "timestamp": "2026-08-04T12:59:50Z", "note": "re-pinged 2026-08-04; CI still green (5/5 passed), still reviewer-blocked, <3 days since last ping so no re-ping needed yet"}
+  "issues_labeled": ["52178:bug", "52174:bug"],
+  "issues_commented": ["52178"],
+  "covered_no_duplicate": {
+    "52131": "PR #52136 already closes it (Closes #52131), numeric_stable=true for both named softmax ops",
+    "52174": "part of #52178 meta-issue; no existing fix PR found via search",
+    "52178": "meta-issue synthesizing 6 sub-issues; commented, no fix PR needed for the issue itself"
+  },
+  "dropped_fix_targets": {
+    "51845": "maintainer jasondavies explicitly rejected both proposed remedies (extend Cody-Waite splits; clamp output to [-1,1]) on 2026-08-05 -- do not attempt fix. PR #52124 may need reassessment."
+  },
+  "watch_prs": {
+    "52124": "Clamp sin/cos to [-1,1] - author unknown/not repo-assist; maintainer rejected this approach in #51845 discussion, may get closed or need rework",
+    "52126": "ttnn.i0 fix PR, uses I0_MAX_INPUT=88.5f -- per #52178 this would zero ~48% of bf16 domain, same defect class as i1",
+    "51843": "alternate ttnn.i0 fix PR, same I0_MAX_INPUT=88.5f concern as #52126"
+  },
+  "sfpu_clamp_family": {
+    "note": "Root-cause family documented in #52178 (community, kinginu). Sub-issues: i1 #52174 (fixed/measured), erfc #51137, digamma #51128, snake_beta #51116, sin/cos #51845 (blocked, see dropped_fix_targets), softplus #51866 (PR #51868 open, pending approval gate). erfc/digamma/snake_beta remain open with no PR as of this run -- potential future Task 3 candidates, need scoping."
+  },
+  "welcome_candidates_pending_verification": {
+    "thwaitsusa0316": "author of #52114, single data point, verification queries (merged PR count, prior issue count) not yet run",
+    "kinginu": "multiple recent issues (52178, 52174, 52155, 52141) -- likely established, not verified via query yet",
+    "EazyHood": "extensive history on #51845/#52131 -- clearly established, do NOT welcome"
   },
   "backlog_cursor": {
-    "issues": 51420,
-    "last_processed_date": "2026-08-03",
-    "note": "Task2/Task1 this run focused on freshest issues (52100s range, opened 2026-08-04/05) rather than continuing the older cursor sweep, since several were high-value confirmed bugs. Next run should resume oldest-first legacy sweep from #51420 forward, and continue scanning newer issues past #52158 for fresh triage candidates. #52114 and #52156 already have open fix PRs (#52128, #52159) - do not duplicate. #52131 (bounty issue, numeric_stable softmax defaults) and #51845/#51861 remain good candidates for a careful future fix attempt or Task4 improvement."
+    "task1_labeling": "resume after 52178/52174; issues 52162, 52176 already had bug label; 52181 not yet read",
+    "task2_commenting": "resume from oldest-first open issues after this run's pass; 52178 handled this run",
+    "task6_stale_prs": "not run this session, needs a pass next run"
   },
-  "open_prs": [
-    {
-      "branch": "repo-assist/fix-issue-51420-rsqrt-legacy-compat-f4c2a90682495826",
-      "pr_number": 51999,
-      "issue": 51420,
-      "title": "fix(ttnn): use non-legacy rsqrt in fused_rms_minimal compute kernel",
-      "created": "2026-08-03",
-      "ci_status": "pr-gate.yaml run 30844343235 still stuck at action_required (0 jobs run) as of 2026-08-05 07:14 UTC - needs maintainer approval to run, not a build failure. Already flagged via PR comment and monthly summary; no new info this run."
-    },
-    {
-      "branch": "repo-assist/fix-issue-51660-erfinv-small-arg-0f91511c0c426892",
-      "pr_number": 52106,
-      "issue": 51660,
-      "title": "fix(ttnn): add small-argument Maclaurin branch for erfinv to fix collapse-to-zero",
-      "created": "2026-08-04",
-      "ci_status": "CI completed - all 5 checks passed (RTL Sim CI test, Cycode SAST/Vulnerable Deps/Licenses/Secrets) as of 2026-08-04 19:24 UTC. Posted Test Status update comment on PR 2026-08-05. Branch reported behind main; not rebasing per policy - left for maintainer."
-    }
-  ],
-  "closed_or_merged_prs": [
-    {"pr_number": 51663, "merged_at": "2026-08-03T00:02:44Z", "note": "fmod/remainder repair-loop direction fix, merged by blozano-tt"},
-    {"pr_number": 51809, "merged_at": null, "note": "closed unmerged - superseded by human PR #51686 which more thoroughly fixed the same moe_routing_remap issue"},
-    {"pr_number": 51111, "merged_at": "2026-07-28T19:35:44Z", "note": "repeat_program_factory_last_dim precedence fix"}
-  ],
-  "next_tasks": ["task3_fix_issues", "task4_improvements", "task6_stale_prs", "task7_welcome"],
-  "notes": "2026-08-05 07:14 UTC run: Task5 - checked PR #52106 (erfinv) CI: all green, posted Test Status comment. Task1/Task2 - reviewed freshest issues (52100-52158 range): confirmed and labeled bug on #52141 (bfloat16 add/sub Inf-Inf routing), #52114 (fp32 div by inf - already has fix PR #52128), #52131 (softmax numeric_stable regression, bounty issue), #52155 (bfloat8_b pack precision double-rounding). Posted substantive triage comment on #52141 confirming root cause against current source. Checked #52114 and #52156 for existing fix PRs before considering new work - found #52128 and #52159 already open covering them, avoided duplicates. Did not get to Task3 (new fixes), Task4 (small improvements), Task6 (stale PR sweep beyond checking existing #50525 memory - still <3 days since last ping), Task7 (welcome) this run. Next run should prioritize those, particularly Task3 fix attempts on #51845 (sin/cos range) or #52131 (softmax numeric_stable defaults) if scoped carefully, and Task7 welcome-check on any of this run's issue authors (kinginu, EazyHood, thwaitsusa0316 - not yet verified against merged-PR/prior-issue history)."
+  "notes": "This run: verified i1 clamp claim in #52178/#52174 directly against tt_metal/hw/ckernels/blackhole/.../ckernel_sfpu_i1.h (I1_MAX_INPUT=88.5f, symmetric_clamp) -- confirmed accurate. Applied bug labels + substantive comment on #52178. Confirmed #52131 covered by #52136, no duplicate. Confirmed #51845 fix approaches rejected by maintainer -- dropped from fix backlog. Did NOT complete Task3 (new fix PR), Task4, Task6, Task7 (verification queries) this run due to time -- prioritize these next run. PR pr-gate.yaml action_required pattern across all 3 repo-assist PRs appears structural (bot-authored branch gating), not something repo-assist can resolve; keep reporting but stop re-commenting on it unless it changes."
 }
