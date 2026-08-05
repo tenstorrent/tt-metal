@@ -181,6 +181,18 @@ _PARAMS = pytest.mark.parametrize(
     indirect=["mesh_device", "device_params"],
 )
 
+# `check` computes the CPU golden and asserts PCC; `perf` skips both and runs only our implementation,
+# asserting shapes and finiteness. Same ids as the other tt_dit tests -- see
+# models/wan2_2/test_all_gather_minimal_matmul_async.py.
+#
+# `perf` is what makes the large grids usable here. The golden is a 27-layer CPU forward whose attention
+# is quadratic within each block, so `max_load` (18 blocks, the largest 16384 patches) and the 65536-row
+# grids are dominated by it -- and those cases exist to exercise capacity, tiling and dispatch rather than
+# arithmetic, since accuracy is established by the smaller grids. It is also the mode to use under
+# `python -m tracy`, where the CPU forward would otherwise swamp the capture. A green `perf` run says
+# nothing about accuracy.
+_MODE = pytest.mark.parametrize("check_pcc", [True, False], ids=["check", "perf"])
+
 
 def _parallel_args(submesh, tp_axis, sp_axis, num_links):
     """`(parallel_config, ccl_manager)` for `Qwen3VlVisionModel`, or `(None, None)` when replicated."""
@@ -217,7 +229,8 @@ def _shard(x, submesh, sp_axis):
 
 @_PARAMS
 @pytest.mark.parametrize("name", list(GRIDS))
-def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name):
+@_MODE
+def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name, check_pcc):
     """The full tower: patch embed, position embeddings, every block, all four mergers.
 
     Covers the whole stack through its outputs -- the merged tokens and one deepstack feature per
@@ -237,11 +250,13 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
 
     torch.manual_seed(0)
     patches = torch.randn(total, patch_dim)
-    with torch.no_grad():
-        ref_out = reference(patches, grid_thw=grid, return_dict=True)
-    golden_tokens = ref_out.pooler_output.float()
-    golden_deepstack = [f.float() for f in ref_out.deepstack_features]
-    assert len(golden_deepstack) == len(DEEPSTACK_INDEXES), "reference did not emit one feature per index"
+    golden_tokens, golden_deepstack = None, None
+    if check_pcc:
+        with torch.no_grad():
+            ref_out = reference(patches, grid_thw=grid, return_dict=True)
+        golden_tokens = ref_out.pooler_output.float()
+        golden_deepstack = [f.float() for f in ref_out.deepstack_features]
+        assert len(golden_deepstack) == len(DEEPSTACK_INDEXES), "reference did not emit one feature per index"
 
     # One block per frame, so the count is sum(t) rather than the number of grid rows.
     cu_seqlens = vision_cu_seqlens(grid)
@@ -249,28 +264,36 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     assert cu_seqlens[0] == 0 and cu_seqlens[-1] == total, f"cu_seqlens must span [0, {total}]: {cu_seqlens}"
 
     tower = _tower(reference, submesh, *_parallel_args(submesh, tp_axis, sp_axis, num_links))
+    print("Prepare Vision Rope")
     cos, sin = tower.prepare_rope(grid)
     pos = tower.prepare_pos_embeds(grid)
     # Inputs shard on rows under SP; the tower's outputs come back gathered and replicated.
+    print("Tower Forward")
     tokens, deepstack = tower.forward(
         _shard(patches, submesh, sp_axis),
         pos_embeds=_shard(pos, submesh, sp_axis),
         rope=(_shard(cos, submesh, sp_axis), _shard(sin, submesh, sp_axis)),
         cu_seqlens=cu_seqlens,
     )
+    print("Tower Done")
 
     merged = total // SPATIAL_MERGE_SIZE**2
     actual_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])
     assert actual_tokens.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"{tuple(actual_tokens.shape)}"
-    assert_quality(golden_tokens, actual_tokens, pcc=0.99)
-
     assert len(deepstack) == len(DEEPSTACK_INDEXES), f"expected {len(DEEPSTACK_INDEXES)} features"
-    features = []
-    for i, (feature, golden_feature) in enumerate(zip(deepstack, golden_deepstack)):
-        actual = tensor.to_torch(feature, mesh_axes=[None, None])
-        assert actual.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"deepstack {i}: {tuple(actual.shape)}"
-        assert_quality(golden_feature, actual, pcc=0.99)
-        features.append(actual)
+    features = [tensor.to_torch(f, mesh_axes=[None, None]) for f in deepstack]
+    for i, feature in enumerate(features):
+        assert feature.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"deepstack {i}: {tuple(feature.shape)}"
+
+    if check_pcc:
+        assert_quality(golden_tokens, actual_tokens, pcc=0.99)
+        for golden_feature, feature in zip(golden_deepstack, features):
+            assert_quality(golden_feature, feature, pcc=0.99)
+    else:
+        # `perf`: no golden was computed, so only what can be checked without one.
+        assert torch.isfinite(actual_tokens).all(), "merged tokens contain NaN or Inf"
+        for i, feature in enumerate(features):
+            assert torch.isfinite(feature).all(), f"deepstack {i} contains NaN or Inf"
 
     # Routing by list index can yield the right count and shapes while tapping one layer twice.
     for i in range(len(features) - 1):
