@@ -69,8 +69,10 @@ def create_tt_model(
     if is_mesh and num_devices > 1:
         # num_links=None -> arch default (2 on Blackhole) so the per-layer TP
         # all-reduces (the dominant ~31% of prefill device time) use full
-        # inter-device bandwidth.
-        ccl_manager = CCLManager(mesh_device)
+        # inter-device bandwidth. is_moe selects the topology default: Ring is
+        # ~2.2 ms/step faster on a 1x8 WH mesh but tanks MoE PCC — see
+        # ccl.default_ccl_topology.
+        ccl_manager = CCLManager(mesh_device, is_moe=bool(getattr(model_args, "enable_moe_block", False)))
     else:
         ccl_manager = None
 
