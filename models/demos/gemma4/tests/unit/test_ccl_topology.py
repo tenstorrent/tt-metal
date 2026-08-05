@@ -136,6 +136,29 @@ def test_prefill_progcfg_in0_block_w_divides_kt():
     assert k_tiles % pc.in0_block_w == 0
 
 
+def test_gate_up_prefill_progcfg_1d_matches_sweep_winner():
+    """31B fused gate+up @ TP=8 → 1d_c42_bw4 (test_gate_up_matmul_sweep overall winner)."""
+    import ttnn
+    from models.demos.gemma4.tt.dram_sharded import interleaved_gate_up_prefill_config, prefill_progcfg_1d
+
+    # M=128 K=5376 N=5376 (2 * intermediate/TP)
+    pc = prefill_progcfg_1d(m=128, k=5376, n=5376)
+    assert pc is not None
+    assert pc.in0_block_w == 4
+    assert pc.per_core_M == 4  # 128/32
+    assert pc.per_core_N == 4  # 168 N-tiles / 42 cores
+    grid = pc.compute_with_storage_grid_size
+    assert grid.x * grid.y == 42
+
+    prog, out_mc, ckc = interleaved_gate_up_prefill_config(128, 5376, 5376)
+    assert prog is not None
+    assert out_mc == ttnn.L1_MEMORY_CONFIG
+    assert ckc.math_fidelity == ttnn.MathFidelity.HiFi2
+    # Decode / long-context: no override
+    assert interleaved_gate_up_prefill_config(32, 5376, 5376) == (None, None, None)
+    assert interleaved_gate_up_prefill_config(2048, 5376, 5376) == (None, None, None)
+
+
 def test_weight_cache_path_qualified_by_mesh(tmp_path, monkeypatch):
     """TP=4 on 1x4 vs 2x4 must not share tensorbin directories when mesh dirs are used."""
     import ttnn

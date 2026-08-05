@@ -310,6 +310,121 @@ def interleaved_prefill_config(m, k, n):
     return prefill_progcfg(m, k, n), l1_block_sharded_memcfg(m, n), compute_kernel_config
 
 
+def _out_subblock_hw(per_core_n, per_core_m):
+    """Largest ``(h, w)`` with ``h*w <= 4``, ``w|per_core_n``, ``h|per_core_m``."""
+    best = (1, 1)
+    for h in range(1, min(per_core_m, 4) + 1):
+        if per_core_m % h:
+            continue
+        for w in range(1, min(per_core_n, 4 // h) + 1):
+            if per_core_n % w == 0 and h * w > best[0] * best[1]:
+                best = (h, w)
+    return best
+
+
+def _factor_1d_grid(cores, grid_x, grid_y):
+    """``(cols, rows)`` packing ``cores`` into ``grid_x x grid_y``, or ``None``."""
+    cols = min(grid_x, cores)
+    while cols > 1 and cores % cols:
+        cols -= 1
+    rows = cores // cols
+    if rows < 1 or rows > grid_y:
+        return None
+    return cols, rows
+
+
+def _pick_1d_cores(n_tiles, grid_x, grid_y, prefer=42):
+    """Core count dividing ``n_tiles`` that fits the worker grid; prefer ``prefer``.
+
+    ``prefer=42`` is the measured gate+up winner on WH 8x8 (Nt=168 → 42 cores).
+    """
+    max_cores = grid_x * grid_y
+    candidates = [
+        c for c in range(8, max_cores + 1) if n_tiles % c == 0 and _factor_1d_grid(c, grid_x, grid_y) is not None
+    ]
+    if not candidates:
+        return None
+    if prefer in candidates:
+        return prefer
+    return max(candidates, key=lambda c: (-abs(c - prefer), c))
+
+
+def prefill_progcfg_1d(m, k, n, cores=None, in0_block_w=None, grid_size=None):
+    """1D-multicast prefill program config (``MatmulMultiCoreReuseMultiCast1D``).
+
+    Sweep family for the fused gate+up shape: every core holds all of M and a
+    slice of N. Measured winner for M=128 K=5376 N=5376 (31B TP=8) is
+    ``1d_c42_bw4`` — see ``test_gate_up_matmul_sweep``. Returns ``None`` when
+    no valid core count divides N-tiles into the worker grid.
+    """
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    grid_x, grid_y = grid_size
+    mt = math.ceil(m / TILE_SIZE)
+    kt = math.ceil(k / TILE_SIZE)
+    nt = math.ceil(n / TILE_SIZE)
+    if cores is None:
+        cores = _pick_1d_cores(nt, grid_x, grid_y, prefer=42)
+    if cores is None or nt % cores:
+        return None
+    factored = _factor_1d_grid(cores, grid_x, grid_y)
+    if factored is None:
+        return None
+    cols, rows = factored
+    if in0_block_w is None:
+        in0_block_w = _find_largest_divisor(kt, max_div=4)
+    if kt % in0_block_w:
+        return None
+    per_core_n = nt // cores
+    out_h, out_w = _out_subblock_hw(per_core_n, mt)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cols, rows),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_h,
+        out_subblock_w=out_w,
+        per_core_M=mt,
+        per_core_N=per_core_n,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet(set()),
+        num_global_cb_receivers=0,
+        untilize_out=False,
+    )
+
+
+def interleaved_gate_up_prefill_config(m, k, n):
+    """``(program_config, out_memory_config, compute_kernel_config)`` for fused
+    gate+up on a DRAM-*interleaved* weight, or all-``None`` for ttnn auto.
+
+    Off Blackhole ``can_dram_shard`` is False, so ``SharedMLP.gate_up_proj`` is a
+    bare ``ttnn.linear``. ``test_gate_up_matmul_sweep`` ranks the overall winner
+    for M=128 K=5376 N=5376 at TP=8 as ``1d_c42_bw4`` + L1-interleaved in0/out +
+    HiFi2 / bfp8 (~1.27x vs shipped auto). ``test_gate_up_output_slice_cost``
+    confirmed L1-interleaved out is consumable by the GeGLU ``ttnn.slice`` split
+    (and faster as a matmul+slice group than DRAM out).
+
+    Same ``_PREFILL_CUTOFF`` band as ``interleaved_prefill_config``: residency
+    measured ``in0+out`` L1 interleaved up to ISL 1024 on WH; above that (and for
+    decode ``M<=32``) return ``None`` and keep the prior auto path. Callers that
+    want the full win should also move in0 to L1 interleaved when it is still in
+    DRAM (rms_norm leaves it there by default).
+    """
+    if not TILE_SIZE < m <= _PREFILL_CUTOFF:
+        return None, None, None
+    program_config = prefill_progcfg_1d(m, k, n)
+    if program_config is None:
+        return None, None, None
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
+
+
 def matmul_rows(x):
     """Row count a matmul sees for ``x``: the product of all but the last dim.
 
