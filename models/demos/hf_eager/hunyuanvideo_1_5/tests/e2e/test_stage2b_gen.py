@@ -60,6 +60,49 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
 
     coerce_bf16()
     pipe = HunyuanVideo15Pipeline.from_pretrained(_pipeline_path(), torch_dtype=torch.bfloat16)
+    # HY_720P=1: swap the 480p DiT for the 720p_t2v transformer (same arch, target_size=960).
+    # VAE + text encoders are identical across tiers, so we reuse the cached 480p ones and
+    # only load the 720p transformer (its shards must already be in the HF cache). Pass
+    # HY_H=720 HY_W=1280 for the 720p 16:9 bucket.
+    if os.environ.get("HY_720P") == "1":
+        import gc
+
+        from huggingface_hub import snapshot_download
+
+        _720 = snapshot_download(
+            "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v",
+            allow_patterns=["transformer/*", "model_index.json"],
+        )
+        _cls = type(pipe.transformer)
+        pipe.transformer = None  # free the 480p DiT before loading the 720p one
+        gc.collect()
+        # low_cpu_mem_usage=False fully materializes the weights into RAM (no lazy
+        # mmap) -- the deferred mmap page-fault access was SIGBUS-ing during the
+        # ttnn.from_torch device upload in build_pipeline.
+        pipe.transformer = _cls.from_pretrained(
+            _720, subfolder="transformer", torch_dtype=torch.bfloat16, low_cpu_mem_usage=False
+        )
+        # The 720p checkpoint uses flow-match scheduler shift=9.0 (480p uses 5.0); keeping
+        # the 480p shift under-shifts the 720p denoise trajectory -> washed-out/oversaturated
+        # output. VAE scaling_factor + guidance are identical, so only the shift needs fixing.
+        # NOTE: FlowMatchEulerDiscreteScheduler.set_timesteps reads `self.shift` (the property
+        # backed by `self._shift`), NOT `self.config.shift`. register_to_config only updates the
+        # config dict, so it's a silent no-op -- must go through set_shift()/`_shift`.
+        _shift = float(os.environ.get("HY_SCHED_SHIFT", "9.0"))
+        if hasattr(pipe.scheduler, "set_shift"):
+            pipe.scheduler.set_shift(_shift)
+        else:
+            pipe.scheduler._shift = _shift
+        try:
+            pipe.scheduler.register_to_config(shift=_shift)  # keep config in sync (cosmetic)
+        except Exception:
+            pass
+        print(
+            f"[{label}] HY_720P: swapped in 720p transformer "
+            f"(target_size={pipe.transformer.config.target_size}, "
+            f"sched shift set to {pipe.scheduler.shift})",
+            flush=True,
+        )
     real_tf = pipe.transformer
     tt = P.build_pipeline(device, real_tf)
     calls = {"n": 0, "device_runs": 0}
@@ -222,7 +265,10 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
             pipe.text_encoder = _qe.TTQwenTextEncoderAdapter(pipe.text_encoder, qwen_dev)
             print(f"[{label}] Qwen text-encode: ON DEVICE ({_pl}) on {list(qwen_dev.get_device_ids())}", flush=True)
         else:
-            print(f"[{label}] no Qwen submesh at this mesh; text-encode on CPU (HY_TT_QWEN_SHARED=1 to reuse the DiT mesh)", flush=True)
+            print(
+                f"[{label}] no Qwen submesh at this mesh; text-encode on CPU (HY_TT_QWEN_SHARED=1 to reuse the DiT mesh)",
+                flush=True,
+            )
 
     _prompt = os.environ.get("HY_PROMPT", "A cat walks on the grass, realistic")
     _neg = os.environ.get("HY_NEG_PROMPT") or None
