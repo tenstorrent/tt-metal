@@ -57,9 +57,11 @@ import ttnn
 from ...encoders.qwen3vl.loader_minimax_h3 import (
     MINIMAX_H3_TEXT_ENCODER_LAYER,
     build_minimax_h3_text_encoder,
+    build_minimax_h3_vision_tower,
     load_minimax_h3_text_state_dict,
 )
-from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors
+from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
+from ...encoders.qwen3vl.vision_qwen3vl import vision_cu_seqlens
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
@@ -78,6 +80,7 @@ from .packing import (
     MINIMAX_H3_FPS,
     MINIMAX_H3_KEYFRAME_NOISE_AUG,
     MINIMAX_H3_TEXT_TAG,
+    MINIMAX_H3_VIDEO_TAG,
     adaln_indices,
     align_num_frames,
     audio_latent_num_frames,
@@ -220,6 +223,9 @@ class MiniMaxH3Pipeline:
         self._transformer = None
         self._vae = None
         self._encoder_state_loaded = False
+        self._image_processor = None
+        self._vision_tower = None
+        self._vision_config = None
         self._audio_decoder = None
         self._resident: str | None = None
         # The last call's (label, seconds) rows, as LTXPipeline exposes them, so a test can assert on
@@ -327,6 +333,74 @@ class MiniMaxH3Pipeline:
             self._tokenizer = AutoTokenizer.from_pretrained(str(self.weights_dir), subfolder="tokenizer")
         return self._tokenizer
 
+    @property
+    def image_processor(self):
+        """The checkpoint's own image processor. It decides the patch grid, so nothing else may."""
+        if self._image_processor is None:
+            from transformers import AutoImageProcessor
+
+            self._image_processor = AutoImageProcessor.from_pretrained(str(self.weights_dir), subfolder="text_encoder")
+        return self._image_processor
+
+    def _build_presentation(self, prompt: str, keyframes: Sequence):
+        """MiniMax-H3's token presentation, exactly as `encoders.py::encode_prompt` assembles it.
+
+        Returns `(input_ids [1, L], token_tags [L], mm_token_type_ids [1, L], pixel_values, grid_thw)`.
+
+        Per keyframe: a `"<Picture i>: "` label, then `<|vision_start|>`, then one `<|image_pad|>` per
+        *merged* vision patch, then `<|vision_end|>`. Then the prompt, verbatim. No chat template and
+        `add_special_tokens=False` throughout, so no BOS/EOS.
+
+        Two different taggings come out of this and conflating them is a silent error:
+
+        - `token_tags` is **H3's** per-row modality for the DiT's AdaLN, and the *whole vision block*
+          including `<|vision_start|>`/`<|vision_end|>` is video-tagged.
+        - `mm_token_type_ids` is **Qwen3-VL's**, feeding its own 3-D rotary grid, and marks only the
+          `<|image_pad|>` run as image; the start/end sentinels count as text there.
+        """
+        tokenizer = self.tokenizer
+        image_pad = tokenizer.convert_tokens_to_ids("<|image_pad|>")
+        vision_start = tokenizer.convert_tokens_to_ids("<|vision_start|>")
+        vision_end = tokenizer.convert_tokens_to_ids("<|vision_end|>")
+
+        token_ids: list[int] = []
+        token_tags: list[int] = []
+        pixel_values = grid_thw = None
+        if keyframes:
+            processor = self.image_processor
+            vision = processor(images=list(keyframes), return_tensors="pt")
+            pixel_values, grid_thw = vision["pixel_values"], vision["image_grid_thw"]
+            merge = processor.merge_size**2
+            for index in range(len(keyframes)):
+                num_image_tokens = int(grid_thw[index].prod()) // merge
+                label = tokenizer(f"<Picture {index + 1}>: ", add_special_tokens=False)["input_ids"]
+                block = [vision_start] + [image_pad] * num_image_tokens + [vision_end]
+                token_ids += label + block
+                token_tags += [MINIMAX_H3_TEXT_TAG] * len(label) + [MINIMAX_H3_VIDEO_TAG] * len(block)
+
+        prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        if not prompt_ids:
+            raise ValueError("prompt tokenized to zero tokens")
+        token_ids += prompt_ids
+        token_tags += [MINIMAX_H3_TEXT_TAG] * len(prompt_ids)
+
+        input_ids = torch.tensor([token_ids], dtype=torch.long)
+        return (
+            input_ids,
+            torch.tensor(token_tags, dtype=torch.long),
+            (input_ids == image_pad).long(),
+            pixel_values,
+            grid_thw,
+        )
+
+    def _prepare_vision_tower(self):
+        if self._vision_tower is None:
+            logger.info("building the Qwen3-VL vision tower (replicated)")
+            self._vision_tower, self._vision_config = build_minimax_h3_vision_tower(
+                self.weights_dir / "text_encoder", mesh_device=self.mesh_device
+            )
+        return self._vision_tower
+
     def _embed_cache_path(self, prompt: str, keyframes: Sequence = ()) -> Path:
         """Disk cache path for one prompt presentation.
 
@@ -359,17 +433,6 @@ class MiniMaxH3Pipeline:
         """
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
-        if keyframes:
-            # Deliberately an error rather than a silent text-only fallback: the vision tower is wired
-            # in a later step, and falling back would read `t2va` embeddings for an `fl2va` request and
-            # produce a plausible video with the keyframe's *conditioning rows* but none of its
-            # *semantics*. The cache key above already distinguishes the two, so this cannot be reached
-            # by a stale cache entry either.
-            raise NotImplementedError(
-                "fl2va conditioning with a keyframe needs the Qwen3-VL vision tower wired into "
-                "encode_prompt; use the keyframe VAE conditioning path with a text-only presentation "
-                "until then"
-            )
 
         cache_path = self._embed_cache_path(prompt, keyframes)
         if use_cache and cache_path.is_file():
@@ -377,10 +440,12 @@ class MiniMaxH3Pipeline:
             embeds, tags = torch.load(cache_path, weights_only=False)
             return embeds, tags
 
-        token_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
-        if not token_ids:
-            raise ValueError("prompt tokenized to zero tokens")
-        logger.info(f"encoding {len(token_ids)} prompt tokens on device")
+        input_ids, tags, type_ids, pixel_values, grid_thw = self._build_presentation(prompt, keyframes)
+        seq_len = input_ids.shape[1]
+        logger.info(
+            f"encoding {seq_len} presentation tokens on device"
+            + ("" if not keyframes else f" ({int(type_ids.sum())} of them vision, {len(keyframes)} keyframe(s))")
+        )
 
         self._make_resident("text")
         if self._text_encoder is None:
@@ -407,29 +472,70 @@ class MiniMaxH3Pipeline:
                 ),
             )
         config = self._text_config
+
+        # The vision tower, and the two ways its output enters the decoder. Run before the rope tables
+        # so a tower failure surfaces before any decoder work.
+        vision_kwargs = {}
+        if keyframes:
+            tower = self._prepare_vision_tower()
+            vis_cos, vis_sin = tower.prepare_rope(grid_thw)
+            merged, deepstack = tower.forward(
+                bf16_tensor(pixel_values.float(), device=self.mesh_device),
+                pos_embeds=bf16_tensor(tower.prepare_pos_embeds(grid_thw), device=self.mesh_device),
+                rope=(
+                    bf16_tensor(vis_cos, device=self.mesh_device),
+                    bf16_tensor(vis_sin, device=self.mesh_device),
+                ),
+                # One block per image. `fl2va` never needs block-diagonal masking -- that is `ref2va`,
+                # where a video contributes one block per frame.
+                cu_seqlens=vision_cu_seqlens(grid_thw),
+            )
+            runs = vision_token_runs(input_ids, self.tokenizer.convert_tokens_to_ids("<|image_pad|>"))
+            expected_runs = len(keyframes)
+            if len(runs) != expected_runs:
+                raise AssertionError(f"expected {expected_runs} vision run(s) in the presentation, found {runs}")
+            # merged tokens REPLACE the `<|image_pad|>` row embeddings; deepstack features are ADDED to
+            # those same rows after the first three decoder layers. Not interchangeable.
+            vision_kwargs = {"vision_embeds": merged, "vision_runs": runs, "deepstack_embeds": deepstack}
+
+        # With a vision run the three mRoPE axes diverge, so `mrope_interleaved` stops being a no-op
+        # and the chunked section split is wrong. t2va keeps the default (shared `arange`) path, where
+        # the two layouts are bit-identical -- measured, see amendment 74.
+        rope_scaling = config["rope_scaling"]
+        position_ids = None
+        if keyframes:
+            if not rope_scaling.get("mrope_interleaved"):
+                raise ValueError("this checkpoint does not declare mrope_interleaved; the fl2va rope path assumes it")
+            position_ids = mrope_position_ids(
+                type_ids,
+                image_grid_thw=grid_thw,
+                spatial_merge_size=self._vision_config["spatial_merge_size"],
+            )
         cos, sin = create_rope_tensors(
             1,
-            len(token_ids),
+            seq_len,
             None,
             config["head_dim"],
-            config["rope_scaling"].get("rope_theta", config["rope_theta"]),
-            config["rope_scaling"]["mrope_section"],
+            rope_scaling.get("rope_theta", config["rope_theta"]),
+            rope_scaling["mrope_section"],
+            position_ids=position_ids,
+            interleaved=bool(keyframes),
         )
         tt_ids = ttnn.from_torch(
-            torch.tensor([token_ids], dtype=torch.long),
+            input_ids,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
         )
-        # Causal, and a single un-padded prompt, so no mask is needed.
+        # Causal, and a single un-padded presentation, so no mask is needed.
         taps = self._text_encoder.forward(
             tt_ids,
             attention_mask=None,
             pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
+            **vision_kwargs,
         )
         # Replicated across the mesh: read one replica rather than composing all 32 and discarding 31.
         embeds = ttnn.to_torch(ttnn.get_device_tensors(taps[0])[0]).float()
-        tags = torch.full((len(token_ids),), MINIMAX_H3_TEXT_TAG, dtype=torch.long)
 
         if use_cache:
             torch.save((embeds, tags), cache_path)
@@ -861,6 +967,9 @@ class MiniMaxH3Pipeline:
     def warmup(
         self,
         *,
+        prompt: str = "warmup",
+        image=None,
+        last_image=None,
         num_frames: int = 124,
         height: int | None = None,
         width: int | None = None,
@@ -875,6 +984,12 @@ class MiniMaxH3Pipeline:
         every persistent buffer this working point touches is resident afterwards.
 
         "Fully warm" in every number this pipeline reports means *after* this.
+
+        **Pass the real `prompt` and the real keyframes**, not the defaults. Every program in the
+        50-block stack is keyed on the *padded* packed length, so warming a different one warms nothing.
+        `t2va` got away with the one-token default purely by luck -- 1 and 39 tokens both round up to
+        37888 -- and a keyframe's ~1010-row vision block ends that. `last_padded_len` is exposed so a
+        caller can assert the warm and measured lengths agree rather than trusting them to.
         """
         t0 = time.time()
         task = "t2va" if image is None and last_image is None else "fl2va"
@@ -898,6 +1013,10 @@ class MiniMaxH3Pipeline:
         """
         num_cond = layout.num_condition_video_rows
         num_cond_audio = layout.num_condition_audio_rows
+        # Kept to assert the invariant at the end of the loop. `fl2va` is the first task for which the
+        # write mask matters, nothing re-imposes the anchors, and an overwritten anchor still denoises
+        # into a plausible video that merely ignores the keyframe -- so no output metric would catch it.
+        anchor_rows = video_rows[:num_cond].clone() if num_cond else None
         alignment = self.sp_factor * ttnn.TILE_SIZE
         padded_len = ((layout.sequence_length + alignment - 1) // alignment) * alignment
         self.last_padded_len = padded_len
@@ -967,6 +1086,13 @@ class MiniMaxH3Pipeline:
             audio_rows[num_cond_audio:] = audio_scheduler.step(a, audio_timesteps[i], audio_rows[num_cond_audio:])
             if i % 10 == 0 or i == len(timesteps) - 1:
                 logger.info(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
+
+        if anchor_rows is not None and not torch.equal(video_rows[:num_cond], anchor_rows):
+            changed = int((video_rows[:num_cond] != anchor_rows).any(dim=-1).sum())
+            raise AssertionError(
+                f"{changed} of {num_cond} keyframe anchor rows changed during denoising; the loop's "
+                "write mask is wrong and the keyframe conditioning is not being honoured"
+            )
 
         return video_rows, audio_rows
 

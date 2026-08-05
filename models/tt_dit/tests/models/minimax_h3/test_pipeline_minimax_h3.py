@@ -131,12 +131,17 @@ def _to_uint8_frames(video: torch.Tensor) -> np.ndarray:
     return frames.cpu().numpy()
 
 
-def _write_artifacts(frames, audio, sampling_rate, directory: Path):
-    """Write the video, the soundtrack, and a muxed mp4. Returns the paths that were produced."""
+def _write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "t2va"):
+    """Write the video, the soundtrack, and a muxed mp4. Returns the paths that were produced.
+
+    `stem` names the files. It defaults to `t2va` so every existing caller and every recorded artifact
+    path is unchanged; the fl2va gate passes its own so the two tasks' artifacts coexist in one
+    directory rather than overwriting each other.
+    """
     import wave
 
     paths = {}
-    wav_path = directory / "t2va.wav"
+    wav_path = directory / f"{stem}.wav"
     interleaved = np.ascontiguousarray(audio[0].T if audio.ndim == 3 else audio.T)
     pcm = np.clip(interleaved, -1.0, 1.0)
     with wave.open(str(wav_path), "wb") as handle:
@@ -152,7 +157,7 @@ def _write_artifacts(frames, audio, sampling_rate, directory: Path):
         logger.warning("no ffmpeg available; skipping mp4 and the file-level checks")
         return paths
 
-    silent = directory / "t2va_silent.mp4"
+    silent = directory / f"{stem}_silent.mp4"
     num_frames, height, width, _ = frames.shape
     subprocess.run(
         [
@@ -186,7 +191,7 @@ def _write_artifacts(frames, audio, sampling_rate, directory: Path):
     )
     paths["silent_mp4"] = silent
 
-    muxed = directory / "t2va.mp4"
+    muxed = directory / f"{stem}.mp4"
     subprocess.run(
         [
             exe,

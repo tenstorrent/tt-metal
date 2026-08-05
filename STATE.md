@@ -3879,3 +3879,205 @@ warmup pass, so its 77.7 s denoise is not comparable to amendment 81's warm 61.7
 Host suite **104 passed** (was 100): four new production-shape tests covering the t2va draw
 bit-identity, the conditioning-noise-first order for one and two anchors, and the rows-per-anchor
 agreement between the encode and the layout.
+
+---
+
+## Amendment 97 (2026-08-05) — M10: `fl2va` runs end to end. A keyframe in, video plus synchronized audio out, anchor PCC 0.9971
+
+The vision tower, the conditioner-with-image, the keyframe VAE encode and the conditioning row path
+are wired and the whole task runs. First green case, `first` anchor, 4x8 Blackhole Galaxy, TP=4 axis 0
+/ SP=8 axis 1, ring, 2 links, 1344x768, 124 frames @ 24 fps, 50 steps:
+
+| | |
+|---|---|
+| task | `fl2va`, `anchors=('first',)` |
+| presentation | 1028 tokens: `"<Picture 1>: "` (5) + `<|vision_start|>` + **1008** `<|image_pad|>` + `<|vision_end|>` + 13-token prompt tail |
+| packed sequence | 1028 text + 1008 condition + 414 audio + 37296 video = 39746 -> **39936** padded, 4992 rows/device |
+| **decoded frame 0 vs keyframe** | **PCC 0.9971** |
+| frame std / mean delta | 46.99 / 11.66 |
+| audio | 2ch 5.175 s @ 32 kHz, peak **0.265**, rms 0.0624, 0 % clipped |
+| A/V sync | video 5.167 s / audio 5.175 s, delta +0.0083 s |
+| spatial seam v / h | 1.034 / 0.785 (bar 2.0) |
+| keyframe encode | **0.8 s** warm (23.0 s on the cold call, which includes the 0.72 GB encoder build) |
+| Total (compute) | 84.5 s, denoise 74.4 s — **no warmup pass**, so not comparable to a warm number |
+
+`1 passed in 145 s`. Command: `MINIMAX_H3_ARTIFACT_DIR=~/h3_fl2va_artifacts timeout 3600
+./python_env/bin/python -m pytest .../test_pipeline_fl2va_minimax_h3.py -q -s --timeout 3300 -k "first
+and not last" -x`. SHA `676b73993c8` + working tree.
+
+**The anchor number is the headline.** 0.9971 against a provisional 0.3 floor says the conditioning
+path is not merely running but correct end to end: the keyframe reached the VAE, its rows were
+noise-augmented to `t = 0.999`, placed between text and audio where `build_packed_sequence` puts them,
+carried the right rotary anchor and AdaLN tag through 49 forwards, were never written by the loop, and
+were dropped before decode. A single wrong link in that chain moves this number to near zero. The
+floor is left provisional pending the other two anchor cases; 0.9971 is what to tighten toward.
+
+**The audio responds to the keyframe.** Peak 0.265 / rms 0.0624 against t2va's 0.076 / 0.0122 on the
+*same prompt and seed* — 3.5x and 5.1x. Nothing in the pipeline conditions audio on the keyframe
+explicitly, so this is the model reading the vision block, and it is independent evidence that the
+conditioner's vision path is doing something rather than being ignored.
+
+### The presentation is gated against the reference, host-side
+
+`test_fl2va_presentation_matches_the_reference` (production canvas, one and two keyframes) calls
+`MiniMaxH3Pipeline._build_presentation` **unbound** against a stub carrying only the tokenizer and the
+image processor, so it needs no mesh, and compares against the reference's own assembly. It checks
+three things because each fails silently alone: the token ids; **H3's** `token_tags`, where the whole
+vision block *including both sentinels* is video-tagged (1010 rows, not 1008); and **Qwen3-VL's**
+`mm_token_type_ids`, a different tagging over the same tokens marking only the 1008 image pads,
+compared against `create_mm_token_type_ids` rather than against our derivation of it. Conflating the
+two taggings mis-modulates 1010 rows through the DiT's AdaLN with no PCC signal anywhere.
+
+Confirmed incidentally: at the production canvas the vision grid is `[1, 48, 84]` -> 1008 merged
+patches, which is *exactly* `rows_per_frame`. The same `(H/32) x (W/32)` grid is read by the
+conditioner as image tokens and by the DiT as conditioning rows.
+
+### The anchors-survived invariant is enforced in the pipeline, not in a test
+
+`_denoise` clones the anchor rows and asserts they are bit-identical after the loop. It belongs there
+rather than in a test because it is cheap, runs on every request, and is the one failure mode no output
+metric can see: overwritten anchors still denoise into a plausible video that merely ignores the
+keyframe. `fl2va` is the first task where the write mask exists at all.
+
+### Two defects of mine, both caught by running it
+
+- `_encode_keyframes` read `self._vae.tile_size` before `_prepare_vae` had built `self._vae`. Would
+  have been an `AttributeError` on the first fl2va call.
+- The fl2va test read its keyframe from `MINIMAX_H3_ARTIFACT_DIR`, the directory fl2va *writes* to.
+  Pointing that at a fresh directory turned the keyframe source into a missing file and the test
+  **skipped** rather than failing — the quiet failure mode, and the reason the keyframe source now has
+  its own `MINIMAX_H3_T2VA_ARTIFACT_DIR`.
+
+Also fixed: `decode_tile_grid` returns `((y_starts, lengths, overlaps), (x_starts, ...))` and I
+unpacked it as two flat lists, which raised a `TypeError` inside `check_spatial_seams`. The t2va gate
+had it right; copying its call site rather than re-deriving it was the fix.
+
+### Deviation from the plan, deliberately
+
+The plan called for moving `_write_artifacts` and the metric helpers out of
+`test_pipeline_minimax_h3.py` into `common_av.py`. Deferred: they are pure functions with no import
+side effects, and churning a green e2e gate to relocate them buys nothing the fl2va gate needs. The
+fl2va gate imports them, and `_write_artifacts` gained a `stem` argument defaulting to `"t2va"` so
+every recorded artifact path is unchanged. Recorded here so it is a decision, not an oversight.
+
+### Tier 6 is recorded, not gated
+
+Per amendment 87 the gated prompt and the tier-6 bars are a matched pair, so the gated keyframe is
+**frame 0 of the calibrated t2va generation** — the fox scene those thresholds were measured on. That
+keeps the content distribution the one they were calibrated against and makes the anchor check
+maximally meaningful, at the cost of the fl2va gate depending on the t2va artifact (it skips, loudly,
+rather than inventing content). CLIP and VBench numbers are logged with the bars **not applied** until
+an amendment sets them from measurement.
+
+---
+
+## Amendment 98 (2026-08-05) — `fl2va` all three anchor modes green through tier 6, and the fully-warm latency
+
+Following amendment 97's first green case, all three modes now pass every tier, plus the artifact
+rubric read by eye. 4x8 Blackhole Galaxy, TP=4 axis 0 / SP=8 axis 1, ring, 2 links, 1344x768, 124
+frames @ 24 fps, 50 steps. `3 passed in 470.7 s`.
+
+| | `first` | `last` | `first`+`last` |
+|---|---|---|---|
+| padded packed length | 39936 | 39936 | **41984** |
+| **anchor PCC** | frame 0 **0.9971** | frame -1 **0.9943** | **0.9971** / **0.9946** |
+| frame std / mean delta | 46.99 / 11.66 | 45.75 / 10.74 | 46.47 / 9.97 |
+| audio peak / rms | 0.265 / 0.0624 | 0.328 / 0.0550 | 0.094 / 0.0214 |
+| spatial seam v / h | 1.034 / 0.785 | 0.931 / 0.692 | 1.034 / 0.742 |
+| temporal seam @ 17 | 0.996 | 0.998 | 0.983 |
+| CLIP mean / min | 36.63 / 34.86 | 37.30 / 35.48 | 37.00 / 36.26 |
+
+**The anchor floor is now set from measurement, not inherited.** The wan2_2 analogue ships a
+provisional `pcc_floor=0.3` with a note to tighten it; measured worst case here is 0.9943, so the bar
+is **0.95** — ~9x margin on `1 - PCC`, amendment 74's convention. Deliberately not tighter: the anchor
+goes through a VAE round trip and 49 steps of a neighbouring frame's influence, and a genuinely broken
+conditioning path scores near zero rather than 0.9.
+
+**Tier 6 was recorded first, then gated from what it measured.** CLIP came out 36.63 / 37.30 / 37.00
+against t2va's 37.37, so the t2va bar of 33.0 *does* transfer, and it is now applied. That is a
+measurement rather than the assumption it would have been if copied across blind, and it transfers
+because the gated keyframe is frame 0 of the calibrated t2va generation. An arbitrary keyframe would
+need its own calibration — amendment 87 is the counterexample.
+
+**Artifact rubric, read by eye** (`~/h3_fl2va_artifacts/fl2va_*_frame_*.png`): photorealistic fox on
+snow at low sun, correct rim lighting and shadow direction. No visible discontinuity at any of the six
+vertical or three horizontal tile boundaries, no banding in the sky gradient, no flicker between the
+sampled frames, and motion is coherent — the fox has advanced across the frame by 62 and the gait is
+plausible. The `last` case's frame 123 reproduces the keyframe, which is the anchor working at the far
+end of the clip. Nothing the statistics averaged away.
+
+### Fully-warm latency, both tasks, same method and same process
+
+LTX's method: one full warmup generation **at this shape with this keyframe and this prompt**,
+prepares and export excluded, `Total (compute)` = sum of the stage rows.
+
+| row | t2va | fl2va (one anchor) |
+|---|---|---|
+| Encoder (cache) | 0.0 s | 0.0 s |
+| Keyframe encode | — | **0.1 s** |
+| Denoise | 67.0 s | 58.0 s |
+| VAE decode | 4.0 s | 4.1 s |
+| Audio decode | 1.7 s | 1.7 s |
+| **Total (compute)** | **72.7 s** | **63.9 s** |
+| per forward | 1366.5 ms | 1183.2 ms |
+| realtime factor | 14.1x | 12.4x |
+
+**Do not read this as "fl2va is faster than t2va".** It is one run of each. Amendment 82 records
+**±8 % run-to-run at identical shape and seed** (denoise 56.6-71.3 s), and 58.0 against 67.0 is +15.5 %
+— outside that band, but that band was measured at one shape and these are single samples taken
+minutes apart in the same process, with fl2va second and therefore on a more settled allocator. What
+this **does** establish, which is what the plan asked for, is that **fl2va is not materially slower
+than t2va despite a 5.4 % longer packed sequence**. Claiming a direction needs repeats, and the plan's
+own predicted "+8-12 % denoise" is not supported either way by this data.
+
+The keyframe encode is **0.1 s warm** (5.9 s on the cold call in the same process, and 23.0 s on a
+genuinely cold one, which includes building the 0.72 GB encoder). It is 0.2 % of the total, so the
+plan's residency worry was moot in cost terms — and DiT + decoder + encoder **did** co-fit at ~27.1
+GB/device with no allocation failure, so `MINIMAX_H3_KEYFRAME_ENCODER_RESIDENT=0` was never needed and
+is not implemented.
+
+**The warm-vs-measured `padded_len` assertion earns its place.** `warmup` had no `prompt`, `image` or
+`last_image` parameters until this phase — its body was edited to pass them before its signature was,
+which failed loudly with `TypeError` and `NameError` rather than quietly warming the wrong shape. The
+one-line assertion that the two lengths agree is now in the perf test, and t2va only ever got away
+without it by luck (1 and 39 tokens both round up to 37888).
+
+### Incidentally: amendment 85's stale VAE decode numbers are re-measured
+
+Amendment 86 retracted amendment 85's decode figures because they were taken on a readback that was
+returning zeros. This run measures the fixed path, fully warm: **VAE decode 4.0 s, 7 waves / 196 units
+(28.0 units/wave over 32 devices)**, against amendment 81's 17.6 s on the old path. That closes the
+second of the two loose ends amendment 89 parked, without a run dedicated to it.
+
+### Unexplained but not blocking: 144 `DRAM Auto slice` TT_FATALs in a passing run
+
+The log carries 144 lines of `TT_FATAL: DRAM Auto slice could not find valid slice configuration ...
+Available L1: 1392512 bytes` and **both tests pass**. So this is an auto-slice configuration probe
+failing and falling back, not an op failing — but it is logged at `critical` and would read as a fatal
+error to anyone scanning the log. Recorded here so the next person does not chase it as the cause of an
+unrelated failure. Not investigated; out of scope for a correctness campaign.
+
+### Two more of my own defects, both caught by running rather than by review
+
+- `_probe_streams` returns per-stream **dicts**, not durations, and `_decoded_frames` takes `count=`.
+  My tier-5 block treated the first as floats and raised `KeyError: 'video'` on all three cases. The
+  t2va gate had both right; copying its call site rather than re-deriving it was the fix — the same
+  lesson as `decode_tile_grid` in amendment 97, twice in one file.
+- The `_write_artifacts` stem was hardcoded `t2va`, so fl2va would have overwritten the calibrated
+  t2va artifact it reads its own keyframe from. Now a `stem` argument defaulting to `"t2va"`, so every
+  recorded artifact path is unchanged.
+
+### Where `fl2va` stands
+
+Green: the vision tower on released weights, the presentation against the reference, the transformer
+condition stream at both production anchor counts, the keyframe VAE encode, all three anchor modes end
+to end through tier 6, the artifact rubric by eye, and a fully-warm latency number.
+
+Still open, unchanged from amendment 95: `test_fused_conditioner_real_weights` remains `xfail` at
+98.6224 % against a 0.99 bar **at an invented 448x448 shape with a `torch.rand` image**. Amendment 95
+established that this is not a downstream defect — the reference decoder fed the same magnitude of
+perturbation scores 92-95 % — so the remaining work is to re-point that gate at the production canvas
+and natural content and set its bar from that, which the e2e results above suggest will be
+comfortable. The conditioner's absolute fidelity is bounded by `layers/linear.py`'s bf16 accumulation
+(amendment 93), and the e2e evidence is that it does not matter downstream: anchor PCC 0.9971 and CLIP
+37.0 say the video follows both the keyframe and the prompt.
