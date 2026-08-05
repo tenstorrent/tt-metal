@@ -227,6 +227,13 @@ class StimuliConfig:
 
         next_addr = self.buf_b_addr + self.tile_size_B_bytes * self.tile_count_B
 
+        self.tile_size_S_bytes = 0
+        self.buf_s_addr = 0
+        self.tile_size_T_bytes = 0
+        self.buf_t_addr = 0
+        self.tile_size_C_bytes = 0
+        self.buf_c_addr = 0
+
         for op in self._active_optional_operands():
             tile_size = calculate_tile_size_bytes(
                 op["format"],
@@ -234,14 +241,16 @@ class StimuliConfig:
                 format_tile_sizes,
                 use_srcs=self._operand_use_srcs(op["name"]),
             )
-            setattr(self, self._tile_size_attr(op["name"]), tile_size)
-            setattr(self, self._buf_addr_attr(op["name"]), next_addr)
+            if op["name"] == "S":
+                self.tile_size_S_bytes = tile_size
+                self.buf_s_addr = next_addr
+            elif op["name"] == "T":
+                self.tile_size_T_bytes = tile_size
+                self.buf_t_addr = next_addr
+            elif op["name"] == "C":
+                self.tile_size_C_bytes = tile_size
+                self.buf_c_addr = next_addr
             next_addr += tile_size * op["tile_count"]
-
-        for name, buf_attr, _, _ in self._OPTIONAL_OPERAND_SPECS:
-            if getattr(self, buf_attr) is None:
-                setattr(self, self._tile_size_attr(name), 0)
-                setattr(self, self._buf_addr_attr(name), 0)
 
         self.buf_res_addr = next_addr
 
@@ -885,11 +894,17 @@ class StimuliConfig:
         stimuli_id = sha256(
             os.environ.get("PYTEST_CURRENT_TEST", "").encode()
         ).hexdigest()
-        for buf_attr in self._CACHE_BUFFER_ATTRS:
-            if getattr(self, buf_attr) is None:
-                continue
-            cache_path = (
-                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / f"{buf_attr}.pt"
-            )
+        cache_dir = StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id
+
+        def _load(name: str, buffer):
+            if buffer is None:
+                return None
+            cache_path = cache_dir / f"{name}.pt"
             logger.debug(cache_path)
-            setattr(self, buf_attr, torch.load(cache_path))
+            return torch.load(cache_path, weights_only=True)
+
+        self.buffer_A = _load("buffer_A", self.buffer_A)
+        self.buffer_B = _load("buffer_B", self.buffer_B)
+        self.buffer_S = _load("buffer_S", self.buffer_S)
+        self.buffer_T = _load("buffer_T", self.buffer_T)
+        self.buffer_C = _load("buffer_C", self.buffer_C)
