@@ -120,6 +120,89 @@ def decode_progcfg(m, k, n):
     )
 
 
+def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE):
+    """``(program_config, compute_kernel_config)`` for a *narrow-N* decode
+    matmul, or ``None`` to keep ``ttnn.linear``'s auto choice.
+
+    ``ttnn.linear`` with no program config picks its own grid. For the wide
+    decode matmuls (N per device ~= hidden, i.e. N_tiles >> grid cores) that
+    choice is already at the DRAM-bandwidth ceiling and forcing a config only
+    ever costs time. But when N per device is narrow relative to the grid, auto
+    spreads N one tile per core and the output subblock collapses to 1x1, which
+    stalls the reload/pack pipeline: the Gemma4-31B fused QKV projection
+    (K=5376, N=2048) ran 64 cores / per_core_N=1 / subblock 1x1 at **33% of
+    DRAM peak**. Using FEWER cores with a larger ``per_core_N`` fixes it.
+
+    Trace-replay sweep on 1x8 WH (bf16 act x bfp8 weight, M=32) over
+    grid x per_core_N x out_subblock_w x in0_block_w, PCC vs an fp32 reference
+    against the on-device bfp8 weight (so the gap is accumulation error only):
+
+      | matmul                   | auto              | this config       |
+      |--------------------------|-------------------|-------------------|
+      | qkv sliding K5376 N2048  | 121.6us  .999923  |  66.5us  .999993  |
+      | qkv global  K5376 N3072  | 110.8us  .999922  |  90.9us  .999995  |
+      | gate_up     K5376 N5376  | 152.0us  202 GB/s | (auto wins)       |
+      | down_proj   K2688 N5376  |  81.0us  190 GB/s | (auto wins)       |
+      | o_proj      K1024 N5376  |  37.6us  156 GB/s | (auto wins)       |
+      | o_proj glob K2048 N5376  |  64.9us  180 GB/s | (auto wins)       |
+
+    So a config is returned ONLY in the narrow-N regime (``n_tiles <
+    2 * grid_cores``); everything else keeps auto. A DRAM-width-sharded
+    (``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``) arm was swept
+    over the same shapes and lost badly on Wormhole (12-47 GB/s vs 95-202) —
+    see ``can_dram_shard``, which is Blackhole-only for the same reason.
+
+    ``fp32_dest_acc_en=True`` is part of the win: forcing the blocking changes
+    how many products land in DST before packing, and fp32 accumulation costs
+    nothing here (the matmul is DRAM-bandwidth-bound, not DST-bound) while
+    taking PCC to 0.999993 — *better* than auto's 0.999923. ``packer_l1_acc``
+    must stay True; False measured PCC 0.9988 at every in0_block_w.
+    """
+    if os.environ.get("GEMMA4_QKV_DECODE_PROGCFG", "1").lower() in ("0", "false", "no"):
+        return None
+    if k % TILE_SIZE or n % TILE_SIZE or m > TILE_SIZE:
+        return None
+    grid = mesh_device.compute_with_storage_grid_size()
+    grid_cores = grid.x * grid.y
+    k_tiles, n_tiles = k // TILE_SIZE, n // TILE_SIZE
+    if n_tiles >= 2 * grid_cores:
+        return None  # wide N — auto is already at the bandwidth ceiling
+    # Largest core count that divides N_tiles and still leaves per_core_N >= 2.
+    cap = min(grid_cores, n_tiles // 2)
+    cores = next((c for c in range(cap, 0, -1) if n_tiles % c == 0), 0)
+    if cores < 2:
+        return None
+    # WIDTH-MAJOR grid (fewest rows). Orientation is NOT free for a 1D mcast
+    # matmul even at a fixed core count — measured on the two 31B QKV shapes:
+    #   K=5376 N=2048: 8x4 = 66.5 us   vs   4x8 = 93.1 us  (auto 121.4)
+    #   K=5376 N=3072: 8x6 = 94.4 us   vs   6x8 = 138.4 us (auto 110.8)
+    # i.e. the tall variant is not just slower, it can lose to auto outright.
+    rows = next((y for y in range(1, grid.y + 1) if cores % y == 0 and cores // y <= grid.x), None)
+    if rows is None:
+        return None
+    per_core_n = n_tiles // cores
+    # out_subblock_h * out_subblock_w must stay <= 4 with fp32_dest_acc_en=True.
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cores // rows, rows),
+        in0_block_w=_find_largest_divisor(k_tiles, max_div=4),
+        out_subblock_h=1,
+        out_subblock_w=_find_largest_divisor(per_core_n, max_div=4),
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,  # matches the op default for bf16 x bfp8
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return program_config, compute_kernel_config
+
+
 def activation_memcfg(k):
     """WIDTH_SHARDED L1 activation config for a [*, k] activation."""
     k_tiles = k // TILE_SIZE
