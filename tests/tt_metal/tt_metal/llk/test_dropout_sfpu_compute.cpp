@@ -156,13 +156,13 @@ bool test_dropout_standalone(
          */
         KernelHandle unary_reader_kernel_id = CreateKernel(
             program_,
-            "tt_metal/kernels/dataflow/reader_unary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
         KernelHandle unary_writer_kernel_id = CreateKernel(
             program_,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

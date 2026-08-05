@@ -120,10 +120,8 @@ inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t 
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
 #if defined(COMPILE_FOR_AERISC)
     constexpr uint32_t base = MEM_AERISC_NOC_COUNTER_BASE;
-    constexpr uint32_t size = MEM_AERISC_NOC_COUNTER_SIZE;
 #else
     constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
-    constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
 #endif
 
     // Calculate most of the offset at compile time. Only the noc is variable at runtime.

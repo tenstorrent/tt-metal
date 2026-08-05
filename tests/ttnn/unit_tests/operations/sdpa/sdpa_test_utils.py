@@ -556,6 +556,7 @@ def run_test_sdpa_decode_paged_attention(
     sharded_in=True,
     sharded_out=True,
     sliding_window_size=None,
+    use_program_config=True,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -645,18 +646,21 @@ def run_test_sdpa_decode_paged_attention(
         scale = d**-0.5
         start_indices = np.linspace(max(max_start_idx - b, 0), max_start_idx, b, dtype=np.int32).tolist()
 
-        # Test when page_table does not contain blocks for full sequence length
-        k_chunk_size = get_chunk_size(max_start_idx + 1, s)
+        # Test when page_table does not contain blocks for full sequence length.
+        # The no-program-config decode default uses fixed 32-token chunks.
+        k_chunk_size = get_chunk_size(max_start_idx + 1, s) if use_program_config else 32
         padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size) if causal else s
 
         tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
-        program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
-            q_chunk_size=padded_num_heads,
-            k_chunk_size=k_chunk_size,
-            exp_approx_mode=False,
-        )
+        program_config = None
+        if use_program_config:
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
+                q_chunk_size=padded_num_heads,
+                k_chunk_size=k_chunk_size,
+                exp_approx_mode=False,
+            )
 
         # Test various sequence lengths
         logger.debug(

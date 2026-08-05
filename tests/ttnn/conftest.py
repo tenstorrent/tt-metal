@@ -16,7 +16,6 @@ from loguru import logger
 import pytest
 
 import ttnn
-import ttnn.database
 
 
 def pytest_addoption(parser):
@@ -63,6 +62,8 @@ def pre_and_post(request):
     if ttnn.CONFIG_OVERRIDES is not None:
         ttnn.load_config_from_dictionary(json.loads(ttnn.CONFIG_OVERRIDES))
 
+    ttnn.graph.reset_comparison_records_data()
+
     report_name = f"{request.node.nodeid}: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (UTC)"
     with ttnn.manage_config("report_name", ttnn.CONFIG.report_name or report_name):
         if ttnn.CONFIG.enable_logging and ttnn.CONFIG.report_name is not None:
@@ -71,12 +72,7 @@ def pre_and_post(request):
             if report_path.exists():
                 logger.warning(f"Removing existing log directory: {report_path}")
                 shutil.rmtree(report_path)
-            ttnn.database.DEVICE_IDS_IN_DATABASE.clear()
         yield
-
-    if ttnn.database.SQLITE_CONNECTION is not None:
-        ttnn.database.SQLITE_CONNECTION.close()
-        ttnn.database.SQLITE_CONNECTION = None
 
     ttnn.tracer.disable_tracing()
     ttnn.CONFIG = original_config

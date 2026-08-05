@@ -8,6 +8,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -71,7 +72,7 @@ struct PhysicalPortEndpoint {
     uint32_t rack = 0;
     uint32_t shelf_u = 0;
     TrayId tray_id{0};
-    PortType port_type = PortType::TRACE;
+    PortType port_type = PortType::UNKNOWN;
     PortId port_id{0};
 
     auto operator<=>(const PhysicalPortEndpoint& other) const = default;
@@ -83,6 +84,7 @@ std::ostream& operator<<(std::ostream& os, const PhysicalPortEndpoint& conn);
 
 using LogicalChannelConnection = std::pair<LogicalChannelEndpoint, LogicalChannelEndpoint>;
 using PhysicalChannelConnection = std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>;
+using PhysicalPortConnection = std::pair<PhysicalPortEndpoint, PhysicalPortEndpoint>;
 
 // Port connection types (graph-level connections between nodes)
 using PortEndpoint = std::tuple<HostId, TrayId, PortId>;  // host_id, tray_id, port_id
@@ -92,6 +94,7 @@ struct Node {
     std::string motherboard;
     std::map<TrayId, Board> boards;
     HostId host_id{0};
+    std::string node_descriptor_name;
 
     // Board-to-board connections within this node: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
     using BoardEndpoint = std::pair<TrayId, PortId>;
@@ -162,9 +165,24 @@ public:
     template <typename DeploymentArg>
     friend CablingGenerator build_from_directory(const std::string& dir_path, const DeploymentArg& deployment_arg);
 
+    // Overload taking a parsed deployment; slices it per cabling file before each per-file ctor
+    // so positional (host_id-indexed) access stays consistent across files.
+    friend CablingGenerator build_from_directory(
+        const std::string& dir_path,
+        const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor);
+
     // Getters for all data
     const std::vector<Host>& get_deployment_hosts() const;
     const std::vector<LogicalChannelConnection>& get_chip_connections() const;
+
+    // In-place opt-in sub-cluster filter. Each include/exclude entry is an instance path matched as a
+    // suffix (relative): {"bh_galaxy_node_0"} matches under every parent, and matching an instance
+    // selects its whole subtree. Kept = (all nodes, or include-matched) minus exclude-matched; only
+    // connections with both endpoints kept survive, and survivors re-index to a dense 0..M-1 space.
+    // Throws on a path matching nothing or a filter keeping no nodes; no-op when both lists are empty.
+    void apply_instance_filter(
+        const std::vector<std::vector<std::string>>& include_paths,
+        const std::vector<std::vector<std::string>>& exclude_paths);
 
     // Method to emit factory system descriptor
     void emit_factory_system_descriptor(const std::string& output_path) const;
@@ -175,20 +193,69 @@ public:
     // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 
-    // Method to emit merged cabling descriptor
-    void emit_cabling_descriptor(const std::string& output_path) const;
+    // Method to emit merged cabling descriptor.
+    // When hierarchical=false (default), a nested resolved tree is flattened into a single-level,
+    // hostname-keyed "extracted_topology" descriptor (CableGen shape). When hierarchical=true, the
+    // nested tree is serialized faithfully (one graph_template per graph instance), preserving the
+    // hierarchy so the derived FSD instance_path reflects the full structure.
+    void emit_cabling_descriptor(const std::string& output_path, bool hierarchical = false) const;
+
+    // A child to nest under a composite root. instance_name is the child's directory name (used to
+    // uniquify the child's top instance_path segment). deployment_path, when non-empty, is the child's
+    // own deployment (host_id-indexed); it lets hierarchical children (whose leaf nodes are named by
+    // instance, not hostname) load positionally instead of being sliced from the composite deployment
+    // by hostname. fsd_path, when non-empty, supplies the child's intra-cluster hierarchy.
+    struct AggregateChild {
+        std::string instance_name;
+        std::string cabling_path;
+        std::string fsd_path;         // may be empty
+        std::string deployment_path;  // may be empty
+    };
+
+    // Build a composite generator that nests each child under a root named composite_name, wiring
+    // glue descriptors (inter-child cabling, referencing hosts by hostname) at the composite level.
+    // When a child's fsd_path is non-empty, its intra-cluster hierarchy is taken from that FSD's
+    // per-host instance_path (e.g. sp4/sp2_0/...): each child host lands at
+    //   <composite_name>/<fsd_seg0>-<instance_name>/<fsd_seg1>/.../<fsd_leaf>
+    // so the aggregated FSD combines the directory forest with the descriptor's own hierarchy. When
+    // fsd_path is empty, the child's resolved tree is nested directly under instance_name instead.
+    // Used to aggregate a tree of cluster configs while keeping the hierarchy (see
+    // merge_cluster_configs.py).
+    static CablingGenerator build_nested_aggregate(
+        const std::string& composite_name,
+        const std::vector<AggregateChild>& children,
+        const std::vector<std::string>& glue_descriptor_paths,
+        const std::string& deployment_descriptor_path);
 
     // Method to emit deployment descriptor (one host per node in host_id order; use for merged output)
     void emit_deployment_descriptor(const std::string& output_path) const;
 
+    // Given a set of dead physical channel endpoints (e.g. unretrainable channels reported by
+    // run_cluster_validation), return the set of cables (port-level connections) whose channel
+    // expansion contains at least one of those channels. Used to identify which cables to remove
+    // from a degraded cluster's cabling descriptor before regenerating its FSD.
+    std::set<PhysicalPortConnection> find_cables_containing_channels(
+        const std::set<PhysicalChannelEndpoint>& dead_channels) const;
+
+    // Mutating counterpart to find_cables_containing_channels: walks the resolved graph and
+    // removes every cable whose expansion intersects the dead set, applying the
+    // dead-channel == dead-cable policy.
+    std::set<PhysicalPortConnection> prune_dead_channels(const std::set<PhysicalChannelEndpoint>& dead_channels);
+
 private:
     // Track which node_descriptors were explicitly present in source files (not inferred)
     std::unordered_set<std::string> explicit_node_descriptors_;
+
     // Common initialization logic for all constructors
     void initialize_cluster(
         const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
         std::optional<std::reference_wrapper<const deployment::proto::DeploymentDescriptor>> deployment_descriptor =
             std::nullopt);
+
+    // Single-file init shared by the (path, path) and (path, DeploymentDescriptor) ctors.
+    void initialize_from_single_file(
+        const std::string& cluster_descriptor_path,
+        const deployment::proto::DeploymentDescriptor& deployment_descriptor);
 
     // Merge another descriptor file into this CablingGenerator
     // Creates CablingGenerator internally and merges it
@@ -198,6 +265,21 @@ private:
     template <typename DeploymentArg>
     void merge(
         const std::string& new_file_path, const DeploymentArg& deployment_arg, const std::string& existing_sources);
+
+    // Ctor / merge overloads taking a parsed deployment; used by build_from_directory after
+    // slicing the full deployment per cabling file.
+    CablingGenerator(
+        const std::string& cluster_descriptor_path,
+        const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor);
+
+    void merge(
+        const std::string& new_file_path,
+        const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
+        const std::string& existing_sources);
+
+    // Post-construction merge logic shared by both merge() entry points.
+    void merge_other(
+        CablingGenerator& other, const std::string& new_file_path, const std::string& existing_sources);
 
     // Utility function for finding descriptor files in a directory
     static std::vector<std::string> find_descriptor_files(const std::string& directory_path);

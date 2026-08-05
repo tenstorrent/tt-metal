@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -22,10 +23,9 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::cached_program_t
-UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
+tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_descriptor(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
-    tt::tt_metal::Program program{};
+    ProgramDescriptor desc;
 
     // const auto& a = input;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
@@ -86,13 +86,16 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
         // Double buffer if the core is processing 2+ blocks
         input_cb_num_tiles = num_tiles_per_input_block * 2;
     }
-    auto [src0_cb_index, cb_src0] = create_cb(
-        tt::CBIndex::c_0,
-        program,
-        compute_core_range,
-        input_single_tile_size,
-        input_cb_num_tiles,
-        input_cb_data_format);
+    constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_cb_num_tiles * input_single_tile_size,
+        .core_ranges = compute_core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src0_cb_index,
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+        }}},
+    });
 
     // Output CB
     uint32_t output_cb_num_tiles;
@@ -103,28 +106,32 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
         // Double buffer if the core is processing 2+ blocks
         output_cb_num_tiles = num_tiles_per_input_block * 2;
     }
-    auto [output_cb_index, cb_output] = create_cb(
-        tt::CBIndex::c_16,
-        program,
-        compute_core_range,
-        output_single_tile_size,
-        output_cb_num_tiles,
-        output_cb_data_format);
+    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = output_cb_num_tiles * output_single_tile_size,
+        .core_ranges = compute_core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = output_cb_index,
+            .data_format = output_cb_data_format,
+            .page_size = output_single_tile_size,
+        }}},
+    });
 
-    // Reader compile-time args and kernel
-    KernelHandle unary_reader_kernel_id;
-    // Sharded input
+    // Reader compile-time args and kernel (sharded input)
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src0_cb_index,
         (uint32_t)num_tiles_per_input_block,
         (uint32_t)num_shards,
         (uint32_t)num_compute_cores};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_nd_sharded_blocks.cpp",
-        compute_core_range,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_nd_sharded_blocks.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = compute_core_range;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer compile-time args
     uint32_t output_element_size = output.element_size();
@@ -181,45 +188,46 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
         .append_to(writer_compile_time_args);  // For ND sharded input, we need info on the input buffer distribution
 
     // Writer kernel
-    std::string writer_kernel_file =
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_multicore_nd_sharded.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = compute_core_range;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
 
-    KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        writer_kernel_file,
-        compute_core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-    tt::tt_metal::SetCommonRuntimeArgs(program, unary_writer_kernel_id, writer_common_runtime_args);
-
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     // Compute kernel file
-    std::string compute_kernel(
+    const std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
 
     // Compute compile-time args and kernel
     // Note: This condition is always true for sharded input
-    KernelHandle untilize_kernel_id = 0;
-    std::map<std::string, std::string> compute_kernel_defines;
+    KernelDescriptor::Defines compute_kernel_defines;
     if (input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32 || input.dtype() == DataType::FLOAT32) {
-        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+        compute_kernel_defines.emplace_back("DST_ACCUM_MODE", "1");
     }
-    if (!compute_core_range.ranges().empty()) {
+    KernelDescriptor compute_desc;
+    bool has_compute = !compute_core_range.ranges().empty();
+    if (has_compute) {
         std::vector<uint32_t> compute_compile_time_args = {
             (uint32_t)num_tiles_per_input_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
-        untilize_kernel_id = CreateKernel(
-            program,
-            compute_kernel,
-            compute_core_range,
-            ComputeConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
-                .compile_args = compute_compile_time_args,
-                .defines = compute_kernel_defines});
+        compute_desc.kernel_source = compute_kernel;
+        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc.core_ranges = compute_core_range;
+        compute_desc.compile_time_args = std::move(compute_compile_time_args);
+        compute_desc.defines = std::move(compute_kernel_defines);
+        compute_desc.config = ComputeConfigDescriptor{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        };
     }
 
     // Run-time args
@@ -231,6 +239,11 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
     // page_mapping.core_host_page_indices[core_id] contains host page indices for all device pages on that core,
     // with UncompressedBufferPageMapping::PADDING indicating padding pages
     uint32_t start_shard_id = 0;
+    reader_desc.runtime_args.reserve(ordered_cores_with_data.size());
+    writer_desc.runtime_args.reserve(ordered_cores_with_data.size());
+    if (has_compute) {
+        compute_desc.runtime_args.reserve(ordered_cores_with_data.size());
+    }
     for (auto core : ordered_cores_with_data) {
         auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
         uint32_t num_input_blocks_to_process = 0;
@@ -256,47 +269,24 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
             }
         }
         // Reader run-time args
-        std::vector<uint32_t> reader_run_time_args = {src0_buffer->address(), start_shard_id};
+        reader_desc.emplace_runtime_args(core, {src0_buffer, start_shard_id});
 
         // Writer run-time args
-        std::vector<uint32_t> writer_run_time_args = {dst_buffer->address(), src0_buffer->address(), start_shard_id};
+        writer_desc.emplace_runtime_args(core, {dst_buffer, src0_buffer, start_shard_id});
         start_shard_id++;
 
         // Compute run-time args
-        std::vector<uint32_t> compute_run_time_args = {num_input_blocks_to_process};
-        // Set run-time arg
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
-        tt::tt_metal::SetRuntimeArgs(program, untilize_kernel_id, core, compute_run_time_args);
+        if (has_compute) {
+            compute_desc.emplace_runtime_args(core, {num_input_blocks_to_process});
+        }
     }
 
-    return cached_program_t{
-        std::move(program),
-        {unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output, ordered_cores_with_data}};
-}
-
-void UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::override_runtime_arguments(
-    UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::cached_program_t& cached_program,
-    const UntilizeWithUnpaddingParams& /*operation_attributes*/,
-    const Tensor& input,
-    const Tensor& output) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& cores_with_runtime_args = cached_program.shared_variables.cores_with_runtime_args;
-
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
-
-    // Reader and Writer update buffer addresses
-    auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
-    auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
-    for (const CoreCoord& core : cores_with_runtime_args) {
-        auto& runtime_args_reader = runtime_args_by_core_reader[core.x][core.y];
-        runtime_args_reader[0] = src_buffer->address();
-        auto& runtime_args_writer = runtime_args_by_core_writer[core.x][core.y];
-        runtime_args_writer[0] = dst_buffer->address();
-        runtime_args_writer[1] = src_buffer->address();
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    if (has_compute) {
+        desc.kernels.push_back(std::move(compute_desc));
     }
+
+    return desc;
 }
 }  // namespace ttnn::prim

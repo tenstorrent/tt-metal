@@ -36,7 +36,6 @@ void kernel_main() {
     const size_t fabric_write_dest_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const size_t fabric_write_dest_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-
     bool is_starting_worker = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_times_to_connect = get_arg_val<uint32_t>(arg_idx++);
     const size_t next_worker_noc_x = get_arg_val<uint32_t>(arg_idx++);
@@ -55,9 +54,9 @@ void kernel_main() {
     arg_idx += num_num_messages;
 
     const size_t source_l1_cb_index = get_arg_val<uint32_t>(arg_idx++);
-    size_t packet_size_index = get_arg_val<uint32_t>(arg_idx++);;
-    size_t num_messages_index = get_arg_val<uint32_t>(arg_idx++);;
-    size_t stall_duration_index = get_arg_val<uint32_t>(arg_idx++);;
+    size_t packet_size_index = get_arg_val<uint32_t>(arg_idx++);
+    size_t num_messages_index = get_arg_val<uint32_t>(arg_idx++);
+    size_t stall_duration_index = get_arg_val<uint32_t>(arg_idx++);
 
     auto fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
@@ -68,8 +67,7 @@ void kernel_main() {
     auto* pkt_hdr_fwd = PacketHeaderPool::allocate_header();
 
     if (is_starting_worker) {
-        DPRINT << "Is starting worker\n";
-        DEVICE_PRINT("Is starting worker\n");
+        DPRINT("Is starting worker\n");
         *connection_token_ptr += 1;
     }
 
@@ -104,7 +102,8 @@ void kernel_main() {
 
         if (stall_duration) {
             auto start = get_timestamp();
-            while (get_timestamp() - start < stall_duration) {}
+            while (get_timestamp() - start < stall_duration) {
+            }
         }
         fabric_connection.open();
 

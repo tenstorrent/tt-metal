@@ -129,7 +129,7 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
             {"ELTWISE_OP", op_id_to_op_define[eltwise_op]}, {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};
         auto eltwise_binary_kernel = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/compute/eltwise_binary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
             full_grid,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 

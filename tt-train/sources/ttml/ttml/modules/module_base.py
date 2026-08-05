@@ -6,7 +6,7 @@
 
 from typing import Any, Iterable, Iterator, Optional, Union, overload
 from _ttml.modules import ModuleBase as CppModuleBase
-from .parameter import Buffer, Parameter
+from .parameter import Buffer, Parameter, TensorMetadata
 
 
 class AbstractModuleBase(CppModuleBase):
@@ -30,7 +30,10 @@ class AbstractModuleBase(CppModuleBase):
             return
 
         if isinstance(value, Parameter):
-            self._bind_parameter(value.tensor, name)
+            inner = value.peek_tensor()
+            if isinstance(inner, TensorMetadata):
+                return
+            self._bind_parameter(inner, name)
             return
 
         if isinstance(value, Buffer):

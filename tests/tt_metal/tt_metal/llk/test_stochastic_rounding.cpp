@@ -136,14 +136,14 @@ StochasticRoundingResult run_stochastic_rounding(
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
         cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});

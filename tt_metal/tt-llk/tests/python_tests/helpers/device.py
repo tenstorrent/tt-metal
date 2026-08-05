@@ -11,20 +11,19 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.debug_tensix import TensixDebug
-from ttexalens.hardware.risc_debug import CallstackEntry
+from ttexalens.elf import CallstackEntry
 from ttexalens.tt_exalens_lib import (
-    ParsedElfFile,
+    ElfFile,
     TTException,
     arc_msg,
     callstack,
     check_context,
     convert_coordinate,
     parse_elf,
-    read_from_device,
     read_word_from_device,
-    write_words_to_device,
 )
 
+from .device_io import read_from_device, write_words_to_device
 from .llk_params import BriscCmd
 from .logger import logger
 
@@ -176,13 +175,15 @@ def commit_tensix_soft_reset(
         "RISCV_DEBUG_REG_SOFT_RESET_0", soft_reset
     )
 
-    end_time = time.time() + 0.1  # 100ms
-    while time.time() < end_time:
+    end_time = time.monotonic() + 0.1  # 100ms
+    while True:
         temp_reg_value = get_register_store(location, device_id).read_register(
             "RISCV_DEBUG_REG_SOFT_RESET_0"
         )
         if temp_reg_value == soft_reset:
             return
+        if time.monotonic() >= end_time:
+            break
 
     raise TimeoutError(
         f"Polling for committed soft reset value times out | Last read value: {temp_reg_value}"
@@ -358,7 +359,7 @@ def reset_mailboxes(location: str = "0,0"):
 
 def pull_coverage_stream_from_tensix(
     location: str | OnChipCoordinate,
-    elf: str | ParsedElfFile,
+    elf: str | ElfFile,
     stream_path: str,
     device_id: int = 0,
     context: Context | None = None,

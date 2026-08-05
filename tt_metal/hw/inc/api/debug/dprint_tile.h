@@ -5,13 +5,16 @@
 #pragma once
 
 #include "hostdevcommon/dprint_common.h"
+
+#if !defined(ENV_LLK_INFRA)
 #include "llk_io.h"
 #include "api/debug/ring_buffer.h"
 
 // Printing tiles from CBs requires reading CB config from generated files
-#if defined(DEBUG_PRINT_ENABLED) && defined(DEBUG_PRINT_ENABLED)
+#if defined(DEBUG_PRINT_ENABLED)
 #include "chlkc_descriptors.h"
 #endif
+#endif  // !defined(ENV_LLK_INFRA)
 
 // Macros for printing circular buffer internals
 #define CB_RD_PTR(id) (get_local_cb_interface(id).fifo_rd_ptr << cb_addr_shift)  // only valid in unpacker thread
@@ -25,9 +28,9 @@
 // Slices/samples elements of a tile 'itile' from cb using a given numpy style slice object SliceRange.
 // Sampling happens relative to the current CB read or write pointer.
 // This means that for printing a tile read from the front of the CB,
-// the DPRINT << TSLICE(...) call has to occur after cb_wait_front and before cb_pop_front
+// the DPRINT("{}", TSLICE(...)); call has to occur after cb_wait_front and before cb_pop_front
 // For the case of printing a tile from the back of the CB
-// the DPRINT << TSLICE(...) call has to occur after cb_reserve_back and before cb_push_back.
+// the DPRINT("{}", TSLICE(...)); call has to occur after cb_reserve_back and before cb_push_back.
 //
 // MAXCOUNT is the size of reserved space in the print buffer
 // if the total element data_count produced by the slice spec exceeds MAXCOUNT, it will be truncated
@@ -173,6 +176,7 @@ static constexpr bool is_supported_format(const CommonDataFormat& format) {
     }
 }
 
+#if !defined(ENV_LLK_INFRA)
 inline tile_info_t get_tile_info(
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     uint8_t cb, dprint_tslice_cb_t cb_type, dprint_tslice_ptr_t ptr_type
@@ -214,6 +218,7 @@ inline tile_info_t get_tile_info(
     info.face_dim_c = info.tile_dim_r * info.tile_dim_c / info.num_faces / info.face_dim_r;
     return info;
 }
+#endif  // !defined(ENV_LLK_INFRA)
 #endif  // defined(DEBUG_PRINT_ENABLED)
 
 // Specialization of TileSliceHostDev, with device-side implementation
@@ -237,7 +242,6 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         if (untilize) {
             // For tilized data, exponents are grouped by face
             uint32_t row_in_face = h % tile_info.face_dim_r;
-            uint32_t col_in_face = w % tile_info.face_dim_c;
             uint32_t face_idx_r = h / tile_info.face_dim_r;
             uint32_t face_idx_c = w / tile_info.face_dim_c;
             uint32_t num_faces_c = tile_info.tile_dim_c / tile_info.face_dim_c;
@@ -249,6 +253,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         }
     }
 
+#if !defined(ENV_LLK_INFRA)
     __attribute__((__noinline__)) TileSlice(
         uint8_t cb,
         int tile_idx,
@@ -355,17 +360,73 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         }
 #endif  // DEBUG_PRINT_ENABLED
     }
+#endif  // !defined(ENV_LLK_INFRA)
 } ATTR_PACK;
 
 using TSLICE = TileSlice<64>;
 
-template <>
-uint8_t DebugPrintTypeToId<TileSlice<64>>() {
-    return DPrintTILESLICE;
-}  // TODO(AP): can we use SFINAE here?
-template <>
-uint8_t DebugPrintTypeToId<TileSlice<128>>() {
-    return DPrintTILESLICE;
-}  // TODO(AP): can we use SFINAE here?
+#if defined(DEBUG_PRINT_ENABLED)
+// Build a TileSlice by reading tile data directly from an L1 address.
+// Tile geometry is passed explicitly (defaults to the standard 32x32 tile).
+template <int MAX_BYTES = 64>
+inline TileSlice<MAX_BYTES> tile_slice_from_l1(
+    uint32_t l1_addr,
+    DataFormat fmt,
+    const SliceRange& sr,
+    uint32_t tile_dim_r = 32,
+    uint32_t tile_dim_c = 32,
+    uint32_t face_dim_r = 16,
+    uint32_t face_dim_c = 16,
+    uint32_t num_faces = 4,
+    bool endl_rows = true) {
+    TileSlice<MAX_BYTES> ts{};
+    ts.slice_range = sr;
+    ts.cb_ptr = l1_addr;
+    ts.data_format = static_cast<uint8_t>(fmt);
+    ts.endl_rows = endl_rows;
+    ts.return_code = DPrintOK;
 
-template DebugPrinter operator<< <TSLICE>(DebugPrinter, TSLICE val);
+    if (!is_supported_format(static_cast<CommonDataFormat>(fmt))) {
+        ts.return_code = DPrintErrorUnsupportedFormat;
+        return ts;
+    }
+
+    tile_info_t info{};
+    info.tile_dim_r = tile_dim_r;
+    info.tile_dim_c = tile_dim_c;
+    info.face_dim_r = face_dim_r;
+    info.face_dim_c = face_dim_c;
+    info.num_faces = num_faces;
+
+    volatile tt_l1_ptr uint8_t* base = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_addr);
+    const bool bfp = is_bfp(static_cast<CommonDataFormat>(fmt));
+    // Bfp L1 layout: face_dim_r * num_faces shared-exponent bytes at offset 0
+    // (one per (face, row-within-face)), then mantissa bytes packed per
+    // dprint_datum_size(fmt) (Bfp8: 1 elt per byte, Bfp4: 2 elts/byte). We
+    // emit one (exp, mantissa) byte pair per element. Other formats walk
+    // dprint_datum_size(fmt) raw bytes per element.
+    const uint32_t bytes_per_datum = bfp ? 2 : dprint_datum_size(static_cast<CommonDataFormat>(fmt));
+    const uint32_t mantissa_offset = info.face_dim_r * info.num_faces;
+
+    uint32_t byte_idx = 0;
+    for (uint32_t h = sr.h0; h < sr.h1; h += sr.hs) {
+        for (uint32_t w = sr.w0; w < sr.w1; w += sr.ws) {
+            if (byte_idx + bytes_per_datum > MAX_BYTES) {
+                return ts;
+            }
+            if (bfp) {
+                ts.data[byte_idx++] = base[TileSlice<MAX_BYTES>::get_exponent_index(info, h, w, /*untilize=*/true)];
+                ts.data[byte_idx++] = get_datum(
+                    fmt, base + mantissa_offset, TileSlice<MAX_BYTES>::get_data_index(info, h, w, /*untilize=*/true));
+            } else {
+                const uint32_t i = TileSlice<MAX_BYTES>::get_data_index(info, h, w, /*untilize=*/true);
+                for (uint32_t b = 0; b < bytes_per_datum; ++b) {
+                    ts.data[byte_idx++] = base[i * bytes_per_datum + b];
+                }
+            }
+            ++ts.data_count;
+        }
+    }
+    return ts;
+}
+#endif  // defined(DEBUG_PRINT_ENABLED)

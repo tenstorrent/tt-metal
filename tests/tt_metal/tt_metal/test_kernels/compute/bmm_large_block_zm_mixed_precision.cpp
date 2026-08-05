@@ -6,6 +6,7 @@
 
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);              // inner block size in tiles
@@ -26,7 +27,8 @@ void kernel_main() {
     uint32_t out_cb_id = tt::CBIndex::c_16;
     uint32_t mm_partials_cb_id = tt::CBIndex::c_24;
 
-    mm_init(in0_cb_id, in1_cb_id, out_cb_id);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);
+    matmul_init(in0_cb_id, in1_cb_id);
 
     for (uint32_t b = 0; b < batch; b++) {
         bool spill = num_blocks > 1;
@@ -42,7 +44,7 @@ void kernel_main() {
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                    acquire_dst();
+                    tile_regs_acquire();
 
                     if (enable_reload) {
                         // Reconfigure input
@@ -53,7 +55,8 @@ void kernel_main() {
                         }
                         cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
                         // Reconfigure srcA back
-                        mm_init_short_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id);
+                        reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+                        matmul_init(in0_cb_id, in1_cb_id);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock
@@ -72,6 +75,9 @@ void kernel_main() {
                         }
                         in0_index_h_offset += in0_block_w;
                     }
+
+                    tile_regs_commit();
+                    tile_regs_wait();
 
                     if (last_out) {
                         // Pack out to output buffer
@@ -94,7 +100,7 @@ void kernel_main() {
                         cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
                     }
 
-                    release_dst();
+                    tile_regs_release();
                     in1_index_subblock_offset += out_subblock_w;
                 }
                 in0_index_subblock_offset += in0_subblock_num_tiles;

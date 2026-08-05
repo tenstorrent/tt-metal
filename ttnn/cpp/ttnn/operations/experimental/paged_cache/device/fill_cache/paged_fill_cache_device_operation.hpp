@@ -6,21 +6,24 @@
 
 #include <functional>
 #include <optional>
+#include <vector>
+
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "paged_fill_cache_program_factory.hpp"
 
 #include "paged_fill_cache_device_operation_types.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct PagedFillCacheDeviceOperation {
     using operation_attributes_t = PagedFillCacheParams;
     using tensor_args_t = PagedFillCacheInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<PagedFillCacheProgramFactory, PagedFillCacheMeshWorkloadFactory>;
-    using shared_variables_t = PagedFillCacheProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -32,6 +35,16 @@ struct PagedFillCacheDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    // Cache-hit re-derivation: patches the cached program's runtime args in place (no descriptor
+    // rebuild). Re-applies every buffer address plus the args derived from what compute_program_hash
+    // excludes — batch_idx_fallback and noop — which would otherwise freeze at the cache-miss value.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -45,6 +58,8 @@ Tensor paged_fill_cache(
     const std::optional<Tensor>& batch_idx_tensor,
     uint32_t batch_idx_fallback,
     const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt,
-    std::optional<uint32_t> block_size_override = std::nullopt);
+    std::optional<uint32_t> block_size_override = std::nullopt,
+    std::optional<uint32_t> cache_position_modulo = std::nullopt,
+    const std::optional<Tensor>& valid_seq_len_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

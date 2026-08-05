@@ -46,18 +46,30 @@ import torch.nn.functional as F
 from tqdm.auto import tqdm
 
 import ttml
+import ttnn
 
-from utils.kv_cache import (
-    KVCache,
-    _to_device_tiled,
-    _causal_mask,
-)
+from ttml.models.qwen3.kv_cache import KVCache
 from utils.memory import MemoryUsageTracker, finalize_memory
 from utils.tensor_utils import (
     create_input_tensor_from_torch,
     create_input_tensor_dp,
     gather_mesh_to_cpu,
 )
+
+
+def _to_device_tiled(tensor_torch, device, dtype=ttnn.bfloat16):
+    """Host torch tensor -> device tilized ttml tensor (no grad)."""
+    host = ttnn.from_torch(tensor_torch, dtype=dtype)
+    dev = ttnn.to_device(host, device)
+    tiled = ttnn.tilize_with_zero_padding(dev)
+    return ttml.autograd.create_tensor(tiled, requires_grad=False)
+
+
+def _causal_mask(seq_len, device):
+    """Square causal mask ``[1, 1, seq_len, seq_len]`` as a tiled bf16 device tensor."""
+    mask = torch.tril(torch.ones(1, 1, seq_len, seq_len, dtype=torch.bfloat16))
+    return _to_device_tiled(mask, device)
+
 
 create_causal_mask_tensor = _causal_mask  # public alias used by gradients.py
 

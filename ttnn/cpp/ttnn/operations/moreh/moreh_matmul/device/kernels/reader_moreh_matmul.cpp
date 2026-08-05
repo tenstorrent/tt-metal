@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
@@ -99,13 +99,15 @@ void kernel_main() {
     bool need_input_mask_w = (input_mask_w != 32);
 
     if (need_input_mask_h || need_input_mask_w) {
-        generate_mask_tiles(cb_id_in2, input_mask_h, input_mask_w);
+        DataflowBuffer dfb_in2(cb_id_in2);
+        generate_mask_tiles(dfb_in2, input_mask_h, input_mask_w);
     }
 
     bool need_other_mask_h = (other_mask_h != 32);
     bool need_other_mask_w = (other_mask_w != 32);
     if (need_other_mask_h || need_other_mask_w) {
-        generate_mask_tiles(cb_id_in3, other_mask_h, other_mask_w);
+        DataflowBuffer dfb_in3(cb_id_in3);
+        generate_mask_tiles(dfb_in3, other_mask_h, other_mask_w);
     }
 
     uint32_t output_tidx = output_tile_start_idx;
@@ -113,21 +115,21 @@ void kernel_main() {
     uint32_t other_step_count = (transpose_other) ? (other_stride[0]) : (other_stride[1]);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in1(cb_id_in1);
     const auto in0_tile_bytes = get_tile_size(cb_id_in0);
     const auto in1_tile_bytes = get_tile_size(cb_id_in1);
 #ifdef FUSE_BIAS
-    CircularBuffer cb_in4(cb_id_in4);
+    DataflowBuffer dfb_in4(cb_id_in4);
     const auto in4_tile_bytes = get_tile_size(cb_id_in4);
 #endif
 
 #ifdef FUSE_BIAS
     if (is_scalar_bias && num_output_tiles > 0) {
-        cb_in4.reserve_back(onetile);
-        noc.async_read(s_bias, cb_in4, in4_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+        dfb_in4.reserve_back(onetile);
+        noc.async_read(s_bias, dfb_in4, in4_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in4.push_back(onetile);
+        dfb_in4.push_back(onetile);
     }
 #endif
 
@@ -138,15 +140,15 @@ void kernel_main() {
         uint32_t other_tidx = get_tidx(output_idxes, other_stride, other_not_bcast, transpose_other, false);
 
         for (uint32_t kt = 0; kt < Kt; kt++) {
-            cb_in0.reserve_back(onetile);
-            cb_in1.reserve_back(onetile);
+            dfb_in0.reserve_back(onetile);
+            dfb_in1.reserve_back(onetile);
 
-            noc.async_read(s0, cb_in0, in0_tile_bytes, {.page_id = input_tidx}, {.offset_bytes = 0});
-            noc.async_read(s1, cb_in1, in1_tile_bytes, {.page_id = other_tidx}, {.offset_bytes = 0});
+            noc.async_read(s0, dfb_in0, in0_tile_bytes, {.page_id = input_tidx}, {.offset_bytes = 0});
+            noc.async_read(s1, dfb_in1, in1_tile_bytes, {.page_id = other_tidx}, {.offset_bytes = 0});
             noc.async_read_barrier();
 
-            cb_in0.push_back(onetile);
-            cb_in1.push_back(onetile);
+            dfb_in0.push_back(onetile);
+            dfb_in1.push_back(onetile);
 
             input_tidx += input_step_count;
             other_tidx += other_step_count;
@@ -154,10 +156,10 @@ void kernel_main() {
 #ifdef FUSE_BIAS
         if constexpr (!is_scalar_bias) {
             uint32_t bias_tidx = output_idxes[0];
-            cb_in4.reserve_back(onetile);
-            noc.async_read(s_bias, cb_in4, in4_tile_bytes, {.page_id = bias_tidx}, {.offset_bytes = 0});
+            dfb_in4.reserve_back(onetile);
+            noc.async_read(s_bias, dfb_in4, in4_tile_bytes, {.page_id = bias_tidx}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_in4.push_back(onetile);
+            dfb_in4.push_back(onetile);
         }
 #endif
 

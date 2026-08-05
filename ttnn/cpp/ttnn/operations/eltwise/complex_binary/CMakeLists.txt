@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_eltwise_complex_binary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Complex::Binary ALIAS ttnn_op_eltwise_complex_binary)
 
-tt_reuse_precompile_headers(ttnn_op_eltwise_complex_binary TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_eltwise_complex_binary TTNN::PCHLean)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_complex_binary)
 
 target_sources(

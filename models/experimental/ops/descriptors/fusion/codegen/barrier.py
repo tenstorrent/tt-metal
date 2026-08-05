@@ -226,9 +226,17 @@ def _generate_unicast_segment(
         f"            get_arg_val<uint32_t>(rt_offset + {arrive_offset}));\n"
         f"        release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
         f"            get_arg_val<uint32_t>(rt_offset + {release_offset}));\n"
-        f"        // Reset L1 semaphores for re-execution\n"
-        f"        *arrive = 0;\n"
-        f"        *release = 0;\n"
+        f"        // NOTE: Do NOT reset *arrive / *release here.  These are\n"
+        f"        // cross-core GlobalSemaphores: a non-core0 core increments\n"
+        f"        // core0's *arrive over NOC in sync(), and core0 unicasts\n"
+        f"        // *release to the other cores.  init() runs unsynchronized\n"
+        f"        // across cores, so a slow init() on the receiving core would\n"
+        f"        // zero the semaphore AFTER a peer's NOC write already arrived,\n"
+        f"        // erasing it and deadlocking the barrier (same NOC-clobber\n"
+        f"        // race the op-semaphore NOTE in _emit_init_coordinator warns\n"
+        f"        // about).  The semaphores are allocated ephemerally with\n"
+        f"        // initial_value 0 on every dispatch, so an explicit reset is\n"
+        f"        // both unnecessary and unsafe.\n"
         f"    }}\n"
         f"\n"
         f"    template <SyncMode mode>\n"
@@ -266,8 +274,11 @@ namespace seg_{seg_idx} {{
         call_count = 0;
         release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             get_arg_val<uint32_t>(rt_offset + {release_offset}));
-        // Reset L1 semaphore for re-execution
-        *release = 0;
+        // NOTE: Do NOT reset *release here.  core0 unicasts *release to this
+        // core over NOC in sync(); a slow init() would zero it after that
+        // write arrived, deadlocking the spinwait.  The semaphore is allocated
+        // ephemerally with initial_value 0 on every dispatch, so resetting it
+        // here is both unnecessary and unsafe.
     }}
 
     template <SyncMode mode>
@@ -319,7 +330,12 @@ def _build_barrier_dispatch(
                 }
             )
             cumulative_rebind_offset += len(rebinds) * 2
-    # Trailing barrier (after last phase, e.g. for parent sync in OpGraph)
+    # Trailing barrier (after last phase).
+    # When the last phase has a group sync entry (e.g. early-exit cores in
+    # OpGraph), a full group barrier is emitted.  Otherwise, a local-only
+    # trailing barrier is still needed for re-dispatch correctness: the last
+    # phase's CBs must be reset so that a subsequent dispatch starts with
+    # clean stream-register and FIFO-pointer state.
     last_phase_idx = sources[-1][0]
     if last_phase_idx in multi_barrier.transition_map:
         seg_idx, _ = multi_barrier.transition_map[last_phase_idx]
@@ -331,6 +347,17 @@ def _build_barrier_dispatch(
                 "rebinds": [],
                 "rebind_entry_offset": cumulative_rebind_offset,
                 "is_arrive": last_phase_idx not in noop_phase_indices,
+            }
+        )
+    elif len(sources) > 1:
+        dispatch.append(
+            {
+                "done_val": len(sources),
+                "seg_idx": None,
+                "next_phase_idx": None,
+                "rebinds": [],
+                "rebind_entry_offset": cumulative_rebind_offset,
+                "is_arrive": False,
             }
         )
     return dispatch
@@ -534,6 +561,8 @@ def _emit_group_sync_coordinator(dispatch: List[Dict[str, Any]]) -> List[str]:
     for entry in dispatch:
         done_val = entry["done_val"]
         seg_idx = entry["seg_idx"]
+        if seg_idx is None:
+            continue
         is_arrive = entry.get("is_arrive", True)
         mode = "SyncMode::Full" if is_arrive else "SyncMode::WaitOnly"
         lines.append(f"        if (done == {done_val}) {{")
@@ -546,7 +575,6 @@ def _emit_group_sync_coordinator(dispatch: List[Dict[str, Any]]) -> List[str]:
 def _emit_group_sync_follower(
     dispatch: List[Dict[str, Any]],
     for_compute: bool,
-    risc_type: str,
 ) -> List[str]:
     """Emit ``group::sync()`` function for BRISC or compute.
 
@@ -565,7 +593,8 @@ def _emit_group_sync_follower(
         is_arrive = entry.get("is_arrive", True)
         mode = "SyncMode::Full" if is_arrive else "SyncMode::WaitOnly"
         lines.append(f"        if (done == {done_val}) {{")
-        lines.append(f"            seg_{seg_idx}::sync<{mode}>();")
+        if seg_idx is not None:
+            lines.append(f"            seg_{seg_idx}::sync<{mode}>();")
         lines.append(f"            resync_cbs(phase_{completed_phase_idx}_cbs);")
         if rebinds and next_phase_idx is not None:
             if for_compute:
@@ -586,7 +615,6 @@ def _emit_group_sync_follower(
 def _emit_init_coordinator(
     has_compute: bool,
     num_segments: int,
-    op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
     has_writer: bool = True,
 ) -> List[str]:
     """Emit ``init()`` for the coordinator (NCRISC)."""
@@ -609,13 +637,14 @@ def _emit_init_coordinator(
     lines.append("    // Each follower RISC resets its own semaphore in its own init().")
     lines.append("    // Resetting here races with fast compute/BRISC signaling")
     lines.append("    // (e.g. no-op phase 0 where compute signals immediately).")
-    if op_semaphore_info:
-        lines.append("    // Reset op semaphores so phase 0 doesn't see stale values")
-        lines.append("    // from the previous execution's last phase.")
-        for sem_id, initial_value in op_semaphore_info:
-            lines.append(
-                f"    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = {initial_value};"
-            )
+    # NOTE: Do NOT reset op semaphores here. The hardware dispatch initializes
+    # semaphores to their initial_value on every enqueue (including cache hits),
+    # and local::sync()'s trailing barrier resets them after the last phase.
+    # Resetting in init() races with receiver cores that call sender_sem.up()
+    # via NOC before this core finishes init() — those signals would be erased,
+    # causing a deadlock when mcast_in0 is the first (phase 0) operation.
+    # The synchronized reset in local::sync() (gated by *reset_done) is
+    # sufficient for all inter-phase transitions.
     for seg_idx in range(num_segments):
         lines.append(f"    group::seg_{seg_idx}::init();")
     lines.append("}")
@@ -645,10 +674,21 @@ def _emit_init_follower(
         lines.append("        get_arg_val<uint32_t>(rt_offset + 1));")
         lines.append("    pack_drained = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
         lines.append("        get_arg_val<uint32_t>(rt_offset + 2));")
-        lines.append("    *pack_drained = 0;")
         lines.append("    math_drained = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
         lines.append("        get_arg_val<uint32_t>(rt_offset + 3));")
-        lines.append("    *math_drained = 0;")
+        # NOTE: Do NOT reset *pack_drained / *math_drained here.  These are the
+        # three TRISC threads' drain-handshake flags in local::sync (pack sets
+        # *pack_drained, math waits on it then sets *math_drained, unpack waits
+        # on it).  init() runs on ALL THREE threads with no barrier before the
+        # first local::sync, so a thread whose init() is slow (e.g. after a
+        # no-op phase, where the fast threads reach local::sync almost
+        # immediately) would write 0 here AFTER another thread already advanced
+        # the flag in the first barrier — clobbering it and deadlocking the
+        # spinwait.  The GlobalSemaphores are allocated with initial_value 0 and
+        # the hardware dispatch re-initializes them to that value on every
+        # enqueue (including cache hits), so an explicit reset is both
+        # unnecessary and unsafe.  This mirrors the compute_done/writer_done
+        # rationale below (they are deliberately not reset in init() either).
     for seg_idx in range(num_segments):
         lines.append(f"    group::seg_{seg_idx}::init();")
     lines.append("}")
@@ -777,7 +817,7 @@ def _generate_barrier_namespace(
     if is_coordinator:
         lines.extend(_emit_group_sync_coordinator(dispatch))
     else:
-        lines.extend(_emit_group_sync_follower(dispatch, for_compute=(risc_type == "compute"), risc_type=risc_type))
+        lines.extend(_emit_group_sync_follower(dispatch, for_compute=(risc_type == "compute")))
     lines.append("} // namespace group")
     lines.append("")
 
@@ -790,7 +830,7 @@ def _generate_barrier_namespace(
 
     # init()
     if is_coordinator:
-        lines.extend(_emit_init_coordinator(has_compute, num_segments, op_semaphore_info, has_writer=has_writer))
+        lines.extend(_emit_init_coordinator(has_compute, num_segments, has_writer=has_writer))
     else:
         lines.extend(_emit_init_follower(risc_type, num_segments))
     lines.append("")

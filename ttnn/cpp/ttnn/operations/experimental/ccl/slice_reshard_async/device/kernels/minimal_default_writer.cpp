@@ -3,6 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -59,6 +65,9 @@ void kernel_main() {
     // program cache hits.
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
+
     // pre-populate packet headers
     auto pkt_hdr = PacketHeaderPool::allocate_header();
     pkt_hdr->to_chip_unicast(1);
@@ -93,8 +102,9 @@ void kernel_main() {
                         (uint32_t)pkt_hdr_barrier_sem_inc, sizeof(PACKET_HEADER_TYPE));
                 }
             }
-            noc_async_writes_flushed();
+            noc_obj.async_writes_flushed();
         }
+        // Device 2.0 migration: legacy primitive retained, barrier_sem is the address of a GlobalSemaphore.
         if (!is_last_chip) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
         }
@@ -112,8 +122,8 @@ void kernel_main() {
                     stick_start_id;
             }
             for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                cb_wait_front(cb_output_id, 1);
-                uint32_t l1_read_addr = get_read_ptr(cb_output_id);
+                cb_output.wait_front(1);
+                uint32_t l1_read_addr = cb_output.get_read_ptr();
 
                 uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
 
@@ -132,12 +142,12 @@ void kernel_main() {
                         (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
                 }
 
-                noc_async_writes_flushed();
+                noc_obj.async_writes_flushed();
 
                 dst_stick_id++;
 
-                noc_async_write_barrier();
-                cb_pop_front(cb_output_id, 1);
+                noc_obj.async_write_barrier();
+                cb_output.pop_front(1);
             }
         }
 
@@ -162,23 +172,27 @@ void kernel_main() {
         // If we need extend beyond the original input tensor, pad
         if (direction) {
             if (outer_dims_from_forward) {
-                cb_wait_front(cb_output_id, 1);
-                uint32_t l1_read_addr = get_read_ptr(cb_output_id);
+                cb_output.wait_front(1);
+                uint32_t l1_read_addr = cb_output.get_read_ptr();
                 for (uint32_t outer_dim_id = 0; outer_dim_id < outer_dims_from_forward; outer_dim_id++) {
                     uint32_t dst_stick_id = (outer_dim_id + outer_dims_to_receive +
                                              (outer_dims_to_keep_end - outer_dims_to_keep_start + 1)) *
                                                 num_sticks_per_outer_dim +
                                             stick_start_id;
                     for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                        uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id);
-                        noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+                        noc_obj.async_write(
+                            CoreLocalMem<uint8_t>(l1_read_addr),
+                            dst_accessor,
+                            stick_size,
+                            {},
+                            {.page_id = dst_stick_id});
 
                         dst_stick_id++;
 
-                        noc_async_write_barrier();
+                        noc_obj.async_write_barrier();
                     }
                 }
-                cb_pop_front(cb_output_id, 1);
+                cb_output.pop_front(1);
             }
         }
     }
@@ -189,16 +203,13 @@ void kernel_main() {
              outer_dim_id++) {
             uint32_t dst_stick_id = (outer_dim_id + outer_dims_to_receive) * num_sticks_per_outer_dim + stick_start_id;
             for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                cb_wait_front(cb_output_id, 1);
-                uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-
-                uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id);
-                noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+                cb_output.wait_front(1);
+                noc_obj.async_write(cb_output, dst_accessor, stick_size, {}, {.page_id = dst_stick_id});
 
                 dst_stick_id++;
 
-                noc_async_write_barrier();
-                cb_pop_front(cb_output_id, 1);
+                noc_obj.async_write_barrier();
+                cb_output.pop_front(1);
             }
         }
     }

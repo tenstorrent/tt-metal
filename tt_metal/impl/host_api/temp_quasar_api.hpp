@@ -1,0 +1,149 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <filesystem>
+#include <set>
+#include <string>
+#include <variant>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+
+/**
+ * The APIs in this file are for initial support of Quasar, our next-generation architecture.
+ * These are temporary, placeholder APIs that will be replaced soon.
+ *
+ * Quasar has significant architectural differences from Wormhole and Blackhole. Some key differences are:
+ * - There are 8 data movement cores per cluster
+ * - There are 4 Tensix engines per cluster with each Tensix engine having 4 TRISC processors
+ * - All the data movement cores and Tensix engines in a cluster share the same 4 MB of L1 SRAM
+ * - Users target clusters rather than individual data movement cores or Tensix engines; the implementation internally
+ *   selects which resources to use within each cluster
+ *
+ * These APIs are very experimental and will evolve accordingly over time.
+ */
+
+namespace tt::tt_metal {
+class Program;
+
+namespace experimental::quasar {
+static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;
+// Tensix WORKER clusters reserve DM0 (ISR) and DM1 (remapper) for runtime use; CreateKernel
+// assigns user kernels to DM2..DM7 only. Dispatch-engine cores do not apply this reservation.
+static constexpr uint32_t QUASAR_NUM_RESERVED_DM_CORES_PER_CLUSTER = 2;
+static constexpr uint32_t QUASAR_NUM_USER_DM_CORES_PER_CLUSTER =
+    QUASAR_NUM_DM_CORES_PER_CLUSTER - QUASAR_NUM_RESERVED_DM_CORES_PER_CLUSTER;
+static constexpr uint32_t QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER = 4;
+
+struct QuasarDataMovementConfig {
+    // Number of data movement cores per cluster to use (max is QUASAR_NUM_USER_DM_CORES_PER_CLUSTER)
+    uint32_t num_threads_per_cluster = QUASAR_NUM_USER_DM_CORES_PER_CLUSTER;
+
+    std::vector<uint32_t> compile_args;
+
+    std::map<std::string, std::string> defines;
+
+    // Both compile_args and named_compile_args contain compile time arguments
+    // The former is accessed by index, the latter by name
+    // Can be used in new/existing kernels by explicitly defining them in the config
+    // Ex. std::vector<uint32_t> compile_args = {5, 7};
+    //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
+    //     CreateKernel(program, "kernel.cpp", core, QuasarDataMovementConfig{.compile_args = compile_args,
+    //     .named_compile_args = named_compile_args})
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+
+    // Flag to enable rapid porting of kernels from WH/BH to Quasar.
+    // If set to true, global variables will be accessed as local variables
+    // to the kernel, functionally equivalent to how thread_local variables operate.
+    // Note that setting this flag will also duplicate the kernel binary
+    // for each thread, so it is recommended to rewrite the kernel to operate
+    // properly on Quasar as soon as possible.
+    bool is_legacy_kernel = false;
+
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
+
+    // Provide include paths for the kernel compiler (-I)
+    std::vector<std::filesystem::path> compiler_include_paths;
+};
+
+struct QuasarComputeConfig {
+    // Number of Tensix engines per cluster to use
+    uint32_t num_threads_per_cluster = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER;
+
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    bool fp32_dest_acc_en = false;
+    bool dst_full_sync_en = false;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode;
+    bool bfp8_pack_precise = false;
+    bool math_approx_mode = false;
+    bool enable_2x_src_format = false;
+
+    std::vector<uint32_t> compile_args;
+
+    std::map<std::string, std::string> defines;
+
+    // Both compile_args and named_compile_args contain compile time arguments
+    // The former is accessed by index, the latter by name
+    // Can be used in new/existing kernels by explicitly defining them in the config
+    // Ex. std::vector<uint32_t> compile_args = {5, 7};
+    //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
+    //     CreateKernel(program, "kernel.cpp", core, QuasarComputeConfig{.compile_args = compile_args,
+    //     .named_compile_args = named_compile_args})
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
+    // Provide include paths for the kernel compiler (-I)
+    std::vector<std::filesystem::path> compiler_include_paths;
+};
+
+/**
+ * @brief Create a data movement kernel and add it to the program.
+ *
+ * @param program The program to which this kernel will be added to
+ * @param file_name Path to kernel source file
+ * @param core_spec Either a single logical cluster, a range of logical clusters or a set of logical cluster ranges that
+ * indicate which clusters the kernel is placed on
+ * @param config Config for data movement kernel
+ * @return Kernel ID
+ */
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const QuasarDataMovementConfig& config);
+
+/**
+ * @brief Create a compute kernel and add it to the program.
+ *
+ * @param program The program to which this kernel will be added to
+ * @param file_name Path to kernel source file
+ * @param core_spec Either a single logical cluster, a range of logical clusters or a set of logical cluster ranges that
+ * indicate which clusters the kernel is placed on
+ * @param config Config for compute kernel
+ * @return Kernel ID
+ */
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const QuasarComputeConfig& config);
+
+/**
+ * @brief Reserve free data-movement processors on the given programmable core type.
+ *
+ * Same allocation policy as Quasar Tensix CreateKernel: pick the lowest-numbered free DMs.
+ * On TENSIX, DM0/DM1 are reserved and skipped; on DISPATCH the full DM0..DM7 set is available.
+ */
+std::set<DataMovementProcessor> GetAvailableDataMovementProcessors(
+    Program& program,
+    const CoreRangeSet& core_ranges,
+    uint32_t num_processors_per_cluster,
+    HalProgrammableCoreType programmable_core_type);
+
+}  // namespace experimental::quasar
+}  // namespace tt::tt_metal

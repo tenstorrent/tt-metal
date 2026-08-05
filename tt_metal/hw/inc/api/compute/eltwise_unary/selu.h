@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
-#include "llk_math_eltwise_unary_sfpu_selu.h"
+#include "ckernel_sfpu_selu.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -28,18 +29,34 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void selu_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_selu<APPROX, DST_ACCUM_MODE>(idst, param0, param1)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_selu,
+        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC,
+        param0,
+        param1));
 }
 
 ALWI void selu_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
-    PACK((llk_math_eltwise_unary_sfpu_selu<APPROX, DST_ACCUM_MODE>(idst, param0, param1)));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_selu,
+        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC,
+        param0,
+        param1));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void selu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_selu_init())); }
+ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
 
-ALWI void selu_tile_init_pack() { PACK((llk_math_eltwise_unary_sfpu_selu_init())); }
+ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu)); }
 
 }  // namespace ckernel

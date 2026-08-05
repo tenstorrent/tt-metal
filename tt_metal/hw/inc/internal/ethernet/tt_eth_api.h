@@ -9,8 +9,8 @@
 
 #include "tt_eth_ss_regs.h"
 
-#define ETH_WRITE_REG(addr, val) ((*((volatile uint32_t*)((addr)))) = (val))
-#define ETH_READ_REG(addr) (*((volatile uint32_t*)((addr))))
+#define ETH_WRITE_REG(addr, val) ((*((volatile uint32_t*)(uintptr_t)((addr)))) = (val))
+#define ETH_READ_REG(addr) (*((volatile uint32_t*)(uintptr_t)((addr))))
 
 #define ETH_WORD_SIZE_BYTES 16
 #define BYTES_TO_ETH_WORD_SHIFT 4

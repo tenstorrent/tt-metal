@@ -63,7 +63,7 @@ def main():
         attention_scores = query @ key
         attention_scores = attention_scores * (1 / (head_size**0.5))
         attention_scores += attention_mask
-        attention_probs = ttnn.softmax(attention_scores, dim=-1, numeric_stable=False)
+        attention_probs = ttnn.softmax(attention_scores, dim=-1, numeric_stable=True)
 
         context_layer = attention_probs @ value
         context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
@@ -278,7 +278,12 @@ def main():
     torch_output = ttnn.to_torch(output)
     torch_optimized_output = ttnn.to_torch(optimized_output)
 
-    assert torch.allclose(torch_output, torch_optimized_output)
+    # Compare via Pearson correlation. PCC tolerates the precision gap between the two paths
+    # (optimized uses bfloat8_b matmuls; unoptimized uses bfloat16), where torch.allclose would not.
+    flat_ref = torch_output.flatten().to(torch.float32)
+    flat_opt = torch_optimized_output.flatten().to(torch.float32)
+    pcc = torch.corrcoef(torch.stack([flat_ref, flat_opt]))[0, 1].item()
+    assert pcc >= 0.95, f"Outputs disagree: PCC {pcc:.4f} < 0.95"
 
     ttnn.close_device(device)
 

@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, create_gate_weights, get_sp_mesh_composer
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_gate_weights, get_sp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
@@ -80,15 +80,6 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     gate_w = gate_weights_dict["weight"]
     gate_b = gate_weights_dict["e_score_correction_bias"]
 
-    # Create dispatch table
-    n_sp_devices = mesh_device.shape[0]
-    n_tp_devices = mesh_device.shape[1]
-    dispatch_table = ExpertMapping.create_dispatch_table(
-        num_routed_experts=config.n_routed_experts,
-        dispatch_group_size=n_sp_devices,
-        num_dispatch_groups=n_tp_devices,
-    )
-
     # Create input (SP+TP sharded)
     x = create_gate_input(config, mesh_device)
 
@@ -100,18 +91,15 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         return ttnn.to_torch(tt_tensor, mesh_composer=sp_composer)
 
     # === Path 1: From Weights ===
-    experts_per_chip = config.n_routed_experts // (n_sp_devices * n_tp_devices)
     gate_from_weights = TtMoEGatePrefill(
         config,
         mesh_device,
-        dispatch_table,
-        experts_per_chip=experts_per_chip,
         weight=gate_w,
         bias=gate_b,
         fallback_mode=gate_mode,
         weight_cache_path=None,  # No caching
     )
-    scores1, indices1, logits1, offsets1, counts1, regions1 = gate_from_weights(x)
+    scores1, indices1, logits1 = gate_from_weights(x)
     output1 = to_torch_gate(scores1)
 
     # === Path 2: Cold Cache (build + load) ===
@@ -145,8 +133,6 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     gate_cold = TtMoEGatePrefill(
         config,
         mesh_device,
-        dispatch_table,
-        experts_per_chip=experts_per_chip,
         weight=None,
         bias=None,  # Cache-only mode
         fallback_mode=gate_mode,
@@ -154,7 +140,7 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         cache_name_prefix="gate",
     )
     profiler.end("cold_load")
-    scores2, indices2, logits2, offsets2, counts2, regions2 = gate_cold(x)
+    scores2, indices2, logits2 = gate_cold(x)
     output2 = to_torch_gate(scores2)
 
     # === Path 3: Warm Cache (reuse existing cache) ===
@@ -162,8 +148,6 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     gate_warm = TtMoEGatePrefill(
         config,
         mesh_device,
-        dispatch_table,
-        experts_per_chip=experts_per_chip,
         weight=None,
         bias=None,
         fallback_mode=gate_mode,
@@ -171,7 +155,7 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         cache_name_prefix="gate",
     )
     profiler.end("warm_load")
-    scores3, indices3, logits3, offsets3, counts3, regions3 = gate_warm(x)
+    scores3, indices3, logits3 = gate_warm(x)
     output3 = to_torch_gate(scores3)
 
     # === Validation ===

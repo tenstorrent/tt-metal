@@ -109,7 +109,9 @@ inline void _llk_math_sdpa_custom_mm_mask_dest_(
         TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
     } else {
         // Zero Dest
-        uint32_t dst_face = dst_offset / 16;
+        // ZEROACC auto-detects the DEST bank, so its tile index must be bank-relative (dst_index, not
+        // dst_offset which already includes the bank base -> would double-count the bank on bank 1).
+        uint32_t dst_face = dst_index / 16;
         // A tile is 2 faces of 8x16, so clearing 16 rows per tile is equivalent to clearing the tile
         for (uint32_t i = 0; i < ct_dim; i++) {
             TT_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_7, dst_face);

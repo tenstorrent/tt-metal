@@ -10,11 +10,29 @@
 
 #include <tracy/Tracy.hpp>
 
-namespace tt::tt_metal {
+namespace ttnn {
+
+using tt::tt_metal::CBDescriptor;
+using tt::tt_metal::CBFormatDescriptor;
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::CoreRangeSet;
+using tt::tt_metal::datatype_to_dataformat_converter;
+using tt::tt_metal::MeshTensor;
+using tt::tt_metal::NOC;
+using tt::tt_metal::TileDescriptor;
 
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
+
+ttsl::optional_reference<const MeshTensor> as_optional_mesh_tensor(const std::optional<Tensor>& opt) {
+    if (opt.has_value()) {
+        TT_FATAL(
+            is_device_tensor(*opt), "as_optional_mesh_tensor: expected device tensor, got {}", opt->storage_type());
+        return {opt->mesh_tensor()};
+    }
+    return std::nullopt;
+}
 
 CBDescriptor cb_descriptor_from_sharded_tensor(
     uint8_t cb_index,
@@ -76,4 +94,4 @@ std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor&
     return ordered_worker_cores_with_data;
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

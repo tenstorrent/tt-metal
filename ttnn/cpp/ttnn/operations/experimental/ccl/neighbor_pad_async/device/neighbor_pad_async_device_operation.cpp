@@ -124,7 +124,7 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
@@ -135,7 +135,7 @@ TensorSpec NeighborPadAsyncDeviceOperation::compute_output_specs(
     if (args.t_front_pad > 0) {
         shape[args.dim - 1] += args.t_front_pad;
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 
@@ -146,29 +146,6 @@ Tensor NeighborPadAsyncDeviceOperation::create_output_tensors(
     }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
-}
-
-ttsl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "NeighborPadAsyncDeviceOperation::compute_program_hash is called");
-    return operation::hash_operation<NeighborPadAsyncDeviceOperation>(
-        args.dim,
-        args.padding_left,
-        args.padding_right,
-        args.padding_mode,
-        args.cluster_axis,
-        args.num_links,
-        args.output_mem_config,
-        args.topology,
-        args.ring_size,
-        args.pad_dim2,
-        args.pad2_left,
-        args.pad2_right,
-        args.pad2_cluster_axis,
-        args.pad2_num_links,
-        args.logical_h,
-        args.t_front_pad,
-        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

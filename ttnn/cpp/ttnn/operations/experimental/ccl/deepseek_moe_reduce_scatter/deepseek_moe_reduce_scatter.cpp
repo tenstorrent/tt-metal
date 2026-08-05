@@ -8,6 +8,7 @@
 
 #include "deepseek_moe_reduce_scatter.hpp"
 #include "device/deepseek_moe_reduce_scatter_device_operation.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -18,10 +19,15 @@ ttnn::Tensor deepseek_moe_reduce_scatter(
     const std::vector<ttnn::Tensor>& input_tensors,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     int32_t dim,
-    uint32_t num_links,
-    tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> num_links,
+    std::optional<tt::tt_fabric::Topology> topology,
     std::optional<uint32_t> cluster_axis) {
     uint32_t scatter_dim = (dim < 0) ? dim + input_tensors.at(0).logical_shape().rank() : (uint32_t)dim;
+
+    // num_links
+    auto* mesh_device = input_tensors.back().device();
+    const auto num_links_ =
+        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis));
 
     // topology
     const ttnn::ccl::Topology required_topology = tt::tt_fabric::Topology::Ring;
@@ -34,7 +40,7 @@ ttnn::Tensor deepseek_moe_reduce_scatter(
 
     // call the prim operation
     std::vector<ttnn::Tensor> result = ttnn::prim::deepseek_moe_reduce_scatter(
-        input_tensors, output_memory_config, scatter_dim, num_links, cluster_axis);
+        input_tensors, output_memory_config, scatter_dim, num_links_, cluster_axis);
 
     // return the output tensor (first 8 are intermediates)
     return result.at(8);

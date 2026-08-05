@@ -7,8 +7,14 @@
 #include <cstdint>
 
 #include "ckernel_debug.h"
+#if !defined(ENV_LLK_INFRA)
 #include "api/compute/compute_kernel_api.h"
 #include "dprint.h"
+#else
+inline void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
+    ckernel::dbg_get_array_row(ckernel::dbg_array_id::DEST, row_addr, rd_data);
+}
+#endif
 #include "tensix_types.h"
 
 // Given a Tensix configuration register field name, print the contents of the register.
@@ -16,7 +22,7 @@
 //   For config section "Registers for THREAD", use banks THREAD_0_CFG, THREAD_1_CFG, THREAD_2_CFG
 //   For other config sections (ALU,PACK0), use banks HW_CFG_0, HW_CFG_1
 #define READ_CFG_REG_FIELD(bank, reg_field_name) \
-    (dbg_read_cfgreg(bank, reg_field_name##_ADDR32) & reg_field_name##_MASK) >> reg_field_name##_SHAMT
+    (ckernel::dbg_read_cfgreg(bank, reg_field_name##_ADDR32) & reg_field_name##_MASK) >> reg_field_name##_SHAMT
 
 // Helper macros
 #define READ_HW_CFG_0_REG_FIELD(reg_field_name) READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::HW_CFG_0, reg_field_name)
@@ -38,82 +44,29 @@ constexpr uint16_t NUM_ROWS_PER_TILE = NUM_FACES_PER_TILE * NUM_ROWS_PER_FACE;
 // Helper function to print array
 template <uint32_t count>
 inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data) {
-    DPRINT << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format, data, count)
-           << ENDL();
-    DEVICE_PRINT("{}\n", dp_typed_array_t<count>(data_format, data));
+    DPRINT("{}\n", dp_typed_array_t<count>(data_format, data));
 }
 
 // Dprints data format as string given an uint
 inline void dprint_data_format(uint8_t data_format) {
     switch (data_format) {
-        case (uint8_t)DataFormat::Float32:
-            DPRINT << "Float32";
-            DEVICE_PRINT("Float32");
-            break;
-        case (uint8_t)DataFormat::Float16:
-            DPRINT << "Float16";
-            DEVICE_PRINT("Float16");
-            break;
-        case (uint8_t)DataFormat::Bfp8:
-            DPRINT << "Bfp8";
-            DEVICE_PRINT("Bfp8");
-            break;
-        case (uint8_t)DataFormat::Bfp4:
-            DPRINT << "Bfp4";
-            DEVICE_PRINT("Bfp4");
-            break;
-        case (uint8_t)DataFormat::Bfp2:
-            DPRINT << "Bfp2";
-            DEVICE_PRINT("Bfp2");
-            break;
-        case (uint8_t)DataFormat::Float16_b:
-            DPRINT << "Float16_b";
-            DEVICE_PRINT("Float16_b");
-            break;
-        case (uint8_t)DataFormat::Bfp8_b:
-            DPRINT << "Bfp8_b";
-            DEVICE_PRINT("Bfp8_b");
-            break;
-        case (uint8_t)DataFormat::Bfp4_b:
-            DPRINT << "Bfp4_b";
-            DEVICE_PRINT("Bfp4_b");
-            break;
-        case (uint8_t)DataFormat::Bfp2_b:
-            DPRINT << "Bfp2_b";
-            DEVICE_PRINT("Bfp2_b");
-            break;
-        case (uint8_t)DataFormat::Lf8:
-            DPRINT << "Lf8";
-            DEVICE_PRINT("Lf8");
-            break;
-        case (uint8_t)DataFormat::Int8:
-            DPRINT << "Int8";
-            DEVICE_PRINT("Int8");
-            break;
-        case (uint8_t)DataFormat::UInt8:
-            DPRINT << "UInt8";
-            DEVICE_PRINT("UInt8");
-            break;
-        case (uint8_t)DataFormat::UInt16:
-            DPRINT << "UInt16";
-            DEVICE_PRINT("UInt16");
-            break;
-        case (uint8_t)DataFormat::Int32:
-            DPRINT << "Int32";
-            DEVICE_PRINT("Int32");
-            break;
-        case (uint8_t)DataFormat::UInt32:
-            DPRINT << "UInt32";
-            DEVICE_PRINT("UInt32");
-            break;
-        case (uint8_t)DataFormat::Tf32:
-            DPRINT << "Tf32";
-            DEVICE_PRINT("Tf32");
-            break;
-        default:
-            DPRINT << "INVALID DATA FORMAT";
-            DEVICE_PRINT("INVALID DATA FORMAT");
-            break;
+        case (uint8_t)DataFormat::Float32: DPRINT("Float32"); break;
+        case (uint8_t)DataFormat::Float16: DPRINT("Float16"); break;
+        case (uint8_t)DataFormat::Bfp8: DPRINT("Bfp8"); break;
+        case (uint8_t)DataFormat::Bfp4: DPRINT("Bfp4"); break;
+        case (uint8_t)DataFormat::Bfp2: DPRINT("Bfp2"); break;
+        case (uint8_t)DataFormat::Float16_b: DPRINT("Float16_b"); break;
+        case (uint8_t)DataFormat::Bfp8_b: DPRINT("Bfp8_b"); break;
+        case (uint8_t)DataFormat::Bfp4_b: DPRINT("Bfp4_b"); break;
+        case (uint8_t)DataFormat::Bfp2_b: DPRINT("Bfp2_b"); break;
+        case (uint8_t)DataFormat::Lf8: DPRINT("Lf8"); break;
+        case (uint8_t)DataFormat::Int8: DPRINT("Int8"); break;
+        case (uint8_t)DataFormat::UInt8: DPRINT("UInt8"); break;
+        case (uint8_t)DataFormat::UInt16: DPRINT("UInt16"); break;
+        case (uint8_t)DataFormat::Int32: DPRINT("Int32"); break;
+        case (uint8_t)DataFormat::UInt32: DPRINT("UInt32"); break;
+        case (uint8_t)DataFormat::Tf32: DPRINT("Tf32"); break;
+        default: DPRINT("INVALID DATA FORMAT"); break;
     }
 }
 
@@ -227,7 +180,7 @@ inline void dprint_tensix_dest_reg_row_float16(uint32_t data_format, uint16_t ro
     dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
 
-inline void dprint_tensix_dest_reg_row_int32(uint16_t row) {
+inline void dprint_tensix_dest_reg_row_int32([[maybe_unused]] uint16_t row) {
 #ifdef ARCH_BLACKHOLE
     constexpr int ARRAY_LEN = 16;
     uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
@@ -237,8 +190,7 @@ inline void dprint_tensix_dest_reg_row_int32(uint16_t row) {
     }
     dprint_array_with_data_type<ARRAY_LEN>((uint32_t)DataFormat::Int32, rd_data);
 #else
-    DPRINT << "Int32 format not supported on this architecture" << ENDL();
-    DEVICE_PRINT("Int32 format not supported on this architecture\n");
+    DPRINT("Int32 format not supported on this architecture\n");
 #endif
 }
 
@@ -270,6 +222,7 @@ inline void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) 
     dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
 
+#if !defined(ENV_LLK_INFRA)
 // Print the contents of tile with index tile_id within the destination register
 template <bool print_by_face = false>
 void dprint_tensix_dest_reg(int tile_id = 0) {
@@ -281,17 +234,12 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
 #if defined(ARCH_WORMHOLE)
-            DPRINT << "WARNING: Float32 on Wormhole displays limited precision - lower 16 mantissa bits are not shown"
-                   << ENDL();
-            DEVICE_PRINT(
-                "WARNING: Float32 on Wormhole displays limited precision - lower 16 mantissa bits are not shown\n");
+            DPRINT("WARNING: Float32 on Wormhole displays limited precision - lower 16 mantissa bits are not shown\n");
 #endif
         }
 
         // Print the contents
-        DPRINT << FIXED() << SETW(WIDTH) << SETPRECISION(PRECISION);
-        DPRINT << "Tile ID = " << tile_id << ENDL();
-        DEVICE_PRINT("Tile ID = {}\n", tile_id);
+        DPRINT("Tile ID = {}\n", tile_id);
 
         uint32_t row = tile_id * NUM_ROWS_PER_TILE;
         for (int face_id = 0; face_id < NUM_FACES_PER_TILE; ++face_id) {
@@ -302,6 +250,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
                     case (uint32_t)DataFormat::UInt16:
                         dprint_tensix_dest_reg_row_uint16(data_format_reg_field_value, row);
                         break;
+                    case (uint32_t)DataFormat::Float16:
                     case (uint32_t)DataFormat::Float16_b:
                         dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
                         break;
@@ -311,21 +260,18 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
                     case (uint32_t)DataFormat::Int8:
                         dprint_tensix_dest_reg_row_int8(data_format_reg_field_value, row);
                         break;
-                    default:
-                        DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL();
-                        DEVICE_PRINT("Unsupported data format: {}\n", data_format_reg_field_value);
-                        break;
+                    default: DPRINT("Unsupported data format: {}\n", data_format_reg_field_value); break;
                 }
                 row++;
             }
             if constexpr (print_by_face) {
-                DPRINT << ENDL();
-                DEVICE_PRINT("\n");
+                DPRINT("\n");
             }
         }
     })
     dbg_unhalt();
 }
+#endif  // !defined(ENV_LLK_INFRA)
 
 // Print the contents of the specified configuration register field.
 // Example:
@@ -333,8 +279,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 #define dprint_cfg_reg_field(bank, reg_field_name)                                          \
     {                                                                                       \
         uint32_t field_val = READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::bank, reg_field_name); \
-        DPRINT << #reg_field_name << " = " << field_val << ENDL();                          \
-        DEVICE_PRINT(#reg_field_name " = {}\n", field_val);                                 \
+        DPRINT(#reg_field_name " = {}\n", field_val);                                       \
     }
 
 // Print the contents of the whole configuration register. The register is specified by
@@ -344,34 +289,25 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 #define dprint_cfg_reg(bank, reg_field_name)                                                    \
     {                                                                                           \
         uint32_t reg_val = dbg_read_cfgreg(ckernel::dbg_cfgreg::bank, reg_field_name##_ADDR32); \
-        DPRINT << #reg_field_name << " = " << HEX() << reg_val << ENDL();                       \
-        DEVICE_PRINT(#reg_field_name " = 0x{:x}\n", reg_val);                                   \
+        DPRINT(#reg_field_name " = 0x{:x}\n", reg_val);                                         \
     }
 
 // Print the content of the register field given the value in the register.
 #define DPRINT_TENSIX_CONFIG_FIELD(reg_val, reg_field_name, name, printDec)                 \
     {                                                                                       \
         uint32_t field_value = (reg_val & reg_field_name##_MASK) >> reg_field_name##_SHAMT; \
-        DPRINT << name << " = ";                                                            \
         if (printDec) {                                                                     \
-            DPRINT << DEC();                                                                \
-            DEVICE_PRINT(name " = {}; ", field_value);                                      \
+            DPRINT(name " = {}; ", field_value);                                            \
         } else {                                                                            \
-            DPRINT << "0x" << HEX();                                                        \
-            DEVICE_PRINT(name " = 0x{:x}; ", field_value);                                  \
+            DPRINT(name " = 0x{:x}; ", field_value);                                        \
         }                                                                                   \
-        DPRINT << field_value << "; ";                                                      \
     }
 
-#define dprint_tensix_struct_field(word, mask, shamt, name, printDec)      \
-    {                                                                      \
-        DPRINT << name << ": ";                                            \
-        if (printDec) {                                                    \
-            DPRINT << DEC();                                               \
-            DEVICE_PRINT(name ": {}\n", ((word) & (mask)) >> (shamt));     \
-        } else {                                                           \
-            DPRINT << "0x" << HEX();                                       \
-            DEVICE_PRINT(name ": 0x{:x}\n", ((word) & (mask)) >> (shamt)); \
-        }                                                                  \
-        DPRINT << (uint32_t)((((word) & (mask)) >> (shamt))) << ENDL();    \
+#define dprint_tensix_struct_field(word, mask, shamt, name, printDec) \
+    {                                                                 \
+        if (printDec) {                                               \
+            DPRINT(name ": {}\n", ((word) & (mask)) >> (shamt));      \
+        } else {                                                      \
+            DPRINT(name ": 0x{:x}\n", ((word) & (mask)) >> (shamt));  \
+        }                                                             \
     }

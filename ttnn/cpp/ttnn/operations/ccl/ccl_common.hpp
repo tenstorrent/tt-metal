@@ -14,14 +14,23 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::ccl {
 
 bool is_fabric_2d();
+
+std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    tt::tt_metal::DataType input_dtype);
+
+// Warn about ideal packet size
+void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size);
 
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
@@ -29,6 +38,10 @@ tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
+// Resolve the topology (Ring vs Linear) for a single mesh axis
+tt::tt_fabric::Topology get_axis_topology(
+    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis);
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
@@ -98,7 +111,7 @@ class EriscDatamoverBuilder;
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     uint32_t num_devices,
-    const ttnn::SmallVector<uint32_t>& unpad_elements,
+    const ttsl::SmallVector<uint32_t>& unpad_elements,
     int dim);
 
 class LineTopology {
@@ -782,13 +795,39 @@ void fabric_mux_connection_rt_args(
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> = std::nullopt);
 
-// Estimate fabric transfer time (nanoseconds).
+// ProgramDescriptor (Contract-2) variant of fabric_mux_connection_rt_args.
+// Mirrors the legacy Program& helper but allocates the five mux-side semaphores by
+// pushing SemaphoreDescriptors into desc.semaphores and recording their IDs into
+// worker_rt_args at the same positions. Semaphore IDs are obtained from
+// ProgramDescriptor::find_available_semaphore_id so they don't collide with IDs
+// already allocated on the same worker_logical_core. An optional
+// termination_master_semaphore_id can be supplied if the caller already owns one
+// (e.g. the termination master worker on this core).
+void fabric_mux_connection_rt_args(
+    bool mux_connection_valid,
+    bool is_termination_master,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::ProgramDescriptor& desc,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id = std::nullopt);
+
+// Fabric transfer time in device clock cycles, as a {bandwidth_cycles, latency_cycles} pair.
+// bandwidth_cycles represents steady-state, latency_cycles is pipeline fill.
 //   arch:          Wormhole or Blackhole
-//   data_bytes:    total bytes that must traverse the bottleneck link
+//   fabric_config: fabric config
+//   clock_rate_mhz: device AICLK, used to convert ns -> cycles
+//   data_bytes:    total bytes traversing the link
 //   num_links:     number of parallel ethernet links
-//   num_hops:      number of fabric hops (for latency)
-double estimate_fabric_transfer_ns(
+//   num_hops:      number of device hops
+std::pair<int, int> estimate_fabric_transfer_cycles(
     tt::ARCH arch,
+    tt::tt_fabric::FabricConfig fabric_config,
+    int clock_rate_mhz,
     uint64_t data_bytes,
     uint32_t num_links,
     uint32_t num_hops);

@@ -50,6 +50,7 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
     return config, weights
 
 
+@pytest.mark.parametrize("is_column_parallel", [True, False], ids=["col", "row"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize(
     "batch_seq_len, emb_dim, vocab_size, run_full_pcc_check",
@@ -87,6 +88,16 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
             id="2x4-linear",
         ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -101,6 +112,7 @@ def test_lm_head(
     num_links: int,
     topology: ttnn.Topology,
     is_balanced: bool,
+    is_column_parallel: bool,
 ):
     """
     Test TtLMHead PCC against torch.nn.Linear reference.
@@ -143,7 +155,7 @@ def test_lm_head(
         logger.debug(f"Torch output shape: {torch_output.shape}")
 
     # Create TTNN LM head model
-    logger.debug("Creating TtLMHead")
+    logger.debug(f"Creating TtLMHead (is_column_parallel={is_column_parallel})")
     tt_model = TtLMHead(
         mesh_device=mesh_device,
         emb_dim=emb_dim,
@@ -154,6 +166,7 @@ def test_lm_head(
         activations_dtype=ttnn_activations_dtype,
         weights_dtype=ttnn_weights_dtype,
         is_balanced=is_balanced,
+        is_column_parallel=is_column_parallel,
     )
 
     tt_input = ttnn.from_torch(
@@ -167,7 +180,7 @@ def test_lm_head(
 
     logger.debug("Running ttnn forward pass")
     global_token_id = batch_seq_len * dispatch_group_size - 1
-    tt_output, token_offset = tt_model(tt_input, global_token_id=global_token_id)
+    tt_output, (device_id, token_offset) = tt_model(tt_input, global_token_id=global_token_id)
     logger.debug(f"TTNN output shape (sharded): {tt_output.shape}")
 
     # For now, we only run the full PCC check on input tensors with seq_len == TILE_SIZE to avoid slicing
@@ -179,16 +192,15 @@ def test_lm_head(
 
     # Convert and compare
     logger.debug("Converting TTNN output to torch for comparison")
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
-    )
+    tt_output_torch = tt_model.logit_to_host(tt_output, device_id)
     logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
 
     logger.debug("Comparing outputs with PCC")
+    expected = torch_output[device_id]
+    actual = tt_output_torch.squeeze(0)
     pcc_passed, pcc_message = assert_with_pcc(
-        torch_output.to(torch.float32),
-        tt_output_torch.to(torch.float32),
+        expected.to(torch.float32),
+        actual.to(torch.float32),
         pcc=0.9999,
     )
 

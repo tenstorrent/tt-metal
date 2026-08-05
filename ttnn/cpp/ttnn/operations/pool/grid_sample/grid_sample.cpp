@@ -21,7 +21,8 @@ ttnn::Tensor grid_sample(
     bool align_corners,
     bool use_precomputed_grid,
     bool batch_output_channels,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::prim::grid_sample(
         input_tensor,
         grid,
@@ -30,7 +31,8 @@ ttnn::Tensor grid_sample(
         align_corners,
         use_precomputed_grid,
         batch_output_channels,
-        memory_config);
+        memory_config,
+        compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::grid_sample

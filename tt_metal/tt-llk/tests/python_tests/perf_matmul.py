@@ -109,7 +109,7 @@ def test_perf_matmul(
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
             NUM_FACES(),
-            LOOP_FACTOR(16),
+            LOOP_FACTOR(64),
             TILE_COUNT(variant_tile_count),
             CRK_TILE_DIMM(dims.ct_dim, dims.rt_dim, dims.kt_dim),
         ],

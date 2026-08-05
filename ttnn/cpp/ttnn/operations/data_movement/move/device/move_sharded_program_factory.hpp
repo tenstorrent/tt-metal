@@ -4,28 +4,14 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "move_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
 
 struct MoveShardedProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle kernel_id = 0;
-        tt::tt_metal::CBHandle src_sharded_cb = 0;
-        tt::tt_metal::CBHandle dst_sharded_cb = 0;
-        uint32_t total_size_bytes = 0;
-        std::vector<tt::tt_metal::CoreCoord> cores;
-    };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const MoveOperationAttributes& operation_attributes,
-        const MoveTensorArgs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const MoveOperationAttributes& operation_attributes,
         const MoveTensorArgs& tensor_args,
         Tensor& tensor_return_value);

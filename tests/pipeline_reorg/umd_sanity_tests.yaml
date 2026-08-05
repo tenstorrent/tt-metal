@@ -1,0 +1,21 @@
+# UMD unit tests.
+#
+# Invoked from .github/workflows/umd-unit-tests.yaml. SKUs map to the viommu CI runners
+# (see .github/sku_config.yaml); $ARCH_NAME is set per-SKU by the impl, selecting the
+# arch-specific unit_tests binary (build/test/umd/<arch>/unit_tests).
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team.
+# For max allowed timeout refer to .github/time_budget.yaml.
+
+- name: umd unit tests
+  cmd: ./build/test/umd/$ARCH_NAME/unit_tests && ./build/test/umd/api/api_tests
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+    wh_n300_civ2:
+      timeout: 15
+    bh_p100a_civ2_viommu:
+      timeout: 15
+    bh_p150b_civ2_viommu:
+      timeout: 15
+  team: umd

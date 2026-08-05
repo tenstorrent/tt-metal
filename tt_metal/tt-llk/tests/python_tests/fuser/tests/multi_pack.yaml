@@ -1,0 +1,34 @@
+# One elwadd packed into two separate outputs with different formats.
+# The first output is plain Float16, the second is Float32 with zero relu.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "out_plain"
+    dims: [64, 64]
+    format: "Float16"
+  - name: "out_relu"
+    dims: [64, 64]
+    format: "Float32"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+    pack:
+      - output: "out_plain"
+        packer: "Packer"
+      - output: "out_relu"
+        packer: "Packer"
+        pack_relu: "ZERO_RELU"

@@ -60,15 +60,15 @@ Enabling
     export TT_METAL_CHECKPOINT=1
 
 Without a print backend, checkpoints act as barriers only (no dump output). To get CB dump
-output, also enable DPRINT or DEVICE_PRINT:
+output, also enable DPRINT:
 
 .. code-block:: bash
 
     export TT_METAL_CHECKPOINT=1
     export TT_METAL_DPRINT_CORES=0,0
 
-**Standalone dump utilities** (``debug_dump_cb``, ``debug_dump_l1``, etc.) require only DPRINT
-or DEVICE_PRINT — no ``TT_METAL_CHECKPOINT`` needed:
+**Standalone dump utilities** (``debug_dump_cb``, ``debug_dump_l1``, etc.) require only DPRINT —
+no ``TT_METAL_CHECKPOINT`` needed:
 
 .. code-block:: bash
 
@@ -425,7 +425,7 @@ Output:
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Prints tile data interpreted according to the CB's data format, showing actual float/int values.
-Uses TileSlice internally. Works with both DPRINT and DEVICE_PRINT.
+Uses TileSlice internally.
 
 Available on TRISC0 (Unpack), TRISC2 (Pack), BRISC, and NCRISC. On BRISC/NCRISC, an additional
 ``cb_type`` parameter specifies whether the CB is an input or output.
@@ -459,7 +459,7 @@ Output:
       [0x100020] 41100000 41200000 41300000 41400000
       [0x100030] 41500000 41600000 41700000 41800000
 
-All three functions are no-ops when DPRINT/DEVICE_PRINT is not enabled.
+All three functions are no-ops when DPRINT is not enabled.
 
 Comparison with dprint_tensix_dest_regs
 ---------------------------------------

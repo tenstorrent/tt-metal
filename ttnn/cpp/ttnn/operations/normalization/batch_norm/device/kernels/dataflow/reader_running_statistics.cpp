@@ -7,9 +7,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/kernel/dataflow/cb_fill_helpers.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -23,20 +23,20 @@ void kernel_main() {
     uint32_t N = get_arg_val<uint32_t>(7);
     uint32_t C = get_arg_val<uint32_t>(8);
 
-    constexpr auto cb_id_src = get_compile_time_arg_val(0);
-    constexpr auto cb_id_momentum = get_compile_time_arg_val(1);
-    constexpr auto cb_id_one = get_compile_time_arg_val(2);
+    constexpr auto dfb_id_src = get_compile_time_arg_val(0);
+    constexpr auto dfb_id_momentum = get_compile_time_arg_val(1);
+    constexpr auto dfb_id_one = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3>();
     constexpr bool fill_momentum_fp32 = get_compile_time_arg_val(src_args.next_compile_time_args_offset()) == 1;
     constexpr uint32_t onetile = 1;
     constexpr uint32_t k_tile_face_elems = 1024;
 
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr);
-
     Noc noc;
-    CircularBuffer cb_id_src_obj(cb_id_src);
-    CircularBuffer cb_id_momentum_obj(cb_id_momentum);
+    DataflowBuffer dfb_src(dfb_id_src);
+    DataflowBuffer dfb_momentum(dfb_id_momentum);
+
+    const uint32_t src_tile_bytes = dfb_src.get_entry_size();
+    const auto src = TensorAccessor(src_args, src_addr);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
@@ -53,27 +53,27 @@ void kernel_main() {
     uint32_t one_u = 0;
     const float one_f = 1.0f;
     std::memcpy(&one_u, &one_f, sizeof(uint32_t));  // Alternative for std::bit_cast
-    fill_cb_with_value(cb_id_one, one_u);
+    fill_cb_with_value(dfb_id_one, one_u);
 
     // momentum
-    cb_id_momentum_obj.reserve_back(onetile);
+    dfb_momentum.reserve_back(onetile);
     if constexpr (fill_momentum_fp32) {
         float momentum_f = 0;
         std::memcpy(&momentum_f, &momentum, sizeof(float));  // Alternative for std::bit_cast
-        fill_with_val<k_tile_face_elems, float>(cb_id_momentum, momentum_f);
+        fill_with_val<k_tile_face_elems, float>(dfb_momentum.get_write_ptr(), momentum_f);
     } else {
-        fill_with_val_bfloat16(cb_id_momentum, momentum);
+        fill_with_val_bfloat16(dfb_momentum.get_write_ptr(), momentum);
     }
-    cb_id_momentum_obj.push_back(onetile);
+    dfb_momentum.push_back(onetile);
 
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
             for (uint32_t t = start_t; t < HtWt && num_tiles_read < num_tiles; ++t, ++num_tiles_read, ++tile_offset) {
-                cb_id_src_obj.reserve_back(onetile);
-                noc.async_read(src, cb_id_src_obj, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                dfb_src.reserve_back(onetile);
+                noc.async_read(src, dfb_src, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_id_src_obj.push_back(onetile);
+                dfb_src.push_back(onetile);
             }
             tile_offset += next_channel_shift;
         }

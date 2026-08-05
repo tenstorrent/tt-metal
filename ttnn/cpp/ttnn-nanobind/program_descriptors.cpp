@@ -292,6 +292,35 @@ void py_module_types(nb::module_& mod) {
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
+    // Bind FaceGeometry
+    nb::class_<tt::tt_metal::FaceGeometry>(mod, "FaceGeometry", R"pbdoc(
+        Descriptor for the face layout of a tile.
+
+        A tile is subdivided into equally sized faces. FaceGeometry records how many rows each
+        face contains (face_r_dim) and how many faces make up the operand (num_faces). Use it to
+        describe an operand whose geometry differs from the default full-tile layout.
+    )pbdoc")
+        .def(nb::init<>(), R"pbdoc(
+            Default constructor for FaceGeometry (standard full tile: 16-row faces, 4 faces).
+        )pbdoc")
+        .def(
+            "__init__",
+            [](tt::tt_metal::FaceGeometry* self, uint32_t face_r_dim, uint32_t num_faces) {
+                new (self) tt::tt_metal::FaceGeometry{face_r_dim, num_faces};
+            },
+            nb::arg("face_r_dim"),
+            nb::arg("num_faces"),
+            R"pbdoc(
+                Initialize a FaceGeometry.
+
+                Args:
+                    face_r_dim: Number of rows in each face
+                    num_faces: Number of faces in the operand
+            )pbdoc")
+        .def_rw("face_r_dim", &tt::tt_metal::FaceGeometry::face_r_dim, "Number of rows in each face")
+        .def_rw("num_faces", &tt::tt_metal::FaceGeometry::num_faces, "Number of faces in the operand")
+        .def(nb::self == nb::self);
+
     // Bind CBDescriptor and related types
     nb::class_<tt::tt_metal::CBFormatDescriptor>(mod, "CBFormatDescriptor", R"pbdoc(
         Descriptor for command buffer format configuration.
@@ -360,7 +389,11 @@ void py_module_types(nb::module_& mod) {
             },
             "Raw tt::DataFormat enum value as uint8 (reliable getter for all formats)")
         .def_rw("page_size", &tt::tt_metal::CBFormatDescriptor::page_size, "Size of a page in bytes")
-        .def_rw("tile", &tt::tt_metal::CBFormatDescriptor::tile, "Optional tile descriptor for custom tile dimensions");
+        .def_rw("tile", &tt::tt_metal::CBFormatDescriptor::tile, "Optional tile descriptor for custom tile dimensions")
+        .def_rw(
+            "face_geometry",
+            &tt::tt_metal::CBFormatDescriptor::face_geometry,
+            "Optional FaceGeometry override for pack/unpack face layout");
 
     nb::class_<tt::tt_metal::CBDescriptor>(mod, "CBDescriptor", R"pbdoc(
         Circular Buffer Descriptor.
@@ -401,21 +434,6 @@ void py_module_types(nb::module_& mod) {
             "address_offset",
             &tt::tt_metal::CBDescriptor::address_offset,
             "Byte offset from buffer base address for CB placement (default 0)")
-        .def(
-            "add_format_descriptor",
-            [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::CBFormatDescriptor& fmt) {
-                self.format_descriptors.push_back(fmt);
-            },
-            nb::arg("fmt"),
-            R"pbdoc(
-                Add a format descriptor to this CB descriptor.
-
-                Used for CB aliasing: multiple format descriptors share the same
-                L1 allocation but have different CB IDs and tile formats.
-
-                Args:
-                    fmt: A CBFormatDescriptor to add to this descriptor's alias group
-            )pbdoc")
         .def(
             "has_buffer",
             [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr; },
@@ -498,7 +516,7 @@ void py_module_types(nb::module_& mod) {
     // Helper function for creating CBDescriptor from sharded tensor
     mod.def(
         "cb_descriptor_from_sharded_tensor",
-        &tt::tt_metal::cb_descriptor_from_sharded_tensor,
+        &ttnn::cb_descriptor_from_sharded_tensor,
         nb::arg("cb_index"),
         nb::arg("tensor"),
         nb::arg("address_offset") = 0,
@@ -540,7 +558,7 @@ void py_module_types(nb::module_& mod) {
     // Helper function for getting the L1 byte address of a CB descriptor
     mod.def(
         "get_cb_address",
-        &tt::tt_metal::get_cb_address,
+        &ttnn::get_cb_address,
         nb::arg("descriptor"),
         R"pbdoc(
             Get the L1 byte address of a CB descriptor.
@@ -704,58 +722,9 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::KernelDescriptor::Defines defines,
                tt::tt_metal::KernelDescriptor::RuntimeArgs runtime_args,
                tt::tt_metal::KernelDescriptor::CommonRuntimeArgs common_runtime_args,
-               const nb::list& named_common_runtime_args,
-               const nb::list& named_per_core_runtime_args,
-               const nb::list& named_common_runtime_arg_arrays,
-               const nb::list& named_per_core_runtime_arg_arrays,
                std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level,
                tt::tt_metal::KernelDescriptor::ConfigDescriptor config,
                tt::tt_metal::KernelDescriptor::IncludePaths compiler_include_paths) {
-                tt::tt_metal::KernelDescriptor::NamedCommonRuntimeArgs ncra;
-                for (auto item : named_common_runtime_args) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    ncra.push_back({nb::cast<std::string>(tup[0]), nb::cast<uint32_t>(tup[1])});
-                }
-                tt::tt_metal::KernelDescriptor::NamedPerCoreRuntimeArgs npcra;
-                for (auto item : named_per_core_runtime_args) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    auto name = nb::cast<std::string>(tup[0]);
-                    auto dict = nb::cast<nb::dict>(tup[1]);
-                    std::vector<std::pair<CoreCoord, uint32_t>> core_values;
-                    for (const auto& [k, v] : dict) {
-                        core_values.emplace_back(nb::cast<CoreCoord>(k), nb::cast<uint32_t>(v));
-                    }
-                    npcra.push_back({std::move(name), std::move(core_values)});
-                }
-                // Array variant: (name, [val0, val1, ...])
-                tt::tt_metal::KernelDescriptor::NamedCommonRuntimeArgArrays ncraa;
-                for (auto item : named_common_runtime_arg_arrays) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    auto name = nb::cast<std::string>(tup[0]);
-                    auto values_list = nb::cast<nb::list>(tup[1]);
-                    std::vector<uint32_t> values;
-                    for (auto v : values_list) {
-                        values.push_back(nb::cast<uint32_t>(v));
-                    }
-                    ncraa.push_back({std::move(name), std::move(values)});
-                }
-                // Per-core array variant: (name, {CoreCoord: [val0, val1, ...]})
-                tt::tt_metal::KernelDescriptor::NamedPerCoreRuntimeArgArrays npcraa;
-                for (auto item : named_per_core_runtime_arg_arrays) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    auto name = nb::cast<std::string>(tup[0]);
-                    auto dict = nb::cast<nb::dict>(tup[1]);
-                    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> core_values;
-                    for (const auto& [k, v] : dict) {
-                        auto values_list = nb::cast<nb::list>(v);
-                        std::vector<uint32_t> values;
-                        for (auto val : values_list) {
-                            values.push_back(nb::cast<uint32_t>(val));
-                        }
-                        core_values.emplace_back(nb::cast<CoreCoord>(k), std::move(values));
-                    }
-                    npcraa.push_back({std::move(name), std::move(core_values)});
-                }
                 new (self) tt::tt_metal::KernelDescriptor{
                     kernel_source,
                     source_type,
@@ -765,10 +734,14 @@ void py_module_types(nb::module_& mod) {
                     std::move(defines),
                     std::move(runtime_args),
                     std::move(common_runtime_args),
-                    std::move(ncra),
-                    std::move(npcra),
-                    std::move(ncraa),
-                    std::move(npcraa),
+                    ////////////////////////////////////////////////////////////
+                    // Blaze-only experimental named args
+                    // Removal is tracked by issue #50953
+                    // Deliberately constructed EMPTY here: the Blaze named-arg surface is kept
+                    // OUT of the Python __init__ signature. It is settable ONLY post-construction
+                    // via the blaze_named_* def_prop_rw setters below (experimental / temporary).
+                    tt::tt_metal::experimental::blaze::NamedKernelArgs{},
+                    ////////////////////////////////////////////////////////////
                     opt_level,
                     std::move(config),
                     std::move(compiler_include_paths),
@@ -782,10 +755,6 @@ void py_module_types(nb::module_& mod) {
             nb::arg("defines") = nb::cast(tt::tt_metal::KernelDescriptor::Defines()),
             nb::arg("runtime_args") = nb::cast(tt::tt_metal::KernelDescriptor::RuntimeArgs()),
             nb::arg("common_runtime_args") = tt::tt_metal::KernelDescriptor::CommonRuntimeArgs(),
-            nb::arg("named_common_runtime_args") = nb::list(),
-            nb::arg("named_per_core_runtime_args") = nb::list(),
-            nb::arg("named_common_runtime_arg_arrays") = nb::list(),
-            nb::arg("named_per_core_runtime_arg_arrays") = nb::list(),
             nb::arg("opt_level") = nb::none(),
             nb::arg("config"),
             nb::arg("compiler_include_paths") = nb::cast(tt::tt_metal::KernelDescriptor::IncludePaths()),
@@ -801,8 +770,6 @@ void py_module_types(nb::module_& mod) {
                     defines: Preprocessor definitions for kernel compilation
                     runtime_args: Arguments provided at runtime
                     common_runtime_args: Common runtime arguments shared across kernels
-                    named_common_runtime_args: Ordered (name, value) pairs for generated header
-                    named_per_core_runtime_args: List of (name, {CoreCoord: value}) pairs
                     opt_level: Optimization level for kernel compilation
                     config: Configuration descriptor for the kernel
                     compiler_include_paths: Additional include paths passed to the kernel compiler as -I flags
@@ -863,29 +830,37 @@ void py_module_types(nb::module_& mod) {
             "common_runtime_args",
             &tt::tt_metal::KernelDescriptor::common_runtime_args,
             "Common runtime arguments shared across all cores")
+        ////////////////////////////////////////////////////////////
+        // Blaze-only experimental named args
+        // Removal is tracked by issue #50953
+        //
+        // These 4 def_prop_rw setters are the ENTIRE Python surface for the temporary,
+        // Blaze-only named runtime args. They are intentionally kept off __init__ and
+        // loudly marked so they acquire no new users before deletion (issue #50953).
         .def_prop_rw(
-            "named_common_runtime_args",
+            "blaze_named_common_runtime_args",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_common_runtime_args) {
+                for (const auto& arg : self.blaze_named_args.named_common_runtime_args) {
                     result.append(nb::make_tuple(arg.name, arg.value));
                 }
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_common_runtime_args.clear();
+                self.blaze_named_args.named_common_runtime_args.clear();
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
-                    self.named_common_runtime_args.push_back(
+                    self.blaze_named_args.named_common_runtime_args.push_back(
                         {nb::cast<std::string>(tup[0]), nb::cast<uint32_t>(tup[1])});
                 }
             },
-            "Named common runtime arguments: ordered (name, value) pairs for generated header")
+            "[EXPERIMENTAL, BLAZE-ONLY, TEMPORARY - WILL BE DELETED, see issue #50953] Do NOT build new "
+            "code on this API. Named common runtime arguments: ordered (name, value) pairs.")
         .def_prop_rw(
-            "named_per_core_runtime_args",
+            "blaze_named_per_core_runtime_args",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_per_core_runtime_args) {
+                for (const auto& arg : self.blaze_named_args.named_per_core_runtime_args) {
                     nb::dict core_values;
                     for (const auto& [core, value] : arg.core_values) {
                         core_values[nb::cast(core)] = nb::cast(value);
@@ -895,24 +870,28 @@ void py_module_types(nb::module_& mod) {
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_per_core_runtime_args.clear();
+                self.blaze_named_args.named_per_core_runtime_args.clear();
+                self.blaze_named_args.named_per_core_runtime_args.reserve(args.size());
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
                     auto dict = nb::cast<nb::dict>(tup[1]);
                     std::vector<std::pair<CoreCoord, uint32_t>> core_values;
+                    core_values.reserve(dict.size());
                     for (const auto& [k, v] : dict) {
                         core_values.emplace_back(nb::cast<CoreCoord>(k), nb::cast<uint32_t>(v));
                     }
-                    self.named_per_core_runtime_args.push_back({std::move(name), std::move(core_values)});
+                    self.blaze_named_args.named_per_core_runtime_args.push_back(
+                        {std::move(name), std::move(core_values)});
                 }
             },
-            "Named per-core runtime args: list of (name, {CoreCoord: value}) pairs")
+            "[EXPERIMENTAL, BLAZE-ONLY, TEMPORARY - WILL BE DELETED, see issue #50953] Do NOT build new "
+            "code on this API. Named per-core runtime args: list of (name, {CoreCoord: value}) pairs.")
         .def_prop_rw(
-            "named_common_runtime_arg_arrays",
+            "blaze_named_common_runtime_arg_arrays",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_common_runtime_arg_arrays) {
+                for (const auto& arg : self.blaze_named_args.named_common_runtime_arg_arrays) {
                     nb::list values;
                     for (auto v : arg.values) {
                         values.append(v);
@@ -922,24 +901,28 @@ void py_module_types(nb::module_& mod) {
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_common_runtime_arg_arrays.clear();
+                self.blaze_named_args.named_common_runtime_arg_arrays.clear();
+                self.blaze_named_args.named_common_runtime_arg_arrays.reserve(args.size());
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
                     auto values_list = nb::cast<nb::list>(tup[1]);
                     std::vector<uint32_t> values;
+                    values.reserve(values_list.size());
                     for (auto v : values_list) {
                         values.push_back(nb::cast<uint32_t>(v));
                     }
-                    self.named_common_runtime_arg_arrays.push_back({std::move(name), std::move(values)});
+                    self.blaze_named_args.named_common_runtime_arg_arrays.push_back(
+                        {std::move(name), std::move(values)});
                 }
             },
-            "Named common runtime arg arrays: list of (name, [values]) pairs")
+            "[EXPERIMENTAL, BLAZE-ONLY, TEMPORARY - WILL BE DELETED, see issue #50953] Do NOT build new "
+            "code on this API. Named common runtime arg arrays: list of (name, [values]) pairs.")
         .def_prop_rw(
-            "named_per_core_runtime_arg_arrays",
+            "blaze_named_per_core_runtime_arg_arrays",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
-                for (const auto& arg : self.named_per_core_runtime_arg_arrays) {
+                for (const auto& arg : self.blaze_named_args.named_per_core_runtime_arg_arrays) {
                     nb::dict core_values;
                     for (const auto& [core, values] : arg.core_values) {
                         nb::list val_list;
@@ -953,24 +936,30 @@ void py_module_types(nb::module_& mod) {
                 return result;
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
-                self.named_per_core_runtime_arg_arrays.clear();
+                self.blaze_named_args.named_per_core_runtime_arg_arrays.clear();
+                self.blaze_named_args.named_per_core_runtime_arg_arrays.reserve(args.size());
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
                     auto dict = nb::cast<nb::dict>(tup[1]);
                     std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> core_values;
+                    core_values.reserve(dict.size());
                     for (const auto& [k, v] : dict) {
                         auto values_list = nb::cast<nb::list>(v);
                         std::vector<uint32_t> values;
+                        values.reserve(values_list.size());
                         for (auto val : values_list) {
                             values.push_back(nb::cast<uint32_t>(val));
                         }
                         core_values.emplace_back(nb::cast<CoreCoord>(k), std::move(values));
                     }
-                    self.named_per_core_runtime_arg_arrays.push_back({std::move(name), std::move(core_values)});
+                    self.blaze_named_args.named_per_core_runtime_arg_arrays.push_back(
+                        {std::move(name), std::move(core_values)});
                 }
             },
-            "Named per-core runtime arg arrays: list of (name, {CoreCoord: [values]}) pairs")
+            "[EXPERIMENTAL, BLAZE-ONLY, TEMPORARY - WILL BE DELETED, see issue #50953] Do NOT build new "
+            "code on this API. Named per-core runtime arg arrays: list of (name, {CoreCoord: [values]}) pairs.")
+        ////////////////////////////////////////////////////////////
         .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel")
         .def_rw(
             "compiler_include_paths",

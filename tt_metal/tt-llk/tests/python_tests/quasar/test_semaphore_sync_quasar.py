@@ -21,7 +21,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -42,6 +42,9 @@ from helpers.utils import passed_test
         [
             DataFormat.Float16_b,
             DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
         ],
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
@@ -67,7 +70,7 @@ def test_semaphore_sync_quasar(
 
     input_dimensions = [64, 64]
 
-    src_A, tile_cnt, _, _ = generate_stimuli_v2(
+    src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -86,6 +89,7 @@ def test_semaphore_sync_quasar(
         math_fidelity,
         tile_cnt,
         input_format=formats.input_format,
+        dest_acc=dest_acc,
     )
 
     configuration = TestConfig(

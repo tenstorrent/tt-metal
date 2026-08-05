@@ -10,7 +10,7 @@ namespace ckernel
 {
 
 // Currently unused but kept for backwards compatibility
-enum VectorMode
+enum class VectorMode : std::uint8_t
 {
     None      = 0,
     R         = 1,
@@ -90,16 +90,36 @@ enum class SfpuType : std::uint32_t
     sigmoid,
     silu,
     abs,
+    clamp,
+    negative,
+    softplus,
+    sine,
+    cosine,
+    acosh,
+    asinh,
+    atanh,
     fill,
     swiglu,
-    where
-};
-
-enum class BinaryOp : std::uint8_t
-{
-    ADD,
-    SUB,
-    MUL,
+    where,
+    unused,
+    lt,
+    gt,
+    le,
+    ge,
+    lt_int,
+    gt_int,
+    le_int,
+    ge_int,
+    mul_int,
+    topk_local_sort,
+    topk_merge,
+    topk_rebuild,
+    equal_zero,
+    not_equal_zero,
+    less_than_zero,
+    greater_than_zero,
+    less_than_equal_zero,
+    greater_than_equal_zero,
 };
 
 enum class DstSync : std::uint8_t
@@ -122,6 +142,13 @@ enum class StochRndType : std::uint8_t
     Fpu  = 1,
     Pack = 2,
     All  = 3,
+};
+
+enum class PackMode : std::uint8_t
+{
+    Default  = 0,
+    Untilize = 1,
+    Tilize   = 2,
 };
 
 // Packer ReLU modes; encoding matches RELU_MODE (2 bits) in HW.

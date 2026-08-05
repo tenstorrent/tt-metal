@@ -18,7 +18,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES pad_tile.hpp
+        FILES pad_tile.hpp validation_helpers.hpp
 )
 
 install(
@@ -29,3 +29,5 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/kernel_helper_functions
         COMPONENT ttnn-runtime
 )
+
+install(TARGETS ttnn_op_helper FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

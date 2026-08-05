@@ -21,17 +21,22 @@ usage() {
     cat <<EOF
     Bundle Python interpreter into a virtual environment.
 
-    This script deep-copies the Python interpreter into the venv, making it
-    fully self-contained and portable. This is necessary for multi-host SLURM
-    environments where the venv may be shared over NFS and each host needs
-    access to the Python interpreter without relying on symlinks to a Docker
-    container's local filesystem.
+    This script deep-copies the Python interpreter into the venv's _python/
+    subdirectory, making it fully self-contained and portable. This is necessary
+    for multi-host SLURM environments where the venv may be shared over NFS and
+    each host needs access to the Python interpreter without relying on symlinks
+    to a per-host managed Python installation.
+
+    Python binaries in bin/ are replaced with relative symlinks into _python/bin/,
+    and pyvenv.cfg.home is rewritten to match. Using a subdirectory (not the venv
+    root) ensures base_prefix (_python/) != prefix (venv root), which is required
+    for uv, pip, and Python's own site.py to recognise this as a virtual environment.
 
     Usage: $0 <venv_dir> [--force]
 
     Arguments:
       venv_dir    Path to the virtual environment directory
-      --force     Bundle even if Python is not symlinked (optional)
+      --force     Re-bundle even if _python/ already exists (optional)
 
     The script uses uv's Python installation structure:
       <UV_PYTHON_INSTALL_DIR>/cpython-<version>-<platform>/bin/python
@@ -60,22 +65,15 @@ if [[ ! -d "$VENV_DIR" ]]; then
     exit 1
 fi
 
-# Check if Python interpreter needs to be bundled by checking if any python executables are symlinks
+BUNDLED_PYTHON_DIR="$VENV_DIR/_python"
+
+# Bundling is needed if the _python/ subdirectory does not yet exist.
 needs_bundling() {
-    local venv_dir="$1"
-    (
-        shopt -s nullglob
-        for py_exec in "$venv_dir/bin/python" "$venv_dir/bin/python3" "$venv_dir/bin/python3".*; do
-            if [[ -e "$py_exec" && -L "$py_exec" ]]; then
-                return 0  # true - needs bundling
-            fi
-        done
-        return 1  # false - already bundled
-    )
+    [[ ! -d "$BUNDLED_PYTHON_DIR" ]]
 }
 
-if [[ "$FORCE_BUNDLE" != "--force" ]] && ! needs_bundling "$VENV_DIR"; then
-    echo "INFO: Python interpreter is already bundled in $VENV_DIR, skipping"
+if [[ "$FORCE_BUNDLE" != "--force" ]] && ! needs_bundling; then
+    echo "INFO: Python interpreter already bundled at $BUNDLED_PYTHON_DIR, skipping"
     exit 0
 fi
 
@@ -127,12 +125,68 @@ if [[ ! -d "$CPYTHON_DIR/lib" ]]; then
     exit 1
 fi
 
-# Remove python symlinks in venv (they will be replaced with bundled interpreter)
-echo "  Removing venv python symlinks..."
+# Copy CPython into a temporary location first. This is necessary because on a
+# --force re-run against an already-bundled venv, bin/python is a relative symlink
+# (../_python/bin/python) that readlink -f resolves to $VENV_DIR/_python/bin/python,
+# making CPYTHON_DIR == BUNDLED_PYTHON_DIR. Copying to a temp dir before removing
+# anything means the source is always intact when the copy runs.
+echo "  Copying Python interpreter into $BUNDLED_PYTHON_DIR/..."
+TMP_DIR="${BUNDLED_PYTHON_DIR}.tmp"
+rm -rf "$TMP_DIR"
+mkdir -p "$TMP_DIR"
+cp -r "$CPYTHON_DIR"/* "$TMP_DIR/"
+
+# Remove Python symlinks in venv/bin/ (they point to either the external managed
+# install or, on re-bundle, into the _python/ dir that is about to be replaced).
+echo "  Removing Python symlinks from $VENV_DIR/bin/..."
 rm -f "$VENV_DIR/bin/python"*
 
-# Copy the cpython directory contents into the venv
-echo "  Copying Python interpreter files into venv..."
-cp -r "$CPYTHON_DIR"/* "$VENV_DIR/"
+# Atomically replace _python/ with the new copy.
+# We deliberately do NOT copy into the venv root. If we did, base_prefix would
+# equal prefix ($VENV_DIR), which causes Python, uv, and pip to conclude that
+# this is NOT a virtual environment — the same symptom as the bug we are fixing.
+# Bundling into _python/ keeps:
+#   base_prefix = $VENV_DIR/_python   (derived from pyvenv.cfg.home)
+#   prefix      = $VENV_DIR
+#   base_prefix != prefix  =>  venv is correctly recognised.
+rm -rf "$BUNDLED_PYTHON_DIR"
+mv "$TMP_DIR" "$BUNDLED_PYTHON_DIR"
+
+# Create relative symlinks in venv/bin/ that point to the bundled interpreter.
+# Relative symlinks remain valid when the venv is mounted at any NFS path —
+# the link resolves within the venv regardless of the absolute mount point.
+echo "  Creating relative symlinks to bundled interpreter..."
+for py_exec in python python3; do
+    [[ -f "$BUNDLED_PYTHON_DIR/bin/$py_exec" ]] && \
+        ln -sf "../_python/bin/$py_exec" "$VENV_DIR/bin/$py_exec"
+done
+for versioned_py in "$BUNDLED_PYTHON_DIR/bin/python3".[0-9]*; do
+    [[ -f "$versioned_py" ]] || continue
+    py_name=$(basename "$versioned_py")
+    ln -sf "../_python/bin/$py_name" "$VENV_DIR/bin/$py_name"
+done
+
+# Rewrite pyvenv.cfg.home to point at the bundled interpreter location.
+#
+# Before bundling: home = /usr/local/share/uv/cpython-3.12.X.../bin
+#   (the external managed install; no longer accessible after Docker build or on
+#    SLURM worker nodes that lack the uv managed Python installation)
+#
+# After bundling:  home = <venv>/_python/bin
+#   (bundled inside the venv; always accessible, relative to the venv root)
+#
+# uv runs Interpreter::query against venv/bin/python to validate the environment.
+# If home points to a path Python cannot locate its stdlib from, the query fails
+# and uv reports "No virtual environment found" even though VIRTUAL_ENV is set.
+PYVENV_CFG="$VENV_DIR/pyvenv.cfg"
+if [[ -f "$PYVENV_CFG" ]]; then
+    awk -v home="$BUNDLED_PYTHON_DIR/bin" '
+        /^home = /  { print "home = " home; next }
+        { print }
+    ' "$PYVENV_CFG" > "$PYVENV_CFG.tmp" && mv "$PYVENV_CFG.tmp" "$PYVENV_CFG"
+    echo "  Updated pyvenv.cfg: home = $BUNDLED_PYTHON_DIR/bin"
+else
+    echo "WARNING: $PYVENV_CFG not found — venv may not be recognised correctly" >&2
+fi
 
 echo "  Python interpreter bundled successfully"

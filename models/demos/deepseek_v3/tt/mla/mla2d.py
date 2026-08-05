@@ -169,6 +169,7 @@ class MLA2D(MLA1D):
         cfg: RunPrefillConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
+        chunk_start_idx: int = 0,
     ) -> ttnn.Tensor:
         """Forward pass of MLA in prefill mode.
 
@@ -178,6 +179,7 @@ class MLA2D(MLA1D):
             batch_idx: Batch index for cache updates (wrt to global batch size)
             rope_tensors: Dictionary containing RoPE tensors
             page_table: Page table tensor for paged attention
+            chunk_start_idx: Absolute token offset of the first token in this chunk
 
         Returns:
             Output tensor after MLP computation
@@ -196,6 +198,7 @@ class MLA2D(MLA1D):
             cfg=cfg["mla1d"],
             rope_tensors=rope_tensors,
             page_table=page_table,
+            chunk_start_idx=chunk_start_idx,
         )
         ttnn.deallocate(x_next)
 

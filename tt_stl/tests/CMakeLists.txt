@@ -8,6 +8,7 @@ target_sources(
     PRIVATE
         test_cleanup.cpp
         test_fmt.cpp
+        test_hash.cpp
         test_indestructible.cpp
         test_optional_reference.cpp
         test_reflection.cpp

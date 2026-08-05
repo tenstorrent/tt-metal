@@ -9,7 +9,12 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache, strip_state_dict_prefix
+from models.demos.ttnn_falcon7b.tt.common import (
+    build_past_key_values_cache,
+    create_custom_preprocessor,
+    create_kv_cache,
+    strip_state_dict_prefix,
+)
 from models.demos.ttnn_falcon7b.tt.falcon_model import TtFalconModel
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -74,15 +79,21 @@ def test_falcon_model(
     else:
         shard_dim = 0
 
-    causual_model = transformers.FalconForCausalLM.from_pretrained(PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True).eval()
+    causual_model = (
+        transformers.FalconForCausalLM.from_pretrained(PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True)
+        .eval()
+        .to(torch.float32)
+    )
     state_dict = causual_model.state_dict()
     filtered_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
 
     configuration = transformers.FalconConfig.from_pretrained(model_version)
     configuration.num_hidden_layers = num_layers
-    torch_model = transformers.models.falcon.modeling_falcon.FalconModel.from_pretrained(
-        model_version, config=configuration
-    ).eval()
+    torch_model = (
+        transformers.models.falcon.modeling_falcon.FalconModel.from_pretrained(model_version, config=configuration)
+        .eval()
+        .to(torch.float32)
+    )
 
     torch_model.load_state_dict(filtered_state_dict, strict=False)
     model_config = get_model_config(model_config_str)
@@ -120,7 +131,7 @@ def test_falcon_model(
                 mesh_device,
                 mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
             )
-            past_key_values += ((current_layer_past.key_cache[0], current_layer_past.value_cache[0]),)
+            past_key_values += (current_layer_past,)
             tt_layer_past += (tt_current_layer_past,)
 
     else:
@@ -129,7 +140,7 @@ def test_falcon_model(
     pytorch_out, pytorch_layer_present = torch_model(
         input_ids=model_input,
         attention_mask=None,
-        past_key_values=past_key_values,
+        past_key_values=build_past_key_values_cache(past_key_values),
         use_cache=True,
         return_dict=False,
     )

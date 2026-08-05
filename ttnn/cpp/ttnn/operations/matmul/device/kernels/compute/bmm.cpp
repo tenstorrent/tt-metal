@@ -5,8 +5,9 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 using std::uint32_t;
 
@@ -23,15 +24,16 @@ void kernel_main() {
     uint32_t Kt = get_compile_time_arg_val(2);
     uint32_t Nt = get_compile_time_arg_val(3);
 
-    constexpr uint32_t cb_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t dfb_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t dfb_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t dfb_out = get_named_compile_time_arg_val("cb_out");
 
-    CircularBuffer in0_cb(cb_in0);
-    CircularBuffer in1_cb(cb_in1);
-    CircularBuffer out_cb(cb_out);
+    DataflowBuffer in0_dfb(dfb_in0);
+    DataflowBuffer in1_dfb(dfb_in1);
+    DataflowBuffer out_dfb(dfb_out);
 
-    mm_init(cb_in0, cb_in1, cb_out);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb_in0, dfb_in1, dfb_out);
+    matmul_init(dfb_in0, dfb_in1);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -39,22 +41,26 @@ void kernel_main() {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
-                acquire_dst();
+                tile_regs_acquire();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
-                    in0_cb.wait_front(onetile);
-                    in1_cb.wait_front(onetile);
+                    in0_dfb.wait_front(onetile);
+                    in1_dfb.wait_front(onetile);
 
-                    matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
+                    matmul_tiles(dfb_in0, dfb_in1, 0, 0, 0);
 
-                    in0_cb.pop_front(onetile);
-                    in1_cb.pop_front(onetile);
+                    in0_dfb.pop_front(onetile);
+                    in1_dfb.pop_front(onetile);
                 }
 
-                out_cb.reserve_back(onetile);
-                pack_tile(0, cb_out);
-                out_cb.push_back(onetile);
+                tile_regs_commit();
 
-                release_dst();
+                out_dfb.reserve_back(onetile);
+
+                tile_regs_wait();
+                pack_tile(0, dfb_out);
+                tile_regs_release();
+
+                out_dfb.push_back(onetile);
             }
         }
     }

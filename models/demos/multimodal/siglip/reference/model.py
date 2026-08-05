@@ -633,7 +633,7 @@ class SiglipEncoderLayer(nn.Module):
     def __init__(self, config: SiglipConfig):
         super().__init__()
         self.embed_dim = config.hidden_size
-        self.self_attn = SIGLIP_ATTENTION_CLASSES[config._attn_implementation](config=config)
+        self.self_attn = SIGLIP_ATTENTION_CLASSES[config._attn_implementation or "eager"](config=config)
         self.layer_norm1 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
         # self.layer_norm1 = SiglipLayerNorm(self.embed_dim, eps=config.layer_norm_eps)
         self.mlp = SiglipMLP(config)

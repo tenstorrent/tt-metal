@@ -25,7 +25,8 @@ template <EltwiseBinaryType eltwise_binary_type>
 inline void deepseek_moe_gate_eltwise_binary_configure_addrmod() {
     // Use srcA for data movement
     if constexpr (
-        (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
+        (eltwise_binary_type == EltwiseBinaryType::ELWMUL)) {
         addr_mod_t{
             .srca = {.incr = 8},
             .srcb = {.incr = 8},
@@ -70,12 +71,15 @@ inline void _llk_math_deepseek_moe_gate_eltwise_binary_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
-    static_assert(!(eltwise_binary_type == ELWMUL && high_fidelity), "High fidelity is not supported for ELWMUL");
+    static_assert(
+        !(eltwise_binary_type == EltwiseBinaryType::ELWMUL && high_fidelity),
+        "High fidelity is not supported for ELWMUL");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     if constexpr (
-        (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
+        (eltwise_binary_type == EltwiseBinaryType::ELWMUL)) {
         ckernel_template::run();
     }
     math::clear_dst_reg_addr();
@@ -98,12 +102,12 @@ inline void deepseek_moe_gate_eltwise_binary_configure_mop(
 
     // TODO: Probably not worth it to use a replay buffer/mop for this
     // Just hardcode the math ops in _llk_math_deepseek_moe_gate_eltwise_binary_ since we only have 1 face
-    if constexpr (eltwise_binary_type == ELWADD) {
+    if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD) {
         math_op = TT_OP_ELWADD(0, acc_to_dest, broadcast_type, addr_mod, dst_math_offset);
 
-    } else if constexpr (eltwise_binary_type == ELWSUB) {
+    } else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWSUB) {
         math_op = TT_OP_ELWSUB(0, acc_to_dest, broadcast_type, addr_mod, dst_math_offset);
-    } else if constexpr (eltwise_binary_type == ELWMUL) {
+    } else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL) {
         static_assert(!high_fidelity, "High fidelity is not supported for ELWMUL");
         math_op = TT_OP_ELWMUL(0, 0, broadcast_type, addr_mod, dst_math_offset);
     }
@@ -132,7 +136,8 @@ inline void _llk_math_deepseek_moe_gate_eltwise_binary_init_(
     deepseek_moe_gate_eltwise_binary_configure_addrmod<eltwise_binary_type>();
 
     if constexpr (
-        (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
+        (eltwise_binary_type == EltwiseBinaryType::ELWMUL)) {
         deepseek_moe_gate_eltwise_binary_configure_mop<eltwise_binary_type, mode, math_fidelity>(
             acc_to_dest, num_faces);
     }

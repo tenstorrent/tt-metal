@@ -18,25 +18,28 @@ namespace ttml::metal::ops::subtract_at_target::device {
 //
 // Real callers pass (local_V, cluster_axis) and leave first_v = 0; first_v exists so
 // single-device unit tests can still exercise non-zero shard windows.
-struct operation_attributes_t {
+struct SubtractAtTargetParams {
     uint32_t first_v{0U};
     uint32_t local_V{0U};
     std::optional<uint32_t> cluster_axis{};
     float subtract_value{1.0F};
 };
 
-struct tensor_args_t {
+struct SubtractAtTargetInputs {
     const ttnn::Tensor& input;   // [N, 1, S, local_V] TILE BFLOAT16
     const ttnn::Tensor& target;  // [N, S]              ROW_MAJOR UINT32  (global indices)
 
     std::optional<ttnn::Tensor> preallocated_output;
 };
 
+using operation_attributes_t = SubtractAtTargetParams;
+using tensor_args_t = SubtractAtTargetInputs;
+
 // output: same shape as input [N, 1, S, local_V] TILE BFLOAT16
 // output[n, 0, s, c] = input[n, 0, s, c] - subtract_value
 //                       if c + device_first_v == target[n, s] && target[n, s] in [device_first_v, device_last_v)
 //                     = input[n, 0, s, c] otherwise
 using tensor_return_value_t = ttnn::Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 }  // namespace ttml::metal::ops::subtract_at_target::device

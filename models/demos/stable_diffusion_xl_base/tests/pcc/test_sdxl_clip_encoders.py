@@ -139,14 +139,14 @@ def test_clip_encoder(
     logger.info(f"HF text encoder 1 pooled output mean: {pooled_output.mean():.6f}, std: {pooled_output.std():.6f}")
 
     logger.info("compiling text encoder...")
-    tt_clip(tt_tokens, mesh_device)
+    tt_clip(tt_tokens)
 
     logger.info("executing text encoder...")
     start_time = time.time()
 
     ttnn.ReadDeviceProfiler(mesh_device)
 
-    tt_sequence_output, tt_projected_output = tt_clip(tt_tokens, mesh_device)
+    tt_sequence_output, tt_projected_output = tt_clip(tt_tokens)
 
     logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
     logger.info("text encoder done...")

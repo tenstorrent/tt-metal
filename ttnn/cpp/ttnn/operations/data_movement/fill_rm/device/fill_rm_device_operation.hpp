@@ -15,7 +15,7 @@ namespace ttnn::prim {
 struct FillRMDeviceOperation {
     using operation_attributes_t = FillRmParams;
     using tensor_args_t = FillRmInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<FillRMProgramFactory>;
 
@@ -41,6 +41,6 @@ ttnn::Tensor fill_rm(
     const Tensor& input,
     float val_hi,
     float val_lo,
-    const MemoryConfig& output_memory_config);
+    const tt::tt_metal::MemoryConfig& output_memory_config);
 
 }  // namespace ttnn::prim

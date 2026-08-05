@@ -11,7 +11,9 @@
 #include "api/compute/eltwise_unary/clamp.h"
 #include "api/compute/eltwise_unary/rsub.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+
+// Formula: logit(x) = log(x/(1-x)) -- calls clamp, rsub, div, and log tiles.
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -22,15 +24,15 @@ void kernel_main() {
     constexpr auto cb_output = tt::CBIndex::c_2;
     constexpr auto cb_tmp0 = tt::CBIndex::c_1;
 
-    CircularBuffer cb_in(cb_input);
-    CircularBuffer cb_out(cb_output);
-    CircularBuffer cb_tmp(cb_tmp0);
+    DataflowBuffer dfb_in(cb_input);
+    DataflowBuffer dfb_out(cb_output);
+    DataflowBuffer dfb_tmp(cb_tmp0);
 
     init_sfpu(cb_input, cb_output);
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-        cb_tmp.reserve_back(1);
+        dfb_in.wait_front(1);
+        dfb_out.reserve_back(1);
+        dfb_tmp.reserve_back(1);
 
         tile_regs_acquire();
 
@@ -46,8 +48,8 @@ void kernel_main() {
         pack_tile(0, cb_tmp0);
         tile_regs_release();
 
-        cb_tmp.push_back(1);
-        cb_tmp.wait_front(1);
+        dfb_tmp.push_back(1);
+        dfb_tmp.wait_front(1);
 
         tile_regs_acquire();
 
@@ -70,8 +72,8 @@ void kernel_main() {
         pack_tile(0, cb_output);
         tile_regs_release();
 
-        cb_tmp.pop_front(1);
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
+        dfb_tmp.pop_front(1);
+        dfb_in.pop_front(1);
+        dfb_out.push_back(1);
     }
 }

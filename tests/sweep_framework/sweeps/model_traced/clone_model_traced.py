@@ -122,9 +122,19 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
+    # Check with PCC. clone may convert dtype (op_kwargs["dtype"]); a block-float
+    # output is inherently lossy vs the bf16/fp32 golden, so relax the threshold
+    # to match the output precision (the unit test uses loose rtol/atol=0.01 for
+    # dtype-converting clones). bfloat4_b carries ~3 mantissa bits.
+    out_dtype = op_kwargs.get("dtype")
+    if out_dtype == ttnn.bfloat4_b:
+        pcc_threshold = 0.98
+    elif out_dtype == ttnn.bfloat8_b:
+        pcc_threshold = 0.99
+    else:
+        pcc_threshold = 0.999
     if is_mesh_device:
         torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, pcc_threshold)
 
     return [pcc, e2e_perf]

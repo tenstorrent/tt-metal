@@ -229,7 +229,7 @@ This results in an **4×4 sampled preview** of the 32×32 tile.  Pretty efficien
 To print your slice, call the TileSlice function like so:
 
 ```cpp
-DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false);
+DPRINT("{}", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
 ```
 
 - **Circular Buffer ID**: `cb_id_in0` → The circular buffer ID where the tile data is stored. NOTE: it is important the circular buffer is not pushed backed yet, otherwise tile DPRINTing will fail, so make sure TileSlice is placed before a `cb_push_back()` call.
@@ -280,8 +280,8 @@ Recall that instead of setting it to `INVALID`, we reset it to `0`. Bringing thi
 So now, we print a debug message to alert you that the multicast operation is ready for launch. At this point, the coordinator has verified that all receivers are ready, so let us commence the multicast!
 
 ```cpp
-DPRINT << "CORE (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
-    << "): Tile ready for multicast. I am starting all inbound kernels in cores in given range." << ENDL() << ENDL();
+DPRINT("CORE ({},{}): Tile ready for multicast. I am starting all inbound kernels in cores in given range.\n\n",
+    get_absolute_logical_x(), get_absolute_logical_y());
 ```
 
 ### **3.6 Multicasting the Tile**
@@ -417,7 +417,7 @@ To verify correctness, receivers can use DPRINT to log a sample of the tile data
 ```cpp
 for (uint8_t r = 0; r < 32; ++r) {
     SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-    DPRINT_DATA0({ DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false); });
+    DPRINT_DATA0("{}", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
 }
 ```
 
@@ -432,8 +432,8 @@ cb_push_back(cb_id_in0, 1);
 And officially close out the inbound kernel with:
 
 ```cpp
-DPRINT << "CORE (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
-    << "): Inbound kernel has processed and acknowledged its tile." << ENDL() << ENDL();
+DPRINT("CORE ({},{}): Inbound kernel has processed and acknowledged its tile.\n\n",
+    get_absolute_logical_x(), get_absolute_logical_y());
 ```
 
 

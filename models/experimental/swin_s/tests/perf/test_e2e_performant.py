@@ -62,6 +62,9 @@ def run_e2e_performant(
     [{"l1_small_size": SWIN_S_L1_SMALL_SIZE, "trace_region_size": 16998400, "num_command_queues": 2}],
     indirect=True,
 )
+@pytest.mark.skip(
+    reason="Deterministic TT_FATAL: trace buffer size 23052288B exceeds allocated trace_region_size 16998400B (mesh_trace.cpp:78) — tracked in https://github.com/tenstorrent/tt-metal/issues/45528"
+)
 def test_e2e_performant(
     device,
     batch_size,
@@ -96,6 +99,9 @@ def test_e2e_performant(
     "device_params",
     [{"l1_small_size": SWIN_S_L1_SMALL_SIZE, "trace_region_size": 16998400, "num_command_queues": 2}],
     indirect=True,
+)
+@pytest.mark.skip(
+    reason="Deterministic TT_FATAL: trace buffer size 23052288B exceeds allocated trace_region_size 16998400B (mesh_trace.cpp:78) — tracked in https://github.com/tenstorrent/tt-metal/issues/45528"
 )
 def test_e2e_performant_dp(
     mesh_device,

@@ -38,8 +38,16 @@ def test_demo_batch_7(batch, input_path, model_location_generator, device):
 
     logger.info(answers)
 
+    # transformers 5.x changed the QA tokenizer's answer-span char offsets slightly, so an answer
+    # may gain/lose a trailing comma vs 4.x (e.g. "...communities," -> "...communities"). Normalize
+    # trailing commas/whitespace on both sides so the exact-span check stays version-tolerant.
+    def _norm(s):
+        return s.rstrip(", ")
+
     for i in range(batch):
-        assert expected_answers[i] == answers[i]
+        assert _norm(expected_answers[i]) == _norm(
+            answers[i]
+        ), f"answer[{i}]: {answers[i]!r} != {expected_answers[i]!r}"
 
 
 @pytest.mark.parametrize("batch", (12,), ids=["batch_12"])
@@ -70,8 +78,16 @@ def test_demo_batch_12(batch, input_path, model_location_generator, device):
 
     logger.info(answers)
 
+    # transformers 5.x changed the QA tokenizer's answer-span char offsets slightly, so an answer
+    # may gain/lose a trailing comma vs 4.x (e.g. "...communities," -> "...communities"). Normalize
+    # trailing commas/whitespace on both sides so the exact-span check stays version-tolerant.
+    def _norm(s):
+        return s.rstrip(", ")
+
     for i in range(batch):
-        assert expected_answers[i] == answers[i]
+        assert _norm(expected_answers[i]) == _norm(
+            answers[i]
+        ), f"answer[{i}]: {answers[i]!r} != {expected_answers[i]!r}"
 
 
 @pytest.mark.skipif(is_blackhole(), reason="#7525: Not functional on BH yet")

@@ -98,7 +98,7 @@ void kernel_main() {
             for (uint32_t h = 0; h < in0_block_h; h++) {
                 uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                 for (uint32_t w = 0; w < in0_block_w; w++) {
-                    noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
+                    noc_async_read_page(in0_tensor_tile_id, s0, l1_write_addr_in0);
                     l1_write_addr_in0 += single_tile_size_bytes;
                     in0_tensor_tile_id += in0_tensor_stride_w;
                     in0_block_size_bytes += single_tile_size_bytes;

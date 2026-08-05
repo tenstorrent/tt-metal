@@ -143,14 +143,7 @@ constexpr std::uint32_t LREG_DATA3 = p_sfpu::LREG5;
 
 // SFPSHFT2 Mod1 encoding: rotate right by 1 within each 8-lane sub-vector.
 constexpr std::uint32_t SFPSHFT2_MOD1_SUBVEC_SHFLROR1 = 3;
-
-// SFPCONFIG target index used with imm-mask to force LReg[11] = 1.0 on
-// specific SFPU instances (= specific "SFPU columns" within each 8-lane
-// group) and 0.0 on the others. Bit N of the mask corresponds to SFPU
-// instance N; the low 8 bits control the 8 SFPU columns.
-constexpr std::uint32_t SFPCONFIG_TARGET_LREG11      = 11;
-constexpr std::uint32_t SFPCONFIG_MOD_SET_LREG11     = 8;
-constexpr std::uint32_t SFPCONFIG_MASK_INSTANCE_COL0 = 0x0001;
+constexpr std::uint32_t SFPSHFT_MOD1_ARG_IMM          = 1;
 
 // Replay-buffer slots.
 constexpr std::uint32_t REPLAY_SLOT_BROADCAST = 0;  // col-0 -> all-cols broadcast
@@ -172,50 +165,16 @@ constexpr std::uint32_t COL_GROUP_OFFSETS[4] = {
 // ============================================================================
 
 // Build LREG_MASK = {1.0, 0, 0, 0, 0, 0, 0, 0} repeated across all 4 sub-rows
-// of the register. Strategy: write 1.0 into the mask register only on SFPU
-// instance 0 (= SFPU col 0 of each 8-lane sub-vector) via SFPSETCC guarded
-// by a purpose-built LReg[11] marker.
-//
-// SFPCONFIG(imm_mask, 11, 8) sets LReg[11] = (current value of LReg[0]) but
-// only on SFPU instances selected by imm_mask; other instances keep whatever
-// LReg[11] previously held. Bit N of imm_mask selects SFPU instance N.
-// Because only selected instances are overwritten, we must issue two
-// SFPCONFIG passes: first to zero LReg[11] everywhere, then to set it to a
-// nonzero marker on the target instance.
-//
-// Notes on SFPLOADI Mod0:
-//   SFPLOADI_MOD0_UPPER (8)   -> writes high 16 bits of each lane's u32
-//   SFPLOADI_MOD0_LOWER (10)  -> writes low  16 bits of each lane's u32
-// FP32 0x3F800000 = 1.0, so high=0x3F80, low=0x0000.
+// of the register. LReg[15] contains 2*lane_id, so left-shifting it by 28
+// leaves zero only for SFPU col 0 in each 8-lane sub-vector.
 inline void _build_lane_mask_col0_()
 {
-    constexpr std::uint32_t ALL_INSTANCES_MASK = 0x5555; // every SFPU instance
-
-    // Start with LREG_MASK = 0.0 on all 32 lanes.
+    TTI_SFPMOV(0, p_sfpu::LTILEID, LREG_TMP, 0);
+    TTI_SFPSHFT(28, 0, LREG_TMP, SFPSHFT_MOD1_ARG_IMM);
     TTI_SFPMOV(0, p_sfpu::LCONST_0, LREG_MASK, 0);
-
-    // Step 1: clear LReg[11] on all instances.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
-    TTI_SFPCONFIG(ALL_INSTANCES_MASK, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
-
-    // Step 2: set LReg[11] = 1.0 on SFPU instance 0 only.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3F80);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
-    TTI_SFPCONFIG(SFPCONFIG_MASK_INSTANCE_COL0, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
-
-    // Under "LReg[11] != 0" (true only on SFPU col 0 of each 8-lane group),
-    // write 1.0 into LREG_MASK. Elsewhere LREG_MASK keeps its 0.0 from above.
-    TTI_SFPSETCC(0, p_sfpu::LREG11, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+    TTI_SFPSETCC(0, LREG_TMP, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
     TTI_SFPLOADI(LREG_MASK, sfpi::SFPLOADI_MOD0_UPPER, 0x3F80);
-    TTI_SFPLOADI(LREG_MASK, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
     TTI_SFPENCC(0, 0, 0, 0);
-
-    // Restore LREG11 to its hardware default value of -1.0f.
-    // 0xBF800000 = -1.0f.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0xBF80);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
-    TTI_SFPCONFIG(ALL_INSTANCES_MASK, SFPCONFIG_TARGET_LREG11, SFPCONFIG_MOD_SET_LREG11);
 }
 
 // Record the mask + stage1 (ROR by 1) + stage2 (ROR by 2) portion of the

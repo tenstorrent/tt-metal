@@ -6,10 +6,12 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_set>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
+#include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/hal_types.hpp>
 #include "context/metal_context.hpp"
@@ -46,7 +48,7 @@ public:
         uint8_t num_hw_cqs,
         std::size_t l1_small_size,
         std::size_t trace_region_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false,
         uint32_t worker_thread_core = 0,
         uint32_t completion_queue_reader_core = 0,
@@ -106,7 +108,6 @@ public:
     std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
-    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
 
     CoreCoord compute_with_storage_grid_size() const override;
 
@@ -141,7 +142,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
     void init_command_queue_host();
     void init_command_queue_device();
@@ -150,6 +151,9 @@ public:
 
     bool compile_fabric();
     void configure_fabric();
+    void update_smc_dispatch_telemetry_for_fast_dispatch(
+        uint8_t cq_id, const dispatch_telemetry_types::SMCDispatchCoreCoords& coords);
+    void set_smc_dispatch_telemetry_slow_dispatch_enabled(bool enabled);
     // Puts device into reset
     bool close() override;
 
@@ -163,8 +167,6 @@ public:
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
-
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
 
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
 
@@ -192,21 +194,19 @@ private:
     uint32_t num_sub_devices() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
-        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
-    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
+        ttsl::Span<const SubDeviceId> sub_device_ids) const override;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(
         std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     SubDeviceManagerId create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+        ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
     const std::vector<SubDeviceId>& get_sub_device_ids() const override;
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
-    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
+    void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
 
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
@@ -215,9 +215,12 @@ private:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_unreserved_start,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {});
 
     void configure_command_queue_programs(DispatchTopology* topology);
+
+    void initialize_smc_dispatch_telemetry_control();
+    void invalidate_smc_dispatch_telemetry_control();
 
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void mark_allocations_unsafe();
@@ -235,6 +238,7 @@ private:
     std::vector<std::vector<ChipId>> tunnels_from_mmio_;
 
     bool initialized_ = false;
+    dispatch_telemetry_types::SMCDispatchTelemetryControl smc_dispatch_telemetry_control_;
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
@@ -254,6 +258,10 @@ private:
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
     std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
+    // Cached assignment is NOC-specific (DRAM endpoints differ per NOC) and compute-grid-specific
+    // (dispatch axis / harvesting change logical worker bounds).
+    std::optional<std::uint8_t> optimal_dram_bank_to_logical_worker_assignment_noc_;
+    std::optional<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_grid_size_;
 
     std::vector<int32_t> dram_bank_offset_map_;
     std::vector<int32_t> l1_bank_offset_map_;

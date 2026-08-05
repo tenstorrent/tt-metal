@@ -1,129 +1,168 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <cmath>
-#include <optional>
-#include <variant>
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-
-#include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"
 
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
 
+#include <cstdint>
+#include <filesystem>
+
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_common.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
 namespace ttnn::prim {
 
-RepeatProgramFactoryLastDim::cached_program_t RepeatProgramFactoryLastDim::create(
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
+
+ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryLastDim::create_program_artifacts(
     const RepeatParams& operation_attributes, const RepeatInputs& tensor_args, Tensor& tensor_return_value) {
     // We are repeating the last dim on a 2D shape
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const uint32_t num_repeats = operation_attributes.m_num_repeats;
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // get datum size
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t data_size = input.element_size();
-    tt::tt_metal::IDevice* device = input.device();
+    IDevice* device = input.device();
     // Multi device pre-computation
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const uint32_t num_cores_total = num_cores_x * num_cores_y;
+    const CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    const CoreRangeSet total_core_ranges{total_cores};
+
     ttnn::Shape input_log_shape = ttnn::Shape(input.logical_shape().view());
     ttnn::Shape output_log_shape = ttnn::Shape(output.logical_shape().view());
-    uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
-    uint32_t dest_page_size_bytes = source_page_size_bytes * num_repeats;
+    const uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
+    const uint32_t dest_page_size_bytes = source_page_size_bytes * num_repeats;
     TT_FATAL(
         dest_page_size_bytes == output_log_shape[-1] * data_size,
         "Data size of output does not match requirement for repeat last dim");
     uint32_t read_start_page = 0;
-    tt::tt_metal::Buffer* src_buffer = input.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    Buffer* src_buffer = input.buffer();
+    Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
-    // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
-    uint32_t number_of_pages = input_log_shape[-2];
-    uint32_t responsibility = ((number_of_pages - 1) / num_cores_total) + 1;
-    uint32_t cb_size_bytes = READ_ALIGNMENT * 2 + (source_page_size_bytes & 0xF) == 0 ? source_page_size_bytes
-                             : (source_page_size_bytes & 0x7) == 0                    ? source_page_size_bytes * 2
-                             : (source_page_size_bytes & 0x3) == 0                    ? source_page_size_bytes * 4
-                             : (source_page_size_bytes & 0x1) == 0                    ? source_page_size_bytes * 8
-                                                                                      : source_page_size_bytes * 16;
-    uint32_t src0_cb_index = 0;
-    uint32_t src1_cb_index = 1;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_size_bytes, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, cb_size_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(cb_size_bytes, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, cb_size_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
-    std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t)source_page_size_bytes, (std::uint32_t)num_repeats, src0_cb_index, src1_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+    // Per-core page count so read/write start on page boundaries.
+    const uint32_t number_of_pages = input_log_shape[-2];
+    const uint32_t responsibility = ((number_of_pages - 1) / num_cores_total) + 1;
+    const uint32_t cb_size_bytes = (READ_ALIGNMENT * 2) + ((source_page_size_bytes & 0xF) == 0 ? source_page_size_bytes
+                                   : (source_page_size_bytes & 0x7) == 0                       ? source_page_size_bytes * 2
+                                   : (source_page_size_bytes & 0x3) == 0                       ? source_page_size_bytes * 4
+                                   : (source_page_size_bytes & 0x1) == 0                       ? source_page_size_bytes * 8
+                                                                           : source_page_size_bytes * 16);
 
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_last_dim_rm.cpp",
-        total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
+    // RM sharded -> rm_sharded; RM interleaved -> rm_interleaved (TILE uses higher-dim factory).
+    const bool src_sharded = src_buffer->buffer_distribution_spec().has_value();
+    const bool dst_sharded = dst_buffer->buffer_distribution_spec().has_value();
+    const bool needs_alignment_cb = !src_sharded && !dst_sharded;
+
+    // Metal 2.0 named resource ids. Declared function-local so the unity build (both repeat factory
+    // .cpp files land in one translation unit) sees no duplicate anonymous-namespace symbols.
+    const KernelSpecName READER{"reader"};
+    const DFBSpecName SRC0{"src0"};
+    const DFBSpecName SRC1{"src1"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+
+    // Dataflow buffers: one page each. Each is a single-toucher scratchpad the reader fills and drains
+    // itself, so it self-loops (reader bound PRODUCER + CONSUMER).
+    Group<DataflowBufferSpec> dataflow_buffers;
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = SRC0,
+        .entry_size = cb_size_bytes,
+        .num_entries = 1,
+        .data_format_metadata = cb_data_format,
+    });
+    // Second buffer only for interleaved RM.
+    if (needs_alignment_cb) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = SRC1,
+            .entry_size = cb_size_bytes,
+            .num_entries = 1,
+            .data_format_metadata = cb_data_format,
+        });
+    }
+
+    // Self-loop the DFBs: bind the reader as both PRODUCER and CONSUMER of each (one accessor name each).
+    Group<DFBBinding> dfb_bindings = {
+        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
+    if (needs_alignment_cb) {
+        dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER});
+        dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
+
+    std::filesystem::path kernel_source;
+    if (src_sharded || dst_sharded) {
+        kernel_source = "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_last_dim_rm_sharded.cpp";
+    } else {
+        kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_last_dim_rm_interleaved.cpp";
+    }
+
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = kernel_source,
+        .dfb_bindings = dfb_bindings,
+        .tensor_bindings =
+            {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"},
+             TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
+        .compile_time_args = {{"original_page_size_bytes", source_page_size_bytes}, {"num_repeats", num_repeats}},
+        .runtime_arg_schema = {.runtime_arg_names = {"page_start", "page_end", "nop"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+
+    KernelRunArgs reader_run_args{.kernel = READER};
     uint32_t done = 0;
-    for (int core_x = 0; core_x < num_cores_x; core_x++) {
-        for (int core_y = 0; core_y < num_cores_y; core_y++) {
-            CoreCoord core = {core_x, core_y};
+    for (uint32_t core_x = 0; core_x < num_cores_x; core_x++) {
+        for (uint32_t core_y = 0; core_y < num_cores_y; core_y++) {
+            const CoreCoord core = {core_x, core_y};
             if (done == 1) {
-                const std::vector<uint32_t> reader_runtime_args = {
-                    src_buffer->address(), dst_buffer->address(), 0, 0, 1};
-                tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+                // Idle core: early exit.
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"page_start", uint32_t{0}}, {"page_end", uint32_t{0}}, {"nop", uint32_t{1}}});
             } else {
                 const uint32_t start_of_read = read_start_page;
                 uint32_t end_of_read = read_start_page + responsibility;
                 end_of_read = end_of_read < number_of_pages ? end_of_read : number_of_pages;
 
-                const std::vector<uint32_t> reader_runtime_args = {
-                    src_buffer->address(), dst_buffer->address(), start_of_read, end_of_read, 0
-
-                };
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"page_start", start_of_read}, {"page_end", end_of_read}, {"nop", uint32_t{0}}});
                 read_start_page = end_of_read;
                 done = (end_of_read == input_log_shape[-2]) ? 1 : 0;
-                tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
             }
         }
     }
-    return RepeatProgramFactoryLastDim::cached_program_t{std::move(program), {reader_kernel_id, total_cores}};
-}
 
-void RepeatProgramFactoryLastDim::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const RepeatParams& /*operation_attributes*/,
-    const RepeatInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& shared_vars = cached_program.shared_variables;
+    ProgramSpec spec{
+        .name = "repeat_last_dim",
+        .kernels = {reader},
+        .dataflow_buffers = dataflow_buffers,
+        .tensor_parameters =
+            {TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
+             TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER}, .target_nodes = total_core_ranges}},
+    };
 
-    auto& reader_kernel_id = shared_vars.reader_kernel_id;
-    auto& total_cores = shared_vars.total_cores;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args)};
+    run_args.tensor_args = {{INPUT, input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
 
-    const auto& input = tensor_args.input;
-    const auto& output = tensor_return_value;
-
-    auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-    for (const auto& core : total_cores) {
-        auto& runtime_args = runtime_args_by_core[core.x][core.y];
-        runtime_args.at(0) = input.buffer()->address();
-        runtime_args.at(1) = output.buffer()->address();
-    }
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

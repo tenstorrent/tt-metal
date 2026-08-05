@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -25,8 +26,9 @@ void kernel_main() {
 
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
-    mm_init(in0_cb, in1_cb, out_cb);
-    acquire_dst();
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, in1_cb, out_cb);
+    matmul_init(in0_cb, in1_cb);
+    tile_regs_acquire();
 
     uint32_t out_tile_index = 0;
     uint32_t in0_index_r_offset = 0;
@@ -39,7 +41,7 @@ void kernel_main() {
                 int in0_tile_index = in0_index_r_offset + k;
                 int in1_tile_index = in1_index_c_offset + c;
                 matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index);
-                in1_index_c_offset += k;
+                in1_index_c_offset += out_c;
             }
             out_tile_index++;
         }
@@ -48,10 +50,13 @@ void kernel_main() {
     cb0.pop_front(in0_num_tiles);
     cb1.pop_front(in1_num_tiles);
 
+    tile_regs_commit();
+    tile_regs_wait();
+
     cb_out.reserve_back(out_num_tiles);
     for (uint32_t tile_index = 0; tile_index < out_num_tiles; tile_index++) {
         pack_tile(tile_index, out_cb);
     }
     cb_out.push_back(out_num_tiles);
-    release_dst();
+    tile_regs_release();
 }

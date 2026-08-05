@@ -16,6 +16,9 @@
 #include <tuple>
 #include <vector>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <cxxopts.hpp>
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -489,14 +492,14 @@ void gather_mock_cluster_desc_paths(
         for (int r = 1; r < static_cast<int>(world_size); ++r) {
             std::size_t path_size = 0;
             distributed_context->recv(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
                 Rank{r},
                 k_mock_path_size_tag);
             std::vector<char> path_buf(path_size);
             if (path_size > 0) {
                 distributed_context->recv(
-                    tt::stl::as_writable_bytes(
-                        tt::stl::Span<uint8_t>(reinterpret_cast<uint8_t*>(path_buf.data()), path_buf.size())),
+                    ttsl::as_writable_bytes(
+                        ttsl::Span<uint8_t>(reinterpret_cast<uint8_t*>(path_buf.data()), path_buf.size())),
                     Rank{r},
                     k_mock_path_payload_tag);
             }
@@ -508,13 +511,13 @@ void gather_mock_cluster_desc_paths(
     } else {
         std::size_t path_size = my_path.size();
         distributed_context->send(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
             Rank{root_rank},
             k_mock_path_size_tag);
         if (path_size > 0) {
             std::vector<uint8_t> path_bytes(my_path.begin(), my_path.end());
             distributed_context->send(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(path_bytes.data(), path_bytes.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(path_bytes.data(), path_bytes.size())),
                 Rank{root_rank},
                 k_mock_path_payload_tag);
         }
@@ -664,6 +667,32 @@ int main(int argc, char** argv) {
                     "Successfully wrote: {} (cluster descriptors used during allocation)",
                     phase2_mock_path.string());
             }
+
+            // Flush all output files to storage before signaling peers via barrier.
+            // std::ofstream::close() only drains the C++ stream buffer to the OS page cache.
+            // Without fsync(), NFS peers (and local readers) may see stale or absent files
+            // even after generate_rank_bindings exits.  We fsync each file and its parent
+            // directory so that both data and directory entries are durable before we call
+            // barrier() below — making the barrier the authoritative "writes are visible"
+            // signal and allowing ttrun.py to skip any blind sleep after this subprocess.
+            auto fsync_path = [](const std::filesystem::path& p) noexcept {
+                int fd = ::open(p.c_str(), O_RDONLY);
+                if (fd >= 0) {
+                    ::fsync(fd);
+                    ::close(fd);
+                }
+                int dir_fd = ::open(p.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
+                if (dir_fd >= 0) {
+                    ::fsync(dir_fd);
+                    ::close(dir_fd);
+                }
+            };
+            fsync_path(output_file);
+            fsync_path(rankfile_path);
+            if (!mpi_rank_to_cluster_desc_path.empty()) {
+                fsync_path(output_dir / "phase2_mock_mapping.yaml");
+            }
+            log_info(tt::LogFabric, "Fsynced output files; barrier will signal peers that writes are visible.");
 
             log_info(tt::LogFabric, "Rank bindings generation complete!");
         } else {

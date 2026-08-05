@@ -4,6 +4,28 @@
 
 import ttnn
 import math
+from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
+
+
+def _batched_mm_core_grid(B, Nt, device):
+    """Pick a core grid for a batched (B, Nt, *) matmul.
+
+    When a batched matmul has many independent batches but a tiny per-batch
+    problem (few query rows), ttnn's matmul heuristic collapses the whole op
+    onto a single core. The motion/map decoders hit this: B = bsz*num_heads
+    can be ~14000 with Nt == 1, so q@kᵀ and attn@v each run ~14 ms on one
+    core. Spreading the batches across the grid drops that to ~0.25 ms with no
+    change to the math (each core owns whole batches; the contraction is not
+    split across cores). Large per-batch problems (e.g. DETR self-attn with
+    Nt~900) already parallelize, so leave those to the heuristic.
+    """
+    if B < 64 or Nt > 8:
+        return None
+    cg = device.core_grid
+    n = min(B, cg.x * cg.y)
+    x = min(cg.x, n)
+    y = max(1, min(cg.y, n // x))
+    return ttnn.CoreGrid(y=y, x=x)
 
 
 class TtMultiheadAttention:
@@ -98,13 +120,14 @@ class TtMultiheadAttention:
         q_weight = ttnn.permute(q_weight, (1, 0))
         k_weight = ttnn.permute(k_weight, (1, 0))
         v_weight = ttnn.permute(v_weight, (1, 0))
-        query = ttnn.linear(query, q_weight, bias=q_bias)
-
-        key = ttnn.linear(key, k_weight, bias=k_bias)
+        # Flatten leading dims into M (e.g. (901, 1, 256) -> (1, 1, 901, 256))
+        # so the matmul heuristic sees the full row count instead of bsz=1.
+        query = linear_flatten_batch(query, q_weight, bias=q_bias)
+        key = linear_flatten_batch(key, k_weight, bias=k_bias)
 
         if value.get_layout() != ttnn.TILE_LAYOUT:
             value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
-        value = ttnn.linear(value, v_weight, bias=v_bias)
+        value = linear_flatten_batch(value, v_weight, bias=v_bias)
 
         query = ttnn.reshape(query, (tgt_len, bsz * self.num_heads, q_head_size))
         query = ttnn.permute(query, (1, 0, 2))
@@ -121,24 +144,25 @@ class TtMultiheadAttention:
         q_scaled = query * math.sqrt(1.0 / float(E))
         key_transposed = ttnn.permute(key, (0, 2, 1))
 
+        mm_core_grid = _batched_mm_core_grid(B, Nt, self.device)
+        mm_kw = {"core_grid": mm_core_grid} if mm_core_grid is not None else {}
+
         if attn_mask is not None:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed)
+            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, **mm_kw)
             attn_output_weights = attn_output_weights + attn_mask
         else:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed)
+            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, **mm_kw)
 
         attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1)
 
-        attn_output = ttnn.matmul(attn_output_weights, value)
+        attn_output = ttnn.matmul(attn_output_weights, value, **mm_kw)
 
         attn_output = ttnn.permute(attn_output, (1, 0, 2))
         attn_output = ttnn.reshape(attn_output, (tgt_len * bsz, embed_dim))
 
         attn_output = ttnn.linear(attn_output, self.attn_out_proj_weight, bias=self.attn_out_proj_bias)
         attn_output = ttnn.reshape(attn_output, (tgt_len, bsz, attn_output.shape[1]))
-        attn_output_weights = ttnn.reshape(attn_output_weights, (bsz, self.num_heads, tgt_len, src_len))
-        attn_output_weights = ttnn.to_layout(attn_output_weights, ttnn.ROW_MAJOR_LAYOUT)
-        attn_output_weights = ttnn.mean(attn_output_weights, dim=1)
-        identity = ttnn.to_layout(identity, ttnn.TILE_LAYOUT)
+        if identity.get_layout() != ttnn.TILE_LAYOUT:
+            identity = ttnn.to_layout(identity, ttnn.TILE_LAYOUT)
 
         return attn_output + identity

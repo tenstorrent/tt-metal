@@ -92,6 +92,7 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_floor_()
 {
+#pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::dst_reg[0] = _floor_body_(sfpi::dst_reg[0]);
@@ -102,6 +103,7 @@ sfpi_inline void _calculate_floor_()
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_ceil_()
 {
+#pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::dst_reg[0] = _ceil_body_(sfpi::dst_reg[0]);
@@ -112,6 +114,7 @@ sfpi_inline void _calculate_ceil_()
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_trunc_()
 {
+#pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::dst_reg[0] = _trunc_body_(sfpi::dst_reg[0]);
@@ -122,6 +125,7 @@ sfpi_inline void _calculate_trunc_()
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_frac_()
 {
+#pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat x   = sfpi::dst_reg[0];
@@ -188,7 +192,8 @@ sfpi_inline void _calculate_stochastic_round_()
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat x   = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(x, sfpi::RoundMode::Stochastic);
+        x                = sfpi::convert<sfpi::vFloat16b>(x, sfpi::RoundMode::NearestStochastic);
+        sfpi::dst_reg[0] = x;
         sfpi::dst_reg++;
     }
 }

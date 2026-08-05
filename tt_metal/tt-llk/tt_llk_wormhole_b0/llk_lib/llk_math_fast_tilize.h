@@ -24,6 +24,16 @@ using namespace ckernel;
  * so nothing except fast tilize should be using that dest bank
  *************************************************************************/
 
+/**
+ * @brief Program the address-mod slots for fast tilize, including the jumps to and from the bottom-face dest offset.
+ *
+ * ADDR_MOD_1/ADDR_MOD_2 are the standard 4-row (MOVB2D) and 8-row (MOVA2D) steps; ADDR_MOD_3/ADDR_MOD_0 hold the
+ * forward/backward dest jumps used to interleave top and bottom faces, computed from the per-bank bottom-face offset
+ * (which halves for TF32) and the unit_dim.
+ *
+ * @param unpack_dst_format: Destination data format (DataFormat enum underlying value); TF32 halves the bottom-face offset.
+ * @param unit_dim: Number of tiles processed per iteration (selects the jump increments); must match the unpacker.
+ */
 inline void _llk_math_fast_tilize_addrmod_config_(const std::uint32_t unpack_dst_format, const std::uint32_t unit_dim)
 {
     // standard addrmod that follows MOVB2D
@@ -87,6 +97,9 @@ inline void _llk_math_fast_tilize_addrmod_config_(const std::uint32_t unpack_dst
     }
 }
 
+/**
+ * @brief Program the fast-tilize MOP with the MOVA2D (8-row) and MOVB2D (4-row) move templates used by the block loop.
+ */
 inline void _llk_math_fast_tilize_mop_config_()
 {
     ckernel_unpack_template tmp = ckernel_unpack_template(
@@ -103,6 +116,18 @@ inline void _llk_math_fast_tilize_mop_config_()
     tmp.program();
 }
 
+/**
+ * @brief Initialize the math thread for fast tilize: programs address mods and the move MOP.
+ *
+ * For non-TF32 formats, switches to CFG state 1 and clears the FP32 dest-accumulation bit so MOVA2D/MOVB2D fully
+ * ignore FP32 dest mode (a HW quirk). Only DstSync::SyncHalf is supported.
+ *
+ * @param unpack_dst_format: Destination data format (DataFormat enum underlying value); TF32 keeps FP32 dest mode.
+ * @param unit_dim: Number of tiles processed per iteration; must match the unpacker.
+ * @note On the unpack thread, pair with @ref _llk_unpack_fast_tilize_init_ which feeds the top/bottom faces into SrcA/SrcB.
+ * @note On the pack thread, pair with @ref _llk_pack_fast_tilize_init_ (same unit_dim) which drains the split dest halves.
+ * @note Call @ref _llk_math_fast_tilize_uninit_ to restore the FP32 dest-mode/state changes; run with @ref _llk_math_fast_tilize_block_.
+ */
 inline void _llk_math_fast_tilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t unit_dim)
 {
     // even though MOVA2D and MOVB2D are supposed to ignore ALU_ACC_CTRL_Fp32_enabled some parts still rely on it (not sure why)
@@ -127,6 +152,13 @@ inline void _llk_math_fast_tilize_init_(const std::uint32_t unpack_dst_format, c
     _llk_math_fast_tilize_mop_config_();
 }
 
+/**
+ * @brief Uninitialize after fast tilize, restoring the FP32 dest-accumulation mode and CFG state that init changed.
+ *
+ * @tparam is_fp32_dest_acc_en: FP32 dest-accumulation mode to restore (must match the surrounding context).
+ * @param unpack_dst_format: Destination data format (DataFormat enum underlying value); only non-TF32 needs restoring.
+ * @note Reverses @ref _llk_math_fast_tilize_init_.
+ */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_math_fast_tilize_uninit_(const std::uint32_t unpack_dst_format)
 {
@@ -142,6 +174,23 @@ inline void _llk_math_fast_tilize_uninit_(const std::uint32_t unpack_dst_format)
     }
 }
 
+/**
+ * @brief Tilize a block of tiles into the destination register, moving top and bottom faces into split dest halves.
+ *
+ * For each unit, copies the top faces (via MOVA2D from SrcA) and the bottom faces (via MOVB2D from SrcB) into the
+ * two halves of the active dest bank, using the configured address mods to jump between offsets. The unit_dim and
+ * num_faces select which move/clear sequence runs (unit_dim 3 uses an explicit dest offset for the forward jump).
+ * Only DstSync::SyncHalf is supported, and nothing else should use the active dest bank.
+ *
+ * @param dst_index: Tile index into the destination register to write to.
+ * @param unpack_dst_format: Destination data format (DataFormat enum underlying value); affects the bottom-face offset.
+ * @param unit_dim: Number of tiles processed per iteration; must match the unpacker.
+ * @param num_units: Number of units processed in this call.
+ * @param num_faces: Number of faces per tile (must be 2 or 4).
+ * @note Call @ref _llk_math_fast_tilize_init_ with matching unpack_dst_format and unit_dim before this function.
+ * @note On the unpack thread, @ref _llk_unpack_fast_tilize_block_ must feed the tiles into SrcA/SrcB.
+ * @note On the pack thread, @ref _llk_pack_fast_tilize_block_ drains the split dest halves into tilized L1 output.
+ */
 inline void _llk_math_fast_tilize_block_(
     const std::uint32_t dst_index,
     const std::uint32_t unpack_dst_format,

@@ -71,12 +71,17 @@ void kernel_main() {
 
                 // dst_offset_bytes is already relative to block buffer start (includes channel * block_size + column)
                 if constexpr (is_input_in_dram) {
-                    // DRAM bank-id path stays on legacy noc_async_read: get_noc_addr_from_bank_id returns a packed
-                    // uint64_t NOC address, and Noc::async_read does not expose a clean way to
-                    // decompose it back into UnicastEndpoint {noc_x, noc_y, addr} fields.
-                    const uint64_t src_addr_base = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
-                    const uint32_t dst_addr = cb_in_batch_obj.get_write_ptr() + dst_offset_bytes;
-                    noc_async_read(src_addr_base + src_offset_bytes, dst_addr, transfer_size_bytes);
+                    // DRAM bank-id read via the AllocatorBank<DRAM> endpoint. Folding src_offset_bytes into the
+                    // bank address offset is equivalent to the legacy bank-id addr-gen result plus
+                    // src_offset_bytes: both land the offset in the NOC address's low bits below
+                    // NOC_ADDR_COORD_SHIFT (see the DRAM bank-id addr-gen in dataflow_api_addrgen.h).
+                    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                    noc.async_read(
+                        dram_bank,
+                        cb_in_batch_obj,
+                        transfer_size_bytes,
+                        {.bank_id = bank_id, .addr = dram_base_read_addr + src_offset_bytes},
+                        {.offset_bytes = dst_offset_bytes});
                 } else {
                     UnicastEndpoint src_ep;
                     noc.async_read(

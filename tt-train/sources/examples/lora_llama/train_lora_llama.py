@@ -74,6 +74,8 @@ def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = Fa
 
     return LlamaConfig(
         hidden_size=tc.get("embedding_dim", 384),
+        # Read the MLP intermediate size from the yaml.
+        intermediate_size=tc.get("intermediate_dim", None),
         num_hidden_layers=tc.get("num_blocks", 6),
         num_attention_heads=tc.get("num_heads", 6),
         num_key_value_heads=tc.get("num_groups", 3),
@@ -379,7 +381,14 @@ def main():
 
         optimizer.zero_grad()
         logits = model(tt_x, None)
-        loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
+        # When TP is enabled the LoRA-wrapped Llama LM head returns vocab-sharded
+        # logits ([B,1,S,padded_V/tp_size] per device).
+        if use_tp:
+            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                logits, tt_y, cluster_axis=mesh.axis_index("tp")
+            )
+        else:
+            loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
 
         if use_ddp:
             loss_val = float(get_loss_over_devices(loss))

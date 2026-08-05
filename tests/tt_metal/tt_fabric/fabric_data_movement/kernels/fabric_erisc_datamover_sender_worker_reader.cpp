@@ -18,11 +18,7 @@ void kernel_main() {
 
     const auto source_address_generator = TensorAccessor(src_args, src_addr);
 
-    DPRINT << "swr: args " << "\n\tsrc_addr=" << src_addr << "\n\tsrc_is_dram=" << (src_args.is_dram ? "T" : "F")
-           << "\n\tnum_pages_to_read_total=" << num_pages_to_read_total
-           << "\n\tpages_per_edm_buffer=" << pages_per_edm_buffer << "\n\tpage_size=" << page_size
-           << "\n\twrite_scatter_mode=" << (write_scatter_mode ? "T" : "F") << "\n";
-    DEVICE_PRINT(
+    DPRINT(
         "swr: args "
         "\n\tsrc_addr={}\n\tsrc_is_dram={}\n\tnum_pages_to_read_total={}\n\tpages_per_edm_buffer={}\n\tpage_size={}"
         "\n\twrite_scatter_mode={}\n",

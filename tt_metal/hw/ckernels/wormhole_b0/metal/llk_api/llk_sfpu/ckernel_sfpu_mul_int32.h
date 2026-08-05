@@ -39,7 +39,7 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         // This is exact for 23-bit integers.
 
         // a0
-        TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
         // a1
         TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, 5);
         // a2
@@ -57,7 +57,7 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
 
         // b0
-        TT_SFPLOAD(p_sfpu::LREG1, INT32, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
         // b1
         TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, 5);
         // b2
@@ -103,7 +103,7 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
 
-        TT_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_2, dst_index_out * dst_tile_size);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, dst_index_out * dst_tile_size);
     }
 }
 

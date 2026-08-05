@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
@@ -55,13 +56,10 @@ void kernel_main() {
 #ifdef IS_ORIGIN
     {
         const uint32_t fp32_tile_bytes = get_tile_size(cb_recv);
-        uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-        uint32_t zero_dst = cb_recv_base;
-        for (uint32_t z = 0; z < fp32_tile_bytes / MEM_ZEROS_SIZE; ++z) {
-            noc_async_read(zeros_noc_addr, zero_dst, MEM_ZEROS_SIZE);
-            zero_dst += MEM_ZEROS_SIZE;
-        }
-        noc_async_read_barrier();
+        Noc noc;
+        CircularBuffer recv_cb(cb_recv);
+        noc.async_write_zeros(recv_cb, fp32_tile_bytes);
+        noc.write_zeros_l1_barrier();
     }
 #endif
 

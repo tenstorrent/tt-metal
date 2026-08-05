@@ -91,7 +91,7 @@ RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
 
     std::map<std::string, std::string> bcast_compute_defines = {
         {"BCAST_OP", "mul_tiles_bcast"},
-        {"BCAST_LLKOP", "ELWMUL"},
+        {"BCAST_LLKOP", "EltwiseBinaryType::ELWMUL"},
         {"BCAST_DIM", "BroadcastType::SCALAR"},
         {"BCAST_SCALAR", "1"}};
 

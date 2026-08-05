@@ -7,6 +7,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
@@ -15,6 +16,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/internal/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
@@ -231,7 +233,7 @@ void bind_fabric_api(nb::module_& mod) {
             } else {
                 throw std::invalid_argument("api_type must be 'Linear' or 'Mesh', got: " + api_type_str);
             }
-            return tt::tt_fabric::get_fabric_kernel_defines(api_type);
+            return tt::tt_metal::internal::get_fabric_kernel_defines(api_type);
         },
         nb::arg("api_type") = "Linear",
         R"(
@@ -256,7 +258,7 @@ void bind_fabric_api(nb::module_& mod) {
             std::vector<uint32_t> fabric_args;
 
             tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(kernel_idx);
-            tt::tt_fabric::append_routing_plane_connection_rt_args_no_defines<tt::tt_metal::ProgramDescriptor>(
+            tt::tt_metal::internal::append_routing_plane_connection_rt_args_no_defines<tt::tt_metal::ProgramDescriptor>(
                 src_fabric_node_id,
                 dst_nodes,
                 connection_link_indices,
@@ -294,7 +296,7 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "compute_fabric_connection_rt_args",
-        &tt::tt_fabric::compute_fabric_connection_rt_args,
+        &tt::tt_metal::internal::compute_fabric_connection_rt_args,
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_nodes"),
         nb::arg("connection_link_indices"),
@@ -331,6 +333,25 @@ void bind_fabric_api(nb::module_& mod) {
         )");
 
     mod.def(
+        "get_physical_mesh_shapes",
+        []() {
+            // Return plain ints ({mesh_id: (rows, cols)}) to avoid MeshId/MeshShape
+            // Python-type friction -- callers just need the open shape per local mesh.
+            std::unordered_map<uint32_t, std::array<uint32_t, 2>> out;
+            for (const auto& [mid, shape] : tt::tt_fabric::get_physical_mesh_shapes()) {
+                out[*mid] = {shape[0], shape[1]};
+            }
+            return out;
+        },
+        R"(
+            Physical shape of each mesh local to this rank, read from the active mesh graph descriptor.
+
+            Returns a {mesh_id: (rows, cols)} map scoped to get_user_physical_mesh_ids() -- i.e. only
+            this rank's local mesh(es). This is exactly the shape to pass to open_mesh_device, so it is
+            safe to call before the device is opened (the control plane lazily inits from the MGD).
+        )");
+
+    mod.def(
         "get_eth_forwarding_direction",
         [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) -> std::optional<int> {
@@ -353,7 +374,7 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "get_all_fabric_mesh_ids",
-        &tt::tt_fabric::get_all_fabric_mesh_ids,
+        &tt::tt_metal::internal::get_all_fabric_mesh_ids,
         R"(
             Returns every compute mesh id declared in the active mesh graph descriptor.
 

@@ -5,6 +5,7 @@
 import pytest
 import torch
 from conftest import skip_for_coverage, skip_for_wormhole
+from helpers.device_io import read_from_device, write_to_device
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -21,7 +22,7 @@ from helpers.llk_params import (
 )
 from helpers.pack import pack_bfp16
 from helpers.param_config import input_output_formats, parametrize
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
@@ -35,7 +36,6 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_res_tiles
 from helpers.utils import passed_test
-from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 
 @skip_for_coverage
@@ -67,7 +67,7 @@ def test_sdpa_reinits(
 
     # Generate input stimuli
     # Note: src_b_const_value: 1.0 in YAML means src_B is constant 1.0, not random
-    src_A, tile_cnt_A, _, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

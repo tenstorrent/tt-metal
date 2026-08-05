@@ -100,7 +100,7 @@ BENCHMARK(BM_FromVector_Uint32_UINT32)->Unit(benchmark::kMicrosecond)->RangeMult
 BENCHMARK(BM_FromVector_Int32_INT32)->Unit(benchmark::kMicrosecond)->RangeMultiplier(2)->Range(1 << 16, 1 << 20);
 
 int main(int argc, char** argv) {
-    auto device = ttnn::device::open_mesh_device(0, /*l1_small_size=*/0, /*trace_region_size=*/1048576);
+    auto device = ttnn::device::open_mesh_device(0);
     g_device = device.get();
 
     ::benchmark::Initialize(&argc, argv);

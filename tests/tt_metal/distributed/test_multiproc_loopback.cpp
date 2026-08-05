@@ -74,6 +74,19 @@ void run_launcher(
     auto d2h_socket = D2HSocket(mesh_device, socket_core, cfg.fifo_size);
     d2h_socket.export_descriptor(d2h_socket_id);
 
+    // L1 landing slot for DEVICE_PULL: the H2D FIFO lives in pinned host memory, so
+    // the kernel needs a page of local L1 to pull into before looping back to D2H.
+    auto scratch_shard_params =
+        ShardSpecBuffer(CoreRangeSet(socket_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig scratch_local_config{
+        .page_size = cfg.page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(scratch_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto scratch_buffer =
+        MeshBuffer::create(ReplicatedBufferConfig{.size = cfg.page_size}, scratch_local_config, mesh_device.get());
+
     auto program = CreateProgram();
     CreateKernel(
         program,
@@ -89,6 +102,7 @@ void run_launcher(
                 static_cast<uint32_t>(cfg.data_size),
                 num_iterations,
                 static_cast<uint32_t>(h2d_mode == H2DMode::DEVICE_PULL),
+                static_cast<uint32_t>(scratch_buffer->address()),
             }});
 
     auto mesh_workload = MeshWorkload();

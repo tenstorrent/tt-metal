@@ -20,7 +20,7 @@ void kernel_main() {
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_remap_addrs_RMW>(remap);
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_swizzle_32b_RMW>(swizzle);
 #endif
-    acquire_dst();
+    tile_regs_acquire();
     cb_wait_front(tt::CBIndex::c_0, per_core_tile_cnt);
     cb_reserve_back(tt::CBIndex::c_16, per_core_tile_cnt);
 
@@ -29,11 +29,14 @@ void kernel_main() {
         dprint_tensix_dest_reg(b);
     }
 
+    tile_regs_commit();
+    tile_regs_wait();
+
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         pack_tile(b, tt::CBIndex::c_16);
         cb_pop_front(tt::CBIndex::c_0, 1);
         cb_push_back(tt::CBIndex::c_16, 1);
     }
 
-    release_dst();
+    tile_regs_release();
 }

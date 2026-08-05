@@ -9,4 +9,5 @@ set(UNIT_TESTS_DEVICE_SMOKE_SOURCES
     test_simulator_device.cpp
     test_galaxy_cluster_api.cpp
     test_mock_device_api.cpp
+    test_mock_allocator.cpp
 )

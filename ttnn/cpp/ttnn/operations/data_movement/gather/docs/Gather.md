@@ -350,12 +350,12 @@ for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
 ```cpp
 // Single Row Single Core: Batch memory access
 for (uint32_t w = 0; w < Wt_input; w++) {
-    noc_async_read_tile(h * Wt_input + w, input_tensor_dram, l1_addr);  // Sequential reads
+    noc_async_read_page(h * Wt_input + w, input_tensor_dram, l1_addr);  // Sequential reads
 }
 
 // Single Row Multi Core: Interleaved memory access
 for (uint32_t wi = 0; wi < Wt_input; wi++) {
-    noc_async_read_tile(h * Wt_input + wi, input_tensor_dram, l1_addr);  // Per-tile reads
+    noc_async_read_page(h * Wt_input + wi, input_tensor_dram, l1_addr);  // Per-tile reads
 }
 ```
 

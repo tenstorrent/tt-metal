@@ -6,6 +6,8 @@ import torch
 import pytest
 import ttnn
 
+from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import ttnn_sum
+
 TEST_PADDING_VALUE = -42
 
 
@@ -36,7 +38,7 @@ def test_sum_for_dim_hw(device, shape_dim):
 
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
     dev_x = ttnn.fill_implicit_tile_padding(dev_x, TEST_PADDING_VALUE)
-    tt_npu = ttnn.sum(dev_x, dim=dim, keepdim=True)
+    tt_npu = ttnn_sum(dev_x, dim=dim, keepdim=True)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev[0, 0, 0, 0], torch.Tensor([value]).bfloat16()[0])
 
@@ -67,6 +69,6 @@ def test_sum_global(device, shape):
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
     dev_x = ttnn.fill_implicit_tile_padding(dev_x, TEST_PADDING_VALUE)
 
-    tt_npu = ttnn.sum(dev_x)
+    tt_npu = ttnn_sum(dev_x)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev.bfloat16(), torch_output.bfloat16())

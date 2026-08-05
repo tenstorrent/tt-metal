@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import TYPE_CHECKING
 
@@ -107,6 +108,7 @@ class Conv2d(Module):
         in_mesh_axis: int | None = None,
         out_mesh_axis: int | None = None,
         ccl_manager: CCLManager | None = None,
+        use_barrier: bool = True,
     ) -> None:
         """
         Initialize the Conv2d layer. Set mesh_axis to None to disable mesh parallelism. Only TP is supported currently.
@@ -164,6 +166,9 @@ class Conv2d(Module):
             on_host=True,
         )
 
+        self._prepared_weight = None
+        self._prepared_bias = None
+
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
@@ -176,6 +181,7 @@ class Conv2d(Module):
         self.in_mesh_axis_size = in_mesh_axis_size
         self.out_mesh_axis_size = out_mesh_axis_size
         self.ccl_manager = ccl_manager
+        self.use_barrier = use_barrier
 
     @classmethod
     def from_torch(
@@ -214,7 +220,7 @@ class Conv2d(Module):
             bias_zeros = torch.zeros([self.in_mesh_axis_size - 1, 1, 1, out_dim])
             state["bias"] = torch.cat([bias, bias_zeros])
 
-    def forward(self, x: ttnn.Tensor, /) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True) -> ttnn.Tensor:
         """Forward pass of the Conv2d layer with support for tensor parallelism.
 
         Args:
@@ -247,25 +253,29 @@ class Conv2d(Module):
             and self.out_mesh_axis_size != 1
             and c == self.in_channels // self.out_mesh_axis_size
         ):
-            x = vae_all_gather(self.ccl_manager, x, cluster_axis=self.out_mesh_axis)
+            x = vae_all_gather(self.ccl_manager, x, cluster_axis=self.out_mesh_axis, use_barrier=self.use_barrier)
         else:
             expected_c = self.in_channels // self.in_mesh_axis_size
             if c != expected_c:
                 msg = f"expected input channel dimension to be {expected_c}, but got {c}"
                 raise ValueError(msg)
 
+        # num_slices is a hand-tuned DRAM width-slicing count per (h, w, in, out) conv shape
+        # and mesh shape. Fall back to the documented max for the tile DRAM width
+        # (ceil(w / TILE)) for shapes not in the table — keeps new resolutions / VAEs
+        # working (more slices fit L1; the OOM path below reports if even that is too big).
+        slice_table = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
+        num_slices = slice_table.get((h, w, self.in_channels, self.out_channels), max(1, math.ceil(w / 32)))
         slice_config = ttnn.Conv2dSliceConfig(
-            num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)[
-                (h, w, self.in_channels, self.out_channels)
-            ],
+            num_slices=num_slices,
             slice_type=ttnn.Conv2dDRAMSliceWidth,
         )
 
         try:
-            x, [out_height, out_width] = ttnn.conv2d(
+            x, (out_height, out_width), (self._prepared_weight, self._prepared_bias) = ttnn.conv2d(
                 input_tensor=x,
-                weight_tensor=self.weight.data,
-                bias_tensor=self.bias.data if self.bias is not None else None,
+                weight_tensor=self._prepared_weight or self.weight.data,
+                bias_tensor=(self._prepared_bias or self.bias.data) if self.bias is not None else None,
                 in_channels=self.in_channels // self.in_mesh_axis_size,
                 out_channels=self.weight.data.shape[0],
                 device=self.mesh_device,
@@ -275,10 +285,18 @@ class Conv2d(Module):
                 batch_size=b,
                 input_height=h,
                 input_width=w,
-                conv_config=ttnn.Conv2dConfig(act_block_h_override=32),
+                # Large convs (spatial > 1024^2, e.g. VAE decode at 2048px) exhaust the small L1
+                # region: even at max DRAM width-slicing, their halo/reader config tensors don't
+                # fit L1_SMALL and OOM. Spill those config tensors to DRAM for big convs so they
+                # fit; 1024^2 and below keep the faster in-L1 config path unchanged.
+                conv_config=ttnn.Conv2dConfig(
+                    act_block_h_override=32,
+                    config_tensors_in_dram=h * w > 1024 * 1024,
+                ),
                 compute_config=self.compute_config,
                 slice_config=slice_config,
                 return_output_dim=True,
+                return_weights_and_bias=True,
             )
         except RuntimeError as e:
             m = re.search(r"Out of Memory: (.*)", str(e))
@@ -295,6 +313,8 @@ class Conv2d(Module):
         x = ttnn.reshape(x, (b, out_height, out_width, -1))
 
         if self.in_mesh_axis is not None:
-            x = self.ccl_manager.reduce_scatter_persistent_buffer(x, dim=-1, mesh_axis=self.in_mesh_axis)
+            x = self.ccl_manager.reduce_scatter(
+                x, dim=-1, mesh_axis=self.in_mesh_axis, use_persistent_buffer=use_persistent_buffer
+            )
 
         return x

@@ -2027,3 +2027,585 @@ def test_ternary_resolve_mem_config_with_grid_size_two(device):
 
     output = ttnn.to_torch(output_tt)
     assert_with_pcc(torch_output, output)
+
+
+@pytest.mark.parametrize("predicate_sharded", [True, False])
+@pytest.mark.parametrize("true_sharded", [True, False])
+@pytest.mark.parametrize("false_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_where_ttt_outer_bcast_with_height_sharding(
+    device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
+):
+    # NOTE: Native L1 sharding is enabled only when all tensor inputs have identical shapes
+    # and identical memory configs (see is_native_L1_sharding in ternary_op_utils.cpp).
+    # When enabled, the whole shard is pre-populated into the CB (bulk reserve/push).
+    # Otherwise, per-tile NOC reads are performed via TensorAccessor (interleaved fallback).
+    predicate_shape = (2, 7, 2 * 32, 4 * 32)
+    true_shape = (1, 7, 2 * 32, 4 * 32)  # outer broadcast on N (2 -> 1); H/W identical
+    false_shape = (2, 7, 2 * 32, 4 * 32)
+    output_shape = (2, 7, 2 * 32, 4 * 32)
+
+    torch_predicate = torch.randint(0, 2, predicate_shape, dtype=torch.bfloat16)
+    torch_true = torch.rand(true_shape, dtype=torch.bfloat16)
+    torch_false = torch.rand(false_shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        pred_shard_shape = (2 * 32 * 2, 4 * 32)  # [128, 128]
+        true_shard_shape = (1 * 32 * 2, 4 * 32)  # [64, 128]
+    else:
+        pred_shard_shape = (4 * 32, 2 * 32 * 2)  # [128, 128] for COL_MAJOR
+        true_shard_shape = (4 * 32, 1 * 32 * 2)  # [128, 64] for COL_MAJOR
+
+    pred_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=pred_shard_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=7),  # 7 cores: (0,0) to (0,6)
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    true_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=true_shard_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=7),  # 7 cores: (0,0) to (0,6)
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output = torch.where(torch_predicate.bool(), torch_true, torch_false)
+
+    predicate_tensor = ttnn.from_torch(
+        torch_predicate, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if predicate_sharded:
+        predicate_tensor = ttnn.to_memory_config(predicate_tensor, pred_sharded_mem_config)
+
+    true_tensor = ttnn.from_torch(
+        torch_true, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if true_sharded:
+        true_tensor = ttnn.to_memory_config(true_tensor, true_sharded_mem_config)
+
+    false_tensor = ttnn.from_torch(
+        torch_false, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if false_sharded:
+        false_tensor = ttnn.to_memory_config(false_tensor, pred_sharded_mem_config)
+
+    if out_sharded:
+        out_mem_config = pred_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.where(predicate_tensor, true_tensor, false_tensor, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch_equal_nan(output_tensor, torch_output)
+    assert output_tensor.shape == output_shape
+
+
+@pytest.mark.parametrize(
+    "shape, shard_strategy, shard_shape_row_major, shard_shape_col_major, core_grid",
+    [
+        # BLOCK sharding
+        (
+            (1, 1, 1024, 1024),
+            ttnn.ShardStrategy.BLOCK,
+            (1024 // 2, 1024 // 4),
+            (1024 // 2, 1024 // 4),
+            ttnn.CoreGrid(y=2, x=4),
+        ),
+        # HEIGHT sharding
+        (
+            (1, 1, 256, 256),
+            ttnn.ShardStrategy.HEIGHT,
+            (256 // 4, 256),
+            (256, 256 // 4),
+            ttnn.CoreGrid(y=4, x=1),
+        ),
+        # WIDTH sharding
+        (
+            (1, 1, 256, 256),
+            ttnn.ShardStrategy.WIDTH,
+            (256, 256 // 4),
+            (256 // 4, 256),
+            ttnn.CoreGrid(y=1, x=4),
+        ),
+    ],
+)
+@pytest.mark.parametrize("input_sharded", [True, False])
+@pytest.mark.parametrize("end_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_lerp_tts_no_bcast_with_sharding(
+    device,
+    shape,
+    shard_strategy,
+    shard_shape_row_major,
+    shard_shape_col_major,
+    core_grid,
+    input_sharded,
+    end_sharded,
+    out_sharded,
+    shard_orientation,
+):
+    torch.manual_seed(0)
+    weight = 0.5
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_end = torch.rand(shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        shard_shape = shard_shape_row_major
+    else:
+        shard_shape = shard_shape_col_major
+
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=core_grid,
+        strategy=shard_strategy,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output = torch.lerp(torch_input, torch_end, weight)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if input_sharded:
+        input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+
+    end_tensor = ttnn.from_torch(
+        torch_end, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if end_sharded:
+        end_tensor = ttnn.to_memory_config(end_tensor, sharded_mem_config)
+
+    if out_sharded:
+        out_mem_config = sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output, output_tensor)
+    assert output_tensor.shape == shape
+
+
+@pytest.mark.parametrize("input_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_lerp_tts_scalar_bcast_with_height_sharding(device, input_sharded, out_sharded, shard_orientation):
+    torch.manual_seed(0)
+    input_shape = (2, 7, 2 * 32, 4 * 32)
+    end_shape = (1, 7, 1, 1)
+    output_shape = (2, 7, 2 * 32, 4 * 32)
+    weight = 0.3
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_end = torch.rand(end_shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        shard_shape = (2 * 32 * 2, 4 * 32)
+    else:
+        shard_shape = (4 * 32, 2 * 32 * 2)
+
+    height_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=7),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output = torch.lerp(torch_input, torch_end, weight)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if input_sharded:
+        input_tensor = ttnn.to_memory_config(input_tensor, height_sharded_mem_config)
+
+    end_tensor = ttnn.from_torch(
+        torch_end, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    if out_sharded:
+        out_mem_config = height_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output, output_tensor)
+    assert output_tensor.shape == output_shape
+
+
+@pytest.mark.parametrize("input_sharded", [True, False])
+@pytest.mark.parametrize("end_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_lerp_tts_outer_bcast_with_height_sharding(device, input_sharded, end_sharded, out_sharded, shard_orientation):
+    torch.manual_seed(0)
+    input_shape = (2, 7, 2 * 32, 4 * 32)
+    end_shape = (1, 7, 2 * 32, 4 * 32)
+    output_shape = (2, 7, 2 * 32, 4 * 32)
+    weight = 0.4
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_end = torch.rand(end_shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        input_shard_shape = (2 * 32 * 2, 4 * 32)
+        end_shard_shape = (1 * 32 * 2, 4 * 32)
+    else:
+        input_shard_shape = (4 * 32, 2 * 32 * 2)
+        end_shard_shape = (4 * 32, 1 * 32 * 2)
+
+    input_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=input_shard_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=7),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    end_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=end_shard_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=7),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output = torch.lerp(torch_input, torch_end, weight)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if input_sharded:
+        input_tensor = ttnn.to_memory_config(input_tensor, input_sharded_mem_config)
+
+    end_tensor = ttnn.from_torch(
+        torch_end, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if end_sharded:
+        end_tensor = ttnn.to_memory_config(end_tensor, end_sharded_mem_config)
+
+    if out_sharded:
+        out_mem_config = input_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output, output_tensor)
+    assert output_tensor.shape == output_shape
+
+
+@pytest.mark.parametrize("input_sharded", [True, False])
+@pytest.mark.parametrize("end_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_lerp_tts_outer_bcast_with_width_sharding(device, input_sharded, end_sharded, out_sharded, shard_orientation):
+    torch.manual_seed(0)
+    input_shape = (1, 2, 2 * 32, 7 * 32)
+    end_shape = (1, 1, 2 * 32, 7 * 32)
+    output_shape = (1, 2, 2 * 32, 7 * 32)
+    weight = 0.6
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_end = torch.rand(end_shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        input_shard_shape = (2 * 1 * 2 * 32, 32)
+        end_shard_shape = (1 * 1 * 2 * 32, 32)
+    else:
+        input_shard_shape = (32, 2 * 1 * 2 * 32)
+        end_shard_shape = (32, 1 * 1 * 2 * 32)
+
+    input_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=input_shard_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=7),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    end_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=end_shard_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=7),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output = torch.lerp(torch_input, torch_end, weight)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if input_sharded:
+        input_tensor = ttnn.to_memory_config(input_tensor, input_sharded_mem_config)
+
+    end_tensor = ttnn.from_torch(
+        torch_end, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if end_sharded:
+        end_tensor = ttnn.to_memory_config(end_tensor, end_sharded_mem_config)
+
+    if out_sharded:
+        out_mem_config = input_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output, output_tensor)
+    assert output_tensor.shape == output_shape
+
+
+@pytest.mark.parametrize("end_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_lerp_tts_row_col_bcast_with_height_sharding(device, end_sharded, out_sharded, shard_orientation):
+    torch.manual_seed(0)
+    input_shape = (1, 1, 1, 4 * 32)
+    end_shape = (1, 1, 4 * 32, 1)
+    output_shape = (1, 1, 4 * 32, 4 * 32)
+    weight = 0.5
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_end = torch.rand(end_shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        out_shard_shape = (1 * 32, 4 * 32)
+        end_shard_shape = (1 * 32, 1 * 32)
+    else:
+        out_shard_shape = (4 * 32, 1 * 32)
+        end_shard_shape = (1 * 32, 1 * 32)
+
+    out_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=out_shard_shape,
+        core_grid=ttnn.CoreGrid(y=4, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    end_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=end_shard_shape,
+        core_grid=ttnn.CoreGrid(y=4, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output = torch.lerp(torch_input, torch_end, weight)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    end_tensor = ttnn.from_torch(
+        torch_end, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if end_sharded:
+        end_tensor = ttnn.to_memory_config(end_tensor, end_sharded_mem_config)
+
+    if out_sharded:
+        out_mem_config = out_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output, output_tensor)
+    assert output_tensor.shape == output_shape
+
+
+@pytest.mark.parametrize("end_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_lerp_tts_row_bcast_with_height_sharding(device, end_sharded, out_sharded, shard_orientation):
+    torch.manual_seed(0)
+    input_shape = (1, 1, 1, 4 * 32)
+    end_shape = (1, 1, 4 * 32, 4 * 32)
+    output_shape = (1, 1, 4 * 32, 4 * 32)
+    weight = 0.5
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_end = torch.rand(end_shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        shard_shape = (1 * 32, 4 * 32)
+    else:
+        shard_shape = (4 * 32, 1 * 32)
+
+    height_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=ttnn.CoreGrid(y=4, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output = torch.lerp(torch_input, torch_end, weight)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    end_tensor = ttnn.from_torch(
+        torch_end, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if end_sharded:
+        end_tensor = ttnn.to_memory_config(end_tensor, height_sharded_mem_config)
+
+    if out_sharded:
+        out_mem_config = height_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output, output_tensor)
+    assert output_tensor.shape == output_shape
+
+
+@pytest.mark.parametrize("input_sharded", [True, False])
+@pytest.mark.parametrize("end_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_lerp_tts_col_bcast_with_height_sharding(device, input_sharded, end_sharded, out_sharded, shard_orientation):
+    torch.manual_seed(0)
+    input_shape = (1, 1, 4 * 32, 4 * 32)
+    end_shape = (1, 1, 4 * 32, 1)
+    output_shape = (1, 1, 4 * 32, 4 * 32)
+    weight = 0.5
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_end = torch.rand(end_shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        input_shard_shape = (1 * 32, 4 * 32)
+        end_shard_shape = (1 * 32, 1 * 32)
+    else:
+        input_shard_shape = (4 * 32, 1 * 32)
+        end_shard_shape = (1 * 32, 1 * 32)
+
+    input_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=input_shard_shape,
+        core_grid=ttnn.CoreGrid(y=4, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    end_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=end_shard_shape,
+        core_grid=ttnn.CoreGrid(y=4, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output = torch.lerp(torch_input, torch_end, weight)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if input_sharded:
+        input_tensor = ttnn.to_memory_config(input_tensor, input_sharded_mem_config)
+
+    end_tensor = ttnn.from_torch(
+        torch_end, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if end_sharded:
+        end_tensor = ttnn.to_memory_config(end_tensor, end_sharded_mem_config)
+
+    if out_sharded:
+        out_mem_config = input_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output, output_tensor)
+    assert output_tensor.shape == output_shape
+
+
+@pytest.mark.parametrize("input_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_lerp_tts_scalar_bcast_with_width_sharding(device, input_sharded, out_sharded, shard_orientation):
+    torch.manual_seed(0)
+    input_shape = (1, 2, 2 * 32, 7 * 32)
+    end_shape = (1, 1, 1, 1)
+    output_shape = (1, 2, 2 * 32, 7 * 32)
+    weight = 0.7
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_end = torch.rand(end_shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        shard_shape = (2 * 1 * 2 * 32, 32)
+    else:
+        shard_shape = (32, 2 * 1 * 2 * 32)
+
+    width_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=7),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output = torch.lerp(torch_input, torch_end, weight)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if input_sharded:
+        input_tensor = ttnn.to_memory_config(input_tensor, width_sharded_mem_config)
+
+    end_tensor = ttnn.from_torch(
+        torch_end, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    if out_sharded:
+        out_mem_config = width_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output, output_tensor)
+    assert output_tensor.shape == output_shape

@@ -11,8 +11,6 @@
 namespace tt {
 
 // Host MMIO reads/writes don't have alignment restrictions, so no need to check alignment here.
-// TODO: For Quasar, this range would need to be expanded if we need to write into uncached L1
-// (>= MEM_L1_UNCACHED_BASE) from host, probably by baking the existence of uncached memory into HAL.
 #define DEBUG_VALID_L1_ADDR(a, l) (((a) >= HAL_MEM_L1_BASE) && ((a) + (l) <= HAL_MEM_L1_BASE + HAL_MEM_L1_SIZE))
 
 #define DEBUG_VALID_REG_ADDR(a) tt::tt_metal::MetalContext::instance().hal().valid_reg_addr(a)
@@ -33,9 +31,9 @@ namespace tt {
             HAL_MEM_DRAM_L1_SIZE))) ||                                                                                \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
-static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoord core) {
+static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, tt::tt_metal::CoreCoord core) {
     for (const tt::umd::CoreCoord& core_coord : coords) {
-        CoreCoord item = {core_coord.x, core_coord.y};
+        tt::tt_metal::CoreCoord item = {core_coord.x, core_coord.y};
         if (item == core) {
             return true;
         }
@@ -43,9 +41,9 @@ static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoo
     return false;
 }
 
-static bool coord_found_p(const std::unordered_set<CoreCoord>& coords, CoreCoord core) { return coords.contains(core); }
+static bool coord_found_p(const std::unordered_set<tt::tt_metal::CoreCoord>& coords, tt::tt_metal::CoreCoord core) { return coords.contains(core); }
 
-static std::string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
+static std::string noc_address(tt::tt_metal::CoreCoord core, uint64_t a, uint32_t l) {
     std::stringstream ss;
     ss << "noc{" << core.str() << ", 0x" << std::setfill('0') << std::setw(8) << std::hex << a << ", " << std::dec << l
        << "}";
@@ -72,12 +70,13 @@ static void print_stack_trace() {
 static void watcher_sanitize_host_noc(
     const char* what,
     const metal_SocDescriptor& soc_d,
-    const std::unordered_set<CoreCoord>& virtual_worker_cores,
-    const std::unordered_set<CoreCoord>& virtual_eth_cores,
-    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
-    const std::unordered_set<CoreCoord>& virtual_dram_cores,
-    const std::unordered_set<CoreCoord>& virtual_dram_hw_cores,
-    const CoreCoord& core,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
+    const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -115,6 +114,13 @@ static void watcher_sanitize_host_noc(
             print_stack_trace();
             TT_THROW("Host watcher: bad {} eth address {}", what, noc_address(core, addr, lbytes));
         }
+    } else if (
+        coord_found_p(soc_d.get_cores(CoreType::DISPATCH, CoordSystem::NOC0), core) ||
+        coord_found_p(virtual_dispatch_cores, core)) {
+        if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
+            print_stack_trace();
+            TT_THROW("Host watcher: bad {} dispatch address {}", what, noc_address(core, addr, lbytes));
+        }
     } else if (coord_found_p(virtual_worker_cores, core)) {
         if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
             print_stack_trace();
@@ -129,12 +135,13 @@ static void watcher_sanitize_host_noc(
 
 inline void watcher_sanitize_host_noc_read(
     const metal_SocDescriptor& soc_d,
-    const std::unordered_set<CoreCoord>& virtual_worker_cores,
-    const std::unordered_set<CoreCoord>& virtual_eth_cores,
-    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
-    const std::unordered_set<CoreCoord>& virtual_dram_cores,
-    const std::unordered_set<CoreCoord>& virtual_dram_hw_cores,
-    const CoreCoord& core,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
+    const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
     watcher_sanitize_host_noc(
@@ -145,6 +152,7 @@ inline void watcher_sanitize_host_noc_read(
         virtual_pcie_cores,
         virtual_dram_cores,
         virtual_dram_hw_cores,
+        virtual_dispatch_cores,
         core,
         addr,
         lbytes);
@@ -152,12 +160,13 @@ inline void watcher_sanitize_host_noc_read(
 
 inline void watcher_sanitize_host_noc_write(
     const metal_SocDescriptor& soc_d,
-    const std::unordered_set<CoreCoord>& virtual_worker_cores,
-    const std::unordered_set<CoreCoord>& virtual_eth_cores,
-    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
-    const std::unordered_set<CoreCoord>& virtual_dram_cores,
-    const std::unordered_set<CoreCoord>& virtual_dram_hw_cores,
-    const CoreCoord& core,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
+    const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
     watcher_sanitize_host_noc(
@@ -168,6 +177,7 @@ inline void watcher_sanitize_host_noc_write(
         virtual_pcie_cores,
         virtual_dram_cores,
         virtual_dram_hw_cores,
+        virtual_dispatch_cores,
         core,
         addr,
         lbytes);
@@ -175,9 +185,9 @@ inline void watcher_sanitize_host_noc_write(
 
 inline void watcher_sanitize_host_noc_multicast_write(
     const metal_SocDescriptor& soc_d,
-    const std::unordered_set<CoreCoord>& virtual_worker_cores,
-    const CoreCoord& core_start,
-    const CoreCoord& core_end,
+    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
+    const tt::tt_metal::CoreCoord& core_start,
+    const tt::tt_metal::CoreCoord& core_end,
     uint64_t addr,
     uint32_t lbytes) {
     // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start,

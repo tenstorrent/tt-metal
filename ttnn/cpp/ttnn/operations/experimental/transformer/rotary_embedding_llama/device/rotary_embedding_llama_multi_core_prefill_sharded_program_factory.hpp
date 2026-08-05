@@ -4,40 +4,21 @@
 
 #pragma once
 
-#include <optional>
-
-#include <tt-metalium/host_api.hpp>
-#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "rotary_embedding_llama_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingLlamaMultiCorePrefillSharded {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-        tt::tt_metal::KernelHandle rotary_embedding_kernel_id{};
-        std::vector<CoreCoord> cores;
-        uint32_t num_active_cores{};
-
-        // CB handles for globally-allocated (sharded) buffers; used by
-        // override_runtime_arguments to update addresses without re-creating CBs.
-        std::optional<tt::tt_metal::CBHandle> cb_cos;        // set iff cos is sharded and not reloading
-        std::optional<tt::tt_metal::CBHandle> cb_sin;        // set iff sin is sharded and not reloading
-        std::optional<tt::tt_metal::CBHandle> cb_trans_mat;  // set iff trans_mat uses global CB
-    };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    // Metal 2.0 factory (MetalV2FactoryConcept) for prefill with sharded cos/sin/trans_mat.
+    // Globally-allocated (L1-resident) cos/sin/trans_mat bind through borrowed-memory DataflowBuffers
+    // (DataflowBufferSpec::borrowed_from) only when the shard grid covers all work-unit cores; otherwise
+    // they are read via TensorAccessor. The work unit is placed on all device cores.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const RotaryEmbeddingLlamaParams& operation_attributes,
         const RotaryEmbeddingLlamaInputs& tensor_args,
-        tt::tt_metal::Tensor& output);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const RotaryEmbeddingLlamaParams& operation_attributes,
-        const RotaryEmbeddingLlamaInputs& tensor_args,
-        tt::tt_metal::Tensor& output);
+        ttnn::Tensor& tensor_return_value);
 };
 
 }  // namespace ttnn::experimental::prim

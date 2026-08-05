@@ -26,7 +26,7 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(
     constexpr auto broadcast_type = p_elwise::SRCB_BCAST_ALL;
 
     // Scalar broadcast should not Clear B within a mop.  This is controlled outside of MOP.
-    if constexpr (eltwise_binary_type == ELWADD) {
+    if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD) {
         ckernel_template tmp(
             num_tiles,
             num_faces,
@@ -35,7 +35,7 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(
         tmp.set_last_inner_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.set_last_outer_loop_instr(TT_OP_ELWADD(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
-    } else if constexpr (eltwise_binary_type == ELWSUB) {
+    } else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWSUB) {
         ckernel_template tmp(
             num_tiles,
             num_faces,
@@ -44,7 +44,7 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(
         tmp.set_last_inner_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.set_last_outer_loop_instr(TT_OP_ELWSUB(p_setrwc::CLR_A, acc_to_dest, broadcast_type, ADDR_MOD_3, 0));
         tmp.program();
-    } else if constexpr (eltwise_binary_type == ELWMUL) {
+    } else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL) {
         if constexpr (high_fidelity) {
             ckernel_template tmp(
                 num_faces,
@@ -98,9 +98,10 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_(std::uint32_t src_index, 
     }
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
-    if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB)) {
+    if constexpr (
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB)) {
         ckernel_template::run();
-    } else if constexpr (eltwise_binary_type == ELWMUL) {
+    } else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL) {
         // Row and no broadcasted behaves similarly
         if constexpr (high_fidelity) {
             for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num++) {
@@ -120,7 +121,8 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_addrmod(const std::uint32_
     constexpr std::uint32_t fidelity_increment = high_fidelity ? 1 : 0;
     // Use srcA for data movement
     if constexpr (
-        (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
+        (eltwise_binary_type == EltwiseBinaryType::ELWMUL)) {
         addr_mod_t{
             .srca = {.incr = 8},
             .srcb = {.incr = 0},
@@ -134,7 +136,7 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_addrmod(const std::uint32_
         }
             .set(ADDR_MOD_1);
 
-        if constexpr (eltwise_binary_type == ELWMUL && high_fidelity) {
+        if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL && high_fidelity) {
             addr_mod_t{
                 .srca = {.incr = 0, .clr = 1},
                 .srcb = {.incr = 0, .clr = 1},
@@ -179,7 +181,8 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_(
     rmsnorm_bcast_scalar_dest_reuse_configure_addrmod<eltwise_binary_type, math_fidelity>(num_faces);
 
     if constexpr (
-        (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
+        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
+        (eltwise_binary_type == EltwiseBinaryType::ELWMUL)) {
         rmsnorm_bcast_scalar_dest_reuse_configure_mop<eltwise_binary_type, num_tiles, math_fidelity>(
             num_faces, acc_to_dest);
     }

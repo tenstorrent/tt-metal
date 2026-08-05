@@ -66,6 +66,28 @@ def test_concat(device, height, width, dim, dtype):
     assert_equal(torch_output_tensor, output)
 
 
+def test_concat_size_switches(device):
+    def to_tt(t, device):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # 1) decode-shape concat — caches a program
+    a = torch.rand(1, 1, 1, 64, dtype=torch.bfloat16)
+    tt_a = to_tt(a, device)
+    ttnn.concat([tt_a, tt_a], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    # 2) prefill-shape concat — CRASH on this one
+    b = torch.rand(1, 4, 64, 64, dtype=torch.bfloat16)
+    c = torch.rand(1, 4, 64, 64, dtype=torch.bfloat16)
+    tt_b, tt_c = to_tt(b, device), to_tt(c, device)
+    ttnn.concat([tt_b, tt_c], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
 @pytest.mark.parametrize(
     "inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode",
     (
@@ -466,3 +488,46 @@ def test_concat_large_page_l1_budget(device, shapes, dim):
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output)
+
+
+def test_concat_int32_2d_dim1_regression(device):
+    """Regression test for issue #43371: ttnn.concat on tile-layout int32 2D tensors
+    with non-aligned last dim and large dim[-2] that would overflow L1 after the
+    untilize+transpose fallback.
+
+    Computes the smallest tile-aligned height whose post-transpose page size
+    exceeds the device's usable L1, keeping runtime and memory pressure minimal."""
+
+    TILE_H = 32
+    elem_size = 4  # int32
+    l1_unreserved = ttnn.get_max_worker_l1_unreserved_size()
+    min_overflow_rows = (l1_unreserved // elem_size) + 1
+    rows = ((min_overflow_rows + TILE_H - 1) // TILE_H) * TILE_H
+
+    torch.manual_seed(0)
+
+    torch_a = torch.randint(-(2**31), 2**31, [rows, 3], dtype=torch.int32)
+    torch_b = torch.randint(-(2**31), 2**31, [rows, 1], dtype=torch.int32)
+    torch_output = torch.cat([torch_a, torch_b], dim=1)
+
+    tt_a = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_b = ttnn.from_torch(
+        torch_b,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_output = ttnn.concat([tt_a, tt_b], dim=1)
+
+    assert list(tt_output.shape) == [rows, 4]
+
+    tt_output_torch = ttnn.to_torch(tt_output)
+    assert torch.equal(torch_output, tt_output_torch)

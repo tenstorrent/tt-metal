@@ -9,6 +9,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from tests.ttnn.utils_for_testing import assert_with_pcc, maybe_trace
 
 DEEPSEEK_SHAPE_PAIRS = [([1, 1, 1, 32], [1, 1, 4096, 64]), ([1, 1, 1, 32], [1, 1, 129280, 224])]
@@ -18,7 +19,7 @@ VOCAB_SIZE = 2048
 
 @pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 0}], indirect=True
 )
 @pytest.mark.parametrize("shape_pair", DEEPSEEK_SHAPE_PAIRS)
 @pytest.mark.parametrize("input_dtype", [ttnn.uint32])

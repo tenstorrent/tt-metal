@@ -102,7 +102,7 @@ void RunTest(
         u32_vec.insert(u32_vec.end(), tile.begin(), tile.end());
 
         using tt::tt_metal::test::dprint::GenerateExpectedData;
-        std::string golden_output = GenerateExpectedData(data_format, tile, true);
+        std::string golden_output = GenerateExpectedData(data_format, tile);
         expected_output_write += fmt::format("Write tile {}:{}\n", i, golden_output);
         expected_output_read += fmt::format("Read tile {}:{}\n", i, golden_output);
     }

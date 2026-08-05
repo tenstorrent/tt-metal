@@ -4,9 +4,16 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
+
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -14,45 +21,36 @@
 
 namespace ttnn::prim {
 
-struct ExpRingJointSDPASharedVariables {
-    uint32_t num_sdpa_cores = 0;
-    tt::tt_metal::CoreCoord sdpa_grid;
-    tt::tt_metal::KernelHandle reader_kernels_id{};
-    tt::tt_metal::KernelHandle writer_kernels_id{};  // non-fabric: columns 0..grid_size.x-3
-    tt::tt_metal::KernelHandle
-        writer_fabric_kernels_id{};  // fabric MUX clients: columns grid_size.x-2 and grid_size.x-1
-    tt::tt_metal::KernelHandle compute_kernels_id{};
-    // Offset into fabric writer RT args where all-gather args begin (all link_in_range MUX writers)
-    uint32_t writer_fabric_ag_rt_offset = 0;
-    // Offset into reader RT args where per-link semaphore addresses begin
-    uint32_t reader_per_link_sem_rt_offset = 0;
-    uint32_t num_links = 0;
-};
+// Single source of truth for the DYNAMIC (hash-excluded) global-semaphore address runtime args.
+//
+// The per-link GlobalSemaphore addresses are excluded from the program-cache key
+// (ExpRingJointSDPAParams::attribute_values omits `semaphore`), so two calls that differ only in
+// which GlobalSemaphores they pass still cache-hit. That makes the addresses dynamic: the factory
+// bakes them for the cache-miss build, and ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args()
+// re-applies them on every dispatch — otherwise a cache hit with a different semaphore set would
+// silently reuse the address frozen at the first miss (the frozen-runtime-arg bug).
+//
+// The kernel indices and per-core arg slots below are the shared reference for BOTH the factory's
+// cache-miss bake (build_exp_ring_joint_sdpa_program_descriptor) and the cache-hit patch
+// (get_dynamic_runtime_args); reorder the runtime args in the factory and these constants (and thus
+// the re-apply targets) must be updated in lockstep.
+namespace exp_ring_joint_sdpa_dynamic {
+// Kernel indices — must match the desc.kernels push order (reader, writer, writer_fabric, compute[, mux]).
+inline constexpr uint32_t kReaderKernelIdx = 0;
+inline constexpr uint32_t kWriterFabricKernelIdx = 2;
+// Per-core reader runtime-arg slot of the first per-link semaphore address; slots
+// kReaderSemaphoreArgBase .. +num_links-1 hold args.semaphore[lnk].address().
+inline constexpr uint32_t kReaderSemaphoreArgBase = 26;
+// Per-core fabric-writer runtime-arg slot of out_ready_sem_addr (= args.semaphore[link].address()).
+inline constexpr uint32_t kWriterFabricOutReadySemArg = 25;
+}  // namespace exp_ring_joint_sdpa_dynamic
 
 struct ExpRingJointSDPAProgramFactory {
-    using shared_variables_t = ExpRingJointSDPASharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const ExpRingJointSDPAParams& args,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        const ExpRingJointSDPAParams& operation_attributes,
         const ExpRingJointSDPAInputs& tensor_args,
-        ExpRingJointSDPAResult& output_tensors);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
-        const ExpRingJointSDPAParams& args,
-        const ExpRingJointSDPAInputs& tensor_args,
-        ExpRingJointSDPAResult& output_tensors);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const ExpRingJointSDPAParams& args,
-        const ttnn::MeshCoordinate& coord,
-        const ExpRingJointSDPAInputs& tensor_args,
-        ExpRingJointSDPAResult& output_tensors);
+        ExpRingJointSDPAResult& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::prim

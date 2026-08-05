@@ -23,7 +23,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include "impl/context/metal_context.hpp"
@@ -70,7 +69,8 @@ void build_and_run_program(
     uint32_t program2_semaphore1 = CreateSemaphore(program2, cr_set, 0);
 
     vector<uint32_t> compile_args = {MAX_LOOP, page_size, 2};
-    tt_metal::TensorAccessorArgs::create_l1_interleaved().append_to(compile_args);
+    compile_args.push_back(0);          // TensorAccessorArgs: args_config = None (L1 interleaved)
+    compile_args.push_back(page_size);  // TensorAccessorArgs: aligned_page_size
 
     auto brisc_kernel1 = CreateKernel(
         program1,
@@ -221,7 +221,8 @@ void build_and_run_program_ethernet(
     uint32_t program2_semaphore1 = CreateSemaphore(program2, eth_cr_set, 0, CoreType::ETH);
 
     vector<uint32_t> compile_args = {MAX_LOOP, page_size, 2};
-    tt_metal::TensorAccessorArgs::create_l1_interleaved().append_to(compile_args);
+    compile_args.push_back(0);          // TensorAccessorArgs: args_config = None (L1 interleaved)
+    compile_args.push_back(page_size);  // TensorAccessorArgs: aligned_page_size
 
     // Create ERISC0 kernel for program1 (Dynamic NOC)
     auto eth_erisc0_kernel1 = CreateKernel(

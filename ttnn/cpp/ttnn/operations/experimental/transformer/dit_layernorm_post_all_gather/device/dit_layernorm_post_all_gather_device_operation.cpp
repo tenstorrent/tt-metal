@@ -134,7 +134,7 @@ void PostAllGatherDeviceOperation::validate_on_program_cache_miss(
 PostAllGatherDeviceOperation::spec_return_value_t PostAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(args.dtype.value_or(input_tensor.dtype()), PageConfig(Layout::TILE), args.memory_config));
 }

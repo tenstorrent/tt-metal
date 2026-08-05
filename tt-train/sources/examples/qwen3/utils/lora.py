@@ -11,7 +11,7 @@ PEFT-style mixin pattern (mirrors HuggingFace PEFT BaseTunerLayer):
 traverses the module tree and replaces every attribute whose name appears
 in lora_config["targets"] with an appropriate LoRA wrapper:
 
-  LinearProjection       → LoRALinearProjection       (single-device)
+  LinearLayer            → LoRALinearProjection       (single-device)
   ColumnParallelLinear   → LoRAColumnParallelLinear    (tensor-parallel)
   RowParallelLinear      → LoRARowParallelLinear       (tensor-parallel)
 
@@ -28,13 +28,14 @@ weights to load.
 """
 
 import math
+import warnings
 
 import torch
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
 
+from ttml.models.qwen3.weights import torch_to_ttml
 from .tensor_utils import (
-    torch_to_ttml,
     get_tp_size,
     make_dist_replicated_weight,
     make_dist_replicated_zeros,
@@ -42,15 +43,60 @@ from .tensor_utils import (
     make_dist_sharded_zeros,
 )
 
+# Canonical LoRA target attribute names, as they appear on the (fused-KV) Qwen3
+# attention/MLP modules. K and V share a single fused ``kv_proj`` projection, so
+# the injectable attribute is ``kv_proj`` (there are no ``k_proj``/``v_proj``
+# submodules anymore -- see model_qwen3_distributed.py / ttml.models.qwen3.attention).
 LORA_TARGETS_ALL = [
     "q_proj",
-    "k_proj",
-    "v_proj",
+    "kv_proj",
     "o_proj",
     "gate_proj",
     "up_proj",
     "down_proj",
 ]
+
+# Deprecated back-compat aliases: users / scripts may still pass the pre-fusion
+# ``k_proj`` / ``v_proj`` names. Both map to the single fused ``kv_proj`` so
+# "train K and V" keeps working. ``normalize_lora_targets`` applies this mapping,
+# de-dupes, and emits a DeprecationWarning.
+_LORA_TARGET_ALIASES = {
+    "k_proj": "kv_proj",
+    "v_proj": "kv_proj",
+}
+
+# Removal date advertised in the DeprecationWarning, matching the tt-metal
+# convention of giving deprecated arguments an explicit removal deadline.
+_LORA_TARGET_ALIAS_REMOVAL_DATE = "2027-01-29"
+
+# Names accepted on the CLI: canonical targets plus the deprecated aliases.
+LORA_TARGETS_ACCEPTED = LORA_TARGETS_ALL + list(_LORA_TARGET_ALIASES)
+
+
+def normalize_lora_targets(targets):
+    """Map any ``k_proj``/``v_proj`` aliases to the fused ``kv_proj`` and de-dupe.
+
+    Order is preserved (first occurrence wins) so error messages / logs stay
+    stable. Unknown names are passed through unchanged for the caller to validate.
+    Aliases still resolve, but emit a ``DeprecationWarning``.
+    """
+    out = []
+    deprecated = []
+    for t in targets:
+        canon = _LORA_TARGET_ALIASES.get(t, t)
+        if canon != t and t not in deprecated:
+            deprecated.append(t)
+        if canon not in out:
+            out.append(canon)
+    if deprecated:
+        warnings.warn(
+            f"LoRA target(s) {', '.join(deprecated)} are deprecated: Qwen3 attention fuses K and V "
+            f"into a single projection, so pass 'kv_proj' instead. "
+            f"Removal by {_LORA_TARGET_ALIAS_REMOVAL_DATE}.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    return out
 
 
 # =====================================================================
@@ -59,7 +105,7 @@ LORA_TARGETS_ALL = [
 
 
 class LoRALinearProjection(AbstractModuleBase):
-    """LoRA wrapper for single-device LinearProjection.
+    """LoRA wrapper for single-device LinearLayer.
 
     Forward: base_layer(x) + lora_B(lora_A(x)) * scaling
     Dimensions inferred from base_layer.weight shape (1, 1, out, in).
@@ -157,7 +203,7 @@ class LoRARowParallelLinear(AbstractModuleBase):
 def _make_lora_wrapper(module, rank: int, alpha: float):
     """Create the appropriate LoRA wrapper for the given base module."""
     cls_name = type(module).__name__
-    if cls_name == "LinearProjection":
+    if cls_name == "LinearLayer":
         return LoRALinearProjection(module, rank, alpha)
     elif cls_name == "ColumnParallelLinear":
         return LoRAColumnParallelLinear(module, rank, alpha)
@@ -166,7 +212,7 @@ def _make_lora_wrapper(module, rank: int, alpha: float):
     else:
         raise ValueError(
             f"Cannot inject LoRA into module type '{cls_name}'. "
-            f"Supported: LinearProjection, ColumnParallelLinear, RowParallelLinear"
+            f"Supported: LinearLayer, ColumnParallelLinear, RowParallelLinear"
         )
 
 
@@ -190,7 +236,10 @@ def inject_adapter_in_model(model, lora_config: dict):
     Args:
         model:       ttml model (Qwen3ForCausalLM or DistributedQwen3ForCausalLM).
         lora_config: dict with keys:
-                       ``targets`` – list of module names, e.g. ``["q_proj", "v_proj"]``
+                       ``targets`` – list of module names, e.g. ``["q_proj", "kv_proj"]``
+                                     (``k_proj``/``v_proj`` are deprecated aliases for
+                                     the fused ``kv_proj``; normalize via
+                                     ``normalize_lora_targets`` before injection)
                        ``rank``    – LoRA rank *r*
                        ``alpha``   – LoRA scaling alpha (default: rank → scaling = 1.0)
 

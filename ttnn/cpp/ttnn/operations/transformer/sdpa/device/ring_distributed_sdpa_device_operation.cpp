@@ -6,7 +6,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include "ring_distributed_sdpa_program_factory.hpp"
 #include "sdpa_perf_model.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -258,7 +257,7 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec RingDistributedSdpaDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec RingDistributedSdpaDeviceOperation::compute_output_specs(
     const RingDistributedSDPAParams& operation_attributes, const RingDistributedSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& q_shape = input_tensor_q.logical_shape();
@@ -272,7 +271,7 @@ TensorSpec RingDistributedSdpaDeviceOperation::compute_output_specs(
     auto local_output_shape = q_shape;
     local_output_shape[2] = local_seq_len;  // Update sequence length dimension
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         local_output_shape,
         TensorLayout(input_tensor_q.dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config));
 }

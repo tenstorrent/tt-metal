@@ -43,12 +43,13 @@ void kernel_main() {
 
     binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         exp_cb_bcast.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+        pack_reconfig_data_format(cb_out, cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
 
         tile_regs_acquire();
@@ -66,10 +67,10 @@ void kernel_main() {
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 #endif
 
-        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
+        PREPROCESS(LHS, CircularBuffer(cb_pre_lhs), exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_lhs.wait_front(num_tiles_per_cycle);
 
-        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
+        PREPROCESS(RHS, CircularBuffer(cb_pre_rhs), exp_cb_post_rhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
 
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);

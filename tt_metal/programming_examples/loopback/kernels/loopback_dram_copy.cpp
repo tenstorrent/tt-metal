@@ -30,12 +30,12 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i++) {
         // Issue a read to the NoC and write to the L1 buffer. This operation is asynchronous.
         // thus a barrier is needed to ensure that the read is complete before the write.
-        noc_async_read_tile(i, in0, l1_buffer_addr);
+        noc_async_read_page(i, in0, l1_buffer_addr);
         noc_async_read_barrier();
         // Write back the tile to the destination DRAM buffer.
         // Again, this is an asynchronous operation, so we need a barrier to ensure the write
         // is complete before the next iteration.
-        noc_async_write_tile(i, out0, l1_buffer_addr);
+        noc_async_write_page(i, out0, l1_buffer_addr);
         noc_async_write_barrier();
     }
 }

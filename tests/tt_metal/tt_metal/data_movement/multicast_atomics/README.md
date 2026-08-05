@@ -27,26 +27,30 @@ This test suite includes tests using both the standard NOC API and the Device 2.
 
 ## Test Cases
 
-| Test Name                          | ID  | Description |
-| ---------------------------------- | --- | ----------- |
-| MulticastAtomicSingleSource        | 321 | Single sender core multicasts atomic increment to 12 destinations (NOC_0) |
-| MulticastAtomicMultiSource         | 322 | 4 sender cores multicast atomic increment to 12 destinations (NOC_0)      |
-| MulticastAtomicSingleSourceNOC1    | 323 | Single sender core multicasts atomic increment to 12 destinations (NOC_1) |
-| MulticastAtomicMultiSourceNOC1     | 324 | 4 sender cores multicast atomic increment to 12 destinations (NOC_1)      |
-| MulticastAtomicLargerIncrement     | 325 | 4 senders, 3 transactions each, increment value 5 (NOC_0)                 |
-| MulticastAtomicLargerIncrementNOC1 | 326 | 4 senders, 3 transactions each, increment value 5 (NOC_1)                 |
-| MulticastAtomicSingleSource_2_0    | 327 | Single sender using API                                      |
-| MulticastAtomicLargerIncrement_2_0 | 328 | 4 senders, 3 transactions each, increment value 5 using API  |
+| Test Name                              | ID  | Description |
+| ----------------------------------     | --- | ----------- |
+| MulticastAtomicSingleSource            | 342 | Single sender core multicasts atomic increment to 12 destinations (NOC_0) |
+| MulticastAtomicMultiSource             | 343 | 4 sender cores multicast atomic increment to 12 destinations (NOC_0)      |
+| MulticastAtomicSingleSourceNOC1        | 344 | Single sender core multicasts atomic increment to 12 destinations (NOC_1) |
+| MulticastAtomicMultiSourceNOC1         | 345 | 4 sender cores multicast atomic increment to 12 destinations (NOC_1)      |
+| MulticastAtomicLargerIncrement         | 346 | 4 senders, 3 transactions each, increment value 5 (NOC_0)                 |
+| MulticastAtomicLargerIncrementNOC1     | 347 | 4 senders, 3 transactions each, increment value 5 (NOC_1)                 |
+| MulticastAtomicSingleSource_2_0        | 348 | Single sender using 2.0 API                                      |
+| MulticastAtomicLargerIncrement_2_0     | 349 | 4 senders, 3 transactions each, increment value 5 using 2.0 API  |
+| MulticastAtomicMultiSource_2_0         | 350 | MulticastAtomicMultiSource using 2.0 API |
+| MulticastAtomicSingleSourceNOC1_2_0    | 351 | Single sender (NOC_1) using 2.0 API |
+| MulticastAtomicMultiSourceNOC1_2_0     | 352 | MulticastAtomicMultiSource (NOC_1) using 2.0 API |
+| MulticastAtomicLargerIncrementNOC1_2_0 | 353 | 4 senders, 3 transactions each, increment value 5 (NOC_1) using 2.0 API |
 
-### SingleSourceMulticastAtomic (IDs 321, 323, 327)
+### SingleSourceMulticastAtomic (IDs 342, 344, 348, 351)
 - **Description**: Single sender core multicasts atomic increment to a 3x4 grid of 12 destination cores
 - **Expected Result**: All 12 destination cores have semaphore value = 1
 
-### MultiSourceMulticastAtomic (IDs 322, 324)
+### MultiSourceMulticastAtomic (IDs 343, 345, 350, 352)
 - **Description**: 4 sender cores each multicast atomic increment to the same 3x4 grid of 12 destination cores
 - **Expected Result**: All 12 destination cores have semaphore value = 4 (one increment from each sender)
 
-### LargerIncrementMulticastAtomic (IDs 325, 326, 328)
+### LargerIncrementMulticastAtomic (IDs 346, 347, 349, 353)
 - **Description**: 4 sender cores each perform 3 multicast atomic increments with value 5 to a 3x4 grid of 12 destination cores
 - **Expected Result**: All 12 destination cores have semaphore value = 60 (4 senders × 3 transactions × 5 increment)
 

@@ -13,14 +13,18 @@
 </div>
 
 <script>
-const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+// versions.json is regenerated on gh-pages by the docs deploy workflow after every successful
+// deploy, so the dropdown always matches what's actually being served. See #45572.
+const VERSIONS_URL = '/tt-metal/versions.json';
 
 async function loadVersions() {
     try {
         const response = await fetch(VERSIONS_URL);
         const data = await response.json();
         const versionList = document.getElementById('version-list');
-        const projectCode = location.pathname.split('/')[3];
+        const pathParts = location.pathname.split('/');
+        // Hosted layout: /tt-metal/{version}/{project}/...; local builds: /{project}/...
+        const projectCode = pathParts[1] === 'tt-metal' ? pathParts[3] : pathParts[1];
 
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
@@ -38,7 +42,9 @@ async function loadVersions() {
 loadVersions();
 
 function getCurrentVersion() {
-    return window.location.pathname.split('/')[2];
+    const parts = window.location.pathname.split('/');
+    // Hosted layout: /tt-metal/{version}/...; local builds fall back to 'latest'.
+    return parts[1] === 'tt-metal' ? parts[2] : 'latest';
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
 

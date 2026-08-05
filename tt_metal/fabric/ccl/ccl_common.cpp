@@ -49,7 +49,7 @@ tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscData
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
     const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
-    const CoreCoord& eth_core,
+    const tt::tt_metal::CoreCoord& eth_core,
     const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
     edm_builder.dump_to_log();

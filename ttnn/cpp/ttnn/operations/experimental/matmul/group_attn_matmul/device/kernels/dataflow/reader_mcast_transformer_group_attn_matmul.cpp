@@ -240,7 +240,7 @@ void kernel_main() {
                                     if (in1_sender_in_receiver_grid) {
                                         // if sender is in receiver grid, num_dests will include source, since we are
                                         // copying to a different local CB as well
-                                        noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
+                                        noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                                             mcast_src,
                                             cb_in1_obj,
                                             in1_mcast_sender_size_bytes,
@@ -254,7 +254,7 @@ void kernel_main() {
                                     } else {
                                         // if sender is not in receiver grid, do a regular multicast but from
                                         // in1_sharded_cb_addr
-                                        noc.async_write_multicast<Noc::McastMode::EXCLUDE_SRC>(
+                                        noc.async_write_multicast(
                                             mcast_src,
                                             cb_in1_obj,
                                             in1_mcast_sender_size_bytes,
@@ -269,7 +269,7 @@ void kernel_main() {
                                 } else {  // mcast from l1_write_addr_in1 which is populated locally by copying from in1
                                           // sharded or interleaved
                                     CoreLocalMem<uint32_t> mcast_src(l1_write_addr_in1);
-                                    noc.async_write_multicast<Noc::McastMode::EXCLUDE_SRC>(
+                                    noc.async_write_multicast(
                                         mcast_src,
                                         cb_in1_obj,
                                         in1_mcast_sender_size_bytes,

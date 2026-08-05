@@ -4,6 +4,10 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // Triple buffering constants
 #define NUM_SLOTS 3  // 3 slots in CB
@@ -52,21 +56,23 @@ void kernel_main() {
     const auto raw_scores_semaphore = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_r2c_w = tt::CBIndex::c_0;
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_in2 = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_out = tt::CBIndex::c_4;
-    constexpr auto cb_w2c_in3 = tt::CBIndex::c_5;
-    constexpr auto cb_w2c_in4 = tt::CBIndex::c_6;
-    constexpr auto cb_w2c_in5 = tt::CBIndex::c_7;
-    constexpr auto cb_w2c_in6 = tt::CBIndex::c_8;
-    constexpr auto cb_w2c_in7 = tt::CBIndex::c_9;
+    constexpr auto cb_r2c_w_id = tt::CBIndex::c_0;
+    constexpr auto cb_s2c_in_id = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_rdy_id = tt::CBIndex::c_2;
+    constexpr auto cb_w2c_in2_id = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_out_id = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_in3_id = tt::CBIndex::c_5;
+    constexpr auto cb_w2c_in4_id = tt::CBIndex::c_6;
+    constexpr auto cb_w2c_in5_id = tt::CBIndex::c_7;
+    constexpr auto cb_w2c_in6_id = tt::CBIndex::c_8;
+    constexpr auto cb_w2c_in7_id = tt::CBIndex::c_9;
+
+    CircularBuffer cb_r2c_w(cb_r2c_w_id);
 
     // Tile sizes
-    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
-    constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w);
-    constexpr uint32_t out_tile_size = get_tile_size(cb_s2c_out);
+    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in_id);
+    constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w_id);
+    constexpr uint32_t out_tile_size = get_tile_size(cb_s2c_out_id);
 
     // NOC Packet size
     constexpr uint32_t noc_packet_size = 8192;
@@ -98,7 +104,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // CB addresses
     //-------------------------------------------------------------------------
-    const uint32_t w_cb_base_addr = get_write_ptr(cb_r2c_w);
+    const uint32_t w_cb_base_addr = cb_r2c_w.get_write_ptr();
 
     // Precompute slot addresses (avoid multiply in hot loop)
     // Each slot holds txns_per_block tiles
@@ -125,7 +131,7 @@ void kernel_main() {
     bool txns_in_flight = false;
 
     // We reserve one to kick start the pipeline, and then it is steady state
-    cb_reserve_back(cb_r2c_w, w_tiles_per_block);
+    cb_r2c_w.reserve_back(w_tiles_per_block);
 
     //-------------------------------------------------------------------------
     // Pipelined reading of W0/W1
@@ -147,14 +153,14 @@ void kernel_main() {
         // Only when we first start the pipeline, we don't have any txns in flight
         if (txns_in_flight) {
             noc_async_read_barrier_with_trid(trid_to_wait);
-            cb_push_back(cb_r2c_w, w_tiles_per_block);
+            cb_r2c_w.push_back(w_tiles_per_block);
 
             ADVANCE_TRID(trid_to_wait);
 
             // Reserve for next block
             // Reserve back is not incremental, so to reserve one more, we need to reserve 2
             // This accounts for the one we already have reserved (for in-flight read)
-            cb_reserve_back(cb_r2c_w, w_tiles_per_block * 2);
+            cb_r2c_w.reserve_back(w_tiles_per_block * 2);
         }
         txns_in_flight = true;
     }
@@ -168,13 +174,13 @@ void kernel_main() {
     }
 
     noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_push_back(cb_r2c_w, w_tiles_per_block);
+    cb_r2c_w.push_back(w_tiles_per_block);
 
     ADVANCE_TRID(trid_to_wait);
 
     // Drain the pipeline - the last txn in flight
     noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_push_back(cb_r2c_w, w_tiles_per_block);
+    cb_r2c_w.push_back(w_tiles_per_block);
 }
 
 #undef ADVANCE_TRID

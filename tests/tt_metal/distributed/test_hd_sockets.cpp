@@ -101,12 +101,18 @@ void test_h2d_socket(
     }
 }
 
+// Read: consume the stream with read() and verify the data. Discard: drop pages with
+// discard_pending_pages() without touching the data.
+enum class D2HConsumeMode { Read, Discard };
+
 void test_d2h_socket(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
-    const MeshCoreCoord& sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)}) {
+    const MeshCoreCoord& sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
+    uint32_t pages_per_read = 1,
+    D2HConsumeMode consume_mode = D2HConsumeMode::Read) {
     auto output_socket = D2HSocket(mesh_device, sender_core, socket_fifo_size);
     output_socket.set_page_size(page_size);
 
@@ -139,7 +145,7 @@ void test_d2h_socket(
                 static_cast<uint32_t>(data_size),
             }});
 
-    uint32_t num_reads = data_size / page_size;
+    uint32_t num_pages = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
@@ -151,9 +157,23 @@ void test_d2h_socket(
 
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
 
+    if (consume_mode == D2HConsumeMode::Discard) {
+        // Drop every page without reading the data region. discard_pending_pages() must
+        // advance bytes_acked exactly as read()/pop_bytes does, including the FIFO wrap
+        // gap, otherwise host bytes_acked never reconciles with device bytes_sent and the
+        // barrier deadlocks.
+        uint32_t discarded = 0;
+        while (discarded < num_pages) {
+            discarded += output_socket.discard_pending_pages();
+        }
+        output_socket.barrier(/*timeout_ms=*/5000);
+        return;
+    }
+
     uint32_t page_size_words = page_size / sizeof(uint32_t);
-    for (uint32_t i = 0; i < num_reads; i++) {
-        output_socket.read(dst_vec.data() + (i * page_size_words), 1);
+    for (uint32_t page = 0; page < num_pages; page += pages_per_read) {
+        uint32_t pages = std::min<uint32_t>(pages_per_read, num_pages - page);
+        output_socket.read(dst_vec.data() + (page * page_size_words), pages);
     }
     output_socket.barrier();
     EXPECT_EQ(src_vec, dst_vec);
@@ -175,6 +195,19 @@ void test_hd_socket_loopback(
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
+    // DEVICE_PULL landing slot (CT arg 6): the H2D FIFO lives in pinned host memory, so the
+    // loopback kernel needs a page of local L1 to pull into before writing back to the D2H socket.
+    const ReplicatedBufferConfig scratch_buffer_config{.size = page_size};
+    auto scratch_shard_params =
+        ShardSpecBuffer(CoreRangeSet(socket_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig scratch_device_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(scratch_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto scratch_buffer = MeshBuffer::create(scratch_buffer_config, scratch_device_local_config, mesh_device.get());
+
     auto send_program = CreateProgram();
     CreateKernel(
         send_program,
@@ -190,6 +223,7 @@ void test_hd_socket_loopback(
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(num_iterations),
                 h2d_mode == H2DMode::DEVICE_PULL,
+                static_cast<uint32_t>(scratch_buffer->address()),
             }});
 
     uint32_t num_txns = data_size / page_size;
@@ -228,6 +262,19 @@ void test_hd_socket_multithreaded_loopback(
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
+    // DEVICE_PULL landing slot (CT arg 6): the H2D FIFO lives in pinned host memory, so the
+    // loopback kernel needs a page of local L1 to pull into before writing back to the D2H socket.
+    const ReplicatedBufferConfig scratch_buffer_config{.size = page_size};
+    auto scratch_shard_params =
+        ShardSpecBuffer(CoreRangeSet(socket_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig scratch_device_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(scratch_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto scratch_buffer = MeshBuffer::create(scratch_buffer_config, scratch_device_local_config, mesh_device.get());
+
     auto send_program = CreateProgram();
     CreateKernel(
         send_program,
@@ -243,6 +290,7 @@ void test_hd_socket_multithreaded_loopback(
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(num_iterations),
                 h2d_mode == H2DMode::DEVICE_PULL,
+                static_cast<uint32_t>(scratch_buffer->address()),
             }});
 
     uint32_t num_txns = data_size / page_size;
@@ -342,6 +390,13 @@ TEST_F(HDSocketFixture, D2HSocket) {
         // Uneven wrap with multiple pages on host allocated.
         // On most hosts, page size is 4K, so this should lead to 5 pages being allocated on the host.
         test_d2h_socket(mesh_device_, 16512, 1088, 156672, MeshCoreCoord(sender_coord, CoreCoord(0, 1)));
+        // Multi-page read whose span straddles the FIFO wrap boundary, exercising the head/tail split.
+        test_d2h_socket(mesh_device_, 4096, 1088, 79424, MeshCoreCoord(sender_coord, CoreCoord(0, 1)), 2);
+        // Drain a wrapping stream via discard_pending_pages() instead of reading. 4 pages
+        // through a 3-page FIFO forces one wrap; the discard path must credit the wrap gap
+        // or the closing barrier never reconciles with the device.
+        test_d2h_socket(
+            mesh_device_, 4096, 1088, 4352, MeshCoreCoord(sender_coord, CoreCoord(0, 1)), 1, D2HConsumeMode::Discard);
     }
 }
 

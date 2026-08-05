@@ -21,9 +21,10 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.x'  # Ensures latest stable Python 3
 
@@ -53,11 +54,11 @@ jobs:
           echo "NUM_METHODS=$num_methods" >> $GITHUB_ENV
 
       - name: Send Slack message to a channel
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
+          webhook: ${{ secrets.METAL_API_SURFACE_WEBHOOK }}
+          webhook-type: incoming-webhook
           payload: |
             {
               "text": "date: ${{ env.DATE }} \nnum_files: ${{ env.NUM_FILES }} \nnum_types: ${{ env.NUM_TYPES }} \nnum_methods: ${{ env.NUM_METHODS }}"
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.METAL_API_SURFACE_WEBHOOK }}

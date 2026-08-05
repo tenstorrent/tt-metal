@@ -12,27 +12,25 @@ using namespace ckernel::trisc;
 using namespace ckernel::math;
 
 /**
- * @brief Sets up mop config for eltwise unary datacopy operations
- * @tparam DATA_COPY_TYPE sets which src register to datacopy from values = <A2D, B2D>
- * @tparam IS_32b_DEST_EN set if math destination register is set to Float32/Int32 mode
- * @param num_rows_inner_loop: Number of rows that will be output by FPU per innerloop
- * Innerloop runs continuously without setting datavalids, or resetting counters.
- * If unpacker is unpacking 1 32x32 tile, with 1 dvalid -> set this value to 64 rows
- * If unpacker is unpacking 4 faces (16x16 each), with 4 dvalids -> set this value to 16 rows
- * @param num_dvalids_outer_loop: number of times required to reset datavalids for the unpacker
- * & counters for math srca/srcb.
- * If unpacker is unpacking 1 32x32 tile, with 1 dvalid -> set this value to 1
- * If unpacker is unpacking 4 faces (16x16 each), with 4 dvalids -> set this value to 4
+ * @brief Sets up mop config for eltwise unary datacopy operations.
+ *
+ * @tparam DATA_COPY_TYPE: Which src register to datacopy from, values = <A2D/B2D>
+ * @tparam IS_32b_DEST_EN: Set if math destination register is set to Float32/Int32 mode
+ * @param num_rows_inner_loop: Number of rows that will be output by FPU per inner loop. Inner loop runs continuously without setting datavalids, or resetting
+ * counters. If unpacker is unpacking 1 32x32 tile, with 1 dvalid -> set this value to 64 rows. If unpacker is unpacking 4 faces (16x16 each), with 4 dvalids ->
+ * set this value to 16 rows
+ * @param num_dvalids_outer_loop: Number of times required to reset datavalids for the unpacker & counters for math srca/srcb. If unpacker is unpacking 1 32x32
+ * tile, with 1 dvalid -> set this value to 1. If unpacker is unpacking 4 faces (16x16 each), with 4 dvalids -> set this value to 4
+ * @param num_rows_per_move_instrn: Number of rows moved per FPU move instruction (1, 4, or 8)
  */
 template <DataCopyType DATA_COPY_TYPE, bool IS_32b_DEST_EN>
 inline void _llk_math_eltwise_unary_datacopy_mop_config_(
     const std::uint32_t num_rows_inner_loop, const std::uint32_t num_dvalids_outer_loop, const std::uint32_t num_rows_per_move_instrn)
 {
     // Divide number of rows by how many rows are output per fpu instruction
-    const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> math_rows_log2(num_rows_per_move_instrn);
-    const std::uint32_t mov_rows_instn = (num_rows_per_move_instrn == 8)
-                                             ? p_mov_src_to_dest::MOV_8_ROWS
-                                             : ((num_rows_per_move_instrn == 4) ? p_mov_src_to_dest::MOV_4_ROWS : p_mov_src_to_dest::MOV_1_ROW);
+    // Each FPU instruction moves 8 rows at a time
+    const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> rows_log2(num_rows_per_move_instrn);
+    const std::uint32_t mov_rows_instn = p_mov_src_to_dest::MOV_8_ROWS;
 
     const std::uint32_t MOP_OUTER_LOOP = num_dvalids_outer_loop;
 
@@ -40,15 +38,15 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
     {
         if constexpr (IS_32b_DEST_EN)
         {
-            return TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, addr_mod, 0);
+            return TT_OP_ELWADD(0 /*clear_dvalid*/, 0 /*dest_accum_en*/, p_elwise::SRCB_NO_BCAST, addr_mod, 0 /*dst*/);
         }
         else if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
         {
-            return TT_OP_MOVA2D(0, 0, addr_mod, mov_rows_instn, 0);
+            return TT_OP_MOVA2D(0 /*dest_32b_lo*/, 0 /*src*/, addr_mod, mov_rows_instn, 0 /*dst*/);
         }
         else
         {
-            return TT_OP_MOVB2D(0, 0, addr_mod, mov_rows_instn, 0, 0);
+            return TT_OP_MOVB2D(0 /*dest_32b_lo*/, 0 /*src*/, addr_mod, mov_rows_instn, 0 /*bcast_datum0*/, 0 /*dst*/);
         }
     };
 
@@ -59,7 +57,8 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
                                                                                 : p_cleardvalid::CLR_SRCB_VLD;
 
     // clear srcA and srcB dvalid
-    temp.set_end_op(TT_OP_CLEARDVALID(CLR_SRC_VLD, 0, 0, 0, 0, 0));
+    temp.set_end_op(
+        TT_OP_CLEARDVALID(CLR_SRC_VLD, 0 /*cleardvalid_S*/, 0 /*dest_dvalid_reset*/, 0 /*dest_dvalid_client_bank_reset*/, 0 /*dest_pulse_last*/, 0 /*reset*/));
 
     temp.set_last_inner_loop_instr(datacopy_func(ADDR_MOD_1));
 
@@ -67,8 +66,10 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
 }
 
 /**
- * @brief Sets up addrmods for eltwise unary datacopy operations
- * @tparam DATA_COPY_TYPE sets which src register to datacopy from values = <A2D, B2D>
+ * @brief Sets up addrmods for eltwise unary datacopy operations.
+ *
+ * @tparam DATA_COPY_TYPE: Which src register to datacopy from, values = <A2D/B2D>
+ * @param num_rows_per_move_instrn: Number of rows moved per FPU move instruction (1, 4, or 8)
  */
 template <DataCopyType DATA_COPY_TYPE>
 inline void _llk_math_eltwise_unary_datacopy_addrmod_(const std::uint32_t num_rows_per_move_instrn)
@@ -91,64 +92,63 @@ inline void _llk_math_eltwise_unary_datacopy_addrmod_(const std::uint32_t num_ro
     addr_mod_t {
         .srca = {.clr = use_srca},
         .srcb = {.clr = use_srcb},
-        .dest = {.incr = num_rows_dest},
+        .dest = {.incr = ELTWISE_MATH_ROWS},
     }
         .set(ADDR_MOD_1);
 }
 
 /**
- * @brief Sets up initialization for eltwise unary datacopy operations
- * @tparam DATA_COPY_TYPE sets which src register to datacopy from values = <A2D, B2D>
- * @tparam IS_32b_DEST_EN set if math destination register is set to Float32/Int32 mode
- * @param num_rows_per_matrix: Number of rows that will be output by FPU per innerloop
- * Innerloop runs continuously without setting datavalids, or resetting counters.
- * If unpacker is unpacking 1 32x32 tile, with 1 dvalid -> set this value to 64 rows
- * If unpacker is unpacking 4 faces (16x16 each), with 4 dvalids -> set this value to 16 rows
- * @param num_matrices: Number of times required to reset datavalids for the unpacker
- * & counters for math srca/srcb.
- * If unpacker is unpacking 1 32x32 tile, with 1 dvalid -> set this value to 1
- * If unpacker is unpacking 4 faces (16x16 each), with 4 dvalids -> set this value to 4
+ * @brief Sets up initialization for eltwise unary datacopy operations.
+ *
+ * @tparam DATA_COPY_TYPE: Which src register to datacopy from, values = <A2D/B2D>
+ * @tparam IS_32b_DEST_EN: Set if math destination register is set to Float32/Int32 mode
+ * @param num_rows_per_matrix: Number of rows that will be output by FPU per inner loop. Inner loop runs continuously without setting datavalids, or resetting
+ * counters. If unpacker is unpacking 1 32x32 tile, with 1 dvalid -> set this value to 64 rows. If unpacker is unpacking 4 faces (16x16 each), with 4 dvalids ->
+ * set this value to 16 rows
+ * @param num_matrices: Number of times required to reset datavalids for the unpacker & counters for math srca/srcb. If unpacker is unpacking 1 32x32 tile, with
+ * 1 dvalid -> set this value to 1. If unpacker is unpacking 4 faces (16x16 each), with 4 dvalids -> set this value to 4
+ * @note On the unpack thread, pair with @ref _llk_unpack_unary_operand_init_ (T0; or @ref _llk_unpack_tilize_init_ for the tilize datacopy variant); on the
+ * pack thread, pair with @ref _llk_pack_init_ (T2).
+ * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
  */
 template <DataCopyType DATA_COPY_TYPE, bool IS_32b_DEST_EN>
 inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_per_matrix, const std::uint32_t num_matrices = NUM_TILES)
 {
-    // MOVA2D/MOVB2D can move 1, 4 or 8 rows, need to check which
-    // For Float32 or Integer dest, ELWADD will be used for rebiasing, can only move MATH_ROWS
     const std::uint32_t num_rows_per_move_instrn = [num_rows_per_matrix]() -> const std::uint32_t
     {
         if constexpr (IS_32b_DEST_EN)
         {
-            return ELTWISE_MATH_ROWS;
+            return ELTWISE_MATH_ROWS; // always 8 for quasar
         }
         else
         {
-            for (std::uint32_t mr : MOVE_MATH_ROWS)
-            {
-                if (_divisible_by_pow_two_(num_rows_per_matrix, mr))
-                {
-                    return mr;
-                }
-            }
-            return 1;
+            return 8;
         }
     }();
 
     _llk_math_eltwise_unary_datacopy_addrmod_<DATA_COPY_TYPE>(num_rows_per_move_instrn);
-    _llk_math_eltwise_unary_datacopy_mop_config_<DATA_COPY_TYPE, IS_32b_DEST_EN>(num_rows_per_matrix, num_matrices, num_rows_per_move_instrn);
+    _llk_math_eltwise_unary_datacopy_mop_config_<DATA_COPY_TYPE, IS_32b_DEST_EN>(
+        find_max(FACE_R_DIM, num_rows_per_matrix), num_matrices, num_rows_per_move_instrn);
+
+    _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, num_rows_per_matrix));
 
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
 
 /**
- * @brief Perform an eltwise unary datacopy operation
- * @param tile_idx: Tile index into the destination register.
- * If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in full mode
- * If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @brief Perform an eltwise unary datacopy operation.
+ *
+ * @param num_rows_per_tile: Number of rows per tile, used to compute the destination write address
+ * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
+ * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @note Call @ref _llk_math_eltwise_unary_datacopy_init_ with matching template args before this function.
  */
-inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_idx)
+inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t tile_idx)
 {
-    _set_dst_write_addr_by_rows_(num_rows_per_tile, tile_idx);
+    // For face_r_dim => 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
+    // If num_rows_per_tile is less than that of face_r_dim = 8, replace it to ensure face_r_dim = 8 sparse layout.
+    _set_dst_write_addr_by_rows_(tile_idx);
 
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);

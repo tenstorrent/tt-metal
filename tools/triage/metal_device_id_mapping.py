@@ -85,7 +85,7 @@ class MetalDeviceIdMapping:
 @triage_singleton
 def run(args, context: Context) -> MetalDeviceIdMapping:
     inspector_data = get_inspector_data(args, context)
-    return MetalDeviceIdMapping(inspector_data, context.devices.values())
+    return MetalDeviceIdMapping(inspector_data, list(context.devices.values()))
 
 
 if __name__ == "__main__":

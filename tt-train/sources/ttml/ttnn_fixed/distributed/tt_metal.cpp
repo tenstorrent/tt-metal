@@ -108,4 +108,8 @@ void enable_fabric(uint32_t num_devices) {
     }
 }
 
+void disable_fabric() {
+    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+}
+
 }  // namespace ttml::ttnn_fixed::distributed

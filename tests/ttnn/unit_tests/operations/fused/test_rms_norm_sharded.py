@@ -13,6 +13,9 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     generate_input_tensor,
     ttnn_rms_norm_sharded,
     rms_norm_golden,
+    run_sharded_norm_logical_width_multicore,
+    UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
+    UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import is_watcher_enabled
@@ -341,3 +344,15 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
         atol=0.052,
         frobenius_threshold=0.010,
     )
+
+
+# Geometry cases (see UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES in sharded_test_utils.py for the covered
+# tile-aligned-uneven and non-tile-aligned widths).
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
+)
+@pytest.mark.parametrize(
+    ("w", "num_cores_w"), UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, ids=UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS
+)
+def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, dtype):
+    run_sharded_norm_logical_width_multicore(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, dtype=dtype)

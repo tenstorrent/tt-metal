@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -42,26 +42,28 @@ void kernel_main() {
     const auto addrg_target = TensorAccessor(target_args, target_addr);
     constexpr uint32_t onetile = 1;
 
-    CircularBuffer cb_target_obj(cb_target);
-    CircularBuffer cb_output_grad_obj(cb_output_grad);
-    CircularBuffer cb_input_grad_obj(cb_input_grad);
+    DataflowBuffer dfb_target_obj(cb_target);
+    DataflowBuffer dfb_output_grad_obj(cb_output_grad);
+    DataflowBuffer dfb_input_grad_obj(cb_input_grad);
 #if defined(WEIGHT)
-    CircularBuffer cb_weight_obj(cb_weight);
+    DataflowBuffer dfb_weight_obj(cb_weight);
     const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
-    read_line(cb_weight, cb_weight_scratch, addrg_weight, Ct);
+    DataflowBuffer dfb_weight_scratch_obj(cb_weight_scratch);
+    read_line(dfb_weight_obj, dfb_weight_scratch_obj, addrg_weight, Ct);
 
-    cb_weight_obj.wait_front(Ct);
-    CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
+    dfb_weight_obj.wait_front(Ct);
+    CoreLocalMem<volatile uint16_t> weight_l1_ptr(dfb_weight_obj.get_read_ptr());
 #endif
 
     const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr);
 
-    read_line(cb_output_grad, cb_output_grad_scratch, addrg_output_grad, Nt);
+    DataflowBuffer dfb_output_grad_scratch_obj(cb_output_grad_scratch);
+    read_line(dfb_output_grad_obj, dfb_output_grad_scratch_obj, addrg_output_grad, Nt);
 
-    cb_output_grad_obj.wait_front(Nt);
+    dfb_output_grad_obj.wait_front(Nt);
 
-    auto zero = float_to_bfloat16(0.0f);
+    auto zero = fp32_to_bf16_truncate(0.0f);
 
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
@@ -69,14 +71,14 @@ void kernel_main() {
         uint32_t ct = i % Ct;
 
         auto target_noc_id = nt;
-        read_tile(cb_target, addrg_target, target_noc_id);
+        read_tile(dfb_target_obj, addrg_target, target_noc_id);
 
-        cb_input_grad_obj.reserve_back(onetile);
-        cb_target_obj.wait_front(onetile);
+        dfb_input_grad_obj.reserve_back(onetile);
+        dfb_target_obj.wait_front(onetile);
 
-        CoreLocalMem<volatile uint16_t> input_grad_l1_ptr(cb_input_grad_obj.get_write_ptr());
-        CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
-        CoreLocalMem<volatile uint16_t> output_grad_l1_ptr(cb_output_grad_obj.get_read_ptr());
+        CoreLocalMem<volatile uint16_t> input_grad_l1_ptr(dfb_input_grad_obj.get_write_ptr());
+        CoreLocalMem<volatile int32_t> target_l1_ptr(dfb_target_obj.get_read_ptr());
+        CoreLocalMem<volatile uint16_t> output_grad_l1_ptr(dfb_output_grad_obj.get_read_ptr());
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
@@ -91,13 +93,13 @@ void kernel_main() {
                 uint16_t input_grad_val;
 
                 if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
-                    float output_grad_val = bfloat16_to_float(output_grad_l1_ptr[n]);
+                    float output_grad_val = bf16_to_fp32(output_grad_l1_ptr[n]);
 #if defined(WEIGHT)
-                    float weight_val = bfloat16_to_float(weight_l1_ptr[target_val]);
+                    float weight_val = bf16_to_fp32(weight_l1_ptr[target_val]);
 
-                    input_grad_val = float_to_bfloat16(-output_grad_val * weight_val);
+                    input_grad_val = fp32_to_bf16_truncate(-output_grad_val * weight_val);
 #else
-                    input_grad_val = float_to_bfloat16(-output_grad_val);
+                    input_grad_val = fp32_to_bf16_truncate(-output_grad_val);
 #endif
                 } else {
                     input_grad_val = zero;
@@ -106,8 +108,8 @@ void kernel_main() {
             }
         }
 
-        cb_input_grad_obj.push_back(onetile);
+        dfb_input_grad_obj.push_back(onetile);
 
-        cb_target_obj.pop_front(onetile);
+        dfb_target_obj.pop_front(onetile);
     }
 }

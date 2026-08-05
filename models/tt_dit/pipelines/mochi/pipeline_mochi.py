@@ -2,168 +2,229 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 
-import inspect
-from typing import Any, Callable, Dict, List, Optional, Union
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-from diffusers.models import AutoencoderKLMochi
-from diffusers.pipelines.mochi.pipeline_output import MochiPipelineOutput
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline
+import tqdm
+from diffusers.pipelines.mochi.pipeline_mochi import linear_quadratic_schedule
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.video_processor import VideoProcessor
 from loguru import logger
-from transformers import T5EncoderModel, T5TokenizerFast
 
 import ttnn
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_dit.models.transformers.transformer_mochi import MochiCheckpoint
+from models.tt_dit.models.vae.vae_mochi import MochiVAEDecoderAdapter
+from models.tt_dit.parallel.config import DiTParallelConfig, MochiVAEParallelConfig
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
+from models.tt_dit.pipelines.mochi.text_encoder import TextEncoder
+from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
+from models.tt_dit.solvers import EulerSolver
+from models.tt_dit.utils import cache
+from models.tt_dit.utils.mesh import reshape_device
+from models.tt_dit.utils.tracing import Tracer
 
-from ...models.transformers.transformer_mochi import MochiTransformer3DModel
-from ...models.vae.vae_mochi import MochiVAEDecoder
-from ...parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
-from ...parallel.manager import CCLManager
-from ...utils import cache
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from contextlib import AbstractContextManager
 
+_DEFAULT_CHECKPOINT = "genmo/mochi-1-preview"
 
-# from: https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
-def linear_quadratic_schedule(num_steps, threshold_noise, linear_steps=None):
-    if linear_steps is None:
-        linear_steps = num_steps // 2
-    linear_sigma_schedule = [i * threshold_noise / linear_steps for i in range(linear_steps)]
-    threshold_noise_step_diff = linear_steps - threshold_noise * num_steps
-    quadratic_steps = num_steps - linear_steps
-    quadratic_coef = threshold_noise_step_diff / (linear_steps * quadratic_steps**2)
-    linear_coef = threshold_noise / linear_steps - 2 * threshold_noise_step_diff / (quadratic_steps**2)
-    const = quadratic_coef * (linear_steps**2)
-    quadratic_sigma_schedule = [
-        quadratic_coef * (i**2) + linear_coef * i + const for i in range(linear_steps, num_steps)
-    ]
-    sigma_schedule = linear_sigma_schedule + quadratic_sigma_schedule
-    sigma_schedule = [1.0 - x for x in sigma_schedule]
-    return sigma_schedule
+_PRESETS_WH: dict[tuple[int, ...], dict] = {
+    (2, 4): {
+        "sp": (2, 0),
+        "tp": (4, 1),
+        "vae_mesh_shape": (1, 8),
+        "vae_sp_axis": 0,
+        "vae_tp_axis": 1,
+        "num_links": 1,
+        "reload_dit_model": True,
+    },
+    (4, 8): {
+        "sp": (8, 1),
+        "tp": (4, 0),
+        "vae_mesh_shape": (4, 8),
+        "vae_sp_axis": 0,
+        "vae_tp_axis": 1,
+        "num_links": 4,
+        "reload_dit_model": False,
+    },
+}
 
-
-# Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.retrieve_timesteps
-def retrieve_timesteps(
-    scheduler,
-    num_inference_steps: Optional[int] = None,
-    device: Optional[Union[str, torch.device]] = None,
-    timesteps: Optional[List[int]] = None,
-    sigmas: Optional[List[float]] = None,
-    **kwargs,
-):
-    r"""
-    Calls the scheduler's `set_timesteps` method and retrieves timesteps from the scheduler after the call. Handles
-    custom timesteps. Any kwargs will be supplied to `scheduler.set_timesteps`.
-
-    Args:
-        scheduler (`SchedulerMixin`):
-            The scheduler to get timesteps from.
-        num_inference_steps (`int`):
-            The number of diffusion steps used when generating samples with a pre-trained model. If used, `timesteps`
-            must be `None`.
-        device (`str` or `torch.device`, *optional*):
-            The device to which the timesteps should be moved to. If `None`, the timesteps are not moved.
-        timesteps (`List[int]`, *optional*):
-            Custom timesteps used to override the timestep spacing strategy of the scheduler. If `timesteps` is passed,
-            `num_inference_steps` and `sigmas` must be `None`.
-        sigmas (`List[float]`, *optional*):
-            Custom sigmas used to override the timestep spacing strategy of the scheduler. If `sigmas` is passed,
-            `num_inference_steps` and `timesteps` must be `None`.
-
-    Returns:
-        `Tuple[torch.Tensor, int]`: A tuple where the first element is the timestep schedule from the scheduler and the
-        second element is the number of inference steps.
-    """
-    if timesteps is not None and sigmas is not None:
-        raise ValueError("Only one of `timesteps` or `sigmas` can be passed. Please choose one to set custom values")
-    if timesteps is not None:
-        accepts_timesteps = "timesteps" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
-        if not accepts_timesteps:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                f" timestep schedules. Please check whether you are using the correct scheduler."
-            )
-        scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-        num_inference_steps = len(timesteps)
-    elif sigmas is not None:
-        accept_sigmas = "sigmas" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
-        if not accept_sigmas:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                f" sigmas schedules. Please check whether you are using the correct scheduler."
-            )
-        scheduler.set_timesteps(sigmas=sigmas, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-        num_inference_steps = len(timesteps)
-    else:
-        scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-    return timesteps, num_inference_steps
+_PRESETS_BH: dict[tuple[int, ...], dict] = {
+    (2, 2): {
+        "sp": (2, 0),
+        "tp": (2, 1),
+        "vae_mesh_shape": (1, 4),
+        "vae_sp_axis": 0,
+        "vae_tp_axis": 1,
+        "num_links": 2,
+        "reload_dit_model": True,
+    },
+    (2, 4): {
+        "sp": (2, 0),
+        "tp": (4, 1),
+        "vae_mesh_shape": (2, 4),
+        "vae_sp_axis": 0,
+        "vae_tp_axis": 1,
+        "num_links": 2,
+        "reload_dit_model": False,
+    },
+    (4, 8): {
+        "sp": (8, 1),
+        "tp": (4, 0),
+        "vae_mesh_shape": (4, 8),
+        "vae_sp_axis": 0,
+        "vae_tp_axis": 1,
+        "num_links": 2,
+        "reload_dit_model": False,
+    },
+}
 
 
-class MochiPipeline(DiffusionPipeline):
-    r"""
-    The mochi pipeline for text-to-video generation.
+@dataclass(frozen=True, kw_only=True)
+class MochiPipelineConfig:
+    topology: ttnn.Topology
+    num_links: int
+
+    dit_parallel_config: DiTParallelConfig
+    vae_parallel_config: MochiVAEParallelConfig
+    vae_mesh_shape: tuple[int, ...]
+
+    use_reference_vae: bool
+    force_zeros_for_empty_prompt: bool
+    reload_dit_model: bool
+
+    height: int
+    width: int
+    num_frames: int
+    max_sequence_length: int
+
+    checkpoint_name: str
+
+    @classmethod
+    def default(
+        cls,
+        *,
+        mesh_shape: ttnn.MeshShape,
+        topology: ttnn.Topology = ttnn.Topology.Linear,
+        num_links: int | None = None,
+        dit_parallel_config: DiTParallelConfig | None = None,
+        vae_parallel_config: MochiVAEParallelConfig | None = None,
+        vae_mesh_shape: tuple[int, ...] | None = None,
+        use_reference_vae: bool = False,
+        force_zeros_for_empty_prompt: bool = False,
+        reload_dit_model: bool | None = None,
+        height: int = 480,
+        width: int = 848,
+        num_frames: int = 168,
+        max_sequence_length: int = 256,
+        checkpoint_name: str = _DEFAULT_CHECKPOINT,
+    ) -> MochiPipelineConfig:
+        preset_dict = _PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH
+        preset = preset_dict.get(tuple(mesh_shape), {})
+
+        if dit_parallel_config is None:
+            dit_parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=preset["sp"], tp=preset["tp"])
+
+        if vae_mesh_shape is None:
+            vae_mesh_shape = preset["vae_mesh_shape"]
+
+        if vae_parallel_config is None:
+            vae_sp_axis = preset["vae_sp_axis"]
+            vae_tp_axis = preset["vae_tp_axis"]
+            if vae_mesh_shape[0] > 1 and vae_mesh_shape[1] > 1:
+                # 2D mesh (e.g. Galaxy): separate H/W on different axes
+                vae_parallel_config = MochiVAEParallelConfig.from_tuples(
+                    time=(1, vae_tp_axis),
+                    h=(vae_mesh_shape[vae_sp_axis], vae_sp_axis),
+                    w=(vae_mesh_shape[vae_tp_axis], vae_tp_axis),
+                )
+            else:
+                # 1D mesh (e.g. T3K, N300): use time parallelism, no spatial
+                t_axis = 1 if vae_mesh_shape[1] > 1 else 0
+                vae_parallel_config = MochiVAEParallelConfig.from_tuples(
+                    time=(vae_mesh_shape[t_axis], t_axis),
+                    h=(1, 0),
+                    w=(1, 1),
+                )
+
+        return cls(
+            topology=topology,
+            num_links=num_links if num_links is not None else preset["num_links"],
+            dit_parallel_config=dit_parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            vae_mesh_shape=tuple(vae_mesh_shape),
+            use_reference_vae=use_reference_vae,
+            force_zeros_for_empty_prompt=force_zeros_for_empty_prompt,
+            reload_dit_model=reload_dit_model if reload_dit_model is not None else preset["reload_dit_model"],
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            max_sequence_length=max_sequence_length,
+            checkpoint_name=checkpoint_name,
+        )
+
+
+class MochiPipeline(PipelineAPIMixin):
+    r"""The mochi pipeline for text-to-video generation.
 
     Reference: https://github.com/genmoai/models
-
-    Args:
-        transformer ([`MochiTransformer3DModel`]):
-            Conditional Transformer architecture to denoise the encoded video latents.
-        scheduler ([`FlowMatchEulerDiscreteScheduler`]):
-            A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
-        vae ([`AutoencoderKLMochi`]):
-            Variational Auto-Encoder (VAE) Model to encode and decode videos to and from latent representations.
-        text_encoder ([`T5EncoderModel`]):
-            [T5](https://huggingface.co/docs/transformers/en/model_doc/t5#transformers.T5EncoderModel), specifically
-            the [google/t5-v1_1-xxl](https://huggingface.co/google/t5-v1_1-xxl) variant.
-        tokenizer (`CLIPTokenizer`):
-            Tokenizer of class
-            [CLIPTokenizer](https://huggingface.co/docs/transformers/en/model_doc/clip#transformers.CLIPTokenizer).
-        tokenizer (`T5TokenizerFast`):
-            Second Tokenizer of class
-            [T5TokenizerFast](https://huggingface.co/docs/transformers/en/model_doc/t5#transformers.T5TokenizerFast).
     """
 
-    model_cpu_offload_seq = "text_encoder->transformer->vae"
-    _optional_components = []
-    _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds"]
+    @classmethod
+    def create_pipeline(
+        cls,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        height: int = 480,
+        width: int = 848,
+        num_frames: int = 168,
+        max_sequence_length: int = 256,
+        checkpoint_name: str = _DEFAULT_CHECKPOINT,
+    ) -> MochiPipeline:
+        config = MochiPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            max_sequence_length=max_sequence_length,
+            checkpoint_name=checkpoint_name,
+        )
+        return cls(device=mesh_device, config=config)
 
     def __init__(
         self,
-        mesh_device: ttnn.MeshDevice,
-        vae_mesh_shape: tuple,
-        parallel_config: DiTParallelConfig,
-        vae_parallel_config: MochiVAEParallelConfig,
-        num_links: int,
-        use_reference_vae: bool = False,
-        model_name: str = "genmo/mochi-1-preview",
-        force_zeros_for_empty_prompt: bool = False,
-        reload_dit_model: bool = None,
-    ):
-        super().__init__()
-
+        *,
+        device: ttnn.MeshDevice,
+        config: MochiPipelineConfig,
+    ) -> None:
         # TODO: determine these scaling factors from model parameters
         self.vae_spatial_scale_factor = 8
         self.vae_temporal_scale_factor = 6
         self.patch_size = 2
 
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_spatial_scale_factor)
-        self.default_height = 480
-        self.default_width = 848
-        self.register_to_config(force_zeros_for_empty_prompt=force_zeros_for_empty_prompt)
 
-        # Store device and config for model initialization
-        self.mesh_device = mesh_device
-        self.dit_mesh_shape = tuple(mesh_device.shape)
-        self.vae_mesh_shape = vae_mesh_shape
-        self.parallel_config = parallel_config
-        self.vae_parallel_config = vae_parallel_config
-        self.num_links = num_links
-        self.reload_dit_model = reload_dit_model  # Only required if VAE is memory-constrained.
+        self._device = device
+        self._vae_mesh_shape = config.vae_mesh_shape
+        self.parallel_config = config.dit_parallel_config
+        self.vae_parallel_config = config.vae_parallel_config
+        self.reload_dit_model = config.reload_dit_model  # Only required if VAE is memory-constrained.
+        self._height = config.height
+        self._width = config.width
+        self._num_frames = config.num_frames
+
+        if self._height % self.vae_spatial_scale_factor != 0 or self._width % self.vae_spatial_scale_factor != 0:
+            msg = (
+                f"`height` and `width` must be divisible by {self.vae_spatial_scale_factor} "
+                f"but are {self._height} and {self._width}."
+            )
+            raise ValueError(msg)
 
         if self.reload_dit_model and not cache.cache_dir_is_set():
             msg = (
@@ -173,761 +234,221 @@ class MochiPipeline(DiffusionPipeline):
             raise RuntimeError(msg)
 
         # Create CCL manager
-        self.ccl_manager = CCLManager(
-            mesh_device=mesh_device,
-            num_links=num_links,
-            topology=ttnn.Topology.Linear,
+        self._ccl_manager = CCLManager(
+            mesh_device=device,
+            num_links=config.num_links,
+            topology=config.topology,
         )
 
         # Create VAE CCL manager using the VAE mesh shape.
-        if tuple(self.mesh_device.shape) != self.vae_mesh_shape:
-            self.mesh_device.reshape(ttnn.MeshShape(self.vae_mesh_shape))
-        self.vae_ccl_manager = CCLManager(
-            mesh_device=mesh_device,
-            num_links=num_links,
-            topology=ttnn.Topology.Linear,
-        )
-        if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
-            self.mesh_device.reshape(ttnn.MeshShape(self.dit_mesh_shape))
+        with self._reshape_vae():
+            self._vae_ccl_manager = CCLManager(
+                mesh_device=device,
+                num_links=config.num_links,
+                topology=ttnn.Topology.Linear,
+            )
 
-        # Load scheduler (Torch)
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_name, subfolder="scheduler")
+        checkpoint_name = config.checkpoint_name
+        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
+        self._solver = EulerSolver()
 
         # Load pretrained T5 text encoder and tokenizer (Torch)
-        self.text_encoder = T5EncoderModel.from_pretrained(
-            model_name, subfolder="text_encoder", torch_dtype=torch.float32
+        self._text_encoder = TextEncoder(
+            checkpoint_name=checkpoint_name,
+            force_zeros_for_empty_prompt=config.force_zeros_for_empty_prompt,
+            max_sequence_length=config.max_sequence_length,
         )
-        self.tokenizer = T5TokenizerFast.from_pretrained(model_name, subfolder="tokenizer")
 
         # Load pretrained Mochi Transformer (TT)
-        # First load the torch version to get the config and state dict
-        from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
+        self._checkpoint = MochiCheckpoint(checkpoint_name)
 
-        torch_transformer = TorchMochiTransformer3DModel.from_pretrained(
-            model_name, subfolder="transformer", torch_dtype=torch.float32
-        )
-
-        self.transformer_config = torch_transformer.config
-
-        # Create TT version with the same config
-        self.transformer = MochiTransformer3DModel(
-            patch_size=torch_transformer.config.patch_size,
-            num_attention_heads=torch_transformer.config.num_attention_heads,
-            attention_head_dim=torch_transformer.config.attention_head_dim,
-            num_layers=torch_transformer.config.num_layers,
-            pooled_projection_dim=torch_transformer.config.pooled_projection_dim,
-            in_channels=torch_transformer.config.in_channels,
-            text_embed_dim=torch_transformer.config.text_embed_dim,
-            time_embed_dim=torch_transformer.config.time_embed_dim,
-            activation_fn=torch_transformer.config.activation_fn,
-            mesh_device=mesh_device,
-            ccl_manager=self.ccl_manager,
-            parallel_config=parallel_config,
+        self._transformer = self._checkpoint.build(
+            ccl_manager=self._ccl_manager,
+            parallel_config=self.parallel_config,
             is_fsdp=True,
         )
+        self._tracer = Tracer(self._transformer.forward, device=device, prep_run=False)
 
-        # Load state dict into TT transformer
-        cache.load_model(
-            self.transformer,
-            model_name="mochi-1-preview",
-            subfolder="transformer",
+        self._checkpoint.load(
+            self._transformer,
+            mesh_device=self._device,
             parallel_config=self.parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            get_torch_state_dict=lambda: torch_transformer.state_dict(),
         )
 
-        # Load pretrained VAE (Torch)
-        torch_vae = AutoencoderKLMochi.from_pretrained(model_name, subfolder="vae", torch_dtype=torch.float32)
-        if use_reference_vae:
-            self.vae = torch_vae
-        else:
-            # Reshape the device mesh to the VAE mesh shape:
-            if tuple(self.mesh_device.shape) != self.vae_mesh_shape:
-                self.mesh_device.reshape(ttnn.MeshShape(self.vae_mesh_shape))
-
-            self.vae = MochiVAEDecoder(
-                mesh_device=self.mesh_device,
-                parallel_config=vae_parallel_config,
-                ccl_manager=self.vae_ccl_manager,
-                out_channels=torch_vae.config.out_channels,
-                base_channels=torch_vae.config.decoder_block_out_channels[0],
-                channel_multipliers=[
-                    x // torch_vae.config.decoder_block_out_channels[0]
-                    for x in torch_vae.config.decoder_block_out_channels
-                ],
-                temporal_expansions=torch_vae.config.temporal_expansions,
-                spatial_expansions=torch_vae.config.spatial_expansions,
-                num_res_blocks=torch_vae.config.layers_per_block,
-                latent_dim=torch_vae.config.latent_channels,
-                has_attention=[False, False, False, False, False],  # torch_vae.config.add_attention_block,
-                nonlinearity=torch_vae.config.act_fn,
-                output_nonlinearity=torch_vae.config.act_fn,
-                latents_mean=torch_vae.config.latents_mean,
-                latents_std=torch_vae.config.latents_std,
-                scaling_factor=torch_vae.config.scaling_factor,
+        with self._reshape_vae():
+            self._vae = MochiVAEDecoderAdapter(
+                checkpoint_name=checkpoint_name,
+                parallel_config=self.vae_parallel_config,
+                ccl_manager=self._vae_ccl_manager,
+                use_torch=config.use_reference_vae,
             )
-            self.vae.load_torch_state_dict(torch_vae.decoder.state_dict())
+            if not config.use_reference_vae:
+                self._vae.reload_weights()
 
-            # Reshape the device mesh back to the DiT mesh shape:
-            if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
-                self.mesh_device.reshape(ttnn.MeshShape(self.dit_mesh_shape))
+        logger.info("Pipeline allocation run...")
+        self(prompts=[""], num_inference_steps=2, guidance_scale=2, traced=False)
 
-        # Update tokenizer max length
-        self.tokenizer_max_length = self.tokenizer.model_max_length if self.tokenizer is not None else 256
+    def _reshape_vae(self) -> AbstractContextManager[None]:
+        return reshape_device(self._device, self._vae_mesh_shape)
 
-        # Register components for pipeline
-        self.register_modules(
-            scheduler=self.scheduler,
-            text_encoder=self.text_encoder,
-            tokenizer=self.tokenizer,
-            transformer=self.transformer,
-            vae=self.vae,
-        )
-
-    @staticmethod
-    def create_pipeline(
-        mesh_device,
-        checkpoint_name,
-        sp_axis=None,
-        tp_axis=None,
-        vae_sp_axis=None,
-        vae_tp_axis=None,
-        vae_mesh_shape=None,
-        num_links=None,
-        use_reference_vae=False,
-        force_zeros_for_empty_prompt=False,
-        reload_dit_model=None,
-    ):
-        if ttnn.device.is_blackhole():
-            if tuple(mesh_device.shape) != (2, 2):
-                logger.warning(
-                    f"Mochi has only been successfully tested on 2x2 configuration for Blackhole. Proceeding with the requested {tuple(mesh_device.shape)} configuration."
-                )
-
-            default_config = {
-                (2, 2): {
-                    "sp_axis": 0,
-                    "tp_axis": 1,
-                    "num_links": 2,
-                    "vae_mesh_shape": (1, 4),
-                    "vae_sp_axis": 0,
-                    "vae_tp_axis": 1,
-                    "reload_dit_model": True,
-                },
-                (2, 4): {  # Hangs on BH
-                    "sp_axis": 0,
-                    "tp_axis": 1,
-                    "num_links": 2,
-                    "vae_mesh_shape": (2, 4),
-                    "vae_sp_axis": 0,
-                    "vae_tp_axis": 1,
-                    "reload_dit_model": False,
-                },
-                (4, 8): {  # Untested.
-                    "sp_axis": 1,
-                    "tp_axis": 0,
-                    "num_links": 2,
-                    "vae_mesh_shape": (4, 8),
-                    "vae_sp_axis": 0,
-                    "vae_tp_axis": 1,
-                    "reload_dit_model": False,
-                },
-            }
-        else:
-            assert tuple(mesh_device.shape) != (
-                2,
-                2,
-            ), "Mochi 2x2 is only supported on Blackhole. Wormhole does not have enough memory for this configuration."
-            default_config = {
-                (2, 4): {
-                    "sp_axis": 0,
-                    "tp_axis": 1,
-                    "vae_mesh_shape": (1, 8),
-                    "vae_sp_axis": 0,
-                    "vae_tp_axis": 1,
-                    "num_links": 1,
-                    "reload_dit_model": True,
-                },
-                (4, 8): {
-                    "sp_axis": 1,
-                    "tp_axis": 0,
-                    "vae_mesh_shape": (4, 8),
-                    "vae_sp_axis": 0,
-                    "vae_tp_axis": 1,
-                    "num_links": 4,
-                    "reload_dit_model": False,
-                },
-            }
-
-        mesh_shape = tuple(mesh_device.shape)
-
-        sp_axis = sp_axis or default_config[mesh_shape]["sp_axis"]
-        tp_axis = tp_axis or default_config[mesh_shape]["tp_axis"]
-        vae_sp_axis = vae_sp_axis or default_config[mesh_shape]["vae_sp_axis"]
-        vae_tp_axis = vae_tp_axis or default_config[mesh_shape]["vae_tp_axis"]
-        vae_mesh_shape = vae_mesh_shape or default_config[mesh_shape]["vae_mesh_shape"]
-        num_links = num_links or default_config[mesh_shape]["num_links"]
-        reload_dit_model = reload_dit_model or default_config[mesh_shape]["reload_dit_model"]
-
-        sp_factor = mesh_device.shape[sp_axis]
-        tp_factor = mesh_device.shape[tp_axis]
-
-        # Create parallel config
-        parallel_config = DiTParallelConfig(
-            cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-            sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
-        )
-
-        if vae_mesh_shape[0] > 1 and vae_mesh_shape[1] > 1:
-            # 2D mesh (e.g. Galaxy): separate H/W on different axes
-            vae_parallel_config = MochiVAEParallelConfig(
-                time_parallel=ParallelFactor(factor=1, mesh_axis=vae_tp_axis),
-                h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis], mesh_axis=vae_sp_axis),
-                w_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
-            )
-        else:
-            # 1D mesh (e.g. T3K, N300): use time parallelism, no spatial
-            t_axis = 1 if vae_mesh_shape[1] > 1 else 0
-            vae_parallel_config = MochiVAEParallelConfig(
-                time_parallel=ParallelFactor(factor=vae_mesh_shape[t_axis], mesh_axis=t_axis),
-                h_parallel=ParallelFactor(factor=1, mesh_axis=0),
-                w_parallel=ParallelFactor(factor=1, mesh_axis=1),
-            )
-
-        # Create the TT Mochi pipeline
-        pipeline = MochiPipeline(
-            mesh_device=mesh_device,
-            vae_mesh_shape=vae_mesh_shape,
-            parallel_config=parallel_config,
-            vae_parallel_config=vae_parallel_config,
-            num_links=num_links,
-            use_reference_vae=use_reference_vae,
-            model_name=checkpoint_name,
-            force_zeros_for_empty_prompt=force_zeros_for_empty_prompt,
-            reload_dit_model=reload_dit_model,
-        )
-
-        return pipeline
-
-    def _get_t5_prompt_embeds(
-        self,
-        prompt: Union[str, List[str]] = None,
-        num_videos_per_prompt: int = 1,
-        max_sequence_length: int = 256,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
-    ):
-        device = "cpu"
-        dtype = dtype or self.text_encoder.dtype
-
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-        batch_size = len(prompt)
-
-        text_inputs = self.tokenizer(
-            prompt,
-            padding="max_length",
-            max_length=max_sequence_length,
-            truncation=True,
-            add_special_tokens=True,
-            return_tensors="pt",
-        )
-
-        text_input_ids = text_inputs.input_ids
-        prompt_attention_mask = text_inputs.attention_mask
-        prompt_attention_mask = prompt_attention_mask.bool().to(device)
-
-        # The original Mochi implementation zeros out empty negative prompts
-        # but this can lead to overflow when placing the entire pipeline under the autocast context
-        # adding this here so that we can enable zeroing prompts if necessary
-        if self.config.force_zeros_for_empty_prompt and (prompt == "" or prompt[-1] == ""):
-            text_input_ids = torch.zeros_like(text_input_ids, device=device)
-            prompt_attention_mask = torch.zeros_like(prompt_attention_mask, dtype=torch.bool, device=device)
-
-        untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
-
-        if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(text_input_ids, untruncated_ids):
-            removed_text = self.tokenizer.batch_decode(untruncated_ids[:, max_sequence_length - 1 : -1])
-            logger.warning(
-                "The following part of your input was truncated because `max_sequence_length` is set to "
-                f" {max_sequence_length} tokens: {removed_text}"
-            )
-
-        prompt_embeds = self.text_encoder(text_input_ids.to(device), attention_mask=prompt_attention_mask)[0]
-        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-
-        # duplicate text embeddings for each generation per prompt, using mps friendly method
-        _, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
-
-        prompt_attention_mask = prompt_attention_mask.view(batch_size, -1)
-        prompt_attention_mask = prompt_attention_mask.repeat(num_videos_per_prompt, 1)
-
-        return prompt_embeds, prompt_attention_mask
-
-    # Adapted from diffusers.pipelines.cogvideo.pipeline_cogvideox.CogVideoXPipeline.encode_prompt
-    def encode_prompt(
-        self,
-        prompt: Union[str, List[str]],
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        do_classifier_free_guidance: bool = True,
-        num_videos_per_prompt: int = 1,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        negative_prompt_embeds: Optional[torch.Tensor] = None,
-        prompt_attention_mask: Optional[torch.Tensor] = None,
-        negative_prompt_attention_mask: Optional[torch.Tensor] = None,
-        max_sequence_length: int = 256,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
-    ):
-        r"""
-        Encodes the prompt into text encoder hidden states.
-
-        Args:
-            prompt (`str` or `List[str]`, *optional*):
-                prompt to be encoded
-            negative_prompt (`str` or `List[str]`, *optional*):
-                The prompt or prompts not to guide the image generation. If not defined, one has to pass
-                `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
-                less than `1`).
-            do_classifier_free_guidance (`bool`, *optional*, defaults to `True`):
-                Whether to use classifier free guidance or not.
-            num_videos_per_prompt (`int`, *optional*, defaults to 1):
-                Number of videos that should be generated per prompt. torch device to place the resulting embeddings on
-            prompt_embeds (`torch.Tensor`, *optional*):
-                Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
-                provided, text embeddings will be generated from `prompt` input argument.
-            negative_prompt_embeds (`torch.Tensor`, *optional*):
-                Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
-                weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
-                argument.
-            device: (`torch.device`, *optional*):
-                torch device
-            dtype: (`torch.dtype`, *optional*):
-                torch dtype
-        """
-        device = "cpu"
-
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-        if prompt is not None:
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
-
-        if prompt_embeds is None:
-            prompt_embeds, prompt_attention_mask = self._get_t5_prompt_embeds(
-                prompt=prompt,
-                num_videos_per_prompt=num_videos_per_prompt,
-                max_sequence_length=max_sequence_length,
-                device=device,
-                dtype=dtype,
-            )
-
-        if do_classifier_free_guidance and negative_prompt_embeds is None:
-            negative_prompt = negative_prompt or ""
-            negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
-
-            if prompt is not None and type(prompt) is not type(negative_prompt):
-                raise TypeError(
-                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
-                    f" {type(prompt)}."
-                )
-            elif batch_size != len(negative_prompt):
-                raise ValueError(
-                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
-                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
-                    " the batch size of `prompt`."
-                )
-
-            negative_prompt_embeds, negative_prompt_attention_mask = self._get_t5_prompt_embeds(
-                prompt=negative_prompt,
-                num_videos_per_prompt=num_videos_per_prompt,
-                max_sequence_length=max_sequence_length,
-                device=device,
-                dtype=dtype,
-            )
-
-        return prompt_embeds, prompt_attention_mask, negative_prompt_embeds, negative_prompt_attention_mask
-
-    def check_inputs(
-        self,
-        prompt,
-        height,
-        width,
-        callback_on_step_end_tensor_inputs=None,
-        prompt_embeds=None,
-        negative_prompt_embeds=None,
-        prompt_attention_mask=None,
-        negative_prompt_attention_mask=None,
-    ):
-        if height % 8 != 0 or width % 8 != 0:
-            raise ValueError(f"`height` and `width` have to be divisible by 8 but are {height} and {width}.")
-
-        if callback_on_step_end_tensor_inputs is not None and not all(
-            k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
-        ):
-            raise ValueError(
-                f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
-            )
-
-        if prompt is not None and prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                " only forward one of the two."
-            )
-        elif prompt is None and prompt_embeds is None:
-            raise ValueError(
-                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
-            )
-        elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
-            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
-
-        if prompt_embeds is not None and prompt_attention_mask is None:
-            raise ValueError("Must provide `prompt_attention_mask` when specifying `prompt_embeds`.")
-
-        if negative_prompt_embeds is not None and negative_prompt_attention_mask is None:
-            raise ValueError("Must provide `negative_prompt_attention_mask` when specifying `negative_prompt_embeds`.")
-
-        if prompt_embeds is not None and negative_prompt_embeds is not None:
-            if prompt_embeds.shape != negative_prompt_embeds.shape:
-                raise ValueError(
-                    "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
-                    f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
-                    f" {negative_prompt_embeds.shape}."
-                )
-            if prompt_attention_mask.shape != negative_prompt_attention_mask.shape:
-                raise ValueError(
-                    "`prompt_attention_mask` and `negative_prompt_attention_mask` must have the same shape when passed directly, but"
-                    f" got: `prompt_attention_mask` {prompt_attention_mask.shape} != `negative_prompt_attention_mask`"
-                    f" {negative_prompt_attention_mask.shape}."
-                )
-
-    def prepare_latents(
-        self,
-        batch_size,
-        num_channels_latents,
-        height,
-        width,
-        num_frames,
-        dtype,
-        device,
-        latents=None,
-    ):
-        height = height // self.vae_spatial_scale_factor
-        width = width // self.vae_spatial_scale_factor
-        num_frames = (num_frames - 1) // self.vae_temporal_scale_factor + 1
+    def prepare_latents(self, batch_size: int, num_channels_latents: int, dtype: torch.dtype) -> torch.Tensor:
+        height = self._height // self.vae_spatial_scale_factor
+        width = self._width // self.vae_spatial_scale_factor
+        num_frames = (self._num_frames - 1) // self.vae_temporal_scale_factor + 1
 
         shape = (batch_size, num_channels_latents, num_frames, height, width)
-
-        if latents is not None:
-            return latents.to(device=device, dtype=dtype)
-
-        latents = torch.randn(shape, dtype=torch.float32, device=torch.device(device))
-        latents = latents.to(dtype)
-        return latents
-
-    @property
-    def guidance_scale(self):
-        return self._guidance_scale
-
-    @property
-    def do_classifier_free_guidance(self):
-        return self._guidance_scale > 1.0
-
-    @property
-    def num_timesteps(self):
-        return self._num_timesteps
-
-    @property
-    def attention_kwargs(self):
-        return self._attention_kwargs
-
-    @property
-    def current_timestep(self):
-        return self._current_timestep
-
-    @property
-    def interrupt(self):
-        return self._interrupt
+        return torch.randn(shape, dtype=torch.float32).to(dtype)
 
     @torch.no_grad()
     def __call__(
         self,
-        prompt: Union[str, List[str]] = None,
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
-        num_frames: int = 19,
-        num_inference_steps: int = 64,
-        timesteps: List[int] = None,
+        *,
+        prompts: Sequence[str],
+        negative_prompts: Sequence[str] | None = None,
+        num_inference_steps: int,
         guidance_scale: float = 4.5,
-        num_videos_per_prompt: Optional[int] = 1,
-        seed: Optional[int] = None,
-        latents: Optional[torch.Tensor] = None,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        prompt_attention_mask: Optional[torch.Tensor] = None,
-        negative_prompt_embeds: Optional[torch.Tensor] = None,
-        negative_prompt_attention_mask: Optional[torch.Tensor] = None,
-        output_type: Optional[str] = "pil",
-        return_dict: bool = True,
-        attention_kwargs: Optional[Dict[str, Any]] = None,
-        callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
-        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
-        max_sequence_length: int = 256,
+        num_videos_per_prompt: int | None = 1,
+        seed: int = 0,
         traced: bool = False,
-        profiler: BenchmarkProfiler = None,
-        profiler_iteration: int = 0,
-    ):
-        height = height or self.default_height
-        width = width or self.default_width
+        vae_traced: bool | None = None,
+        on_event: PipelineEventCallback | None = None,
+    ) -> torch.Tensor:
+        on_event = on_event if on_event is not None else null_callback
+        negative_prompts = negative_prompts if negative_prompts is not None else [""] * len(prompts)
 
-        # 1. Check inputs. Raise error if not correct
-        self.check_inputs(
-            prompt=prompt,
-            height=height,
-            width=width,
-            callback_on_step_end_tensor_inputs=callback_on_step_end_tensor_inputs,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            prompt_attention_mask=prompt_attention_mask,
-            negative_prompt_attention_mask=negative_prompt_attention_mask,
-        )
+        vae_traced = vae_traced if vae_traced is not None else traced
 
-        self._guidance_scale = guidance_scale
-        self._attention_kwargs = attention_kwargs
-        self._current_timestep = None
-        self._interrupt = False
+        batch_size = len(prompts)
 
-        # 2. Define call parameters
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
-
-        device = "cpu"
         # 3. Prepare text embeddings
-        if profiler:
-            profiler.start("encoder", profiler_iteration)
-        (
-            prompt_embeds,
-            prompt_attention_mask,
-            negative_prompt_embeds,
-            negative_prompt_attention_mask,
-        ) = self.encode_prompt(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            do_classifier_free_guidance=self.do_classifier_free_guidance,
+        on_event(SectionStart("encoder"))
+        torch_context, torch_context_masks = self._text_encoder.encode_cfg(
+            prompts,
+            negative_prompts,
             num_videos_per_prompt=num_videos_per_prompt,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            prompt_attention_mask=prompt_attention_mask,
-            negative_prompt_attention_mask=negative_prompt_attention_mask,
-            max_sequence_length=max_sequence_length,
-            device=device,
+            disable_attention_mask=traced,
+            on_event=on_event,
         )
-        if profiler:
-            profiler.end("encoder", profiler_iteration)
-
-        print(f"prompt_embeds.shape: {prompt_embeds.shape}")
-        print(f"prompt_attention_mask.shape: {prompt_attention_mask.shape}")
-        print(f"negative_prompt_embeds.shape: {negative_prompt_embeds.shape}")
-        print(f"negative_prompt_attention_mask.shape: {negative_prompt_attention_mask.shape}")
+        on_event(SectionEnd("encoder"))
 
         # 3b. If the transformer was destroyed, recreate it.
-        if self.transformer is None:
+        if self._transformer is None:
             logger.info("Recreating MochiTransformer3DModel")
-            self.transformer = MochiTransformer3DModel(
-                patch_size=self.transformer_config.patch_size,
-                num_attention_heads=self.transformer_config.num_attention_heads,
-                attention_head_dim=self.transformer_config.attention_head_dim,
-                num_layers=self.transformer_config.num_layers,
-                pooled_projection_dim=self.transformer_config.pooled_projection_dim,
-                in_channels=self.transformer_config.in_channels,
-                text_embed_dim=self.transformer_config.text_embed_dim,
-                time_embed_dim=self.transformer_config.time_embed_dim,
-                activation_fn=self.transformer_config.activation_fn,
-                mesh_device=self.mesh_device,
-                ccl_manager=self.ccl_manager,
+            self._transformer = self._checkpoint.build(
+                ccl_manager=self._ccl_manager,
                 parallel_config=self.parallel_config,
                 is_fsdp=True,
             )
-
-            # Load state dict into TT transformer
-            logger.info("Loading MochiTransformer3DModel state_dict")
-
-            cache.load_model(
-                self.transformer,
-                model_name="mochi-1-preview",
-                subfolder="transformer",
-                parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
+            self._tracer = Tracer(
+                self._transformer.forward, device=self._device, prep_run=True, clone_prep_inputs=False
             )
 
-        # 4. Prepare latent variables
-        if seed is not None:
-            torch.manual_seed(seed)
+            logger.info("Loading MochiTransformer3DModel state_dict")
+            self._checkpoint.load(
+                self._transformer,
+                mesh_device=self._device,
+                parallel_config=self.parallel_config,
+            )
 
-        num_channels_latents = self.transformer_config.in_channels
+        assert self._tracer is not None
+
+        # 4. Prepare latent variables
+        torch.manual_seed(seed)
+
+        num_channels_latents = self._checkpoint.in_channels
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
             num_channels_latents,
-            height,
-            width,
-            num_frames,
-            prompt_embeds.dtype,
-            device,
-            latents,
+            torch_context[1].dtype,
         )
-        print(f"preparing latents with H: {height}, W: {width}, num_frames: {num_frames}")
-        print(f"latents.shape: {latents.shape}")
-
-        if self.do_classifier_free_guidance:
-            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-            prompt_attention_mask = torch.cat([negative_prompt_attention_mask, prompt_attention_mask], dim=0)
 
         # 5. Prepare timestep
         # from https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
-        threshold_noise = 0.025
-        sigmas = linear_quadratic_schedule(num_inference_steps, threshold_noise)
-        sigmas = np.array(sigmas)
+        sigmas = np.array(linear_quadratic_schedule(num_inference_steps, threshold_noise=0.025))
+        self._scheduler.set_timesteps(sigmas=sigmas)
+        self._solver.set_schedule(self._scheduler.sigmas.tolist())
+        timesteps = self._scheduler.timesteps
 
-        print(f"given num_inference_steps: {num_inference_steps} and threshold_noise: {threshold_noise}")
-        print(f"sigmas: {sigmas}")
-
-        timesteps, num_inference_steps = retrieve_timesteps(
-            self.scheduler,
-            num_inference_steps,
-            device,
-            timesteps,
-            sigmas,
-        )
-        print(f"timesteps: {timesteps}")
-        print(f"num_inference_steps: {num_inference_steps}")
-
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
-        self._num_timesteps = len(timesteps)
+        # Upload spatial latents and pre-compute rope features once before the loop.
+        _, _, f, h, w = latents.shape
+        latents, latents_sequence_length = self._transformer.preprocess_spatial_input(latents)
+        rope_cos, rope_sin, trans_mat = self._transformer.prepare_rope_features(f, h, w)
 
         # 6. Denoising loop
-        if profiler:
-            profiler.start("denoising", profiler_iteration)
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
+        on_event(SectionStart("denoising"))
+        with tqdm.tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                if self.interrupt:
-                    continue
+                timestep = torch.tensor([t], dtype=torch.float32)
 
-                # Note: Mochi uses reversed timesteps. To ensure compatibility with methods like FasterCache, we need
-                # to make sure we're using the correct non-reversed timestep values.
-                self._current_timestep = 1000 - t
-                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
-                # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-                timestep = t.expand(latent_model_input.shape[0]).to(latents.dtype)
-
-                print("Input to transformer:")
-                print(f"latent_model_input.shape: {latent_model_input.shape}")
-                print(f"prompt_embeds.shape: {prompt_embeds.shape}")
-                print(f"timestep.shape: {timestep.shape}")
-                print(f"prompt_attention_mask.shape: {prompt_attention_mask.shape}")
-                print(f"attention_kwargs: {attention_kwargs}")
-
-                noise_pred_uncond = self.transformer(
-                    spatial=latent_model_input[:1],
-                    prompt=prompt_embeds[:1],
-                    timestep=timestep[:1],
-                    prompt_attention_mask=prompt_attention_mask[:1],
+                temb, context = self._transformer.prepare_timestep_text_features(
+                    timestep, torch_context[0], torch_context_masks[0]
                 )
-                noise_pred_text = self.transformer(
-                    spatial=latent_model_input[1:],
-                    prompt=prompt_embeds[1:],
-                    timestep=timestep[1:],
-                    prompt_attention_mask=prompt_attention_mask[1:],
+                velocity_pred_uncond = self._tracer(
+                    spatial_1BNI=latents,
+                    temb_11BD=temb,
+                    prompt_1BLP=context,
+                    rope_cos_1HND=rope_cos if i == 0 else self._tracer.inputs["rope_cos_1HND"],
+                    rope_sin_1HND=rope_sin if i == 0 else self._tracer.inputs["rope_sin_1HND"],
+                    trans_mat=trans_mat if i == 0 else self._tracer.inputs["trans_mat"],
+                    N=latents_sequence_length,
+                    traced=traced,
                 )
-                print(f"noise_pred_uncond.shape: {noise_pred_uncond.shape}")
-                print(f"noise_pred_text.shape: {noise_pred_text.shape}")
-                # Mochi CFG + Sampling runs in FP32
-                noise_pred_uncond = noise_pred_uncond.to(torch.float32)
-                noise_pred_text = noise_pred_text.to(torch.float32)
 
-                assert self.do_classifier_free_guidance == True
-                if self.do_classifier_free_guidance:
-                    # noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+                # latents can be overwritten by trace execution, use the captured input instead,
+                # which is safe.
+                latents = self._tracer.inputs["spatial_1BNI"]
 
-                # compute the previous noisy sample x_t -> x_t-1
-                latents_dtype = latents.dtype
-                latents = self.scheduler.step(noise_pred, t, latents.to(torch.float32), return_dict=False)[0]
-                latents = latents.to(latents_dtype)
+                # Move to CPU memory since the output tensor will be overwritten by the next trace
+                # execution.
+                velocity_pred_uncond = velocity_pred_uncond.cpu()
 
-                if latents.dtype != latents_dtype:
-                    if torch.backends.mps.is_available():
-                        # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
-                        latents = latents.to(latents_dtype)
-
-                if callback_on_step_end is not None:
-                    callback_kwargs = {}
-                    for k in callback_on_step_end_tensor_inputs:
-                        callback_kwargs[k] = locals()[k]
-                    callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
-
-                    latents = callback_outputs.pop("latents", latents)
-                    prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
-
-                # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                    progress_bar.update()
-        if profiler:
-            profiler.end("denoising", profiler_iteration)
-
-        self._current_timestep = None
-
-        if output_type == "latent":
-            video = latents
-        else:
-            # unscale/denormalize the latents
-            # denormalize with the mean and std if available and not None
-            has_latents_mean = hasattr(self.vae.config, "latents_mean") and self.vae.config.latents_mean is not None
-            has_latents_std = hasattr(self.vae.config, "latents_std") and self.vae.config.latents_std is not None
-            if has_latents_mean and has_latents_std:
-                latents_mean = (
-                    torch.tensor(self.vae.config.latents_mean).view(1, 12, 1, 1, 1).to(latents.device, latents.dtype)
+                temb, context = self._transformer.prepare_timestep_text_features(
+                    timestep, torch_context[1], torch_context_masks[1]
                 )
-                latents_std = (
-                    torch.tensor(self.vae.config.latents_std).view(1, 12, 1, 1, 1).to(latents.device, latents.dtype)
+                velocity_pred_cond = self._tracer(
+                    spatial_1BNI=latents,
+                    temb_11BD=temb,
+                    prompt_1BLP=context,
+                    rope_cos_1HND=self._tracer.inputs["rope_cos_1HND"],
+                    rope_sin_1HND=self._tracer.inputs["rope_sin_1HND"],
+                    trans_mat=self._tracer.inputs["trans_mat"],
+                    N=latents_sequence_length,
+                    traced=traced,
                 )
-                latents = latents * latents_std / self.vae.config.scaling_factor + latents_mean
-            else:
-                latents = latents / self.vae.config.scaling_factor
 
-            # If the VAE is memory-constrained, free the transformer.
-            if self.reload_dit_model:
-                logger.info("Freeing MochiTransformer3DModel")
-                self.transformer = None
+                velocity_pred_uncond = velocity_pred_uncond.to(velocity_pred_cond.device())
 
-            # Reshape the device mesh to the VAE mesh shape:
-            if tuple(self.mesh_device.shape) != self.vae_mesh_shape:
-                self.mesh_device.reshape(ttnn.MeshShape(self.vae_mesh_shape))
+                velocity_pred = velocity_pred_uncond + guidance_scale * (velocity_pred_cond - velocity_pred_uncond)
+                latents = self._solver.step(step=i, latent=latents, velocity_pred=velocity_pred)
 
-            if profiler:
-                profiler.start("vae", profiler_iteration)
-            video = self.vae.decode(latents, return_dict=False)[0]
-            if profiler:
-                profiler.end("vae", profiler_iteration)
+                progress_bar.update()
+        on_event(SectionEnd("denoising"))
 
-            # Reshape the device mesh back to the DiT mesh shape:
-            if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
-                self.mesh_device.reshape(ttnn.MeshShape(self.dit_mesh_shape))
+        latents = self._transformer.postprocess_spatial_output(latents, f, h, w, latents_sequence_length)
 
-            video = self.video_processor.postprocess_video(video, output_type=output_type)
+        return self._decode_latents(
+            latents,
+            vae_traced=vae_traced,
+            on_event=on_event,
+        )
 
-        if not return_dict:
-            return (video,)
+    def _decode_latents(
+        self,
+        latents: torch.Tensor,
+        *,
+        vae_traced: bool,
+        on_event: PipelineEventCallback,
+    ) -> torch.Tensor:
+        # If the VAE is memory-constrained, free the transformer.
+        if self.reload_dit_model:
+            logger.info("Freeing MochiTransformer3DModel")
+            self._transformer = None
+            self._tracer.release_trace()
+            self._tracer = None
 
-        return MochiPipelineOutput(frames=video)
+        on_event(SectionStart("vae"))
+        with self._reshape_vae():
+            video = self._vae.decode(latents, traced=vae_traced)
+        on_event(SectionEnd("vae"))
 
-    def run_single_prompt(self, *args, **kwargs):
-        return self.__call__(*args, **kwargs).frames
-
-    def synchronize_devices(self):
-        ttnn.synchronize_device(self.mesh_device)
+        return self.video_processor.postprocess_video(video, output_type="pil")

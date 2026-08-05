@@ -9,6 +9,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -34,7 +35,7 @@ Tensor make_tensor_with_num_shards(int num_device_shards, MeshDevice* mesh_devic
     const auto global_shape = ttnn::Shape{num_device_shards, 1, 32, 32};
     auto buffer = std::make_shared<std::vector<float>>(global_shape.volume());
     return distributed::create_distributed_tensor(
-        tt::stl::make_span(*buffer),
+        ttsl::make_span(*buffer),
         global_shape,
         tt::tt_metal::MemoryPin{buffer},
         tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{}),
@@ -49,7 +50,7 @@ Tensor make_tensor_with_mapper_config(
     const auto global_shape = ttnn::Shape{num_device_shards, 1, 32, 32};
     auto buffer = std::make_shared<std::vector<float>>(global_shape.volume());
     return distributed::create_distributed_tensor(
-        tt::stl::make_span(*buffer),
+        ttsl::make_span(*buffer),
         global_shape,
         tt::tt_metal::MemoryPin{buffer},
         tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{}),
@@ -105,6 +106,101 @@ struct NewInfraWorkloadFactory {
 static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<NewInfraWorkloadFactory>);
 static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFactory>);
 
+// ---------------------------------------------------------------------------
+// ProgramSpecFactoryConcept (Metal 2.0 op-porting stepping stone)
+//
+// No real op uses create_program_artifacts yet, so the adapter's templated
+// method bodies — including the op-owned tensor enumeration and parking added
+// for this concept — are never instantiated by a normal build. The checks below
+// (a) pin the concept's classification (it recognizes a create_program_artifacts
+// factory and is mutually exclusive with the other factory concepts, per
+// all_factories_valid), and (b) force-instantiate the adapter so its bodies are
+// actually compiled.
+//
+// NOTE: runtime behavior (cache miss -> hit TensorArg patching, op-owned device
+// allocation liveness across dispatches) is NOT exercised here — that requires a
+// real op dispatched through the launch path, i.e. the first op port. Until then
+// this is compile-coverage only.
+// ---------------------------------------------------------------------------
+struct ProgramSpecFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return ttnn::device_operation::ProgramArtifacts{};
+    }
+};
+
+// Same, but additionally provides override_runtime_arguments -> classified as the
+// custom variant, whose cache-hit path applies the returned ProgramRunArgs via
+// UpdateProgramRunArgs.
+struct CustomProgramSpecFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return ttnn::device_operation::ProgramArtifacts{};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        const OperationAttributes& /*attrs*/,
+        const Tensor& /*tensor_args*/,
+        Tensor& /*tensor_return_value*/,
+        const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/ = std::nullopt) {
+        return {};
+    }
+};
+
+// Minimal device operation supplying just the typedefs the adapter inherits.
+struct ProgramSpecMinimalOp {
+    using operation_attributes_t = OperationAttributes;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = Tensor;
+};
+
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::CustomProgramSpecFactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramFactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<ProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<ProgramSpecFactory>);
+
+// The custom variant is mutually exclusive with the base one.
+static_assert(ttnn::device_operation::CustomProgramSpecFactoryConcept<CustomProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramSpecFactoryConcept<CustomProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramFactoryConcept<CustomProgramSpecFactory>);
+static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<CustomProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<CustomProgramSpecFactory>);
+
+// Compile-coverage: taking the adapter methods' addresses ODR-uses them, forcing
+// the (otherwise un-instantiated) bodies to compile. Never dispatched.
+TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
+    using Adapter = device_operation::MeshDeviceOperationAdapter<
+        ProgramSpecMinimalOp>::ProgramSpecMeshWorkloadFactoryAdapter<ProgramSpecFactory>;
+    [[maybe_unused]] auto create = &Adapter::create_mesh_workload;
+    [[maybe_unused]] auto apply = &Adapter::apply_descriptor;
+    [[maybe_unused]] auto resolve = &Adapter::resolve_bindings;
+
+    using CustomAdapter = device_operation::MeshDeviceOperationAdapter<
+        ProgramSpecMinimalOp>::CustomProgramSpecMeshWorkloadFactoryAdapter<CustomProgramSpecFactory>;
+    [[maybe_unused]] auto ccreate = &CustomAdapter::create_mesh_workload;
+    [[maybe_unused]] auto capply = &CustomAdapter::apply_descriptor;
+    SUCCEED();
+}
+
+// SupportsPerCoreAllocation gates whether launch() will accept a per-core allocated tensor. No op
+// declares supports_per_core_allocation today, so the accept path is otherwise never exercised --
+// a concept that could never match would look identical at runtime. Pin all three directions here:
+// absent, true, and explicitly false.
+namespace per_core_opt_in_test {
+struct NoDeclaration {};
+struct OptedIn {
+    static constexpr bool supports_per_core_allocation = true;
+};
+struct OptedOut {
+    static constexpr bool supports_per_core_allocation = false;
+};
+}  // namespace per_core_opt_in_test
+
+static_assert(!device_operation::SupportsPerCoreAllocation<per_core_opt_in_test::NoDeclaration>);
+static_assert(device_operation::SupportsPerCoreAllocation<per_core_opt_in_test::OptedIn>);
+static_assert(!device_operation::SupportsPerCoreAllocation<per_core_opt_in_test::OptedOut>);
+
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
     using ::ttnn::operations::examples::ExampleDeviceOperation;
     EXPECT_EQ(
@@ -116,9 +212,9 @@ TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
 using LaunchOperation2x4Test = tt::tt_metal::MeshDevice2x4Fixture;
 
 TEST_F(LaunchOperation2x4Test, UniformTensor) {
-    const TensorSpec tensor_spec = TensorSpec(
+    const tt::tt_metal::TensorSpec tensor_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    auto full_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
+    auto full_tensor = ttnn::create_device_tensor(tensor_spec, mesh_device_.get());
 
     EXPECT_TRUE(all_tensors_have_uniform_storage(full_tensor));
 
@@ -149,9 +245,9 @@ TEST_F(LaunchOperation2x4Test, UnevenTensor) {
 }
 
 TEST_F(LaunchOperation2x4Test, FilterTensorShards) {
-    const TensorSpec tensor_spec = TensorSpec(
+    const tt::tt_metal::TensorSpec tensor_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    auto full_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
+    auto full_tensor = ttnn::create_device_tensor(tensor_spec, mesh_device_.get());
 
     EXPECT_TRUE(all_tensors_have_uniform_storage(full_tensor));
     EXPECT_THAT(
@@ -262,7 +358,7 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopology) {
     EXPECT_EQ(sum.tensor_topology().distribution_shape(), MeshShape(8));
     EXPECT_EQ(
         sum.tensor_topology().placements(),
-        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
+        (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
 }
 
 TEST_F(LaunchOperation2x4Test, OutputTensorTopologyAugmentedDistribution) {
@@ -289,17 +385,17 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopologyAugmentedDistribution) {
     EXPECT_EQ(sum_1.tensor_topology().distribution_shape(), MeshShape(2, 4));
     EXPECT_EQ(
         sum_1.tensor_topology().placements(),
-        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
+        (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{
             distributed::MeshMapperConfig::Shard{0}, distributed::MeshMapperConfig::Replicate{}}));
     EXPECT_EQ(sum_2.tensor_topology().distribution_shape(), MeshShape(2, 4));
     EXPECT_EQ(
         sum_2.tensor_topology().placements(),
-        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
+        (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{
             distributed::MeshMapperConfig::Replicate{}, distributed::MeshMapperConfig::Shard{0}}));
     EXPECT_EQ(sum_3.tensor_topology().distribution_shape(), MeshShape(1, 4));
     EXPECT_EQ(
         sum_3.tensor_topology().placements(),
-        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
+        (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{
             distributed::MeshMapperConfig::Replicate{}, distributed::MeshMapperConfig::Shard{0}}));
 }
 
@@ -312,7 +408,7 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopologyMultipleShardDims) {
     EXPECT_EQ(sum.tensor_topology().distribution_shape(), MeshShape(8));
     EXPECT_EQ(
         sum.tensor_topology().placements(),
-        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
+        (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
 }
 
 }  // namespace

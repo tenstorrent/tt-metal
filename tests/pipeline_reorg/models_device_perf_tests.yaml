@@ -19,19 +19,72 @@
     export HF_MODEL={hf_model}
     export TT_CACHE_PATH={tt_cache_path}
     pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
+    pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
   model: llama3.1-8b
   skus:
     wh_n150:
-      timeout: 10
+      timeout: 20
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:
-      timeout: 10
+      timeout: 20
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      hf_model: meta-llama/Llama-3.1-8B-Instruct
+    bh_quietbox_2:
+      timeout: 20
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p300:
-      timeout: 10
+      timeout: 20
       tt_cache_path: ""
       hf_model: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+
+- name: Llama 3.3-70B device perf tests
+  cmd: |
+    export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+    export HF_MODEL={hf_model}
+    export TT_CACHE_PATH={tt_cache_path}
+    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
+    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-131072-2-10-1-1-False"
+  model: llama3.3-70b
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      hf_model: meta-llama/Llama-3.3-70B-Instruct
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+
+- name: Qwen3-32B device perf tests
+  cmd: |
+    export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+    export HF_MODEL={hf_model}
+    export TT_CACHE_PATH={tt_cache_path}
+    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-qwen3_32b-2-32768-2-2-1-1-False"
+    pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-qwen3_32b-2-32768-2-10-1-1-False"
+  model: qwen3-32b
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      hf_model: Qwen/Qwen3-32B
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+
+- name: Stable Diffusion XL device-perf tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal || exit_code=$?
+    exit $exit_code
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 100
+    bh_p150:
+      timeout: 60
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield

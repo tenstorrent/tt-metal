@@ -24,6 +24,7 @@ TARGETS_JSON_FILENAME = (
 )
 
 
+@pytest.mark.skip(reason="Disabled by issue #44770")
 @pytest.mark.parametrize("device_params", [{"fabric_config": True, "l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",

@@ -60,10 +60,7 @@ class TestNewModePhase1Phase2:
             return mock_result
 
         with patch.object(subprocess, "run", side_effect=mock_run):
-            with patch("time.sleep"):  # Skip sleep in tests
-                run_phase1_generate_rank_bindings(
-                    mgd_path, hosts, output_dir, subprocess_run=subprocess.run, sleep_secs=0
-                )
+            run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=subprocess.run)
 
         # Verify Phase 1 command structure
         assert "--host" in captured_cmd
@@ -109,15 +106,13 @@ class TestNewModePhase1Phase2:
             return mock_result
 
         with patch.object(subprocess, "run", side_effect=mock_run):
-            with patch("time.sleep"):  # Skip sleep in tests
-                run_phase1_generate_rank_bindings(
-                    mgd_path,
-                    None,
-                    output_dir,
-                    subprocess_run=subprocess.run,
-                    sleep_secs=0,
-                    mock_rank_to_desc=mock_rank_to_desc,
-                )
+            run_phase1_generate_rank_bindings(
+                mgd_path,
+                None,
+                output_dir,
+                subprocess_run=subprocess.run,
+                mock_rank_to_desc=mock_rank_to_desc,
+            )
 
         # Verify Phase 1 mock command structure
         # Mock clusters should use --oversubscribe, not --host
@@ -268,19 +263,18 @@ class TestNewModePhase1Phase2:
                 return mock_result
 
         with patch.object(subprocess, "run", side_effect=mock_run):
-            with patch("time.sleep"):  # Skip sleep
-                result = runner.invoke(
-                    main,
-                    [
-                        "--mesh-graph-descriptor",
-                        str(mgd_path),
-                        "--hosts",
-                        "node1,node2",
-                        "--dry-run",
-                        "echo",
-                        "test",
-                    ],
-                )
+            result = runner.invoke(
+                main,
+                [
+                    "--mesh-graph-descriptor",
+                    str(mgd_path),
+                    "--hosts",
+                    "node1,node2",
+                    "--dry-run",
+                    "echo",
+                    "test",
+                ],
+            )
         # Verify CLI invocation succeeded
         assert result.exit_code == 0
         assert result.exception is None
@@ -466,19 +460,18 @@ class TestNewModePhase1Phase2:
                 return mock_result
 
         with patch.object(subprocess, "run", side_effect=mock_run):
-            with patch("time.sleep"):
-                runner.invoke(
-                    main,
-                    [
-                        "--mesh-graph-descriptor",
-                        str(mgd_path),
-                        "--hosts",
-                        "node1,node2",
-                        "--dry-run",
-                        "echo",
-                        "test",
-                    ],
-                )
+            runner.invoke(
+                main,
+                [
+                    "--mesh-graph-descriptor",
+                    str(mgd_path),
+                    "--hosts",
+                    "node1,node2",
+                    "--dry-run",
+                    "echo",
+                    "test",
+                ],
+            )
 
         # Phase 1: should have -np 2 (len(hosts))
         phase1_np_idx = captured_phase1_cmd.index("-np")

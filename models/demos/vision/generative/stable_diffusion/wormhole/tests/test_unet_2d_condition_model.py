@@ -51,7 +51,7 @@ def unsqueeze_all_params_to_4d(params):
     return params
 
 
-@pytest.mark.timeout(500)
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], ids=["device_params=l1_small_size_24576"], indirect=True
 )

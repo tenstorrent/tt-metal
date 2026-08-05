@@ -59,7 +59,7 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
             else:
                 adamw_params[name] = tensor
 
-        # Create sub-optimizers
+        # TODO: add FSDP-aware Muon.
         self._muon = ttml.optimizers.MuonComposite(
             muon_params,
             ttml.optimizers.MuonConfig.make(

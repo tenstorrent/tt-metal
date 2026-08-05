@@ -12,6 +12,10 @@ from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
+    ttnn_rms_norm_post_all_gather,
+    ttnn_layer_norm_post_all_gather,
+)
 
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
@@ -21,7 +25,16 @@ def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
         return torch.nn.functional.layer_norm(x, x.shape[-1:], gamma, beta, epsilon)
 
 
-def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled=False):
+def run_layernorm_part_2(
+    inp_shape,
+    n_devices,
+    is_rmsnorm,
+    input_dtype,
+    output_dtype,
+    device,
+    gamma_beta_dtype,
+    fp32_enabled=False,
+):
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
@@ -74,28 +87,28 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         )
         tt_gamma = torch2tt_tensor(
             gamma_chunked[d].reshape(1, 1, -1, 32),
-            tt_dtype=ttnn.bfloat16,
+            tt_dtype=gamma_beta_dtype,
             tt_device=device,
             tt_layout=ttnn.ROW_MAJOR_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
         tt_beta = torch2tt_tensor(
             beta_chunked[d].reshape(1, 1, -1, 32),
-            tt_dtype=ttnn.bfloat16,
+            tt_dtype=gamma_beta_dtype,
             tt_device=device,
             tt_layout=ttnn.ROW_MAJOR_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
         tt_stats = torch2tt_tensor(
             stats_tiles,
-            tt_dtype=ttnn.bfloat16,
+            tt_dtype=input_dtype,
             tt_device=device,
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
 
         if is_rmsnorm:
-            tt_lnp2_out = ttnn.rms_norm_post_all_gather(
+            tt_lnp2_out = ttnn_rms_norm_post_all_gather(
                 tt_inp,
                 tt_stats,
                 epsilon=epsilon,
@@ -104,7 +117,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
                 dtype=output_dtype,
             )
         else:
-            tt_lnp2_out = ttnn.layer_norm_post_all_gather(
+            tt_lnp2_out = ttnn_layer_norm_post_all_gather(
                 tt_inp,
                 tt_stats,
                 epsilon=epsilon,
@@ -137,9 +150,11 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         (ttnn.bfloat16, ttnn.bfloat16),
         (ttnn.bfloat8_b, ttnn.bfloat8_b),
         (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.float32, ttnn.float32),
     ],
-    ids=["BFLOAT16", "BFLOAT8_B", "BFLOAT16_BFLOAT8_B"],
+    ids=["BFLOAT16", "BFLOAT8_B", "BFLOAT16_BFLOAT8_B", "FLOAT32"],
 )
+@pytest.mark.parametrize("gamma_beta_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize(
     "inp_shape",
     [
@@ -163,15 +178,42 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
     ids=["fp32_enabled", "fp32_disabled"],
 )
 def test_layernorm_part_2_with_program_cache(
-    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, fp32_enabled, device
+    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, gamma_beta_dtype, fp32_enabled, device
 ):
-    run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled)
+    """Post-all-gather correctness matrix, covering FP32 (input + FP32 stats + bf16/fp32 gamma/beta)
+    alongside the bf16/bf8 cases. The kernel processes inp_shape[-1] // n_devices per device, so L1
+    usage is driven by that per-device width, not the full width -- FP32 runs on the same 8192-wide
+    shapes as bf16/bf8. FP32 doubles tile size, and the one combination that overflows L1 is FP32
+    layernorm at per-device width 2048 (8192-wide / 4 devices: 2 stats tiles + beta), skipped below."""
+    is_fp32 = input_dtype == ttnn.float32
+    per_device_width = inp_shape[-1] // n_devices
+
+    # FP32 requires fp32_dest_acc_en.
+    if is_fp32 and not fp32_enabled:
+        pytest.skip("FP32 input requires fp32_dest_acc_en=True")
+    # FP32 gamma/beta is only exercised with FP32 input; bf16/bf8 keep bf16 gamma/beta.
+    if gamma_beta_dtype == ttnn.float32 and not is_fp32:
+        pytest.skip("fp32 gamma/beta only exercised with FP32 input")
+    # FP32 layernorm needs 2 stats tiles + beta in double-size tiles; per-device width 2048 overflows L1.
+    if is_fp32 and not is_rmsnorm and per_device_width >= 2048:
+        pytest.skip("FP32 layernorm overflows L1 at per-device width >= 2048")
+
+    run_layernorm_part_2(
+        inp_shape,
+        n_devices,
+        is_rmsnorm,
+        input_dtype,
+        output_dtype,
+        device,
+        fp32_enabled=fp32_enabled,
+        gamma_beta_dtype=gamma_beta_dtype,
+    )
 
 
 @pytest.mark.parametrize(
     "dtype",
-    [ttnn.bfloat16],
-    ids=["BFLOAT16"],
+    [ttnn.bfloat16, ttnn.float32],
+    ids=["BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "inp_shape",
@@ -192,6 +234,7 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
     dummy_tensors = []
 
     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    fp32_enabled = dtype == ttnn.float32  # FP32 requires fp32_dest_acc_en
 
     for i in range(2):
         if i > 0:
@@ -204,7 +247,9 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
                     tt_memory_config=dram_memcfg,
                 )
             )
-        run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, dtype, device)
+        run_layernorm_part_2(
+            inp_shape, n_devices, is_rmsnorm, dtype, dtype, device, gamma_beta_dtype=dtype, fp32_enabled=fp32_enabled
+        )
 
     assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
         device.num_program_cache_entries()
@@ -235,7 +280,7 @@ def test_layer_norm_post_all_gather_non_tile_aligned_width(device, input_w):
         )
 
     epsilon = 1e-5
-    out_ttnn = ttnn.layer_norm_post_all_gather(
+    out_ttnn = ttnn_layer_norm_post_all_gather(
         to_device(inp),
         to_device(stats),
         epsilon=epsilon,
@@ -323,7 +368,7 @@ def test_layer_norm_post_all_gather_bias_only_matches_torch(device):
         tt_memory_config=dram_memcfg,
     )
 
-    tt_out = ttnn.layer_norm_post_all_gather(
+    tt_out = ttnn_layer_norm_post_all_gather(
         tt_inp,
         tt_stats,
         epsilon=epsilon,
@@ -337,7 +382,7 @@ def test_layer_norm_post_all_gather_bias_only_matches_torch(device):
     assert passing, output_str
 
 
-def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(device):
+def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(device, expect_error):
     """Invalid beta width must fail in validate even when weight is absent.
 
     ROW_MAJOR bias uses the physical_volume vs input width check (same as gamma). A TILE
@@ -383,7 +428,7 @@ def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(
         tt_memory_config=dram_memcfg,
     )
 
-    with pytest.raises(RuntimeError, match="Beta tensor dimensions must align"):
+    with expect_error(RuntimeError, "Beta tensor dimensions must align"):
         ttnn.layer_norm_post_all_gather(
             tt_inp,
             tt_stats,

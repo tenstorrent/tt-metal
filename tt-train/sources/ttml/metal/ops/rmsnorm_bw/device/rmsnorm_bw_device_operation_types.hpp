@@ -9,12 +9,12 @@
 namespace ttml::metal::ops::rmsnorm_bw::device {
 
 // Attributes for the backward operation (add more if needed)
-struct operation_attributes_t {
+struct RMSNormBackwardParams {
     float epsilon = 1e-6F;
 };
 
 // Tensors required for backward
-struct tensor_args_t {
+struct RMSNormBackwardInputs {
     ttnn::Tensor input;
     ttnn::Tensor gamma;
     ttnn::Tensor rms;
@@ -23,8 +23,11 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_dgamma_components = std::nullopt;
 };
 
+using operation_attributes_t = RMSNormBackwardParams;
+using tensor_args_t = RMSNormBackwardInputs;
+
 // Output tensor specs and tensors
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
 }  // namespace ttml::metal::ops::rmsnorm_bw::device

@@ -344,6 +344,7 @@ class CompressedTensor:
         assignment_memory_config=None,
         tile_hw: int = DEFAULT_TILE_HW,
         min_shard_bytes: int = 0,
+        per_core_allocation: bool = False,
         mesh_mapper_config=None,
         keep_packed_data: bool = False,
         move_to_device: bool = True,
@@ -364,6 +365,7 @@ class CompressedTensor:
             assignment_memory_config=assignment_memory_config,
             tile_hw=tile_hw,
             min_shard_bytes=min_shard_bytes,
+            per_core_allocation=per_core_allocation,
             mesh_mapper_config=mesh_mapper_config,
             keep_packed_data=keep_packed_data,
             move_to_device=move_to_device,
@@ -579,7 +581,7 @@ class CompressedTensor:
             per_core = self._multi_device_data_per_core.get(device_coord, {})
             key = (core_coord.x, core_coord.y)
             assert key in per_core, f"Core {core_coord} not found in per-core data for device {device_coord}"
-            return per_core[key].experimental_per_core_buffer_address(core_coord)
+            return per_core[key].experimental_per_core_buffer_address(device_coord, core_coord)
         return self.data.buffer_address()
 
     def get_assignment_l1_address(self) -> int:
@@ -594,7 +596,7 @@ class CompressedTensor:
         per_core = self._multi_device_assignment_per_core.get(device_coord, {})
         key = (core_coord.x, core_coord.y)
         assert key in per_core, f"Core {core_coord} not found in per-core assignment for device {device_coord}"
-        return per_core[key].experimental_per_core_buffer_address(core_coord)
+        return per_core[key].experimental_per_core_buffer_address(device_coord, core_coord)
 
     @property
     def data_bytes(self) -> int:
@@ -1366,14 +1368,22 @@ class CompressedTensor:
 
             per_core = {}
             for (core, _page_indices), core_tile_data, raw_size in zip(shard_mapping, shard_data, shard_data_sizes):
-                if raw_size == 0:
+                # Apply min_shard_bytes floor — all-bfp0 cores have raw_size=0
+                # (bfp0 packs to zero bytes per tile_utils.bfp_tile_packed_size)
+                # but still need a valid L1 address for downstream
+                # get_data_l1_address_per_core queries. Caller passes a non-zero
+                # min_shard_bytes to allocate a placeholder buffer instead of
+                # skipping. With min_shard_bytes=0 (default) the original
+                # skip-empty behavior is preserved.
+                effective_size = max(raw_size, self._min_shard_bytes)
+                if effective_size == 0:
                     continue
-                aligned_size = _align(raw_size, alignment)
+                aligned_size = _align(effective_size, alignment)
                 core_bytes = list(core_tile_data)
                 pad = aligned_size - raw_size
                 if pad > 0:
                     core_bytes.append(np.zeros(pad, dtype=np.uint8))
-                flat = np.concatenate(core_bytes)
+                flat = np.concatenate(core_bytes) if core_bytes else np.zeros(aligned_size, dtype=np.uint8)
 
                 core_torch = torch.from_numpy(flat.copy()).reshape(1, aligned_size)
                 core_shard_spec = ttnn.ShardSpec(

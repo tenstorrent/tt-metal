@@ -25,14 +25,14 @@ namespace {
 
 ttnn::Tensor slice_small_vector_wrapper(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int>& slice_start,
-    const ttnn::SmallVector<int>& slice_end,
-    const std::optional<ttnn::SmallVector<int>>& step,
+    const ttsl::SmallVector<int>& slice_start,
+    const ttsl::SmallVector<int>& slice_end,
+    const std::optional<ttsl::SmallVector<int>>& step,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,
     const std::optional<CoreRangeSet>&& sub_core_grids) {
-    const auto step_value = step.value_or(ttnn::SmallVector<int>(slice_end.size(), 1));
+    const auto step_value = step.value_or(ttsl::SmallVector<int>(slice_end.size(), 1));
     return ttnn::slice(
         input_tensor,
         slice_start,
@@ -51,15 +51,19 @@ void bind_slice(nb::module_& mod) {
         Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
 
         Args:
-            input_tensor: Input Tensor.
-            slice_start: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
-            slice_end: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
-            slice_step: (Optional[List[int[tensor rank]]) Step size for each dim. Default is None, which works out be 1 for each dimension.
+            input_tensor (ttnn.Tensor): Input tensor.
+            slice_start (List[int]): Start indices of input tensor. Values along each dim must be in ``[0, input_tensor_shape[i])``.
+            slice_end (List[int]): End indices of input tensor (exclusive). Values along each dim must be in ``(0, input_tensor_shape[i]]``.
+            slice_step (List[int], optional): Step size for each dim. Defaults to ``None`` (step = 1 for all dims).
 
         Keyword Args:
-            memory_config: Memory Config of the output tensor
-            pad_value: Optional value to fill padding for tiled tensors. Padding values are unmodified (and undefined) by default
-            sub_core_grids: (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to the input tensor's memory config.
+            output_tensor (ttnn.Tensor, optional): Pre-allocated output tensor. Its shape must match the slice output. Defaults to ``None``.
+            pad_value (float, optional): Fill value for implicit tile padding on tiled tensors. Padding is undefined by default.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+
+        Note:
+            Strided slicing (``slice_step != 1``) is not supported for ``bfloat8_b`` tensors.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -76,7 +80,7 @@ void bind_slice(nb::module_& mod) {
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
-                const std::optional<ttnn::SmallVector<uint32_t>>&,
+                const std::optional<ttsl::SmallVector<uint32_t>>&,
                 const std::optional<MemoryConfig>&,
                 const std::optional<Tensor>&,
                 const std::optional<float>&,
@@ -114,7 +118,7 @@ void bind_slice(nb::module_& mod) {
             nb::arg("output_tensor") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()),
-        // Overload 3: SmallVector<int> version (int32_t template parameter)
+        // Overload 3: ttsl::SmallVector<int> version (int32_t template parameter)
         ttnn::overload_t(
             &slice_small_vector_wrapper,
             nb::arg("input_tensor"),

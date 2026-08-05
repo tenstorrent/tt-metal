@@ -8,16 +8,18 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
-RotaryEmbeddingLlamaFusedQKProgramFactory::cached_program_t RotaryEmbeddingLlamaFusedQKProgramFactory::create(
+ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
     const RotaryEmbeddingLlamaFusedQkParams& operation_attributes,
     const RotaryEmbeddingLlamaFusedQkInputs& tensor_args,
     RotaryEmbeddingLlamaFusedQkResult& tensor_return_value) {
-    Program program{};
+    ProgramDescriptor desc;
 
     const auto& q_input = tensor_args.q_input;
     const auto& k_input = tensor_args.k_input;
@@ -89,84 +91,124 @@ RotaryEmbeddingLlamaFusedQKProgramFactory::cached_program_t RotaryEmbeddingLlama
     auto* q_dst_buffer = q_output.buffer();
     auto* k_dst_buffer = k_output.buffer();
 
-    uint32_t q_input_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig cb_q_input_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_q_input_tiles * input_single_tile_size, {{q_input_cb_index, input_cb_data_format}})
-            .set_page_size(q_input_cb_index, input_single_tile_size)
-            .set_globally_allocated_address(*q_src_buffer);
-    auto cb_q_input = tt::tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_q_input_config);
+    constexpr uint8_t q_input_cb_index = tt::CBIndex::c_0;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_q_input_tiles * input_single_tile_size,
+        .core_ranges = all_cores_bb,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = q_input_cb_index,
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+        }}},
+        .buffer = q_src_buffer,
+    });
 
-    uint32_t k_input_cb_index = tt::CBIndex::c_1;
-    tt::tt_metal::CircularBufferConfig cb_k_input_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_k_input_tiles * input_single_tile_size, {{k_input_cb_index, input_cb_data_format}})
-            .set_page_size(k_input_cb_index, input_single_tile_size)
-            .set_globally_allocated_address(*k_src_buffer);
-    auto cb_k_input = tt::tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_k_input_config);
+    constexpr uint8_t k_input_cb_index = tt::CBIndex::c_1;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_k_input_tiles * input_single_tile_size,
+        .core_ranges = all_cores_bb,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = k_input_cb_index,
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+        }}},
+        .buffer = k_src_buffer,
+    });
 
-    uint32_t cos_cb_index = tt::CBIndex::c_2;
-    tt::tt_metal::CircularBufferConfig cb_cos_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
-            .set_page_size(cos_cb_index, cos_single_tile_size)
-            .set_globally_allocated_address(*cos_buffer);
-    auto cb_cos = tt::tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_cos_config);
+    constexpr uint8_t cos_cb_index = tt::CBIndex::c_2;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_cos_sin_tiles * cos_single_tile_size,
+        .core_ranges = all_cores_bb,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cos_cb_index,
+            .data_format = cos_cb_data_format,
+            .page_size = cos_single_tile_size,
+        }}},
+        .buffer = cos_buffer,
+    });
 
-    uint32_t sin_cb_index = tt::CBIndex::c_3;
-    tt::tt_metal::CircularBufferConfig cb_sin_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
-            .set_page_size(sin_cb_index, sin_single_tile_size)
-            .set_globally_allocated_address(*sin_buffer);
-    auto cb_sin = tt::tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_sin_config);
+    constexpr uint8_t sin_cb_index = tt::CBIndex::c_3;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_cos_sin_tiles * sin_single_tile_size,
+        .core_ranges = all_cores_bb,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = sin_cb_index,
+            .data_format = sin_cb_data_format,
+            .page_size = sin_single_tile_size,
+        }}},
+        .buffer = sin_buffer,
+    });
 
-    uint32_t trans_mat_cb_index = tt::CBIndex::c_4;
+    constexpr uint8_t trans_mat_cb_index = tt::CBIndex::c_4;
     // We only take one tile of trans_mat
     uint32_t num_trans_mat_tiles = 1;
-    tt::tt_metal::CircularBufferConfig cb_trans_mat_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_trans_mat_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
-            .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size)
-            .set_globally_allocated_address(*trans_mat_buffer);
-    auto cb_trans_mat = tt::tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_trans_mat_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_trans_mat_tiles * trans_mat_single_tile_size,
+        .core_ranges = all_cores_bb,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = trans_mat_cb_index,
+            .data_format = trans_mat_cb_data_format,
+            .page_size = trans_mat_single_tile_size,
+        }}},
+        .buffer = trans_mat_buffer,
+    });
 
     uint32_t num_interm_tiles = head_dim_t;
-    uint32_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
-    tt::tt_metal::CircularBufferConfig cb_rotated_input_interm_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_interm_tiles * input_single_tile_size, {{rotated_input_interm_cb_index, input_cb_data_format}})
-            .set_page_size(rotated_input_interm_cb_index, input_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_rotated_input_interm_config);
+    constexpr uint8_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_interm_tiles * input_single_tile_size,
+        .core_ranges = all_cores_bb,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = rotated_input_interm_cb_index,
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+        }}},
+    });
 
-    uint32_t cos_interm_cb_index = tt::CBIndex::c_25;
-    tt::tt_metal::CircularBufferConfig cb_cos_interm_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_interm_tiles * input_single_tile_size, {{cos_interm_cb_index, cos_cb_data_format}})
-            .set_page_size(cos_interm_cb_index, cos_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_cos_interm_config);
+    constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_interm_tiles * input_single_tile_size,
+        .core_ranges = all_cores_bb,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cos_interm_cb_index,
+            .data_format = cos_cb_data_format,
+            .page_size = cos_single_tile_size,
+        }}},
+    });
 
-    uint32_t sin_interm_cb_index = tt::CBIndex::c_26;
-    tt::tt_metal::CircularBufferConfig cb_sin_interm_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_interm_tiles * input_single_tile_size, {{sin_interm_cb_index, sin_cb_data_format}})
-            .set_page_size(sin_interm_cb_index, sin_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_sin_interm_config);
+    constexpr uint8_t sin_interm_cb_index = tt::CBIndex::c_26;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_interm_tiles * input_single_tile_size,
+        .core_ranges = all_cores_bb,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = sin_interm_cb_index,
+            .data_format = sin_cb_data_format,
+            .page_size = sin_single_tile_size,
+        }}},
+    });
 
-    uint32_t q_output_cb_index = tt::CBIndex::c_16;  // output operands start at index 16
-    tt::tt_metal::CircularBufferConfig cb_q_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_q_output_tiles * output_single_tile_size, {{q_output_cb_index, output_cb_data_format}})
-            .set_page_size(q_output_cb_index, output_single_tile_size)
-            .set_globally_allocated_address(*q_dst_buffer);
-    auto cb_q_output = tt::tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_q_output_config);
-    uint32_t k_output_cb_index = tt::CBIndex::c_17;  // output operands start at index 17
-    tt::tt_metal::CircularBufferConfig cb_k_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_k_output_tiles * output_single_tile_size, {{k_output_cb_index, output_cb_data_format}})
-            .set_page_size(k_output_cb_index, output_single_tile_size)
-            .set_globally_allocated_address(*k_dst_buffer);
-    auto cb_k_output = tt::tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_k_output_config);
+    constexpr uint8_t q_output_cb_index = tt::CBIndex::c_16;  // output operands start at index 16
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_q_output_tiles * output_single_tile_size,
+        .core_ranges = all_cores_bb,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = q_output_cb_index,
+            .data_format = output_cb_data_format,
+            .page_size = output_single_tile_size,
+        }}},
+        .buffer = q_dst_buffer,
+    });
+    constexpr uint8_t k_output_cb_index = tt::CBIndex::c_17;  // output operands start at index 17
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_k_output_tiles * output_single_tile_size,
+        .core_ranges = all_cores_bb,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = k_output_cb_index,
+            .data_format = output_cb_data_format,
+            .page_size = output_single_tile_size,
+        }}},
+        .buffer = k_dst_buffer,
+    });
 
     // Set up the kernel
     std::vector<uint32_t> compute_kernel_args = {
@@ -192,59 +234,36 @@ RotaryEmbeddingLlamaFusedQKProgramFactory::cached_program_t RotaryEmbeddingLlama
               "compute/rotary_embedding_llama_sharded_row_major.cpp"
             : "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/"
               "compute/rotary_embedding_llama_sharded.cpp";
-    auto rotary_embedding_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        compute_kernel_path,
-        all_cores_bb,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = compute_kernel_path;
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores_bb;
+    compute_desc.compile_time_args = std::move(compute_kernel_args);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+    };
 
     // Runtime args to differentiate between q, k or no work groups
     // TODO: Turn off unused compute cores? (technically, it doesn't matter since only compute kernel)
     // Running into code size issues on TRISC2 with profiler turned on; need to reduce stack size by 4B
     // constexpr bool has_work = true;
-    constexpr bool is_q = true;  // If not q, must be k
-    tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, q_cores, {is_q});
-    tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, k_cores, {!is_q});
-    // tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, unused_cores, {!has_work});
+    constexpr uint32_t is_q_arg = 1;  // If not q, must be k
+    constexpr uint32_t is_k_arg = 0;
+    const auto q_cores_vec = corerange_to_cores(q_cores, std::nullopt, /*row_wise=*/true);
+    const auto k_cores_vec = corerange_to_cores(k_cores, std::nullopt, /*row_wise=*/true);
+    compute_desc.runtime_args.reserve(q_cores_vec.size() + k_cores_vec.size());
+    for (const auto& core : q_cores_vec) {
+        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{is_q_arg});
+    }
+    for (const auto& core : k_cores_vec) {
+        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{is_k_arg});
+    }
 
-    RotaryEmbeddingLlamaFusedQKSharedVariables shared_variables{
-        .cb_q_input = cb_q_input,
-        .cb_k_input = cb_k_input,
-        .cb_cos = cb_cos,
-        .cb_sin = cb_sin,
-        .cb_trans_mat = cb_trans_mat,
-        .cb_q_output = cb_q_output,
-        .cb_k_output = cb_k_output};
+    desc.kernels.push_back(std::move(compute_desc));
 
-    // NOLINTNEXTLINE(performance-move-const-arg): CachedProgram ctor requires rvalue reference
-    return cached_program_t{std::move(program), std::move(shared_variables)};
-}
-
-void RotaryEmbeddingLlamaFusedQKProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const RotaryEmbeddingLlamaFusedQkParams& /*operation_attributes*/,
-    const RotaryEmbeddingLlamaFusedQkInputs& tensor_args,
-    RotaryEmbeddingLlamaFusedQkResult& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& shared_variables = cached_program.shared_variables;
-
-    auto* q_src_buffer = tensor_args.q_input.buffer();
-    auto* k_src_buffer = tensor_args.k_input.buffer();
-    auto* cos_buffer = tensor_args.cos.buffer();
-    auto* sin_buffer = tensor_args.sin.buffer();
-    auto* trans_mat_buffer = tensor_args.trans_mat.buffer();
-    auto* q_dst_buffer = std::get<0>(tensor_return_value).buffer();
-    auto* k_dst_buffer = std::get<1>(tensor_return_value).buffer();
-
-    // Update the CB globally allocated addresses here
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_q_input, *q_src_buffer);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_k_input, *k_src_buffer);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_cos, *cos_buffer);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_sin, *sin_buffer);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_trans_mat, *trans_mat_buffer);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_q_output, *q_dst_buffer);
-    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_k_output, *k_dst_buffer);
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim

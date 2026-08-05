@@ -32,7 +32,8 @@ template <
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
     bool skip_signalling = false,
-    bool fused_signalling = false>
+    bool fused_signalling = false,
+    std::uint32_t output_granularity>
 inline void llk_math_sdpa_bcast_col_srca_srcb_reuse(const std::uint32_t dst_index) {
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_<
         eltwise_binary_type,
@@ -42,5 +43,6 @@ inline void llk_math_sdpa_bcast_col_srca_srcb_reuse(const std::uint32_t dst_inde
         math_fidelity,
         false,
         skip_signalling,
-        fused_signalling>(dst_index);
+        fused_signalling,
+        output_granularity>(dst_index);
 }

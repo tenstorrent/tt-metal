@@ -43,6 +43,25 @@ inline tt::tt_metal::CBHandle create_circular_buffer(
 }
 
 /**
+ *   Byte-sized variant of create_circular_buffer for CBs whose total size and
+ *   page size aren't naturally expressed as tile_size × num_tiles (control/scratch
+ *   buffers, row-major staging, custom-aligned pages). If `page_size_bytes` is 0
+ *   the whole buffer is one page.
+ */
+inline tt::tt_metal::CBHandle create_circular_buffer_bytes(
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::CoreRangeSet& core_ranges,
+    uint32_t cb_index,
+    tt::DataFormat data_format,
+    uint32_t total_bytes,
+    uint32_t page_size_bytes = 0U) {
+    const uint32_t page_size = page_size_bytes == 0U ? total_bytes : page_size_bytes;
+    tt::tt_metal::CircularBufferConfig cb_config =
+        tt::tt_metal::CircularBufferConfig(total_bytes, {{cb_index, data_format}}).set_page_size(cb_index, page_size);
+    return CreateCircularBuffer(program, core_ranges, cb_config);
+}
+
+/**
  *   Create a reader kernel with the given compile-time arguments.
  */
 inline tt::tt_metal::KernelHandle create_reader_kernel(

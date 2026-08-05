@@ -17,6 +17,7 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 
 namespace tt::tt_metal {
+using ttnn::Tensor;
 
 class MeshDevice4StagePipelineSendRecvFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {};
 
@@ -52,37 +53,37 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> generate_a
             // Loop over all entries of the map and send them to the other hosts
             std::size_t num_entries = asic_id_to_mesh_coord_map.size();
             distributed_context->broadcast(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
                 distributed::multihost::Rank{rank});
             for (auto& [asic_id, mesh_coord] : asic_id_to_mesh_coord_map) {
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(
+                    ttsl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(const_cast<tt_metal::AsicID*>(&asic_id)), sizeof(asic_id)),
                     distributed::multihost::Rank{rank});
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
                     distributed::multihost::Rank{rank});
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
                     distributed::multihost::Rank{rank});
             }
         } else {
             // Receive the map from the other host
             std::size_t num_entries = 0;
             distributed_context->broadcast(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
                 distributed::multihost::Rank{rank});
             for (auto i = 0; i < num_entries; i++) {
                 tt_metal::AsicID asic_id;
                 distributed::MeshCoordinate mesh_coord = distributed::MeshCoordinate(0, 0);
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&asic_id), sizeof(asic_id)),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&asic_id), sizeof(asic_id)),
                     distributed::multihost::Rank{rank});
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
                     distributed::multihost::Rank{rank});
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
                     distributed::multihost::Rank{rank});
                 asic_id_to_mesh_coord_map.emplace(asic_id, mesh_coord);
             }
@@ -206,7 +207,7 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
     const bool is_pipeline_end = (*distributed_context->rank() == *pipeline_end_rank);
     const bool is_intermediate = !is_pipeline_start && !is_pipeline_end;
 
-    Tensor intermediate_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
+    Tensor intermediate_tensor = ttnn::create_device_tensor(tensor_spec, mesh_device_.get());
 
     if (is_pipeline_start) {
         // Pipeline start: Copy data from start coord to exit node using an intermediate socket
@@ -294,7 +295,7 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
             auto run_receiver_step = [&](uint32_t i) {
                 ttnn::experimental::recv_async(intermediate_tensor, recv_socket);
                 ttnn::experimental::send_async(intermediate_tensor, intermed_send);
-                Tensor output_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
+                Tensor output_tensor = ttnn::create_device_tensor(tensor_spec, mesh_device_.get());
                 ttnn::experimental::recv_async(output_tensor, intermed_recv);
                 auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
                 auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<uint32_t>();

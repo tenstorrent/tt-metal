@@ -144,7 +144,15 @@ def test_vision_model_inference(
     tt_input = tt_model.prepare_input(patch_input, seq_len)
 
     # Run reference model
-    reference_output, reference_deepstack_visual_embeds = reference_model(pt_pixel_values, image_grid_thw)
+    # transformers 5.x Qwen3VLVisionModel returns BaseModelOutputWithDeepstackFeatures, not a
+    # (last_hidden_state, deepstack_features) tuple. Unpack version-tolerantly.
+    _vis_out = reference_model(pt_pixel_values, image_grid_thw)
+    if isinstance(_vis_out, tuple):
+        reference_output, reference_deepstack_visual_embeds = _vis_out
+    else:
+        # 5.x merged image embeds are in pooler_output (the merger output); last_hidden_state is the
+        # pre-merger patch features. The LM itself consumes vision_output.pooler_output.
+        reference_output, reference_deepstack_visual_embeds = _vis_out.pooler_output, _vis_out.deepstack_features
 
     # Run TT model
     tt_out, tt_deepstack_visual_embeds = tt_model(

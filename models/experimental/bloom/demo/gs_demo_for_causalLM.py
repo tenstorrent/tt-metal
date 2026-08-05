@@ -20,6 +20,7 @@ import models.experimental.bloom.tt.bloom_causal_lm as bloom_causal_lm
 )
 def test_bloom_causal_lm(device, model_location_generator, iterations):
     tokenizer = BloomTokenizerFast.from_pretrained("bigscience/bloom-560m")
+    # NOTE(transformers-5.x): `torchscript=` was removed from transformers configs in 5.x; drop it (a default no-op) when running this experimental model under 5.x.
     hf_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hf_reference_model.eval()
 

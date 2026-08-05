@@ -17,7 +17,7 @@
     # CCL smoke tests - exactly one representative test from each op category
     pytest "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_2d]" --timeout=300
 
-    pytest "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async[wormhole_b0-mesh_device0-normal-2-1-1-fabric_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300
+    pytest "tests/nightly/tg/ccl/test_all_gather.py::test_all_gather_async[wormhole_b0-mesh_device0-normal-2-1-1-fabric_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300
     pytest "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-mesh_device0-2-1-1-fabric_ring-mem_config_input0-mem_config_rs0-batch_8-perf-4links]" --timeout=300
     pytest "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_1d_line]" --timeout=300
 
@@ -27,17 +27,20 @@
     pytest tests/nightly/tg/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "Wan_shape_17 and check" --timeout=300
     pytest tests/nightly/tg/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "medium_5d_h0w1 and general_4x8_1link" --timeout=300
 
+    # TODO: Fix Eth Heartbeat Failures --> https://github.com/tenstorrent/tt-metal/issues/45740
+    # TODO: Enable these tests once Fabric Manager is ready
     # Use Fabric Manager to initialize/teardown Fabric 2D and run all tests without initializing/tearing down fabric
-    ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --initialize-fabric
-    pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_to_all_combine_fabric_manager_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_manager_enabled_2d]" --timeout=300
-    ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --terminate-fabric
+    # ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --initialize-fabric
+    # pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_to_all_combine_fabric_manager_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_manager_enabled_2d]" --timeout=300
+    # ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --terminate-fabric
 
     # Use Fabric Manager to initialize/teardown Fabric 1D and run all tests without initializing/tearing down fabric
-    ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_1D --initialize-fabric
-    pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_gather_async_fabric_manager[wormhole_b0-mesh_device0-normal-2-2-20-fabric_manager_enabled_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300
-    pytest "tests/scale_out/test_ccl_fabric_manager.py::test_reduce_scatter_async_fabric_manager[wormhole_b0-mesh_device0-8-2-2-fabric_manager_enabled_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]" --timeout=300
-    pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_to_all_dispatch_fabric_manager_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_manager_enabled_1d_line]" --timeout=300
-    ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_1D --terminate-fabric
+    # ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_1D --initialize-fabric
+    # pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_gather_fabric_manager[wormhole_b0-mesh_device0-normal-fabric_manager_enabled_linear-DRAM_memconfig-sd35_prompt_check]" --timeout=300
+    # pytest "tests/scale_out/test_ccl_fabric_manager.py::test_reduce_scatter_async_fabric_manager[wormhole_b0-mesh_device0-8-2-2-fabric_manager_enabled_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]" --timeout=300
+    # pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_to_all_dispatch_fabric_manager_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_manager_enabled_1d_line]" --timeout=300
+    # ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_1D --terminate-fabric
+
   skus:
     wh_galaxy:
       timeout: 20

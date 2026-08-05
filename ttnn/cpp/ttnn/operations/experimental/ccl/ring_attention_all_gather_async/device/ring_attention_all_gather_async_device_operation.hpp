@@ -21,7 +21,7 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
 
     using tensor_args_t = RingAttentionAllGatherAsyncInputs;
 
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
     using tensor_return_value_t = std::vector<Tensor>;
 
@@ -33,9 +33,6 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
 std::tuple<RingAttentionAllGatherAsyncParams, RingAttentionAllGatherAsyncInputs>

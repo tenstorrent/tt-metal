@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from itertools import product
 
 import torch
@@ -22,19 +23,34 @@ class WarmupForwardMixin:
     - self.decode_forward(): method to perform decode forward pass
     """
 
-    def _create_sampling_params(self, can_sample_on_device, non_greedy_decoding_on_device, batch_size):
+    def _create_sampling_params(self, can_sample_on_device, batch_size, greedy_only: bool = False):
         """
-        non_greedy_decoding_on_device: when True, device supports non-greedy sampling (temperature,
-        top_k, top_p, presence/frequency/repetition penalties, log_probs); warmup then includes
-        those configs. When False, only greedy decoding is warmed up (temperature=0.0, top_k=1, top_p=1.0).
+        greedy_only: when True, warmup only covers greedy decoding on device (temperature=0.0,
+        top_k=1, top_p=1.0). When False (the default), warmup also exercises non-greedy variants
+        — temperature/top_k/top_p, presence/frequency/repetition penalties, and log_probs.
         """
         if not can_sample_on_device:
             return [None]
 
         sampling_configs = []
 
-        if non_greedy_decoding_on_device:
-            for penalties, log_probs in product([True, False], repeat=2):
+        if not greedy_only:
+            # Full warmup pre-captures every penalties × log_probs permutation so
+            # no on-device-sampling request ever pays a one-time trace-capture
+            # cost on first use. Each permutation is a *separate resident trace*,
+            # though, and for large MoE models the combined trace region can run
+            # into the gigabytes (e.g. Gemma4-26B-A4B). ``TT_LEAN_DECODE_WARMUP``
+            # restricts the sweep to the plain (no-penalty, no-logprob) sampling
+            # config — what a throughput benchmark with default sampling actually
+            # exercises — trading a one-time runtime capture for the rarer
+            # penalty/logprob request shapes in exchange for a much smaller trace
+            # region. Greedy and ``None`` are still captured below.
+            if os.environ.get("TT_LEAN_DECODE_WARMUP"):
+                penalty_logprob_combos = [(False, False)]
+            else:
+                penalty_logprob_combos = list(product([True, False], repeat=2))
+
+            for penalties, log_probs in penalty_logprob_combos:
                 presence_penalty, frequency_penalty, repetition_penalty = None, None, None
 
                 if penalties:
@@ -85,15 +101,13 @@ class WarmupForwardMixin:
         max_batch_size,
         num_blocks,
         can_sample_on_device,
-        non_greedy_decoding_on_device,
         read_from_device=True,
+        greedy_only: bool = False,
     ):
         """
         This function is called by vLLM
         """
-        sampling_params = self._create_sampling_params(
-            can_sample_on_device, non_greedy_decoding_on_device, max_batch_size
-        )
+        sampling_params = self._create_sampling_params(can_sample_on_device, max_batch_size, greedy_only=greedy_only)
 
         tokens, start_pos, page_table = self._create_decode_warmup_inputs(max_batch_size, num_blocks)
 

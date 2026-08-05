@@ -56,6 +56,7 @@ ttnn::Tensor create_group_norm_input_mask_impl(
     const int64_t num_cols_per_group = num_channel / num_groups;
 
     std::vector<int64_t> start_strides;
+    start_strides.reserve(num_cores_across_channel * num_groups_per_core);
     for (int64_t core = 0; core < num_cores_across_channel; ++core) {
         int64_t row_offset = 0;
         start_strides.push_back(0);
@@ -83,17 +84,18 @@ ttnn::Tensor create_group_norm_input_mask_impl(
     for (int64_t group = 0; group < out_num_groups; ++group) {
         int64_t start_stride = start_strides[group];
         int64_t end_stride = std::min(end_strides[group], out_mask_width);
+        const int64_t group_base = group * out_tile_height * out_mask_width;
         for (int64_t h = 0; h < out_tile_height; ++h) {
+            const int64_t row_base = group_base + (h * out_mask_width);
             for (int64_t w = start_stride; w < end_stride; ++w) {
-                int64_t idx = (group * out_tile_height * out_mask_width) + (h * out_mask_width) + w;
-                mask_vec[idx] = mask_value;
+                mask_vec[row_base + w] = mask_value;
             }
         }
     }
     // create ttnn::Tensor from mask_vec
     const ttnn::Shape tensor_shape{1, out_num_groups, out_tile_height, out_mask_width};
     const tt::tt_metal::TensorLayout tensor_layout(data_type, Layout::TILE, ttnn::DRAM_MEMORY_CONFIG);
-    const ttnn::TensorSpec tensor_spec(tensor_shape, tensor_layout);
+    const tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
     ttnn::Tensor mask = ttnn::Tensor::from_vector(
         mask_vec,
         tensor_spec,

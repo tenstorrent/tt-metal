@@ -7,10 +7,11 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
+#include "cmath_common.h"
 
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_log.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -34,7 +35,7 @@ inline void calculate_lgamma_stirling() {
         sfpi::vFloat res = ((z - 0.5f) * _calculate_log_body_no_init_(z) - z + LOG_SQRT_2PI);
 
         // 3. Bernoulli correction: (1/z)(r0 + r1/z^2).
-        sfpi::vFloat inv_z = _sfpu_reciprocal_<2>(z);
+        sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
         sfpi::vFloat correction = inv_z * (r0 + (inv_z * inv_z) * r1);
         res = res + correction;
 
@@ -45,7 +46,7 @@ inline void calculate_lgamma_stirling() {
         // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
 
         if constexpr (!is_fp32_dest_acc_en) {
-            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[0] = res;
@@ -78,7 +79,7 @@ inline void calculate_lgamma_adjusted(
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         } else {
             sfpi::vInt exp = sfpi::exexp(in);
             sfpi::vInt man = sfpi::exman(in);
@@ -144,7 +145,7 @@ inline void calculate_lgamma_stirling_fp32(
         v_else {
             // Stirling base + Bernoulli correction
             res = ((z - 0.5f) * log_z - z + LOG_SQRT_2PI);
-            sfpi::vFloat inv_z = _sfpu_reciprocal_<2>(z);
+            sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
             sfpi::vFloat inv_z2 = (inv_z * inv_z);
             // Bernoulli correction: r0 + inv_z2 * (inv_z2 * (r2 + inv_z2 * r3) + r1);
             sfpi::vFloat correction = PolynomialEvaluator::eval(inv_z2, r0, r1, r2, r3);
@@ -164,7 +165,8 @@ inline void calculate_lgamma_stirling_fp32(
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void lgamma_stirling_init() {
-    // init for _sfpu_reciprocal_<2> for Blackhole
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    // init for sfpu_reciprocal_iter<2> for Blackhole
     sfpi::vConstFloatPrgm0 = 2.0f;
 }
 

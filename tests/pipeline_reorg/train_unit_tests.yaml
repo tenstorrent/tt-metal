@@ -1,0 +1,59 @@
+# Test matrix for unit tests
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#
+# For max allowed timeout refer to .github/time_budget.yaml.
+
+- name: tt-train cpp nightly unit tests
+  # ENABLE_NIGHTLY_TT_TRAIN_TESTS is inlined in cmd.
+  cmd: |
+    mkdir -p generated/test_reports
+    ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter=*NIGHTLY_*
+  skus:
+    wh_n150_civ2:
+      timeout: 40
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+# Non-nightly unit tests
+- name: tt-train cpp non-nightly unit tests
+  cmd: |
+    mkdir -p generated/test_reports
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
+  skus:
+    # wh_n150_civ2 is used for smoke test
+    wh_n300_civ2:
+      timeout: 30
+    bh_p100:
+      timeout: 30
+    bh_p150b_civ2:
+      timeout: 30
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: tt-train python unit tests
+  cmd: python -m pytest tt-train/tests/python
+  skus:
+    wh_n150_civ2:
+      timeout: 20
+    wh_n300_civ2:
+      timeout: 20
+    bh_p100:
+      timeout: 20
+    bh_p150b_civ2:
+      timeout: 20
+  owner_id: U07K00A281X # Kevin Wu
+  team: train

@@ -125,8 +125,7 @@ Result conv2d_L1(
             input_tensor.layout(),
             input_tensor.dtype(),
             output_dtype,
-            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                         : std::nullopt,
+            ttnn::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config()) : std::nullopt,
             kernel_size,
             stride,
             dilation,
@@ -158,8 +157,15 @@ Result conv2d_L1(
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
-    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
-        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, bias_tensor.has_value());
+    const bool conv_is_1d_depthwise =
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, bias_tensor.has_value());
+    const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
+        conv_is_1d_depthwise,
+        parallel_config.shard_scheme,
+        in_channels_padded,
+        kernel_size[1],
+        dilation[1],
+        input_tensor_post_tm.dtype());
 
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
@@ -173,7 +179,8 @@ Result conv2d_L1(
         output_width,
         kernel_size,
         compute_grid_size,
-        conv_is_1d_depthwise);
+        conv_is_1d_depthwise,
+        coalesce_1d_depthwise_kw_reads);
 
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
@@ -196,6 +203,7 @@ Result conv2d_L1(
         conv_config.enable_kernel_stride_folding.value(),
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
+        coalesce_1d_depthwise_kw_reads,
         orig_stride);
 
     // Prepare weights and move to device if necessary
@@ -246,7 +254,7 @@ Result conv2d_L1(
     }
 
     // call conv op or matmul micro op
-    bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor_post_tm);
+    bool input_is_on_device = ttnn::is_device_tensor(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
 
     if (!mm_conv) {
@@ -815,7 +823,7 @@ Result conv2d_DRAM(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
 
-    ttnn::Tensor dram_output_tensor = tt::tt_metal::create_device_tensor(
+    ttnn::Tensor dram_output_tensor = ttnn::create_device_tensor(
         tt::tt_metal::TensorSpec(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
             tt::tt_metal::TensorLayout(

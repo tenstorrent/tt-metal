@@ -122,13 +122,22 @@ jobs:
                             Path("reports/wormhole/ttsim-version")):
               if candidate.is_file():
                   for line in candidate.read_text().splitlines():
-                      m = re.match(r"ttsim_version=['\"]?([\w.]+)['\"]?", line.strip())
+                      m = re.match(r"ttsim_version=['\"]?([\w.-]+)['\"]?", line.strip())
                       if m:
                           TTSIM_VERSION = m.group(1)
                           break
-                  break
+                  if TTSIM_VERSION != "unknown":
+                      break
 
-          def summarize(xml_path: Path):
+          def read_enumerated(enum_path: Path):
+              # The regression job stages a tiny count file next to the XML
+              # holding how many tests pytest --collect-only enumerated.
+              try:
+                  return int(enum_path.read_text().strip())
+              except (ValueError, OSError):
+                  return None
+
+          def summarize(xml_path: Path, enum_path: Path):
               if not xml_path.is_file():
                   return None
               root = ET.parse(xml_path).getroot()
@@ -138,28 +147,45 @@ jobs:
                   total   += int(s.attrib.get("tests",    0) or 0)
                   failed  += int(s.attrib.get("failures", 0) or 0)
                   skipped += int(s.attrib.get("skipped",  0) or 0)
-              passed = max(total - failed - skipped, 0)
-              pct = (100.0 * passed / total) if total else 0.0
-              return dict(total=total, passed=passed, failed=failed,
-                          skipped=skipped, pass_pct=pct)
+              # "finished" = testcases recorded in the XML; "crashed" =
+              # enumerated − finished (collected but never reported because the
+              # worker died first). enumerated may be unavailable on older runs.
+              finished = total
+              enumerated = read_enumerated(enum_path)
+              crashed = max(enumerated - finished, 0) if enumerated is not None else None
+              # Include crashed tests in the denominator to match the HTML report's
+              # treatment of crashed tests as non-passing (render_ttsim_report.py:341-345).
+              ran = max(total - skipped, 0)
+              if crashed is not None and crashed > 0:
+                  ran += crashed
+              passed = max(ran - failed - (crashed or 0), 0)
+              pct = (100.0 * passed / ran) if ran else 0.0
+              return dict(total=total, ran=ran, passed=passed, failed=failed,
+                          skipped=skipped, pass_pct=pct, finished=finished,
+                          enumerated=enumerated, crashed=crashed)
 
           archs = [
-              ("Blackhole", Path("reports/blackhole/ttsim-blackhole.xml")),
-              ("Wormhole",  Path("reports/wormhole/ttsim-wormhole.xml")),
+              ("Blackhole", Path("reports/blackhole/ttsim-blackhole.xml"),
+                            Path("reports/blackhole/ttsim-blackhole.enumerated")),
+              ("Wormhole",  Path("reports/wormhole/ttsim-wormhole.xml"),
+                            Path("reports/wormhole/ttsim-wormhole.enumerated")),
           ]
 
           lines = []
-          for label, xml in archs:
-              s = summarize(xml)
+          for label, xml, enum in archs:
+              s = summarize(xml, enum)
               if s is None:
                   lines.append(f"• *{label}*: no report produced (infra error — see run logs).")
               else:
+                  crashed_txt = "n/a" if s["crashed"] is None else str(s["crashed"])
                   lines.append(
                       f"• *{label}*: "
-                      f"✅ {s['passed']}/{s['total']} passing "
+                      f"✅ {s['passed']}/{s['ran']} passing "
                       f"({s['pass_pct']:.1f}%) · "
                       f"❌ {s['failed']} failed · "
-                      f"⏩ {s['skipped']} skipped"
+                      f"⏩ {s['skipped']} skipped · "
+                      f"🏁 {s['finished']} finished · "
+                      f"💥 {crashed_txt} crashed"
                   )
 
           header = f"📊 *LLK ttsim weekly digest (v{TTSIM_VERSION})* 📊"
@@ -190,7 +216,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Send Slack digest
-        uses: slackapi/slack-github-action@v2.1.1
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           method: chat.postMessage
           token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}

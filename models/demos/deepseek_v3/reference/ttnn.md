@@ -154,7 +154,7 @@ Looks up embeddings from weight table using input token IDs. Used for token embe
 
 ## Sampling and Output Operations
 
-### `ttnn.argmax(tensor, dim, keepdim=False, use_multicore=False, output_tensor=None)`
+### `ttnn.argmax(tensor, dim, keepdim=False, output_tensor=None)`
 Finds indices of maximum values along specified dimension. Used for greedy decoding on device.
 
 ### `ttnn.concat(tensors, dim, memory_config=None)`

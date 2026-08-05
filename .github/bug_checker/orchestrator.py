@@ -12,10 +12,15 @@ from .logger import logger
 from .output import (
     format_pr_comment,
     format_summary_comment,
+    print_failure,
     print_findings,
     write_sarif,
 )
 from .rules import Rule, load_rules, select_rules
+
+
+class BugCheckFailed(RuntimeError):
+    """Raised when bug checker analysis is incomplete and must fail closed."""
 
 
 def run_bug_check(
@@ -34,6 +39,7 @@ def run_bug_check(
         List of all findings.
     """
     all_rules = load_rules()
+    rule_paths = _rule_paths(all_rules)
     matched_rules = select_rules(all_rules, pr_info.changed_files, pr_info.labels)
 
     if not matched_rules:
@@ -46,34 +52,36 @@ def run_bug_check(
             )
         return []
 
-    logger.info(
-        f"Matched {len(matched_rules)} rule(s): "
-        f"{', '.join(r.id for r in matched_rules)}"
-    )
+    logger.info(f"Matched {len(matched_rules)} rule(s): " f"{', '.join(r.id for r in matched_rules)}")
 
     # Preflight: verify LLM is configured before entering the per-rule loop.
-    # This is intentionally fail-closed for hard config errors (missing API key,
-    # missing anthropic package). Silently skipping every rule on a config error
-    # would give a false "no findings" result. The fail-open policy applies to
-    # per-rule runtime errors only (e.g. transient API failures).
-    LLMSession()
+    # Hard config errors must fail closed; otherwise a broken setup can look like
+    # a clean "no findings" result.
+    try:
+        LLMSession()
+    except Exception as e:
+        failed_rules = [rule.id for rule in matched_rules]
+        logger.exception("Bug Checker failed during LLM setup")
+        print_failure("Bug Checker failed during LLM setup", failed_rules)
+        if sarif_path:
+            write_sarif([], failed_rules, sarif_path)
+            logger.info(f"SARIF output written to {sarif_path}")
+        if post_comments:
+            _post_findings_as_comments(pr_info, [], failed_rules, [], rule_paths)
+        raise BugCheckFailed("Bug Checker failed during LLM setup") from e
 
     all_findings: list[Finding] = []
     rules_used: list[str] = []
-    skipped_rules: list[str] = []
+    failed_rules: list[str] = []
     truncated_rules: list[str] = []
     truncated_file_set = set(pr_info.truncated_files)
 
     for rule in matched_rules:
         rules_used.append(rule.id)
         try:
-            filtered_diff = _filter_diff_for_rule(
-                pr_info.diff, pr_info.changed_files, rule
-            )
+            filtered_diff = _filter_diff_for_rule(pr_info.diff, pr_info.changed_files, rule)
             if not filtered_diff:
-                matched_truncated = {
-                    f for f in pr_info.changed_files if rule.matches_pr([f], [])
-                } & truncated_file_set
+                matched_truncated = {f for f in pr_info.changed_files if rule.matches_pr([f], [])} & truncated_file_set
                 if matched_truncated:
                     truncated_rules.append(rule.id)
                     logger.warning(
@@ -81,9 +89,7 @@ def run_bug_check(
                         f"analysis skipped: {', '.join(sorted(matched_truncated))}"
                     )
                 else:
-                    logger.info(
-                        f"Rule {rule.id}: no matching diff sections — skipping LLM call"
-                    )
+                    logger.info(f"Rule {rule.id}: no matching diff sections — skipping LLM call")
                 continue
             session = LLMSession(model=rule.model or "")
             findings = session.analyze_rule(
@@ -96,13 +102,12 @@ def run_bug_check(
             all_findings.extend(findings)
             logger.info(f"Rule {rule.id}: {len(findings)} finding(s)")
         except Exception:
-            skipped_rules.append(rule.id)
-            logger.exception(f"Rule {rule.id} failed — skipping")
+            failed_rules.append(rule.id)
+            logger.exception(f"Rule {rule.id} failed")
 
-    if skipped_rules:
-        logger.warning(
-            f"{len(skipped_rules)} rule(s) skipped due to errors: "
-            f"{', '.join(skipped_rules)}. Results may be incomplete."
+    if failed_rules:
+        logger.error(
+            f"{len(failed_rules)} rule(s) failed during LLM analysis: " f"{', '.join(failed_rules)}. Failing the check."
         )
     if truncated_rules:
         logger.warning(
@@ -111,7 +116,12 @@ def run_bug_check(
         )
 
     # Output: CLI
-    print_findings(all_findings)
+    if all_findings:
+        print_findings(all_findings)
+    elif failed_rules:
+        print_failure("Bug Checker failed because one or more LLM analyses did not complete", failed_rules)
+    else:
+        print_findings([])
 
     # Output: SARIF
     if sarif_path:
@@ -120,8 +130,11 @@ def run_bug_check(
 
     # Output: PR comments
     if post_comments:
-        _post_findings_as_comments(
-            pr_info, all_findings, skipped_rules, truncated_rules
+        _post_findings_as_comments(pr_info, all_findings, failed_rules, truncated_rules, rule_paths)
+
+    if failed_rules:
+        raise BugCheckFailed(
+            "Bug Checker failed because one or more LLM analyses did not complete: " + ", ".join(failed_rules)
         )
 
     return all_findings
@@ -182,6 +195,7 @@ def check_rule_command(
 ) -> list[Finding]:
     """Run a single named rule against the PR. Error if rule not found."""
     all_rules = load_rules()
+    rule_paths = _rule_paths(all_rules)
     rule = next((r for r in all_rules if r.id == rule_id), None)
     if rule is None:
         available = ", ".join(r.id for r in all_rules)
@@ -196,7 +210,17 @@ def check_rule_command(
 
     logger.info(f"Running single rule: {rule.id}")
 
-    LLMSession()  # Preflight check
+    try:
+        LLMSession()  # Preflight check
+    except Exception as e:
+        logger.exception("Bug Checker failed during LLM setup")
+        print_failure("Bug Checker failed during LLM setup", [rule.id])
+        if sarif_path:
+            write_sarif([], [rule.id], sarif_path)
+            logger.info(f"SARIF output written to {sarif_path}")
+        if post_comments:
+            _post_findings_as_comments(pr_info, [], [rule.id], [], rule_paths)
+        raise BugCheckFailed("Bug Checker failed during LLM setup") from e
 
     filtered_diff = _filter_diff_for_rule(pr_info.diff, pr_info.changed_files, rule)
     if not filtered_diff:
@@ -206,20 +230,30 @@ def check_rule_command(
             post_pr_comment(pr_number=pr_info.number, body=f"## Bug Checker\n{msg}")
         return []
 
-    session = LLMSession(model=rule.model or "")
-    findings = session.analyze_rule(
-        rule_content=rule.content,
-        rule_id=rule.id,
-        severity=rule.severity,
-        suggest_fix=rule.suggest_fix,
-        diff=filtered_diff,
-    )
+    try:
+        session = LLMSession(model=rule.model or "")
+        findings = session.analyze_rule(
+            rule_content=rule.content,
+            rule_id=rule.id,
+            severity=rule.severity,
+            suggest_fix=rule.suggest_fix,
+            diff=filtered_diff,
+        )
+    except Exception as e:
+        logger.exception(f"Rule {rule.id} failed")
+        print_failure(f"Bug Checker failed while running rule {rule.id}", [rule.id])
+        if sarif_path:
+            write_sarif([], [rule.id], sarif_path)
+            logger.info(f"SARIF output written to {sarif_path}")
+        if post_comments:
+            _post_findings_as_comments(pr_info, [], [rule.id], [], rule_paths)
+        raise BugCheckFailed(f"Bug Checker failed while running rule {rule.id}") from e
 
     print_findings(findings)
     if sarif_path:
         write_sarif(findings, [rule.id], sarif_path)
     if post_comments:
-        _post_findings_as_comments(pr_info, findings, [], [])
+        _post_findings_as_comments(pr_info, findings, [], [], rule_paths)
 
     return findings
 
@@ -285,16 +319,12 @@ def _format_dry_run(
 
         lines.append(f"### `{rule.id}` ({rule.severity})")
         lines.append(f"- **Match reason:** {reason}")
-        lines.append(
-            f"- **Diff sections:** {len(diff_files)} file(s), {diff_line_count} line(s)"
-        )
+        lines.append(f"- **Diff sections:** {len(diff_files)} file(s), {diff_line_count} line(s)")
         if diff_files:
             for f in sorted(diff_files):
                 lines.append(f"  - `{f}`")
         else:
-            lines.append(
-                "  - (no diff sections — rule matched by label only or all matched files were truncated)"
-            )
+            lines.append("  - (no diff sections — rule matched by label only or all matched files were truncated)")
         lines.append("")
 
     if unmatched:
@@ -307,11 +337,17 @@ def _format_dry_run(
     return "\n".join(lines)
 
 
+def _rule_paths(rules: list[Rule]) -> dict[str, str]:
+    """Return rule-id to markdown path links for PR comments."""
+    return {rule.id: f".github/bug_checker/rules/{rule.file}" for rule in rules}
+
+
 def _post_findings_as_comments(
     pr_info: PRInfo,
     findings: list[Finding],
-    skipped_rules: list[str],
+    failed_rules: list[str],
     truncated_rules: list[str],
+    rule_paths: dict[str, str],
 ) -> None:
     """Post findings as PR comments (inline where valid, general otherwise) plus a summary."""
     valid_diff_lines = diff_line_numbers(pr_info.diff)
@@ -322,7 +358,7 @@ def _post_findings_as_comments(
 
     for finding in findings or []:
         line_in_diff = finding.line in valid_diff_lines.get(finding.file, set())
-        body = format_pr_comment(finding)
+        body = format_pr_comment(finding, rule_path=rule_paths.get(finding.rule_id))
         try:
             if line_in_diff:
                 post_pr_comment(
@@ -342,20 +378,16 @@ def _post_findings_as_comments(
                 general_posted += 1
         except Exception as e:
             failed += 1
-            logger.warning(
-                f"Failed to post comment for {finding.rule_id} at {finding.file}:{finding.line}: {e}"
-            )
+            logger.warning(f"Failed to post comment for {finding.rule_id} at {finding.file}:{finding.line}: {e}")
 
-    logger.info(
-        f"Comments: {inline_posted} inline, {general_posted} general, {failed} failed"
-    )
+    logger.info(f"Comments: {inline_posted} inline, {general_posted} general, {failed} failed")
 
     # Post summary comment
     try:
         summary = format_summary_comment(
             findings,
             comment_failures=failed,
-            skipped_rules=skipped_rules,
+            failed_rules=failed_rules,
             truncated_rules=truncated_rules,
         )
         post_pr_comment(pr_number=pr_info.number, body=summary)

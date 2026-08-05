@@ -6,6 +6,7 @@ import pytest
 
 import ttnn
 from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -26,7 +27,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 10000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_repeat(mesh_device, shape, repeat_shape, dtype, mem_config, layout, enable_trace):
     torch_input = random_torch_tensor(dtype, shape)

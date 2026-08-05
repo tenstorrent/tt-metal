@@ -13,7 +13,7 @@ import sys
 sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
 
 import ttml
-from ttml.common.config import get_config, DeviceConfig, TrainingConfig
+from ttml.common.config import load_config, DeviceConfig, TrainingConfig
 from ttml.common.utils import set_seed, initialize_device, create_optimizer
 from ttml.common.model_factory import TransformerModelFactory
 import click
@@ -31,7 +31,7 @@ def main(config: str):
         config: Path to YAML configuration file (relative to configs directory)
     """
     # Load configuration and set seed
-    yaml_config = get_config(config)
+    yaml_config = load_config(config)
     set_seed(yaml_config["training_config"].get("seed", 42))
 
     # Prepare data

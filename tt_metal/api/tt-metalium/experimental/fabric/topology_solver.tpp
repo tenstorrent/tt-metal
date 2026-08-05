@@ -95,12 +95,11 @@ void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name, 
     }
     degree_hist_str += "}";
 
-    // Always print histogram and summary in log_info
     std::stringstream summary_ss;
     summary_ss << "\n=== " << graph_name << " Adjacency Map ===" << std::endl;
     summary_ss << "Total nodes: " << nodes_cache_.size() << std::endl;
     summary_ss << "Degree histogram: " << degree_hist_str << std::endl;
-    log_info(tt::LogFabric, "{}", summary_ss.str());
+    log_trace(tt::LogFabric, "{}", summary_ss.str());
 
     // Print node details based on mode
     std::stringstream nodes_ss;
@@ -127,7 +126,7 @@ void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name, 
     if (quiet_mode) {
         log_debug(tt::LogFabric, "{}", nodes_ss.str());
     } else {
-        log_info(tt::LogFabric, "{}", nodes_ss.str());
+        log_trace(tt::LogFabric, "{}", nodes_ss.str());
     }
 }
 
@@ -318,6 +317,13 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes) {
+    if (target_nodes.empty() || global_nodes.empty()) {
+        return false;
+    }
+    if (target_nodes.size() > global_nodes.size()) {
+        return false;
+    }
+
     // Save current state before modifying (for rollback if validation fails)
     std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     for (const auto& target_node : target_nodes) {
@@ -326,24 +332,13 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
             (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
     }
 
-    // For each target node, ensure it can map to any of the global nodes
-    // This creates a many-to-many relationship: any target can map to any global
+    // Each target in the group may map only to globals in global_nodes (intersect with existing).
     for (const auto& target_node : target_nodes) {
         if (valid_mappings_[target_node].empty()) {
-            // First constraint: initialize with the provided set of global nodes
             valid_mappings_[target_node] = global_nodes;
         } else {
-            // Intersect with existing constraints to ensure compatibility
-            // This allows the target to map to any global node that satisfies both
-            // the existing constraints and the new many-to-many constraint
             valid_mappings_[target_node] = intersect_sets(valid_mappings_[target_node], global_nodes);
         }
-    }
-
-    // Track that these global nodes are reserved for these target nodes via many-to-many constraint
-    // This allows us to enforce that nodes not in the constraint cannot map to these global nodes
-    for (const auto& global_node : global_nodes) {
-        reserved_global_nodes_[global_node].insert(target_nodes.begin(), target_nodes.end());
     }
 
     // Validate automatically and return false if invalid (will restore saved_state on failure)
@@ -527,7 +522,7 @@ void MappingConstraints<TargetNode, GlobalNode>::print_mapping_constraint_maps(
     summary_ss << "Forbidden pairs: " << forbidden_pairs_.size() << std::endl;
     summary_ss << "Cardinality constraints: " << cardinality_constraints_.size() << std::endl;
     summary_ss << "Same-rank target groups: " << same_rank_target_groups_.size() << std::endl;
-    log_info(tt::LogFabric, "{}", summary_ss.str());
+    log_trace(tt::LogFabric, "{}", summary_ss.str());
 
     std::stringstream detail_ss;
     detail_ss << "\n--- Valid (required) mappings ---" << std::endl;
@@ -2066,7 +2061,7 @@ void ConstraintIndexData<TargetNode, GlobalNode>::print_resolved_mapping_constra
     std::stringstream summary_ss;
     summary_ss << "\n=== " << label << " (indexed, resolved) ===" << std::endl;
     summary_ss << "Targets: " << graph_data.n_target << ", Globals: " << graph_data.n_global << std::endl;
-    log_info(tt::LogFabric, "{}", summary_ss.str());
+    log_trace(tt::LogFabric, "{}", summary_ss.str());
 
     std::stringstream detail_ss;
     detail_ss << "\n--- Per-target valid / forbidden / preferred (resolved to global nodes) ---" << std::endl;

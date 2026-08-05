@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -34,12 +34,14 @@ void kernel_main() {
     const auto y_in = TensorAccessor(y_args, y_addr);
     const auto dy_in = TensorAccessor(dy_args, dy_addr);
 
-    generate_bcast_scaler(cb_scaler, scaler);
-    generate_mask_h(cb_mask, mask_h);
+    DataflowBuffer dfb_scaler_obj(cb_scaler);
+    DataflowBuffer dfb_mask_obj(cb_mask);
+    generate_bcast_scaler(dfb_scaler_obj, scaler);
+    generate_mask_h(dfb_mask_obj, mask_h);
 
     Noc noc;
-    CircularBuffer cb_y_obj(cb_y);
-    CircularBuffer cb_dy_obj(cb_dy);
+    DataflowBuffer dfb_y_obj(cb_y);
+    DataflowBuffer dfb_dy_obj(cb_dy);
     const auto y_tile_bytes = get_tile_size(cb_y);
     const auto dy_tile_bytes = get_tile_size(cb_dy);
 
@@ -50,16 +52,16 @@ void kernel_main() {
         uint32_t tile_idx = nc_idx * Ht * Wt + w_idx;
         for (uint32_t h = 0; h < Ht; h++) {
 #ifndef LOG
-            cb_y_obj.reserve_back(onetile);
-            noc.async_read(y_in, cb_y_obj, y_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+            dfb_y_obj.reserve_back(onetile);
+            noc.async_read(y_in, dfb_y_obj, y_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_y_obj.push_back(onetile);
+            dfb_y_obj.push_back(onetile);
 #endif
 
-            cb_dy_obj.reserve_back(onetile);
-            noc.async_read(dy_in, cb_dy_obj, dy_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+            dfb_dy_obj.reserve_back(onetile);
+            noc.async_read(dy_in, dfb_dy_obj, dy_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_dy_obj.push_back(onetile);
+            dfb_dy_obj.push_back(onetile);
 
             tile_idx += Wt;
         }
@@ -68,15 +70,15 @@ void kernel_main() {
         nc_idx = curr_tile / Wt;
         tile_idx = nc_idx * Ht * Wt + w_idx;
         for (uint32_t h = 0; h < Ht; h++) {
-            cb_y_obj.reserve_back(onetile);
-            noc.async_read(y_in, cb_y_obj, y_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+            dfb_y_obj.reserve_back(onetile);
+            noc.async_read(y_in, dfb_y_obj, y_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_y_obj.push_back(onetile);
+            dfb_y_obj.push_back(onetile);
 
-            cb_dy_obj.reserve_back(onetile);
-            noc.async_read(dy_in, cb_dy_obj, dy_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
+            dfb_dy_obj.reserve_back(onetile);
+            noc.async_read(dy_in, dfb_dy_obj, dy_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_dy_obj.push_back(onetile);
+            dfb_dy_obj.push_back(onetile);
 
             tile_idx += Wt;
         }

@@ -48,12 +48,13 @@ ALWI void process_tile(
     CircularBuffer exp_cb_post_other(CB_POST_OTHER);
 
     binary_op_init_common(cb_left, cb_right, cb_out);
-    PREPROCESS(BCAST_OP, CB_PRE_BCAST, CB_POST_BCAST, cb_out, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
     exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_cb_raw_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+        pack_reconfig_data_format(cb_out, cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(cb_raw_other, cb_llk_post);
 
         tile_regs_acquire();
@@ -71,7 +72,7 @@ ALWI void process_tile(
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 #endif
 
-        PREPROCESS(OTHER_OP, cb_llk_post, CB_POST_OTHER, cb_out, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, CircularBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);
 
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
@@ -120,7 +121,7 @@ void kernel_main() {
 #endif
 
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;

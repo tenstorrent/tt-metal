@@ -228,7 +228,7 @@ def run_test_forward_pass(
     assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.975)
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": get_fabric_config()}], indirect=True)
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
@@ -276,7 +276,7 @@ def test_forward_pass(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": get_fabric_config()}], indirect=True)
 @pytest.mark.parametrize(
     "MLPClass,module_path",
     [

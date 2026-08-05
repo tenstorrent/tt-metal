@@ -106,6 +106,26 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = MEM_RETRAIN_FORCE_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORR_CW)] = MEM_CORR_CW_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNCORR_CW)] = MEM_UNCORR_CW_ADDR;
+    // TX/RX queue counters live in boot_results.eth_live_status (see eth_fw_api.h). They have no
+    // fixed MEM_*_ADDR macro, so derive their addresses from the struct layout.
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TXQ0_RESEND_CNT)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, txq0_resend_cnt);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TXQ1_RESEND_CNT)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, txq1_resend_cnt);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TXQ2_RESEND_CNT)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, txq2_resend_cnt);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RXQ0_PKT_DROP)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, rxq0_pkt_drop);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RXQ1_PKT_DROP)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, rxq1_pkt_drop);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RXQ2_PKT_DROP)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
+        offsetof(eth_live_status_t, rxq2_pkt_drop);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = MEM_AERISC_FABRIC_ROUTER_STATE_BASE;
@@ -122,7 +142,7 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_ERISC_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(dprint_buf_msg_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(DevicePrintMemoryLayout);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     // TODO: this is wrong, need eth specific value. For now use same value as idle
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_ERISC_KERNEL_CONFIG_SIZE;
@@ -177,6 +197,8 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERISC0_RESET_PC)] = AERISC_RESET_PC;
     eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERISC1_RESET_PC)] = SUBORDINATE_AERISC_RESET_PC;
     eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::RISC_SOFT_RESET)] = RISCV_DEBUG_REG_SOFT_RESET_0;
+    eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERR_STAT)] =
+        ETH_CORE_A_ETH_CTRL_A_ERR_STAT_REG_ADDR;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;

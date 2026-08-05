@@ -58,16 +58,17 @@ from ttml.modules import AbstractModuleBase, ModuleList, Parameter
 from ttml.models.qwen3 import (
     Qwen3Config,
     Qwen3RMSNorm,
-    ConcatLastDim,
 )
 from model_qwen3 import linear
 from utils.memory import memory_snapshot
 from utils.checkpoint import checkpoint  # noqa: F401 — re-exported for callers
-from utils.param_utils import (
+from ttml.models.qwen3.weights import (
     unpermute_proj_rows,
     unpermute_norm_weights,
-    build_weight_mapping_distributed,
+    expected_fused_load_shape,
 )
+from ttml.common.utils import resolve_padded_load_shape
+from utils.param_utils import build_weight_mapping_distributed
 from utils.tensor_utils import (
     get_device,
     get_tp_size,
@@ -189,15 +190,17 @@ class DistributedQwen3Attention(AbstractModuleBase):
             has_bias=config.attention_bias,
             shard_dim=shard_dim,
         )
-        self.k_proj = ColumnParallelLinear(
+        # Fused KV projection (Llama-style), width 2*kv_out. Column-parallel shards
+        # the output rows contiguously across TP, and grouped_heads_creation splits
+        # each device's LOCAL kv width at its midpoint into [K_local | V_local]. For
+        # that to be correct the fused weight rows must be grouped PER SHARD as
+        # [K_shard0 | V_shard0 | K_shard1 | V_shard1 | ...], NOT the naive
+        # [all-K | all-V] (whose global midpoint would not line up with the local
+        # per-device midpoints for tp>1). The distributed loader builds that
+        # per-shard-interleaved layout; see build_weight_mapping_distributed.
+        self.kv_proj = ColumnParallelLinear(
             self.hidden_size,
-            kv_out,
-            has_bias=config.attention_bias,
-            shard_dim=shard_dim,
-        )
-        self.v_proj = ColumnParallelLinear(
-            self.hidden_size,
-            kv_out,
+            2 * kv_out,
             has_bias=config.attention_bias,
             shard_dim=shard_dim,
         )
@@ -235,25 +238,17 @@ class DistributedQwen3Attention(AbstractModuleBase):
         position_offset=0,
     ):
         q = self.q_proj(hidden_states)
-        k = self.k_proj(hidden_states)
-        v = self.v_proj(hidden_states)
-
-        q_shape, k_shape = q.shape(), k.shape()
-        B, S = q_shape[0], q_shape[2]
-
-        q = ttml.ops.reshape.reshape(q, [B, 1, S * self.num_local_heads, self.head_dim])
-        k = ttml.ops.reshape.reshape(k, [B, 1, S * self.num_local_kv_heads, self.head_dim])
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        q = ttml.ops.reshape.reshape(q, q_shape)
-        k = ttml.ops.reshape.reshape(k, k_shape)
-
-        kvs = ConcatLastDim.apply(k, v)
+        # Single fused KV matmul; already produces the per-device [K_local | V_local]
+        kvs = self.kv_proj(hidden_states)
         (
             query_heads,
             key_heads,
             value_heads,
         ) = ttml.ops.multi_head_utils.grouped_heads_creation(q, kvs, self.num_local_heads, self.num_local_kv_heads)
+
+        # Per-head QK-Norm, before RoPE (matches HF Qwen3 ordering). V is left unnormed.
+        query_heads = self.q_norm(query_heads)
+        key_heads = self.k_norm(key_heads)
 
         query_heads = ttml.ops.rope.rope(query_heads, self.rope_params, position_offset)
         key_heads = ttml.ops.rope.rope(key_heads, self.rope_params, position_offset)
@@ -490,8 +485,14 @@ def load_weights_from_hf_distributed(
     tp_size = get_tp_size(shard_dim)
     ttml_shapes = {name: list(ttml_params[name].shape()) for name in ttml_params}
 
-    def _prepare_and_transfer(hf_name, ttml_name):
-        """CPU prep + host-side tilize + device transfer (pipelined)."""
+    def _prepare_hf_weights(hf_name, ttml_name):
+        """CPU-only prep: returns (weight_np, shard_type) ready for transfer.
+
+        Device ops (from_numpy -> tilize / shard onto the mesh) are NOT
+        thread-safe on a single mesh device, so this runs the parallelizable
+        host work only; the actual device transfer happens serially on the
+        main thread (see loop below).
+        """
         if hf_name not in hf_state_dict:
             return None
         if ttml_name not in ttml_shapes:
@@ -506,38 +507,71 @@ def load_weights_from_hf_distributed(
                 weight = unpermute_proj_rows(weight, num_heads=tr[1])
             elif tr[0] == "unpermute_norm":
                 weight = unpermute_norm_weights(weight)
+            elif tr[0] == "combine_kv_tp":
+                # tr = ("combine_kv_tp", num_kv_heads, v_hf_name). Build the fused
+                # kv_proj weight (or bias) for ColumnParallel TP. ColumnParallel
+                # shards the output rows CONTIGUOUSLY across tp devices, and the
+                # on-device head split reads each device's LOCAL kv slice as
+                # [K_local | V_local]. So the global fused rows must be grouped
+                # PER SHARD -- [K_s0, V_s0, K_s1, V_s1, ...] -- NOT [all-K, all-V]:
+                # then contiguous chunk s = [K_shard_s | V_shard_s] lands on device
+                # s as exactly [K_local | V_local]. K carries the RoPE row-permute
+                # (like q_proj/k_proj); V is used as-is. At tp=1 this reduces to the
+                # plain [K | V] concat.
+                num_kv_heads, v_hf_name = tr[1], tr[2]
+                if v_hf_name not in hf_state_dict:
+                    return None
+                k_w = unpermute_proj_rows(weight, num_heads=num_kv_heads)
+                v_w = hf_state_dict[v_hf_name].float()
+                kv_out = k_w.shape[0]
+                assert kv_out % tp_size == 0, f"kv_out {kv_out} not divisible by tp {tp_size}"
+                per = kv_out // tp_size
+                if k_w.dim() == 2:  # weight [kv_out, hidden]
+                    k_blk = k_w.reshape(tp_size, per, k_w.shape[1])
+                    v_blk = v_w.reshape(tp_size, per, v_w.shape[1])
+                    # [tp, 2, per, hidden] -> row-major flatten -> K_s0,V_s0,K_s1,V_s1,...
+                    weight = torch.stack([k_blk, v_blk], dim=1).reshape(2 * kv_out, k_w.shape[1])
+                else:  # bias [kv_out]
+                    k_blk = k_w.reshape(tp_size, per)
+                    v_blk = v_w.reshape(tp_size, per)
+                    weight = torch.stack([k_blk, v_blk], dim=1).reshape(2 * kv_out)
 
         ttml_shape = ttml_shapes[ttml_name]
+        expected = expected_fused_load_shape(config, hf_name, tie_word_embeddings)
 
         if weight.dim() == 2:
-            rows, cols = weight.shape
+            # Reconstruct the GLOBAL tile-padded target (ttml_shape is per-device;
+            # the sharded dim is scaled back up by tp_size). Validate the (global)
+            # checkpoint shape against the config-implied logical shape and pad UP
+            # to the global target -- never crop -- via the shared policy helper.
             tgt_rows, tgt_cols = ttml_shape[2], ttml_shape[3]
             if st == "col_w":
                 tgt_rows *= tp_size
             elif st == "row_w":
                 tgt_cols *= tp_size
+            tgt_rows, tgt_cols = resolve_padded_load_shape(weight.shape, (tgt_rows, tgt_cols), expected, name=hf_name)
+            rows, cols = weight.shape
             if rows != tgt_rows or cols != tgt_cols:
                 padded = torch.zeros(tgt_rows, tgt_cols, dtype=weight.dtype)
-                padded[: min(rows, tgt_rows), : min(cols, tgt_cols)] = weight[
-                    : min(rows, tgt_rows), : min(cols, tgt_cols)
-                ]
+                padded[:rows, :cols] = weight  # pad-up only (helper guaranteed tgt >= src)
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0)
         elif weight.dim() == 1:
-            dim = weight.shape[0]
             tgt_dim = ttml_shape[-1]
             if st == "col_b":
                 tgt_dim *= tp_size
+            (tgt_dim,) = resolve_padded_load_shape(weight.shape, (tgt_dim,), expected, name=hf_name)
+            dim = weight.shape[0]
             if dim != tgt_dim:
                 padded = torch.zeros(tgt_dim, dtype=weight.dtype)
-                padded[: min(dim, tgt_dim)] = weight[: min(dim, tgt_dim)]
+                padded[:dim] = weight
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0).unsqueeze(0)
         else:
             raise ValueError(f"Unexpected weight dim {weight.dim()} for {hf_name}")
 
         weight_np = weight.contiguous().float().numpy()
-        return _load_tensor_distributed(weight_np, st, shard_dim, device)
+        return (weight_np, st)
 
     from concurrent.futures import ThreadPoolExecutor
 
@@ -545,9 +579,15 @@ def load_weights_from_hf_distributed(
     loaded = 0
     skipped = []
 
+    # Host prep (torch -> numpy) is parallelized across the pool; the device
+    # transfer (_load_tensor_distributed -> from_numpy tilize/shard) is
+    # serialized on the main thread because TTNN device ops on a single mesh
+    # device are not thread-safe (concurrent enqueue races the program-binary
+    # commit and trips the "Expected Program Binaries to be committed to DRAM"
+    # assert).
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [
-            (hf_name, ttml_name, pool.submit(_prepare_and_transfer, hf_name, ttml_name)) for hf_name, ttml_name in items
+            (hf_name, ttml_name, pool.submit(_prepare_hf_weights, hf_name, ttml_name)) for hf_name, ttml_name in items
         ]
 
         for hf_name, ttml_name, future in tqdm(
@@ -556,12 +596,14 @@ def load_weights_from_hf_distributed(
             desc="  Loading weights",
             unit="w",
         ):
-            new_tensor = future.result()
-            if new_tensor is None:
+            prepared = future.result()
+            if prepared is None:
                 if ttml_name not in ttml_shapes:
                     print(f"  WARNING: ttml param '{ttml_name}' not found for HF '{hf_name}'")
                 skipped.append(hf_name)
                 continue
+            weight_np, st = prepared
+            new_tensor = _load_tensor_distributed(weight_np, st, shard_dim, device)
             ttml_params[ttml_name].assign(new_tensor)
             loaded += 1
 

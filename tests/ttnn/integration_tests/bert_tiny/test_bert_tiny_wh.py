@@ -25,7 +25,7 @@ def test_bert_attention_inference(
     reset_seeds,
 ):
     model_name = str(model_location_generator("mrm8488/bert-tiny-finetuned-squadv2", model_subdir="Bert"))
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name)
 
     encoder_idx = 0
     pytorch_attention_model = hugging_face_reference_model.bert.encoder.layer[encoder_idx].attention
@@ -81,7 +81,7 @@ def test_bert_intermediate_inference(
     reset_seeds,
 ):
     model_name = str(model_location_generator("mrm8488/bert-tiny-finetuned-squadv2", model_subdir="Bert"))
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name)
 
     encoder_idx = 0
     pytorch_intermediate_model = hugging_face_reference_model.bert.encoder.layer[encoder_idx].intermediate
@@ -126,7 +126,7 @@ def test_bert_output_inference(
     reset_seeds,
 ):
     model_name = str(model_location_generator("mrm8488/bert-tiny-finetuned-squadv2", model_subdir="Bert"))
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name)
 
     encoder_idx = 0
     config = hugging_face_reference_model.config
@@ -182,7 +182,7 @@ def test_bert_layer_inference(
     reset_seeds,
 ):
     model_name = str(model_location_generator("mrm8488/bert-tiny-finetuned-squadv2", model_subdir="Bert"))
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name)
 
     encoder_idx = 0
     config = hugging_face_reference_model.config

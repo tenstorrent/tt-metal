@@ -41,7 +41,16 @@ ttnn::Tensor fused_subtract_exp_fp32(const ttnn::Tensor& a, const ttnn::Tensor& 
 }  // namespace
 
 autograd::TensorPtr vocab_parallel_cross_entropy_loss(
-    const autograd::TensorPtr& logits, const autograd::TensorPtr& targets, std::optional<uint32_t> cluster_axis) {
+    const autograd::TensorPtr& logits,
+    const autograd::TensorPtr& targets,
+    std::optional<uint32_t> cluster_axis,
+    ReduceType reduce) {
+    if (reduce != ReduceType::NONE && reduce != ReduceType::MEAN) {
+        throw std::logic_error(fmt::format(
+            "vocab_parallel_cross_entropy_loss: only NONE and MEAN reductions are supported. Got: {}",
+            enchantum::to_string(reduce)));
+    }
+
     const auto logits_shape = logits->get_value().logical_shape();
     const auto targets_shape = targets->get_value().logical_shape();
 
@@ -80,6 +89,10 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     const uint32_t S = logits_shape[2];
     const uint32_t local_V = logits_shape[3];
     const uint32_t N = B * S;
+    // For MEAN we fold 1/N into (softmax−onehot) so the upstream scalar grad
+    // multiplies through unchanged.  For NONE the upstream grad is the
+    // per-position [B,1,S,1] tensor itself, so no extra factor is needed.
+    const float inv_N = (reduce == ReduceType::MEAN) ? (1.0F / static_cast<float>(N)) : 1.0F;
 
     // Step 1: local max [B,1,S,1] per device (BF16 — no precision loss)
     auto local_max = ttnn::max(logits->get_value(), 3, /* keepdim */ true);
@@ -114,30 +127,48 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     // All-reduce to collect contributions from all TP shards  [B,1,S,1]
     auto target_logit = ttnn_fixed::distributed::all_reduce(gather_output, cluster_axis);
 
-    // Step 5: per-position loss = log_normalizer − target_logit  →  mean over B*S
-    // log_normalizer is FP32, target_logit is BF16 — output_dtype keeps subtraction in FP32.
+    // Step 5: per-position loss = log_normalizer − target_logit  [B,1,S,1].
+    // Always subtract in FP32. For MEAN we keep the FP32 tensor
+    // for the precise sum reductions; for NONE we typecast to BF16 to match
+    // the output dtype of the non-sharded ttml::ops::cross_entropy_loss.
     auto per_pos = ttnn::subtract(log_normalizer, target_logit, ttnn::DataType::FLOAT32);
-    auto s0 = ttnn::sum(per_pos, 0, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
-    auto s2 = ttnn::sum(s0, 2, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
-    // Transition back to BF16 to match the non-sharded cross_entropy_loss output type.
-    auto loss_val = ttnn::multiply(s2, 1.0F / static_cast<float>(N), ttnn::DataType::BFLOAT16);
+    ttnn::Tensor loss_val;
+    if (reduce == ReduceType::MEAN) {
+        auto s0 = ttnn::sum(per_pos, 0, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
+        auto s2 = ttnn::sum(s0, 2, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
+        loss_val = ttnn::multiply(s2, inv_N, ttnn::DataType::BFLOAT16);
+    } else {
+        loss_val = ttnn::typecast(per_pos, ttnn::DataType::BFLOAT16);
+    }
 
     auto out = autograd::create_tensor(loss_val);
 
     // ---------------------------------------------------------------
     // Backward  (purely local — no inter-device communication)
     //
-    // dCE/dx_k = (softmax_k / N − onehot_k / N) * grad_output
+    // dCE/dx_k = (softmax_k − onehot_k) * scale * grad_output
+    //   scale = 1/N  for MEAN  → grad_output is scalar [1,1,1,1]
+    //   scale = 1.0  for NONE  → grad_output is per-position [B,1,S,1]
     //
-    // Note we scale by 1/N first, cast to BF16, then scatter-subtract 1/N at the
-    // target position; the ordering matches the reference cross_entropy_bw kernel,
-    // whose writer does the onehot subtraction directly on the already-scaled BF16 tile.
+    // The same ttml_subtract_at_target kernel handles both: the `subtract_value`
+    // it scatters at target positions matches the scale already applied to
+    // softmax_k, so the resulting tile encodes (softmax_k − onehot_k) * scale
+    // before the upstream-grad broadcast multiply.  The trailing
+    // ttnn::multiply broadcasts the scalar grad over [B,1,S,V/tp] for MEAN
+    // and broadcasts the per-position grad over the local vocab dim for NONE
+    // — the same broadcast pattern used by the forward-pass max/exp path.
     // ---------------------------------------------------------------
-    autograd::GradFunction grad_fn = [logits, out, global_max, global_sum, targets_raw, local_V, cluster_axis, N]() {
+    autograd::GradFunction grad_fn = [logits,
+                                      out,
+                                      global_max,
+                                      global_sum,
+                                      targets_raw,
+                                      local_V,
+                                      cluster_axis,
+                                      inv_N]() {
         if (!out->is_grad_initialized()) {
             return;
         }
-        const float inv_N = 1.0F / static_cast<float>(N);
 
         auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
 

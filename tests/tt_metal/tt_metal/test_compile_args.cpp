@@ -38,7 +38,7 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, tt_metal::IDevice
 
     tt_metal::KernelHandle unary_writer_kernel = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -48,7 +48,10 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, tt_metal::IDevice
     };
 
     auto eltwise_unary_kernel = tt_metal::CreateKernel(
-        program, "tt_metal/kernels/compute/blank.cpp", core, tt_metal::ComputeConfig{.compile_args = compute_args});
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp",
+        core,
+        tt_metal::ComputeConfig{.compile_args = compute_args});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile Application
@@ -67,12 +70,12 @@ int main(int argc, char** argv) {
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         // Remove old compiled kernels
         static const std::string kernel_name = "test_compile_args";
-        auto binary_path_str =
-            kernel
-                ->binaries(
-                    tt::tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env)
-                .get_out_kernel_root_path() +
-            kernel_name;
+        auto binary_path_str = kernel
+                                   ->binaries(tt::tt_metal::BuildEnvManager::get_instance(extract_context_id(device))
+                                                  .get_device_build_env(device->build_id())
+                                                  .build_env)
+                                   .get_out_kernel_root_path() +
+                               kernel_name;
         std::filesystem::remove_all(binary_path_str);
 
         pass &= test_compile_args({0, 68, 0, 124}, device);

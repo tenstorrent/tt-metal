@@ -25,6 +25,7 @@ def test_bert_encoder_inference(
     reset_seeds,
 ):
     model_name = str(model_location_generator("mrm8488/bert-tiny-finetuned-squadv2", model_subdir="Bert"))
+    # NOTE(transformers-5.x): `torchscript=` was removed from transformers configs in 5.x; drop it (a default no-op) when running this experimental model under 5.x.
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     output_mem_config = ttnn.DRAM_MEMORY_CONFIG
     state_dict = hugging_face_reference_model.state_dict()

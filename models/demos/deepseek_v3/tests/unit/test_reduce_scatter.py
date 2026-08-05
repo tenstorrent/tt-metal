@@ -8,6 +8,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
@@ -92,7 +93,7 @@ def _get_tensors(
 @pytest.mark.parametrize(
     "device_params, topology, cluster_axis",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear, 1),
+        ({"fabric_config": get_fabric_config(), "trace_region_size": 0}, ttnn.Topology.Linear, 1),
     ],
     indirect=["device_params"],
     ids=["fabric_linear"],

@@ -16,7 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_slow_dispatch
+from models.common.utility_functions import is_blackhole, is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.runtime import TokenCodec, create_model
 from models.demos.deepseek_v3_b1.model import DeepSeekV3
 
@@ -32,6 +32,8 @@ def test_prefill_and_decode(
 ) -> None:
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
+    if is_blackhole():
+        pytest.skip("Skipping prefill/decode test on Blackhole: decode_step is not available")
 
     logger.info("Creating DeepSeekV3 model via shared runtime helper")
     token_codec = TokenCodec(batch_size=batch_size)

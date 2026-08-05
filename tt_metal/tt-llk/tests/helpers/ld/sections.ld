@@ -8,6 +8,16 @@ __firmware_stack_size = LENGTH(REGION_STACK);
 __firmware_start = DEFINED(__fw_export_end_text) ? __fw_export_end_text : ORIGIN(REGION_CODE);
 __ldm_start = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : ORIGIN(REGION_DATA);
 
+/*
+ * Virtual addresses for device print string tables.
+ * Never mapped to the device; the host reads them
+ * from the ELF to print strings. See the CTSTR macro
+ * in device_print.h and ElfStrings in device_print.py.
+ */
+__device_print_strings_vma      = 0x6400000;
+__device_print_strings_info_vma = 0x6500000;
+__profiler_meta_vma = 0x6600000;
+
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
        "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
@@ -119,6 +129,13 @@ SECTIONS
     *(.scommon)
     . = ALIGN(4);
     *(.dynbss)
+    /* `.bss.perf_counters` (zone_hashes[], next_zone_id in counters.h) is
+       NOBITS like any other `.bss.*` and is absorbed by this catch-all, so it
+       lives inside [__ldm_bss_start, __ldm_bss_end) and is zero-initialized
+       by do_crt0(). Its position within `.bss.*` is input-file-order
+       dependent; in practice the perf-test object files link last so the
+       perf-counter symbols end up at the end and don't shift the gp-relative
+       offsets of other globals between NC and WC. */
     *(.bss .bss.* .gnu.linkonce.b.*)
     *(COMMON)
     . = ALIGN(4);
@@ -157,7 +174,21 @@ SECTIONS
    . += __firmware_stack_size;
     __stack_top = .;
   } > REGION_STACK
-  .profiler_meta 0 : { *(.profiler_meta) }
+  .device_print_strings __device_print_strings_vma :
+  {
+    __device_print_strings_start = .;
+    KEEP(*(.device_print_strings))
+    __device_print_strings_end = .;
+    . = ALIGN(4);
+  }
+  .device_print_strings_info __device_print_strings_info_vma :
+  {
+    __device_print_strings_info_start = .;
+    KEEP(*(.device_print_strings_info))
+    __device_print_strings_info_end = .;
+    . = ALIGN(4);
+  }
+  .profiler_meta __profiler_meta_vma : { *(.profiler_meta) }
   .stab 0 : { *(.stab) }
   .stabstr 0 : { *(.stabstr) }
   .stab.excl 0 : { *(.stab.excl) }

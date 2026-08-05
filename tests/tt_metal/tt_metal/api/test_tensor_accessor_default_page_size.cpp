@@ -27,6 +27,7 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgConfig (RuntimePageSize / IsDram)
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
@@ -39,6 +40,14 @@ namespace {
 
 constexpr const char* KERNEL_PATH =
     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/tensor_accessor/report_page_size.cpp";
+
+constexpr const char* RUNTIME_PAGE_SIZE_KERNEL_PATH =
+    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/tensor_accessor/report_runtime_page_size.cpp";
+
+// A deliberately synthetic page size for the RuntimePageSize test: distinct from any buffer's
+// natural aligned_page_size, so a passing assertion can only mean the value came from the common
+// runtime arg (not a stale CTA, and not a re-derivation from the bound buffer).
+constexpr uint32_t RUNTIME_PAGE_SIZE_SENTINEL = 0xABCD;
 
 constexpr uint32_t OUTPUT_PAGE_SIZE = 32;
 constexpr CoreCoord KERNEL_CORE(0, 0);
@@ -107,6 +116,70 @@ void verify_default_page_size(const std::shared_ptr<distributed::MeshDevice>& me
     EXPECT_EQ(result[1], expected_output) << "Output TensorAccessor.page_size should default to aligned_page_size. "
                                           << "Expected: " << expected_output << ", Got: " << result[1]
                                           << ", Buffer page_size: " << output_buffer->page_size();
+}
+
+void verify_runtime_page_size(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const Buffer* input_buffer,
+    uint32_t sentinel_page_size) {
+    auto* device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& prog = workload.get_programs().at(device_range);
+
+    auto output_buffer = CreateBuffer(InterleavedBufferConfig{
+        .device = device, .size = OUTPUT_PAGE_SIZE, .page_size = OUTPUT_PAGE_SIZE, .buffer_type = BufferType::DRAM});
+
+    CircularBufferConfig cb_config =
+        CircularBufferConfig(OUTPUT_PAGE_SIZE, {{0, tt::DataFormat::RawUInt32}}).set_page_size(0, OUTPUT_PAGE_SIZE);
+    CreateCircularBuffer(prog, KERNEL_CORE, cb_config);
+
+    // Forge the input accessor's compile-time args: the args_config word with the RuntimePageSize
+    // bit set, and NO aligned-page-size word (A-collapse). The legacy TensorAccessorArgs(buffer)
+    // path never sets this bit -- only the Metal 2.0 resolver does -- so we build the word by hand.
+    // The output accessor is appended normally (static); the kernel reads it at the post-A-collapse
+    // offset, which only resolves correctly if the input consumed exactly one CTA word.
+    std::vector<uint32_t> compile_time_args;
+    const uint32_t input_config_word =
+        (tensor_accessor::ArgConfig::IsDram | tensor_accessor::ArgConfig::RuntimePageSize).raw();
+    compile_time_args.push_back(input_config_word);
+    TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
+
+    auto kernel = CreateKernel(
+        prog,
+        RUNTIME_PAGE_SIZE_KERNEL_PATH,
+        KERNEL_CORE,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = compile_time_args});
+
+    SetRuntimeArgs(prog, kernel, KERNEL_CORE, {input_buffer->address(), output_buffer->address()});
+    // The input's dynamic page size rides common runtime arg 0 -- the channel the device accessor
+    // reads via get_aligned_page_size() when the RuntimePageSize bit is set.
+    SetCommonRuntimeArgs(prog, kernel, {sentinel_page_size});
+
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    std::vector<uint32_t> result;
+    detail::ReadFromBuffer(output_buffer, result);
+
+    EXPECT_EQ(result[0], sentinel_page_size)
+        << "RuntimePageSize input accessor must report the runtime (common-arg) page size, not a "
+           "static CTA value. Expected sentinel "
+        << sentinel_page_size << ", got " << result[0];
+
+    uint32_t expected_output = static_cast<uint32_t>(output_buffer->aligned_page_size());
+    EXPECT_EQ(result[1], expected_output)
+        << "Output accessor page size must be intact -- proves the input's A-collapse (one fewer CTA "
+           "word) did not shift the output accessor's CTA offset. Expected "
+        << expected_output << ", got " << result[1];
 }
 
 std::shared_ptr<Buffer> create_interleaved_buffer(
@@ -202,6 +275,18 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1Tili
         auto* device = mesh_device->get_devices()[0];
         auto buffer = create_interleaved_buffer(device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::L1);
         verify_default_page_size(mesh_device, buffer.get());
+    }
+}
+
+// --- Runtime page size (RuntimePageSize relaxation, device-side isolation) ---
+
+TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeInterleavedDram) {
+    for (auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        // Input is a real interleaved row-major DRAM buffer; its address is passed to the kernel but
+        // its page size is NOT -- the accessor must read the page size from the runtime sentinel.
+        auto input = create_interleaved_buffer(device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::DRAM);
+        verify_runtime_page_size(mesh_device, input.get(), RUNTIME_PAGE_SIZE_SENTINEL);
     }
 }
 

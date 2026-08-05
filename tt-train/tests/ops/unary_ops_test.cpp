@@ -65,12 +65,12 @@ void load_random_data_from_os(std::span<float> data) {
 }  // namespace
 
 class UnaryOpsTest : public ::testing::Test {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         autograd::ctx().open_device();
     }
 
-    void TearDown() override {
+    static void TearDownTestSuite() {
         autograd::ctx().close_device();
     }
 };
