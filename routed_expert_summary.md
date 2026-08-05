@@ -1390,7 +1390,11 @@ Note what is NOT the cause, checked and ruled out: coordinate mirroring. Blackho
 `get_noc_multicast_addr` does no per-NoC coordinate transform on this arch, and the corner order
 is the only thing that differs.
 
-**Consequence for (d).** A reader-issued NoC-1 weight multicast is technically viable after all —
+**UPDATE (18): the corner swap is necessary but NOT sufficient — a reader-issued NoC-1
+multicast is architecturally impossible in dedicated-NoC mode. See section 18.**
+
+**Consequence for (d) (superseded by 18).** A reader-issued NoC-1 weight multicast looked
+technically viable —
 it needs a second set of mcast rectangle args with the corners swapped (or the swap applied
 kernel-side under the NoC-1 path). Its ceiling remains the 17-19.7 us that removing the multicast
 entirely recovers (14a), and the fabric concern that retired UP_WRITER_MCAST still applies to
@@ -1458,3 +1462,44 @@ Method note: the control initially "passed" because `mv` restores a file with it
 mtime, so ninja skipped recompiling and the test ran against the previous binary. Identical
 PCC to six decimals plus a 2.1s vs 5.6s runtime gave it away. `touch` the file after any
 `mv`-based restore, and treat a suspiciously fast run as evidence of a stale build.
+
+## 18. CLOSED: the weight multicast cannot leave NoC 0 from the reader
+
+Experiment A, tried after section 16 identified the corner swap: move the gate/up weight
+multicast to NoC 1 so it overlaps the reader's NoC-0 weight reads. Scoped to gate/up only
+(1.51 MB of the 2.35 MB per chunk) to keep the blast radius small, with the rectangle corners
+swapped exactly as `device.cpp:818` does host-side, and with the data mcast and its valid-sem
+mcast both moved so `linked=true` still orders them.
+
+**It hung again**, identically to the pre-swap attempt. So the corner swap from section 16 is
+necessary but not sufficient, and the real blocker is command-buffer ownership.
+
+In the default `DM_DEDICATED_NOC` mode both dataflow RISCs use the SAME command-buffer indices
+(`noc_nonblocking_api.h:62-70`):
+
+```
+NCRISC_WR_CMD_BUF = 0, NCRISC_RD_CMD_BUF = 1, NCRISC_WR_REG_CMD_BUF = 2, NCRISC_AT_CMD_BUF = 3
+BRISC_WR_CMD_BUF  = 0, BRISC_RD_CMD_BUF  = 1, BRISC_WR_REG_CMD_BUF  = 2, BRISC_AT_CMD_BUF  = 3
+```
+
+They do not collide only because **each RISC is bound to its own NoC** — that is what
+"dedicated" means, and it is why the reader's `Noc noc_read(0)` and the writer's NoC-1 `up`
+read (UP_SPLIT) coexist happily. Contrast `DM_DYNAMIC_NOC`, where the two RISCs share a NoC
+and therefore get DISJOINT indices (`DYNAMIC_NOC_NCRISC_*` = 2/3, `DYNAMIC_NOC_BRISC_*` = 0/1).
+
+So a reader-issued NoC-1 multicast drives NoC 1's cmd buf 0 — the same buffer the writer is
+using for its NoC-1 reads and output writes. Two RISCs on one command buffer corrupts it and
+hangs, whatever the rectangle says.
+
+**The only two ways to get the weight multicast off NoC 0:**
+
+1. **The writer multicasts on its own NoC 1** — this is exactly the retired `UP_WRITER_MCAST`
+   (mode 1), retired because NoC-1 worker multicasts collide with fabric CCL ops and hang
+   fabric-enabled runs. Our perf test has no fabric, so it would measure green and hang in
+   production.
+2. **Switch the kernels to `DM_DYNAMIC_NOC`** so both RISCs may drive both NoCs on disjoint
+   command buffers. That halves the command buffers available to each RISC and adds
+   arbitration — a large change to buy a ceiling of 17-19.7 us (14a).
+
+**(A) is therefore closed.** Both routes are worse than the prize. The remaining lever with
+multiple-x headroom rather than percent is split-K across the idle M-rows (14d).
