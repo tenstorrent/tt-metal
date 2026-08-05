@@ -169,27 +169,9 @@ For the mesh coordinate mapping YAML to be generated, you must have `TT_METAL_HO
 
 ---
 
-### Generating both reports in one run (shared run_id)
+### Generating Performance Reports
 
-To produce a memory report and a performance report from the **same** execution (with a shared `run_id` for future visualizer linking), leave TTNN logging enabled and run under Tracy:
-
-```bash
-export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode":false,"enable_logging":true,"enable_graph_report":true,"enable_detailed_buffer_report":true,"report_name":"ttnn_visualizer_tutorial"}'
-python -m tracy -p -r -v -n my_run -m pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
-```
-
-Tracy mints `TT_METAL_RUN_ID` (UUID) for the child process and report generation. After the run:
-
-* Memory report: `generated/ttnn/reports/<report_dir>/db.sqlite` has `report_metadata.run_id`
-* Performance report: `generated/profiler/reports/.../manifest.json` contains the same `run_id`
-
-Upload the memory directory and the performance directory to TT-NN Visualizer as usual.
-
----
-
-### Generating Performance Reports only
-
-For a performance-only capture (no memory report), unset TTNN config so graph reporting does not run:
+For the performance report, we'll use the `tracy profiler`. If you're using the same terminal session, unset the previous configuration to avoid regenerating the memory report:
 
 ```bash
 unset TTNN_CONFIG_PATH
@@ -212,11 +194,34 @@ Tracy will output the path to a directory:
 This directory contains the following output files:
 
 * `ops_perf_results_<timestamp>.csv`
-* `manifest.json` (includes `run_id` when captured via `python -m tracy`)
-* `device_profile_log.txt`
+* `profile_log_device.csv`
 * `<name>.tracy` (Tracy file)
 
 Upload this entire directory to TT-NN Visualizer as the **Performance report**.
+
+---
+
+### Generating both reports from one run
+
+The two sections above capture each report separately. To capture both from a single execution, leave the TT-NN logging configuration in place and run that same command under Tracy:
+
+```bash
+export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode":false,"enable_logging":true,"enable_graph_report":true,"enable_detailed_buffer_report":true,"report_name":"ttnn_visualizer_tutorial"}'
+python -m tracy -p -r -v -m pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
+```
+
+Both artefacts are stamped with the same run identifier, which lets TT-NN Visualizer pair them rather than infer the pairing from directory timestamps:
+
+* Memory report: a `run_id` row in the `report_metadata` table of `db.sqlite`
+* Performance report: a `RUN_ID:` field on the first line of `profile_log_device.csv`
+
+Upload the two directories as usual; no extra flags are required. Note that the performance-side identifier travels in the device log, so it is only present when device profiling ran (the `-r` flag above).
+
+Across a multi-host run each rank mints its own identifier unless one is supplied. Export `TT_METAL_RUN_ID` before launching to make every rank agree:
+
+```bash
+export TT_METAL_RUN_ID=$(uuidgen)
+```
 
 ---
 

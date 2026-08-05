@@ -5,13 +5,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import csv
-import json
 from pathlib import Path
 
 import pytest
 
 from tracy import process_ops_logs
-from tracy.visualizer_run import TT_METAL_RUN_ID_ENV
+from tracy.process_device_log import extract_device_info
 
 
 # class for mocking creation of npe data
@@ -204,76 +203,44 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
 
 
-def _minimal_host_ops():
-    return {
-        1: {
-            "global_call_count": 1,
-            "device_id": 0,
-            "host_time": {"ns_since_start": 10, "exec_time_ns": 20},
-            "metal_trace_id": None,
-            "input_tensors": [],
-            "output_tensors": [],
-        }
-    }
+# The profiler appends "RUN_ID: <id>" to the device log preamble so a performance report can be
+# paired with the memory report from the same run. Readers of the preamble must ignore it.
+_RUN_ID = "0123456789abcdef0123456789abcdef"
 
 
-def test_generate_reports_writes_manifest_when_run_id_set(monkeypatch, tmp_path):
-    monkeypatch.setenv(TT_METAL_RUN_ID_ENV, "fixed-run-id")
-    log_folder = tmp_path / "logs"
-    report_folder = tmp_path / "reports"
-    log_folder.mkdir(parents=True, exist_ok=True)
+def _write_device_log(path: Path, arch: str = "wormhole_b0", rows: tuple = ()) -> Path:
+    lines = [
+        f"ARCH: {arch}, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64, RUN_ID: {_RUN_ID}",
+        "PCIe slot,core_x,core_y,RISC processor type,timer_id,time[cycles since reset],data,run host ID,trace id,trace id counter,zone name,type,source line,source file,meta data",
+        *rows,
+    ]
+    path.write_text("\n".join(lines))
+    return path
 
-    process_ops_logs.generate_reports(
-        ops=_minimal_host_ops(),
-        deviceOps={},
-        traceOps={},
-        signposts={},
-        logFolder=log_folder,
-        outputFolder=report_folder,
-        date=False,
-        nameAppend=None,
+
+def test_extract_device_info_ignores_trailing_run_id(tmp_path):
+    device_log = _write_device_log(tmp_path / "profile_log_device.csv")
+
+    arch, freq, max_compute_cores = extract_device_info(device_log)
+
+    assert arch == "wormhole_b0"
+    assert freq == 1000
+    assert max_compute_cores == 64
+
+
+@pytest.mark.parametrize("arch,expected", [("wormhole_b0", False), ("quasar", True)])
+def test_is_quasar_device_log_unaffected_by_run_id(tmp_path, arch, expected):
+    device_log = _write_device_log(tmp_path / "profile_log_device.csv", arch=arch)
+
+    assert process_ops_logs.is_quasar_device_log(device_log) is expected
+
+
+def test_build_sub_device_id_lookup_skips_preamble_with_run_id(tmp_path):
+    device_log = _write_device_log(
+        tmp_path / "profile_log_device.csv",
+        rows=('0,0,0,BRISC,1,100,0,42,0,1,BRISC-FW,ZONE_START,1,k.cpp,{"sub_device_id":3}',),
     )
 
-    manifest_path = Path(report_folder) / "manifest.json"
-    assert manifest_path.is_file()
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert payload["run_id"] == "fixed-run-id"
-    assert payload["ops_csv"] == "ops_perf_results.csv"
-    assert not Path(payload["ops_csv"]).is_absolute()
+    lookup = process_ops_logs.build_sub_device_id_lookup_from_device_csv(device_log)
 
-
-def test_generate_reports_skips_manifest_without_run_id(monkeypatch, tmp_path):
-    monkeypatch.delenv(TT_METAL_RUN_ID_ENV, raising=False)
-    log_folder = tmp_path / "logs"
-    report_folder = tmp_path / "reports"
-    log_folder.mkdir(parents=True, exist_ok=True)
-
-    process_ops_logs.generate_reports(
-        ops=_minimal_host_ops(),
-        deviceOps={},
-        traceOps={},
-        signposts={},
-        logFolder=log_folder,
-        outputFolder=report_folder,
-        date=False,
-        nameAppend=None,
-    )
-
-    assert (Path(report_folder) / "ops_perf_results.csv").is_file()
-    assert not (Path(report_folder) / "manifest.json").exists()
-
-
-def test_get_device_data_generate_report_returns_none_without_device_logs(tmp_path):
-    log_folder = tmp_path / "logs"
-    log_folder.mkdir()
-    report_folder = tmp_path / "reports"
-
-    result = process_ops_logs.get_device_data_generate_report(
-        logFolder=log_folder,
-        outputFolder=report_folder,
-        date=False,
-        nameAppend=None,
-        export_csv=False,
-    )
-
-    assert result is None
+    assert lookup[(0, 42, 0, 1)] == 3

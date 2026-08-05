@@ -36,7 +36,6 @@ from tracy.common import (
     generate_logs_folder,
     generate_reports_folder,
 )
-from tracy.visualizer_run import write_performance_manifest
 from tracy import device_post_proc_config
 from tracy.perf_counter_analysis import (
     PERF_COUNTER_CSV_HEADERS,
@@ -1153,12 +1152,8 @@ def get_device_data_generate_report(
     export_csv: bool = True,
     cleanup_device_log: bool = False,
     device_analysis_types: Tuple[str, ...] | List[str] = (),
-) -> Optional[Path]:
-    """Generate CSV rows using only device-side logs (no host metadata).
-
-    Returns the absolute path of the report directory used for CSV output when a
-    device report is produced, otherwise ``None``.
-    """
+) -> List[Dict[str, Any]]:
+    """Generate CSV rows using only device-side logs (no host metadata)."""
 
     deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
     devicePreOpTime = {}
@@ -1397,7 +1392,6 @@ def get_device_data_generate_report(
                         rowDict[field] = str(fieldData).replace(",", ";")
                     writer.writerow(rowDict)
             logger.info(f"Device only OPs csv generated at: {allOpsCSVPath}")
-            write_performance_manifest(outFolder, ops_csv=allOpsCSVPath)
             with open(perCoreCSVPath, "w") as perCoreCSV:
                 perCoreCSVHeader = ["device ID", "op2op ID"] + [core for core in perCoreCSVHeader]
 
@@ -1410,10 +1404,9 @@ def get_device_data_generate_report(
 
         if cleanup_device_log:
             os.remove(deviceTimesLog)
-        return Path(outFolder)
-
-    logger.info("No device logs found")
-    return None
+    else:
+        logger.info("No device logs found")
+    return rowDicts
 
 
 def generate_reports(
@@ -1425,11 +1418,8 @@ def generate_reports(
     outputFolder: Optional[Path],
     date: bool,
     nameAppend: Optional[str],
-) -> Path:
-    """Emit the final CSV report plus supporting artifacts.
-
-    Returns the absolute path of the generated report directory.
-    """
+) -> None:
+    """Emit the final CSV report plus supporting artifacts."""
 
     logger.info(f"OPs' perf analysis is finished! Generating reports ...")
     outFolder = PROFILER_OUTPUT_DIR
@@ -1917,8 +1907,6 @@ def generate_reports(
                 csv_row[field] = str(fieldData).replace(",", ";")
             writer.writerow(csv_row)
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
-    write_performance_manifest(outFolder, ops_csv=allOpsCSVPath)
-    return Path(outFolder)
 
 
 def analyzeNoCTraces(logFolder: Path):
@@ -1952,12 +1940,8 @@ def process_ops(
     analyze_noc_traces: bool = False,
     device_analysis_types: Tuple[str, ...] | List[str] = (),
     force_legacy_device_logs: bool = False,
-) -> Optional[Path]:
-    """Top-level entry point used by both CLI and importers.
-
-    Returns the absolute path of the generated performance report directory when
-    a report is produced, otherwise ``None``.
-    """
+) -> None:
+    """Top-level entry point used by both CLI and importers."""
 
     if not output_folder:
         output_folder = PROFILER_ARTIFACTS_DIR
@@ -1975,11 +1959,11 @@ def process_ops(
             device_analysis_types,
             force_legacy_device_logs=force_legacy_device_logs,
         )
-        return generate_reports(ops, deviceOps, traceOps, signposts, logFolder, reportFolder, date, name_append)
-
-    return get_device_data_generate_report(
-        logFolder, reportFolder, date, name_append, device_analysis_types=device_analysis_types
-    )
+        generate_reports(ops, deviceOps, traceOps, signposts, logFolder, reportFolder, date, name_append)
+    else:
+        deviceOps = get_device_data_generate_report(
+            logFolder, reportFolder, date, name_append, device_analysis_types=device_analysis_types
+        )
 
 
 @click.command()

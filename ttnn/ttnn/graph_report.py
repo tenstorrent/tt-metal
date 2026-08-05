@@ -150,13 +150,6 @@ def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
             config_path = report_path / "config.json"
         ttnn.save_config_to_json_file(config_path)
 
-        from ttnn.visualizer_run_id import stamp_report_dir_run_id
-
-        stamp_report_dir_run_id(
-            report_path,
-            is_primary_rank=not ttnn.distributed_context_is_initialized() or rank == 0,
-        )
-
 
 def sanitize_git_remote_url(url: str) -> str:
     """Return a remote URL safe to persist in shared artifacts (no credentials or query parts).
@@ -239,7 +232,8 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
-DATABASE_SCHEMA_VERSION = "3.3"
+# 3.4 - run_id in report_metadata, pairing this report with a performance report (#51066)
+DATABASE_SCHEMA_VERSION = "3.4"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"

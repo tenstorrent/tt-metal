@@ -8,7 +8,6 @@ from shutil import copyfile
 
 from tracy import *
 from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
-from tracy.visualizer_run import inject_run_id_into_env
 
 
 def main():
@@ -426,9 +425,6 @@ def main():
 
             if port:
                 envVars["TRACY_PORT"] = port
-
-            run_id = inject_run_id_into_env(envVars)
-            logger.info(f"Visualizer run_id={run_id}")
 
             testProcess = subprocess.Popen([testCommand], shell=True, env=envVars, preexec_fn=os.setsid)
             logger.info(f"Test process started")

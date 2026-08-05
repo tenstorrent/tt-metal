@@ -172,7 +172,7 @@ def generate_report(
 
     logger.info(f"Host side ops data report generated at {logsFolder / TRACY_OPS_DATA_FILE_NAME}")
 
-    return process_ops(
+    process_ops(
         outputFolder,
         nameAppend,
         True,
