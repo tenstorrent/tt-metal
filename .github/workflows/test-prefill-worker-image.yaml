@@ -17,11 +17,12 @@ name: "(TEMPORARY) Test prefill-worker image build"
 # Everything else (derive-from-release-models, the prebuilt-engine COPY, the
 # derived output line, attestations) matches the nightly.
 #
-# Platforms: both 22.04 and 24.04, exactly as the package-and-release matrix
-# drives the nightly. The 24.04 leg is EXPECTED to fail the in-build import check
-# until tt-llm-engine publishes a Python-3.12 migration-worker image (the module
-# is a version-specific nanobind extension; today the image is 3.10 only).
-# fail-fast:false so the 22.04 leg still completes and pushes.
+# Platform: 22.04 ONLY, matching the nightly, which now guards this image to
+# 22.04 (create-prefill-worker-image's `if:`). The prebuilt migration-worker image
+# ships a Python-3.10 (cp310) nanobind _migration_client that can't import in the
+# 24.04 base (3.12), so the nightly skips 24.04 until tt-llm-engine publishes a
+# py3.12 engine image - and this dry run mirrors that. Add ubuntu-24.04 back here
+# (and drop the nightly guard) once a matching 3.12 engine image exists.
 #
 # Why a `push` trigger and not just workflow_dispatch: `gh workflow run` resolves
 # workflows from the DEFAULT branch only, so a dispatch-only workflow on a feature
@@ -70,7 +71,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-22.04, ubuntu-24.04]
+        platform: [ubuntu-22.04]
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: Checkout

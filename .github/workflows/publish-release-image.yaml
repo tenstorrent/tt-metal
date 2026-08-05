@@ -41,13 +41,15 @@ on:
           publishes that image type must therefore have completed first. When
           set, no tool layers, wheel or version args are passed to bake - the
           derived Dockerfile is expected to consume only its base contexts.
-      builder-image:
+      tt-llm-engine-image:
         required: false
         type: string
         default: ""
         description: >-
-          Image used for a derived image's throwaway compile stage (bake context
-          'llm-build-base'). Must match the base's platform/python version.
+          Prebuilt tt-llm-engine migration image the prefill-worker COPYs
+          _migration_client out of (no clone, no token). Pin by full SHA and match
+          the release base's Python minor (3.10 on 22.04). Empty falls back to the
+          pinned default in dockerfile/docker-bake.hcl.
       skip-smoke-test:
         required: false
         type: boolean
@@ -106,36 +108,34 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check the build secret this image needs can read tt-llm-engine
-        # Fail in seconds with an actionable message rather than minutes into the
-        # build on a `git clone` that got an empty or under-scoped token. Checking
-        # non-emptiness is not enough: the org-read PATs in this repo are minted
-        # for read:org (org-membership lookups), which does NOT grant contents
-        # read on a private repo - so probe the actual clone permission.
+      - name: Check the prebuilt tt-llm-engine image is readable
+        # The prefill-worker COPYs _migration_client out of a prebuilt tt-llm-engine
+        # migration image - no clone, no token. That image lives in a DIFFERENT repo,
+        # so the release GITHUB_TOKEN (logged in above) can only pull it if
+        # tenstorrent/tt-metal has been granted Read on the package (or it's set to
+        # Internal visibility). Fail in seconds with an actionable message instead of
+        # a forbidden pull minutes into the build.
         if: ${{ inputs.image == 'prefill-worker' && !inputs.dry-run }}
         env:
-          GH_TOKEN: ${{ secrets.VLLM_TT_PLUGIN_READ_TOKEN }}
-          IMAGE: ${{ inputs.image }}
+          ENGINE_OVERRIDE: ${{ inputs.tt-llm-engine-image }}
         run: |
           set -uo pipefail
-          ENGINE_REPO="tenstorrent/tt-llm-engine"
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::Secret VLLM_TT_PLUGIN_READ_TOKEN is empty or not set." \
-              "The ${IMAGE} image clones the private ${ENGINE_REPO} and" \
-              "cannot be built without a read token."
+          # Effective engine image: the caller's override, else the pinned default in
+          # dockerfile/docker-bake.hcl (single source of truth), read via bake --print.
+          ENGINE="$ENGINE_OVERRIDE"
+          if [ -z "$ENGINE" ]; then
+            ENGINE=$(docker buildx bake -f dockerfile/docker-bake.hcl --print prefill-worker 2>/dev/null \
+              | jq -r '.target["prefill-worker"].args.TT_LLM_ENGINE_IMAGE')
+          fi
+          echo "Engine image: ${ENGINE}"
+          if ! docker manifest inspect "${ENGINE}" > /dev/null 2>&1; then
+            echo "::error::Cannot read ${ENGINE} with the release GITHUB_TOKEN. The prefill-worker" \
+              "image COPYs its migration client out of it, so tenstorrent/tt-metal must be granted" \
+              "Read on that ghcr package (tt-llm-engine package settings -> Manage Actions access)," \
+              "or the package set to Internal visibility."
             exit 1
           fi
-          if ! GIT_TERMINAL_PROMPT=0 git ls-remote \
-                "https://x-access-token:${GH_TOKEN}@github.com/${ENGINE_REPO}.git" \
-                > /dev/null 2>&1; then
-            echo "::error::VLLM_TT_PLUGIN_READ_TOKEN cannot read ${ENGINE_REPO}." \
-              "It is set, so this is a SCOPE problem: the token needs contents read" \
-              "on that private repo (classic PAT 'repo', or a fine-grained PAT with" \
-              "Contents: Read granted for ${ENGINE_REPO}) - read:org alone is not" \
-              "enough. Fix the token's scope, or point gh-token at a secret that has it."
-            exit 1
-          fi
-          echo "Token can read ${ENGINE_REPO}."
+          echo "Engine image is readable."
       - name: Download wheels
         if: ${{ inputs.wheel-artifact-name != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -183,7 +183,7 @@ jobs:
           PLATFORM: ${{ inputs.platform }}
           VERSION: ${{ inputs.version }}
           DERIVE_FROM: ${{ inputs.derive-from }}
-          BUILDER_IMAGE: ${{ inputs.builder-image }}
+          TT_LLM_ENGINE_IMAGE: ${{ inputs.tt-llm-engine-image }}
           PROXY_HTTP: ${{ env.PROXY_HTTP }}
           PROXY_HTTPS: ${{ env.PROXY_HTTPS }}
           PROXY_NO_PROXY: ${{ env.PROXY_NO_PROXY }}
@@ -195,17 +195,16 @@ jobs:
             # Derived image: it layers on an image type published earlier in this
             # same release, so it needs neither tool layers nor the wheel.
             BASE_IMAGE="ghcr.io/${GITHUB_REPOSITORY}/tt-metalium-${PLATFORM}-${DERIVE_FROM}-amd64:${VERSION}"
-            if [ -z "$BUILDER_IMAGE" ]; then
-              echo "::error::derive-from=${DERIVE_FROM} was given without builder-image."
-              exit 1
-            fi
-            echo "Deriving ${TARGET} from ${BASE_IMAGE} (builder: ${BUILDER_IMAGE})"
-            # Deliberately NOT Harbor-prefixed: both refs are ghcr.io images from
-            # this very run (the base was pushed minutes ago), and a pull-through
-            # cache can serve a stale miss for a tag that new. The tool images
-            # below are long-lived, which is why those do go through Harbor.
+            echo "Deriving ${TARGET} from ${BASE_IMAGE}"
+            # Deliberately NOT Harbor-prefixed: the base is a ghcr.io image from this
+            # very run (pushed minutes ago), and a pull-through cache can serve a
+            # stale miss for a tag that new.
             SET+="${TARGET}.contexts.release-base=docker-image://${BASE_IMAGE}"$'\n'
-            SET+="${TARGET}.contexts.llm-build-base=docker-image://${BUILDER_IMAGE}"$'\n'
+            # prefill-worker COPYs _migration_client out of a prebuilt tt-llm-engine
+            # image; override the bake default only when the caller pinned one.
+            if [ -n "$TT_LLM_ENGINE_IMAGE" ]; then
+              SET+="${TARGET}.args.TT_LLM_ENGINE_IMAGE=${TT_LLM_ENGINE_IMAGE}"$'\n'
+            fi
           else
             TOOLS=(ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd sfpi openmpi)
             for tool in "${TOOLS[@]}"; do
@@ -255,10 +254,6 @@ jobs:
           set-lines: ${{ steps.bake.outputs.set }}
           syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
           oras-image: ${{ steps.bake.outputs.oras-image }}
-          # Consumed only by targets declaring a gh_token BuildKit secret
-          # (prefill-worker clones the private tenstorrent/tt-llm-engine);
-          # empty and unused for every other image.
-          gh-token: ${{ secrets.VLLM_TT_PLUGIN_READ_TOKEN }}
           # Cheap insurance against transient blips - the actual fix for the
           # timeouts we hit is the proxy env forwarded above.
           retries: "2"
