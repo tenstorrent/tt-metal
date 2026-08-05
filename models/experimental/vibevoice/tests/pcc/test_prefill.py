@@ -45,7 +45,6 @@ FULL_PREFILL_ISL_SWEEP_LENGTHS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192,
 SPEECH_TOK_COMPRESS_RATIO = 3200
 FIXED_SPEECH_SLOTS = 64
 MIN_TEXT_TOKENS = 32
-PER_TOKEN_PCC_MAX = 1024
 CFG_SCALE = 1.3
 NUM_DIFFUSION_STEPS = 10
 # Random-token LM hidden states have a highly input-dependent bf16 correlation floor
@@ -425,16 +424,16 @@ def test_full_prefill_chain_pcc(mesh_device, vv_config, lm_state):
             continue
 
         passed_embeds, pcc_embeds = comp_pcc(ref_speech_embeds, tt_speech_embeds, pcc=PCC_THRESHOLD)
-        per_token = prefill_len <= PER_TOKEN_PCC_MAX
-        _, pcc_hidden, per_pos = compare_prefill_hidden_pcc(ref_hidden, tt_hidden, prefill_len, per_token=per_token)
-        hidden_median = per_position_pcc(ref_hidden, tt_hidden).median().item()
+        _, pcc_hidden = compare_prefill_hidden_pcc(ref_hidden, tt_hidden, prefill_len)
+        per_pos = per_position_pcc(ref_hidden, tt_hidden)
+        hidden_median = per_pos.median().item()
+        min_pcc = per_pos.min().item()
+        last_pcc = per_pos[-1].item()
         # KV-cache PCCs are informative diagnostics only (printed below), not gated.
         worst_k_pcc, worst_v_pcc, worst_k_raw, worst_v_flat = compare_kv_cache_pcc(
             ref_pkv_bf16, ref_pkv_fp32, tt_kv_cache, prefill_len
         )
 
-        min_pcc = min(per_pos) if per_pos else float("nan")
-        last_pcc = per_pos[-1] if per_pos else float("nan")
         print(
             f"[test_prefill] ISL={seq_len} speech_embed_PCC={pcc_embeds:.6f} "
             f"hidden_PCC={pcc_hidden:.6f} hidden_med={hidden_median:.5f} last={last_pcc:.5f} min={min_pcc:.5f} "
