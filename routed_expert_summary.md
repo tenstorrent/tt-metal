@@ -1252,3 +1252,42 @@ threshold.** `gate_block_bytes = in0_block_w_gu * per_core_N_gu * 576` = 16 * 6 
 for gate, the same for up, and 126 * 576 = 72,576 B per down block; 2.35 MB per sender per
 chunk. Independent of ISL (weights do not scale with per_core_M). 13d already measured that
 wider blocks (w=28 -> 96 KB, w=56 -> 192 KB) buy ~2 us and then nothing.
+
+### 14f. RESOLVED: decomposing the floor with scoped device zones
+
+The instrument that worked, after the two failed attempts in 14e. `DeviceZoneScopedN` inside the
+gate/up K-block loop, one zone around the `cb_wait_front` for x/gate/up (time BLOCKED on weights)
+and one around the matmul+pack subblock loop (time in the compute region). Summed over the
+14 gate/up K-blocks, per thread, at kimi isl-128 x_rm+interleaved (same run reported op device
+time **146,392 ns**, so these correlate directly):
+
+| thread | matmul+pack region | blocked on weight CBs |
+|---|---|---|
+| TRISC_0 unpack | 32.9 us | **29.6 us** (per-core range 2.7-32.8) |
+| TRISC_1 **math** | **62.3 us** (max 65.5) | 0.2 us |
+| TRISC_2 **pack** | **62.9 us** (max 66.1) | 0.2 us |
+
+Readings:
+
+1. **The gate/up matmul+pack region occupies ~62 us of MATH and PACK time — 43% of the op's
+   146 us**, for the gate/up phase ALONE (the down phase's 11 K-blocks are not instrumented).
+   So the compute pipeline is genuinely occupied, not idle: the 14b "floor is compute pipeline"
+   reading holds.
+2. **But it is not the MACs.** Ablating `matmul_block` moved almost nothing (14e), so within
+   that 62 us the packs, the MATH<->PACK `tile_regs` handshakes and the SFPU dominate over the
+   multiply-accumulate itself. "Compute-bound" here means pipeline-bound, not FPU-bound — which
+   is why maximising `out_subblock_w` (already done: gu_out_subblock_w = 6 = per_core_N_gu, so
+   in1_num_subblocks = 1) matters more than anything MAC-side.
+3. **`cb_wait_front` blocks UNPACK for 29.6 us**, and only UNPACK — MATH/PACK sit at 0.2 us
+   because the wait is an unpack-side operation. That 29.6 us is the traffic-bound share and it
+   lines up with the independently measured 31.2 us weight read + 19.7 us mcast differentials
+   (14a) once overlap is accounted for. The per-core spread (2.7 to 32.8 us) is the sender vs
+   receiver asymmetry: the weight sender waits far less than its column receivers.
+
+**Recipe for next time** (both mistakes cost a rebuild each): compute kernels need
+`#include "tools/profiler/kernel_profiler.hpp"` explicitly — dataflow kernels get it
+transitively, and without it the macro fails to compile inside a template with
+"there are no arguments to DeviceZoneScopedN that depend on a template parameter". And
+`TT_METAL_PROFILER_ACCUMULATE=1` is NOT needed: plain `DeviceZoneScopedN` emits begin/end pairs
+per iteration that can be paired and summed offline, which also keeps the per-op perf report
+that accumulate mode disables (it warns it is "for INTERNAL RUNTIME-TEAM use only").
