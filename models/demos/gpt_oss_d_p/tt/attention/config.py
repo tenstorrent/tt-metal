@@ -42,6 +42,11 @@ class AttentionConfig:
     # P1 SP path: AllGather K/V + single-chip SDPA (sliding + sinks). Native ring SDPA swaps in at P6.
     sequence_parallel: bool = False
 
+    # Number of resident user / migration slots per device this cache serves. init_kv_cache reads it
+    # to size the leading batch dim of the K/V allocation ([max_local_batch_size, kv_heads/tp,
+    # seq/sp, head_dim]). Default 1 matches single-user prefill.
+    max_local_batch_size: int = 1
+
     def __post_init__(self):
         if self.scaling is None:
             self.scaling = self.head_dim**-0.5
