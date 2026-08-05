@@ -1,6 +1,6 @@
 ---
 name: perf-report
-description: Generate, refresh, and validate an LLK performance report by running a perf sweep end to end and checking the resulting perf_data CSV. Use when asked to produce or refresh a perf report for an op, run a perf sweep, or when a report is missing, partial, stale, or implausible.
+description: Generate, refresh, and validate LLK performance reports by running perf sweeps end to end and checking the resulting perf_data CSVs. Use when asked to produce or refresh a report for an op, run the full Quasar perf suite, run a perf sweep, or when a report is missing, partial, stale, or implausible.
 ---
 
 # Perf Report
@@ -21,6 +21,15 @@ commit, and the exact command that produced it. Record all four.
   implausible metrics.
 - `perf-parameter-impact` — analyze a finished `.post.csv`.
 - `run-test` — the repository test-runner workflow.
+
+## Quasar full-suite workflow
+
+For the complete Quasar suite, follow
+`docs/tests/running_quasar_llk_tests_from_tt_metal.md`, export the active
+reservation's `NNG_SOCKET_ADDR`, and run
+`tests/python_tests/quasar/run_perf_suite_orchestrator.sh`. The orchestrator
+sequences each `PerfRunType`, writes summaries, and tags generated CSVs. Use
+`run_perf_suite_and_report.sh` directly only for one run type or a suite subset.
 
 ## 1. Establish the sweep
 

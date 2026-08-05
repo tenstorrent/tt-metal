@@ -782,19 +782,6 @@ class REDUCE_TO_ONE(RuntimeParameter):
 
 
 @dataclass
-class NUM_TILES_IN_BLOCK(RuntimeParameter):
-    num_tiles_in_block: int = 0
-
-    def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr std::uint32_t NUM_TILES_IN_BLOCK = {self.num_tiles_in_block};"
-        )
-
-    def convert_to_struct_fields(self) -> tuple[str, str]:
-        return "std::uint32_t NUM_TILES_IN_BLOCK;", "I"
-
-
-@dataclass
 class SRCA_REUSE_COUNT(RuntimeParameter):
     srca_reuse_count: int = 0
 

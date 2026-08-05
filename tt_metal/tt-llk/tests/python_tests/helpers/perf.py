@@ -34,7 +34,7 @@ from .perf_schema import (
 )
 from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
-from .test_config import BuildMode, ProfilerBuild, TestConfig
+from .test_config import BuildMode, ProfilerBuild, TestConfig, TestOutcome
 from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
@@ -177,6 +177,25 @@ class PerfReport:
         for s in sigs[1:]:
             common = common & s
 
+        run_type_names = {run_type.name for run_type in PerfRunType}
+        metric_prefixes = ("mean(", "std(", "TEXT_SIZE(")
+
+        def is_run_type_metric_column(column: str) -> bool:
+            for prefix in metric_prefixes:
+                if column.startswith(prefix) and column.endswith(")"):
+                    metric = column[len(prefix) : -1]
+                    return metric.split("[", 1)[0] in run_type_names
+            return False
+
+        unique_columns = [
+            column
+            for info in schemas.values()
+            for column in sorted(frozenset(info["columns"]) - common)
+        ]
+        differs_only_by_run_type = bool(unique_columns) and all(
+            is_run_type_metric_column(column) for column in unique_columns
+        )
+
         lines = [
             f"Perf report schema contamination in {context or 'report'}: "
             f"{len(schemas)} incompatible column schemas were appended to a single CSV.",
@@ -198,15 +217,24 @@ class PerfReport:
                 )
             )
             lines.append(f"    example params: {info['sample']}")
-        lines += [
-            "",
-            "Fix one of two ways:",
-            "  (a) One test emitting different columns across parametrizations — usually a "
-            "template/runtime param that is None for some sweep values and set for others "
-            "(e.g. MATH_OP's pool_type). Make the param set consistent across the sweep.",
-            "  (b) Two genuinely different ops/families share the same py file — split them "
-            "into separate test files, one schema per file.",
-        ]
+        if differs_only_by_run_type:
+            lines += [
+                "",
+                "These schemas differ only by PerfRunType metric columns.",
+                "Run one PerfRunType per pytest session and use a qualified selector "
+                "such as '-k PerfRunType.PACK_ISOLATE' so PACK_ISOLATE does not also "
+                "match UNPACK_ISOLATE.",
+            ]
+        else:
+            lines += [
+                "",
+                "Fix one of two ways:",
+                "  (a) One test emitting different columns across parametrizations — usually a "
+                "template/runtime param that is None for some sweep values and set for others "
+                "(e.g. MATH_OP's pool_type). Make the param set consistent across the sweep.",
+                "  (b) Two genuinely different ops/families share the same py file — split them "
+                "into separate test files, one schema per file.",
+            ]
         raise PerfSchemaError("\n".join(lines))
 
     def frame(self) -> pd.DataFrame:
@@ -554,6 +582,7 @@ class PerfConfig(TestConfig):
         l1_acc=L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        boot_mode: BootMode = BootMode.DEFAULT,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -578,7 +607,7 @@ class PerfConfig(TestConfig):
             templates,
             runtimes,
             variant_stimuli,
-            BootMode.DEFAULT,
+            boot_mode,
             ProfilerBuild.Yes,
             1,  # L1_2_L1s
             unpack_to_dest,
@@ -729,6 +758,8 @@ class PerfConfig(TestConfig):
         # Setting header fields that are always there
         has_formats = bool(self.formats_config) and bool(self.formats_config[0])
         names = list(FORMAT_HEADERS) if has_formats else []
+        if has_formats:
+            names.append("register_format_hint")
         values = (
             [
                 self.formats_config[0].unpack_A_src,
@@ -737,6 +768,7 @@ class PerfConfig(TestConfig):
                 self.formats_config[0].unpack_B_dst,
                 self.formats_config[0].output_format,
                 self.formats_config[0].sfpu_math,
+                self.register_format_hint,
             ]
             if has_formats
             else []
@@ -777,6 +809,8 @@ class PerfConfig(TestConfig):
             )
             counter_combined = sweep.merge(counter_run_results, how="cross")
             PerfConfig.COUNTER_REPORT.append(counter_combined, label=self.test_name)
+
+        return TestOutcome()
 
 
 def create_test_or_perf_config(

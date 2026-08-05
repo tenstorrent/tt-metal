@@ -471,6 +471,22 @@ def pytest_ignore_collect(collection_path, config):
     return None
 
 
+def _make_hashable(value):
+    """Convert nested parametrization values into a stable compile-key value."""
+    if isinstance(value, dict):
+        return tuple(sorted((key, _make_hashable(item)) for key, item in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_make_hashable(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted(_make_hashable(item) for item in value))
+
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
 def _statically_skipped(definition) -> bool:
     conds = []
     for m in definition.iter_markers(name="skipif"):
@@ -505,8 +521,14 @@ def _collapse_runtime_only_variants(config, items):
         if marker is None or not getattr(item, "callspec", None):
             keep.append(item)
             continue
-        compile_key_fn = marker.kwargs["compile_key_fn"]
-        key = (item.nodeid.split("[")[0], repr(compile_key_fn(item.callspec.params)))
+        compile_key_fn = marker.kwargs.get("compile_key_fn")
+        if compile_key_fn is None:
+            keep.append(item)
+            continue
+        key = (
+            item.nodeid.split("[", 1)[0],
+            _make_hashable(compile_key_fn(item.callspec.params)),
+        )
         if key not in seen:
             seen.add(key)
             keep.append(item)
@@ -867,7 +889,7 @@ def counter_report(request, worker_id):
 
     PerfConfig.COUNTER_REPORT = None
 
-    if TestConfig.MODE == TestMode.PRODUCE:
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         return
 
     if PerfConfig.TEST_COUNTER == 0:

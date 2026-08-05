@@ -247,7 +247,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
 
     // Dummy dvalid NOP for the source register filled by MOVD2A/B
     const std::uint32_t nop_op =
-        TT_OP_UNPACR_NOP(DUMMY_UNP, 0 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, p_unpacr::UNP_NOP);
+        TT_OP_UNPACR_NOP(DUMMY_UNP, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, p_unpacr::UNP_NOP);
 
     // Unpack one face from CB with auto-increment of src face index.
     // Dst_Face_Idx_Inc=0: always write to face 0 position (FPU reads from 0 after CLR_AB).

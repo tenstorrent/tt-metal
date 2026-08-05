@@ -1,6 +1,6 @@
 ---
 name: quasar-perf-test
-description: Create, extend, debug, and validate Quasar LLK performance tests and their PerfRunType kernel paths. Use when adding perf_[op]_quasar.py, wiring PerfConfig, implementing UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE / L1_CONGESTION, or investigating implausible Quasar perf metrics and dvalid handshakes.
+description: Create, extend, debug, and validate Quasar LLK performance tests and their PerfRunType kernel paths. Use when adding perf_<op>_quasar.py, wiring PerfConfig, implementing UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE / L1_CONGESTION, or investigating implausible Quasar perf metrics and dvalid handshakes.
 ---
 
 # Quasar Perf Test
@@ -18,9 +18,14 @@ This skill covers two related workflows:
 - **Repair or extend**: implement or debug run-type behavior in an existing
   Quasar kernel.
 
+For complete-suite execution, follow
+`docs/tests/running_quasar_llk_tests_from_tt_metal.md` and use
+`tests/python_tests/quasar/run_perf_suite_orchestrator.sh`. For a single run
+type or subset, use `run_perf_suite_and_report.sh` directly.
+
 ## Choose the workflow
 
-1. If `tests/python_tests/quasar/perf_[op]_quasar.py` does not exist, follow
+1. If `tests/python_tests/quasar/perf_<op>_quasar.py` does not exist, follow
    **Create a perf test**.
 2. If the perf harness exists but run types are missing, hanging, or producing
    implausible metrics, follow **Repair PerfRunType paths**.
@@ -29,23 +34,23 @@ This skill covers two related workflows:
 ## Create a perf test
 
 1. Read:
-   - `tests/python_tests/quasar/test_[op]_quasar.py`
-   - `tests/sources/quasar/[op]_quasar_test.cpp`
+   - `tests/python_tests/quasar/test_<op>_quasar.py`
+   - `tests/sources/quasar/<op>_quasar_test.cpp`
    - the closest current Quasar perf test with the same pipeline shape
 2. Move reusable parameter axes from inline lambdas into named helpers when
    the perf harness needs them.
-3. Add `tests/python_tests/quasar/perf_[op]_quasar.py`.
+3. Add `tests/python_tests/quasar/perf_<op>_quasar.py`.
 4. Mark it with `@pytest.mark.perf` and `@pytest.mark.quasar`.
 5. Import the correctness test as a helper, normally:
 
    ```python
-   from test_[op]_quasar import test_[op]_quasar as run_[op]_quasar
+   from quasar.test_<op>_quasar import test_<op>_quasar as run_<op>_quasar
    ```
 
 6. Use a narrow perf-oriented sweep:
    - `run_types=PERF_RUN_TYPES_QUASAR` from `helpers.llk_params`
-   - a fixed `loop_factor=32`, unless the operation has an established value
-   - a fixed `is_perf=True`
+   - `loop_factor=[32]`, unless the operation has an established value
+   - `is_perf=[True]`
    - stable dimensions and exact destination fill when normalization depends
      on shape
 7. Pass `perf_report` and `is_perf=True` to the correctness helper.
@@ -67,7 +72,7 @@ This skill covers two related workflows:
 
 ## C++ structure
 
-In `tests/sources/quasar/[op]_quasar_test.cpp`:
+In `tests/sources/quasar/<op>_quasar_test.cpp`:
 
 - Include `perf.h` and `profiler.h`.
 - Put setup in `ZONE_SCOPED("INIT")`.

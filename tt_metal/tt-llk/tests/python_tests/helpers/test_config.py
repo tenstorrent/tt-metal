@@ -655,6 +655,9 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
+        self.register_format_hint = (
+            getattr(formats, "register_format_hint", None) if formats else None
+        )
         self.expected_nondeterministic = expected_nondeterministic
 
         TILE_SIZES = {
@@ -1264,6 +1267,11 @@ class TestConfig:
             )
 
             def build_kernel_part(name: str):
+                # Parallel compiles may reach the linker before another worker
+                # creates these variant directories.
+                os.makedirs(VARIANT_OBJ_DIR, exist_ok=True)
+                os.makedirs(VARIANT_ELF_DIR, exist_ok=True)
+
                 # COMPILE_FOR_TRISC is the single source of truth for the compute thread id on every
                 # arch (unpack=0/math=1/pack=2/sfpu=3). Quasar also gets -DLLK_TRISC_<NAME> below, but the
                 # LLK headers now require COMPILE_FOR_TRISC (see ckernel_addrmod.h), so pass it for Quasar too.

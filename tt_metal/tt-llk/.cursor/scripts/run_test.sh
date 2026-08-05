@@ -1,12 +1,12 @@
 #!/bin/bash
-# run_llk_tests.sh — centralised LLK test runner for codegen agents.
+# run_test.sh — centralised LLK test runner for coding agents.
 #
 # Encapsulates the two-step compile-then-simulate flow, flock-based simulator
 # serialisation, stale-process cleanup, and temp-file lifecycle so agents never
 # have to manage any of that themselves.
 #
 # Usage:
-#   run_llk_tests.sh <COMMAND> --worktree DIR --arch ARCH --test FILE [FILE ...] [OPTIONS]
+#   run_test.sh <COMMAND> --worktree DIR --arch ARCH --test FILE [FILE ...] [OPTIONS]
 #
 # Commands:
 #   count     Count test variants (collection-only; outputs integer to stdout)
@@ -62,21 +62,21 @@
 #
 # Examples:
 #   # Count variants before deciding --maxfail (see tester Step 2.1 table)
-#   VARIANT_COUNT=$(bash "$WORKTREE_DIR/codegen/scripts/run_llk_tests.sh" count \
+#   VARIANT_COUNT=$(bash "$WORKTREE_DIR/.cursor/scripts/run_test.sh" count \
 #       --worktree "$WORKTREE_DIR" --arch quasar --test test_sfpu_square_quasar.py)
 #
 #   # Compile + simulate, stop after 5 failures
-#   bash "$WORKTREE_DIR/codegen/scripts/run_llk_tests.sh" run \
+#   bash "$WORKTREE_DIR/.cursor/scripts/run_test.sh" run \
 #       --worktree "$WORKTREE_DIR" --arch quasar --test test_sfpu_square_quasar.py \
 #       --maxfail 5
 #   RUN_EXIT=$?
 #
 #   # Verification run — full matrix, no maxfail
-#   bash "$WORKTREE_DIR/codegen/scripts/run_llk_tests.sh" run \
+#   bash "$WORKTREE_DIR/.cursor/scripts/run_test.sh" run \
 #       --worktree "$WORKTREE_DIR" --arch quasar --test test_sfpu_square_quasar.py
 #
 #   # Single variant by parametrize ID (single-quotes and brackets are safe)
-#   bash "$WORKTREE_DIR/codegen/scripts/run_llk_tests.sh" simulate \
+#   bash "$WORKTREE_DIR/.cursor/scripts/run_test.sh" simulate \
 #       --worktree "$WORKTREE_DIR" --arch quasar --test test_sfpu_square_quasar.py \
 #       --test-id "test_sfpu_square_quasar.py::test_sfpu_square_quasar[formats:(..., 'SyncFull', ...)]"
 
@@ -223,7 +223,7 @@ _validate() {
 # ── count ─────────────────────────────────────────────────────────────────────
 # Outputs the variant count (integer) to stdout.
 # Collection log (including any errors) goes to stderr so the caller can
-# capture just the count: COUNT=$(run_llk_tests.sh count ...)
+# capture just the count: COUNT=$(run_test.sh count ...)
 
 _do_count() {
   _validate
@@ -309,6 +309,16 @@ _do_simulate() {
     _vlog "consume: $(_test_label) (arch=${ARCH}, mode=simulator, port=${PORT})"
   else
     _vlog "consume: $(_test_label) (arch=${ARCH}, mode=hardware)"
+  fi
+
+  # Emit the resolved consumer target up front so long simulator logs can be
+  # correlated with the exact variant or filter that produced them.
+  if [[ -n "$TEST_ID" ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] test-id: ${TEST_ID}" >&2
+  elif [[ -n "$K_FILTER" ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] test-id: $(_test_label) -k ${K_FILTER}" >&2
+  else
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] test-id: $(_test_label)" >&2
   fi
 
   # Remove temp scripts left by runs that died before their trap fired
