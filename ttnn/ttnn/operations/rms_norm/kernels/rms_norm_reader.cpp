@@ -66,7 +66,14 @@ constexpr uint32_t cb_input_tiles = 1;
 constexpr uint32_t cb_scaler = 3;
 constexpr uint32_t cb_gamma_sticks = 5;
 constexpr uint32_t cb_gamma_tiles = 6;
+// Perf 3 / D27: the cross-core combine's one-hot permutation bank (bf16).  Synthesized
+// here, consumed by the compute kernel's two matmul permutes, never popped.
+constexpr uint32_t cb_bank = 14;
 constexpr uint32_t TILE_DIM = 32;
+constexpr uint32_t FACE_DIM = 16;
+// bf16 1.0 == 0x3F80 (sign 0, exponent 127, mantissa 0) -- EXACT, so the permutation
+// matmuls multiply by a true unit and the bank costs nothing in accuracy.
+constexpr uint16_t BF16_ONE = 0x3F80;
 }  // namespace
 
 void kernel_main() {
@@ -116,7 +123,12 @@ void kernel_main() {
     // 2 face-rows.  The descriptor owns the choice (it knows gamma's tile format and
     // whether a face offset is 64-byte DRAM aligned); the kernel only spells the reads.
     constexpr uint32_t GAMMA_TRIM = get_compile_time_arg_val(19);
-    constexpr auto x_args = TensorAccessorArgs<20>();
+    // Perf 3 (descriptor D27): pages of the one-hot permutation bank this core must
+    // synthesize into cb_bank -- BLOCK_ROWS on the cross-core width combine, 0
+    // everywhere else (which elides the whole `reader_bank_boot` zone).  A page COUNT,
+    // not a COMBINE flag, so the reader never has to re-derive the combine's geometry.
+    constexpr uint32_t BANK_PAGES = get_compile_time_arg_val(20);
+    constexpr auto x_args = TensorAccessorArgs<21>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr bool NATIVE_X = (NATIVE_IN != 0);
@@ -210,6 +222,66 @@ void kernel_main() {
         DataflowBuffer stage_dfb(cb_input_sticks);
         noc.async_write_zeros(stage_dfb, stage_dfb.get_total_size_bytes());
         noc.write_zeros_l1_barrier();
+    }
+
+    // ---- boot: the COMBINE's one-hot permutation bank (Perf 3, descriptor D27) ----
+    //
+    // WHAT IT IS.  Page r of cb_bank is E_r: a bf16 tile that is all zero except a
+    // single EXACT 1.0 at element [0][r].  The compute kernel uses ONE bank for BOTH
+    // directions of the combine's compact-partial permutation:
+    //     pack    C = partial_r x E_r      E_r[0][r] = 1   -> C[i][r] = partial_r[i][0]
+    //     unpack  C = compact   x E_r^T    (matmul's srcB `transpose` reads E_r as
+    //                                       E_r^T, so E_r^T[r][0] = 1)
+    //                                                     -> C[i][0] = compact[i][r]
+    // so a core's BLOCK_ROWS column-shaped partials become BLOCK_ROWS COLUMNS of one
+    // tile before the gather, and come back apart after the multicast.  That is what
+    // makes the gather one whole-tile transaction, the root's fold ONE DEST window per
+    // round instead of BLOCK_ROWS, and the landing ring flat in BLOCK_ROWS.
+    //
+    // WHY IT IS SYNTHESIZED HERE AND NOT PASSED AS A TENSOR.  It is a pure function of
+    // BLOCK_ROWS, identical on every core, and this kernel already synthesizes the
+    // reduce's constant tiles the same way (`reader_scaler_boot` above); a host tensor
+    // would add an input-plumbing surface -- an extra tensor argument, its accessor, its
+    // allocation and a DRAM read -- for a constant the device can write in L1.
+    //
+    // WHY bf16.  A one-hot is EXACT in bf16 (1.0 == 0x3F80), so the permutation matmuls
+    // multiply by a true unit and the bank costs NOTHING in accuracy, at half the L1 of
+    // an fp32 bank.  MEASURED perf-flat against fp32 (isolated bench
+    // perf_experiments/compact_partial_transpose_r3, `member_pack` 419 vs 423 ns at
+    // BLOCK_ROWS 8, 1033 vs 1038 at 32 -- inside noise), so bf16 is free.
+    //
+    // RAW-L1-STORE JUSTIFICATION.  The zeroing is the device zero API
+    // (`Noc::async_write_zeros`), exactly as `reader_stage_zero` above; only the
+    // BLOCK_ROWS single-element stores are hand-rolled.  No kernel_lib helper writes an
+    // arbitrary constant at an arbitrary tile position: `l1_helpers.hpp` offers
+    // `zero_tile` / `prepare_zero_tile` (used here for the zero half) and
+    // `reduce_helpers_dataflow.hpp`'s `prepare_reduce_scaler` / `prepare_reduce_mask`
+    // emit a UNIFORM scaler or a row-0 CONTIGUOUS 0/1 mask -- neither can place a single
+    // 1.0 at column r.  Adding a helper for a one-off boot constant would be a worse
+    // trade than 8 lines with the tile layout spelled out; the layout arithmetic is the
+    // standard 2x2-faces-of-16x16 one and is written out below so it is checkable.
+    if constexpr (BANK_PAGES != 0) {
+        MaybeDeviceZoneScope("reader_bank_boot");
+        Noc noc;
+        DataflowBuffer bank_dfb(cb_bank);
+        const uint32_t bank_tile_bytes = get_tile_size(cb_bank);
+        // A fresh CB has write_ptr == base, so overload (1) of async_write_zeros (which
+        // writes at the WRITE pointer) covers the whole bank in one call.  Zero FIRST,
+        // barrier, THEN place the ones: the zero engine must not race the stores.
+        bank_dfb.reserve_back(BANK_PAGES);
+        noc.async_write_zeros(bank_dfb, BANK_PAGES * bank_tile_bytes);
+        noc.write_zeros_l1_barrier();
+        const uint32_t bank_base = get_write_ptr(cb_bank);
+        for (uint32_t r = 0; r < BANK_PAGES; ++r) {
+            // Element [0][r] of a 32x32 tile stored as 2x2 faces of 16x16: row 0 always
+            // lands in the TOP face row, so the face is (r / 16) (face 0 for columns
+            // 0..15, face 1 for 16..31) and the offset inside it is (r % 16) elements.
+            const uint32_t face_bytes = bank_tile_bytes / 4;
+            const uint32_t byte_off =
+                r * bank_tile_bytes + (r / FACE_DIM) * face_bytes + (r % FACE_DIM) * sizeof(uint16_t);
+            *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(bank_base + byte_off) = BF16_ONE;
+        }
+        bank_dfb.push_back(BANK_PAGES);
     }
 
     // ---- gamma: one chunk's worth of tiles (or sticks) --------------------

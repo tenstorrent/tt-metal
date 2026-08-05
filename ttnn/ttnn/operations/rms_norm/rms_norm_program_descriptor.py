@@ -34,7 +34,11 @@ Knob map (all tunable parameters, none inlined):
                             width tiles into DEST instead of packing every x^2
                             tile out to cb_x_squared (Lamp L6d; see D12)
     GATHER_FACES            faces per fp32 partial tile the cross-core combine's
-                            GATHER ships member -> root (see D13)
+                            GATHER ships member -> root on the BLOCK_ROWS == 1
+                            branch (see D13, scoped by D27)
+    CB_COMBINE_FLAT_DEPTH   page depth of the combine CBs that carry ONE compact
+                            tile per round and are therefore FLAT in BLOCK_ROWS
+                            (see D27)
     ROW_RESIDENT_MIN_ROWS_PER_CORE
                             tile-rows a core must own before the ROW_RESIDENT
                             regime is taken at a SHALLOWER depth than STREAM
@@ -420,29 +424,41 @@ the scheme, topology, work split and helper mapping are unchanged):
       WIDTH-shard geometries 1.02x-1.03x.  Small, because those geometries turned out
       NOT to be compute-throughput-bound the way the tile-op count suggested -- see
       D15 for what actually dominated them.
-  D13 Refinement 4 (perf).  GATHER_FACES: the cross-core combine's member -> root
-      GATHER ships only the leading / column-carrying faces of each fp32 partial
-      tile, not the whole tile.  The gather is the combine's only per-GROUP_SIZE
-      term (every member ships into ONE root, while the stat multicast back carries
-      BLOCK_ROWS tiles TOTAL however big the group is), so it is where a byte lever
-      has a fan-in multiplier on it.
+  D13 SCOPED by Perf 3 / D27, not retired.  GATHER_FACES selects how many of a partial
+      tile's four 16x16 faces the member -> root gather ships (2 = the pair that can hold
+      a REDUCE_ROW column vector, half the bytes).  D27 replaces the layout wherever a
+      block has more than one tile-row -- a member PERMUTES its partials into COLUMNS of
+      ONE tile and ships that tile WHOLE, because the receiver's un-permute matmul turns
+      an un-written column into NaN -- but at block_rows == 1 the permute is the identity
+      and the face-run gather survives, MEASURED: whole-tile ship there regressed the four
+      pinned WIDTH-shard geometries 0.86x-0.98x, monotone in group_size.  Two D13 findings
+      remain invariants either way and are recorded where they bind
+      (rms_norm_writer.cpp): zeroing the whole gather CB at boot is a RACE against an
+      already-landed member (measured pcc 0.87-0.99), and the gather was never
+      byte-bound at these group sizes -- halving its bytes moved the 64-core BLOCK
+      shard ~5%, which is why D27 goes after the TRANSACTION COUNT and the root's
+      per-row serialization instead.
 
-      A partial is a REDUCE_ROW result and does not fill its tile.  MEASURED, because
-      guessing which faces matter is exactly what went wrong first: shipping the
-      leading 3 faces of 4 passes the whole sharded suite, and so does shipping only
-      faces 0 and 2 (the pair that can hold a column vector) -- so faces 1 and 3 are
-      never read back, and the shipped value 2 halves the gather.
-
-      TWO findings worth keeping:
-        * ZEROING THE WHOLE GATHER CB AT BOOT TO DEFINE THE UNSHIPPED FACES IS A
-          RACE.  A member's partial can land before the root's wipe, and it did:
-          every combine cell failed at pcc 0.87-0.99 with rms 0.08-1.10.  Zeroing
-          exactly the UNSHIPPED faces is race-free by construction -- that region is
-          disjoint from everything any member ever writes -- and it is what ships, so
-          no undefined L1 reaches the root's elementwise sum or the rsqrt.
-        * THE BYTE MODEL OVER-PREDICTED.  Halving the gather moved the 64-core BLOCK
-          shard only ~5% (98989 -> 94301 ns), which is what said the combine is not
-          byte-bound at these group sizes and sent the search to D15.
+  D27 Perf 3 (perf) -- THE COMPACT PARTIAL TRANSPOSE.  The combine's per-round unit
+      stops being "BLOCK_ROWS column-shaped tiles" and becomes "ONE tile whose columns
+      0..BLOCK_ROWS-1 are the block's stats".  Every core matmul-permutes its own
+      partials into that shape before shipping and un-permutes the multicast stat back
+      afterwards (rms_norm_compute.cpp), against a one-hot bank the READER synthesizes
+      in L1 (rms_norm_reader.cpp `reader_bank_boot`).  What it changes here:
+        * cb_partials_gathered  GATHER_SLOTS * block_rows pages -> GATHER_SLOTS.  The
+          GROUP_SIZE x BLOCK_ROWS term LEAVES the L1-bound block_rows solve, which is
+          what makes a coarse block (and at the focus geometry ONE round) expressible
+          at all -- the flat ring is 1152 kB at block_rows 32 / group_size 8.
+        * cb_stat_handoff / cb_compact_handoff / cb_mcast_in are CB_COMBINE_FLAT_DEPTH
+          pages each, flat in block_rows.
+        * cb_bank is a NEW bf16 CB of block_rows pages, device-generated.
+        * cb_row_stat is NOT ALLOCATED on the combine path.  D22 already left it
+          strictly dead there (the fused fold accumulates in DEST and packs
+          cb_stat_handoff; CB_REDUCE_ACC is cb_sum_handoff and CB_STAT_B is
+          cb_row_final), so its CB_ROW_STAT_DEPTH * block_rows fp32 pages were pure
+          waste -- 256 kB/core at block_rows 32.
+      The measured justification lives at the kernel sites; the L1 arithmetic is at
+      `_solve_blocking`'s f32 page terms.
   D14 Refinement 4 (perf), Lamp L5 -- the op's THIRD compute regime, ROW_RESIDENT.
       X_RESIDENT is now an EXPLICIT flag instead of `num_w_chunks == 1`, and that
       decoupling IS the regime:
@@ -738,14 +754,28 @@ CB_ROW_STAT_DEPTH = 2
 # legal.
 DEST_ACC_SQUARE_MAX_WT = 8
 
-# Faces of each fp32 partial tile that the cross-core width combine's GATHER ships
-# from a member into the group root -- see D13.  A tile is 2x2 faces of 16x16; a
-# REDUCE_ROW partial is a column vector, so only faces 0 and 2 can carry data.
+# Faces of each fp32 partial tile that the cross-core width combine's GATHER ships from a
+# member into the group root -- see D13.  A tile is 2x2 faces of 16x16; a REDUCE_ROW partial
+# is a column vector, so only faces 0 and 2 can carry data.
 #   2  COMPACT (shipped): half the bytes, two face-sized transfers per tile.
 #   4  WHOLE: one whole-tile transfer -- Refinement 2/3's behaviour, byte-identical.
-# The A/B handle for the gather-byte lever; the stat MULTICAST back is deliberately
-# left whole-tile (it has no fan-in multiplier on it).
+#
+# Perf 3 / D27 CONFINES this to the BLOCK_ROWS == 1 branch (the compact branch must ship
+# whole tiles, or the receiver's un-permute matmul turns an un-written column into NaN) and
+# MEASURES that it has to stay there: shipping whole tiles at BLOCK_ROWS == 1 regressed the
+# four pinned WIDTH-shard geometries 0.86x-0.98x, MONOTONE in group_size, which is the
+# gather's fan-in multiplier showing itself.  So the knob is not dead -- it is scoped.
 GATHER_FACES = 2
+
+# Ring depth (in PAGES, not row-blocks) of the combine's BLOCK_ROWS-INDEPENDENT CBs:
+# cb_stat_handoff, cb_compact_handoff and cb_mcast_in each carry exactly ONE tile per
+# combine round under D27's compact layout, so their depth is a small constant instead
+# of a multiple of BLOCK_ROWS.  2 for the same reason CB_ROW_STAT_DEPTH is 2: the
+# producer must be able to fill round r+1's page while the consumer still holds round
+# r's (D24 publishes the root's own stat copy before the broadcast and needs the other
+# half of the ring to stay untouched; D25's pipeline packs block blk+1's compact
+# partial while the writer is still shipping block blk's).
+CB_COMBINE_FLAT_DEPTH = 2
 
 # Smallest number of tile-rows a core must own before the ROW_RESIDENT regime
 # (Lamp L5, D14) is taken at a SHALLOWER CB depth than STREAM would have used.
@@ -864,10 +894,17 @@ READER_CT_BAND = 15
 WRITER_CT_OUT_SHARD_ROW_BYTES = 14
 
 # --- Refinement 2, WIDTH/BLOCK sharded only (cross-core width combine) -------
-CB_SUM_HANDOFF = 10  # fp32: this core's raw partial sum(x^2), compute -> writer
-CB_PARTIALS_GATHERED = 11  # fp32: root's per-sender landing slots, writer -> compute
-CB_STAT_HANDOFF = 12  # fp32: root's finalized 1/rms tiles, compute -> writer (mcast src)
-CB_ROW_FINAL = 13  # fp32: mcast landing of the finalized 1/rms, writer -> compute
+# Perf 3 / D27 re-cuts the middle of this chain: cb_sum_handoff and cb_row_final are
+# now COMPUTE-PRIVATE (the permute consumes one and produces the other), and the two
+# CBs that cross to the writer carry ONE COMPACT tile per round instead of BLOCK_ROWS
+# column-shaped ones.
+CB_SUM_HANDOFF = 10  # fp32: pass A's raw per-row partials, reduce pack -> compact pack
+CB_PARTIALS_GATHERED = 11  # fp32: root's per-sender landing slots (ONE page per sender)
+CB_STAT_HANDOFF = 12  # fp32: root's finalized COMPACT stat, compute -> writer (mcast src)
+CB_ROW_FINAL = 13  # fp32: the un-permuted per-row 1/rms, compute -> compute (pass B)
+CB_BANK = 14  # bf16: the one-hot permutation bank E_r, reader -> compute (never popped)
+CB_COMPACT_HANDOFF = 15  # fp32: this core's COMPACT partial, compute -> writer (gather src)
+CB_MCAST_IN = 16  # fp32: multicast landing of the COMPACT stat, writer -> compute
 
 
 # ---------------------------------------------------------------------------
@@ -1715,6 +1752,32 @@ def create_program_descriptor(
             avail -= plan.l1_reserved + L1_CB_ARENA_BASE_RESERVE
         budget = int(max(0, avail) * L1_SAFETY_FRACTION)
         max_rows = max((a.row_count for a in plan.assignment), default=1) or 1
+        # HOW MANY COMBINE ROUNDS?  SETTLED BY MEASUREMENT (Perf 3 / D27), on the real op
+        # with D25's pipeline present, at the 64-core BLOCK-shard focus geometry (32
+        # tile-rows per core, group_size 8; one fresh-cache profiled run each):
+        #     block_rows  8 -> 4 rounds   25761 ns   (the pre-D27 blocking, compact)
+        #     block_rows 20 -> 2 rounds   24164 ns   1.066x  <-- what this solve now takes
+        #     block_rows 32 -> 1 round    L1 INFEASIBLE, measured: the CB region overshoots
+        #                                 the input shard's own L1 buffer by 48 kB
+        #                                 ("static circular buffer region ends at 1096576,
+        #                                  L1 buffer allocated at 1048576")
+        # So the coarser block IS worth taking -- the per-round sync + launch floor is real
+        # even behind D25's pipeline -- but ONE round is not expressible once pass A's and
+        # pass B's own CBs are counted, which is exactly the caveat the isolated bench
+        # flagged (it modelled no pass A, so it credited the collapse with latency D25
+        # already hides).  Nothing to gate: the solve takes the coarsest block that fits, as
+        # it always has, and D27 simply made "coarsest" much coarser.
+        #
+        # HARD CAP on the combine path (Perf 3 / D27): the compact partial packs one
+        # tile-row's sum into one COLUMN of a single tile, and a tile has TILE_DIM
+        # columns.  So a combine row-block can never exceed TILE_DIM tile-rows, however
+        # much L1 is free -- and now that D27 has removed the GROUP_SIZE x BLOCK_ROWS term
+        # from the budget below, L1 no longer bounds it on its own.  Discovered the way it
+        # should be: (1,1,3232,96) WIDTH-sharded (101 tile-rows per core, group_size 3)
+        # solved to a 101-row block and came back pcc 0.949109 / rel-RMS 0.31 -- the rows
+        # past column 31 simply have nowhere to live.  The kernels assert the same bound.
+        if plan.combine:
+            max_rows = min(max_rows, TILE_DIM)
         # A CB backed on the shard costs ZERO arena bytes (it aliases the tensor's
         # own L1), so its depth term drops out of the block multiplier -- and with
         # no NoC read to overlap, depth buys nothing there either.
@@ -1726,28 +1789,66 @@ def create_program_descriptor(
         # sequential compute helpers own all three TRISCs and cannot pipeline, so
         # those CBs drop to depth 1 (and must instead hold a whole block — R5).
         depth_candidates = CB_DEPTH_CANDIDATES if is_tile else (1,)
-        # fp32 pages per tile-row of a block: cb_row_stat, plus the combine's
-        # handoff / gather / mcast CBs when the width split is active.  The gather term
-        # is GATHER_SLOTS (group_size rounded up to even), matching D22's CB sizing --
-        # the L1 solve must see the same page count the allocation uses or BLOCK_ROWS
-        # is solved against a budget that does not exist.
-        f32_pages = CB_ROW_STAT_DEPTH + (
-            (CB_ROW_STAT_DEPTH + (plan.group_size + plan.group_size % 2) + 1 + CB_ROW_STAT_DEPTH) if plan.combine else 0
-        )
 
-        def _resident_fit(depth):
+        # ---- the fp32 (and bank) page terms, split PER-TILE-ROW vs FIXED ---------
+        # Perf 3 / D27.  This split IS the compaction's L1 lever, so it is spelled out
+        # rather than folded into one number: the combine's gather ring and its three
+        # one-tile-per-round CBs no longer scale with BLOCK_ROWS at all, so the
+        # GROUP_SIZE x BLOCK_ROWS product LEAVES `per_tilerow` and becomes a constant.
+        # At group_size 8 the focus geometry's per-tile-row fp32 term drops 15 -> 4
+        # pages (61440 -> 16384 B), which is what lets the solve take a COARSE block
+        # (the flat ring alone is GATHER_SLOTS * 32 = 1152 kB at BLOCK_ROWS 32).
+        #
+        # The solve MUST agree page-for-page with the allocation below or BLOCK_ROWS is
+        # solved against a budget that does not exist.
+        #   per tile-row : cb_row_stat (LOCAL path only -- D27 stops allocating it on
+        #                  the combine path, where D22 already left it dead),
+        #                  cb_sum_handoff, cb_row_final, and the bf16 cb_bank.
+        #   fixed        : cb_partials_gathered (GATHER_SLOTS pages, one per sender)
+        #                  + cb_stat_handoff, and on the COMPACT path also
+        #                  cb_compact_handoff / cb_mcast_in.
+        #
+        # `compact` is the D27 carve-out: at block_rows == 1 the permutation is the IDENTITY
+        # and the kernels elide it, so the bank and the two permute CBs are not allocated
+        # either.  The solve therefore has to price BOTH term sets -- price only the compact
+        # one and a block_rows == 1 build is solved against ~14 kB of CBs that do not exist.
+        # The dependency is not circular: the compact terms are strictly LARGER, so if they
+        # admit a block of 2 or more the compact path is the one that will be built, and
+        # otherwise block_rows is 1 and the identity terms are the ones to check.
+        def _f32_terms(compact):
+            per_row = (CB_ROW_STAT_DEPTH + CB_ROW_STAT_DEPTH) if plan.combine else CB_ROW_STAT_DEPTH
+            fixed_pages = 0
+            bank = 0
+            if plan.combine:
+                # cb_partials_gathered (one page per sender) + cb_stat_handoff.
+                fixed_pages = (plan.group_size + plan.group_size % 2) + CB_COMBINE_FLAT_DEPTH
+                if compact:
+                    fixed_pages += 2 * CB_COMBINE_FLAT_DEPTH  # compact_handoff + mcast_in
+                    # cb_bank: ONE bf16 one-hot page per tile-row of a block (page r selects
+                    # column r).  bf16 because the one-hot is EXACT there -- half the L1 of
+                    # an fp32 bank, measured-identical result and measured-identical ns.
+                    bank = st
+            return per_row * ft + bank, fixed_pages * ft
+
+        def _resident_fit(depth, compact):
             mult = _cb_block_mult(depth if dx0 is None else dx0, depth if do0 is None else do0, has_gamma)
+            per_row_bytes, combine_fixed = _f32_terms(compact)
             fixed = (
                 (wt_core * gt)  # cb_gamma_tiles
                 + (wt_core * gt if gamma_is_rm else 0)  # cb_gamma_sticks
                 + (2 * CB_RM_STAGE_DEPTH * wt_core * bt if not is_tile else 0)  # stick staging
                 + scaler_bytes
+                + combine_fixed
             )
-            per_tilerow = wt_core * bt * mult + f32_pages * ft
+            per_tilerow = wt_core * bt * mult + per_row_bytes
             return max(0, (budget - fixed) // max(1, per_tilerow)), mult
 
         for depth in depth_candidates:
-            brmax, _ = _resident_fit(depth)
+            brmax, _ = _resident_fit(depth, compact=True)
+            if brmax < 2:
+                # Either it does not fit at all, or it fits at exactly one tile-row -- and a
+                # one-row block takes the IDENTITY path, whose CBs are strictly smaller.
+                brmax = min(1, _resident_fit(depth, compact=False)[0])
             if brmax >= 1:
                 # RESIDENT: the whole per-core row slice is resident; take the
                 # coarsest row block that fits, i.e. the entire assignment when it does.
@@ -1775,7 +1876,10 @@ def create_program_descriptor(
             held = depth_x * wt_core * bt  # cb_input_tiles: a WHOLE tile-row of x
             if has_gamma:
                 held += wt_core * gt  # cb_gamma_tiles: the whole row, read once
-            fixed = held + scaler_bytes + f32_pages * ft  # block_rows == 1
+            # block_rows == 1 here, so the IDENTITY term set (D27's carve-out) is the
+            # one that will be built.
+            per_row_bytes, combine_fixed = _f32_terms(compact=False)
+            fixed = held + scaler_bytes + per_row_bytes + combine_fixed
             # Per width tile of a CHUNK: cb_x_squared + cb_normalized + cb_output_tiles,
             # plus the ROW_MAJOR staging rings (gamma's stick ring is chunked too).
             per_chunk_tile = (
@@ -1824,7 +1928,9 @@ def create_program_descriptor(
             + (gt * (2 if gamma_is_rm else 1) if has_gamma else 0)
             + (2 * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)  # D2
         )
-        fixed_stream = scaler_bytes + f32_pages * ft  # block_rows == 1 here
+        # block_rows == 1 here too -- the IDENTITY term set.
+        stream_per_row, stream_combine_fixed = _f32_terms(compact=False)
+        fixed_stream = scaler_bytes + stream_per_row + stream_combine_fixed
         wt_chunk_l1_max = max(1, (budget - fixed_stream) // per_chunk_tile_bytes)
         wtc = _largest_divisor_at_most(wt_core, wt_chunk_l1_max)  # D1
         return 1, wtc, wt_core // wtc, depth, depth, False
@@ -1862,6 +1968,18 @@ def create_program_descriptor(
     assert not (combine and num_w_chunks > 1), "rms_norm: a width-split core takes its slice in one chunk"
     row_resident = x_resident and num_w_chunks > 1
     assert not row_resident or block_rows == 1, "rms_norm: ROW_RESIDENT holds ONE tile-row of x"
+    # Perf 3 / D27's ONE carve-out, derived here and nowhere else: the compact partial
+    # transpose is only built when a block has more than one tile-row.  At block_rows == 1
+    # both permutation matmuls are the IDENTITY (`partial_0 x E_0` is the tile it started
+    # as) and the compact layout degenerates into the flat one, so the kernels elide the
+    # permute pair and the bank / cb_compact_handoff / cb_mcast_in are not allocated at all.
+    # MEASURED reason it is elided rather than left uniform: the four pinned WIDTH-shard
+    # geometries all solve to block_rows == 1 and regressed 0.76-0.80x whole-op with the
+    # identity permutes in (3724 -> 4880, 4527 -> 5644, 5406 -> 7119, 5724 -> 7509 ns) --
+    # the extra L1 round trip is fully exposed on a single-round combine.  The GATHER
+    # itself is NOT carved out: both paths ship one whole tile into a GATHER_SLOTS ring.
+    compact_combine = combine and block_rows > 1
+    assert block_rows <= TILE_DIM or not combine, "rms_norm: a compact combine block is at most 32 tile-rows"
     # Width tiles cb_input_tiles / cb_gamma_tiles span.  Equals wt_chunk in both
     # Phase-0 regimes (where wt_chunk == wt_per_core if resident), so every
     # non-L5 build stays byte-identical.
@@ -1981,7 +2099,16 @@ def create_program_descriptor(
     cbs.append(_cb(CB_SCALER, st, scaler_pages, ttnn.bfloat16, all_cores))
     # D6: CB_ROW_STAT_DEPTH * block_rows, so transform_in_place's rotation leaves
     # a PARTIAL final block's stat tiles contiguous for pass B's indexed read.
-    cbs.append(_cb(CB_ROW_STAT, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
+    #
+    # NOT ALLOCATED on the combine path (Perf 3 / D27).  D22 already left cb_row_stat
+    # strictly dead there -- the fused root fold accumulates the group sum in DEST and
+    # packs cb_stat_handoff, CB_REDUCE_ACC is cb_sum_handoff (D18) and CB_STAT_B is
+    # cb_row_final -- so its CB_ROW_STAT_DEPTH * block_rows fp32 pages were pure waste
+    # (64 kB/core at block_rows 8, 256 kB at 32).  The compute kernel only names it
+    # inside `if constexpr (!CROSS_CORE)` branches, so nothing on the combine path can
+    # touch an unallocated slot.
+    if not combine:
+        cbs.append(_cb(CB_ROW_STAT, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
     if has_gamma:
         if gamma_is_rm:
             # The stick staging stays CHUNKED even under ROW_RESIDENT -- the tilize
@@ -2015,6 +2142,12 @@ def create_program_descriptor(
         # already carries the happens-before chain: a member's ship(r+1) is preceded by its
         # receive() of round r's stat, which the root only sends after its fold has drained
         # the ring.
+        #
+        # Perf 3 / D27: cb_sum_handoff is now COMPUTE-PRIVATE (pass A's reduce packs it,
+        # the compact permute consumes it), so the "dedicated to the cross-kernel
+        # handoff" note above has moved down to cb_compact_handoff.  Its depth stays
+        # CB_ROW_STAT_DEPTH * block_rows for the same D25 reason: the pipelined pass A
+        # for block blk+1 packs into it while block blk's pages are still in flight.
         cbs.append(_cb(CB_SUM_HANDOFF, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
         # Perf 2 (D22): the gather lands GATHER_SLOTS -- group_size ROUNDED UP TO EVEN --
         # slots per tile-row, not group_size.  The root's fused fold walks a row's
@@ -2027,10 +2160,36 @@ def create_program_descriptor(
         # focus shape's 8) and `block_rows` fp32 pages at odd group_size -- one 4 kB page
         # at the op's only odd profile, (1,1,32,2304) WIDTH 9c with block_rows == 1.
         # Both kernels re-derive GP from GROUP_SIZE identically, so this needs no CT arg.
+        #
+        # Perf 3 / D27 -- THE COMPACT LAYOUT'S PAGE COUNTS.  The gather ring is ONE page
+        # per sender, FLAT IN BLOCK_ROWS, because a sender's whole block now travels as
+        # one tile whose columns are its BLOCK_ROWS stats.  That is the L1 lever: at
+        # group_size 8 / block_rows 32 the flat ring was 256 pages == 1152 kB (an L1
+        # OOM, measured), and it is now 8 pages == 32 kB.
         gather_slots = plan.group_size + plan.group_size % 2
-        cbs.append(_cb(CB_PARTIALS_GATHERED, ft, gather_slots * block_rows, ttnn.float32, all_cores))
-        cbs.append(_cb(CB_STAT_HANDOFF, ft, block_rows, ttnn.float32, all_cores))
+        cbs.append(_cb(CB_PARTIALS_GATHERED, ft, gather_slots, ttnn.float32, all_cores))
+        # ONE tile per round -- the multicast source, whichever path is built -- so
+        # CB_COMBINE_FLAT_DEPTH pages, not block_rows.
+        cbs.append(_cb(CB_STAT_HANDOFF, ft, CB_COMBINE_FLAT_DEPTH, ttnn.float32, all_cores))
+        # cb_row_final: the un-permute's output on the compact path (compute-private there),
+        # the multicast landing on the identity path (writer -> compute, as before D27).
         cbs.append(_cb(CB_ROW_FINAL, ft, CB_ROW_STAT_DEPTH * block_rows, ttnn.float32, all_cores))
+        if compact_combine:
+            # The cross-kernel gather source: compute packs the compact partial, the writer
+            # ships it.  Single producer, single consumer.
+            cbs.append(_cb(CB_COMPACT_HANDOFF, ft, CB_COMBINE_FLAT_DEPTH, ttnn.float32, all_cores))
+            # The multicast landing.  Declared on ALL cores of the mcast box (including the
+            # INACTIVE ones a non-rectangular width-shard grid drags in) so its L1 address
+            # is identical everywhere -- that is how the root broadcasts to an address it
+            # computed locally, exactly as cb_row_final is used on the identity path.
+            cbs.append(_cb(CB_MCAST_IN, ft, CB_COMBINE_FLAT_DEPTH, ttnn.float32, all_cores))
+            # The one-hot permutation bank E_r (page r carries a single exact 1.0 at [0][r]),
+            # synthesized in L1 by the reader's `reader_bank_boot` and never popped.  ONE
+            # bank serves BOTH directions: the pack does partial_r x E_r (column r <- column
+            # 0) and the un-pack does compact x E_r^T via matmul's srcB `transpose` flag.
+            # bf16 because the one-hot is EXACT there -- measured perf-flat against fp32
+            # (member_pack 419 vs 423 ns) at half the L1.
+            cbs.append(_cb(CB_BANK, st, block_rows, ttnn.bfloat16, all_cores))
 
     # ---- ROW_MAJOR staging-ring zero (R3, generalized by Refinement 2b) ----
     # The pad bytes of a staged stick are never written by a read, so whatever L1
@@ -2073,11 +2232,17 @@ def create_program_descriptor(
         1 if stage_zero else 0,  # 17 zero the RM staging ring at boot
         1 if x_resident else 0,  # 18 X_RESIDENT: x/gamma held across both passes (D14)
         gamma_trim,  # 19 TILE-gamma read granularity (D23): 0 whole / 1 half page / 2 face-rows
+        # 20 BANK_PAGES (D27): one-hot bank pages the reader synthesizes into cb_bank,
+        # == block_rows on the COMPACT combine path and 0 (whole zone elided) everywhere
+        # else -- including the block_rows == 1 identity carve-out, which needs no bank.
+        # Passed as a page COUNT rather than a COMBINE flag so the reader needs no second
+        # derivation of the combine's geometry, and so the carve-out is decided in ONE place.
+        (block_rows if compact_combine else 0),
     ]
     # The kernel reads its accessor args at TensorAccessorArgs<N>() -- N must equal
     # the scalar CT-arg count above.  Assert it here so adding a scalar arg fails
     # in Python instead of mis-parsing on device.
-    assert len(reader_ct_args) == 20, "rms_norm_reader.cpp expects TensorAccessorArgs<20>()"
+    assert len(reader_ct_args) == 21, "rms_norm_reader.cpp expects TensorAccessorArgs<21>()"
     assert reader_ct_args[READER_CT_BAND] == (1 if plan.band else 0), "READER_CT_BAND index drifted"
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
@@ -2106,7 +2271,9 @@ def create_program_descriptor(
         out_shard_pages,  # 12 pages of the resident out shard (native only)
         1 if plan.band else 0,  # 13 BAND: write the band back stick-by-stick
         plan.out_shard_row_bytes,  # 14 L1 stick stride inside the out shard (0 => accessor)
-        GATHER_FACES,  # 15 faces per partial tile the gather ships (D13)
+        # 15 faces per partial tile the IDENTITY-path gather ships (D13, scoped by D27 to
+        # the block_rows == 1 branch -- the compact branch always ships whole tiles).
+        GATHER_FACES,
     ]
     assert len(writer_ct_args) == 16, "rms_norm_writer.cpp expects McastArgs<16, 10>()"
     assert (

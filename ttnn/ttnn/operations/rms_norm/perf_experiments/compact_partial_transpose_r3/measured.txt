@@ -253,3 +253,55 @@ Focus (GROUP_SIZE 8, BLOCK_ROWS 8), the combine's own CBs as bench B declares th
           variants and 3.11x / 1.59x.  Both kernels derive the round's window as
           `GATHER_SLOTS * rows` (COMPACT: GATHER_SLOTS), identically on every core -- that identity
           is what keeps a remote sender's locally-computed landing address equal to the root's.
+
+=== 11. GRADUATION INTO THE REAL OP (Perf 3 / D27) -- MEASURED, and two corrections ==========
+The idea IS in the op now (kernels/*.cpp + rms_norm_program_descriptor.py, uncommitted).  Whole-op
+device kernel ns, ONE fresh-cache profiled run per variant (a second confirming run in brackets for
+the cells that sat on the ~2-3% noise band), against the CURRENT baseline (post-D26):
+
+ target                                   before    after           ratio
+ (1,1,8192,1024) BLOCK 64c  *FOCUS*        31803    24081 [24164]   1.321x
+ (1,1,32,1024)   WIDTH  8c                 3724      3685 [ 3764]   FLAT
+ (1,1,32,2304)   WIDTH  9c (odd)           4527      4485 [ 4399]   FLAT
+ (1,1,32,5120)   WIDTH 32c                 5406      5404 [ 5411]   FLAT
+ (1,1,32,7168)   WIDTH 28c                 5724      5836 [ 5793]   FLAT
+ interleaved (1,1,8192,{1024,2304,5120,7168})  combine OFF -- unchanged code, noise only
+
+TWO THINGS THIS BENCH GOT WRONG, both found by measuring the real op:
+ (a) BLOCK_ROWS = 1 IS A REGRESSION IN THE OP, not the 1.02x-1.70x win this bench measured.  The
+     bench's BLOCK_ROWS=1 credit came ENTIRELY from the gather boot-zeroing disappearing -- and D26
+     has since deleted that stage from the op, so the credit was already banked.  What is left at
+     BLOCK_ROWS=1 is a pure cost: the permute is the IDENTITY (partial_0 x E_0 is the tile it
+     started as) and only adds an L1 round trip a single-round combine cannot hide.  Measured
+     0.76x-0.80x on the four WIDTH geometries.  The op therefore carves BLOCK_ROWS == 1 out --
+     `COMPACT = CROSS_CORE && (BLOCK_ROWS > 1)`, one predicate, both kernels.
+ (b) GATHER_FACES IS NOT DEAD.  This bench asserted a compact page must ship WHOLE (true, and it
+     is a correctness property on the compact path).  But on the BLOCK_ROWS == 1 identity path
+     there is no un-permute matmul, so D13's two-face ship is legal AND faster: shipping whole
+     tiles there DOUBLES the bytes into the root, and it measured 0.86x-0.98x MONOTONE IN
+     GROUP_SIZE -- the gather's fan-in multiplier's own signature.  The knob survives, scoped.
+
+THE num_blocks QUESTION, settled on the real op (focus geometry, D25's pipeline present):
+   block_rows  8 -> 4 rounds   25761 ns   (the pre-D27 blocking, compact)
+   block_rows 20 -> 2 rounds   24081 ns   1.066x   <-- what the solve now takes naturally
+   block_rows 32 -> 1 round    L1 INFEASIBLE, measured: the static CB region overshoots the input
+                               shard's own L1 buffer by 48 kB.
+ So the coarse block IS worth taking, and ONE round is NOT expressible once pass A's and pass B's
+ CBs are counted -- exactly the caveat section 5 flagged.  Section 5's 5428 ns one-round cell
+ modelled no pass A and does not transfer.
+ Decomposition: compaction at the OLD blocking = 31803 -> 25761 = 1.235x; the L1 dividend (a
+ coarser block) adds 1.066x on top.
+
+A THIRD BUG THIS BENCH COULD NOT SEE: with the GROUP_SIZE x BLOCK_ROWS term gone from the
+descriptor's L1 solve, BLOCK_ROWS became free to exceed 32 -- and a compact tile has 32 COLUMNS.
+(1,1,3232,96) WIDTH-sharded (101 tile-rows/core) solved to a 101-row block and returned
+pcc 0.949109 / rel-RMS 0.31.  The op now caps block_rows at TILE_DIM on the combine path, with a
+matching static_assert in both kernels.
+
+PRECISION ON THE REAL OP (same probe, before vs after, bf16/HiFi2/fp32_dest_acc_en=False):
+ (1,1,8192,1024) BLOCK 64c   pcc 0.9999842 -> 0.9999839   rel-RMS 0.006648 -> 0.006209  BETTER
+ (1,1,3232,96)   WIDTH  3c   pcc 0.9999829 -> 0.9999826   rel-RMS 0.006459 -> 0.006020  BETTER
+ the four WIDTH-shard geometries: BIT-FOR-BIT IDENTICAL (identity path, unchanged numerics)
+ This bench's 1.7x rel-RMS penalty (0.00383 vs 0.00227) was measured on the STAT in isolation; at
+ whole-op scale the error is dominated by bf16 x and pass B, so it does not surface.  Nothing
+ tightened.  No precision knob was touched.

@@ -15,6 +15,16 @@
 //            mul<Row>               cb_normalized, cb_gamma_tiles -> cb_output_tiles
 //            [RM] untilize          cb_output_tiles -> cb_output_sticks
 //
+// Under the cross-core width COMBINE the finalize step is replaced by three stages
+// (Perf 3 / D27 -- the compact partial transpose; full justification at the
+// `member_pack` lambda and the fold below):
+//   member_pack  matmul-permute  cb_sum_handoff (rows tiles) -> cb_compact_handoff
+//                                (ONE tile, columns 0..rows-1 = the rows' partials)
+//   root fused   ONE DEST window over the group's GATHER_SLOTS compact pages +
+//                the finalize + one pack             -> cb_stat_handoff
+//   recv_unpack  matmul-un-permute cb_mcast_in (1 tile) -> cb_row_final (rows tiles)
+// Pass B is untouched by all of it: it still reads a column-shaped stat.
+//
 // The regimes differ ONLY in whether cb_input_tiles / cb_gamma_tiles are held
 // across both passes, and how wide they are (X_RESIDENT / X_HOLD_WT, from the
 // descriptor -- deviation D14):
@@ -61,6 +71,9 @@
 // add_tiles / add_tiles_init with acc_to_dest -- the root's fused pairwise DEST fold
 // (Perf 2 / D22; justification at the fused chain in the COMBINE branch).
 #include "api/compute/eltwise_binary.h"
+// matmul_tiles / matmul_init -- the COMBINE's compact partial transpose (Perf 3 / D27;
+// justification at the permute call sites).  The FPU's only horizontal-mixing primitive.
+#include "api/compute/matmul.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 // PERMANENT per-stage device-profiler instrumentation (never remove; free when
 // the profiler is off -- see the header's durability contract).
@@ -161,6 +174,44 @@ ALWI void stat_scale_col_skip(uint32_t idst, uint32_t inv_w_bits, uint32_t eps_b
 ALWI void rsqrt_tile_col_skip(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_(rms_stat_rsqrt_body<2, 4>, idst, VectorMode::C);
 }
+
+// ---- THE COMPACT FINALIZE'S TWO WIDER SCOPES (Perf 3 / D27) ------------------------
+// THESE ARE A CORRECTNESS REQUIREMENT, NOT A PERF CHOICE, and the pair above must NOT be
+// reused on a compact stat tile.  D27's combine finalizes ONE tile whose columns
+// 0..BLOCK_ROWS-1 each hold a different tile-row's group sum, so the finalize has to
+// visit EVERY one of those columns.  The <STRIDE=2, ITERS=4> pair above walks even
+// parity only -- columns 0,2,..,14 -- which is exactly right for a stat that lives in
+// column 0 and SILENTLY WRONG from BLOCK_ROWS = 2 up: the ODD rows' sums are never
+// scaled by 1/W and never rsqrt-ed.
+//
+// MEASURED, twice (perf_experiments/compact_partial_transpose_r2 and _r3's bench A, at
+// the op's pinned config): the narrow scope on a compact tile gives pcc 0.9972987 with
+// rel-RMS 1036 against this op's 0.04 bound -- i.e. a bug pcc ALONE would have waved
+// through, the third of that kind in this op.  It is also 1.39x FASTER (553 vs 770
+// ns/round), so it is exactly the sort of "win" that has to be refused.
+// _r3's test_combine_bench.py keeps `test_finalize_scope_hazard` as a LIVE assertion
+// that fails if the narrow scope ever starts passing on a compact tile.
+//
+// <STRIDE=1, ITERS=8> keeps the product at 8 (the invariant above), so the net dst_reg
+// advance is unchanged and VectorMode's face stepping composes exactly as before:
+//   VectorMode::C   faces 0 and 2  -> columns 0..15   (BLOCK_ROWS <= 16)
+//   VectorMode::RC  all four faces -> columns 0..31   (BLOCK_ROWS > 16)
+// Widening C to RC is a measured flat +452 ns/round, which is why it is taken only where
+// BLOCK_ROWS actually needs columns 16..31.  Both bodies stay at the SAME <1,8> in the
+// scale and the rsqrt, so the +eps guard still covers every lane the rsqrt touches (no
+// rsqrt(0) = inf on an all-zero row) -- the same invariant the narrow pair carries.
+ALWI void stat_scale_col_full(uint32_t idst, uint32_t inv_w_bits, uint32_t eps_bits) {
+    _llk_math_eltwise_unary_sfpu_params_(rms_stat_scale_body<1, 8>, idst, VectorMode::C, inv_w_bits, eps_bits);
+}
+ALWI void rsqrt_tile_col_full(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_(rms_stat_rsqrt_body<1, 8>, idst, VectorMode::C);
+}
+ALWI void stat_scale_all(uint32_t idst, uint32_t inv_w_bits, uint32_t eps_bits) {
+    _llk_math_eltwise_unary_sfpu_params_(rms_stat_scale_body<1, 8>, idst, VectorMode::RC, inv_w_bits, eps_bits);
+}
+ALWI void rsqrt_tile_all(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_(rms_stat_rsqrt_body<1, 8>, idst, VectorMode::RC);
+}
 #endif  // TRISC_MATH
 
 // The SFPU payload only, no init -- so the eltwise_chain element can hoist the init out
@@ -169,6 +220,19 @@ template <uint32_t RMS_INV_W, uint32_t RMS_EPS>
 ALWI void stat_finalize_payload(uint32_t dst) {
     MATH((stat_scale_col_skip(dst, RMS_INV_W, RMS_EPS)));
     MATH((rsqrt_tile_col_skip(dst)));
+}
+
+// The COMPACT (D27) finalize's payload.  `RMS_WIDE` selects VectorMode::RC over C and is
+// a pure function of BLOCK_ROWS at the one call site -- see the scope note above.
+template <uint32_t RMS_INV_W, uint32_t RMS_EPS, bool RMS_WIDE>
+ALWI void compact_finalize_payload(uint32_t dst) {
+    if constexpr (RMS_WIDE) {
+        MATH((stat_scale_all(dst, RMS_INV_W, RMS_EPS)));
+        MATH((rsqrt_tile_all(dst)));
+    } else {
+        MATH((stat_scale_col_full(dst, RMS_INV_W, RMS_EPS)));
+        MATH((rsqrt_tile_col_full(dst)));
+    }
 }
 
 // User-defined eltwise_chain element on the documented UnaryOp<Derived, Slot> CRTP
@@ -210,6 +274,13 @@ constexpr uint32_t cb_sum_handoff = 10;
 constexpr uint32_t cb_partials_gathered = 11;
 constexpr uint32_t cb_stat_handoff = 12;
 constexpr uint32_t cb_row_final = 13;
+// Perf 3 / D27 -- the compact partial transpose.  cb_bank is the one-hot permutation
+// bank the READER synthesizes (never popped); cb_compact_handoff carries this core's
+// permuted partial out to the writer; cb_mcast_in is where the root's compact stat
+// lands.  cb_sum_handoff and cb_row_final are now compute-private.
+constexpr uint32_t cb_bank = 14;
+constexpr uint32_t cb_compact_handoff = 15;
+constexpr uint32_t cb_mcast_in = 16;
 }  // namespace
 
 void kernel_main() {
@@ -490,6 +561,59 @@ void kernel_main() {
     // the odd contributor as an exact +0.0.  See the fused chain below.
     constexpr uint32_t GATHER_SLOTS = GROUP_SIZE + GROUP_SIZE % 2;
     constexpr uint32_t GATHER_HALF = GATHER_SLOTS / 2;
+    // Perf 3 (descriptor D27) -- the COMPACT partial's two derived knobs.
+    //
+    // COMPACT_FIN_WIDE: which VectorMode the compact finalize needs.  A compact stat tile
+    // carries BLOCK_ROWS stats in columns 0..BLOCK_ROWS-1; VectorMode::C reaches faces 0
+    // and 2 == columns 0..15, RC reaches all 32.  A CORRECTNESS threshold, not a tuning
+    // one -- see the scope note at the definitions of stat_scale_col_full / stat_scale_all.
+    // A compact tile holds ONE tile-row's stat per COLUMN, and a tile has 32 columns, so
+    // this is the structural ceiling on a combine row-block.  The descriptor caps its
+    // BLOCK_ROWS solve at the same 32; asserted here so a future budget change that lifts
+    // the cap fails at compile time instead of silently dropping rows past column 31 (which
+    // it did, at pcc 0.949109 / rel-RMS 0.31, on (1,1,3232,96) WIDTH-sharded).
+    static_assert(!CROSS_CORE || BLOCK_ROWS <= 32, "rms_norm: a compact combine block is at most 32 tile-rows");
+    // THE ONE CARVE-OUT, and it is an IDENTITY, not a benchmark boundary.  At BLOCK_ROWS
+    // == 1 a block has exactly one tile-row, so "permute the block's stats into columns
+    // 0..BLOCK_ROWS-1" is `partial_0 x E_0`, which is the tile it started as: BOTH matmuls
+    // are the identity map, and the compact tile IS the column-shaped partial.  So the
+    // compact layout DEGENERATES into the flat one there -- same GATHER_SLOTS ring, same
+    // one-whole-tile ship, same ONE DEST window in the fold, same one-page multicast -- and
+    // all the permute pair can add is an extra L1 round trip (cb_sum_handoff ->
+    // cb_compact_handoff on the way out, cb_mcast_in -> cb_row_final on the way back) that
+    // no round has any latency left to hide, plus the reader's bank boot.
+    //
+    // MEASURED, whole op, one fresh-cache profiled run each, on the four pinned WIDTH-shard
+    // geometries (all of which solve to BLOCK_ROWS == 1, num_blocks == 1):
+    //   (1,1,32,1024) 8c   3724 -> 4880 ns   0.76x
+    //   (1,1,32,2304) 9c   4527 -> 5644 ns   0.80x
+    //   (1,1,32,5120) 32c  5406 -> 7119 ns   0.76x
+    //   (1,1,32,7168) 28c  5724 -> 7509 ns   0.76x
+    // i.e. a MATERIAL REGRESSION, not noise, and it is earned by the identity above rather
+    // than by the shapes: the isolated bench DID measure BLOCK_ROWS == 1 as a win, but its
+    // baseline still paid the gather's boot-zeroing, which D26 has since deleted from the
+    // op -- so that credit was already banked and there was nothing left for the permute to
+    // buy.  Everything from BLOCK_ROWS >= 2 up is on the compact path with no further
+    // qualification (measured 1.11x-14.2x on the fold across BLOCK_ROWS 2..32 x GROUP_SIZE
+    // 4..32, and flat is inside the domain).
+    //
+    // What this carve-out does NOT re-introduce: the D13 face-run gather.  The BLOCK_ROWS
+    // == 1 path ships the partial as ONE WHOLE TILE too -- one transaction instead of two
+    // face writes, and every landing byte defined.  The two paths differ ONLY by the elided
+    // permute pair and by the finalize's lane scope.
+    constexpr bool COMPACT = CROSS_CORE && (BLOCK_ROWS > 1);
+    constexpr bool COMPACT_FIN_WIDE = (BLOCK_ROWS > 16);
+    // COMBINE_DEST_BATCH: DEST lanes the un-permute drives per window.  MEASURED optimum
+    // (isolated bench perf_experiments/compact_partial_transpose_r3, `compute_recv_unpack`
+    // ns at the op's pinned config): at BLOCK_ROWS 8, batch 1/2/4/8 = 1130/682/539/599 ns
+    // (4 wins); at BLOCK_ROWS 32, 4143/2368/1548/1380 (8 wins).  Clamped to
+    // DEST_AUTO_LIMIT and never a literal, because that cap is 8 lanes at
+    // fp32_dest_acc_en=False but 4 at True -- the user's precision config, which this op
+    // never touches, decides how many lanes exist.
+    constexpr uint32_t COMBINE_DEST_BATCH_WANT = (BLOCK_ROWS <= 8) ? 4u : 8u;
+    constexpr uint32_t COMBINE_DEST_BATCH = (COMBINE_DEST_BATCH_WANT < ckl::DEST_AUTO_LIMIT)
+                                                ? COMBINE_DEST_BATCH_WANT
+                                                : static_cast<uint32_t>(ckl::DEST_AUTO_LIMIT);
     // Pass B's Col operand: the multicast landing CB when the stat was combined
     // across cores, the local accumulator otherwise.
     constexpr uint32_t CB_STAT_B = CROSS_CORE ? cb_row_final : cb_row_stat;
@@ -589,6 +713,109 @@ void kernel_main() {
         }
     };
 
+    // ============ the COMBINE's compact partial transpose (Perf 3 / D27) ============
+    //
+    // WHAT CHANGES.  Pass A leaves this core's block as `rows` COLUMN-SHAPED partial tiles
+    // (a REDUCE_ROW result lives in column 0).  This permutes them into `rows` COLUMNS of
+    // ONE tile, so the whole block travels the combine as a SINGLE tile:
+    //     C = partial_r x E_r,  E_r[0][r] = 1  ->  C[i][r] = partial_r[i][0]
+    // and `compute_recv_unpack` below undoes it with the SAME bank read transposed.  The
+    // bank is the reader's `reader_bank_boot` one-hot CB.
+    //
+    // WHAT IT BUYS, and it is four things at once, all MEASURED on the 64-core BLOCK shard
+    // geometry (isolated bench perf_experiments/compact_partial_transpose_r3, blackhole
+    // p150b 1350 MHz, at the op's pinned config -- bf16 / HiFi2 / fp32_dest_acc_en=False /
+    // math_approx_mode=False, UNCHANGED; whole-combine device ns, GROUP_SIZE 8 /
+    // BLOCK_ROWS 8 / 32 tile-rows per core, 34772 -> 10994 ns = 3.16x):
+    //   fold       the root's D22 chain runs ONE DEST window per ROUND instead of one per
+    //              TILE-ROW: 3024 -> 770 ns/round, and it is now FLAT in BLOCK_ROWS
+    //              (777 ns at 16) where the flat fold was O(BLOCK_ROWS x GROUP_SIZE).
+    //   gather     a member issues ONE whole-tile NoC write instead of BLOCK_ROWS
+    //              face-runs (16 writes / 16 kB -> 1 write / 4 kB per round at the focus
+    //              geometry): `writer_gather_ship` 1891 -> 1087 ns/round on a member.
+    //   multicast  the root broadcasts ONE tile instead of BLOCK_ROWS: `writer_mcast_send`
+    //              4133 -> 1147, `writer_mcast_recv` 6577 -> 1395 ns/round.
+    //   L1         the landing ring loses its BLOCK_ROWS factor -- the combine's own CBs
+    //              go 288 -> 88 kB/core at the focus geometry and 1056 -> 184 kB at
+    //              GROUP_SIZE 32, which is what lets the descriptor's L1-bound BLOCK_ROWS
+    //              solve take a coarse block at all (the flat ring is 1152 kB at
+    //              BLOCK_ROWS 32 -- a measured L1 OOM).
+    // The cost is this pack plus the un-pack, and it is paid IN PARALLEL ON EVERY CORE
+    // (+219 / +940 ns/round on the root's timeline) against work that used to be the
+    // root's alone -- the group ends up balanced, root 32-34 us -> ~10 us with the members
+    // going from idle to ~10 us.  Zero cells below 1.00x across BLOCK_ROWS {1,2,4,8,16,32}
+    // x GROUP_SIZE {4,8,9,28,32}, including two RAGGED configs.  BLOCK_ROWS == 1 is a
+    // literal no-op in the fold (one packed column IS column 0) and measured FLAT there,
+    // which is why there is no BLOCK_ROWS guard: flat is inside the domain.
+    //
+    // PRECISION, stated plainly and not hidden: the two permutation matmuls round each
+    // value through a 16-bit DEST word twice more at fp32_dest_acc_en=False, so the
+    // combine is slightly LESS accurate -- rel-RMS 0.00383 vs 0.00227 at the focus, pcc
+    // 0.9999931 vs 0.9999978.  That is four orders inside this op's 0.04 rel-RMS bound and
+    // four nines inside the 0.9995 pcc gate, so the user's precision CONTRACT is untouched
+    // (nothing here reads or changes fp32_dest_acc_en / math_fidelity / math_approx_mode /
+    // a dtype).  There is no fp32 path through DEST at that config, and changing the
+    // config to get one would be exactly the forbidden move.
+    //
+    // RAW-LLK / RAW-API JUSTIFICATION.  A COLUMN PERMUTATION has no kernel_lib expression:
+    // the eltwise / bcast / reduce families all preserve or collapse the column axis, and
+    // `transpose_wh` transposes the WHOLE tile, which is a different map.  The FPU's only
+    // horizontal-mixing primitive is the matmul, so `matmul_tiles` against a one-hot bank
+    // IS the operation -- with `matmul_init`'s srcB `transpose` flag reading E_r as E_r^T
+    // so ONE bank serves both directions.  DEST accumulation is free here: `matmul_tiles`
+    // is DST += A*B and `tile_regs_release` clears DST (the packer's ZEROACC), so `rows`
+    // matmuls into one DEST slot cost ONE pack and need no explicit zero seed -- measured
+    // 1.1x faster on the pack and 2.2-2.5x on the un-pack than seeding with a zero-tile
+    // copy, for a BIT-IDENTICAL result.
+    //
+    // SAFETY INVARIANT any later change must preserve: a matmul sums 32 products, so EVERY
+    // column of BOTH operands must be FINITE -- an inf/NaN in an unused column becomes
+    // inf*0 = NaN and poisons column 0.  Two things guarantee that here, and both are
+    // load-bearing.  (1) A compact page is shipped WHOLE, out of a fully-defined
+    // `pack_tile`, so no landing column is ever un-written L1 -- which is also why D26's
+    // face-zeroing deletion has nothing left to delete on this path and why the gather can
+    // never go back to shipping a face subset.  (2) The finalized compact stat's UNUSED
+    // columns (rows..31) hold rsqrt(0 * 1/W + eps) = 1/sqrt(eps), which is finite for
+    // every eps > 0.  At eps == 0 exactly they would be +inf and the un-permute would
+    // return NaN everywhere; the flat path degraded only on an all-zero row there.  eps is
+    // a user argument with no axis in the op's SUPPORTED rectangle and a 1e-6 default; the
+    // whole test suite runs 1e-12 .. 1e-2.  If eps == 0 ever needs supporting, the fix is
+    // to clamp the finalize's additive term, not to widen the scope.
+    auto member_pack = [&](uint32_t rows) {
+        // Compile the body only where the permute is not the identity: cb_bank /
+        // cb_compact_handoff are not allocated otherwise, and an uncalled-but-emitted zone
+        // would report a phantom stage.  This is also what makes the BLOCK_ROWS == 1
+        // carve-out a single predicate rather than a condition at every call site.
+        if constexpr (!COMPACT) {
+            (void)rows;
+            return;
+        } else {
+            MaybeDeviceZoneScope("compute_member_pack");
+            cb_wait_front(cb_sum_handoff, rows);
+            cb_reserve_back(cb_compact_handoff, 1);
+            // NOT optional, for the same reason D22's fold spells its reconfigs out (a missing
+            // one there was a uniform ~1000x scale error that HELD pcc at 0.9997 and showed
+            // only in rel-RMS): pass A leaves the unpacker on cb_x_squared / cb_scaler (bf16)
+            // and the packer on cb_sum_handoff, and `matmul_init` does NOT reconfigure formats
+            // (its `state_configure` is the debug sentinel, not a reconfig).  SrcOrder::Reverse
+            // because matmul maps in0 -> SrcB and in1 -> SrcA, so the operands are passed in
+            // the same natural order as to `matmul_tiles` and the helper does the swap.
+            reconfig_data_format<ckernel::SrcOrder::Reverse>(cb_sum_handoff, cb_bank);
+            pack_reconfig_data_format(cb_compact_handoff);
+            matmul_init(cb_sum_handoff, cb_bank, /*transpose=*/0);
+            tile_regs_acquire();
+            for (uint32_t r = 0; r < rows; ++r) {
+                matmul_tiles(cb_sum_handoff, cb_bank, r, r, 0);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_compact_handoff);
+            tile_regs_release();
+            cb_push_back(cb_compact_handoff, 1);
+            cb_pop_front(cb_sum_handoff, rows);
+        }
+    };
+
     // D25's PROLOGUE: block 0's pass A runs before the loop, so from here on the loop body
     // issues block blk+1's pass A first and the root's arrival wait + fold + multicast for
     // block blk overlap it.  Elided entirely when PIPE_A is off.
@@ -600,6 +827,15 @@ void kernel_main() {
         const uint32_t rows = rows_of(blk);
 
         if constexpr (PIPE_A) {
+            // D27 x D25 ORDERING, and it is the whole point of the pipeline: block blk's
+            // PERMUTE is issued BEFORE block blk+1's hoisted pass A.  The writer's ship for
+            // block blk waits on cb_compact_handoff, so permuting first puts every member's
+            // partial on the wire while pass A for blk+1 runs -- which is what leaves the
+            // root's gather wait overlapping independent work.  Permuting after the hoist
+            // would delay every member's ship by a whole pass A and re-serialize exactly
+            // the latency D25 exists to hide.  Legal in this order because pass A for block
+            // blk already ran (the prologue for blk == 0, the previous iteration after).
+            member_pack(rows);
             // cb_input_tiles' front is still block blk (pass B has not popped it), so block
             // blk+1 begins `rows * X_HOLD_WT` tiles further in.  Widen the wait to cover
             // both blocks -- on the shard-backed CB this is already satisfied (the whole
@@ -611,6 +847,11 @@ void kernel_main() {
             }
         } else {
             pass_a(rows, 0);
+            // Off the pipeline (D25's carved-out reader-fed combine) pass A for THIS block
+            // has only just produced the partials, so the permute has to follow it.
+            if constexpr (CROSS_CORE) {
+                member_pack(rows);
+            }
         }
 
         // ================= finalize: 1/rms = rsqrt(sum/W + eps) ============
@@ -621,16 +862,17 @@ void kernel_main() {
                 ckl::transform_in_place(cb_row_stat, finalize);
             }
         } else {
-            // Pass A's reduce has ALREADY packed this core's raw partial into
-            // cb_sum_handoff (D18), so there is nothing to hand off here -- the writer
-            // ships it to the group root straight out of the reduce's own output pages.
-            // The `compute_partial_handoff` zone that used to sit here is retired with the
-            // copy it measured.
+            // Pass A's reduce packs this core's raw per-row partials into cb_sum_handoff
+            // (D18) and `member_pack` above has already permuted them into ONE compact tile
+            // in cb_compact_handoff, which is what the writer ships to the group root.  The
+            // `compute_partial_handoff` zone that used to sit here is retired with the copy
+            // it measured.
             if (is_root != 0) {
-                // Sum the group's GROUP_SIZE partials ELEMENTWISE and finalize the row
-                // total, in ONE DEST WINDOW per tile-row.  Each partial is a column-shaped
-                // REDUCE_ROW result, so the row total is their elementwise sum regardless
-                // of which lanes the datapath filled.
+                // Sum the group's GROUP_SIZE partials ELEMENTWISE and finalize the whole
+                // BLOCK, in ONE DEST WINDOW.  Each landing page is a COMPACT partial whose
+                // columns 0..rows-1 are that sender's per-tile-row sums (D27), so the
+                // block's row totals are the elementwise sum of the group's pages -- one
+                // pairwise walk, one finalize, one pack, INDEPENDENT of BLOCK_ROWS.
                 //
                 // Perf 2 (descriptor D22) -- THE FUSED ROOT CHAIN.  This replaces the two
                 // stages Perf 1 left here:
@@ -685,73 +927,125 @@ void kernel_main() {
                 // both so the gap is re-checkable.  Do NOT "restore" this to chain calls
                 // without re-measuring.
                 //
-                // The finalize is the op's existing sanctioned raw-sfpi StatFinalize (D17),
-                // called through the SAME `stat_finalize_payload` the chain element wraps,
-                // so the SFPU spelling is bit-identical to before.  Its lane invariant
-                // survives unchanged: both bodies stay <STRIDE=2, ITERS=4> at
-                // VectorMode::C, so `*(1/W)+eps` and `rsqrt` visit exactly the same lanes
-                // and the +eps guard still covers every lane the rsqrt touches (no
-                // rsqrt(0)=inf on an all-zero row).  The fusion cannot disturb that: the
-                // FPU has no lane scope, so the DEST accumulation fills the WHOLE tile and
-                // the finalize sees the completed sum on every lane it visits -- exactly as
-                // it did when it unpacked cb_row_stat.  The lanes it skips hold the raw
-                // finite group sum, the same defined-but-meaningless datum as before.
+                // The finalize is the op's raw-sfpi StatFinalize body (D17) at the SCOPE the
+                // compact layout requires -- <STRIDE=1, ITERS=8>, VectorMode::C up to
+                // BLOCK_ROWS 16 and RC above (COMPACT_FIN_WIDE).  THAT SCOPE IS A
+                // CORRECTNESS REQUIREMENT, not a tuning choice, and it is the ONE thing D27
+                // had to change in this chain: the stats no longer live in column 0 alone,
+                // so D17's even-parity <2,4> walk (columns 0,2,..,14) would leave every ODD
+                // tile-row's sum unscaled and un-rsqrt-ed -- measured pcc 0.9972987 with
+                // rel-RMS 1036 against a 0.04 bound, and 1.39x FASTER, i.e. precisely the
+                // kind of "win" that has to be refused.  The full note (and why D17's narrow
+                // scope stays right for the LOCAL finalize above, which really does own only
+                // column 0) is at stat_scale_col_full's definition.  Both bodies stay at the
+                // same <1,8>, so the +eps guard still covers every lane the rsqrt touches --
+                // no rsqrt(0) = inf on an all-zero row.  The FPU has no lane scope, so the
+                // DEST accumulation fills the whole tile and the finalize sees completed
+                // sums on every lane it visits.
                 //
                 // GATHER_SLOTS (== GROUP_SIZE rounded up to even) is what makes the
-                // pairwise walk universal: at odd GROUP_SIZE the writer boot-zeroes one pad
-                // slot per tile-row, which pairs against the odd contributor and adds an
-                // exact +0.0.  So there is no odd/even code path and no GROUP_SIZE guard.
+                // pairwise walk universal: at odd GROUP_SIZE the writer boot-zeroes the ONE
+                // pad slot (D27 shrank it from GATHER_SLOTS * BLOCK_ROWS pages to one),
+                // which pairs against the odd contributor and adds an exact +0.0.  So there
+                // is no odd/even code path and no GROUP_SIZE guard.
                 MaybeDeviceZoneScope("compute_root_fused");
 #if defined(RMS_ABLATE_ROOT_SUM) || defined(RMS_ABLATE_ROOT_FINALIZE)
                 // ABLATION (temporary, /perf-measure): payload removed, every CB handshake
-                // and trip count preserved.
-                cb_wait_front(cb_partials_gathered, GATHER_SLOTS * rows);
-                for (uint32_t r = 0; r < rows; ++r) {
-                    cb_reserve_back(cb_stat_handoff, 1);
-                    cb_push_back(cb_stat_handoff, 1);
-                }
-                cb_pop_front(cb_partials_gathered, GATHER_SLOTS * rows);
+                // and trip count preserved.  Under D27 the round's handshake is ONE window
+                // in and ONE page out, whatever BLOCK_ROWS is -- peel recipe: uncomment
+                // RMS_ABLATE_ROOT_SUM at the head of this file (and, on the writer,
+                // RMS_ABLATE_GATHER_ZERO) and diff the profiled zones against the
+                // unablated run; the difference is that stage's WALL contribution, which is
+                // what makes the cumulative peel additive.
+                cb_wait_front(cb_partials_gathered, GATHER_SLOTS);
+                cb_reserve_back(cb_stat_handoff, 1);
+                cb_push_back(cb_stat_handoff, 1);
+                cb_pop_front(cb_partials_gathered, GATHER_SLOTS);
 #else
-                // The whole block's gather window is waited/popped ONCE: the pairwise walk
+                // The round's gather window is waited/popped ONCE: the pairwise walk
                 // addresses two tiles of the same CB at a stride, which a per-tile wait
-                // cannot express.  Legal exactly as it stands -- the writer already
-                // publishes the block atomically (`cb_push_back(cb_partials_gathered,
-                // GATHER_SLOTS * rows)`) and the CB is sized to that same window.
-                cb_wait_front(cb_partials_gathered, GATHER_SLOTS * rows);
+                // cannot express.  Legal exactly as it stands -- the writer publishes the
+                // round atomically (`cb_push_back(cb_partials_gathered, GATHER_SLOTS)`) and
+                // the CB is sized to that same window.  Under D27 the window is GATHER_SLOTS
+                // regardless of `rows`, so a RAGGED last block needs no special case and
+                // both kernels derive an IDENTICAL window -- which is what keeps a remote
+                // sender's locally-computed landing address equal to the root's.
+                cb_wait_front(cb_partials_gathered, GATHER_SLOTS);
                 // The DATA-FORMAT RECONFIG the eltwise_chain helpers emit for us has to be
-                // written out by hand here, and it is NOT optional: pass A left the
-                // unpacker configured for cb_x_squared (the input dtype, bf16 in the
-                // measured config) and the packer for cb_sum_handoff, while the gather and
-                // the handoff are fp32.  Without these two calls the fold unpacks fp32 L1
-                // through a bf16 srcA/srcB and the accumulated sum reads as ~0, which the
-                // finalize then turns into rsqrt(eps) -- a uniform ~1/sqrt(eps) scale error
-                // that keeps pcc at 0.9997 and shows up only in rel-RMS (measured 994
-                // against a 0.04 bound during integration).  That is exactly why the
-                // op's regression nets bound rms and not just pcc.
+                // written out by hand here, and it is NOT optional: the preceding stage left
+                // the unpacker on the permute's (bf16 bank, fp32 handoff) pair or on pass
+                // A's cb_x_squared / cb_scaler (bf16), while the gather and the handoff are
+                // fp32.  Without these two calls the fold unpacks fp32 L1 through a bf16
+                // srcA/srcB and the accumulated sum reads as ~0, which the finalize then
+                // turns into rsqrt(eps) -- a uniform ~1/sqrt(eps) scale error that keeps pcc
+                // at 0.9997 and shows up only in rel-RMS (measured 994 against a 0.04 bound
+                // during integration).  That is exactly why the op's regression nets bound
+                // rms and not just pcc.
                 reconfig_data_format(cb_partials_gathered, cb_partials_gathered);
                 pack_reconfig_data_format(cb_stat_handoff);
                 add_tiles_init(cb_partials_gathered, cb_partials_gathered, /*acc_to_dest=*/true);
                 rsqrt_tile_init();
-                for (uint32_t r = 0; r < rows; ++r) {
-                    const uint32_t base = r * GATHER_SLOTS;
-                    tile_regs_acquire();
-                    for (uint32_t p = 0; p < GATHER_HALF; ++p) {
-                        add_tiles(cb_partials_gathered, cb_partials_gathered, base + p, base + GATHER_HALF + p, 0);
-                    }
-                    stat_finalize_payload<INV_W_BITS, EPS_BITS>(0);
-                    tile_regs_commit();
-                    // Reserve/push PER TILE-ROW, not per block: the writer's stat multicast
-                    // starts on the first finalized row, and a block-granular publish would
-                    // make it wait for the block's LAST row.  Measured cost of keeping that
-                    // overlap: zero (2698 vs 2701 ns).
-                    cb_reserve_back(cb_stat_handoff, 1);
-                    tile_regs_wait();
-                    pack_tile(0, cb_stat_handoff);
-                    tile_regs_release();
-                    cb_push_back(cb_stat_handoff, 1);
+                tile_regs_acquire();
+                for (uint32_t p = 0; p < GATHER_HALF; ++p) {
+                    add_tiles(cb_partials_gathered, cb_partials_gathered, p, GATHER_HALF + p, 0);
                 }
-                cb_pop_front(cb_partials_gathered, GATHER_SLOTS * rows);
+                // The scope FOLLOWS the layout, which is the whole point: at BLOCK_ROWS == 1
+                // the permute is the identity and the stat is a column-0 vector, so D17's
+                // narrow <2,4> C is right (and 1.39x cheaper); above it the stats span
+                // columns and the wide scope is mandatory.  Two spellings, one predicate.
+                if constexpr (COMPACT) {
+                    compact_finalize_payload<INV_W_BITS, EPS_BITS, COMPACT_FIN_WIDE>(0);
+                } else {
+                    stat_finalize_payload<INV_W_BITS, EPS_BITS>(0);
+                }
+                tile_regs_commit();
+                cb_reserve_back(cb_stat_handoff, 1);
+                tile_regs_wait();
+                pack_tile(0, cb_stat_handoff);
+                tile_regs_release();
+                cb_push_back(cb_stat_handoff, 1);
+                cb_pop_front(cb_partials_gathered, GATHER_SLOTS);
 #endif
+            }
+
+            // ---- every core: UN-PERMUTE the multicast compact stat (D27) ------------
+            // C = compact x E_r^T, read straight out of the SAME one-hot bank via
+            // matmul_init's srcB `transpose` flag (E_r^T[r][0] = 1), so page r of the bank
+            // both WROTE column r on the way out and READS it on the way back and there is
+            // only one constant in L1.  Output: `rows` column-shaped 1/rms tiles in
+            // cb_row_final -- byte-for-byte the operand shape pass B already consumed
+            // (BroadcastDim::Col reads column 0), so pass B is UNCHANGED by D27.
+            //
+            // cb_row_final therefore becomes COMPUTE-PRIVATE (this pack is its only
+            // producer, pass B its only consumer); the multicast now lands in cb_mcast_in.
+            //
+            // DEST-batched at COMBINE_DEST_BATCH lanes so one MATH<->PACK handshake and one
+            // format reconfig amortize over several tiles -- measured 1130 -> 539 ns at
+            // BLOCK_ROWS 8 going from 1 lane to 4.  See COMBINE_DEST_BATCH's definition.
+            // Elided at BLOCK_ROWS == 1: the multicast then lands straight in cb_row_final
+            // (an identity un-permute is nothing to do), exactly as it did before D27.
+            if constexpr (COMPACT) {
+                MaybeDeviceZoneScope("compute_recv_unpack");
+                cb_wait_front(cb_mcast_in, 1);
+                cb_reserve_back(cb_row_final, rows);
+                reconfig_data_format<ckernel::SrcOrder::Reverse>(cb_mcast_in, cb_bank);
+                pack_reconfig_data_format(cb_row_final);
+                matmul_init(cb_mcast_in, cb_bank, /*transpose=*/1);
+                for (uint32_t b = 0; b < rows; b += COMBINE_DEST_BATCH) {
+                    const uint32_t n = (rows - b < COMBINE_DEST_BATCH) ? (rows - b) : COMBINE_DEST_BATCH;
+                    tile_regs_acquire();
+                    for (uint32_t d = 0; d < n; ++d) {
+                        matmul_tiles(cb_mcast_in, cb_bank, 0, b + d, d);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t d = 0; d < n; ++d) {
+                        pack_tile(d, cb_row_final, b + d);
+                    }
+                    tile_regs_release();
+                }
+                cb_push_back(cb_row_final, rows);
+                cb_pop_front(cb_mcast_in, 1);
             }
         }
 
