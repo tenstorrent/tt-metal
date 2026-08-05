@@ -25,6 +25,13 @@
 - **Near-term target ~40-50 s** · **Aggressive ~15-20 s** (dense-MoE @ ~40% MFU) · **Floor ~5-8 s** needs sparse dispatch — DEAD on TT.
 - flux2's 5-7 s is a dense ~6-12B DiT — doesn't transfer to an 80B MoE forced dense. Same-model GPU ref: ~137 s on 3×H100 (soft provenance).
 
+## Related port — IGN (`tenstorrent/tt-metal` PR #50968, `ign-christy`)
+A parallel Tenstorrent port of the **same model** (HunyuanImage-3.0) — more complete (base T2I + Instruct I2I + Distil + SigLIP2 vision + recaption). Open PR, ready for review.
+- **Hardware:** BH **4 chips (2×2), SP×TP + EP** (vs our 32-chip Galaxy TP=8 + EP=32).
+- **Base T2I 50-step ~1024² (4,226 tok):** **263 s E2E** = 4.65 s/step denoise + **17.5 s on-device spatial-parallel VAE**.
+- **Us vs them:** ~84 s warm on 32 chips — faster in absolute wall-clock, but on 8× the hardware. **Per-chip they're ~1.6-2.5× more efficient** (throughput/chip 3.42 vs our 1.34 img/hr/chip). Our lead is scale; their port is more hardware-efficient.
+- **Already implement three items on our lever list** — **on-device VAE (spatial-parallel)**, **spatial-parallel (SP)**, and an **8-step Distil variant** (model-level ~6× denoise cut). Reference implementations to learn from / coordinate on (two HunyuanImage-3.0 ports now live on the same repo).
+
 ## Bottleneck (latest Tracy — `HUNYUAN_TRACY_ops_perf.csv`, 224,960 rows)
 **CCL-bound.** ReduceScatter (16.9%) + AllGather (13.3%) = **~30% of device-kernel time, ahead of matmul (23%)**. ~55% of wall-clock once cross-chip sync is counted (~3 s device compute vs ~6.4 s wall/step). Full split: CCL 30% · matmul 23% · SDPA 13% · elementwise 12% · layout ~14%.
 
