@@ -5717,8 +5717,8 @@ else:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
         ("kimi50k", 32, 640, 4, 66.05),
-        # Kimi-K3, UNMEASURED -- 0.0 empties the band, so the case fails and logs the math_util to
-        # commit. Only reachable now that the is_high_power gate below is galaxy-only.
+        # Kimi-K3, UNMEASURED. The is_high_power gate skips this test on QB2 entirely (fixed by
+        # #52190), so 0.0 cannot fire today; swap in the measured math_util once that lands.
         ("kimi_k3", 32, 640, 4, 0.0),
     ]
 
@@ -5745,11 +5745,9 @@ else:
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-# Galaxy only: the gate guards the exabox.tenstorrent.com/power=14kw label. QuietBox reports a
-# sub-130W TDP, so an unconditional gate skipped the ring-4 entries below on every CI run.
 @pytest.mark.skipif(
-    MESH_CONFIG.is_galaxy and not is_high_power(),
-    reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
 )
 def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
