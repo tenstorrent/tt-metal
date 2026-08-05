@@ -956,24 +956,18 @@ to derive them. They are not production node arrays, class names, or dimension-d
 For one fixed X:
 
 ```text
-ordinary:
-0↔1↔...↔7
+ordinary Y ring:
+0↔1↔2↔3↔4↔5↔6↔7↔0
 
-span-4 express:
+express:
 2↔5
-
-span-8 express:
-0↔7
 ```
 
-The express spans are:
+The express span is:
 
 ```text
 base hops from 2 to 5 = 3
 express span          = 3 + 1 = 4
-
-base hops from 0 to 7 = 7
-express span          = 7 + 1 = 8
 ```
 
 Derived output:
@@ -981,11 +975,11 @@ Derived output:
 ```text
 forward:
 0 → 1 → 2 → 5 → 6 → 7 → 0
-S   S   Z   S   S   Z
+S   S   Z   S   S   S
 
 reverse:
 0 → 7 → 6 → 5 → 2 → 1 → 0
-Z   N   N   Z   N   N
+N   N   N   Z   N   N
 ```
 
 Leaves and anchors:
