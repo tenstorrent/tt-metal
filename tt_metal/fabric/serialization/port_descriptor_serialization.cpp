@@ -71,6 +71,7 @@ PortDescriptorTable deserialize_port_descriptors_from_bytes(const std::vector<ui
 
             // Extract port descriptors (dst mesh comes from the entry key)
             std::vector<PortDescriptor> port_descriptors;
+            port_descriptors.reserve(entry.port_descriptors().size());
             for (const auto& proto_port_desc : entry.port_descriptors()) {
                 PortDescriptor port_desc;
                 port_desc.connection_hash = proto_port_desc.connection_hash();

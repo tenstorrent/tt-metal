@@ -6,7 +6,7 @@
 // per 128-element block.
 //
 // Per block = tile_h rows x 128 cols = 4 tiles for default 32-wide tiles:
-//   1. tilize cb_in -> cb_tile.
+//   1. cb_in -> cb_tile: tilize (ROW_MAJOR input) or copy (INPUT_TILE_LAYOUT: input already tiled).
 //   2. compute per-row amax over the 128-element block, clamp(>=1e-4), multiply by 1/448
 //      -> scale (col 0) -> cb_scale_tiles. recip(scale) -> 1/scale -> cb_inv_scale_tiles.
 //   3. divide: out_tile = cb_tile * bcast_col(cb_inv_scale_tiles) per tile -> cb_out_tile.
@@ -102,7 +102,28 @@ void kernel_main() {
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
-            // ----- 1. tilize input row-major -> tile -----
+            // ----- 1. get input tiles into fp32 cb_tile -----
+#ifdef INPUT_TILE_LAYOUT
+            // TILE input is already tiled, so copy instead of tilize. The fp32 copy is also what makes
+            // bf16 correct: reading bf16 cb_in into the reduce would expose only 2 faces (cols 0-15)
+            // and corrupt the per-128 amax.
+            reconfig_data_format_srca(cb_in_id);
+            pack_reconfig_data_format(cb_tile_id);
+            copy_tile_init(cb_in_id);
+            cb_in.wait_front(tiles_per_block);
+            cb_tile.reserve_back(tiles_per_block);
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                tile_regs_acquire();
+                copy_tile(cb_in_id, k, IDST0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(IDST0, cb_tile_id);
+                tile_regs_release();
+            }
+            cb_tile.push_back(tiles_per_block);
+            cb_in.pop_front(tiles_per_block);
+#else
+            // ROW_MAJOR input: tilize the row-major block into tiles.
             reconfig_data_format_srca(cb_in_id);
             pack_reconfig_data_format(cb_tile_id);
             tilize_init(cb_in_id, tiles_per_block, cb_tile_id);
@@ -112,6 +133,7 @@ void kernel_main() {
             cb_tile.push_back(tiles_per_block);
             cb_in.pop_front(tiles_per_block);
             tilize_uninit(cb_in_id, cb_tile_id);
+#endif
 
             // ----- 2. block amax -> scale (col 0) and 1/scale (col 0) -----
             cb_tile.wait_front(tiles_per_block);  // read by index; popped after the divide

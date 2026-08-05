@@ -16,6 +16,7 @@ from helpers.llk_params import (
     DestSync,
     ImpliedMathFormat,
     MathOperation,
+    PerfRunType,
     UnpackerEngine,
     format_dict,
 )
@@ -25,6 +26,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
+from helpers.perf import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -33,13 +35,13 @@ from helpers.stimuli_generator import (
     format_elem_max,
     generate_stimuli,
 )
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
     TEST_FACE_DIMS,
@@ -66,6 +68,16 @@ SFPU_UNARY_FORMATS = input_output_formats(
         DataFormat.Float16_b,
     ]
 )
+
+# The trigonometry / inverse-hyperbolic transcendentals. Float-only (they share the
+# SFPU_UNARY_FORMATS set), each with its own safe input domain (see prepare_trig_inputs).
+TRIGONOMETRY_OPS = [
+    MathOperation.Sin,
+    MathOperation.Cos,
+    MathOperation.Acosh,
+    MathOperation.Asinh,
+    MathOperation.Atanh,
+]
 
 # The six comparison-to-zero modes. These run integer formats too (and UInt16 via
 # the Int16 container), so the sweep adds them to the float formats above.
@@ -366,6 +378,38 @@ def prepare_inputs_for_operation(
     return src_A
 
 
+def prepare_trig_inputs(
+    src_A: torch.Tensor,
+    mathop: MathOperation,
+    input_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Map the uniform [0, 1] stimulus into each op's safe domain so the Quasar kernel
+    stays in its accurate range:
+      sin / cos — [-pi, pi] (argument reduction is valid far wider, but a small domain
+                  keeps the Maclaurin polynomial precise).
+      asinh    — [-10, 10] (log polynomial stable away from overflow).
+      acosh    — [1.1, 50]  (x >= 1 domain; avoid near-1 where the 3rd-order log loses
+                  precision).
+      atanh    — [-0.9, 0.9] (|x| < 1 domain with margin so RECIP does not blow up).
+    """
+    torch_format = format_dict[input_format]
+    u = src_A.to(torch.float32)  # uniform [0, 1] from the uniform stimuli spec
+
+    if mathop in (MathOperation.Sin, MathOperation.Cos):
+        lo, hi = -math.pi, math.pi
+    elif mathop == MathOperation.Asinh:
+        lo, hi = -10.0, 10.0
+    elif mathop == MathOperation.Acosh:
+        lo, hi = 1.1, 50.0
+    elif mathop == MathOperation.Atanh:
+        lo, hi = -0.9, 0.9
+    else:
+        return src_A
+
+    return (lo + u * (hi - lo)).to(torch_format)
+
+
 def prepare_unary_inputs(
     mathop: MathOperation,
     src_A: torch.Tensor,
@@ -378,6 +422,8 @@ def prepare_unary_inputs(
         return prepare_abs_inputs(src_A, src_B, input_format, output_format)
     if mathop == MathOperation.Square:
         return prepare_square_inputs(src_A, src_B, input_format, output_format)
+    if mathop in TRIGONOMETRY_OPS:
+        return prepare_trig_inputs(src_A, mathop, input_format)
     if mathop in COMP_OPS:
         # Unsigned formats need non-negative stimuli (a signed split would wrap under the unsigned
         # dtype); signed formats use the sign-vs-magnitude builder.
@@ -610,6 +656,12 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
+    # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
+    # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
+    *[
+        OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
+        for op in TRIGONOMETRY_OPS
+    ],
 ] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_OPS]
 
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
@@ -662,17 +714,17 @@ def _typecast_pack_src_format(
     return output_format
 
 
-def generate_sfpu_unary_combinations():
+def generate_sfpu_unary_combinations(*, is_perf=False):
     """
-    Build the full unary-SFPU sweep across all ops: per op, a
-    formats × dest_acc × dest-sync × implied-math × {[32, 32], [64, 64]} matrix.
+    Build the unary-SFPU sweep across all operations and their format matrices.
 
-    Every op runs the same matrix over its own format set (from formats_for_op).
-    32-bit inputs always pair with dest_acc=Yes; 16-bit inputs sweep both dest_acc
-    modes. Invalid format/dest_acc combinations are dropped via the shared filter.
+    Functional mode sweeps dest-sync, implied-math, and both [32, 32]/[64, 64]
+    dimensions. Performance mode intentionally keeps the complete op, format,
+    dest_acc, and approximation coverage while pinning those three axes to
+    DestSync.Half, ImpliedMathFormat.Yes, and [32, 32].
 
     Returns: list of (mathop, fmt, dest_acc, dest_sync, implied_math_format,
-    input_dimensions) tuples.
+    approx_mode, input_dimensions) tuples.
     """
     combinations = []
     for cfg in OP_CONFIGS:
@@ -681,7 +733,12 @@ def generate_sfpu_unary_combinations():
         approx_modes = (
             (ApproximationMode.No, ApproximationMode.Yes)
             if cfg.mathop
-            in (MathOperation.Exp, MathOperation.Reciprocal, MathOperation.Rsqrt)
+            in (
+                MathOperation.Exp,
+                MathOperation.Gelu,
+                MathOperation.Reciprocal,
+                MathOperation.Rsqrt,
+            )
             else (ApproximationMode.No,)
         )
         for fmt in formats_for_op(cfg):
@@ -707,13 +764,17 @@ def generate_sfpu_unary_combinations():
                 ):
                     continue
 
-                for dest_sync in cfg.dest_sync_modes:
-                    for implied_math_format in [
-                        ImpliedMathFormat.No,
-                        ImpliedMathFormat.Yes,
-                    ]:
+                dest_sync_modes = (DestSync.Half,) if is_perf else cfg.dest_sync_modes
+                implied_math_formats = (
+                    (ImpliedMathFormat.Yes,)
+                    if is_perf
+                    else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
+                )
+                input_dims = ([32, 32],) if is_perf else cfg.input_dims
+                for dest_sync in dest_sync_modes:
+                    for implied_math_format in implied_math_formats:
                         for approx_mode in approx_modes:
-                            for input_dimensions in cfg.input_dims:
+                            for input_dimensions in input_dims:
                                 combinations.append(
                                     (
                                         cfg.mathop,
@@ -735,6 +796,11 @@ def generate_sfpu_unary_combinations():
 )
 def test_eltwise_unary_sfpu_quasar(
     mathop_formats_dest_acc_sync_implied_math_input_dims,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
@@ -782,31 +848,37 @@ def test_eltwise_unary_sfpu_quasar(
 
     num_faces = MAX_NUM_FACES
 
-    if format_dict[formats.input_format].is_floating_point:
-        generate_golden = get_golden_generator(UnarySFPUGolden)
-        golden_tensor = generate_golden(
-            mathop,
-            src_A,
-            formats.output_format,
-            dest_acc,
-            formats.input_format,
-            input_dimensions,
-        )
-    else:
-        # Integer-input ops (Int32/Int16/UInt16 — currently only the comp family): apply the
-        # UnarySFPUGolden op element-wise instead of through its __call__. __call__ runs a
-        # float-only pipeline (float dst, tilize, FTZ) that would mangle integer values; applying
-        # the op per element keeps integers intact, and for an element-wise op row-major order
-        # already matches the packed result. A non-element-wise integer op would need its own path.
-        ops = UnarySFPUGolden().ops
-        op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
-        golden_tensor = torch.tensor(op_res, dtype=format_dict[formats.output_format])
+    if not is_perf:
+        if format_dict[formats.input_format].is_floating_point:
+            generate_golden = get_golden_generator(UnarySFPUGolden)
+            golden_tensor = generate_golden(
+                mathop,
+                src_A,
+                formats.output_format,
+                dest_acc,
+                formats.input_format,
+                input_dimensions,
+            )
+        else:
+            # Integer-input ops (Int32/Int16/UInt16 — currently only the comp family): apply the
+            # UnarySFPUGolden op element-wise instead of through its __call__. __call__ runs a
+            # float-only pipeline (float dst, tilize, FTZ) that would mangle integer values; applying
+            # the op per element keeps integers intact, and for an element-wise op row-major order
+            # already matches the packed result. A non-element-wise integer op would need its own path.
+            ops = UnarySFPUGolden().ops
+            op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
+            golden_tensor = torch.tensor(
+                op_res, dtype=format_dict[formats.output_format]
+            )
 
     unpack_to_dest = quasar_unpack_to_dest(formats, dest_acc, is_typecast)
-    configuration = TestConfig(
-        "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             IMPLIED_MATH_FORMAT(implied_math_format),
@@ -828,13 +900,14 @@ def test_eltwise_unary_sfpu_quasar(
                 else TYPECAST_FORMATS()
             ),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -845,8 +918,14 @@ def test_eltwise_unary_sfpu_quasar(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+        "dest_acc": dest_acc,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
 
     if is_typecast:
@@ -854,6 +933,10 @@ def test_eltwise_unary_sfpu_quasar(
         for fc in configuration.formats_config:
             fc.pack_src = pack_src_for_output
             fc.pack_S_src = pack_src_for_output
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 
@@ -866,5 +949,7 @@ def test_eltwise_unary_sfpu_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

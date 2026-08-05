@@ -41,6 +41,17 @@ class TtIndexer:
         "indexer.k_norm_bias",
         "indexer.weights_proj",
     )
+    # Per-weight device dtype, read by both the converter and check_cache_complete. as_tensor stamps
+    # dtype.name into the tensorbin filename, so the completeness glob must pin the SAME dtype it will
+    # request; a bare-stem glob accepts a stale bf16-only cache for a bf8 request, then silently loads
+    # the empty placeholders as garbage weights. wq_b/wk are bf8; the rest bf16.
+    WEIGHT_DTYPES = {
+        "indexer.wq_b": ttnn.bfloat8_b,
+        "indexer.wk": ttnn.bfloat8_b,
+        "indexer.k_norm": ttnn.bfloat16,
+        "indexer.k_norm_bias": ttnn.bfloat16,
+        "indexer.weights_proj": ttnn.bfloat16,
+    }
     # Config fields that mark a runtime config as DSA-sparse (index_rope_interleave is optional and
     # defaults to False; the three below are the discriminator vs a dense DeepSeek-V3 / R1 config).
     REQUIRED_CONFIG_FIELDS = ("index_topk", "index_n_heads", "index_head_dim")
@@ -68,7 +79,10 @@ class TtIndexer:
 
     @classmethod
     def check_cache_complete(cls, cache_path, cache_name_prefix: str) -> bool:
-        """True iff every indexer tensorbin exists under cache_name_prefix (e.g. 'layer_0.mla').
+        """True iff every indexer tensorbin exists under cache_name_prefix (e.g. 'layer_0.mla') AT ITS
+        EXPECTED DTYPE. The glob pins ``_dtype_{name}_`` (WEIGHT_DTYPES) because as_tensor encodes dtype in
+        the filename: a dtype-blind glob would accept a stale bf16-only cache for a now-bf8 weight, report
+        complete, and let cache-only construction load the empty placeholder as garbage.
         Uses a direct ``Path.glob`` (no `init_checker`/global-state dependency) because this also runs
         at ttMLA construction time — the resolver / __init__ gate — where the global fast-cache checker
         is not necessarily initialized. It's a one-off per-layer check (5 files), so the batch
@@ -79,8 +93,9 @@ class TtIndexer:
         cache_path = Path(cache_path)
         for name in cls.WEIGHT_NAMES:
             short = cls._cache_short_name(name)
-            if not any(cache_path.glob(f"{cache_name_prefix}.indexer_{short}*.tensorbin")):
-                logger.debug(f"TTNN indexer cache missing: {cache_name_prefix}.indexer_{short}")
+            dtype_name = cls.WEIGHT_DTYPES[name].name
+            if not any(cache_path.glob(f"{cache_name_prefix}.indexer_{short}_dtype_{dtype_name}_*.tensorbin")):
+                logger.debug(f"TTNN indexer cache missing: {cache_name_prefix}.indexer_{short} ({dtype_name})")
                 return False
         return True
 
@@ -145,25 +160,29 @@ class TtIndexer:
 
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
 
-        def repl(t, short, transpose=False):  # replicate across TP (transpose=True: host [out,in] -> device [in,out])
+        def repl(
+            t, short, transpose=False, dtype=ttnn.bfloat16
+        ):  # replicate across TP (transpose=True: host [out,in] -> device [in,out])
             return ttnn.as_tensor(
                 (t.T if transpose else t).contiguous().to(torch.bfloat16),
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=dtype,
                 memory_config=mem,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 cache_file_name=_cache_name(short),
             )
 
-        def shard(t, axis, short):  # host [out, in] -> device [in, out], dim `axis` sharded across tp
+        def shard(
+            t, axis, short, dtype=ttnn.bfloat16
+        ):  # host [out, in] -> device [in, out], dim `axis` sharded across tp
             dims = [None, None]
             dims[tp_axis] = axis
             return ttnn.as_tensor(
                 t.T.contiguous().to(torch.bfloat16),
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=dtype,
                 memory_config=mem,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
                 cache_file_name=_cache_name(short),
@@ -174,14 +193,21 @@ class TtIndexer:
         # matmul/score compute bump for dropping the ~end_pos-wide 2-CCL logit all-reduce.) Cache name
         # "wq_b_repl" (not "wq_b") so a stale col-sharded tensorbin can never alias this layout. wk /
         # weights_proj contract over hidden (TP-sharded) → upload transposed+sharded, reduced by _tp_rs_ag.
+        # wq_b/wk (Q/K projections) load as bf8, halving their DRAM read. wk tolerates it because the k_norm
+        # LayerNorm applied right after it (write_k) cancels the bf8 magnitude error. wq_b has NO downstream
+        # normalizer (RoPE only rotates), but the indexer score drives top-k SELECTION, not a value: the
+        # head-summed logit absorbs the rounding without moving the selected keys across the top-k boundary
+        # (per-layer PCC gate confirms). weights_proj (per-head gate) stays bf16 — the gate is precision-sensitive.
         result = {
             "wq_b": repl(
-                wq_b, cls._cache_short_name("indexer.wq_b"), transpose=True
+                wq_b, cls._cache_short_name("indexer.wq_b"), transpose=True, dtype=cls.WEIGHT_DTYPES["indexer.wq_b"]
             ),  # [q_lora_rank, H_idx*D_idx] replicated (all heads)
-            "wk": shard(wk, 0, "wk"),  # [dim, D_idx] sharded on dim
-            "weights_proj": shard(wproj, 0, "weights_proj"),  # [dim, H_idx] sharded on dim
-            "k_norm": repl(knorm, "k_norm"),  # [D_idx]
-            "k_norm_bias": repl(knorm_b, "k_norm_bias"),  # [D_idx]
+            "wk": shard(wk, 0, "wk", dtype=cls.WEIGHT_DTYPES["indexer.wk"]),  # [dim, D_idx] sharded on dim
+            "weights_proj": shard(
+                wproj, 0, "weights_proj", dtype=cls.WEIGHT_DTYPES["indexer.weights_proj"]
+            ),  # [dim, H_idx] sharded on dim
+            "k_norm": repl(knorm, "k_norm", dtype=cls.WEIGHT_DTYPES["indexer.k_norm"]),  # [D_idx]
+            "k_norm_bias": repl(knorm_b, "k_norm_bias", dtype=cls.WEIGHT_DTYPES["indexer.k_norm_bias"]),  # [D_idx]
         }
         if device is None:
             for v in result.values():

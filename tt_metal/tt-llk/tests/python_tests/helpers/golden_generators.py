@@ -2377,10 +2377,20 @@ class UnarySFPUGolden:
             if data_format in (DataFormat.Bfp4_b, DataFormat.Bfp2_b)
             else format_dict[dst_format]
         )
+        op_tensor = torch.tensor(op_res, dtype=torch.float32)
+        if dst_format == DataFormat.Float16:
+            # SFPU arithmetic flushes A-exponent results below the FP16 minimum
+            # normal before storing them to Dest/SrcS. Apply this before the
+            # FP16 cast so a subnormal does not round up to the minimum normal.
+            op_tensor = torch.where(
+                op_tensor.abs() < torch.finfo(torch.float16).tiny,
+                torch.zeros_like(op_tensor),
+                op_tensor,
+            )
         result[
             ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
             + TILE_SIZE * iterations
-        ] = torch.tensor(op_res, dtype=op_dtype)
+        ] = op_tensor.to(op_dtype)
 
         if not skip_tilize:
             result = untilize_block(result, input_format, dimensions).flatten()
@@ -2423,7 +2433,10 @@ class UnarySFPUGolden:
             result = converter(tilized, dimensions)
 
         if data_format.is_mx_format():
-            result = quantize_mx_tensor_chunked(result.to(torch.bfloat16), data_format)
+            # Quantize from the actual Dest/packer source precision. Casting to
+            # BF16 here incorrectly models Float16 and FP32 Dest values as
+            # Float16 -> BF16 -> MX or Float32 -> BF16 -> MX.
+            result = quantize_mx_tensor_chunked(result, data_format)
 
         # depending on `data_format`, `inf` values may get converted when unpacked to L1.
         # Cast to the target data_format dtype before replacing inf so that
@@ -4348,7 +4361,9 @@ class UntilizeGolden:
     ):
         from helpers.tilize_untilize import untilize_block
 
-        operand = quantize_input_to_unpack_format(operand, input_format)
+        operand = quantize_input_to_unpack_format(
+            operand, input_format, all_mx_formats=True
+        )
 
         result = untilize_block(
             operand,

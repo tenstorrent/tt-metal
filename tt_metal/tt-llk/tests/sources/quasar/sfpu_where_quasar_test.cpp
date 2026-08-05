@@ -122,19 +122,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
 
-    // Runs calculate_where over the faces selected by VECTOR_MODE: cond=tile 0,
-    // true_val=tile 1, false_val=tile 2, result written to tile 0. Faces outside
-    // the selected set keep whatever the producer wrote into Dest before SFPU ran
-    // (the cond tile, here), so the Python test asserts only on the processed faces.
+    // Runs calculate_where over the faces selected by VECTOR_MODE: cond=base+0,
+    // true_val=base+1, false_val=base+2, result written to base+0. Faces
+    // outside the selected set keep whatever the producer wrote into Dest before
+    // SFPU ran (the cond tile, here), so Python asserts only processed faces.
     SFPU_TERNARY_CALL(
         dest_sync,
         is_fp32_dest_acc_en,
         calculate_where,
         (false /*APPROXIMATION_MODE*/),
-        0u /*DST_IN0*/,
-        1u /*DST_IN1*/,
-        2u /*DST_IN2*/,
-        0u /*DST_OUT*/,
+        params.DST_INDEX + 0u /*DST_IN0*/,
+        params.DST_INDEX + 1u /*DST_IN1*/,
+        params.DST_INDEX + 2u /*DST_IN2*/,
+        params.DST_INDEX + 0u /*DST_OUT*/,
         VECTOR_MODE);
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

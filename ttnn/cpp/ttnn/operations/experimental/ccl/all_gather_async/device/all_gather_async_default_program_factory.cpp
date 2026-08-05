@@ -306,12 +306,26 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
         sender_device_coord, forward_coord, backward_coord, mesh_device);
+    const bool use_fabric_2d_neighbor_barrier =
+        topology == ccl::Topology::Linear && tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    // A logical line can turn when it is embedded in a 2D physical mesh (for example QB 1x4 on its
+    // four-chip cycle). A single Fabric multicast range cannot describe that turn: its hop range
+    // continues in the physical direction selected by the first neighbor. The all-gather data path
+    // already store-and-forwards through immediate neighbors, so its startup barrier only needs to
+    // prove that those immediate neighbors have reached their worker kernels. Keep the full-range
+    // barrier for 1D Fabric and use terminal one-hop ranges for Fabric2D.
+    const uint32_t barrier_targets_forward =
+        use_fabric_2d_neighbor_barrier ? std::min(num_targets_forward, 1u) : num_targets_forward;
+    const uint32_t barrier_targets_backward =
+        use_fabric_2d_neighbor_barrier ? std::min(num_targets_backward, 1u) : num_targets_backward;
     auto [barrier_mcast_forward_args, barrier_mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
         sender_device_coord,
         forward_coord,
         backward_coord,
-        topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
-        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1,
+        topology == ccl::Topology::Linear ? barrier_targets_forward
+                                          : (use_fabric_2d_neighbor_barrier ? 1u : ring_size - 1),
+        topology == ccl::Topology::Linear ? barrier_targets_backward
+                                          : (use_fabric_2d_neighbor_barrier ? 1u : ring_size - 1),
         mesh_device);
 
     TT_FATAL(
@@ -320,8 +334,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset, sub_core_grid);
 
     std::vector<CoreRange> sender_worker_core_ranges;
+    sender_worker_core_ranges.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(num_links * num_directions_per_link);
     std::vector<CoreRange> termination_master_core_ranges;
+    termination_master_core_ranges.reserve(num_links * num_directions_per_link);
 
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
@@ -418,7 +435,6 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         reader_compute_defines["OUTPUT_IS_SHARDED"] = "1";
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
     }
-
     if (num_mux_cores_per_direction_per_link) {
         writer_compute_defines["USE_WORKER_MUX"] = "1";
     }
@@ -581,6 +597,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         output_tensor_C,                  // output_tensor_C
         fuse_op,                          // fuse_op
         reverse_order,                    // reverse
+        use_fabric_2d_neighbor_barrier ? static_cast<uint32_t>((num_targets_forward != 0) + (num_targets_backward != 0))
+                                       : ring_size - 1,  // barrier_target_count
     };
 
     if (num_mux_cores_per_direction_per_link) {

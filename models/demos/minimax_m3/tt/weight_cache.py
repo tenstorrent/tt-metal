@@ -89,10 +89,14 @@ def weight_cache_is_complete(
     use_qk_norm = bool(getattr(hf_config, "use_qk_norm", True))
 
     # Top-level tensors are rank-scoped: embed only on the first rank, final norm + LM head only on the
-    # last (a middle rank builds neither and never loads them).
+    # last (a middle rank builds neither and never loads them). The token embedding is the SHARDED parallel
+    # table (tt/parallel_embedding.py), cached under a layout-specific key (1D hidden-only vs 2D vocab+hidden;
+    # both distinct from the old replicated "model.embed_tokens.weight").
+    from models.demos.minimax_m3.tt.parallel_embedding import cache_name_for, embed_shard_2d
+
     required = []
     if is_first_rank:
-        required.append("model.embed_tokens.weight")
+        required.append(cache_name_for(embed_shard_2d()))
     if is_last_rank:
         required += ["lm_head_padded_pow2.weight", "norm/weight"]
 

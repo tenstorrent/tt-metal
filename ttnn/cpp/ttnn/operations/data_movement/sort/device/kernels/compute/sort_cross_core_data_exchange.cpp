@@ -13,6 +13,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 #include "sort_common.hpp"
 
@@ -20,45 +21,32 @@
 
 void kernel_main() {
     // Compile time args
-    constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(0);
-    constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(1);
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
-    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(4);
-    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(5);
-    constexpr bool ascending = get_compile_time_arg_val(6) == 1;
-    constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t index_tensor_cb_id = get_compile_time_arg_val(8);
-    constexpr uint32_t input_tensor_transposed_cb_id = get_compile_time_arg_val(9);
-    constexpr uint32_t index_tensor_transposed_cb_id = get_compile_time_arg_val(10);
-    constexpr uint32_t value_tensor_dfb_id = get_compile_time_arg_val(11);
-    constexpr uint32_t index_tensor_output_dfb_id = get_compile_time_arg_val(12);
-    constexpr uint32_t value_tensor_intermediate_dfb_id = get_compile_time_arg_val(13);
-    constexpr uint32_t index_tensor_intermediate_dfb_id = get_compile_time_arg_val(14);
-    constexpr uint32_t value_tensor_peer_cb_id = get_compile_time_arg_val(15);
-    constexpr uint32_t index_tensor_peer_cb_id = get_compile_time_arg_val(16);
-    constexpr uint32_t packer_unpacker_sync_dfb_id = get_compile_time_arg_val(17);
-    constexpr bool is_row_major = get_compile_time_arg_val(18) == 1;
-    constexpr uint32_t rm_input_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t rm_value_output_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t rm_index_output_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t rm_post_sort_index_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t compute_with_storage_grid_size_x = get_arg(args::compute_with_storage_grid_size_x);
+    constexpr uint32_t compute_with_storage_grid_size_y = get_arg(args::compute_with_storage_grid_size_y);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t number_of_tiles_per_core = get_arg(args::number_of_tiles_per_core);
+    constexpr uint32_t number_of_cores_used = get_arg(args::number_of_cores_used);
+    constexpr bool ascending = get_arg(args::ascending) == 1;
 
-    DataflowBuffer input_tensor_dfb(input_tensor_cb_id);
-    DataflowBuffer index_tensor_dfb(index_tensor_cb_id);
-    DataflowBuffer input_tensor_transposed_dfb(input_tensor_transposed_cb_id);
-    DataflowBuffer index_tensor_transposed_dfb(index_tensor_transposed_cb_id);
-    DataflowBuffer value_tensor_dfb(value_tensor_dfb_id);
-    DataflowBuffer index_tensor_output_dfb(index_tensor_output_dfb_id);
-    DataflowBuffer value_tensor_intermediate_dfb(value_tensor_intermediate_dfb_id);
-    DataflowBuffer index_tensor_intermediate_dfb(index_tensor_intermediate_dfb_id);
-    DataflowBuffer value_tensor_peer_dfb(value_tensor_peer_cb_id);
-    DataflowBuffer index_tensor_peer_dfb(index_tensor_peer_cb_id);
-    DataflowBuffer packer_unpacker_sync_dfb(packer_unpacker_sync_dfb_id);
-    DataflowBuffer rm_input_dfb(rm_input_cb_id);
-    DataflowBuffer rm_value_output_dfb(rm_value_output_cb_id);
-    DataflowBuffer rm_index_output_dfb(rm_index_output_cb_id);
-    DataflowBuffer rm_post_sort_index_dfb(rm_post_sort_index_cb_id);
+    DataflowBuffer input_tensor_dfb(dfb::input_tensor);
+    DataflowBuffer index_tensor_dfb(dfb::index_tensor);
+    DataflowBuffer input_tensor_transposed_dfb(dfb::input_tensor_transposed);
+    DataflowBuffer index_tensor_transposed_dfb(dfb::index_tensor_transposed);
+    DataflowBuffer value_tensor_intermediate_dfb(dfb::value_tensor_intermediate);
+    DataflowBuffer index_tensor_intermediate_dfb(dfb::index_tensor_intermediate);
+    DataflowBuffer value_tensor_peer_dfb(dfb::value_tensor_peer);
+    DataflowBuffer index_tensor_peer_dfb(dfb::index_tensor_peer);
+    DataflowBuffer packer_unpacker_sync_dfb(dfb::packer_unpacker_sync);
+#ifdef IS_ROW_MAJOR
+    DataflowBuffer rm_input_dfb(dfb::rm_input);
+    DataflowBuffer rm_value_output_dfb(dfb::rm_value_output);
+    DataflowBuffer rm_index_output_dfb(dfb::rm_index_output);
+    DataflowBuffer rm_post_sort_index_dfb(dfb::rm_post_sort_index);
+#else
+    DataflowBuffer value_tensor_dfb(dfb::value_tensor);
+    DataflowBuffer index_tensor_output_dfb(dfb::index_tensor_output);
+#endif
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -77,26 +65,29 @@ void kernel_main() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
 
-    // LLK setup — one compute_kernel_hw_startup at the start, then full inits.
-    compute_kernel_hw_startup(
-        is_row_major ? rm_input_cb_id : input_tensor_cb_id, index_tensor_cb_id, input_tensor_cb_id);
-    if constexpr (is_row_major) {
-        binary_op_init_common(input_tensor_cb_id, index_tensor_cb_id, input_tensor_transposed_cb_id);
-    }
+    // LLK setup - one compute_kernel_hw_startup at the start, then full inits.
+#ifdef IS_ROW_MAJOR
+    compute_kernel_hw_startup(dfb::rm_input, dfb::index_tensor, dfb::input_tensor);
+    binary_op_init_common(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
+#else
+    compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor);
+#endif
     ckernel::topk_tile_init();
-    transpose_init(input_tensor_cb_id);
+    transpose_init(dfb::input_tensor);
 
     for (uint32_t h = 0; h < Ht; h++) {
-        if constexpr (is_row_major) {
+#ifdef IS_ROW_MAJOR
+        {
             constexpr uint32_t TILE_H = 32;
-            tilize_init(rm_input_cb_id, number_of_tiles_per_core, input_tensor_cb_id);
+            tilize_init(dfb::rm_input, number_of_tiles_per_core, dfb::input_tensor);
             rm_input_dfb.wait_front(TILE_H);
             input_tensor_dfb.reserve_back(number_of_tiles_per_core);
-            tilize_block(rm_input_cb_id, number_of_tiles_per_core, input_tensor_cb_id);
+            tilize_block(dfb::rm_input, number_of_tiles_per_core, dfb::input_tensor);
             input_tensor_dfb.push_back(number_of_tiles_per_core);
             rm_input_dfb.pop_front(TILE_H);
-            tilize_uninit(rm_input_cb_id, input_tensor_cb_id);
+            tilize_uninit(dfb::rm_input, dfb::input_tensor);
         }
+#endif
 
         bool dir = ascending ^ ((core_id & 1) == 1);
 
@@ -111,7 +102,7 @@ void kernel_main() {
             dir,
             /*end_phase(log2(K))=*/5);
 
-        global_old_cb = index_tensor_cb_id;
+        global_old_cb = dfb::index_tensor;
 
         // Wait for bitonic sequence of Wt tiles
         input_tensor_transposed_dfb.wait_front(number_of_tiles_per_core);
@@ -149,14 +140,14 @@ void kernel_main() {
                             tile_regs_acquire();
 
                             // Copy value tiles to DST register
-                            copy_tile_to_dst_init_with_cb_update(input_tensor_transposed_cb_id, global_old_cb);
-                            copy_tile(input_tensor_transposed_cb_id, left_tile_id, input_dest_start);
-                            copy_tile(input_tensor_transposed_cb_id, right_tile_id, input_dest_end);
+                            copy_tile_to_dst_init_with_cb_update(dfb::input_tensor_transposed, global_old_cb);
+                            copy_tile(dfb::input_tensor_transposed, left_tile_id, input_dest_start);
+                            copy_tile(dfb::input_tensor_transposed, right_tile_id, input_dest_end);
 
                             // Copy index tiles to DST register
-                            copy_tile_to_dst_init_with_cb_update(index_tensor_transposed_cb_id, global_old_cb);
-                            copy_tile(index_tensor_transposed_cb_id, left_tile_id, index_dest_start);
-                            copy_tile(index_tensor_transposed_cb_id, right_tile_id, index_dest_end);
+                            copy_tile_to_dst_init_with_cb_update(dfb::index_tensor_transposed, global_old_cb);
+                            copy_tile(dfb::index_tensor_transposed, left_tile_id, index_dest_start);
+                            copy_tile(dfb::index_tensor_transposed, right_tile_id, index_dest_end);
 
                             uint32_t tile_input_low = input_dest_start;
                             uint32_t tile_input_high = input_dest_end;
@@ -181,15 +172,15 @@ void kernel_main() {
                             tile_regs_commit();
                             tile_regs_wait();
 
-                            // Pack value tiles to CB
-                            pack_reconfig_data_format(input_tensor_transposed_cb_id);
-                            pack_tile<true>(tile_input_low, input_tensor_transposed_cb_id, left_tile_id);
-                            pack_tile<true>(tile_input_high, input_tensor_transposed_cb_id, right_tile_id);
+                            // Pack value tiles to the transposed buffer
+                            pack_reconfig_data_format(dfb::input_tensor_transposed);
+                            pack_tile<true>(tile_input_low, dfb::input_tensor_transposed, left_tile_id);
+                            pack_tile<true>(tile_input_high, dfb::input_tensor_transposed, right_tile_id);
 
-                            // Pack index tiles to CB
-                            pack_reconfig_data_format(index_tensor_transposed_cb_id);
-                            pack_tile<true>(tile_index_low, index_tensor_transposed_cb_id, left_tile_id);
-                            pack_tile<true>(tile_index_high, index_tensor_transposed_cb_id, right_tile_id);
+                            // Pack index tiles to the transposed buffer
+                            pack_reconfig_data_format(dfb::index_tensor_transposed);
+                            pack_tile<true>(tile_index_low, dfb::index_tensor_transposed, left_tile_id);
+                            pack_tile<true>(tile_index_high, dfb::index_tensor_transposed, right_tile_id);
 
                             tile_regs_release();
                         }
@@ -226,18 +217,18 @@ void kernel_main() {
                         tile_regs_acquire();
 
                         // Prepare local index tiles for sorting with new tiles
-                        copy_tile_to_dst_init_with_cb_update(index_tensor_transposed_cb_id, global_old_cb);
-                        copy_tile(index_tensor_transposed_cb_id, tile_id, index_dest_start);
+                        copy_tile_to_dst_init_with_cb_update(dfb::index_tensor_transposed, global_old_cb);
+                        copy_tile(dfb::index_tensor_transposed, tile_id, index_dest_start);
 
                         // Prepare local value tiles for sorting with new tiles
-                        copy_tile_to_dst_init_with_cb_update(input_tensor_transposed_cb_id, global_old_cb);
-                        copy_tile(input_tensor_transposed_cb_id, tile_id, input_dest_start);
+                        copy_tile_to_dst_init_with_cb_update(dfb::input_tensor_transposed, global_old_cb);
+                        copy_tile(dfb::input_tensor_transposed, tile_id, input_dest_start);
 
                         index_tensor_peer_dfb.wait_front(one_tile);
 
                         // Load new index tile for sorting
-                        copy_tile_to_dst_init_with_cb_update(index_tensor_peer_cb_id, global_old_cb);
-                        copy_tile(index_tensor_peer_cb_id, FIRST_TILE, index_dest_end);
+                        copy_tile_to_dst_init_with_cb_update(dfb::index_tensor_peer, global_old_cb);
+                        copy_tile(dfb::index_tensor_peer, FIRST_TILE, index_dest_end);
 
                         index_tensor_peer_dfb.pop_front(one_tile);
 
@@ -245,8 +236,8 @@ void kernel_main() {
                         value_tensor_peer_dfb.wait_front(one_tile);
 
                         // Load new value tile for sorting
-                        copy_tile_to_dst_init_with_cb_update(value_tensor_peer_cb_id, global_old_cb);
-                        copy_tile(value_tensor_peer_cb_id, FIRST_TILE, input_dest_end);
+                        copy_tile_to_dst_init_with_cb_update(dfb::value_tensor_peer, global_old_cb);
+                        copy_tile(dfb::value_tensor_peer, FIRST_TILE, input_dest_end);
 
                         value_tensor_peer_dfb.pop_front(one_tile);
 
@@ -266,13 +257,13 @@ void kernel_main() {
                         tile_regs_commit();
                         tile_regs_wait();
 
-                        // Pack sorted index tiles to CB
-                        pack_reconfig_data_format(index_tensor_transposed_cb_id);
-                        pack_tile<true>(index_output_tile, index_tensor_transposed_cb_id, tile_id);
+                        // Pack sorted index tiles to the transposed buffer
+                        pack_reconfig_data_format(dfb::index_tensor_transposed);
+                        pack_tile<true>(index_output_tile, dfb::index_tensor_transposed, tile_id);
 
-                        // Pack sorted value tiles to CB
-                        pack_reconfig_data_format(input_tensor_transposed_cb_id);
-                        pack_tile<true>(value_output_tile, input_tensor_transposed_cb_id, tile_id);
+                        // Pack sorted value tiles to the transposed buffer
+                        pack_reconfig_data_format(dfb::input_tensor_transposed);
+                        pack_tile<true>(value_output_tile, dfb::input_tensor_transposed, tile_id);
 
                         tile_regs_release();
                     }
@@ -289,24 +280,25 @@ void kernel_main() {
         input_tensor_transposed_dfb.push_back(number_of_tiles_per_core);
         index_tensor_transposed_dfb.push_back(number_of_tiles_per_core);
 
-        if constexpr (!is_row_major) {
-            transpose_and_pack(input_tensor_transposed_dfb, value_tensor_dfb, number_of_tiles_per_core);
-            transpose_and_pack(index_tensor_transposed_dfb, index_tensor_output_dfb, number_of_tiles_per_core);
-        } else {
+#ifndef IS_ROW_MAJOR
+        transpose_and_pack(input_tensor_transposed_dfb, value_tensor_dfb, number_of_tiles_per_core);
+        transpose_and_pack(index_tensor_transposed_dfb, index_tensor_output_dfb, number_of_tiles_per_core);
+#else
+        {
             // ROW_MAJOR output: un-transpose the sorted tiles back into the
-            // PACK-only RM-input/index CBs (which are now empty after the
+            // PACK-only tile-format buffers (which are now empty after the
             // tilize_block/sort loops drained them), then pack_untilize them
             // into TILE_H RM rows for the writer/reader to drain.
             constexpr uint32_t TILE_H = 32;
             // DST_ACCUM_MODE is a compile-time macro injected by the framework when
-            // fp32_dest_acc_en=true is set in ComputeConfigDescriptor (controlled by
+            // enable_32_bit_dest=true is set on the compute hardware config (controlled by
             // is_32_bit_data in sort_program_factory.cpp: true for Float32 input or
-            // UInt32 index).  MAX_DEST_TILES is therefore data-format-dependent:
+            // UInt32 index). MAX_DEST_TILES is therefore data-format-dependent:
             // 32-bit DEST holds 4 tiles; 16-bit (BF16) DEST holds 8 tiles.
             constexpr uint32_t MAX_DEST_TILES = DST_ACCUM_MODE ? 4 : 8;
             // number_of_tiles_per_core is a power-of-two: get_number_of_tiles_per_core()
             // returns Wt / num_cores, and Wt is always a power-of-two (padded by
-            // pre_sort_transform_tensor).  MAX_DEST_TILES is also a power-of-two (4 or 8),
+            // pre_sort_transform_tensor). MAX_DEST_TILES is also a power-of-two (4 or 8),
             // so number_of_tiles_per_core % SUB_BLOCK_DIM == 0 is always satisfied.
             constexpr uint32_t SUB_BLOCK_DIM =
                 (number_of_tiles_per_core < MAX_DEST_TILES) ? number_of_tiles_per_core : MAX_DEST_TILES;
@@ -320,31 +312,31 @@ void kernel_main() {
             transpose_and_pack(index_tensor_transposed_dfb, rm_post_sort_index_dfb, number_of_tiles_per_core);
 
             // Untilize values: number_of_tiles_per_core tiles → TILE_H RM pages.
-            binary_op_init_common(input_tensor_cb_id, index_tensor_cb_id, rm_value_output_cb_id);
-            pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(input_tensor_cb_id, rm_value_output_cb_id);
+            binary_op_init_common(dfb::input_tensor, dfb::index_tensor, dfb::rm_value_output);
+            pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(dfb::input_tensor, dfb::rm_value_output);
             input_tensor_dfb.wait_front(number_of_tiles_per_core);
             rm_value_output_dfb.reserve_back(TILE_H);
             for (uint32_t b = 0; b < NUM_SUB_BLOCKS; ++b) {
                 pack_untilize_block<SUB_BLOCK_DIM, number_of_tiles_per_core>(
-                    input_tensor_cb_id, 1, rm_value_output_cb_id, b);
+                    dfb::input_tensor, 1, dfb::rm_value_output, b);
                 input_tensor_dfb.pop_front(SUB_BLOCK_DIM);
             }
             rm_value_output_dfb.push_back(TILE_H);
-            pack_untilize_uninit(rm_value_output_cb_id);
+            pack_untilize_uninit(dfb::rm_value_output);
 
             // Untilize indices: number_of_tiles_per_core tiles → TILE_H RM pages.
-            binary_op_init_common(rm_post_sort_index_cb_id, input_tensor_cb_id, rm_index_output_cb_id);
-            pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(
-                rm_post_sort_index_cb_id, rm_index_output_cb_id);
+            binary_op_init_common(dfb::rm_post_sort_index, dfb::input_tensor, dfb::rm_index_output);
+            pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(dfb::rm_post_sort_index, dfb::rm_index_output);
             rm_post_sort_index_dfb.wait_front(number_of_tiles_per_core);
             rm_index_output_dfb.reserve_back(TILE_H);
             for (uint32_t b = 0; b < NUM_SUB_BLOCKS; ++b) {
                 pack_untilize_block<SUB_BLOCK_DIM, number_of_tiles_per_core>(
-                    rm_post_sort_index_cb_id, 1, rm_index_output_cb_id, b);
+                    dfb::rm_post_sort_index, 1, dfb::rm_index_output, b);
                 rm_post_sort_index_dfb.pop_front(SUB_BLOCK_DIM);
             }
             rm_index_output_dfb.push_back(TILE_H);
-            pack_untilize_uninit(rm_index_output_cb_id);
+            pack_untilize_uninit(dfb::rm_index_output);
         }
+#endif
     }  // h loop
 }  // void kernel_main()
