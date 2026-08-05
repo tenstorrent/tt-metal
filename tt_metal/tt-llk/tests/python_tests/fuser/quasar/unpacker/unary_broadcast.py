@@ -30,6 +30,7 @@ class UnaryBroadcastUnpacker(Unpacker):
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        tensor_b = self.broadcast_golden(tensor_b, config, operation, compute_unit)
         return tensor_a.flatten(), tensor_b.flatten()
 
     def init(

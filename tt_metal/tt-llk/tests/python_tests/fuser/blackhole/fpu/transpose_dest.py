@@ -11,7 +11,6 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopTileByTile, TileLoop
-from helpers.golden_generators import TransposeGolden, get_golden_generator
 
 
 class TransposeDestFpu(Fpu):
@@ -32,26 +31,10 @@ class TransposeDestFpu(Fpu):
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = config.sentinel.golden_math_format
-        tile_cnt = compute_unit.src_a.tile_count
-
-        t_matrix = get_golden_generator(TransposeGolden)
-        golden_tensor = t_matrix.transpose_faces_multi_tile(
-            tensor_dst,
-            output_format,
-            num_tiles=tile_cnt,
-            tilize=True,
-            input_dimensions=compute_unit.src_a.dimensions,
+        golden_tensor = self.transpose_golden(
+            tensor_dst, config, operation, compute_unit
         )
-        golden_tensor = t_matrix.transpose_within_faces_multi_tile(
-            golden_tensor,
-            output_format,
-            num_tiles=tile_cnt,
-            untilize=True,
-            input_dimensions=compute_unit.src_a.dimensions,
-        )
-
-        return (tensor_a, tensor_b, golden_tensor)
+        return tensor_a, tensor_b, golden_tensor
 
     def init(
         self,
@@ -61,7 +44,8 @@ class TransposeDestFpu(Fpu):
         block: BlockData,
     ) -> str:
         is_32bit = config.dest_acc.cpp_enum_value
-        return f"_llk_math_transpose_dest_init_<true, {is_32bit}>();\n"
+        transpose_faces = compute_unit.transpose_faces.cpp_enum_value
+        return f"_llk_math_transpose_dest_init_<{transpose_faces}, {is_32bit}>();\n"
 
     def calculate(
         self,
@@ -71,7 +55,8 @@ class TransposeDestFpu(Fpu):
         block: BlockData,
     ) -> str:
         is_32bit = config.dest_acc.cpp_enum_value
-        return f"_llk_math_transpose_dest_<true, {is_32bit}>({block.tile_id_block});\n"
+        transpose_faces = compute_unit.transpose_faces.cpp_enum_value
+        return f"_llk_math_transpose_dest_<{transpose_faces}, {is_32bit}>({block.tile_id_block});\n"
 
     def uninit(
         self,

@@ -33,6 +33,7 @@ from helpers.llk_params import (
     MathFidelity,
     MathOperation,
     Tilize,
+    Transpose,
     UnpackToDest,
 )
 from pydantic import Field
@@ -69,7 +70,7 @@ _int32_unpack_to_dest = (
 _ab_checks = [
     (
         lambda s, a, b: s.broadcast_type == BroadcastType.Scalar
-        and s.unpack_transpose_faces.value,
+        and s.transpose_faces.value,
         "SrcA transpose is not supported with scalar broadcast",
     ),
 ]
@@ -80,16 +81,15 @@ _tilize_a_checks = [
         "UnpackerTilizeA does not support broadcast",
     ),
     (
-        lambda s, a, b: s.unpack_transpose_faces.value
-        or s.unpack_transpose_within_face.value,
+        lambda s, a, b: s.transpose_faces.value or s.transpose_within_face.value,
         "UnpackerTilizeA does not support transpose",
     ),
 ]
 
 _matmul_checks = [
     (
-        lambda s, a, b: s.unpack_transpose_within_face != s.unpack_transpose_faces,
-        "MatmulUnpacker does not support different values for transpose_faces and transpose_within_face",
+        lambda s, a, b: s.transpose_faces.value,
+        "MatmulUnpacker does not support transpose_faces, only transpose_within_face",
     ),
 ]
 
@@ -249,6 +249,16 @@ _eltwise_checks = [
 ]
 _eltwise_lofi_checks = [*_eltwise_checks, _lofi_only]
 
+_transpose_dest_within_required = (
+    lambda s, a, b: s.transpose_within_face != Transpose.Yes,
+    "TransposeDest requires transpose_within_face = Yes",
+)
+
+_sub_bcast_col_required = (
+    lambda s, a, b: s.broadcast_type != BroadcastType.Column,
+    'SubBcastColCustom requires broadcast_type: "COL"',
+)
+
 FPU_MAP = {
     "Elwadd": (
         lambda s: EltwiseFpu(MathOperation.Elwadd),
@@ -318,6 +328,7 @@ FPU_MAP = {
         [
             _no_reuse_dest,
             _forced_unpacker("SubBcastColCustomUnpacker"),
+            _sub_bcast_col_required,
             _only_32x32_tile,
         ],
     ),
@@ -326,6 +337,7 @@ FPU_MAP = {
         [
             _no_reuse_dest,
             _forced_unpacker("TransposeDestUnpacker"),
+            _transpose_dest_within_required,
             _only_32x32_tile,
         ],
     ),

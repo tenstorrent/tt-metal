@@ -11,7 +11,6 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopBlockRow, TileLoop
-from helpers.golden_generators import DataCopyGolden, get_golden_generator
 
 
 class DatacopyFpu(Fpu):
@@ -33,19 +32,9 @@ class DatacopyFpu(Fpu):
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        source_tensor = tensor_a
-
-        golden_generator = get_golden_generator(DataCopyGolden)
-        golden_tensor = golden_generator(
-            source_tensor,
-            config.sentinel.golden_math_format,
-            num_faces=operation.tile_shape.total_num_faces(),
-            input_dimensions=compute_unit.src_a.dimensions,
-            face_r_dim=operation.tile_shape.face_r_dim,
-            tile_shape=operation.tile_shape,
+        return self.datacopy_golden(
+            tensor_a, tensor_b, tensor_dst, config, operation, compute_unit
         )
-
-        return (tensor_a, tensor_b, golden_tensor)
 
     def init(
         self,

@@ -13,10 +13,11 @@ if TYPE_CHECKING:
     from .block_data import BlockData
 
 
+from .golden import Golden
 from .tile_loop import TileLoop
 
 
-class Fpu:
+class Fpu(Golden):
     """Base class for fused test FPU (math) code generators.
 
     Subclasses represent specific math operations (e.g. MatmulFpu, DatacopyFpu, etc.)
@@ -37,7 +38,8 @@ class Fpu:
         2. Set `loop` to the desired TileLoop variant
         3. Override get_headers() with the required LLK header files
         4. Override init(), calculate(), uninit() to emit the C++ LLK calls
-        5. Override golden() to compute the expected math result
+        5. Override golden() to compute the expected math result, calling
+           self.eltwise_golden(), self.matmul_golden(), etc.
     """
 
     # Controls the tile iteration pattern for the math loop.

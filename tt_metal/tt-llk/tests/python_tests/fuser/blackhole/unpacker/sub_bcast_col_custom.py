@@ -11,9 +11,6 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopBlockRow, TileLoop
-from helpers.golden_generators import BroadcastGolden, get_golden_generator
-from helpers.llk_params import BroadcastType
-from helpers.tilize_untilize import tilize_block, untilize_block
 
 
 class SubBcastColCustomUnpacker(Unpacker):
@@ -34,38 +31,9 @@ class SubBcastColCustomUnpacker(Unpacker):
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        tile_count_x = compute_unit.src_b.tile_count_x
-        tile_count_y = compute_unit.src_b.tile_count_y
-        block_tiles_x = operation.block_tiles_x
-        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-
-        tilized_b = tilize_block(
-            tensor_b, compute_unit.src_b.dimensions, compute_unit.src_b.data_format
+        tensor_b = self.broadcast_golden(
+            tensor_b, config, operation, compute_unit, per_block=True
         )
-        broadcast_golden = get_golden_generator(BroadcastGolden)
-
-        for ty in range(tile_count_y):
-            for bx in range(0, tile_count_x, block_tiles_x):
-                first_tile_idx = ty * tile_count_x + bx
-                ct_dim = min(block_tiles_x, tile_count_x - bx)
-                broadcast_tile = broadcast_golden(
-                    BroadcastType.Column,
-                    tilized_b[first_tile_idx],
-                    compute_unit.src_b.data_format,
-                    num_faces,
-                    1,
-                    face_r_dim,
-                )
-                for tx_offset in range(ct_dim):
-                    tilized_b[first_tile_idx + tx_offset] = broadcast_tile
-
-        tensor_b = untilize_block(
-            tilized_b,
-            compute_unit.src_b.data_format,
-            compute_unit.src_b.dimensions,
-        )
-
         return tensor_a.flatten(), tensor_b.flatten()
 
     def perf_set_valid(

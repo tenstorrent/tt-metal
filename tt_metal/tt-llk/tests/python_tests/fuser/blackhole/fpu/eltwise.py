@@ -11,8 +11,7 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopTileByTile, TileLoop
-from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
-from helpers.llk_params import AccToDest, EltwiseBinaryReuseDestType, MathOperation
+from helpers.llk_params import MathOperation
 
 
 class EltwiseFpu(Fpu):
@@ -40,31 +39,9 @@ class EltwiseFpu(Fpu):
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = config.sentinel.golden_math_format
-        math_fidelity = compute_unit.math_fidelity
-
-        if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
-            tensor_a = tensor_dst
-            tensor_dst = torch.zeros_like(tensor_dst)
-
-        if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCB:
-            tensor_b = tensor_dst
-            tensor_dst = torch.zeros_like(tensor_dst)
-
-        generate_golden = get_golden_generator(EltwiseBinaryGolden)
-        golden_tensor = generate_golden(
-            self.operation,
-            tensor_a,
-            tensor_b,
-            output_format,
-            math_fidelity,
-            tile_shape=operation.tile_shape,
-        ).reshape(operation.max_output_dimensions)
-
-        if compute_unit.acc_to_dest == AccToDest.Yes:
-            golden_tensor = golden_tensor + tensor_dst
-
-        return (tensor_a, tensor_b, golden_tensor)
+        return self.eltwise_golden(
+            tensor_a, tensor_b, tensor_dst, config, operation, compute_unit
+        )
 
     def init(
         self,

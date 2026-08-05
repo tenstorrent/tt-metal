@@ -32,10 +32,10 @@ class Packer(BasePacker):
         config: GlobalConfig,
     ) -> torch.Tensor:
         if pack_node.pack_relu != PackerReluType.NoRelu:
-            tensor = self._relu_golden(tensor, pack_node, config)
+            tensor = self.relu_golden(tensor, config, operation, pack_node)
 
         if pack_node.pack_l1_accumulation == L1Accumulation.Yes:
-            tensor = self._l1_acc_golden(tensor, pack_node, operation, config)
+            tensor = self.l1_acc_golden(tensor, config, operation, pack_node)
 
         return tensor
 

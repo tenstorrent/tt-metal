@@ -11,7 +11,6 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopBlockRow, TileLoop
-from helpers.tilize_untilize import tilize_block
 
 
 class UnpackerTilizeA(Unpacker):
@@ -32,19 +31,10 @@ class UnpackerTilizeA(Unpacker):
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        tilized_a = tilize_block(
-            tensor_a,
-            compute_unit.src_a.dimensions,
-            compute_unit.src_a.data_format,
-            compute_unit.src_a.tile_shape.total_num_faces(),
-            tile_dimensions=[
-                compute_unit.src_a.tile_shape.total_row_dim(),
-                compute_unit.src_a.tile_shape.total_col_dim(),
-            ],
-            face_r_dim=compute_unit.src_a.tile_shape.face_r_dim,
+        return (
+            self.tilize_golden(tensor_a, config, operation, compute_unit),
+            None,
         )
-
-        return tilized_a, None
 
     def init(
         self,

@@ -10,10 +10,6 @@ from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.sfpu_node import SfpuNode
-from helpers.golden_generators import (
-    BinarySFPUGolden,
-    get_golden_generator,
-)
 from helpers.llk_params import (
     ApproximationMode,
     MathOperation,
@@ -57,22 +53,9 @@ class BinarySfpu(Sfpu):
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        math_format = config.sentinel.golden_math_format
-
-        generate_binary_golden = get_golden_generator(BinarySFPUGolden)
-        golden_tensor = generate_binary_golden(
-            self.operation,
-            tensor,
-            self.dst_index_in0,
-            self.dst_index_in1,
-            self.dst_index_out,
-            self.iterations,
-            batch_dims,
-            math_format,
-            skip_tilize=True,
+        return self.binary_sfpu_golden(
+            tensor, config, operation, compute_unit, batch_dims
         )
-
-        return golden_tensor
 
     def init(
         self,

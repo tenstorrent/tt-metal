@@ -33,9 +33,9 @@ class PackUntilize(Packer):
         config: GlobalConfig,
     ) -> torch.Tensor:
         if pack_node.pack_relu != PackerReluType.NoRelu:
-            tensor = self._relu_golden(tensor, pack_node, config)
+            tensor = self.relu_golden(tensor, config, operation, pack_node)
 
-        return self._untilize_golden(tensor, pack_node)
+        return self.untilize_golden(tensor, config, operation, pack_node)
 
     def init(
         self,

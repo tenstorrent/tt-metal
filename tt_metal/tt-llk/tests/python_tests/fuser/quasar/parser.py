@@ -72,20 +72,19 @@ _broadcast_required = (
 _no_transpose_unpack_to_dest = (
     lambda s, a, b: s.unpack_to_dest == UnpackToDest.Yes
     and (
-        s.unpack_transpose_faces == Transpose.Yes
-        or s.unpack_transpose_within_face == Transpose.Yes
+        s.transpose_faces == Transpose.Yes or s.transpose_within_face == Transpose.Yes
     ),
     "Quasar does not support transpose with unpack_to_dest",
 )
 
 _no_transpose = (
-    lambda s, a, b: s.unpack_transpose_faces == Transpose.Yes
-    or s.unpack_transpose_within_face == Transpose.Yes,
+    lambda s, a, b: s.transpose_faces == Transpose.Yes
+    or s.transpose_within_face == Transpose.Yes,
     "Quasar does not support transpose for this unpacker",
 )
 
 _no_transpose_mismatch = (
-    lambda s, a, b: s.unpack_transpose_faces != s.unpack_transpose_within_face,
+    lambda s, a, b: s.transpose_faces != s.transpose_within_face,
     "Quasar requires both transpose_faces and transpose_within_face to have the same value",
 )
 
@@ -182,6 +181,11 @@ _only_32x32_tile = (
     "Only (32, 32) tiles are supported for this operation",
 )
 
+_transpose_dest_within_required = (
+    lambda s, a, b: s.transpose_within_face != Transpose.Yes,
+    "TransposeDest requires transpose_within_face = Yes",
+)
+
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(reuse_dest=s.reuse_dest),
@@ -264,7 +268,7 @@ FPU_MAP = {
         [
             _no_reuse_dest,
             _no_broadcast,
-            _no_transpose,
+            _transpose_dest_within_required,
             _forced_unpacker("TransposeDestUnpacker"),
             _only_32x32_tile,
         ],

@@ -12,13 +12,11 @@ if TYPE_CHECKING:
     from .block_data import BlockData
     from .pack_node import PackNode
 
-from helpers.golden_generators import PackGolden, UntilizeGolden, get_golden_generator
-from helpers.tilize_untilize import tilize_block, untilize_block
-
+from .golden import Golden
 from .tile_loop import TileLoop
 
 
-class Packer:
+class Packer(Golden):
     """Base class for fused test packer code generators.
 
     Subclasses override methods to emit the C++ LLK calls that configure and
@@ -33,7 +31,7 @@ class Packer:
         2. Override get_headers() with the required LLK header files
         3. Override init(), pack(), uninit() to emit the C++ LLK calls
         4. Override golden() to compute the expected pack result,
-           calling _relu_golden() and _l1_acc_golden() as needed
+           calling self.relu_golden() and self.l1_acc_golden() as needed
     """
 
     # Controls the tile iteration pattern for the pack loop.
@@ -44,84 +42,6 @@ class Packer:
     per_block_init: bool = False
 
     pack_mode: str = "PackMode::Default"
-
-    @staticmethod
-    def _untilize_golden(
-        tensor: torch.Tensor,
-        pack_node: "PackNode",
-    ) -> torch.Tensor:
-        untilize = get_golden_generator(UntilizeGolden)
-        tile_shape = pack_node.output.tile_shape
-        return untilize(
-            tensor,
-            pack_node.output.data_format,
-            dimensions=pack_node.output.dimensions,
-            tile_dimensions=(tile_shape.total_row_dim(), tile_shape.total_col_dim()),
-        )
-
-    @staticmethod
-    def _l1_acc_golden(
-        tensor: torch.Tensor,
-        pack_node: "PackNode",
-        operation: "L1Operation",
-        config: "GlobalConfig",
-    ) -> torch.Tensor:
-        """Golden helper: simulate L1 accumulation across blocks."""
-        output_dims = pack_node.output.dimensions
-        output_format = pack_node.output.data_format
-        tile_size = pack_node.output.tile_shape.total_tile_size()
-        tile_count_x = pack_node.output.tile_count_x
-        tile_count_y = pack_node.output.tile_count_y
-        block_tiles_x = operation.block_tiles_x
-        block_tiles_y = operation.block_tiles_y
-
-        tile_dims = (
-            pack_node.output.tile_shape.total_row_dim(),
-            pack_node.output.tile_shape.total_col_dim(),
-        )
-        num_faces = pack_node.output.tile_shape.total_num_faces()
-        tensor = tilize_block(
-            tensor,
-            output_dims,
-            output_format,
-            num_faces=num_faces,
-            tile_dimensions=tile_dims,
-        ).flatten()
-        tile_grid = tensor.view(tile_count_y, tile_count_x, tile_size)
-
-        accumulated = torch.zeros(
-            block_tiles_y, block_tiles_x, tile_size, dtype=tensor.dtype
-        )
-        for by in range(0, tile_count_y, block_tiles_y):
-            for bx in range(0, tile_count_x, block_tiles_x):
-                bty = min(block_tiles_y, tile_count_y - by)
-                btx = min(block_tiles_x, tile_count_x - bx)
-                accumulated[:bty, :btx] += tile_grid[by : by + bty, bx : bx + btx]
-
-        result_grid = torch.zeros(
-            tile_count_y, tile_count_x, tile_size, dtype=tensor.dtype
-        )
-        result_grid[:block_tiles_y, :block_tiles_x] = accumulated
-        return untilize_block(
-            result_grid.flatten(),
-            output_format,
-            output_dims,
-            tile_dimensions=tile_dims,
-            num_faces=num_faces,
-        )
-
-    @staticmethod
-    def _relu_golden(
-        tensor: torch.Tensor,
-        pack_node: "PackNode",
-        config: "GlobalConfig",
-    ) -> torch.Tensor:
-        """Golden helper: apply packer ReLU activation."""
-        intermediate_format = config.sentinel.golden_pack_src
-        relu_config = PackGolden.generate_relu_config(
-            pack_node.pack_relu, pack_node.relu_threshold, intermediate_format
-        )
-        return PackGolden.apply_relu(tensor, relu_config, intermediate_format)
 
     def get_headers(self) -> List[str]:
         """Return the list of C++ LLK header filenames required by this packer.
@@ -142,7 +62,7 @@ class Packer:
         """Compute the golden pack result in Python.
 
         Returns the tensor after applying pack transforms.
-        Override and call _relu_golden() or _l1_acc_golden()
+        Override and call self.relu_golden() or self.l1_acc_golden()
         as needed based on the pack_node config.
         """
         return tensor

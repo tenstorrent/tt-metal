@@ -69,8 +69,8 @@ def _is_sfpu_tile(dims: Tuple[int, int]) -> bool:
 
 def _has_transpose(schema) -> bool:
     return (
-        schema.unpack_transpose_faces == Transpose.Yes
-        or schema.unpack_transpose_within_face == Transpose.Yes
+        schema.transpose_faces == Transpose.Yes
+        or schema.transpose_within_face == Transpose.Yes
     )
 
 
@@ -192,8 +192,8 @@ class FpuMathSchemaBase(BaseModel):
     reduce_dim: Optional[ReduceDimension] = None
     enforce_fp32_accumulation: EnforceFP32Accumulation = EnforceFP32Accumulation.No
     acc_to_dest: AccToDest = AccToDest.No
-    unpack_transpose_within_face: Transpose = Transpose.No
-    unpack_transpose_faces: Transpose = Transpose.No
+    transpose_within_face: Transpose = Transpose.No
+    transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
     unpack_to_dest: UnpackToDest = UnpackToDest.No
     reduce_to_tile: bool = False
@@ -256,8 +256,8 @@ class FpuMathSchemaBase(BaseModel):
         )
 
         kwargs = {
-            "unpack_transpose_within_face": self.unpack_transpose_within_face,
-            "unpack_transpose_faces": self.unpack_transpose_faces,
+            "transpose_within_face": self.transpose_within_face,
+            "transpose_faces": self.transpose_faces,
             "broadcast_type": self.broadcast_type,
             "reuse_dest": self.reuse_dest,
             "math_fidelity": self.math_fidelity,

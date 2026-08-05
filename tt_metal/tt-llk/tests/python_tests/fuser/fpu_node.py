@@ -35,8 +35,8 @@ class FpuNode:
         src_a: Operand,
         src_b: Operand,
         unpacker: Unpacker = None,
-        unpack_transpose_faces: Transpose = Transpose.No,
-        unpack_transpose_within_face: Transpose = Transpose.No,
+        transpose_faces: Transpose = Transpose.No,
+        transpose_within_face: Transpose = Transpose.No,
         broadcast_type: BroadcastType = BroadcastType.None_,
         data_copy_type: DataCopyType = DataCopyType.A2D,
         reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE,
@@ -51,8 +51,8 @@ class FpuNode:
         self.unpacker = unpacker
         self.src_a = src_a
         self.src_b = src_b
-        self.unpack_transpose_faces = unpack_transpose_faces
-        self.unpack_transpose_within_face = unpack_transpose_within_face
+        self.transpose_faces = transpose_faces
+        self.transpose_within_face = transpose_within_face
         self.broadcast_type = broadcast_type
         self.reuse_dest = reuse_dest
         self.math_fidelity = math_fidelity

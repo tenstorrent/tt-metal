@@ -12,8 +12,10 @@ if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .sfpu_node import SfpuNode
 
+from .golden import Golden
 
-class Sfpu:
+
+class Sfpu(Golden):
     """Base class for fused test SFPU code generators.
 
     Subclasses represent specific SFPU operations (e.g. UnarySfpu, BinarySfpu)
@@ -33,7 +35,8 @@ class Sfpu:
         1. Subclass Sfpu
         2. Override get_headers() with the required LLK header files
         3. Override init(), calculate(), uninit() to emit the C++ LLK calls
-        4. Override golden() to compute the expected SFPU result
+        4. Override golden() to compute the expected SFPU result, calling
+           self.unary_sfpu_golden() or self.binary_sfpu_golden() as needed
     """
 
     def init(

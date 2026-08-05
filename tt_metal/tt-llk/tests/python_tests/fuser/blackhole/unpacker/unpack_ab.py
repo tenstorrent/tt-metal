@@ -11,13 +11,7 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopTileByTile, TileLoop
-from helpers.golden_generators import (
-    BroadcastGolden,
-    TransposeGolden,
-    get_golden_generator,
-)
-from helpers.llk_params import BroadcastType, Transpose
-from helpers.tilize_untilize import tilize_block, untilize_block
+from helpers.llk_params import BroadcastType
 
 
 class UnpackerAB(Unpacker):
@@ -37,56 +31,8 @@ class UnpackerAB(Unpacker):
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        t_matrix = get_golden_generator(TransposeGolden)
-        if compute_unit.broadcast_type != BroadcastType.None_:
-            src_b_tile_dims = (
-                compute_unit.src_b.tile_shape.total_row_dim(),
-                compute_unit.src_b.tile_shape.total_col_dim(),
-            )
-            src_b_num_faces = compute_unit.src_b.tile_shape.total_num_faces()
-            tilized_b = tilize_block(
-                tensor_b,
-                compute_unit.src_b.dimensions,
-                compute_unit.src_b.data_format,
-                num_faces=src_b_num_faces,
-                tile_dimensions=src_b_tile_dims,
-            )
-            broadcast_golden = get_golden_generator(BroadcastGolden)
-            broadcast_result = broadcast_golden(
-                compute_unit.broadcast_type,
-                tilized_b,
-                compute_unit.src_b.data_format,
-                compute_unit.src_a.tile_shape.total_num_faces(),
-                compute_unit.src_b.tile_count,
-                compute_unit.src_a.tile_shape.face_r_dim,
-            )
-            tensor_b = untilize_block(
-                broadcast_result,
-                compute_unit.src_b.data_format,
-                compute_unit.src_b.dimensions,
-                tile_dimensions=src_b_tile_dims,
-                num_faces=src_b_num_faces,
-            )
-
-        if compute_unit.unpack_transpose_faces == Transpose.Yes:
-            tensor_a = t_matrix.transpose_faces_multi_tile(
-                tensor_a,
-                compute_unit.src_a.data_format,
-                compute_unit.src_a.tile_count,
-                tilize=True,
-                untilize=True,
-                input_dimensions=compute_unit.src_a.dimensions,
-            )
-
-        if compute_unit.unpack_transpose_within_face == Transpose.Yes:
-            tensor_a = t_matrix.transpose_within_faces_multi_tile(
-                tensor_a,
-                compute_unit.src_a.data_format,
-                compute_unit.src_a.tile_count,
-                tilize=True,
-                untilize=True,
-                input_dimensions=compute_unit.src_a.dimensions,
-            )
+        tensor_b = self.broadcast_golden(tensor_b, config, operation, compute_unit)
+        tensor_a = self.transpose_golden(tensor_a, config, operation, compute_unit)
 
         return tensor_a.flatten(), tensor_b.flatten()
 
@@ -146,16 +92,16 @@ class UnpackerAB(Unpacker):
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
 
         tile_shape = compute_unit.src_a.tile_shape
-        if compute_unit.unpack_transpose_faces.value:
+        if compute_unit.transpose_faces.value:
             transpose_value = (
                 "ckernel::Transpose::Both"
-                if compute_unit.unpack_transpose_within_face.value
+                if compute_unit.transpose_within_face.value
                 else "ckernel::Transpose::InterFace"
             )
         else:
             transpose_value = (
                 "ckernel::Transpose::IntraFace"
-                if compute_unit.unpack_transpose_within_face.value
+                if compute_unit.transpose_within_face.value
                 else "ckernel::Transpose::None"
             )
         shape_var = f"tensor_shape_stage_{operation.stage_id}"

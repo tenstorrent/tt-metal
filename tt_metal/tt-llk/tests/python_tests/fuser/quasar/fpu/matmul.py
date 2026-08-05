@@ -11,7 +11,6 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopBlock, TileLoop
-from helpers.golden_generators import MatmulGolden, get_golden_generator
 
 
 class MatmulFpu(Fpu):
@@ -33,23 +32,9 @@ class MatmulFpu(Fpu):
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = config.sentinel.golden_math_format
-        math_fidelity = compute_unit.math_fidelity
-
-        generate_golden = get_golden_generator(MatmulGolden)
-        golden = generate_golden(
-            tensor_a,
-            tensor_b,
-            output_format,
-            math_fidelity,
-            input_A_dimensions=compute_unit.src_a.dimensions,
-            input_B_dimensions=compute_unit.src_b.dimensions,
-            tilize=False,
-            input_A_format=compute_unit.src_a.data_format,
-            input_B_format=compute_unit.src_b.data_format,
+        return self.matmul_golden(
+            tensor_a, tensor_b, tensor_dst, config, operation, compute_unit
         )
-
-        return (tensor_a, tensor_b, golden)
 
     def init(
         self,

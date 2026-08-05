@@ -12,10 +12,11 @@ if TYPE_CHECKING:
     from .fpu_node import FpuNode
     from .block_data import BlockData
 
+from .golden import Golden
 from .tile_loop import TileLoop
 
 
-class Unpacker:
+class Unpacker(Golden):
     """Base class for fused test unpacker code generators.
 
     Subclasses represent specific unpack operations (e.g. UnpackerA, MatmulUnpacker, etc.)
@@ -36,7 +37,9 @@ class Unpacker:
         2. Set `loop` to the desired TileLoop variant
         3. Override get_headers() with the required LLK header files
         4. Override init(), unpack(), uninit() to emit the C++ LLK calls
-        5. Override golden() to compute the expected unpack transformation
+        5. Override golden() to compute the expected unpack transformation,
+           calling self.tilize_golden() / self.transpose_golden() /
+           self.broadcast_golden() as needed
         6. Override perf_set_valid() / perf_clear_valid() for perf isolation
     """
 
