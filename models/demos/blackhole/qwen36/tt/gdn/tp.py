@@ -163,6 +163,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
 
     if n_cc > 1:
         C_dev = args.gdn_qkv_dim // tp
+        assert C_dev % n_cc == 0, f"GDN per-device channels {C_dev} not divisible by gdn_conv_channel_chunks {n_cc}"
         cw = C_dev // n_cc
         Wd = W1d.reshape(tp, C_dev, 1, args.gdn_conv_kernel_size)  # per-device channel block
         tw["conv_w1d"] = [
@@ -341,6 +342,7 @@ class TPGatedDeltaNet:
         # original single call. Weights prepped once per chunk (warmup); trace replay stays device-only.
         w1d_chunks = self.tw["conv_w1d"] if isinstance(self.tw["conv_w1d"], list) else [self.tw["conv_w1d"]]
         n_cc = len(w1d_chunks)
+        assert C % n_cc == 0, f"GDN conv channels {C} not divisible by n_cc {n_cc}"
         cw = C // n_cc
         if self._conv1d_wprep is None:
             self._conv1d_wprep = [

@@ -145,9 +145,16 @@ def prefill_forward(
         hidden_chunks = [hidden_states]
         routing_chunks = [routing_weights]
 
+    chunked = len(hidden_chunks) > 1
     result_acc = None
     for h_chunk, r_chunk in zip(hidden_chunks, routing_chunks):
         chunk_result = _process_prefill_chunk(h_chunk, r_chunk, weights, config, prefill_sparsity)
+        if chunked:
+            # split() produced fresh per-chunk copies (not the caller's x/routing that the shared
+            # expert reuses on the single-chunk path), so free them as we go instead of holding
+            # every chunk resident for the whole loop.
+            h_chunk.deallocate(True)
+            r_chunk.deallocate(True)
         if result_acc is None:
             result_acc = chunk_result
         else:
