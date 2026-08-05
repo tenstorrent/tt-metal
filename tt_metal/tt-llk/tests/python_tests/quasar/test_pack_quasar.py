@@ -63,8 +63,8 @@ def generate_qsr_pack_combinations(
 
     Args:
         formats_list: List of input/output format pairs
-        is_perf: Restrict combinations to SyncHalf, NoRelu, a 16x16 tile,
-            and a 32x32 input for performance measurements.
+        is_perf: Restrict combinations to SyncHalf, a 16x16 tile, and a 32x32
+            input while retaining every supported ReLU path.
 
     Returns:
         List of (format, dest_acc, dest_sync, input_dimensions, relu_type,
@@ -127,13 +127,9 @@ def generate_qsr_pack_combinations(
         # Threshold ReLU modes are not supported for integer pack_src formats
         # (mirroring the pytest.skip guard in the test body).
         relu_types = (
-            [PackerReluType.NoRelu]
-            if is_perf
-            else (
-                [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
-                if in_fmt.is_integer()
-                else all_relu_types
-            )
+            [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
+            if in_fmt.is_integer()
+            else all_relu_types
         )
         for dest_acc in get_dest_acc_modes(in_fmt):
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):

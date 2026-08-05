@@ -48,7 +48,7 @@ from helpers.utils import passed_test
 INPUT_DIMENSIONS = [[512, 64], [192, 512]]
 # Nested list of [H, W] pairs: a flat [H, W] is expanded by parametrize into
 # input_dimensions=H (int) and breaks generate_stimuli / rows, cols = dims.
-PERF_ONLY_INPUT_DIMENSIONS = [[512, 64]]
+PERF_ONLY_INPUT_DIMENSIONS = INPUT_DIMENSIONS
 TILE_DIMENSIONS = [32, 32]
 # Complete list of formats that are supported with L1 accumulation as the
 # OUTPUT format. MX formats (MxInt8) are allowed only as INPUT — accumulation
