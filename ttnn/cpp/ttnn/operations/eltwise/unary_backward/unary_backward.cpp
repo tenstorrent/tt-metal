@@ -185,16 +185,27 @@ std::vector<Tensor> rdiv_bw(
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
     if (rounding_mode == std::nullopt) {
+        // -grad * scalar / input^2, evaluated as -grad * ((scalar / input) / input).
+        // Forming input^2 first throws the answer away whenever the square underflows: for
+        // |input| < 1.0842e-19 the square flushes to zero and the reciprocal returns infinity,
+        // while the exact gradient is an ordinary float32. Taking the reciprocal first, with
+        // the scalar folded in between the two multiplies, keeps every intermediate in range
+        // for the same op count -- one reciprocal and two multiplies either way.
+        Tensor recip_input = ttnn::reciprocal(input, output_mem_config);
         Tensor result = ttnn::where(
             ttnn::nez(input),
             ttnn::multiply(
                 ttnn::neg(grad, output_mem_config),
                 (ttnn::multiply(
-                    ttnn::reciprocal(ttnn::square(input, output_mem_config)), scalar, std::nullopt, output_mem_config)),
+                    ttnn::multiply(recip_input, scalar, std::nullopt, output_mem_config),
+                    recip_input,
+                    std::nullopt,
+                    output_mem_config)),
                 std::nullopt,
                 output_mem_config),
             t_nan,
             output_mem_config);
+        recip_input.deallocate();
         if (scalar > 0) {
             result = ttnn::where(
                 ttnn::logical_and(
@@ -1336,6 +1347,10 @@ std::vector<Tensor> reciprocal_bw(
     std::vector<Tensor> grad_tensor;
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
+    // -grad / input^2, evaluated as (-grad / input) / input. Squaring first flushes to zero
+    // for |input| < 1.0842e-19 and yields infinity where the exact gradient is an ordinary
+    // float32; see the note in rdiv_bw. One reciprocal and two multiplies either way.
+    Tensor recip_input = ttnn::reciprocal(input, output_mem_config);
     grad_tensor.emplace_back(where(
         ttnn::eqz(input, output_mem_config),
         where(
@@ -1348,11 +1363,12 @@ std::vector<Tensor> reciprocal_bw(
                 output_mem_config),
             output_mem_config),
         ttnn::multiply(
-            ttnn::neg(grad, output_mem_config),
-            ttnn::reciprocal(ttnn::square(input, output_mem_config), output_mem_config),
+            ttnn::multiply(ttnn::neg(grad, output_mem_config), recip_input, std::nullopt, output_mem_config),
+            recip_input,
             std::nullopt,
             output_mem_config),
         output_mem_config));
+    recip_input.deallocate();
     return grad_tensor;
 }
 
