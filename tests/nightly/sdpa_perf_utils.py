@@ -156,12 +156,18 @@ def post_process_ops_log(
 
 def compute_cores_used(seqlen, q_chunk_size, compute_cores, num_heads, ring_size=1, batch_size=1):
     """
-    Compute number of cores actually used for ring joint attention based on parallelization scheme.
+    Compute number of cores actually used, from the flat (b, h, q)-chunk distribution.
 
-    Parallelization hierarchy (from sdpa_program_factory.cpp):
-    1. batch_parallel_factor = min(B, num_cores)       — always 1 for B=1
-    2. nh_parallel_factor = min(num_cores, num_heads)
-    3. q_parallel_factor = min(num_cores / nh, q_num_chunks)
+    `sdpa_program_factory.cpp` flattens all work items into `total_q_chunks = B * NQH * q_num_chunks`
+    and splits that over the whole grid (`global_q_base_chunks_per_core = total_q_chunks / num_cores`,
+    remainder spread one extra chunk per core). So every core is used whenever there are at least as
+    many work items as cores, and the imbalance is at most one chunk.
+
+    This previously modelled a *head-major* hierarchy (nh_parallel = min(cores, num_heads), then q
+    within each head), which the factory does not do. At 14 heads on 110 cores that reported 98 cores
+    used and 28.6% slot waste, where the op measurably uses all 110 at 4.5% waste -- wrong enough to
+    send an optimisation effort after a chunk size that turned out 4.6% slower. `test_ring_joint_sdpa`
+    computes the flat version inline; this is the same arithmetic.
 
     Args:
         seqlen: Total (global) sequence length.
@@ -174,12 +180,8 @@ def compute_cores_used(seqlen, q_chunk_size, compute_cores, num_heads, ring_size
     local_seq_len = seqlen // ring_size
     q_num_chunks = math.ceil(local_seq_len / q_chunk_size)
 
-    batch_parallel = min(batch_size, compute_cores)
-    nh_parallel = min(compute_cores // batch_parallel, num_heads)
-    q_parallel = min(compute_cores // (batch_parallel * nh_parallel), q_num_chunks)
-
-    cores_used = batch_parallel * nh_parallel * q_parallel
-    return cores_used
+    total_work_items = batch_size * num_heads * q_num_chunks
+    return min(compute_cores, total_work_items)
 
 
 # ============================================================================

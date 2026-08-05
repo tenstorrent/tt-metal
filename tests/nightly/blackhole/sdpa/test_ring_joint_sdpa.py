@@ -379,6 +379,11 @@ def generate_ring_joint_perf_model_configs(
         #   5s  (320, 384)   7.56 ms, 56.7% util
         #   10s (256, 512)  24.75 ms, 64.7% util
         #   15s (256, 512)  51.61 ms, 67.9% util
+        # q=352 measured and rejected: 7.947 ms vs 7.596 at q=320 (+4.6%, util 53.9% vs 56.4%). It was
+        # tried because single-chip SDPA at this shape shows 28.6% slot waste at every q, which q=352
+        # would zero out -- but that waste comes from the single-chip op pinning 110//14 = 7 cores per
+        # head (98 cores used). The ring op distributes q-chunks over all 110 cores and is already at
+        # 4.5% slot waste, so q=352 only adds pad waste. Do not infer ring blockings from single-chip.
         ("5s", 4768, [256, 320], [256, 384]),
         ("10s", 9216, [256, 320], [384, 512]),
         ("15s", 13632, [256, 352], [384, 512]),
