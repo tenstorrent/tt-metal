@@ -54,17 +54,14 @@ class EltwiseFpu(Fpu):
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         op = self.operation.cpp_enum_value
-        face_r_dim = operation.tile_shape.face_r_dim
-        face_c_dim = operation.tile_shape.face_c_dim
-        num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim
-        num_faces_c_dim = compute_unit.src_a.tile_shape.total_col_dim() // face_c_dim
+        tensor_shape = operation.tile_shape.cpp_value
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
             return (
                 f"// Operation {stage}: Eltwise {op} broadcast FPU\n"
                 f"_llk_math_eltwise_binary_broadcast_init_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {math_fidelity}>"
-                f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}});\n"
+                f"({tensor_shape});\n"
             )
 
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
@@ -73,7 +70,7 @@ class EltwiseFpu(Fpu):
         return (
             f"// Operation {stage}: Eltwise {op} FPU\n"
             f"_llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, {math_fidelity}, {reuse_dest}>"
-            f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, {acc_to_dest});\n"
+            f"({tensor_shape}, {acc_to_dest});\n"
         )
 
     def calculate(
@@ -88,16 +85,13 @@ class EltwiseFpu(Fpu):
         if compute_unit.broadcast_type != BroadcastType.None_:
             return f"_llk_math_eltwise_binary_broadcast_({block.tile_id_block});\n"
 
-        face_r_dim = operation.tile_shape.face_r_dim
-        face_c_dim = operation.tile_shape.face_c_dim
-        num_faces_r_dim = compute_unit.src_a.tile_shape.total_row_dim() // face_r_dim
-        num_faces_c_dim = compute_unit.src_a.tile_shape.total_col_dim() // face_c_dim
+        tensor_shape = operation.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         clear_fp32_dst_acc = compute_unit.clear_fp32_dst_acc.cpp_enum_value
 
         return (
             f"_llk_math_eltwise_binary_<ckernel::EltwiseBinaryType::{op}, {reuse_dest}>"
-            f"({block.tile_id_block}, ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, {clear_fp32_dst_acc});\n"
+            f"({block.tile_id_block}, {tensor_shape}, {clear_fp32_dst_acc});\n"
         )
 
     def uninit(

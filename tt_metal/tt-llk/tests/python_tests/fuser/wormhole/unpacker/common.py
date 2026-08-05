@@ -2,9 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import TYPE_CHECKING
+
 from fuser.fpu_node import FpuNode
 from helpers.format_config import DataFormat
 from helpers.llk_params import EltwiseBinaryReuseDestType
+
+if TYPE_CHECKING:
+    from fuser.fuser_config import GlobalConfig
+    from fuser.l1_operation import L1Operation
 
 
 def is_datacopy_node(compute_node: FpuNode) -> bool:
@@ -126,8 +132,8 @@ def dvalid_init(**kwargs) -> str:
     return ""
 
 
-def sync_with_packer(needs_pack_sync: bool) -> str:
-    if needs_pack_sync:
+def sync_with_packer(config: "GlobalConfig", operation: "L1Operation") -> str:
+    if operation.needs_pack_sync:
         return (
             "t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);\n"
             "t6_semaphore_get<>(semaphore::PACK_DONE);\n"

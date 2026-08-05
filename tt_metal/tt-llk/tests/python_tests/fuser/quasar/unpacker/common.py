@@ -2,9 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import TYPE_CHECKING
+
 from fuser.fpu_node import FpuNode
 from helpers.format_config import DataFormat
 from helpers.llk_params import EltwiseBinaryReuseDestType
+
+if TYPE_CHECKING:
+    from fuser.fuser_config import GlobalConfig
+    from fuser.l1_operation import L1Operation
 
 
 def is_unary_unpacker(compute_node: FpuNode) -> bool:
@@ -87,8 +93,8 @@ def dvalid_init(quasar_use_dvalid: bool = False) -> str:
     return ""
 
 
-def sync_with_packer(needs_pack_sync: bool) -> str:
-    if needs_pack_sync:
+def sync_with_packer(config: "GlobalConfig", operation: "L1Operation") -> str:
+    if operation.needs_pack_sync:
         return (
             "_llk_sync_wait_<p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::PACK_UNPACK);\n"
             "_llk_sync_get_<>(semaphore::PACK_UNPACK);\n"

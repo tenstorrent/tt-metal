@@ -69,9 +69,8 @@ class SubBcastColCustomUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        tile_shape = compute_unit.src_a.tile_shape
-        tensor_shape_instantiation = f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
-        return f"_llk_unpack_AB_sub_bcast_col_init_custom_({tensor_shape_instantiation});\n"
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        return f"_llk_unpack_AB_sub_bcast_col_init_custom_({tensor_shape});\n"
 
     def unpack(
         self,

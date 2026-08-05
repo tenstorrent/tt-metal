@@ -49,9 +49,8 @@ class SubBcastColCustomFpu(EltwiseFpu):
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
-        tile_shape = operation.tile_shape
-        tensor_shape_instantiation = f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
-        return f"_llk_math_sub_bcast_cols_reuse_custom_({ct_dim}, {tensor_shape_instantiation}, {block.tile_id_block});\n"
+        tensor_shape = operation.tile_shape.cpp_value
+        return f"_llk_math_sub_bcast_cols_reuse_custom_({ct_dim}, {tensor_shape}, {block.tile_id_block});\n"
 
     def uninit(
         self,

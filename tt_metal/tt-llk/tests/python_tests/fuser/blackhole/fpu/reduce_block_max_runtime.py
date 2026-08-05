@@ -31,9 +31,8 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
     ) -> str:
         ct_dim = block.block_tiles_x
         dest_acc = config.dest_acc.cpp_enum_value
-        tile_shape = compute_unit.src_a.tile_shape
-        tensor_shape_instantiation = f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
-        return f"_llk_math_reduce_block_max_row_init_runtime_<{dest_acc}>({ct_dim}, {tensor_shape_instantiation});\n"
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        return f"_llk_math_reduce_block_max_row_init_runtime_<{dest_acc}>({ct_dim}, {tensor_shape});\n"
 
     def calculate(
         self,
@@ -43,9 +42,8 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
         block: BlockData,
     ) -> str:
         dest_acc = config.dest_acc.cpp_enum_value
-        tile_shape = compute_unit.src_a.tile_shape
-        tensor_shape_instantiation = f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
-        return f"_llk_math_reduce_block_max_row_runtime_<{dest_acc}>({block.tile_id_block}, {tensor_shape_instantiation});\n"
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        return f"_llk_math_reduce_block_max_row_runtime_<{dest_acc}>({block.tile_id_block}, {tensor_shape});\n"
 
     def uninit(
         self,

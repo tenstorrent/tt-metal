@@ -75,9 +75,9 @@ class MatmulUnpacker(Unpacker):
         ct_dim = block.block_tiles_x
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
-        transpose_faces = compute_unit.transpose_faces.cpp_enum_value
+        transpose = compute_unit.transpose_within_face.cpp_enum_value
 
-        return f"_llk_unpack_AB_matmul_init_<>({transpose_faces}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
+        return f"_llk_unpack_AB_matmul_init_<>({transpose}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
 
     def unpack(
         self,

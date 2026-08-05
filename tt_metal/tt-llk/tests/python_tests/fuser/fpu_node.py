@@ -75,15 +75,6 @@ class FpuNode:
         else:
             self.data_copy_type = data_copy_type
 
-    def unpack_reconfig(
-        self,
-        operation: "L1Operation",
-        config: "GlobalConfig",
-    ):
-        if self.unpacker is None or config.skip_unpack_init:
-            return ""
-        return config.sentinel.configure_unpack(config, operation, self)
-
     def unpack_init(
         self,
         operation: "L1Operation",
@@ -113,15 +104,6 @@ class FpuNode:
         if self.unpacker is None or config.skip_unpack_init:
             return ""
         return self.unpacker.uninit(operation, config, self, block)
-
-    def math_reconfig(
-        self,
-        operation: "L1Operation",
-        config: "GlobalConfig",
-    ):
-        if config.skip_math_init:
-            return ""
-        return config.sentinel.configure_math(config, operation, self)
 
     def fpu_init(
         self,

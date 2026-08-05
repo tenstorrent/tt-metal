@@ -94,12 +94,10 @@ class UnpackerA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        from helpers.tile_shape import cpp_tensor_shape
-
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
-        tensor_shape = cpp_tensor_shape(compute_unit.src_a.tile_shape)
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         transpose_faces = compute_unit.transpose_faces.cpp_enum_value
         transpose_within_face = compute_unit.transpose_within_face.cpp_enum_value
         acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value

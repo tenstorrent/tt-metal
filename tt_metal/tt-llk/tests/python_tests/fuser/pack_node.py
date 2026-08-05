@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
-from helpers.golden_generators import PackGolden
 from helpers.llk_params import L1Accumulation, PackerReluType
 
 from .arch_common import pack_common
@@ -42,33 +41,15 @@ class PackNode:
         self.relu_threshold = relu_threshold
         self.pack_l1_accumulation = pack_l1_accumulation
 
-    def _relu_config(self, config: "GlobalConfig") -> str:
-        pack_src_format = config.sentinel._pack_src
-
-        relu_config_val = PackGolden.generate_relu_config(
-            self.pack_relu, self.relu_threshold, pack_src_format
-        )
-        return pack_common.relu_config(relu_config_val, config.dest_acc.cpp_enum_value)
-
-    def _l1_accumulation_config(self, config: "GlobalConfig") -> str:
-        return pack_common.l1_accumulation_config(self.pack_l1_accumulation)
-
-    def reconfig(
-        self,
-        operation: "L1Operation",
-        config: "GlobalConfig",
-    ) -> str:
-        return config.sentinel.configure_pack(config, operation, self)
-
-    def configure(
+    def init(
         self,
         operation: "L1Operation",
         config: "GlobalConfig",
         block: BlockData,
     ) -> str:
         code = self.packer.init(self, operation, config, block)
-        code += self._relu_config(config)
-        code += self._l1_accumulation_config(config)
+        code += pack_common.relu_config(config, operation, self)
+        code += pack_common.l1_accumulation_config(config, operation, self)
         return code
 
     def pack_loop(
