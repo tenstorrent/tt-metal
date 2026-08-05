@@ -10,6 +10,7 @@
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -100,6 +101,7 @@ ReduceScatterDeviceOperation::tensor_return_value_t ReduceScatterDeviceOperation
 tt::tt_metal::operation::OpPerformanceModelGeneral<ReduceScatterDeviceOperation::tensor_return_value_t>
 ReduceScatterDeviceOperation::create_op_performance_model(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    py_log_here();
     // =========================================================================
     // ReduceScatter Roofline Performance Model
     //
@@ -164,12 +166,15 @@ ReduceScatterDeviceOperation::create_op_performance_model(
     uint64_t bottleneck_bytes = 0;  // bottleneck bytes through the most-loaded link
     uint32_t num_hops = 0;          // collective diameter (hops)
     if (N <= 1) {
+        py_log_here();
         // Single device: no fabric communication
     } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
+        py_log_here();
         // Bisection lower bound: (N-1) * slice_size / 2 per direction
         bottleneck_bytes = tt::div_up((N - 1) * slice_size, 2);
         num_hops = N / 2;
     } else {
+        py_log_here();
         // Line/Linear topology
         bottleneck_bytes = (N - 1) * slice_size;
         num_hops = N - 1;
@@ -280,6 +285,7 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool use_l1_small_for_semaphores) {
+    py_log_here();
     using OperationType = ttnn::operations::ccl::ReduceScatterDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{

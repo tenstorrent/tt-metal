@@ -13,6 +13,22 @@
 #include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 
+// TILIZE_HANG_DEBUG: temporary per-phase markers to localize the tilize compute hang.
+// Enabled only when the including kernel (see ttnn/cpp/ttnn/kernel/compute/tilize.cpp)
+// defines TILIZE_HANG_DEBUG, so other tilize users are unaffected. Requires the DPRINT
+// server (e.g. TT_METAL_DPRINT_CORES=all). Remove once the hang is understood.
+#if defined(TILIZE_HANG_DEBUG)
+#include "api/debug/dprint.h"
+#define TZ_MARK(msg, ...)                                \
+    do {                                                 \
+        DPRINT_UNPACK("TZ U: " msg "\n", ##__VA_ARGS__); \
+        DPRINT_MATH("TZ M: " msg "\n", ##__VA_ARGS__);   \
+        DPRINT_PACK("TZ P: " msg "\n", ##__VA_ARGS__);   \
+    } while (0)
+#else
+#define TZ_MARK(msg, ...)
+#endif
+
 // JIT generates chlkc_descriptors.h (not per-variable files), included via chlkc_list.h.
 // The arrays are available in scope but guarded by TRISC type:
 //   - unpack_src_format[] / unpack_dst_format[]   : UNPACK and MATH TRISCs (not PACK)
@@ -130,6 +146,8 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         pack_reconfig_data_format(output_dfb);
     }
 
+    TZ_MARK("before init use_fast={} num_blocks={}", (uint32_t)use_fast, num_blocks);
+
     // Compile-time initialization based on InitUninitMode
     if constexpr (
         init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
@@ -163,6 +181,8 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     }
     PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles));
 
+    TZ_MARK("after init");
+
     // Construct DataflowBuffer objects for sync operations
     DataflowBuffer in_dfb(input_dfb);
     DataflowBuffer out_dfb(output_dfb);
@@ -183,11 +203,19 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             input_pages = (pages_left < 32) ? pages_left : 32;
         }
 
+        if (block == 0) {
+            TZ_MARK("block0 before wait_front pages={}", input_pages);
+        }
+
         if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
             in_dfb.wait_front(input_pages);
         }
 
         out_dfb.reserve_back(block_width_tiles);
+
+        if (block == 0) {
+            TZ_MARK("block0 after wait/reserve, before compute");
+        }
 
         if constexpr (use_fast) {
 #ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
@@ -204,10 +232,16 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         out_dfb.push_back(block_width_tiles);
         in_dfb.pop_front(input_pages);
 
+        if (block == 0) {
+            TZ_MARK("block0 pushed/popped");
+        }
+
         if (asymmetric_dfb_pages) {
             pages_left -= input_pages;
         }
     }
+
+    TZ_MARK("block loop done");
 
     // Compile-time cleanup based on InitUninitMode
     if constexpr (

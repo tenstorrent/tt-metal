@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "/home/maxim-artemov-epam/workspace/debug_include.hpp"
 
 namespace ttnn {
 using namespace ttnn::operations::ccl;
@@ -33,6 +34,7 @@ ttnn::Tensor reduce_scatter(
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool use_l1_small_for_semaphores) {
+    py_log_here();
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call reduce-scatter on cluster_axis=1, then
     // reduce-scatter on cluster_axis=0
     if (cluster_axis == std::nullopt) {

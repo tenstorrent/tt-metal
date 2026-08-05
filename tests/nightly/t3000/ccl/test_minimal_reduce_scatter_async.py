@@ -693,7 +693,7 @@ def test_reduce_scatter_async(
         # Scatter on dim 1
         ([1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
         ([16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, False, 1),  # check
-        pytest.param(
+        (
             [16, 8, 8, 8],
             1,
             ttnn.TILE_LAYOUT,
@@ -701,7 +701,6 @@ def test_reduce_scatter_async(
             True,
             True,
             10,
-            marks=pytest.mark.skip(reason="Disabled: see #45699"),
         ),  # perf
         # Scatter on dim 2
         ([1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, False, 1),  # check
@@ -767,6 +766,7 @@ def test_reduce_scatter_async_training_shapes(
     ones_tensor,
     rs_topology,
 ):
+    logger.info("start run")
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),
