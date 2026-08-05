@@ -146,6 +146,10 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_nk_tp = self.gdn_nk // tp
         self.gdn_nv_tp = self.gdn_nv // tp
         self.gdn_qkv_dim_tp = self.gdn_qkv_dim // tp
+        # Native depthwise conv1d (prefill) keeps all qkv_dim_tp channels resident per core (L1_FULL);
+        # the 35B-A3B channel count overflows L1 on BH. Split the conv over N channel chunks (exact —
+        # depthwise is per-channel-independent) so each call fits. 27B (chunks=1) is unchanged.
+        self.gdn_conv_channel_chunks = 2 if self.moe_num_experts > 0 else 1
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
         # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
