@@ -583,6 +583,10 @@ def test_gpt_oss_demo(
     # cap (e.g. tp=1 on a single Blackhole card → 262K-padded vocab). In that case
     # fall back to host-side sampling. Only greedy is supported for the fallback.
     on_device_sampling_supported = all(getattr(m, "sampling", None) is not None for m in model)
+    # EXPERIMENT ONLY (#52176) — do not merge. Force the host-side greedy argmax decode path
+    # (the bh_p150 path) while leaving prefill and decode tracing untouched, to test whether the
+    # Blackhole garbage output originates inside on-device sampling.
+    on_device_sampling_supported = False
     if not on_device_sampling_supported:
         assert greedy, (
             "On-device sampling is unavailable on this mesh (per-device vocab > 64K) "
