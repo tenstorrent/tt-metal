@@ -227,8 +227,8 @@ private:
         std::array<bool, MAX_NOCS> any_posted_writes{};
         std::array<bool, MAX_NOCS> any_nonposted_writes{};
 
-        // Captures which buffers are marked as locked for each RISC
-        std::array<std::set<LockedBufferInfo>, MAX_PROCESSORS> locked_buffers{};
+        // Buffers currently locked by each RISC, reference-counted.
+        std::array<std::map<LockedBufferInfo, uint32_t>, MAX_PROCESSORS> locked_buffers{};
 
         // Live DFB L1 extents on each RISC, reference-counted
         std::map<L1Extent, uint32_t> dfb_region_refcount;
