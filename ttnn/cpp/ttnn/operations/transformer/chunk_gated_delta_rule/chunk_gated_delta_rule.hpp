@@ -54,4 +54,85 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
     const std::optional<ttnn::Tensor>& masks = std::nullopt);
 
+/**
+ * Chunk-parallel Kimi Delta Attention recurrence with per-key vector decay.
+ * Rank-4 q/k must be L2-normalized; scale defaults to K^-0.5. Rank-3 flat q/k must be raw: the kernel applies both
+ * L2 normalization and scale.
+ *
+ * q, k, g [B,T,H,K], v [B,T,H,V], beta [B,T,H]. Rank-3 flat [B,T,H*D] q/k/v/g is also accepted for tile-aligned
+ * sequences. Returns o [B,T,H,V] and optional final_state [B,H,K,V].
+ * At 160 or more local chunks, the grouped affine-prefix path changes reduction order and rounding.
+ */
+std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    const ttnn::Tensor& g,
+    const ttnn::Tensor& beta,
+    std::optional<float> scale = std::nullopt,
+    const std::optional<ttnn::Tensor>& initial_state = std::nullopt,
+    bool output_final_state = false,
+    bool output_head_major = false,
+    uint32_t chunk_size = 32,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& eye = std::nullopt,
+    const std::optional<ttnn::Tensor>& tril = std::nullopt,
+    const std::optional<ttnn::Tensor>& ones = std::nullopt,
+    const std::optional<ttnn::Tensor>& masks = std::nullopt,
+    uint32_t summary_group_chunks = 8,
+    const std::optional<uint32_t>& sequence_parallel_axis = std::nullopt,
+    ttnn::DataType affine_summary_dtype = ttnn::DataType::FLOAT32,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& affine_prefix_compute_kernel_config = std::nullopt,
+    ttnn::DataType grouped_scan_output_dtype = ttnn::DataType::FLOAT32,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& grouped_scan_compute_kernel_config = std::nullopt,
+    bool use_bf16_prep_intermediates = false);
+
+/**
+ * Sequential rank-by-rank affine prefix over sequence partitions of one 2D mesh tensor.
+ *
+ * Each rank owns one local partition transform S_out = A @ S_in + B.
+ * Returns each partition entry state and the global
+ * final state replicated along sequence_parallel_axis.
+ */
+std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
+    const ttnn::Tensor& transform_a,
+    const ttnn::Tensor& transform_b,
+    const ttnn::Tensor& initial_state,
+    uint32_t sequence_parallel_axis,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
+/** Exchange the three-row causal-convolution carry along the SP mesh axis. */
+std::tuple<ttnn::Tensor, ttnn::Tensor> kda_convolution_halo(
+    const ttnn::Tensor& projected_qkv,
+    const ttnn::Tensor& initial_carry,
+    uint32_t sequence_parallel_axis,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
+
+/** Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill. */
+ttnn::Tensor kda_gated_rms_norm(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& gate,
+    const ttnn::Tensor& weight,
+    uint32_t num_heads,
+    float epsilon = 1e-5f,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    ttnn::DataType output_dtype = ttnn::DataType::FLOAT32);
+
+/** Batch-one, four-tap KDA convolution with direct tiled Q/K/V outputs. */
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> kda_causal_conv1d_split(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& state,
+    const ttnn::Tensor& tap0,
+    const ttnn::Tensor& tap1,
+    const ttnn::Tensor& tap2,
+    const ttnn::Tensor& tap3,
+    uint32_t q_width,
+    uint32_t k_width,
+    uint32_t v_width,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn::transformer

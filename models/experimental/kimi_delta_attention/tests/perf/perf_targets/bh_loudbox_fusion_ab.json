@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "sku": "bh_loudbox",
+  "workload": {
+    "model": "Kimi-K3",
+    "layer": 1,
+    "weights_revision": "9f62e4e9fffbd0a83ddd60e1c209d828994b3569",
+    "batch": 1,
+    "sequence": 5120,
+    "repetitions": 10
+  },
+  "provenance": {
+    "measured_at_utc": "2026-08-03",
+    "validated_source_tree": "b280335bde30f732b076d020c2d3a429038b9ecf",
+    "timing_method": "warm synchronized trace replay average",
+    "pcc_threshold": 0.98
+  },
+  "experiments": {
+    "matmul_reduce_scatter": {
+      "decision": "use_standalone_matmul_then_reduce_scatter",
+      "scope": "full_kda_layer_wall_time",
+      "pcc_scope": "full_layer_output_and_states",
+      "results": {
+        "SP1xTP8": {
+          "fused_ms": 10.672470,
+          "standalone_ms": 10.708576,
+          "fused_gain_pct": 0.3372,
+          "minimum_endpoint_pcc": 1.0
+        },
+        "SP2xTP4": {
+          "fused_ms": 11.059410,
+          "standalone_ms": 10.650660,
+          "fused_gain_pct": -3.8378,
+          "minimum_endpoint_pcc": 1.0
+        },
+        "SP4xTP2": {
+          "fused_ms": 11.535468,
+          "standalone_ms": 11.358262,
+          "fused_gain_pct": -1.5602,
+          "minimum_endpoint_pcc": 1.0
+        }
+      },
+      "tracy": {
+        "layout": "SP2xTP4",
+        "scope": "output_stage_critical_path",
+        "standalone_union_ms": 2.304,
+        "fused_ms": 2.747,
+        "fused_regression_pct": 19.2,
+        "finding": "standalone matmul and reduce-scatter overlap"
+      }
+    },
+    "qkv_convolution": {
+      "decision": "retain_fused",
+      "scope": "isolated_component_including_common_state_and_halo",
+      "pcc_scope": "direct_q_k_v_and_convolution_state",
+      "control": "four slices, four multiplies, three adds, silu, and q_k_v splits",
+      "results": {
+        "SP1xTP8": {
+          "fused_ms": 1.446134,
+          "control_ms": 5.966088,
+          "fused_gain_pct": 75.7608,
+          "minimum_qkv_pcc": 0.999989,
+          "convolution_state_pcc": 1.0
+        },
+        "SP2xTP4": {
+          "fused_ms": 1.502687,
+          "control_ms": 6.145529,
+          "fused_gain_pct": 75.5483,
+          "minimum_qkv_pcc": 0.999989,
+          "convolution_state_pcc": 1.0
+        },
+        "SP4xTP2": {
+          "fused_ms": 1.620671,
+          "control_ms": 6.321697,
+          "fused_gain_pct": 74.3634,
+          "minimum_qkv_pcc": 0.999989,
+          "convolution_state_pcc": 1.0
+        }
+      }
+    },
+    "gated_rms_norm": {
+      "decision": "retain_fused",
+      "scope": "isolated_component",
+      "pcc_scope": "component_output",
+      "control": "rms_norm, permute, reshape, sigmoid, and multiply",
+      "results": {
+        "SP1xTP8": {
+          "fused_ms": 0.259048,
+          "control_ms": 3.634945,
+          "fused_gain_pct": 92.8734,
+          "minimum_output_pcc": 0.999990
+        },
+        "SP2xTP4": {
+          "fused_ms": 0.258307,
+          "control_ms": 3.548573,
+          "fused_gain_pct": 92.7208,
+          "minimum_output_pcc": 0.999990
+        },
+        "SP4xTP2": {
+          "fused_ms": 0.261017,
+          "control_ms": 4.290481,
+          "fused_gain_pct": 93.9164,
+          "minimum_output_pcc": 0.999990
+        }
+      }
+    }
+  },
+  "reproduction": {
+    "environment": "KIMI_K3_CKPT=/path/to/pinned/kimi-k3 KDA_FUSION_AB_REPS=10",
+    "current_fusions": "scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/perf/test_fusion_ab.py -q -s",
+    "mmrs": "Historical decision evidence: the removed control implementation is not included in this PR",
+    "tracy": "Historical attribution: the raw Tracy capture is not included in this PR"
+  }
+}

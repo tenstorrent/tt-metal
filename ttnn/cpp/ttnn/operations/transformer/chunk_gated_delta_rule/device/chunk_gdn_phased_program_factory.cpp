@@ -69,9 +69,17 @@ constexpr uint32_t dl = decayfac;  // scan reads dl into this slot
 
 namespace {
 
-ComputeConfigDescriptor compute_cfg() {
+ComputeConfigDescriptor compute_cfg(
+    tt::ARCH arch, const DeviceComputeKernelConfig& config, bool honor_caller_config = true) {
+    if (!honor_caller_config) {
+        return ComputeConfigDescriptor{
+            .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false};
+    }
+    const auto args = get_compute_kernel_config_args(arch, config);
     return ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true, .math_approx_mode = false};
+        .math_fidelity = std::get<0>(args),
+        .fp32_dest_acc_en = std::get<2>(args),
+        .math_approx_mode = std::get<1>(args)};
 }
 
 // Chunk-parallel work distribution for PREP: split `total` independent (head, chunk) work-items
@@ -116,13 +124,9 @@ PrepWorkDist distribute_prep(CoreCoord grid, uint32_t total, uint32_t core_cap) 
     return d;
 }
 
-// Value-parallel work distribution for SCAN. The chunk recurrence is sequential in TIME, but it
-// factorizes EXACTLY over the value dimension: each V-block S[:, vb] evolves independently (every
-// scan op — kd@S, T_inv@diff, q_decay@S, intra@v_new, k_dec_t@v_new, S*dl — is column-wise in V,
-// needing only the full-K shared per-chunk tensors + that block's own V-slice). This mirrors FLA's
-// fwd_h/fwd_o launch grid over (i_v, i_bh) with a sequential loop over time. K is NOT split (v_new
-// and o reduce over all K). We pick the finest V-blocking that fits the grid: the largest NV | Vt
-// with BH*NV <= cores. Each core runs one (head, v-block) => BH*NV independent scans vs BH today.
+// The scan factorizes over V. Preserve scalar GDN's established maximum splitting, while the measured
+// KDA crossover favors finest-grain splitting at <=8 local heads and one full-V core per head at >=16.
+// Keep the KDA production policy local to vector-gate calls.
 struct ScanWorkDist {
     std::vector<CoreCoord> cores;
     std::vector<uint32_t> head;  // head index per core
@@ -132,17 +136,26 @@ struct ScanWorkDist {
     CoreRangeSet core_set;
 };
 
-ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt) {
+ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt, bool vector_gate, bool state_only = false) {
     const uint32_t ncores = grid.x * grid.y;
     TT_FATAL(BH <= ncores, "num_heads {} exceeds compute cores {}", BH, ncores);
-    // QWEN_GDN_SCAN_SERIAL=1 forces NV=1 (full V on 1 core/head, the old layout) for perf A/B only.
-    const char* serial_env = std::getenv("QWEN_GDN_SCAN_SERIAL");
-    const bool force_serial = serial_env && serial_env[0] == '1';
     uint32_t NV = 1;
-    for (uint32_t cand = force_serial ? 1u : Vt; cand >= 1; cand--) {  // cand==1 always satisfies
-        if (Vt % cand == 0 && BH * cand <= ncores) {
-            NV = cand;
-            break;
+    bool value_split = false;
+    if (vector_gate) {
+        // Summary scans stay one-core-per-head: their identity seed spans the full value dimension.
+        value_split = !state_only && BH <= 8;
+    } else {
+        // Preserve origin/main Qwen behavior and its existing serial A/B override.
+        const char* serial_env = std::getenv("QWEN_GDN_SCAN_SERIAL");
+        const bool force_serial = serial_env && serial_env[0] == '1';
+        value_split = !force_serial;
+    }
+    if (value_split) {
+        for (uint32_t cand = Vt; cand >= 1; cand--) {  // cand==1 always satisfies
+            if (Vt % cand == 0 && BH * cand <= ncores) {
+                NV = cand;
+                break;
+            }
         }
     }
     ScanWorkDist d;
@@ -165,6 +178,65 @@ ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt) {
 }
 
 }  // namespace
+
+uint32_t chunk_gdn_prep_cb_size_bytes(
+    uint32_t chunk_size,
+    uint32_t key_dim,
+    uint32_t val_dim,
+    bool vector_gate,
+    DataType gate_dtype,
+    uint32_t output_bf16_mask) {
+    const uint32_t Ct = chunk_size / TILE_HEIGHT;
+    const uint32_t Kt = key_dim / TILE_WIDTH;
+    const uint32_t Vt = val_dim / TILE_WIDTH;
+    const uint32_t cc = Ct * Ct;
+    const uint32_t ck = Ct * Kt;
+    const uint32_t cv = Ct * Vt;
+    const uint32_t kv = Kt * Vt;
+    const uint32_t kc = Kt * Ct;
+    const uint32_t scr = std::max({cc, ck, cv, kv, kc});
+    const auto output_format = [&](uint32_t index) {
+        return (output_bf16_mask & (1u << index)) ? tt::DataFormat::Float16_b : tt::DataFormat::Float32;
+    };
+    uint32_t bytes = 0;
+    const auto add = [&](uint32_t tiles, uint32_t buffers = 1, tt::DataFormat format = tt::DataFormat::Float32) {
+        bytes += tiles * buffers * tt::tile_size(format);
+    };
+    constexpr auto bf16 = tt::DataFormat::Float16_b;
+    add(ck, 1, bf16);  // q
+    add(ck, 1, bf16);  // k
+    add(cv, 1, bf16);  // v
+    add(vector_gate ? ck : Ct, 1, tt::tt_metal::datatype_to_dataformat_converter(gate_dtype));
+    add(Ct);                                                        // beta
+    add(cc);                                                        // eye
+    add(cc);                                                        // tril
+    add(cc);                                                        // ones
+    add(kv, 2);                                                     // S
+    add(vector_gate ? ck : Ct);                                     // decay
+    add(vector_gate ? ck : Ct);                                     // decay_exp
+    add(vector_gate ? ck : Ct);                                     // decayfac
+    add(cc);                                                        // lmask
+    add(cc, 1, output_format(6));                                   // Tinv
+    add(cv, 1, output_format(0));                                   // vbeta
+    add(ck);                                                        // kbeta
+    add(cv, 2, bf16);                                               // out
+    add(vector_gate ? std::max(cv, 3u) : cv);                       // u
+    add(ck, 1, output_format(1));                                   // w
+    add(ck, 1, output_format(2));                                   // qdecay
+    add(cc, 1, output_format(3));                                   // intra
+    add(kv, 2);                                                     // s2
+    add(vector_gate ? std::max(cv, Kt) : cv, 1, output_format(5));  // vnew / dl
+    add(vector_gate ? std::max(cv, ck) : cv);                       // ointer / centered decay
+    add(kc, 1, output_format(4));                                   // kdec_t
+    add(kv);                                                        // supd
+    add(kv);                                                        // stmp
+    add(kv);                                                        // final_s
+    add(scr);                                                       // scr1
+    add(scr);                                                       // scr2
+    add(scr);                                                       // scr3
+    add(kv, 2);                                                     // s3
+    return bytes;
+}
 
 // ---------------------------------------------------------------------------
 // PREP
@@ -192,11 +264,14 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     const CoreRangeSet& cores = dist.core_set;
     const uint32_t n_used = static_cast<uint32_t>(dist.cores.size());
 
+    uint32_t cb_size_bytes = 0;
     ProgramDescriptor desc;
     auto add_cb = [&](uint32_t idx, uint32_t n_tiles, uint32_t nbuf = 1, tt::DataFormat fmt = tt::DataFormat::Float32) {
         const uint32_t ts = tt::tile_size(fmt);
+        const uint32_t total_size = n_tiles * nbuf * ts;
+        cb_size_bytes += total_size;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = n_tiles * nbuf * ts,
+            .total_size = total_size,
             .core_ranges = cores,
             .format_descriptors = {
                 {CBFormatDescriptor{.buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = ts}}}});
@@ -207,35 +282,48 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::q, ck, 1, df_io);
     add_cb(pcb::k, ck, 1, df_io);
     add_cb(pcb::v, cv, 1, df_io);
-    add_cb(pcb::g, Ct);
+    add_cb(pcb::g, attrs.vector_gate ? ck : Ct, 1, tt::tt_metal::datatype_to_dataformat_converter(in.g.dtype()));
     add_cb(pcb::beta, Ct);
     add_cb(pcb::eye, cc);
     add_cb(pcb::tril, cc);
     add_cb(pcb::ones, cc);
     add_cb(pcb::S, kv, 2);
-    add_cb(pcb::decay, Ct);
-    add_cb(pcb::decay_exp, Ct);
-    add_cb(pcb::decayfac, Ct);
+    add_cb(pcb::decay, attrs.vector_gate ? ck : Ct);
+    add_cb(pcb::decay_exp, attrs.vector_gate ? ck : Ct);
+    add_cb(pcb::decayfac, attrs.vector_gate ? ck : Ct);
     add_cb(pcb::lmask, cc);
-    add_cb(pcb::Tinv, cc);
-    add_cb(pcb::vbeta, cv);
+    const auto output_df = [&](uint32_t index) {
+        return tt::tt_metal::datatype_to_dataformat_converter(outputs[index].dtype());
+    };
+    add_cb(pcb::Tinv, cc, 1, output_df(6));
+    add_cb(pcb::vbeta, cv, 1, output_df(0));
     add_cb(pcb::kbeta, ck);
     add_cb(pcb::out, cv, 2, df_io);
-    add_cb(pcb::u, cv);
-    add_cb(pcb::w, ck);
-    add_cb(pcb::qdecay, ck);
-    add_cb(pcb::intra, cc);
+    add_cb(pcb::u, attrs.vector_gate ? std::max(cv, 3u) : cv);  // KDA startup pacing; Qwen size unchanged
+    add_cb(pcb::w, ck, 1, output_df(1));
+    add_cb(pcb::qdecay, ck, 1, output_df(2));
+    add_cb(pcb::intra, cc, 1, output_df(3));
     add_cb(pcb::s2, kv, 2);
-    add_cb(pcb::vnew, cv);  // aliased as cb_dl in the prep kernel (1 tile used)
-    add_cb(pcb::ointer, cv);
-    add_cb(pcb::kdec_t, kc);
+    add_cb(pcb::vnew, attrs.vector_gate ? std::max(cv, Kt) : cv, 1, output_df(5));  // aliased as cb_dl
+    add_cb(pcb::ointer, attrs.vector_gate ? std::max(cv, ck) : cv);
+    add_cb(pcb::kdec_t, kc, 1, output_df(4));
     add_cb(pcb::supd, kv);
     add_cb(pcb::stmp, kv);
     add_cb(pcb::final_s, kv);
     add_cb(pcb::scr1, scr);
+
     add_cb(pcb::scr2, scr);
     add_cb(pcb::scr3, scr);
     add_cb(pcb::s3, kv, 2);
+    TT_FATAL(
+        cb_size_bytes == chunk_gdn_prep_cb_size_bytes(
+                             attrs.chunk_size,
+                             attrs.key_dim,
+                             attrs.val_dim,
+                             attrs.vector_gate,
+                             in.g.dtype(),
+                             attrs.output_bf16_mask),
+        "KDA prep CB size estimator is out of sync with the program factory");
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
     const std::vector<uint32_t> ct_args = {Ct, Kt, Vt};
@@ -253,6 +341,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     // OPT-A: trailing compile args after all TensorAccessorArgs — 1 => read that tensor flat token-major.
     reader_ct.push_back(attrs.v_flat ? 1u : 0u);
     reader_ct.push_back(attrs.qk_flat ? 1u : 0u);
+    reader_ct.push_back(attrs.g_flat ? 1u : 0u);
 
     std::vector<uint32_t> writer_ct = ct_args;
     for (auto& t : outputs) {
@@ -260,7 +349,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     }
 
     KernelDescriptor reader;
-    reader.kernel_source = kdir + "dataflow/reader_chunk_gdn_prep.cpp";
+    reader.kernel_source =
+        kdir + (attrs.vector_gate ? "dataflow/reader_chunk_kda_prep.cpp" : "dataflow/reader_chunk_gdn_prep.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = cores;
     reader.compile_time_args = reader_ct;
@@ -268,7 +358,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     reader.runtime_args.reserve(n_used);
 
     KernelDescriptor writer;
-    writer.kernel_source = kdir + "dataflow/writer_chunk_gdn_prep.cpp";
+    writer.kernel_source =
+        kdir + (attrs.vector_gate ? "dataflow/writer_chunk_kda_prep.cpp" : "dataflow/writer_chunk_gdn_prep.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = cores;
     writer.compile_time_args = writer_ct;
@@ -276,7 +367,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     writer.runtime_args.reserve(n_used);
 
     KernelDescriptor compute;
-    compute.kernel_source = kdir + "compute/chunk_gdn_prep.cpp";
+    compute.kernel_source = kdir + (attrs.vector_gate ? "compute/chunk_kda_prep.cpp" : "compute/chunk_gdn_prep.cpp");
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     // Compute gets extra args for the in-kernel q/k L2-norm (OPT-B): QK_NORM flag, and scale/eps as
@@ -291,7 +382,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     compute_ct.push_back(f32_bits(attrs.scale));
     compute_ct.push_back(f32_bits(1e-6f));
     compute.compile_time_args = compute_ct;
-    compute.config = compute_cfg();
+    compute.config = compute_cfg(device->arch(), attrs.compute_kernel_config, attrs.vector_gate);
     compute.runtime_args.reserve(n_used);
 
     auto* q_buf = in.q.buffer();
@@ -317,7 +408,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
         const auto& core = dist.cores[i];
         const uint32_t wi_start = dist.wi_start[i];
         const uint32_t wi_count = dist.wi_count[i];
-        // Trailing runtime args NC, HV, Hk are consumed by the reader's flat branches (V_FLAT/QK_FLAT).
+        // Trailing runtime args NC, HV, Hk are consumed by the reader's flat branches.
         reader.emplace_runtime_args(
             core,
             {wi_start,
@@ -355,15 +446,15 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     const uint32_t Ct = attrs.chunk_size / TILE_HEIGHT;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt_full = attrs.val_dim / TILE_WIDTH;
-    const uint32_t has_s0 = attrs.has_initial_state ? 1u : 0u;
+    const uint32_t initial_state_mode = attrs.identity_initial_state ? 2u : (attrs.has_initial_state ? 0u : 1u);
 
-    // o output is fp32 (matches the scan op's compute_output_specs; a bf16 o degraded full-model
-    // quality and was removed). cb_out format must match, else the writer strides wrong.
-    const tt::DataFormat df_io = tt::DataFormat::Float32;
+    // cb_out must match the configured token-output dtype so the writer uses the correct page size.
+    const tt::DataFormat df_io = attrs.output_bf16 ? tt::DataFormat::Float16_b : tt::DataFormat::Float32;
 
     auto* device = in.v_beta.device();
     // Value-parallel fan-out: each core runs one (head, v-block) sequential scan.
-    auto sdist = distribute_scan(device->compute_with_storage_grid_size(), BH, Vt_full);
+    auto sdist =
+        distribute_scan(device->compute_with_storage_grid_size(), BH, Vt_full, attrs.vector_gate, attrs.state_only);
     const CoreRangeSet& cores = sdist.core_set;
     const uint32_t Vt = sdist.Vtl;  // per-core V-block width; CBs/compute use this
     const uint32_t n_used = static_cast<uint32_t>(sdist.cores.size());
@@ -383,34 +474,65 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
                 {CBFormatDescriptor{.buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = ts}}}});
     };
 
-    // Per-chunk inputs (streamed from DRAM). u-slot holds v_beta, w-slot holds kd. nbuf=1.
-    add_cb(pcb::u, cv, 1);  // v_beta
-    add_cb(pcb::w, ck, 1);  // kd
-    add_cb(pcb::qdecay, ck, 1);
-    add_cb(pcb::intra, cc, 1);
-    add_cb(pcb::kdec_t, kc, 1);
-    add_cb(pcb::dl, 1, 1);
-    add_cb(pcb::Tinv, cc, 1);  // t_inv (WY inverse)
-    // State: cb_S is reader-produced (chunk 0 only); s2/s3 are compute-only ping-pong.
-    add_cb(pcb::S, kv);
-    add_cb(pcb::s2, kv);
-    add_cb(pcb::s3, kv);
-    // Outputs.
-    add_cb(pcb::out, cv, 2, df_io);
-    add_cb(pcb::final_s, kv);
-    // Scratch.
-    add_cb(pcb::vnew, cv);
-    add_cb(pcb::ointer, cv);
-    add_cb(pcb::supd, kv);
-    add_cb(pcb::stmp, kv);
-    add_cb(pcb::scr1, scr);
+    // Preserve scalar GDN's origin/main CB order and sizes. KDA's dual-summary specialization
+    // repurposes unused output-side CBs as a second state ping-pong.
+    const auto input_df = [](const Tensor& tensor) {
+        return tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    };
+    if (!attrs.vector_gate) {
+        add_cb(pcb::u, cv);
+        add_cb(pcb::w, ck);
+        add_cb(pcb::qdecay, ck);
+        add_cb(pcb::intra, cc);
+        add_cb(pcb::kdec_t, kc);
+        add_cb(pcb::dl, 1);
+        add_cb(pcb::Tinv, cc);
+        add_cb(pcb::S, kv);
+        add_cb(pcb::s2, kv);
+        add_cb(pcb::s3, kv);
+        add_cb(pcb::out, cv, 2, df_io);
+        add_cb(pcb::final_s, kv);
+        add_cb(pcb::vnew, cv);
+        add_cb(pcb::ointer, cv);
+        add_cb(pcb::supd, kv);
+        add_cb(pcb::stmp, kv);
+        add_cb(pcb::scr1, scr);
+    } else {
+        add_cb(pcb::u, cv, 1, input_df(in.v_beta));
+        add_cb(pcb::w, ck, 1, input_df(in.kd));
+        add_cb(pcb::kdec_t, kc, 1, input_df(in.k_dec_t));
+        add_cb(pcb::dl, Kt, 1, input_df(in.dl));
+        add_cb(pcb::Tinv, cc, 1, input_df(in.t_inv));
+        add_cb(pcb::S, kv);
+        add_cb(pcb::s2, kv);
+        add_cb(pcb::s3, kv);
+        add_cb(pcb::final_s, kv);
+        add_cb(pcb::vnew, cv);
+        add_cb(pcb::supd, kv);
+        add_cb(pcb::stmp, kv);
+        add_cb(pcb::scr1, scr);
+        if (attrs.summary_pair) {
+            add_cb(pcb::qdecay, kv);
+            add_cb(pcb::intra, kv);
+            add_cb(pcb::ointer, kv);
+            add_cb(pcb::out, kv, 1, df_io);
+        } else {
+            add_cb(pcb::qdecay, ck, 1, input_df(in.q_decay));
+            add_cb(pcb::intra, cc, 1, input_df(in.intra));
+            add_cb(pcb::ointer, cv);
+            add_cb(pcb::out, cv, 2, df_io);
+        }
+    }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
-    // ct arg 2 = per-core Vt(=Vtl); arg 4 = Vt_full (full V in tiles) for the readers'/writer's
-    // V-slice row stride. Compute reads only args 0..2 (Ct, Kt, Vt) so the extra arg is harmless.
-    const std::vector<uint32_t> ct_args = {Ct, Kt, Vt, has_s0, Vt_full};
+    // The Qwen reader retains its five-argument ABI; the KDA reader and shared writer use seven.
+    // Both compute kernels consume only Ct, Kt, and Vt.
+    const std::vector<uint32_t> kda_ct_args = {
+        Ct, Kt, Vt, initial_state_mode, Vt_full, attrs.state_only ? 1u : 0u, attrs.summary_pair ? 1u : 0u};
+    const std::vector<uint32_t> gdn_ct_args = {Ct, Kt, Vt, attrs.has_initial_state ? 1u : 0u, Vt_full};
+    const auto& reader_base_ct_args = attrs.vector_gate ? kda_ct_args : gdn_ct_args;
 
-    std::vector<uint32_t> reader_ct = ct_args;
+    std::vector<uint32_t> reader_ct = reader_base_ct_args;
     TensorAccessorArgs(*in.v_beta.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.kd.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.q_decay.buffer()).append_to(reader_ct);
@@ -419,13 +541,17 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     TensorAccessorArgs(*in.dl.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.t_inv.buffer()).append_to(reader_ct);
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
+    if (attrs.vector_gate) {
+        TensorAccessorArgs(in.identity_tile.has_value() ? in.identity_tile->buffer() : nullptr).append_to(reader_ct);
+    }
 
-    std::vector<uint32_t> writer_ct = ct_args;
+    std::vector<uint32_t> writer_ct = kda_ct_args;
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
     TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
 
     KernelDescriptor reader;
-    reader.kernel_source = kdir + "dataflow/reader_chunk_gdn_scan.cpp";
+    reader.kernel_source =
+        kdir + (attrs.vector_gate ? "dataflow/reader_chunk_kda_scan.cpp" : "dataflow/reader_chunk_gdn_scan.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = cores;
     reader.compile_time_args = reader_ct;
@@ -441,11 +567,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     writer.runtime_args.reserve(n_used);
 
     KernelDescriptor compute;
-    compute.kernel_source = kdir + "compute/chunk_gdn_scan.cpp";
+    compute.kernel_source = kdir + (attrs.vector_gate ? "compute/chunk_kda_scan.cpp" : "compute/chunk_gdn_scan.cpp");
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
-    compute.compile_time_args = ct_args;
-    compute.config = compute_cfg();
+    compute.compile_time_args = reader_base_ct_args;
+    compute.config = compute_cfg(device->arch(), attrs.compute_kernel_config, attrs.vector_gate);
     compute.runtime_args.reserve(n_used);
 
     auto* vb_buf = in.v_beta.buffer();
@@ -456,6 +582,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     auto* dl_buf = in.dl.buffer();
     auto* ti_buf = in.t_inv.buffer();
     auto* s0_buf = in.initial_state.has_value() ? in.initial_state->buffer() : nullptr;
+    auto* identity_buf = in.identity_tile.has_value() ? in.identity_tile->buffer() : nullptr;
     auto* o_buf = outputs[0].buffer();
     auto* fs_buf = outputs[1].buffer();
 
@@ -464,11 +591,307 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
         const uint32_t h = sdist.head[i];
         const uint32_t vb = sdist.vblk[i];
         reader.emplace_runtime_args(
-            core, {h, vb, NC, vb_buf, kd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf, s0_buf});
+            core, {h, vb, NC, vb_buf, kd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf, s0_buf, identity_buf});
         writer.emplace_runtime_args(core, {h, vb, NC, o_buf, fs_buf});
         compute.emplace_runtime_args(core, {NC});
     }
 
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+    desc.kernels.push_back(std::move(compute));
+    return desc;
+}
+
+// ---------------------------------------------------------------------------
+// KDA GROUPED AFFINE PREFIX
+// ---------------------------------------------------------------------------
+tt::tt_metal::ProgramDescriptor KdaAffinePrefixProgramFactory::create_descriptor(
+    const KdaAffinePrefixParams& attrs, const KdaAffinePrefixInputs& in, std::vector<Tensor>& outputs) {
+    const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
+    const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
+    const uint32_t G = attrs.groups_per_head;
+    const uint32_t group_heads = attrs.BH * G;
+    const uint32_t kk = Kt * Kt;
+    const uint32_t kv = Kt * Vt;
+
+    auto* device = in.transform_a.device();
+    const auto grid = device->compute_with_storage_grid_size();
+    constexpr uint32_t kMaxAffinePrefixWorkers = 128;
+    TT_FATAL(
+        group_heads <= std::min<uint32_t>(grid.x * grid.y, kMaxAffinePrefixWorkers),
+        "affine prefix supports at most {} group workers, got {}",
+        kMaxAffinePrefixWorkers,
+        group_heads);
+    auto dist = distribute_prep(grid, group_heads, group_heads);
+    const auto& cores = dist.core_set;
+
+    ProgramDescriptor desc;
+    auto add_cb = [&](uint32_t index, uint32_t tiles, tt::DataFormat format = tt::DataFormat::Float32) {
+        const uint32_t tile_size = tt::tile_size(format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tiles * tile_size,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(index), .data_format = format, .page_size = tile_size}}}});
+    };
+    const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.transform_a.dtype());
+    add_cb(0, kk, summary_format);  // BF16 input A
+    add_cb(1, kv, summary_format);  // BF16 input B
+    add_cb(2, kk);                  // prefix A ping
+    add_cb(3, kv);                  // prefix B ping
+    add_cb(4, kk);                  // prefix A pong
+    add_cb(5, kv);                  // prefix B pong
+    add_cb(6, kk);                  // receiver-owned inbound A
+    add_cb(7, kv);                  // receiver-owned inbound B
+    add_cb(8, kv);                  // initial state
+    add_cb(9, kv);                  // group entry state
+    add_cb(10, kv);                 // matmul scratch
+    add_cb(11, 1);                  // dataflow-to-compute stage token
+
+    constexpr uint32_t ready_semaphore_id = 0;
+    constexpr uint32_t arrival_semaphore_id = 1;
+    constexpr uint32_t release_semaphore_id = 2;
+    for (uint32_t id : {ready_semaphore_id, arrival_semaphore_id, release_semaphore_id}) {
+        desc.semaphores.push_back(
+            SemaphoreDescriptor{.id = id, .core_type = tt::CoreType::WORKER, .core_ranges = cores, .initial_value = 0});
+    }
+
+    auto* state_buffer = in.initial_state.has_value() ? in.initial_state->buffer() : in.transform_b.buffer();
+    auto* output_a_buffer = outputs[0].buffer();
+    auto* output_b_buffer = attrs.compose_only ? outputs[1].buffer() : outputs[0].buffer();
+    const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
+    std::vector<uint32_t> dataflow_ct = {Kt, Vt, attrs.BH, G, attrs.compose_only};
+    TensorAccessorArgs(*in.transform_a.buffer()).append_to(dataflow_ct);
+    TensorAccessorArgs(*in.transform_b.buffer()).append_to(dataflow_ct);
+    TensorAccessorArgs(*state_buffer).append_to(dataflow_ct);
+    TensorAccessorArgs(*output_a_buffer).append_to(dataflow_ct);
+    TensorAccessorArgs(*output_b_buffer).append_to(dataflow_ct);
+
+    KernelDescriptor dataflow;
+    dataflow.kernel_source = kdir + "dataflow/reader_writer_kda_affine_prefix.cpp";
+    dataflow.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    dataflow.core_ranges = cores;
+    dataflow.compile_time_args = dataflow_ct;
+    dataflow.config = ReaderConfigDescriptor{};
+    dataflow.runtime_args.reserve(group_heads);
+
+    KernelDescriptor compute;
+    compute.kernel_source = kdir + "compute/kda_affine_prefix.cpp";
+    compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute.core_ranges = cores;
+    compute.compile_time_args = {Kt, Vt, G, attrs.compose_only};
+    compute.config = compute_cfg(device->arch(), attrs.compute_kernel_config);
+    compute.runtime_args.reserve(group_heads);
+
+    auto* a_buffer = in.transform_a.buffer();
+    auto* b_buffer = in.transform_b.buffer();
+    const auto coordinator = device->worker_core_from_logical_core(dist.cores[0]);
+    for (uint32_t flat = 0; flat < group_heads; flat++) {
+        const auto& core = dist.cores[flat];
+        const uint32_t group = flat % G;
+        KernelDescriptor::RTArgList args;
+        args.reserve(13 + 2 * group_heads);
+        args.push_back(flat);
+        args.push_back(group);
+        args.push_back(group_heads);
+        args.push_back(a_buffer);
+        args.push_back(b_buffer);
+        args.push_back(state_buffer);
+        args.push_back(output_a_buffer);
+        args.push_back(output_b_buffer);
+        args.push_back(ready_semaphore_id);
+        args.push_back(arrival_semaphore_id);
+        args.push_back(release_semaphore_id);
+        args.push_back(coordinator.x);
+        args.push_back(coordinator.y);
+        for (const auto& worker : dist.cores) {
+            const auto physical = device->worker_core_from_logical_core(worker);
+            args.push_back(physical.x);
+            args.push_back(physical.y);
+        }
+        dataflow.emplace_runtime_args(core, std::move(args));
+        compute.emplace_runtime_args(core, {group});
+    }
+
+    desc.kernels.push_back(std::move(dataflow));
+    desc.kernels.push_back(std::move(compute));
+    return desc;
+}
+
+tt::tt_metal::ProgramDescriptor KdaGatedRmsProgramFactory::create_descriptor(
+    const KdaGatedRmsParams& attrs, const KdaGatedRmsInputs& in, std::vector<Tensor>& outputs) {
+    const uint32_t Mt = attrs.sequence / TILE_HEIGHT;
+    const uint32_t Vt = attrs.value_dim / TILE_WIDTH;
+    const uint32_t total = attrs.batch * attrs.num_heads * Mt;
+    // Use the fewest workers that preserve the all-core maximum items/worker.
+    const auto grid = in.input.device()->compute_with_storage_grid_size();
+    const uint32_t max_items_per_core = tt::div_up(total, grid.x * grid.y);
+    const uint32_t rms_core_limit = tt::div_up(total, max_items_per_core);
+    auto dist = distribute_prep(in.input.device()->compute_with_storage_grid_size(), total, rms_core_limit);
+    const auto& cores = dist.core_set;
+
+    ProgramDescriptor desc;
+    auto add_cb = [&](uint32_t idx, uint32_t tiles, tt::DataFormat format, uint32_t buffers = 1) {
+        const uint32_t tile_size = tt::tile_size(format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tiles * buffers * tile_size,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(idx), .data_format = format, .page_size = tile_size}}}});
+    };
+    add_cb(0, Vt, datatype_to_dataformat_converter(in.input.dtype()));
+    add_cb(1, Vt, tt::DataFormat::Float16_b);
+    add_cb(2, Vt, tt::DataFormat::Float16_b);
+    add_cb(3, Vt, tt::DataFormat::Float32);
+    add_cb(4, 1, tt::DataFormat::Float32);
+    add_cb(5, 1, tt::DataFormat::Float32);
+    add_cb(6, Vt, tt::DataFormat::Float32);
+    add_cb(7, Vt, datatype_to_dataformat_converter(attrs.output_dtype), 2);
+    add_cb(8, 1, tt::DataFormat::Float32);
+
+    uint32_t eps_bits = 0;
+    uint32_t inv_v_bits = 0;
+    const float inv_v = 1.0f / static_cast<float>(attrs.value_dim);
+    std::memcpy(&eps_bits, &attrs.epsilon, sizeof(float));
+    std::memcpy(&inv_v_bits, &inv_v, sizeof(float));
+    const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
+
+    std::vector<uint32_t> reader_ct = {Vt, attrs.num_heads, Mt};
+    TensorAccessorArgs(*in.input.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.gate.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.weight.buffer()).append_to(reader_ct);
+    std::vector<uint32_t> writer_ct = {Vt, attrs.num_heads, Mt};
+    TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
+
+    KernelDescriptor reader;
+    reader.kernel_source = kdir + "dataflow/reader_kda_gated_rms.cpp";
+    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader.core_ranges = cores;
+    reader.compile_time_args = reader_ct;
+    reader.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer;
+    writer.kernel_source = kdir + "dataflow/writer_kda_gated_rms.cpp";
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = cores;
+    writer.compile_time_args = writer_ct;
+    writer.config = WriterConfigDescriptor{};
+
+    KernelDescriptor compute;
+    compute.kernel_source = kdir + "compute/kda_gated_rms.cpp";
+    compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute.core_ranges = cores;
+    compute.compile_time_args = {Vt, eps_bits, inv_v_bits};
+    compute.config = compute_cfg(in.input.device()->arch(), attrs.compute_kernel_config);
+
+    auto* input_buffer = in.input.buffer();
+    auto* gate_buffer = in.gate.buffer();
+    auto* weight_buffer = in.weight.buffer();
+    auto* output_buffer = outputs[0].buffer();
+    for (uint32_t i = 0; i < dist.cores.size(); i++) {
+        const auto& core = dist.cores[i];
+        reader.emplace_runtime_args(
+            core, {dist.wi_start[i], dist.wi_count[i], input_buffer, gate_buffer, weight_buffer});
+        writer.emplace_runtime_args(core, {dist.wi_start[i], dist.wi_count[i], output_buffer});
+        compute.emplace_runtime_args(core, {dist.wi_count[i]});
+    }
+
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+    desc.kernels.push_back(std::move(compute));
+    return desc;
+}
+
+tt::tt_metal::ProgramDescriptor KdaCausalConvProgramFactory::create_descriptor(
+    const KdaCausalConvParams& attrs, const KdaCausalConvInputs& in, std::vector<Tensor>& outputs) {
+    constexpr uint32_t act_rm_cb = tt::CBIndex::c_0;
+    constexpr uint32_t act_tile_cb = tt::CBIndex::c_1;
+    constexpr uint32_t weights_cb = tt::CBIndex::c_2;
+    constexpr uint32_t partial_a_cb = tt::CBIndex::c_3;
+    constexpr uint32_t partial_b_cb = tt::CBIndex::c_4;
+    constexpr uint32_t output_cb = tt::CBIndex::c_5;
+    const uint32_t Mt = attrs.sequence / TILE_HEIGHT;
+    const uint32_t Qt = attrs.q_width / TILE_WIDTH;
+    const uint32_t Kt = attrs.k_width / TILE_WIDTH;
+    const uint32_t Vt = attrs.v_width / TILE_WIDTH;
+    const uint32_t Ct = Qt + Kt + Vt;
+    const uint32_t channels = attrs.q_width + attrs.k_width + attrs.v_width;
+    const uint32_t row_bytes = channels * sizeof(uint16_t);
+    // Preserve the single-block TP8 case. Wider local head shards use smaller blocks so the nine CBs coexist in L1.
+    uint32_t block_ct = Ct <= 48 ? Ct : 24u;
+    while (Ct % block_ct != 0) {
+        --block_ct;
+    }
+    const uint32_t num_blocks = Ct / block_ct;
+    auto dist = distribute_prep(in.input.device()->compute_with_storage_grid_size(), Mt * num_blocks, ~0u);
+    const auto& cores = dist.core_set;
+
+    ProgramDescriptor desc;
+    auto add_tile_cb = [&](uint32_t idx, uint32_t tiles) {
+        const uint32_t tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tiles * tile_size,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(idx),
+                .data_format = tt::DataFormat::Float16_b,
+                .page_size = tile_size}}}});
+    };
+    add_tile_cb(act_rm_cb, block_ct);
+    add_tile_cb(act_tile_cb, block_ct);
+    add_tile_cb(weights_cb, 4 * block_ct);
+    add_tile_cb(partial_a_cb, block_ct);
+    add_tile_cb(partial_b_cb, block_ct);
+    add_tile_cb(output_cb, block_ct);
+
+    const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
+    std::vector<uint32_t> reader_ct = {block_ct, channels, row_bytes, num_blocks};
+    TensorAccessorArgs(*in.input.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.state.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.tap0.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.tap1.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.tap2.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.tap3.buffer()).append_to(reader_ct);
+    std::vector<uint32_t> writer_ct = {Qt, Kt, Vt, block_ct, num_blocks};
+    TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
+    TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
+    TensorAccessorArgs(*outputs[2].buffer()).append_to(writer_ct);
+
+    KernelDescriptor reader;
+    reader.kernel_source = kdir + "dataflow/reader_kda_causal_conv1d.cpp";
+    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader.core_ranges = cores;
+    reader.compile_time_args = reader_ct;
+    reader.config = ReaderConfigDescriptor{};
+    KernelDescriptor writer;
+    writer.kernel_source = kdir + "dataflow/writer_kda_causal_conv1d.cpp";
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = cores;
+    writer.compile_time_args = writer_ct;
+    writer.config = WriterConfigDescriptor{};
+    KernelDescriptor compute;
+    compute.kernel_source = kdir + "compute/kda_causal_conv1d.cpp";
+    compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute.core_ranges = cores;
+    compute.compile_time_args = {block_ct, num_blocks};
+    compute.config = compute_cfg(in.input.device()->arch(), attrs.compute_kernel_config);
+
+    for (uint32_t i = 0; i < dist.cores.size(); ++i) {
+        const auto& core = dist.cores[i];
+        reader.emplace_runtime_args(
+            core,
+            {dist.wi_start[i],
+             dist.wi_count[i],
+             in.input.buffer(),
+             in.state.buffer(),
+             in.tap0.buffer(),
+             in.tap1.buffer(),
+             in.tap2.buffer(),
+             in.tap3.buffer()});
+        writer.emplace_runtime_args(
+            core, {dist.wi_start[i], dist.wi_count[i], outputs[0].buffer(), outputs[1].buffer(), outputs[2].buffer()});
+        compute.emplace_runtime_args(core, {dist.wi_count[i]});
+    }
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));
     desc.kernels.push_back(std::move(compute));
