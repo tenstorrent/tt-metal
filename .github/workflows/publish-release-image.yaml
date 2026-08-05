@@ -123,7 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           TARGET="${{ inputs.image }}"
-          TOOLS=(ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd sfpi openmpi)
+          TOOLS=(ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd sfpi openmpi curl oras)
           SET=""
           for tool in "${TOOLS[@]}"; do
             tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
