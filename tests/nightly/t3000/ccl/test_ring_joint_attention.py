@@ -199,6 +199,44 @@ def test_ring_joint_sdpa(
 
 
 @pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["line"],
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+def test_ring_joint_sdpa_multi_batch_wh_t3k(mesh_device, all_gather_topology, reset_seeds):
+    """Non-sliding RingJointSDPA supports B>1 without cross-batch K/V chaining."""
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis=0, rp_factor=2, up_axis=1, up_factor=2)
+
+    run_ring_joint_sdpa(
+        submesh,
+        b=2,
+        nh=8,
+        base_seq_len=1024,
+        padded_seq_len=1024,
+        joint_seq_len=0,
+        d=64,
+        q_chunk_size=128,
+        k_chunk_size=128,
+        dtype=ttnn.bfloat16,
+        n_iters=1,
+        trace_enabled=False,
+        num_links=1,
+        rp_axis=0,
+        up_axis=1,
+        all_gather_topology=all_gather_topology,
+        skip_check=False,
+        pcc_threshold=0.994,
+    )
+
+
+@pytest.mark.parametrize(
     "dtype, pcc_threshold",
     [
         (ttnn.bfloat16, 0.994),
