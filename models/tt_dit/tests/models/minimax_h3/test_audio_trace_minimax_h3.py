@@ -25,8 +25,13 @@ import torch
 from ....models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from .test_performance_vae_minimax_h3 import _config, _psnr, _weights_dir
 
+# 300 MB covers the default path but not the precision levers: with ``MINIMAX_H3_AUDIO_ACCURATE=1`` the
+# graph grows (the depthwise MAC form does one pass per tap, and the shifted-matmul convs add
+# ``3 * kernel_size`` matmuls each), and the trace needs 375463936 B. The failure names the requirement
+# exactly -- ``mesh_trace.cpp:80``, "Creating trace buffers of size ... but only ... is allocated" -- so
+# size for the larger of the two rather than making the region depend on an env var.
 TRACED = [
-    pytest.param((1, 1), {"l1_small_size": 65536, "trace_region_size": 300_000_000}, id="single_device"),
+    pytest.param((1, 1), {"l1_small_size": 65536, "trace_region_size": 450_000_000}, id="single_device"),
 ]
 NUM_LATENT_FRAMES = 207
 ITERS = 5

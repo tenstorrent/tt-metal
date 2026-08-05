@@ -24,6 +24,8 @@ import numpy as np
 import torch
 from loguru import logger
 
+from ....pipelines.minimax_h3.packing import prepare_keyframe_image
+
 
 def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seconds=0.05):
     """Guard against a soundtrack that is silent, clipped, constant, or the wrong length.
@@ -220,3 +222,106 @@ def log_spectral_flatness(audio, *, sampling_rate, num_bands=64):
         f"band dB range=[{10 * np.log10(bands.min() + 1e-20):.1f}, {10 * np.log10(bands.max() + 1e-20):.1f}]"
     )
     return {"flatness": flatness, "bands_db": 10 * np.log10(bands + 1e-20)}
+
+
+def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pcc_floor=0.3):
+    """A decoded frame must correlate with the keyframe that anchored it.
+
+    The `fl2va` analogue of `wan2_2.common.check_first_frame_matches_seed`, and it exists separately
+    because that helper resizes the seed with a plain `PIL.resize`, i.e. a **stretch**. That is right
+    for MiniMax-H3's *first* keyframe and wrong for any other: `prepare_keyframe_image` stretches only
+    the geometry anchor (the first keyframe given) and **cover-crops** every later one -- scale by
+    `max(W/w, H/h)`, then centre-crop. Comparing a cover-cropped keyframe against a stretched
+    reference would fail on a correct pipeline.
+
+    So the canvas rule is applied here rather than assumed, by calling `prepare_keyframe_image`
+    itself. That also means this helper cannot drift from the pipeline's own preparation.
+
+    This is a real correctness signal rather than a formality: the anchors are noised only to
+    `t = 0.999`, so `0.999 * x0 + 0.001 * noise` is essentially the clean VAE latent of the keyframe,
+    and a decoded anchor frame that does not resemble it means the conditioning path is broken --
+    wrong rows written, anchors overwritten during denoising, or the conditioning block placed at the
+    wrong sequence position.
+
+    Args:
+        frames: decoded video, `(F, H, W, 3)`, batch dim removed.
+        keyframe: the PIL keyframe *as supplied to the pipeline*, before preparation.
+        index: which decoded frame to compare -- `0` for a `first` anchor, `-1` for a `last` one.
+        stretch: how the pipeline prepared this keyframe. `True` for the first keyframe given.
+        pcc_floor: minimum Pearson correlation. Provisional; tighten once real values are recorded.
+    """
+    frame = frames[index]
+    if isinstance(frame, torch.Tensor):
+        frame = frame.cpu().numpy()
+    frame = np.asarray(frame).astype(np.float64)
+
+    prepared = prepare_keyframe_image(keyframe.convert("RGB"), height, width, stretch)
+    expected = np.asarray(prepared).astype(np.float64)
+    assert frame.shape == expected.shape, f"frame {index} shape {frame.shape} != keyframe {expected.shape}"
+
+    pcc = float(np.corrcoef(frame.ravel(), expected.ravel())[0, 1])
+    label = "first" if index == 0 else "last"
+    logger.info(f"fl2va {label}-keyframe anchor: decoded frame {index} vs keyframe PCC = {pcc:.4f}")
+    assert pcc > pcc_floor, (
+        f"decoded frame {index} barely correlates with the {label} keyframe (PCC={pcc:.3f}); "
+        "the fl2va conditioning path is likely broken"
+    )
+    return pcc
+
+
+def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boundaries, max_ratio=3.0):
+    """One-pixel gradient at each tile boundary against its own neighbourhood.
+
+    The sensitive complement to :func:`check_spatial_seams`, which compares *block-mean* activity either
+    side of a boundary and therefore cannot see a seam narrower than its blocks. Measured on a clean
+    production frame: `check_spatial_seams` reports 1.03 while every one of the six vertical boundaries
+    carries a per-column gradient 1.2-1.5x its neighbourhood. Both numbers are correct; they measure
+    different things, and only this one would notice a one-pixel discontinuity from the tiled VAE decode.
+
+    A control matters here and is built in: non-boundary columns are measured the same way and must sit
+    near 1.0, otherwise the statistic is picking up ordinary image structure rather than a seam.
+
+    The bar is deliberately loose (3.0) because a ratio of 1.2-1.5 is the *known good* state, not a
+    defect: linear cross-fading two independently decoded tiles leaves a derivative discontinuity at the
+    ends of the blend, and at production geometry that measures ~0.3/255 of luma step -- 0.12 % of full
+    scale, invisible at 8x zoom, and identical in `t2va`. This gate exists to catch that becoming
+    *visible*, which is a several-fold change, not to police the floor.
+    """
+    frames = np.asarray(frames)
+    luma = frames.astype(np.float64).mean(-1) if frames.ndim == 4 else frames.astype(np.float64)
+    gx = np.abs(np.diff(luma, axis=2)).mean(axis=(0, 1))
+    gy = np.abs(np.diff(luma, axis=1)).mean(axis=(0, 2))
+
+    def ratio(profile, index):
+        near = np.concatenate([profile[index - 12 : index - 3], profile[index + 3 : index + 12]])
+        return float(profile[index - 1] / max(float(np.median(near)), 1e-9))
+
+    results = {}
+    for name, profile, boundaries in (("vertical", gx, vertical_boundaries), ("horizontal", gy, horizontal_boundaries)):
+        ratios = {int(b): ratio(profile, int(b)) for b in boundaries if 12 < int(b) < len(profile) - 12}
+        results[name] = ratios
+        if ratios:
+            logger.info(
+                f"{name} tile-boundary gradient ratios (1.0 = no seam): "
+                + ", ".join(f"x={b}:{r:.3f}" if name == "vertical" else f"y={b}:{r:.3f}" for b, r in ratios.items())
+            )
+
+    # Control: columns that are not boundaries must read ~1.0, or the measurement is meaningless.
+    generator = np.random.default_rng(0)
+    candidates = generator.integers(30, len(gx) - 30, 24)
+    control = [c for c in candidates if all(abs(int(c) - int(b)) > 16 for b in vertical_boundaries)][:12]
+    control_ratios = [ratio(gx, int(c)) for c in control]
+    mean_control = float(np.mean(control_ratios))
+    logger.info(f"control non-boundary columns: mean ratio {mean_control:.3f}, max {max(control_ratios):.3f}")
+    assert mean_control < 1.15, (
+        f"control columns average {mean_control:.3f}; this statistic is tracking image structure rather "
+        "than tile boundaries, so its boundary numbers mean nothing"
+    )
+
+    worst = max((r, f"{n} {b}") for n, rs in results.items() for b, r in rs.items())
+    assert worst[0] < max_ratio, (
+        f"tile-boundary gradient at {worst[1]} is {worst[0]:.2f}x its neighbourhood (control "
+        f"{mean_control:.2f}); a visible seam. See the artifact rubric"
+    )
+    results["control"] = mean_control
+    return results

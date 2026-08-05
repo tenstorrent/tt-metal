@@ -167,9 +167,15 @@ class MiniMaxH3Transformer3DModel(Module):
     The reference builds the packed sequence with `index_copy` at caller-supplied row indices. A
     general scatter across an already-fractured sequence-parallel tensor would need cross-device
     movement, so the assembly happens *before* fracturing instead: each modality is projected while
-    replicated on SP, the three streams are concatenated into the full packed sequence in natural
-    order `[text | audio | video]`, the tail is zero-padded up to a multiple of `sp_factor * TILE`,
-    and `ttnn.mesh_partition` then fractures that global sequence across the SP axis.
+    replicated on SP, the streams are concatenated into the full packed sequence in natural order
+    `[text | condition | audio | target video]`, the tail is zero-padded up to a multiple of
+    `sp_factor * TILE`, and `ttnn.mesh_partition` then fractures that global sequence across the SP
+    axis.
+
+    The condition stream is the `fl2va` keyframe anchors and is absent for `t2va`, which passes
+    `condition_1BKC=None` and gets the three-stream `[text | audio | video]` assembly unchanged. Its
+    position between text and audio is not a choice: `packing.build_packed_sequence` puts the
+    conditioning rows there, and the caller's rope/AdaLN metadata is built in that layout's order.
 
     Because the sequence is assembled globally, the caller's per-row metadata (`rope_cos`, `rope_sin`,
     `adaln_indices`, `timestep_indices`) is simply built for the padded global sequence in that same
@@ -178,11 +184,12 @@ class MiniMaxH3Transformer3DModel(Module):
     back in its own order, matching what the reference returns.
 
     Per-modality row counts are unconstrained. A concat in `TILE_LAYOUT` can only cut on a tile
-    boundary, so when all three lengths are multiples of `TILE_SIZE` the assembly happens there
-    directly; otherwise the three streams are converted to ROW_MAJOR, concatenated at row
-    granularity, and the assembled sequence -- whose padded length *is* tile aligned -- is converted
-    back once. Production t2va needs the second path: at 1344x768 / 124 frames the video rows are
-    37296 (= 16 mod 32) and the audio rows 414 (= 30 mod 32).
+    boundary, so when every stream's length is a multiple of `TILE_SIZE` the assembly happens there
+    directly; otherwise the streams are converted to ROW_MAJOR, concatenated at row granularity, and
+    the assembled sequence -- whose padded length *is* tile aligned -- is converted back once.
+    Production t2va needs the second path: at 1344x768 / 124 frames the video rows are 37296
+    (= 16 mod 32) and the audio rows 414 (= 30 mod 32). So does fl2va, whose condition rows are
+    1008 per anchor (= 16 mod 32).
 
     Padding
     -------
@@ -354,6 +361,7 @@ class MiniMaxH3Transformer3DModel(Module):
         video_1BVC: ttnn.Tensor,
         audio_1BAC: ttnn.Tensor,
         prompt_1BLP: ttnn.Tensor,
+        condition_1BKC: ttnn.Tensor | None = None,
         timestep: ttnn.Tensor,
         adaln_indices: ttnn.Tensor,
         timestep_indices: ttnn.Tensor,
@@ -362,19 +370,30 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_cache: MiniMaxH3AdalnCache | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
-        video_1BVC: [1, 1, V, in_channels * prod(patch_size)], replicated on SP and TP
+        video_1BVC: [1, 1, V, in_channels * prod(patch_size)], replicated on SP and TP. The *target*
+            rows only --- fl2va's conditioning rows go in `condition_1BKC`, not prepended here.
         audio_1BAC: [1, 1, A, audio_in_channels], replicated on SP and TP
         prompt_1BLP: [1, 1, L, text_dim], replicated on SP and TP
+        condition_1BKC: [1, 1, K, in_channels * prod(patch_size)] or None. fl2va's noise-augmented
+            keyframe anchor rows, in packed order, same width as `video_1BVC`. `None` for t2va.
         timestep: [1, 1, num_timesteps, 1] float32, replicated. Unscaled, in [0, 1].
         adaln_indices: [1, 1, 1, S_padded_local] integers, `timestep_indices * 3 + token_tags`, built
-            for the padded global sequence `[text | audio | video | pad]` and sharded on SP
+            for the padded global sequence `[text | condition | audio | video | pad]` and sharded on SP
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
 
-        V, A and L are arbitrary; only their sum is padded, to a multiple of `sp_factor * TILE`. The
-        true packed length `L + A + V` is derived here, so the caller passes no lengths.
+        V, A, L and K are arbitrary; only their sum is padded, to a multiple of `sp_factor * TILE`. The
+        true packed length `L + K + A + V` is derived here, so the caller passes no lengths.
 
         Returns `(video_velocity, audio_velocity)`, each replicated, in that modality's row order.
+
+        `video_velocity` holds the **target rows only**, `V` of them, and deliberately not the
+        conditioning rows the reference's `video_indices` would also cover. The caller discards
+        conditioning-row velocity --- the loop re-imposes the anchors by only ever writing rows from
+        `num_condition_video_rows` on --- and the two blocks are not contiguous in the packed layout,
+        so returning both would cost a second slice plus a concat every step for a value nobody reads.
+        No detection power is lost: attention is full, so every target row attends to the conditioning
+        rows as keys and values and a wrong conditioning rope or AdaLN tag shows up in this output.
         """
         v_len = video_1BVC.shape[2]
         a_len = audio_1BAC.shape[2]
@@ -385,7 +404,8 @@ class MiniMaxH3Transformer3DModel(Module):
                 f"cache={'given' if adaln_cache is not None else 'None'}, precomputed_adaln={self.precomputed_adaln}"
             )
 
-        seq_len = l_len + a_len + v_len
+        c_len = 0 if condition_1BKC is None else condition_1BKC.shape[2]
+        seq_len = l_len + c_len + a_len + v_len
         tile = ttnn.TILE_SIZE
         # A tile-layout concat can only cut on a tile boundary, so it needs every modality's row
         # count to be a multiple of TILE. Production t2va satisfies none of that: at 1344x768 /
@@ -395,14 +415,21 @@ class MiniMaxH3Transformer3DModel(Module):
         # accepts any lengths. The tile path is kept for the aligned case rather than deleted:
         # it is strictly cheaper, and keeping it means this change cannot move a shape that
         # already worked.
-        tile_aligned = not (v_len % tile or a_len % tile or l_len % tile)
+        tile_aligned = not (v_len % tile or a_len % tile or l_len % tile or c_len % tile)
 
         # 1. Project each modality and refine the text stream, all still replicated on SP, then
         # assemble the full packed sequence in natural order.
         video_embeds = self.proj_in(video_1BVC)
         audio_embeds = self.audio_proj_in(audio_1BAC)
         text_embeds = self.token_refiner(self.context_embedder(prompt_1BLP))
-        streams = [text_embeds, audio_embeds, video_embeds]
+        streams = [text_embeds]
+        if condition_1BKC is not None:
+            # Same weight as the target rows: conditioning rows are video rows that happen to be
+            # pinned, and the reference projects them with the same `proj_in`. A per-row GEMM against a
+            # shared weight is row-independent, so projecting the two blocks separately is bit-identical
+            # to projecting them concatenated -- which is what lets them be placed apart here.
+            streams.append(self.proj_in(condition_1BKC))
+        streams += [audio_embeds, video_embeds]
 
         # 2. Zero-pad the tail up to a multiple of sp_factor * TILE, then fracture across SP.
         # Ring attention masks the pad rows via logical_n = seq_len, so no attention mask is
@@ -474,6 +501,8 @@ class MiniMaxH3Transformer3DModel(Module):
 
         # 7. Select each modality's rows out of the reassembled global sequence. The reference runs both
         # heads over every row and selects afterwards, which is what this does.
-        video_out = ttnn.slice(video_all, [0, 0, l_len + a_len, 0], [1, 1, seq_len, video_all.shape[-1]])
-        audio_out = ttnn.slice(audio_all, [0, 0, l_len, 0], [1, 1, l_len + a_len, audio_all.shape[-1]])
+        audio_start = l_len + c_len
+        video_start = audio_start + a_len
+        video_out = ttnn.slice(video_all, [0, 0, video_start, 0], [1, 1, seq_len, video_all.shape[-1]])
+        audio_out = ttnn.slice(audio_all, [0, 0, audio_start, 0], [1, 1, video_start, audio_all.shape[-1]])
         return video_out, audio_out

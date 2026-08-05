@@ -130,3 +130,106 @@ def test_t2va_warm_latency(mesh_device, reset_seeds, num_frames):
 
     assert output.num_frames == aligned_frames
     assert total < EXPECTED_TOTAL_S, f"fully-warm total {total:.1f} s exceeds the {EXPECTED_TOTAL_S:.0f} s floor bar"
+
+
+# The fl2va keyframe comes from the calibrated t2va artifact, same as the fl2va correctness gate --
+# see that file's module docstring for why the content is not arbitrary.
+T2VA_ARTIFACT_ENV = "MINIMAX_H3_T2VA_ARTIFACT_DIR"
+
+
+def _fl2va_keyframe():
+    from pathlib import Path
+
+    import imageio.v3 as iio
+    import numpy as np
+    from PIL import Image
+
+    source = Path(os.environ.get(T2VA_ARTIFACT_ENV) or Path.home() / "h3_t2va_artifacts") / "t2va.mp4"
+    if not source.is_file():
+        pytest.skip(f"no t2va artifact at {source} to take the fl2va keyframe from")
+    return Image.fromarray(np.asarray(iio.imread(source, index=0, plugin="pyav"))).convert("RGB")
+
+
+@pytest.mark.timeout(10800)
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+def test_fl2va_warm_latency(mesh_device, reset_seeds):
+    """Fully-warm `fl2va` latency, by the same method as the t2va row so the two are comparable.
+
+    Three things have to be right or the number means nothing, and each has bitten a measurement in
+    this campaign or its sibling:
+
+    1. **The warmup must be fl2va-shaped, keyframe included.** `padded_len` goes 37888 (t2va) to 39936
+       (one anchor), and every program in the 50-block stack is keyed on it, so a t2va warmup warms
+       nothing for fl2va.
+    2. **The warmup must run at the same prompt length**, and that is *asserted* rather than assumed.
+       t2va got away with a one-token `"warmup"` prompt purely by luck -- 1 and 39 tokens both round up
+       to 37888 -- and with a ~1010-row vision block that luck is gone. The assertion below is one line
+       and covers a whole class of silently-cold measurements.
+    3. **The embedding cache must be populated.** `warmup` runs with `use_prompt_cache=False`, so it
+       compiles the conditioner and writes nothing; without the priming call the measured run would pay
+       a full device conditioner encode -- now including the vision tower -- inside the timed Encoder
+       row, which is exactly what amendment 81's `Encoder (cache) 0.0 s` row does not include.
+    """
+    base = os.environ.get(WEIGHTS_ENV, DEFAULT_WEIGHTS)
+    missing = [p for p in ("transformer", "text_encoder", "vae", "audio_vae") if not os.path.isdir(f"{base}/{p}")]
+    if missing:
+        pytest.skip(f"MiniMax-H3 snapshot at {base} is missing {missing}; set {WEIGHTS_ENV}")
+
+    keyframe = _fl2va_keyframe()
+    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=base)
+
+    # (1) and (2): warm at the real shape, with the keyframe and the real prompt.
+    pipeline.warmup(
+        prompt=PROMPT,
+        image=keyframe,
+        num_frames=NUM_FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+    )
+    warm_padded_len = pipeline.last_padded_len
+
+    # (3): prime the disk cache so the Encoder row means what it means for t2va.
+    pipeline.encode_prompt(PROMPT, keyframes=[keyframe], use_cache=True)
+
+    output = pipeline(
+        PROMPT,
+        image=keyframe,
+        num_frames=NUM_FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        seed=SEED,
+    )
+
+    assert pipeline.last_padded_len == warm_padded_len, (
+        f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
+        f"{pipeline.last_padded_len}; this number is not warm"
+    )
+
+    rows = pipeline.last_timings
+    total = sum(seconds for _, seconds in rows)
+    num_forwards = NUM_INFERENCE_STEPS - 1
+    aligned_frames = align_num_frames(NUM_FRAMES)
+
+    logger.info(
+        f"MEASUREMENT fl2va fully warm | mesh 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, 2 links "
+        f"| {WIDTH}x{HEIGHT}, {aligned_frames} frames @ {MINIMAX_H3_FPS} fps "
+        f"({aligned_frames / MINIMAX_H3_FPS:.2f} s), {num_forwards} forwards, one 'first' anchor, "
+        f"padded_len {warm_padded_len} "
+        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+    )
+    for label, seconds in rows:
+        logger.info(f"  {label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
+    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
+
+    denoise = dict(rows).get("Denoise")
+    if denoise:
+        logger.info(
+            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
+            f"({num_forwards} forwards over {denoise:.1f} s)"
+        )
+    logger.info(f"  realtime factor    {total / (aligned_frames / MINIMAX_H3_FPS):8.1f} x  (compute / video seconds)")
+
+    assert output.num_frames == aligned_frames
+    assert total < EXPECTED_TOTAL_S, f"fully-warm total {total:.1f} s exceeds the {EXPECTED_TOTAL_S:.0f} s floor bar"
