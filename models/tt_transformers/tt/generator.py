@@ -1608,6 +1608,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.prev_page_table = tuple(pt.clone() for pt in page_table)
         for i, trace_id in self.trace_ids_decode[on_device_sampling].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
+        # EXPERIMENT ONLY (#52176) — do not merge. Fence after trace replay so the CCL all-gather
+        # inside on-device sampling cannot read the decode trace's logits before they are visible.
+        # The clean host-argmax run goes through a blocking device-to-host copy, which fences
+        # implicitly; this tests whether that fence is what makes it clean.
+        for i in self.trace_ids_decode[on_device_sampling]:
+            ttnn.synchronize_device(self.model_args[i].mesh_device)
         return self.trace_output_decode[on_device_sampling]
 
     def sample_decode_on_device(
