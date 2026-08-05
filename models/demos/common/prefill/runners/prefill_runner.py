@@ -175,8 +175,8 @@ _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_g
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
-# Build the DFlash drafter context-KV cache during this prefill (opt-in, default OFF); the runtime reads the
-# checkpoint from DFLASH_HF_MODEL, which must be set when enabled.
+# Build the DFlash drafter context-KV cache during this prefill (opt-in, default OFF). The runner reads only
+# PREFILL_DFLASH; the runtime resolves the drafter checkpoint itself.
 DFLASH_ENABLED = os.environ.get("PREFILL_DFLASH", "0") == "1"
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
@@ -841,7 +841,7 @@ def main() -> None:
         # this (single-rank inherits it); PREFILL_KV_ONLY_LAST_LAYER can force it off.
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
         # NOT gated on is_last_rank: every rank builds its owned fc slices; the runtime derives the
-        # last-rank KV tail from is_last_rank. The drafter checkpoint path comes from DFLASH_HF_MODEL.
+        # last-rank KV tail from is_last_rank.
         dflash_enabled=DFLASH_ENABLED,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
