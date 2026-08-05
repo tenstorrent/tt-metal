@@ -52,10 +52,7 @@ message(STATUS "Found ${ALL_KERNEL_FILES_LEN} kernel files")
 if(NOT DEFINED ARCH_NAME)
     set(ARCH_NAME "wormhole_b0")
 endif()
-set(TOLOWER
-    "${ARCH_NAME}"
-    ARCH_NAME_LOWER
-)
+string(TOLOWER "${ARCH_NAME}" ARCH_NAME_LOWER)
 
 if(ARCH_NAME_LOWER MATCHES "wormhole")
     set(ARCH_NAME_PREFIX "wormhole")
