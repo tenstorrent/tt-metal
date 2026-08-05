@@ -35,7 +35,7 @@ bool supported_execution_controls(
     // and a caller-supplied destination decide that placement, so both are checked here.
     //
     // sub_core_grids is deliberately absent: unlike the codegen builders of other ported ops, all
-    // three gather factories thread it into their work split (gather_core_grid), exactly as
+    // three gather factories thread it into their work split (split_gather_work), exactly as
     // ops/gather/spec.py threads ctx.attr("sub_core_grids") into split_cores, so the caller's core
     // reservation is honoured rather than widened.
     const auto& output_mem_config = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();

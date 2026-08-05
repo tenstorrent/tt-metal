@@ -199,16 +199,29 @@ uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& 
     // Output dtype always equals input dtype, same as gather_interleaved_fits_l1's reasoning.
     const uint64_t fixed_pages = index_page + input_page;
     const uint64_t affordable = usable_l1 > fixed_pages ? (usable_l1 - fixed_pages) / input_page : 0;
-    // Two keeps the reader's DRAM reads overlapping its scan when L1 is too tight for more, and is
-    // the floor gather_min_plan_fits_l1() gates against.
+    // Deepest block L1 affords, capped at the row -- build_gather_streaming_factory's own formula.
+    // Two is its floor (keeps the reader's DRAM reads overlapping its scan when L1 is too tight for
+    // more) and is what gather_min_plan_fits_l1() gates against.
+    const uint32_t max_resident =
+        static_cast<uint32_t>(std::min<uint64_t>(std::max<uint64_t>(affordable, 2), Wt_input));
+    // What the resident depth actually buys is the BLOCK COUNT: both streaming kernels rescan the
+    // whole index tile once per block (gather_reader_streaming.cpp's chunk loop), so the scalar cost
+    // per output tile is n_chunks * TILE_HW and nothing else about the depth changes it. The writer,
+    // however, pushes a full chunk_tiles-deep block every time and pads a short tail by re-reading
+    // the row's last page (gather_writer_streaming.cpp's `page_w` clamp), so the DRAM cost is
+    // n_chunks * chunk_tiles pages per row -- not Wt_input. Spreading the row evenly over the same
+    // block count keeps the scan count identical and drops the padding re-reads: a Wt_input=1000 row
+    // that needs two blocks then costs 1000 input pages per row instead of 2 * ceiling.
     //
-    // Deepest-affordable, capped at the row, is build_gather_streaming_factory's own formula and is
-    // transliterated as-is. A depth that does not divide Wt_input leaves the writer padding the tail
-    // block by re-reading the row's last page, which an even spread over the same block count would
-    // avoid at the same scan count -- but that is a change to the reference PLAN, not a translation
-    // of it, and the port is measured for parity against the plan the reference builds. It belongs
-    // in build_gather_streaming_factory first.
-    return static_cast<uint32_t>(std::min<uint64_t>(std::max<uint64_t>(affordable, 2), Wt_input));
+    // This is where the port must NOT copy the reference's number: build_gather_streaming_factory
+    // sizes its block against builder_utils.USABLE_L1, a fixed 1_400_000-byte constant, while the
+    // port asks the device (gather_usable_l1) as the porting guide requires. The real budget is
+    // larger, so `min(affordable, Wt_input)` alone would make the port's tail padding strictly worse
+    // than the reference's on the same shape. Deriving the depth from the block count instead makes
+    // the port's page count independent of the budget, and its scan count can only be lower than the
+    // reference's (a larger budget never needs more blocks).
+    const uint32_t n_chunks = (Wt_input + max_resident - 1) / max_resident;
+    return (Wt_input + n_chunks - 1) / n_chunks;
 }
 
 tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_descriptor(
