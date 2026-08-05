@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <unordered_map>
 #include <utility>
@@ -420,6 +421,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // Validation already checked the shard is TILE_HEIGHT tall and that all three
     // weights agree; here we only need the shard WIDTH to equal this core's N slice,
     // because the reader reads exactly one shard per K-row into the CB.
+    uint32_t gu_shard_krows = 1;  // gate/up ND-shard height in tile-rows
     const auto& gate_mem = t.gate_proj.memory_config();
     const bool weights_nd_sharded = gate_mem.created_with_nd_shard_spec();
     if (weights_nd_sharded) {
@@ -434,6 +436,21 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
                 expect_tiles * TILE,
                 shape[-1]);
         };
+        const auto shard_krows = [](const ttnn::Tensor& w) -> uint32_t {
+            return static_cast<uint32_t>(w.memory_config().nd_shard_spec()->shard_shape[-2]) / TILE;
+        };
+        gu_shard_krows = shard_krows(t.gate_proj);
+        TT_FATAL(
+            shard_krows(t.up_proj) == gu_shard_krows,
+            "gate/up shard heights must match ({} vs {})",
+            gu_shard_krows,
+            shard_krows(t.up_proj));
+        TT_FATAL(
+            in0_block_w_gu % gu_shard_krows == 0,
+            "gate/up shard height {} tile-rows must divide in0_block_w_gu {}",
+            gu_shard_krows,
+            in0_block_w_gu);
+        TT_FATAL(shard_krows(t.down_proj) == 1, "down_proj shard height must be 1 tile-row");
         check_shard_width(t.gate_proj, per_core_N_gu, "gate_proj");
         check_shard_width(t.up_proj, per_core_N_gu, "up_proj");
         check_shard_width(t.down_proj, per_core_N_d, "down_proj");
@@ -501,6 +518,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // the 7 receivers. Sender position rotates per K-block so each core takes
     // a turn as sender exactly once per chunk.
     const uint32_t act_ready_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    // COUNTS_BCAST: one core reads counts/idx from DRAM and multicasts them to the whole
+    // grid. Previously all GRID_X*GRID_Y cores read the SAME two pages at the same instant,
+    // which serialises on one DRAM bank: measured 1.59 us median and 2.65 us max on the
+    // worst core, identical at isl-0 and isl-128, i.e. pure per-op fixed cost (of a 4.01 us
+    // isl-0 total). Compute-kernel init, the other suspect, is only 0.13 us.
+    const uint32_t counts_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
     const uint32_t act_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
     // Two-RISC weight read: use the writer (NCRISC, idle until the down output)
     // as a second read engine for `up`, read on NoC 1 concurrent with the
@@ -521,8 +544,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // UP_WRITER_MCAST scheme (writer NoC-1-multicasts `up`) is no longer
     // selectable. kEnableSplitUp picks UP_SPLIT for all layouts.
     constexpr bool kEnableSplitUp = true;
-    // DOWN_SPLIT: share each down K-block's rows between the reader (NoC 0) and the
-    // writer (NoC 1). Env-overridable for A/B while it is being characterised.
     // DOWN_SPLIT: share each down K-block's K-rows between the reader (NoC 0) and
     // the writer (NoC 1), the same two-RISC trick UP_SPLIT uses for `up`. The down
     // read was the ONLY weight read still on the critical path — ablating it saved
@@ -534,6 +555,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // divide; in0_block_w_d is per_core_N_gu, so this is 6 for the shipped models.
     const bool kEnableSplitDown = in0_block_w_d >= 2;
     // Rows the READER keeps; the writer takes [down_split_k, in0_block_w_d).
+    // Split point tuned by measurement, not by symmetry: at isl-128 the READER is the
+    // critical path (BRISC 98.2 us of a 98.4 us op) while the writer has ~4.3 us of slack,
+    // because the reader also carries the x read and both phase-4 multicasts. So give the
+    // writer more than half the down rows. DS_DOWN_SPLIT_K overrides for A/B.
+    // Half each way. Shifting rows toward the writer was measured WORSE despite the
+    // writer having ~4.3 us of slack at isl-128 (budget 2163.8 / 2167.2 / 2228.5 us for
+    // reader rows 3 / 2 / 1), so the split point is not a free knob.
     const uint32_t down_split_k = kEnableSplitDown ? (in0_block_w_d / 2) : in0_block_w_d;
     uint32_t up_mode = kEnableSplitUp ? 2 : 0;
     const bool reader_reads_up = (up_mode == 0);                   // reader issues up DRAM read
@@ -542,6 +570,26 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // slot reserved) and up_done (writer -> reader: up in L1). Monotonic.
     const uint32_t up_go_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t up_done_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+    // IN1_WRITER_MCAST: hand the gate/up weight multicast to the WRITER, which owns NoC 1,
+    // so it overlaps the reader's NoC-0 weight reads. The reader cannot multicast on NoC 1
+    // itself -- in DM_DEDICATED_NOC both RISCs use the same command-buffer indices and only
+    // avoid collision by each owning one NoC (section 18) -- so the other RISC must be
+    // SIGNALLED to do it. cb_in1_{gate,up} are double-buffered, so the reader reads block
+    // k+1 while the writer multicasts block k and only blocks before REUSING a slot.
+    //
+    // !! FABRIC HAZARD, KNOWINGLY ACCEPTED !!
+    // This puts a WORKER MULTICAST on NoC 1, which is exactly what retired
+    // UP_WRITER_MCAST above: "the NoC-1 worker multicast + posted atomics collide with
+    // fabric CCL ops on NoC 1 and hang the run", and short-seq is NOT fabric-disabled.
+    // UP_SPLIT's fabric-safety argument is specifically that it keeps NoC 1 READ-ONLY,
+    // and enabling this voids that argument. The single-device perf/functional tests
+    // cannot detect it: the failure is a collision with CCL traffic that is absent
+    // there, so a green sweep here is NOT evidence of fabric safety. Validate against a
+    // fabric-enabled run with concurrent CCL before trusting this in production.
+    // Set DS_NO_WRITER_MCAST=1 to fall back to the reader's NoC-0 multicast.
+    const bool kWriterMcastsIn1 = std::getenv("DS_NO_WRITER_MCAST") == nullptr;
+    const uint32_t mcast_go_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+    const uint32_t mcast_done_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
 
     // -------------------------- circular buffers --------------------------
     // Double-buffered DRAM-streamed inputs.
@@ -754,6 +802,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // compile. A define removes the branch from the translation unit outright.
         shard_grid_n_gu,
         shard_grid_n_d,
+        gu_shard_krows,
         // DOWN_SPLIT: K-rows of each down block the READER reads; the writer reads
         // [down_split_k, in0_block_w_d) on NoC 1. Equals in0_block_w_d when the
         // split is off, so the reader keeps every row.
@@ -775,6 +824,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // offset after start_args.next_compile_time_args_offset(). Only present when
     // fuse_bias — a distinct program (FUSE_BIAS define is in the cache key).
     std::map<std::string, std::string> reader_defines{};
+    if (kWriterMcastsIn1) {
+        reader_defines["WRITER_MCASTS_IN1"] = "1";
+    }
     if (weights_nd_sharded) {
         reader_defines["WEIGHTS_ND_SHARDED"] = "1";
     }
@@ -852,6 +904,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         down_split_k,                             // 31 rows the READER keeps
         static_cast<uint32_t>(kEnableSplitDown),  // 32 writer_split_down
         shard_grid_n_d,                           // 33 down shard-grid N extent
+        // IN1_WRITER_MCAST: cb_in1_gate so the writer can multicast it, plus the gate flag.
+        CB_IN1_GATE,                              // 34
+        static_cast<uint32_t>(kWriterMcastsIn1),  // 35 writer_mcasts_in1
+        gu_shard_krows,                           // 36 gate/up shard height (tile-rows)
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start (direct-write), then up (UP_SPLIT), then down (DOWN_SPLIT).
@@ -1136,6 +1192,25 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             reader_args.push_back(t.up_bias->buffer()->address());
             reader_args.push_back(t.down_bias->buffer()->address());
         }
+        // IN1_WRITER_MCAST handshake sems. Appended LAST -- after the M-row NoC table,
+        // start_addr and the optional bias addrs -- so no existing index shifts. The kernel
+        // derives the same position from M_ROW_NOC_RT_OFFSET + 2*GRID_X and FUSE_BIAS.
+        reader_args.push_back(mcast_go_sem_id);
+        reader_args.push_back(mcast_done_sem_id);
+        // COUNTS_BCAST args, appended after the mcast sems (see the kernel's
+        // IN1_WM_SEM_RT_OFFSET + 2 base). The reader core is logical (0,0); the rectangle
+        // spans the whole worker grid so one multicast reaches every core.
+        {
+            const auto grid_first = device->worker_core_from_logical_core(CoreCoord{0, 0});
+            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, GRID_Y - 1});
+            reader_args.push_back(static_cast<uint32_t>(gx == 0 && gy == 0));  // is_counts_reader
+            reader_args.push_back(static_cast<uint32_t>(grid_first.x));
+            reader_args.push_back(static_cast<uint32_t>(grid_first.y));
+            reader_args.push_back(static_cast<uint32_t>(grid_last.x));
+            reader_args.push_back(static_cast<uint32_t>(grid_last.y));
+            reader_args.push_back(counts_valid_sem_id);
+            reader_args.push_back(GRID_X * GRID_Y - 1);  // receivers (all but the reader)
+        }
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
         // Writer runtime arg layout (must match unified_routed_expert_ffn_writer.cpp):
@@ -1155,6 +1230,17 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             up_go_sem_id,                          // 7
             up_done_sem_id,                        // 8
             down_buffer->address(),                // 9 DOWN_SPLIT
+            // IN1_WRITER_MCAST: column rectangle, receiver count and sems for the
+            // gate/up multicast the writer now issues on its own NoC 1.
+            in1_mcast_nx_start,  // 10
+            in1_mcast_ny_start,  // 11
+            in1_mcast_nx_end,    // 12
+            in1_mcast_ny_end,    // 13
+            in1_num_receivers,   // 14
+            in1_ready_sem_id,    // 15
+            in1_valid_sem_id,    // 16
+            mcast_go_sem_id,     // 17
+            mcast_done_sem_id,   // 18
         };
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
     }

@@ -1503,3 +1503,110 @@ hangs, whatever the rectangle says.
 
 **(A) is therefore closed.** Both routes are worse than the prize. The remaining lever with
 multiple-x headroom rather than percent is split-K across the idle M-rows (14d).
+
+## 19. IN1_WRITER_MCAST and COUNTS_BCAST (2026-08-05)
+
+### 19a. Weight multicast on the writer's own NoC 1
+
+Section 18 closed the reader-issued NoC-1 multicast: in DM_DEDICATED_NOC both RISCs use the
+same command-buffer indices and only avoid collision by each owning one NoC. The way through
+is to SIGNAL the other RISC instead of reaching across, with the CB double-buffered so the
+reader keeps reading while the writer multicasts.
+
+Per gate/up K-block: the reader reserves the slot, reads `gate` on NoC 0, barriers, sets
+`mcast_go`; the writer (which read `up` on NoC 1 already) waits `mcast_go`, waits the
+receivers' `in1_ready`, multicasts gate+up on NoC 1 with the rectangle corners SWAPPED
+(section 16), then sets `mcast_done`. The reader blocks on `mcast_done(mc_seq-2)` only before
+REUSING a slot, which is what leaves its next DRAM read overlapping the multicast.
+
+Measured on x_rm + interleaved: 1.04x at isl-64, 1.05x at 128, 1.08x at 256, 1.11-1.19x at
+512. It also **collapses the isl-512 bimodality** — base spread 181-195 us (7.5%), with the
+change 162.9-163.7 us (0.5%) — which says the +17-18 us bimodal stall documented in 12b was
+largely the reader serialising read-then-multicast.
+
+**Three bugs found on the way, all of the same family and all multi-chunk only:**
+
+1. `mcast_go` keyed on the per-chunk `kb` while the writer waited on the running `up_seq`:
+   chunk 1 signalled 1 against an expected 15. Deadlock at the first isl >= 2048.
+2. Re-keyed on `up_seq` — still deadlocked, because `up_seq` is SHARED with the DOWN_SPLIT
+   loop, which advances it by num_blocks_d per chunk but never sets `mcast_done`. At chunk 1
+   the reader waited for `mcast_done(24)` while the writer had only reached 14. Fixed with a
+   dedicated `mc_seq` that advances only on gate/up blocks.
+3. The phase-3 multicast could lag into the window where receivers are already acking for
+   phase 4 — `in1_ready_sem` is shared by both phases — so the writer consumed acks meant for
+   the down multicast and the reader's phase-4 mcast waited forever. Fixed by draining
+   `mcast_done(mc_seq)` before phase 4.
+
+**RULE, earned three times over (four counting DOWN_SPLIT's slot parity): any cross-RISC
+handshake or CB-slot index must key on a counter that advances exactly once per event it
+guards, and ONLY isl >= 2048 exposes it.** Every single-chunk ISL passed in all four cases.
+
+### 19b. One core reads counts, then multicasts
+
+All GRID_X*GRID_Y = 88 cores were reading the SAME two DRAM pages (counts, idx) at kernel
+entry, serialising on one bank. Zone-measured at **1.59 us median / 2.65 us worst core**,
+identical at isl-0 and isl-128, i.e. pure per-op fixed cost — of a 4.01 us isl-0 total.
+Compute-kernel init, the other candidate, was only 0.13 us.
+
+Logical core (0,0) now reads and multicasts both pages to the whole grid; the rest wait on
+`counts_valid_sem`. Result **0.93 us worst core**, and isl-0 4.01 -> 2.92 us. Worth ~3 us at
+isl-128 and ~9 us at isl-2048 (bigger there because it is paid per chunk pass).
+
+Receivers reset their own semaphore copy after the wait. Not strictly required — the runtime
+appears to re-init semaphores per launch, and 72 cases with differing counts through one
+cached program all pass, which they could not if the wait were being skipped — but depending
+on that was wrong when the rest of the kernel resets `in1_valid`/`in1_ready` every block.
+
+**Why isl-0 cannot go below ~1 us:** the op is data-dependent by construction. It must read
+`counts` from DRAM to learn there is nothing to do, and that round trip is ~0.6-0.9 us. The
+remainder is TensorAccessor construction, NoC/CB/semaphore init and launch skew across 88
+cores. Sub-microsecond would need the count already resident in L1, pushed by the producer —
+a graph-level change, not an op-level one.
+
+### 19c. Budget status
+
+Steering metric: `10 x isl-128 + 2 x isl-2048`, x_rm only (the dispatch emits ROW_MAJOR).
+
+| config | isl-128 | isl-2048 | budget |
+|---|---|---|---|
+| x_rm + interleaved | 122.9 | 585.2 | 2399.7 us |
+| **x_rm + ND-sharded** | **97.5** | **585.6** | **2146.5 us** |
+| (x_tile + ND-sharded, for reference only) | 97.3 | 530.3 | 2034.0 us |
+
+ND-sharding is worth **1.26x at isl-128** here, which retires section 14's conclusion that it
+was neutral once the other wins landed: the writer-multicast changed which term dominates.
+
+`x_tile` would meet a 2100 us target, but it needs the PRODUCER to emit bfp8 TILE natively —
+section 6 measured that converting outside the op costs more than the in-op tilize saves, so
+choosing it on this op alone just moves cost into the graph.
+
+### 19d. Why the last ~46 us is a different class of problem
+
+At isl-128 every RISC is within 4.5 us of the total: reader 98.2, pack 97.5, math 95.6,
+writer 93.9, total 98.4. The op is SATURATED, not imbalanced — so rebalancing caps out around
+21 us even if made perfect, and that is confirmed empirically: shifting down-read rows toward
+the idle writer measured WORSE (budget 2163.8 / 2167.2 / 2228.5 for reader rows 3 / 2 / 1).
+With the compute floor at 84.7 us = 86% of 98.8, the remainder is a compute-side change.
+
+Two candidates, in cost order:
+
+1. **Multi-row ND shards.** `RD_GATE` measures **7.32 us** for 16 requests x 14 blocks, so
+   request-issue cost alone exceeds the gap (x10 = 73 us). Heights of 2 and 4 tile-rows FAIL
+   PCC: a contiguous read of k_rows*per_core_n tiles from one shard does not land in the
+   k-major order the CB expects, so shard-internal tile order is not shard-local row-major as
+   assumed. Reverted to the validated 1-row layout. Resolve the actual ND-shard tile layout
+   and this is the cheapest remaining win. (The FULL-K-block height is separately a dead end:
+   it pins the core to one bank, ~245 vs ~370 GB/s.)
+2. **Split-K across the idle M-rows** (14d) — the only idea measured to have multiple-x
+   headroom, and a genuine restructure.
+
+### 19e. Outstanding risk before either
+
+**IN1_WRITER_MCAST puts a worker multicast AND posted atomics on NoC 1, which is exactly what
+retired UP_WRITER_MCAST** ("collide with fabric CCL ops on NoC 1 and hang the run"), and
+short-seq is not fabric-disabled. UP_SPLIT's safety argument is specifically that it keeps
+NoC 1 READ-ONLY; this voids it. The single-device tests cannot detect the failure, because it
+is a collision with CCL traffic that is absent there — a green sweep here is NOT evidence of
+fabric safety. It is default ON at the user's direction; `DS_NO_WRITER_MCAST=1` reverts to the
+reader's NoC-0 multicast at a cost of ~6 us/call (~60 us of budget). **Validate against a
+fabric-enabled run with concurrent CCL before trusting it in production.**

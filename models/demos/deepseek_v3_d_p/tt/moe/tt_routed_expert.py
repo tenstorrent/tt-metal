@@ -73,6 +73,14 @@ class TtRoutedExpert(LightweightModule):
         n_tiles = n_dim // ttnn.TILE_SIZE
         per_core_n = (n_tiles + FFN_GRID_X - 1) // FFN_GRID_X
         dram_grid = mesh_device.dram_grid_size()
+        # Height stays ONE tile-row. A partial height (2 or 4 rows) would cut the request
+        # count -- RD_GATE measures 7.32 us for 16 requests x 14 blocks, so issue cost is
+        # real -- while consecutive groups still rotate banks. It was tried and FAILED PCC:
+        # a contiguous read of k_rows*per_core_n tiles from one shard does not land in the
+        # k-major order the CB expects, so the shard's internal tile order is not
+        # shard-local row-major as assumed. Needs the actual ND-shard tile layout confirmed
+        # before retrying; the full-K-block height is separately a dead end (pins the core
+        # to one bank, ~245 vs ~370 GB/s).
         return ttnn.NdShardSpec(
             shard_shape=ttnn.Shape([ttnn.TILE_SIZE, per_core_n * ttnn.TILE_SIZE]),
             grid=ttnn.CoreRangeSet(
