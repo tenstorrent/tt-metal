@@ -25,6 +25,7 @@ from .operations import (
     chunked_prefill_sdpa_sliding,
     concat_heads,
     effective_block_size,
+    interleave_qkv_if_sharded,
     prefill_sdpa_program_config,
     prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
@@ -318,7 +319,9 @@ def _prefill_forward_single(
 
     # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
     # #48861). o_proj / allreduce stay DRAM (CB clash with CCL).
+    # Fused QKV may land L1 block-sharded (sweep winner); head-split needs interleaved.
     act_mc = prefill_short_lived_memcfg()
+    xqkv = interleave_qkv_if_sharded(xqkv, memory_config=act_mc)
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
         xqkv,
         config,
@@ -826,10 +829,12 @@ def prefill_forward(
     xqkv = apply_qkv_projection(hidden_states, weights)
     ttnn.deallocate(hidden_states)
 
+    # Block-sharded QKV (tuned prefill path) must be interleaved before reshape/split.
+    act_mc = prefill_short_lived_memcfg()
+    xqkv = interleave_qkv_if_sharded(xqkv, memory_config=act_mc)
     xqkv = ttnn.reshape(xqkv, [batch_size, 1, seq_len // batch_size, -1])
     seq_len_per_user = seq_len // batch_size
 
-    act_mc = prefill_short_lived_memcfg()
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
         xqkv,
         config,

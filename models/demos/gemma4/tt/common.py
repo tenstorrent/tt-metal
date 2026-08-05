@@ -86,7 +86,9 @@ def create_tt_model(
     mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
     model_args.cluster_shape = mesh_shape
     tensor_cache_path = str(model_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
-    precision = Gemma4Precision.load(model_path, mesh_shape)
+    # ``model_args`` is already the resolved HF config, so hand it over rather
+    # than making the lookup re-read config.json to identify the variant.
+    precision = Gemma4Precision.load(model_path, mesh_shape, hf_config=model_args)
 
     model = Gemma4Model(
         mesh_device=mesh_device,

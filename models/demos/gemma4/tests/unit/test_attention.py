@@ -26,6 +26,7 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from ...tests.test_factory import (
     PREFILL_BUCKETS,
     TestFactory,
+    _get_model_path,
     build_hf_prefill_mask,
     compare_tensors,
     find_layer_idx,
@@ -42,6 +43,36 @@ def _skip_if_l1_overflow(config, mesh_device):
         hf_config = TestFactory.create_hf_config()
         if hf_config.hidden_size > 4096:
             pytest.skip("Global attention head_dim=512 overflows L1 on single device for large models")
+
+
+def _attn_weight_dtype(mesh_device):
+    """Weight dtype for the TT attention module under test — same source as the demo.
+
+    These tests construct ``Gemma4Attention`` directly, so they never pass through
+    ``tt/common.py:create_tt_model``, the only place ``Gemma4Precision.load`` reads
+    ``precision_overrides.json``. Left to the constructor default they would PCC
+    bf16 weights while the demo runs bfp8, so a precision regression in the shipped
+    config could not fail this test. Resolve the same table instead.
+
+    Per-variant, not a blanket bfp8: ``attention: bfp8`` is declared for 31B/12B
+    only, so E2B/E4B/26B-A4B keep bf16 here exactly as they do in the demo.
+
+    ``GEMMA4_ATTN_WEIGHT_DTYPE=bf16|bfp8`` forces a dtype for sweeps. It is an env
+    var rather than a parametrize axis on purpose: an extra axis would rename every
+    node and silently strand the existing ``test_attention_*`` entries in
+    pcc_thresholds.json back on the 0.99 default.
+    """
+    from models.demos.gemma4.tt.precision import _DTYPE_BY_NAME, Gemma4Precision
+
+    forced = os.getenv("GEMMA4_ATTN_WEIGHT_DTYPE")
+    if forced is not None:
+        if forced not in _DTYPE_BY_NAME:
+            raise ValueError(f"GEMMA4_ATTN_WEIGHT_DTYPE={forced!r} — expected one of {sorted(_DTYPE_BY_NAME)}")
+        return _DTYPE_BY_NAME[forced]
+
+    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    precision = Gemma4Precision.load(_get_model_path(), mesh_shape, hf_config=TestFactory.create_hf_config())
+    return precision.get("attention", ttnn.bfloat16)
 
 
 def _setup_attention(mesh_device, layer_idx, create_kv_cache=False, max_seq_len=128):
@@ -68,6 +99,7 @@ def _setup_attention(mesh_device, layer_idx, create_kv_cache=False, max_seq_len=
         create_kv_cache=create_kv_cache,
         max_batch_size=1,
         max_seq_len=max_seq_len,
+        weight_dtype=_attn_weight_dtype(mesh_device),
     )
 
     return hf_text_config, hf_attn, config, tt_attn, mesh_config
@@ -271,6 +303,7 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
+        weight_dtype=_attn_weight_dtype(mesh_device),
     )
     tt_attn.kv_cache = kv_cache
 
@@ -444,6 +477,7 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
+        weight_dtype=_attn_weight_dtype(mesh_device),
     )
     tt_attn.kv_cache = kv_cache
 
@@ -611,6 +645,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
+        weight_dtype=_attn_weight_dtype(mesh_device),
     )
     tt_attn.kv_cache = kv_cache
 
@@ -760,6 +795,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
+        weight_dtype=_attn_weight_dtype(mesh_device),
     )
     tt_attn.kv_cache = kv_cache
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(1, -1)

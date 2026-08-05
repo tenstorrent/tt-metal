@@ -238,6 +238,90 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
     )
 
 
+def l1_block_sharded_memcfg(rows, cols, grid=None):
+    """L1 BLOCK_SHARDED memory config for a 2D activation/output ``(rows, cols)``.
+
+    Matches ``sweeps/sweep_common.act_memcfg(..., "l1_block_sharded")``: split
+    row-tiles over y and col-tiles over x, taking the largest divisors that fit
+    the worker grid. Used for the fused-QKV prefill matmul output — the measured
+    winner in ``test_qkv_matmul_sweep`` (M=128 K=5376 N=2048 → CoreGrid 8x4).
+    """
+    if grid is None:
+        grid = prefill_grid_default()  # (x, y) = (cols, rows) of worker grid
+    grid_x, grid_y = grid
+    row_tiles = math.ceil(rows / TILE_SIZE)
+    col_tiles = math.ceil(cols / TILE_SIZE)
+    ys = [y for y in range(1, grid_y + 1) if row_tiles % y == 0]
+    xs = [x for x in range(1, grid_x + 1) if col_tiles % x == 0]
+    if not ys or not xs:
+        # Shape cannot block-shard evenly — fall back to interleaved L1.
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.create_sharded_memory_config(
+        shape=(rows, cols),
+        core_grid=ttnn.CoreGrid(x=max(xs), y=max(ys)),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def interleaved_prefill_config(m, k, n):
+    """``(program_config, out_memory_config, compute_kernel_config)`` for a prefill
+    matmul on a DRAM-*interleaved* weight, or all-``None`` to keep ttnn's auto
+    selection (byte-identical to passing nothing).
+
+    Off Blackhole ``can_dram_shard`` is always False, so the projections never
+    reach ``DramShardedLinear`` and ttnn auto-selects with no program config at
+    all. For the fused QKV shape (M=128 K=5376 N=2048 at TP=8) it picks
+    ``per_core_N=1``, which forces ``out_subblock_w=1`` and starves the FPU —
+    39.9% DRAM and 10.9% FPU in the 1x8 profile, saturating neither.
+    ``prefill_progcfg`` returns 8x8 / ``in0_block_w=4`` / ``out_subblock 1x4``
+    for that shape, measured ~1.35x faster at identical PCC by
+    ``models/demos/gemma4/sweeps/test_qkv_matmul_sweep.py``.
+
+    Bounded by ``_PREFILL_CUTOFF`` for the same reason ``DramShardedLinear``
+    chunks there: the 2D kernel's CBs scale with ``per_core_M``, so pinning this
+    config at long context would blow L1. Above the cutoff (and for decode,
+    M<=32) we return ``(None, None)`` and the caller behaves exactly as before.
+
+    Output is L1 *block-sharded* (sweep overall winner for QKV: ~1.40x vs auto),
+    not interleaved L1. Callers that need interleaved/DRAM for
+    ``nlp_create_qkv_heads`` / reshape must ``sharded_to_interleaved`` after the
+    matmul. Deliberately *not* included: a width-sharded weight measured slightly
+    faster again, but the same weight tensor also serves decode, and decode's
+    auto-selected matmul rejects a width-sharded in1 with a circular-buffer
+    TT_THROW. That variant needs a second weight copy, so it is not free and is
+    left out.
+
+    Math fidelity is pinned to HiFi2 — *not* cosmetic. Supplying a program config
+    changes what ttnn's default compute-kernel-config selection picks: a profile
+    of this path with the config but no explicit fidelity came back as LoFi where
+    the auto-selected baseline was HiFi2. That silently trades accuracy for part
+    of the speedup and still clears a 0.99 PCC gate, so it does not show up as a
+    test failure. Pin it, and the config change is a pure scheduling change.
+    """
+    if not TILE_SIZE < m <= _PREFILL_CUTOFF:
+        return None, None, None
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    return prefill_progcfg(m, k, n), l1_block_sharded_memcfg(m, n), compute_kernel_config
+
+
+def matmul_rows(x):
+    """Row count a matmul sees for ``x``: the product of all but the last dim.
+
+    Batched prefill hands in ``[B, 1, S, K]``, so ``shape[-2]`` alone would
+    undercount by a factor of B (same reasoning as ``DramShardedLinear.__call__``).
+    """
+    rows = 1
+    for i in range(len(x.shape) - 1):
+        rows *= int(x.shape[i])
+    return rows
+
+
 class DramShardedLinear:
     """A single DRAM-width-sharded weight served for both decode and prefill.
 
