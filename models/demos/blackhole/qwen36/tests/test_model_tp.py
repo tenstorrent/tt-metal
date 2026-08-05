@@ -27,7 +27,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.blackhole.qwen36.tests.test_factory import get_pcc_threshold, parametrize_mesh_tp
+from models.demos.blackhole.qwen36.tests.test_factory import get_pcc_threshold, parametrize_batch, parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
 
@@ -231,9 +231,7 @@ def test_prefill_warmup_no_recompile(mesh_device, reset_seeds, ensure_gc):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-# B32 dropped (#50969 CI budget): width 32 reaches no branch B8 misses, and the oracle runs B
-# independent B=1 chains. Width 32 stays covered by test_model_tp_prefill_chunked_batched.
-@pytest.mark.parametrize("B", [8], ids=["B8"])
+@parametrize_batch(batches=(8, 32))
 def test_model_tp_decode_batched(mesh_device, B, reset_seeds, ensure_gc):
     """Batched per-user decode contract (TP): higher-batch serving acceptance test.
 
@@ -316,7 +314,7 @@ def test_model_tp_decode_batched(mesh_device, B, reset_seeds, ensure_gc):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@pytest.mark.parametrize("B", [8], ids=["B8"])
+@parametrize_batch(batches=(8,))
 def test_model_tp_prefill_paged_slots(mesh_device, B, reset_seeds, ensure_gc):
     """vLLM continuous-batching prefill contract (TP): per-slot prefill acceptance test.
 
@@ -564,8 +562,7 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-# B32 dropped (#50969 CI budget): same reason as test_model_tp_decode_batched.
-@pytest.mark.parametrize("B", [8], ids=["B8"])
+@parametrize_batch(batches=(8, 32))
 def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, request):
     """Traced batched short-prompt prefill (TP): traced-bucket-prefill acceptance test.
 
@@ -705,10 +702,8 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-# Two cases, not the 2x3 cross product (#50969 CI budget): "mixed" already cycles
-# {128,1024,2048,4096}, so it covers the short-via-masked-bucket + 1-chunk + 2-chunk branches in one
-# batch; isl4096-B32 keeps the uniform-long, max-width capacity case that "mixed" does not reach.
-@pytest.mark.parametrize("seqlen, B", [("mixed", 8), (4096, 32)], ids=["mixed-B8", "isl4096-B32"])
+@parametrize_batch(batches=(8, 32))
+@pytest.mark.parametrize("seqlen", [2048, 4096, "mixed"], ids=["isl2048", "isl4096", "mixed"])
 def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, ensure_gc, request):
     """Batched per-user long prefill (TP): chunked-batched-prefill acceptance test.
 
@@ -721,6 +716,11 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     over {128, 1024, 2048, 4096}, exercising short-via-masked-bucket + long-via-chunked in one
     batch with diverging decode positions). Per-user prefill logits, post-prefill GDN recurrent
     state, and a few decode steps must all match the B=1 reference.
+
+    Decode inputs are teacher-forced from the oracle's own argmax chain (as in
+    test_model_tp_decode_batched) -- see the comment at the batched decode loop for why letting each
+    stack pick its own next token makes the later per-step PCCs measure token divergence rather than
+    the model.
     """
     import gc
 
@@ -760,6 +760,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     oracle_pf = []
     oracle_rec = []  # per user: list over GDN layers of device-0 rec_state shard [Nv,Dk,Dv]
     oracle_dec = [[] for _ in range(B)]
+    oracle_fed = []  # per user: [argmax(prefill), argmax(dec0), ...] — teacher-forcing source
     for u in range(B):
         toks = torch.tensor([prompts[u]], dtype=torch.long)
         lg = omodel.prefill_traced_chunked(toks, opt, actual_len=prompt_lens[u])
@@ -774,6 +775,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
         )
         pos = prompt_lens[u]
         fed = int(torch.argmax(oracle_pf[u]))
+        oracle_fed.append([fed])  # tokens the batched path is teacher-forced with (see below)
         for s in range(N_DEC):
             dev = omodel.prepare_inputs_decode(
                 torch.tensor([[fed]], dtype=torch.int32), torch.tensor([pos], dtype=torch.int32), opt
@@ -782,6 +784,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
             ls = omodel.process_output_decode(out, 1)
             oracle_dec[u].append(ls[0, 0, :vocab].float())
             fed = int(torch.argmax(ls[0, 0, :vocab]))
+            oracle_fed[u].append(fed)
             pos += 1
     n_gdn = len(oracle_rec[0])
     omodel.free_kv_caches()
@@ -802,17 +805,33 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     ]
     batched_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
-    fed = [int(torch.argmax(batched_pf[u])) for u in range(B)]
+    # TEACHER-FORCED from the oracle chain, matching test_model_tp_decode_batched. Letting each
+    # stack feed its own argmax makes the per-step PCC meaningless: the prompts are random tokens
+    # (torch.randint over the whole vocab), so the logit distribution is near-flat and the argmax is
+    # a coin flip. One flipped token at decode s makes step s+1 a comparison of two DIFFERENT
+    # continuations -- measured PCC ~0.52-0.65 at decode1 while decode0 was >=0.97, which reads as a
+    # catastrophic model bug and is purely the harness diverging in token space. Feeding the oracle's
+    # tokens keeps "batch scratch-swap + state assembly + batched-decode routing" the only delta,
+    # which is what this test claims to isolate.
+    tok_divergence = []  # (user, step, oracle_tok, batched_tok) — reported, not fatal
     for s in range(N_DEC):
-        tokens_step = torch.tensor([[fed[u]] for u in range(B)], dtype=torch.int32)
+        tokens_step = torch.tensor([[oracle_fed[u][s]] for u in range(B)], dtype=torch.int32)
         pos_t = torch.tensor(pos, dtype=torch.int32)
         dev = bmodel.prepare_inputs_decode(tokens_step, pos_t, bpt)
         out, _ = bmodel.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         ls = bmodel.process_output_decode(out, B)
         for u in range(B):
             batched_dec[u].append(ls[u, 0, :vocab].float())
-            fed[u] = int(torch.argmax(ls[u, 0, :vocab]))
+            own = int(torch.argmax(ls[u, 0, :vocab]))
+            if own != oracle_fed[u][s + 1]:
+                tok_divergence.append((u, s, oracle_fed[u][s + 1], own))
         pos = [p + 1 for p in pos]
+    if tok_divergence:
+        logger.info(
+            f"argmax divergence vs B=1 oracle at {len(tok_divergence)}/{B * N_DEC} (user, step) pairs "
+            f"(expected on random-token prompts; teacher forcing keeps it from compounding): "
+            f"{tok_divergence[:8]}{' ...' if len(tok_divergence) > 8 else ''}"
+        )
     bmodel.free_kv_caches()
     del bmodel
     gc.collect()
