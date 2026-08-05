@@ -143,6 +143,8 @@ class LagunaForCausalLM:
         self._spec_probed = False
         self._spec_buf: list = []  # pending committed token ids, returned one per vLLM step
         self._spec_hist: list = []  # running token history for the single served request (ngram source)
+        self._spec = None  # lazily-built SpeculativeDecoder (served mode); needs kv_cache/page_table per call
+        self._spec_tok = None  # persistent [1,1,1,1] device token buffer the plugin reads back
         # Diagnostic sink: MPI-worker stdout isn't captured in the readiness log, so spec/probe verdicts go
         # to a file readable regardless of process. Only touched when spec mode is set (no normal-run noise).
         self._spec_log_path = (
@@ -891,6 +893,71 @@ class LagunaForCausalLM:
         except Exception as e:  # noqa: BLE001 - diagnostic probe, report any failure verbatim
             self._spec_log(f"PROBE FAILED under resident decode trace: {type(e).__name__}: {e}")
 
+    def _spec_is_greedy(self, sampling_params):
+        try:
+            t = sampling_params.temperature
+            return float(t[0] if hasattr(t, "__len__") else t) <= 0.0
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _spec_history(self, prompt_tokens, output_tokens, tokens):
+        """Full current token sequence for the single served request (ngram source + position anchor)."""
+
+        def _row0(x):
+            if x is None:
+                return []
+            r = x[0] if hasattr(x, "__getitem__") else x
+            return [int(v) for v in (r.tolist() if hasattr(r, "tolist") else r)]
+
+        hist = _row0(prompt_tokens) + _row0(output_tokens)
+        return hist or [int(torch.as_tensor(tokens).reshape(-1)[0])]
+
+    def _spec_serve(
+        self, tokens, pos, page_table, kv_cache, page_tables_per_layer, reset_batch, kwargs, read_from_device
+    ):
+        """One served decode step via TRACED spec-decode. Runs one spec round when the commit buffer is
+        empty, then returns the buffered committed tokens one per vLLM step (plugin reads self._spec_tok).
+        Bounded-K keeps the round's look-ahead KV writes inside the current allocated block. Needs warmup to
+        have captured the verify traces + omitted the normal decode trace (TT_LAGUNA_SPEC_DECODE=1)."""
+        if self._spec is None:
+            from models.autoports.poolside_laguna_xs_2_1.tt.spec_decode import SpeculativeDecoder
+
+            k_max = int(os.environ.get("TT_LAGUNA_SPEC_K", "4"))
+            self._spec = SpeculativeDecoder(
+                self,
+                kv_cache=kv_cache,
+                page_table=page_table,
+                page_tables_per_layer=page_tables_per_layer,
+                stop_tokens=None,
+                draft_len=k_max,
+                ngram_max_n=int(os.environ.get("TT_LAGUNA_SPEC_NGRAM_MAX", "10")),
+                verify_mode="decode",
+                traced=True,
+                adaptive=True,
+                k_min=1,
+                k_max=k_max,
+                guard=True,
+            )
+            self._spec_tok = self.gen._rep(torch.zeros([1, 1, 1, 1], dtype=torch.int32), ttnn.uint32)
+        # per-call context refresh (the request's block table grows as it advances)
+        self._spec.kv_cache = kv_cache
+        self._spec.page_table = page_table
+        self._spec.page_tables_per_layer = page_tables_per_layer
+        if reset_batch:  # new request / batch-layout change → reset guard/adaptive + drop stale buffer
+            self._spec.serve_reset()
+            self._spec_buf = []
+        if not self._spec_buf:
+            history = self._spec_history(kwargs.get("prompt_tokens"), kwargs.get("output_tokens"), tokens)
+            k_cap = 63 - (len(history) % 64)  # bounded-K: never draft past the current block_size=64 block
+            self._spec_buf = list(self._spec.serve_round(history, k_cap=k_cap))
+        tok_id = int(self._spec_buf.pop(0))
+        ttnn.copy_host_to_device_tensor(
+            self._host_rank4_tok_batch(torch.tensor([[tok_id]], dtype=torch.int64), 1), self._spec_tok
+        )
+        if read_from_device:
+            return self._read_tokens_host(self._spec_tok, 1)
+        return [self._spec_tok]
+
     def verify_forward_decode(
         self,
         tokens,
@@ -1045,6 +1112,14 @@ class LagunaForCausalLM:
         ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(tokens.reshape(K1, 1), K1), st["tok"])
         ttnn.copy_host_to_device_tensor(self._host_pos_batch(pos), st["cur"])
         ttnn.copy_host_to_device_tensor(self._host_ridx_batch(pos), st["ridx"])
+        # Refresh the page table into the persistent trace buffer that the replay reads. Without this,
+        # st["pt"] stays frozen at the warmup identity table (arange) and the verify indexes the WRONG
+        # physical KV blocks on any real (non-identity) served page table -> silently wrong greedy ids.
+        # (Uniform serving path; hybrid grouped-PT verify is a separate follow-up — serving is uniform today.)
+        if page_tables_per_layer is None and st.get("pt") is not None:
+            if st.get("last_pt_host") is None or not torch.equal(pt_host, st["last_pt_host"]):
+                ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt"])
+                st["last_pt_host"] = pt_host.clone()
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=True)
         return self._read_tokens_host(st["tok"], K1)  # per-row greedy ids sampled ON DEVICE
 
@@ -1227,6 +1302,13 @@ class LagunaForCausalLM:
                 # Run ONE eager verify under the resident decode trace on row 0; fall through to normal
                 # decode (throwaway KV at pos+1 — probe boot only).
                 self._spec_feasibility_probe(tokens, pos, page_table, kv_cache, page_tables_per_layer)
+
+        # FULL served spec-decode: in this mode the normal decode trace was OMITTED at warmup, so ALL decode
+        # goes through the traced verify path. Requires --max-num-seqs 1 (B==1, no padding) + greedy.
+        if self._spec_mode == "1" and B == 1 and sampling_params is not None and self._spec_is_greedy(sampling_params):
+            return self._spec_serve(
+                tokens, pos, page_table, kv_cache, page_tables_per_layer, reset_batch, kwargs, read_from_device
+            )
 
         if sampling_params is None:
             return self._decode_host_sampling(tokens, pos, page_table, kv_cache, read_from_device)
@@ -1462,6 +1544,20 @@ class LagunaForCausalLM:
         if not enable_trace or kv_cache is None or max_batch_size is None:
             return None
         B = int(max_batch_size)
+        # SPEC-DECODE served mode (TT_LAGUNA_SPEC_DECODE=1): capture the VERIFY traces (K1=1..k_max+1) and
+        # OMIT the normal decode trace. Two resident CCL-bearing traces (normal decode + verify) deadlock
+        # the mesh; routing ALL batch-1 greedy decode through the verify traces (K1=1 = a native single-token
+        # step, K1=K+1 = a spec step) keeps only one trace family resident. Serve with --max-num-seqs 1 so
+        # B==1 (no padding). Mirrors the standalone driver's capture_decode_trace=False.
+        if self._spec_mode == "1":
+            k_max = int(os.environ.get("TT_LAGUNA_SPEC_K", "4"))
+            self.warmup_verify_decode_multi(list(range(0, k_max + 1)), kv_cache, int(num_blocks) if num_blocks else 1)
+            print(
+                f"[laguna spec] warmup: captured verify traces K1=1..{k_max + 1}; normal decode trace OMITTED "
+                f"(deadlock-safe, batch-1 greedy spec-decode)",
+                flush=True,
+            )
+            return None
         if B in self._decode:
             return None
         nb = int(num_blocks) if num_blocks else 1

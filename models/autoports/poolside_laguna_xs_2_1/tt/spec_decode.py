@@ -396,6 +396,66 @@ class SpeculativeDecoder:
         self.last_accepts = accepts
         return out[:max_new_tokens], accepts
 
+    # ------------------------------------------------------------------ #
+    # Served per-step API (in-adapter spec-decode): one round per call, with guard/adaptive state that
+    # PERSISTS across calls (unlike generate()'s loop-local state). decode_forward buffers the committed
+    # tokens and returns them one per vLLM step. Greedy only.
+    # ------------------------------------------------------------------ #
+    def serve_reset(self):
+        """Reset per-request serving state — call on a new request / reset_batch."""
+        self._sv_k_cur = float(self.k_init if self.adaptive else self.draft_len)
+        self._sv_spec_on = True
+        self._sv_recent = []
+        self._sv_off_since = 0
+
+    def serve_round(self, history, k_cap=None):
+        """Run ONE served spec round over ``history`` (the full current token sequence) and return the
+        committed token ids ``[t0..tm]`` (always >=1). Traced greedy verify via _verify_window (reads
+        self.kv_cache / self.page_table / self.page_tables_per_layer — decode_forward refreshes these per
+        call). ``k_cap`` bounds K so the verify's look-ahead KV writes stay inside the currently-allocated
+        block (bounded-K = block_size-1 - pos%block_size); pass it every step in served paged mode."""
+        if not hasattr(self, "_sv_k_cur"):
+            self.serve_reset()
+        probing = False
+        if self.guard and not self._sv_spec_on:
+            if self._sv_off_since >= self.guard_probe:
+                probing, self._sv_off_since = True, 0
+            else:
+                self._sv_off_since += 1
+        run_spec = (not self.guard) or self._sv_spec_on or probing
+        if run_spec:
+            K = max(self.k_min, min(self.k_max, int(round(self._sv_k_cur)))) if self.adaptive else self.draft_len
+        else:
+            K = 0
+        if k_cap is not None:  # bounded-K: never draft past the current allocated block
+            K = max(0, min(K, int(k_cap)))
+        drafts = self.proposer.propose(history, K) if K > 0 else []
+        anchor_pos = len(history) - 1
+        verify = self._verify_window(history, anchor_pos, drafts, K)
+        m, committed = self._accept_greedy(drafts, verify)
+        if self.guard:
+            if run_spec:
+                self._sv_recent.append(m)
+                if len(self._sv_recent) > self.guard_window:
+                    self._sv_recent.pop(0)
+            if self._sv_spec_on:
+                if (
+                    len(self._sv_recent) >= self.guard_window
+                    and (sum(self._sv_recent) / len(self._sv_recent)) < self.guard_off
+                ):
+                    self._sv_spec_on, self._sv_recent, self._sv_off_since = False, [], 0
+            elif probing and m >= self.guard_on:
+                self._sv_spec_on, self._sv_recent = True, []
+                if self.adaptive:
+                    self._sv_k_cur = float(self.k_init)
+        if self.adaptive and run_spec:
+            self._sv_k_cur = (
+                min(self.k_max, self._sv_k_cur + 2.0)
+                if (len(drafts) == K and m == K)
+                else max(self.k_min, self._sv_k_cur - 1.0)
+            )
+        return committed
+
 
 def plain_greedy_via_verify(
     generator,
