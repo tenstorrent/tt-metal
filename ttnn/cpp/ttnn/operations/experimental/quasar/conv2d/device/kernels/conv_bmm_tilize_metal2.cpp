@@ -685,19 +685,22 @@ void kernel_main() {
                 // need this (they recompute the full L1 addr from fifo_wr_ptr each pack). Mirrors
                 // compute_pool_2d.cpp's llk_pack_init re-init.
                 PACK((llk_pack_init(curr_matmul_out_cb)));
-                // [#48552] Re-seed the MATH<->PACK DEST semaphore + bank parity for the MATMUL, the exact
-                // MIRROR of the PROVEN pre-tilize re-seed (:564-570) that fixed the tilize inheriting the
-                // matmul's stale phase. Here the roles reverse: the pretilize just ran its own dest-bank
-                // phase and per-tile CLEARDVALID<FPU>, then this matmul runs with NO CLEARDVALID and would
-                // inherit that phase. On Quasar the FPU DEST data-valid bit is a real HW issue interlock (see
-                // :550-558): an MVMUL targeting a bank whose dvalid/phase is stale is REJECTED AT ISSUE ->
-                // MATH MOP timeout ERROR_TRISC1 0x0119 at the first bank ping-pong (subblock 2 nominal, moves
-                // with DPRINT timing). A CLEARDVALID scrub did NOT resolve it (:559); the sem/parity re-seed
-                // DID resolve the symmetric tilize case, so apply the same here. llk_math_pack_sync_init
-                // drains the tilize's outstanding packs (wait_front already guaranteed the data), resets MATH
-                // dest parity to bank0 + re-seeds MATH_PACK; llk_pack_dest_init resets PACK parity to bank0 +
-                // re-selects the packer dest registers -- giving the matmul the identical clean bank0 start
-                // the tilize already gets. Runs once per K-block (matches the tilize re-seed cadence).
+                // [#48552] Re-seed the MATH<->PACK DEST bank-recycle handshake for the MATMUL — the exact
+                // MIRROR of the PROVEN pre-tilize re-seed (:564-570). Root cause (confirmed by removing the
+                // MVMUL entirely: the hang PERSISTS byte-identical, so it is the acquire/commit/pack/
+                // section_done/recycle HANDSHAKE, NOT compute — drop the earlier FPU-dvalid framing): a plain
+                // matmul kernel runs this identical handshake and passes; the ONLY difference here is the
+                // pretilize (datacopy->DEST->pack, 294 tiles) that ran FIRST on the SAME MATH_PACK semaphore
+                // + DEST bank-parity, then the matmul reuses that machinery. The transition (reconfig /
+                // matmul_block_init / the PACK llk_pack_init above) does NOT reset the MATH-side DEST section
+                // pointer / MATH_PACK sem / bank-parity, so the matmul inherits the pretilize's ending phase.
+                // That is self-consistent for the first two subblocks (banks 0,1 fresh) but DEADLOCKS at the
+                // FIRST bank0 REUSE (out_subblock 2) -> ERROR_TRISC1 0x0119. llk_math_pack_sync_init drains the
+                // pretilize's outstanding packs (cb_mm_in0.wait_front already guaranteed the data), resets
+                // MATH dest parity to bank0 and re-seeds MATH_PACK to its SyncHalf init (max 2); llk_pack_dest_
+                // init resets PACK parity to bank0 + re-selects the packer dest registers. Both threads restart
+                // at a clean bank0/init handshake — the same clean start the standalone matmul gets from its
+                // own init and the tilize gets from :564-570.
                 MATH((llk_math_pack_sync_init()));
                 PACK((llk_pack_dest_init()));
 #endif
@@ -790,22 +793,16 @@ void kernel_main() {
                                 UNPACK(DPRINT("After UNPK 2\n"));  // [#48552 DIAG - remove after]
                                 UNPACK(DPRINT("After UNPK 3\n"));  // [#48552 DIAG - remove after]
                             }
-                            // [#48552 DIAG - REVERT AFTER] MVMUL disabled to isolate the DEST-bank-reuse hang.
-                            // Everything else (tile_regs_acquire/commit, pack, section_done, bank recycle) still
-                            // runs; only the FPU MVMUL that WRITES the (recycled) DEST bank is removed. If the
-                            // 0x0119 HANG DISAPPEARS -> the fault is definitively the reuse MVMUL itself (clean
-                            // repro: this conv hangs with the MVMUL, runs with it commented). PCC will be garbage
-                            // (DEST never written). MUST be reverted.
-                            // matmul_block(
-                            //     mm_in0_cb_id,
-                            //     in1_cb_id,
-                            //     in0_index,
-                            //     in1_index,
-                            //     dst_index,
-                            //     false,
-                            //     out_subblock_w,
-                            //     out_subblock_h,
-                            //     in0_block_w);
+                            matmul_block(
+                                mm_in0_cb_id,
+                                in1_cb_id,
+                                in0_index,
+                                in1_index,
+                                dst_index,
+                                false,
+                                out_subblock_w,
+                                out_subblock_h,
+                                in0_block_w);
                             in0_index++;
                             in1_index += in1_block_w;
                         }
