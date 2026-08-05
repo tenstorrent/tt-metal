@@ -33,6 +33,8 @@ from helpers.utils import passed_test
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 ELEMENTS_PER_TILE = 1024
+FACE_DIM = 16  # a tile is a 2x2 grid of 16x16 faces
+ELEMENTS_PER_FACE = FACE_DIM * FACE_DIM
 BF16_NEG_INF_HI16 = 0xFF80  # high 16 bits of bf16 -inf, padding
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt32)
 
@@ -51,17 +53,26 @@ def _tiles_per_sequence(K: int) -> int:
 
 def _decode_row_major(raw: int, K: int) -> int:
     """
-    Translate an add_lsb tile coordinate to its row-major position within a chunk.
+    Translate an add_lsb tile coordinate into the element's offset in the chunk.
     Mirrors ckernel::sfpu::_topk_xl_decode_row_major_index_.
+
+    add_lsb_indices stamps each lane with its own (row, column) in the 32x32 tile,
+    plus, for K=2048, which of the sequence's two tiles it sits in:
+
+        bits [4:0] row, bit [5] tile in sequence, bits [10:6] column
+
+    The chunk is laid out as tiles, and a tile is four 16x16 faces in raster order,
+    each face row-major. So the offset is: pick the tile, pick the face the (row,
+    column) falls in, then index row-major inside that face.
     """
     raw &= 0xFFFF
-    d = (raw >> 6) & 0xF
-    d |= (raw & 0xF) << 4
-    d |= ((raw >> 10) & 0x1) << 8
-    d |= ((raw >> 4) & 0x1) << 9
-    if K == 2048:
-        d |= ((raw >> 5) & 0x1) << 10
-    return d
+    row = raw & 0x1F
+    tile = ((raw >> 5) & 0x1) if K == 2048 else 0
+    column = (raw >> 6) & 0x1F
+
+    face = (row // FACE_DIM) * 2 + (column // FACE_DIM)
+    offset_in_face = (row % FACE_DIM) * FACE_DIM + (column % FACE_DIM)
+    return tile * ELEMENTS_PER_TILE + face * ELEMENTS_PER_FACE + offset_in_face
 
 
 def _bitcast_float32(words: torch.Tensor) -> torch.Tensor:
@@ -226,6 +237,22 @@ def _run(K, **kwargs):
     return config.run().result, rows
 
 
+def _run_test_topk(K, compare_index_set=True, index_offset=0, **kwargs):
+    """
+    The whole flow for the variants that report a flat index: build the stimulus,
+    run it, and check the result against the golden. `kwargs` go to `_variant`.
+    """
+    result, rows = _run(K, **kwargs)
+    _check(
+        result,
+        K,
+        rows,
+        compare_index_set,
+        index_offset=index_offset,
+        value_format=kwargs.get("formats", FORMATS).input_format,
+    )
+
+
 def _extract_hw_topk(result, K, num_rows, num_regions=2):
     """
     Per row, pair value[j] with index[j] and drop bf16 -inf padding lanes.
@@ -385,13 +412,12 @@ def _check_coordinates(
     partial_tail=lambda num_chunks: [False] if num_chunks == 1 else [False, True],
 )
 def test_topk_xl(K, num_chunks, partial_tail):
-    result, rows = _run(
+    _run_test_topk(
         K,
         num_chunks=num_chunks,
         tail_elements=(K // 2) if partial_tail else K,
         num_rows=2,
     )
-    _check(result, K, rows, compare_index_set=True)
 
 
 # "signed": distinct values spanning negatives and positives, so the top-K are the
@@ -401,8 +427,7 @@ def test_topk_xl(K, num_chunks, partial_tail):
 # ambiguous. Validate K distinct indices + the top-K value multiset only.
 @parametrize(K=[512, 1024, 2048], mode=["signed", "random"])
 def test_topk_xl_input_modes(K, mode):
-    result, rows = _run(K, num_chunks=2, mode=mode)
-    _check(result, K, rows, compare_index_set=(mode == "signed"))
+    _run_test_topk(K, num_chunks=2, mode=mode, compare_index_set=(mode == "signed"))
 
 
 @parametrize(K=[512, 1024, 2048])
@@ -484,14 +509,14 @@ def test_topk_xl_chunk_base(K, chunk_base_mode):
     """Assert that the reported index is chunk_base + position."""
     chunk_base = 0x1F800
 
-    result, rows = _run(
+    _run_test_topk(
         K,
         num_chunks=2,
         num_rows=2,
         chunk_base_mode=chunk_base_mode,
         chunk_base=chunk_base,
+        index_offset=chunk_base,
     )
-    _check(result, K, rows, compare_index_set=True, index_offset=chunk_base)
 
 
 def _positional_rank(values, descending):
@@ -625,15 +650,12 @@ def test_topk_xl_input_float32(K, partial_tail):
       - K=1024: the copy clears SrcA with -inf instead of doing ZEROACC
       - K=2048: the tail's second tile is empty, so both threads return early
     """
-    formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt32)
-
-    result, rows = _run(
+    _run_test_topk(
         K,
         num_chunks=2,
         tail_elements=(K // 2) if partial_tail else K,
-        formats=formats,
+        formats=InputOutputFormat(DataFormat.Float32, DataFormat.UInt32),
     )
-    _check(result, K, rows, compare_index_set=True, value_format=formats.input_format)
 
 
 # DestSync.Half halves the Dest budget (4 fp32 tiles), which the unfused merge tree
@@ -643,5 +665,4 @@ def test_topk_xl_input_float32(K, partial_tail):
 def test_topk_xl_dest_sync_half(K):
     (K,) = K
 
-    result, rows = _run(K, num_chunks=2, num_rows=2, dest_sync=DestSync.Half)
-    _check(result, K, rows, compare_index_set=True)
+    _run_test_topk(K, num_chunks=2, num_rows=2, dest_sync=DestSync.Half)
