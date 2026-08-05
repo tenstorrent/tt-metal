@@ -22,8 +22,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileOutputInL1) {
-    auto mesh_device = devices_[0];
+TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
     CoreCoord core = {0, 0};
 
     uint32_t single_tile_size = 2 * 1024;
@@ -34,15 +33,14 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileOutputInL1) {
     distributed::DeviceLocalBufferConfig l1_config{.page_size = dram_buffer_size, .buffer_type = BufferType::L1};
     distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
 
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
-    auto dst_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
+    auto dst_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
 
-    auto l1_dst_noc_xy = mesh_device->virtual_core_from_logical_core(
-        mesh_device->allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
+    auto l1_dst_noc_xy = this->device().virtual_core_from_logical_core(
+        this->device().allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
 
     distributed::MeshWorkload workload;
-    auto device_range = distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));
     Program program = CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -92,12 +90,12 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileOutputInL1) {
     auto activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(tensor.get_values()));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-    this->WriteBuffer(mesh_device, src0_dram_buffer, activations);
+    this->WriteBuffer(src0_dram_buffer, activations);
 
     auto identity = create_identity_matrix(32, 32, 32);
     auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    this->WriteBuffer(mesh_device, src1_dram_buffer, weights);
+    this->WriteBuffer(src1_dram_buffer, weights);
 
     SetRuntimeArgs(
         program,
@@ -119,11 +117,11 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileOutputInL1) {
         core,
         {dst_l1_buffer->address(), (std::uint32_t)l1_dst_noc_xy.x, (std::uint32_t)l1_dst_noc_xy.y, num_tiles});
 
-    workload.add_program(device_range, std::move(program));
-    this->RunProgram(mesh_device, workload);
+    workload.add_program(device_range_, std::move(program));
+    this->RunProgram(workload);
 
     std::vector<uint32_t> result_vec;
-    this->ReadBuffer(mesh_device, dst_l1_buffer, result_vec);
+    this->ReadBuffer(dst_l1_buffer, result_vec);
 
     // Validation
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
