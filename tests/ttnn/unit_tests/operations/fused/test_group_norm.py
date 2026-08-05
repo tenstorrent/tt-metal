@@ -40,6 +40,14 @@ GN_SHARDED_SHAPES = [
     (1, 1280, 16, 16, 32, 4, 8),  # block-sharded 8x4
 ]
 
+# Subset of GN_SHARDED_SHAPES for the negative-mask coverage test: one height-sharded and two
+# block-sharded grids. The negative-mask path only accepts ROW_MAJOR sharded input and output.
+GN_SHARDED_NEGATIVE_MASK_SHAPES = [
+    (1, 320, 32, 32, 16, 1, 8),
+    # (1, 1280, 1, 512, 32, 8, 8),
+    # (1, 1280, 16, 16, 32, 4, 8),
+]
+
 BLOCK_SHARDED_V2_8X4_SHAPES = [
     (1, 1280, 16, 16, 32),
     (1, 320, 1, 8192, 32),
@@ -1634,6 +1642,182 @@ def test_group_norm_sharded_all_config(
             pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.09, 0.035
         else:
             pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.08, 0.035
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_SHARDED_NEGATIVE_MASK_SHAPES)
+@pytest.mark.parametrize("mask_dtype", [ttnn.bfloat8_b, ttnn.float32], ids=["mask_bfp8", "mask_fp32"])
+@pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+def test_group_norm_sharded_negative_mask(
+    device, use_welford, in_dtype, mask_dtype, N, C, H, W, num_groups, grid_y, grid_x
+):
+    # Negative mask over the fp32/bf16 input x fp32/bfp8 mask matrix, on both reduction paths. The
+    # negative mask overlaps the tilized-in and out CBs, so gamma/beta are applied in place on cb_in
+    # and the mask dtype takes part in the kernel's fp32 unpacker reconfiguration.
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    torch.manual_seed(0)
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(
+        xt, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y, mask_dtype), device)
+    nmask = ttnn.to_device(ttnn.create_group_norm_input_negative_mask(C, num_groups, grid.y, mask_dtype), device)
+
+    gamma = ttnn.create_group_norm_weight_bias_rm(w, C, grid.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(b, C, grid.y)
+    gt = ttnn.from_torch(
+        gamma, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bt = ttnn.from_torch(
+        beta, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    shard_shape = N * H * W // grid.x, C // grid.y
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    tensor_memory_layout = (
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED if grid.y == 1 else ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+    )
+    mem = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+    xt = ttnn.to_memory_config(xt, mem)
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        negative_mask=nmask,
+        weight=gt,
+        bias=bt,
+        memory_config=mem,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=use_welford,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        inplace=True,
+    )
+    out = (
+        ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))).float().reshape(ref.shape)
+    )
+
+    if in_dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.09, 0.035
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.08, 0.035
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", GN_SHARDED_NEGATIVE_MASK_SHAPES)
+@pytest.mark.parametrize(
+    "mask_dtype",
+    [
+        ttnn.bfloat8_b,
+        # ttnn.float32
+    ],
+)
+@pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+def test_group_norm_sharded_negative_mask2(
+    device, use_welford, in_dtype, mask_dtype, N, C, H, W, num_groups, grid_y, grid_x
+):
+    # Negative mask over the fp32/bf16 input x fp32/bfp8 mask matrix, on both reduction paths. The
+    # negative mask overlaps the tilized-in and out CBs, so gamma/beta are applied in place on cb_in
+    # and the mask dtype takes part in the kernel's fp32 unpacker reconfiguration.
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    torch.manual_seed(0)
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(
+        xt, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y, mask_dtype), device)
+    nmask = ttnn.to_device(ttnn.create_group_norm_input_negative_mask(C, num_groups, grid.y, mask_dtype), device)
+
+    gamma = ttnn.create_group_norm_weight_bias_rm(w, C, grid.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(b, C, grid.y)
+    gt = ttnn.from_torch(
+        gamma, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bt = ttnn.from_torch(
+        beta, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    shard_shape = N * H * W // grid.x, C // grid.y
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    tensor_memory_layout = (
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED if grid.y == 1 else ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+    )
+    mem = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+    xt = ttnn.to_memory_config(xt, mem)
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        negative_mask=nmask,
+        weight=gt,
+        bias=bt,
+        memory_config=mem,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=use_welford,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        inplace=True,
+    )
+    out = (
+        ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))).float().reshape(ref.shape)
+    )
+
+    if in_dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.09, 0.035
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.08, 0.035
     assert_numeric_metrics(
         ref,
         out,
