@@ -727,7 +727,7 @@ bookkeeping and validation that attach to the one target, or to phase A's report
    anchored at the start of the comment), and everything after it is read as author notes, so
    the rest of the report reads exactly as it would without the command:
    ```json
-   { "type": "add_comment", "item_number": 52111, "body": "/codeowners ping\n\n**Test status** — dispatched `pr-gate` run <https://github.com/tenstorrent/tt-metal/actions/runs/30612345678>: `completed` / `success`.\n\nA green conclusion alone confirms nothing about this warning: that run's **own logs** must still be re-grepped for `-Wunused-but-set-variable` in the **build/compile step's** logs (categories 1/4 — for a JIT / device-kernel, runtime or log-spam fix, the **test-execution step's** logs, categories 2/3/5/6)." }
+   { "type": "add_comment", "item_number": 52111, "body": "/codeowners ping\n\n**Test status** — dispatched `pr-gate` run <https://github.com/tenstorrent/tt-metal/actions/runs/30612345678>: `completed` / `success`.\n\nA green conclusion alone confirms nothing about this warning: that run's **own logs** must still be re-grepped for `-Wunused-but-set-variable` in the **build/compile step's** logs (categories 1/4 — for a JIT / device-kernel, runtime or log-spam fix, the **test-execution step's** logs, categories 2/3/5/6). For a category-2 fix that step's logs must **also carry the affected kernel's JIT-compile line** — no such line means no test in the run exercised the kernel, so the result is **inconclusive**, not verified." }
    ```
    - `item_number` is the PR number you just resolved — PRs are issues to this API, so
      `add-comment`'s `target: "*"` reaches them.
@@ -741,7 +741,8 @@ bookkeeping and validation that attach to the one target, or to phase A's report
      terminal state — see the memory bullet below.
    - Always restate **what to grep and where**, naming the step per category exactly as
      *Validating changes via CI* does. The conclusion is never the proof; the pattern's absence
-     from that run's own logs is.
+     from that run's own logs is — and for category 2, only alongside a JIT-compile line proving
+     the run built the kernel at all.
    - This fires **at most twice** per PR, however many runs the validation spans: once when the
      PR first comes out of draft (which may be on a nonterminal state), and once with the
      terminal outcome. The two flags in *CI validations in flight* are what bound it —
@@ -964,7 +965,8 @@ Therefore:
   (`search_pull_requests`, then `pull_request_read` with `method: "get_check_runs"` — see *Scan
   procedure* step 1) and, **once that outcome is terminal**, can then re-grep the dispatched
   run's own logs — the build/compile step for categories 1/4, the test-execution step for
-  categories 2/3/5/6 — to confirm the pattern is genuinely absent. It must then **post what it
+  categories 2/3/5/6 — to confirm the pattern is genuinely absent, and for category 2 that the
+  kernel's JIT-compile line is present at all (per the caveat above). It must then **post what it
   found back onto the PR** with the `add-comment` safe-output; an outcome resolved but never
   reported is worth nothing (*Scan procedure* step 1 has the exact call). A run that is still
   `queued` / `in_progress` gets an interim comment and **remains in flight** — there are no
@@ -1128,12 +1130,15 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
   branch in the same turn you open/amend it (see *Validating changes via CI*). Never claim a fix
   is verified without a CI run, and never claim a JIT/device-kernel (category 2) or
   runtime/log-spam (categories 3/5/6) pattern is confirmed gone from a host build log — the
-  `build-artifact` job never compiles device kernels, so its logs cannot prove either. The proof
-  is the pattern's absence from the **test-execution** logs of the dispatched
-  run, which you cannot read until a later run. On that later run, **comment the
-  resolved outcome back onto the PR** with `add-comment` and **mark the PR ready for review**
-  with `mark-pull-request-as-ready-for-review` (*Scan procedure* step 1); an outcome you
-  resolve but never report is no better than one you never checked, and a report nobody can see
+  `build-artifact` job runs no tests, so no runtime output exists there to prove 3/5/6, and it
+  excludes device-kernel sources, so it never invokes the kernel compiler either. The proof is the
+  pattern's absence from the **test-execution** logs of the dispatched run, which you cannot read
+  until a later run — and for category 2 that absence proves nothing on its own: those logs must
+  also **show the affected kernel's JIT-compile line**, or the validation is **inconclusive**
+  rather than verified (see the caveat in *Validating changes via CI*). On that later run,
+  **comment the resolved outcome back onto the PR** with `add-comment` and **mark the PR ready
+  for review** with `mark-pull-request-as-ready-for-review` (*Scan procedure* step 1); an outcome
+  you resolve but never report is no better than one you never checked, and a report nobody can see
   — a comment on a draft PR — is no better than no report.
 - **Coordinate with `deprecations.json` / `deprecation-reaper.yml`** for deprecated-API work;
   migrate call sites, leave shim deletion to the reaper's schedule.
