@@ -42,6 +42,11 @@
 //
 // =============================================================================
 
+// ATT is an optional V2 transport backend, selected with NOC_ATT_ENABLED plus a
+// compile-time configuration supplied by runtime. It changes only address
+// construction and command-buffer register programming; the public API remains
+// V2.
+
 #define NOC_API_V2
 
 #if !defined(NOC_API_V2)

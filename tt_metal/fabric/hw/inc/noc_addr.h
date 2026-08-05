@@ -35,6 +35,9 @@ safe_get_noc_addr(uint8_t dest_noc_x, uint8_t dest_noc_y, uint32_t dest_bank_add
     return get_noc_addr(noc_x, noc_y, dest_bank_addr, noc_id);
 }
 // TODO: COMMONIZE WITH THE ONE IN `ccl_send_writer.cpp`
+// TODO: Quasar does not currently support fabric. Before enabling fabric on Quasar, make this helper ATT-aware:
+// ATT worker addresses encode a logical selector rather than NoC X/Y coordinates, and the local-address width comes
+// from the active map's endpoint shift.
 FORCE_INLINE std::pair<tt::tt_fabric::WorkerXY, uint32_t> get_noc_address_components(uint64_t noc_addr) {
     const size_t bank_addr = noc_addr & 0xFFFFFFFF;
     const size_t noc_x = NOC_UNICAST_ADDR_X(noc_addr);

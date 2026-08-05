@@ -214,10 +214,14 @@ FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) 
 #else
     constexpr uint32_t dispatch_message_stride = NOC_STREAM_REG_SPACE_SIZE;
 #endif
-    uint64_t addr = NOC_XY_ADDR(
-        NOC_X(go_message.master_x),
-        NOC_Y(go_message.master_y),
-        DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_message.dispatch_message_offset);
+    const uint32_t local_addr = DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_message.dispatch_message_offset;
+#if defined(NOC_ATT_ENABLED)
+    // Dispatch cores are not part of the worker-only TensixNEO L1 window. The
+    // active per-tile Config window covers the complete physical Quasar grid.
+    uint64_t addr = active_att::tile_address_physical_xy(go_message.master_x, go_message.master_y, local_addr);
+#else
+    uint64_t addr = NOC_XY_ADDR(NOC_X(go_message.master_x), NOC_Y(go_message.master_y), local_addr);
+#endif
     return addr;
 }
 
