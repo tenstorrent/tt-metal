@@ -1867,6 +1867,30 @@ def _should_skip_device_profiler(config):
     FAIL_UNSUPPORTED_DEVICE_PERF) -- see _populate_result_from_response."""
     if _is_multidevice_ccl_module(config.module_name) and config.mesh_dims != "1d":
         return True
+
+    # The same overflow, reached a second way. mesh_tensor_utils configures the fabric on the
+    # GENERIC device path too (fabric_config_for_mesh), so a non-CCL batch on a 2D mesh also
+    # opens under FABRIC_2D -- and the overflow is a property of FABRIC_2D + profiler at mesh
+    # open, not of the op that happens to run afterwards. Without this gate those jobs wedge at
+    # open (run_mailbox 0x40) instead of reporting results. TTNN_SWEEP_FABRIC=off disables the
+    # fabric configuration and, with it, this gate.
+    try:
+        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import fabric_config_for_mesh
+        import ttnn
+
+        mesh_shape = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+        if mesh_shape and "x" in mesh_shape:
+            rows, cols = (int(x) for x in mesh_shape.split("x", 1))
+            if fabric_config_for_mesh((rows, cols)) == ttnn.FabricConfig.FABRIC_2D:
+                logger.info(
+                    f"Skipping device profiler: mesh {mesh_shape} opens under FABRIC_2D, and "
+                    "FABRIC_2D + profiler overflows the idle-erisc code region at mesh open "
+                    "(idle_erisc.elf 0x5544 > 0x5390). Vectors report device-perf N/A and PASS."
+                )
+                return True
+    except Exception as e:
+        logger.warning(f"Could not evaluate the fabric profiler gate ({e}); leaving the profiler as-is.")
+
     return False
 
 
