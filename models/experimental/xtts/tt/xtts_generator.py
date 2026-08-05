@@ -19,6 +19,8 @@ genuine incremental cache — only the new token is projected/attended each step
 swapping to preallocated ``update_cache`` is a later perf optimization.
 """
 
+import time
+
 import torch
 import ttnn
 
@@ -146,126 +148,142 @@ class TtXttsGenerator:
         """FULLY on-device, end-to-end traceable decode: one captured step — decode_on_device +
         on-device Gumbel-max sampling (``TtSampler.pick_dev`` over PRE-DRAWN host noise, no
         ``ttnn.rand``) + in-place token feedback (``ttnn.copy``) + on-device latent/code accumulation
-        (onehot writes) — replayed ``max_new_tokens`` times with ONLY counter/noise-row writes (NO
-        per-step host readback / no host loop control). Requires ``self.model._static_kv`` already
-        seeded (by the setup trace/prefill). Reads codes+latents ONCE at the end and trims at the
-        first STOP. Returns ``(codes, latents)``.
+        (onehot writes) — replayed up to ``max_new_tokens`` times. Requires ``self.model._static_kv``
+        already seeded (by the setup trace/prefill). Reads codes+latents ONCE at the end and trims
+        at the first STOP. Returns ``(codes, latents, decode_replay_s)`` where ``decode_replay_s``
+        is the replay loop only (warmup + capture excluded).
 
-        This is the clean pre->device->post shape: noise is drawn on host up front (preprocessing),
-        the decode runs entirely on device, and STOP self-termination becomes a post-loop trim. The
-        sampling now matches the host path in distribution (true uniform Gumbel draw); the only
-        residual difference from host self-termination is the fixed step budget + trailing-drone trim.
+        Per-step counters (mel pos, cache pos, slot index) and the Gumbel / STOP-bias rows are
+        advanced **inside** the captured program from a device step counter, so the replay loop
+        does not ``copy_host_to_device_tensor`` between ``execute_trace`` calls — only a cheap
+        ``tok_buf`` read for early STOP exit.
 
-        ``min_new_tokens`` suppresses STOP below that many codes, as the eager :meth:`generate`
-        does — without it a long prompt self-terminates mid-sentence. The eager path can branch per
-        step on the host; a captured trace cannot, so instead the STOP logit gets a persistent
-        ``[1, V]`` additive bias buffer that the replay loop rewrites ONCE, at step
-        ``min_new_tokens``. Same mechanism as the pre-drawn Gumbel rows: the buffer is written
-        between replays, never inside the capture, so the captured program stays static and every
-        op stays on device. The buffer (and the extra add) only exist when the floor is on, so a
-        run with ``min_new_tokens=0`` captures exactly the program it captured before."""
+        ``min_new_tokens`` suppresses STOP below that many codes via a precomputed per-step bias
+        table (same effect as the old between-replay STOP mask rewrite). ``max_new_tokens`` is
+        only an upper bound / buffer size — unused steps are not paid for once STOP is seen."""
         m = self.model
         dev = m.device
         N = int(max_new_tokens)
-        sampler = TtSampler(dev, NUM_AUDIO_TOKENS, temperature, top_k, repetition_penalty, top_p)
+        V = NUM_AUDIO_TOKENS
+        sampler = TtSampler(dev, V, temperature, top_k, repetition_penalty, top_p)
         T32 = ttnn.TILE_LAYOUT
 
         def f32(t):
             return ttnn.from_torch(t, device=dev, dtype=ttnn.float32, layout=T32)
 
         tok_buf = m._pos_ids(START_AUDIO_TOKEN)  # [1,1] uint32 (embedding input; fed back in place)
-        mp_buf = m._pos_ids(0)  # [1,1] uint32 (mel position)
-        cpos_buf = m.cache_pos(prompt_len)  # [1,1,1,max_seq] fp32 (absolute cache position)
-        # Pre-draw ALL Gumbel noise on HOST with a proper RNG (torch), once, before the loop. The
-        # noise is independent of the logits, so drawing it up front is preprocessing (not an in-loop
-        # host fallback); each step's row is streamed into a persistent [1, V] buffer like the
-        # position counters. This is a true uniform draw -> exact multinomial (vs a poor in-trace hash).
-        sampled = bool(temperature and temperature > 0.0)
-        if sampled:
-            u = torch.rand(N, NUM_AUDIO_TOKENS).clamp_(1e-4, 1.0 - 1e-3)
-            gumbel_all = -torch.log(-torch.log(u))  # [N, V] Gumbel(0,1)
-        noise_buf = f32(torch.zeros(1, NUM_AUDIO_TOKENS)) if sampled else None  # [1, V] fp32, refreshed per step
-        # STOP-suppression floor. The mask is built on host once, before capture — a constant, not a
-        # function of anything on device, so it is preprocessing like the Gumbel rows above.
-        floor = min(int(min_new_tokens), N)
-        stop_bias_buf = None
-        if floor > 0:
-            _m = torch.zeros(1, NUM_AUDIO_TOKENS)
-            _m[0, STOP_AUDIO_TOKEN] = -1e30
-            stop_bias_buf = f32(_m)  # [1, V] fp32, zeroed at step `floor` to release the floor
-        arange_row = f32(torch.arange(N, dtype=torch.float32).reshape(1, N, 1))  # latent-slot selector base
-        slot_row = f32(torch.zeros(1, N, 1))
-        arange_col = f32(torch.arange(N, dtype=torch.float32).reshape(1, N))  # code-slot selector base
-        slot_col = f32(torch.zeros(1, N))
+        # Device step counter: advanced in-graph at the end of each captured step so replays need
+        # no host counter writes. Mel-pos / cache-pos / slot one-hots / noise rows all derive from it.
+        step_f = f32(torch.zeros(1, 1))  # [1,1] fp32
+        cpos_buf = m.cache_pos(prompt_len)  # [1,1,1,max_seq] fp32; +=1 each step in-graph
+        arange_col = f32(torch.arange(N, dtype=torch.float32).reshape(1, N))  # [1,N] slot selector
         latents_buf = ttnn.from_torch(torch.zeros(1, N, HIDDEN_SIZE), device=dev, dtype=ttnn.bfloat16, layout=T32)
         codes_buf = f32(torch.zeros(1, N))  # fp32 so code ids > 256 stay exact
 
+        # Pre-draw ALL Gumbel noise on HOST once, then keep the full [N,V] table on device. Each
+        # captured step selects row ``step`` with a matmul against the step one-hot — no per-step
+        # host->device noise stream.
+        noise_buf = None
+        gumbel_dev = None
+        if temperature and temperature > 0.0:
+            u = torch.rand(N, V).clamp_(1e-4, 1.0 - 1e-3)
+            gumbel_all = -torch.log(-torch.log(u))  # [N, V] Gumbel(0,1)
+            gumbel_dev = f32(gumbel_all)  # [N, V]
+            noise_buf = f32(torch.zeros(1, V))  # [1, V] persistent; filled in-graph each step
+
+        # STOP-suppression: precompute per-step bias rows ( -inf at STOP for steps < floor ).
+        # Selecting the row in-graph replaces the old single host rewrite at step ``floor``.
+        floor = min(int(min_new_tokens), N)
+        stop_bias_buf = None
+        bias_dev = None
+        if floor > 0:
+            bias_all = torch.zeros(N, V)
+            bias_all[:floor, STOP_AUDIO_TOKEN] = -1e30
+            bias_dev = f32(bias_all)  # [N, V]
+            stop_bias_buf = f32(torch.zeros(1, V))  # [1, V] persistent; filled in-graph each step
+
+        def _select_row(table_nv, oh_1n, dest_1v):
+            """``oh_1n @ table_nv -> dest_1v`` in place (same buffer address for traced pick_dev)."""
+            ttnn.copy(ttnn.matmul(oh_1n, table_nv), dest_1v)
+
         def step_ops():
-            logits, latent = m.decode_on_device(tok_buf, mp_buf, cpos_buf, m._static_kv)  # kv updated in place
+            # One-hot over the N decode slots from the device step counter (broadcast eq).
+            oh_c = ttnn.typecast(ttnn.eq(arange_col, step_f), ttnn.float32)  # [1, N]
+            oh_r = ttnn.reshape(ttnn.typecast(oh_c, ttnn.bfloat16), [1, N, 1])  # [1, N, 1]
+            if gumbel_dev is not None:
+                _select_row(gumbel_dev, oh_c, noise_buf)
+            if bias_dev is not None:
+                _select_row(bias_dev, oh_c, stop_bias_buf)
+
+            # Mel position = step (uint32 ROW_MAJOR for embedding). Cache pos already holds
+            # prompt_len+step from the in-graph +=1 chain (initialized to prompt_len).
+            mp = ttnn.to_layout(ttnn.typecast(step_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
+            logits, latent = m.decode_on_device(tok_buf, mp, cpos_buf, m._static_kv)  # kv updated in place
             tok = sampler.pick_dev(logits, noise_buf, stop_bias_buf)  # [1,1] uint32, sampled on device
             ttnn.copy(tok, tok_buf)  # on-device token feedback -> next step's embedding
-            oh_r = ttnn.typecast(ttnn.eq(arange_row, slot_row), ttnn.bfloat16)  # [1,N,1] one-hot at step
             ttnn.multiply(latents_buf, ttnn.add(ttnn.multiply(oh_r, -1.0), 1.0), output_tensor=latents_buf)
             ttnn.add(latents_buf, ttnn.multiply(latent, oh_r), output_tensor=latents_buf)
-            oh_c = ttnn.typecast(ttnn.eq(arange_col, slot_col), ttnn.float32)  # [1,N] one-hot at step
             ttnn.multiply(codes_buf, ttnn.add(ttnn.multiply(oh_c, -1.0), 1.0), output_tensor=codes_buf)
             ttnn.add(codes_buf, ttnn.multiply(ttnn.typecast(tok, ttnn.float32), oh_c), output_tensor=codes_buf)
+            # Advance counters for the next replay (captured; no host writes between executes).
+            ttnn.add(step_f, 1.0, output_tensor=step_f)
+            ttnn.add(cpos_buf, 1.0, output_tensor=cpos_buf)
+
+        def _reset_step_state():
+            """Restore step/cache/tok/accumulators after warmup or capture (those runs advance state)."""
+            ttnn.multiply(step_f, 0.0, output_tensor=step_f)
+            ttnn.copy(m.cache_pos(prompt_len), cpos_buf)
+            ttnn.copy(m._pos_ids(START_AUDIO_TOKEN), tok_buf)
+            ttnn.multiply(latents_buf, 0.0, output_tensor=latents_buf)
+            ttnn.multiply(codes_buf, 0.0, output_tensor=codes_buf)
+            sampler.reset()
 
         # Warmup (compile). It executes one step at position prompt_len — harmless: real step 0
-        # rewrites that cache slot; we reset the sampler's seen mask / token / accumulators below.
+        # rewrites that cache slot; we reset below before capture.
         step_ops()
         ttnn.synchronize_device(dev)
-        sampler.reset()
-        ttnn.copy(m._pos_ids(START_AUDIO_TOKEN), tok_buf)
-        ttnn.multiply(latents_buf, 0.0, output_tensor=latents_buf)
-        ttnn.multiply(codes_buf, 0.0, output_tensor=codes_buf)
-        # Capture the one static-shape sample-step, then replay it N times with only counter writes.
+        _reset_step_state()
+        # Capture the one static-shape sample-step (runs step 0, advances counters to 1).
         tid = ttnn.begin_trace_capture(dev, cq_id=0)
         step_ops()
         ttnn.end_trace_capture(dev, tid, cq_id=0)
         ttnn.synchronize_device(dev)
+        # Capture left step=1 / dirty accumulators — reset so the first replay is real step 0.
+        # (Matches prior host-written i=0..N-1 semantics; tok/seen reset included.)
+        _reset_step_state()
 
-        def h32(shape, v):
-            return ttnn.from_torch(torch.full(shape, float(v)), dtype=ttnn.float32, layout=T32)
-
-        def hu32(v):
-            return ttnn.from_torch(
-                torch.tensor([[v]], dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-
+        # Replay-only: execute_trace with on-device counter/noise updates inside the program.
+        # Early-exit: read the just-sampled token from tok_buf; stop on STOP past the floor.
+        t_replay = time.perf_counter()
+        steps_run = 0
         for i in range(N):
-            ttnn.copy_host_to_device_tensor(hu32(i), mp_buf)
-            ttnn.copy_host_to_device_tensor(h32((1, 1, 1, m.max_seq), prompt_len + i), cpos_buf)
-            if sampled:  # stream this step's pre-drawn Gumbel-noise row into the persistent buffer
-                ttnn.copy_host_to_device_tensor(
-                    ttnn.from_torch(gumbel_all[i : i + 1].contiguous(), dtype=ttnn.float32, layout=T32), noise_buf
-                )
-            if stop_bias_buf is not None and i == floor:
-                # Floor reached: release STOP. One write, between replays (never inside the capture).
-                ttnn.copy_host_to_device_tensor(h32((1, NUM_AUDIO_TOKENS), 0.0), stop_bias_buf)
-            ttnn.copy_host_to_device_tensor(h32((1, N, 1), i), slot_row)
-            ttnn.copy_host_to_device_tensor(h32((1, N), i), slot_col)
             ttnn.execute_trace(dev, tid, blocking=True)
+            steps_run = i + 1
+            if i < floor:
+                continue  # STOP still suppressed in the bias table; skip the host check
+            tok_id = int(ttnn.to_torch(tok_buf).reshape(-1)[0].item())
+            if tok_id == STOP_AUDIO_TOKEN:
+                break
+        decode_replay_s = time.perf_counter() - t_replay
         ttnn.release_trace(dev, tid)
 
         # Read once. code c_i is sampled at step i; latent slot i is the fed-token latent (START at
-        # slot 0), so c_j's latent is slot j+1. Trim at the first STOP (single post-loop host op).
-        codes = ttnn.to_torch(codes_buf).float().round().to(torch.long).flatten().tolist()
+        # slot 0), so c_j's latent is slot j+1. Trim at the first STOP (or steps_run if no STOP).
+        codes = ttnn.to_torch(codes_buf).float().round().to(torch.long).flatten().tolist()[:steps_run]
         lat = ttnn.to_torch(latents_buf).float()
-        stop = next((i for i, c in enumerate(codes) if c == STOP_AUDIO_TOKEN), N)
+        stop = next((i for i, c in enumerate(codes) if c == STOP_AUDIO_TOKEN), len(codes))
         seq = codes[:stop]
-        # Fixed-N decode can't self-terminate mid-loop, so after the model is "done" it drones on a
-        # single repeated code (the "accuracyyyy" drag). Trim that trailing same-code run to a short
-        # hold — this is the on-device analogue of stopping at STOP.
+        # If the model hits the max-token cap without STOP it can drone on a repeated code. Trim
+        # that trailing same-code run to a short hold (early STOP exit usually avoids this).
         if seq:
             run = 1
             while run < len(seq) and seq[-1 - run] == seq[-1]:
                 run += 1
             if run > 8:
                 seq = seq[: len(seq) - run + 2]  # keep ~2 for a natural final hold
-        cut = min(max(len(seq), 1), N - 1)
+        cut = min(max(len(seq), 1), max(steps_run - 1, 1))
         codes_out = torch.tensor([codes[:cut]], dtype=torch.long)
         lat_out = ttnn.from_torch(
             lat[:, 1 : cut + 1, :].to(torch.bfloat16), device=dev, dtype=ttnn.bfloat16, layout=T32
         )
-        return codes_out, lat_out
+        return codes_out, lat_out, decode_replay_s

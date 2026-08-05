@@ -104,7 +104,7 @@ def test_tt_full_trace(device, xtts_state_dict, pcc, reset_seeds):
     )
 
     # ---- FULLY TRACED: setup (conditioning+speaker+prefill) -> decode (per token) -> vocoder ----
-    wav_dev, codes = tt.inference_fully_traced(
+    wav_dev, codes, _perf = tt.inference_fully_traced(
         wrapped,
         wav,  # raw reference wav; 80-mel computed on device inside the setup trace
         spk_wav_tt,
@@ -171,7 +171,7 @@ def test_tt_eval_traced(device, xtts_state_dict, reset_seeds):
         spk_wav.reshape(1, -1, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
     )
 
-    wav_dev, codes = tt.inference_fully_traced(
+    wav_dev, codes, _perf = tt.inference_fully_traced(
         wrapped,
         wav,  # raw reference wav; 80-mel computed on device inside the setup trace
         spk_wav_tt,
