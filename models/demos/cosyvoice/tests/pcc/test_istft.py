@@ -141,7 +141,6 @@ def test_host_identity_across_lengths(n_frames):
 needs_l1_small = pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 
 
-@needs_golden
 @needs_l1_small
 @pytest.mark.parametrize("n_frames", [64, 512])
 def test_device_istft_matches_host(device, n_frames):
