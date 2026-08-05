@@ -66,14 +66,23 @@ across chunks (chunk 1 differs because it carries the real prompt; the rest are
 deterministic filler), which is the signal that the ring history read is not
 drifting as the prefix grows.
 
-| context | chunks | wall | first / last chunk std |
-| --- | --- | --- | --- |
-| 32768 | 8 | 37.1 s | 3.92 / 5.07 |
-| 65536 | 16 | 12.7 s | 3.92 / 4.85 |
-| 131072 | 32 | 27.6 s | 3.92 / 4.91 |
+| context | chunks | ring reads | wall | first / last chunk std |
+| --- | --- | --- | --- | --- |
+| 32768 | 8 | 420 / 420 | 68 s | 3.92 / 6.63 |
+| 65536 | 16 | 900 / 900 | 44 s | 3.92 / 6.56 |
+| 131072 | 32 | 1860 / 1860 | 62 s | 3.92 / 6.56 |
+| 262144 | 64 | 3780 / 3780 | 101 s | 3.92 / 6.55 |
 
 Wall-clock differences between runs are dominated by first-chunk kernel compile
-and JIT cache state, not by the prefill itself; steady-state is ~0.5-0.8 s/chunk.
+and JIT cache state, not by the prefill itself.
+
+**The ring-read count is the load-bearing assertion, not the smoke checks.** An
+earlier round of these runs "passed" at every context length while the ring path
+never executed: the fallback (mask path) attends within-chunk and produces
+perfectly finite, non-drifting output while ignoring history, so finite /
+non-degenerate / no-scale-drift all held. The counter caught it at 0 of 420.
+Output scale is the visible difference — ~5.05 per chunk without history versus
+~6.7 with it.
 
 ### RoPE under multi-chunk
 
