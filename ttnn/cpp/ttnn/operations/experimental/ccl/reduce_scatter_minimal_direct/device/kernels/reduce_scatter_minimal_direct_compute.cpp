@@ -25,8 +25,6 @@ namespace detail {
 // copy-pasted from api/dataflow/dataflow_api.h
 FORCE_INLINE
 void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
-    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_SET, false, -1);
-
     // set semaphore value to val
     (*sem_addr) = val;
 }
