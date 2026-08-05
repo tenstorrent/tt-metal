@@ -667,11 +667,6 @@ void kernel_main() {
             noc_semaphore_set(my_recv, 0);
         }
     }
-#if defined(GATHER_ONLY)
-    // Dedicated gather core: the gather is published, and this core owns no output block and belongs to
-    // no in0 ring. Everything below is matmul work that does not apply.
-    return;
-#endif
 #endif  // FUSED_GATHER
 
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
