@@ -1,0 +1,32 @@
+{
+  "model": "tencent/HunyuanImage-3.0",
+  "task": "text-to-image (on-device head-glue render)",
+  "device": "Blackhole Galaxy - MeshShape(8,4), 32 chips, FABRIC_1D",
+  "parallelism": "TP=8 (attn/dense) + EP=32 (MoE, 64 experts 2/chip across all 32) + shard-shared",
+  "config": { "resolution": "1024x1024", "steps": 50, "cfg_factor": 2 },
+  "metric": "ONDEVICE_E2E_TOTAL_LATENCY_S (traced wall-clock; emitted by tests/e2e/test_host_glue_stage3_perf.py)",
+  "current": {
+    "e2e_s_per_image_warm": 84.0,
+    "e2e_s_per_image_cold": 216.5,
+    "steady_ms_per_step": 947,
+    "vae_decode_s_host_bf16": 36.0
+  },
+  "targets": {
+    "near_term_s_per_image": "40-50",
+    "aggressive_s_per_image": "15-20",
+    "floor_s_per_image": "5-8 (needs sparse dispatch - DEAD on TT, ~13-47x slower than dense)"
+  },
+  "regression_gate": {
+    "e2e_cold_max_s": 240.0,
+    "relative_margin": 0.10,
+    "note": "cold single-render ceiling; wire into test_host_glue_stage3_perf.py to assert ONDEVICE_E2E_TOTAL_LATENCY_S < e2e_cold_max_s"
+  },
+  "correctness_gate": { "image_pcc_min": 0.95, "env": "TT_HY3_PCC" },
+  "references": {
+    "hunyuanimage3_on_3xH100_s_per_image": 137,
+    "longcat_image_tt_6B_dense_4chip_s_per_image": 43.6,
+    "ign_port_PR50968_4chip_2x2_s_per_image": 263.06,
+    "roofline_dense64_at_40pct_mfu_s_per_image": "15-20"
+  },
+  "source": "UNIFIED_STACK.md; PERF_CONSOLIDATION/HUNYUAN3_PERF_references.csv; HANDOFF/PERF_SHEET.csv"
+}
