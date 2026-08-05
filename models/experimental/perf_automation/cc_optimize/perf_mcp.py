@@ -3838,6 +3838,16 @@ def record_kernel_attempt(
         "cache",
         "kv-cache",
         "trace",
+        # `trace-capture` IS a config/loop transform, not a hand-written kernel, so it belongs in
+        # this set -- and it is the rung _op_ladder_status literally NAMES for the host bucket.
+        # Omitting it deadlocked that bucket: the host ladder clears on a win or on
+        # PERF_MCP_MAX_HOST_ATTEMPTS (3) real tries out of _host_kinds = {structural, trace,
+        # trace-capture}, but _rung_allowance permits ONE attempt per non-knob rung, so only
+        # `trace` and `structural` were ever recordable -- 2 of a required 3. The third try was
+        # refused for having no `generic_op`/`@ttl`/`.cpp` marker in the model source, which a loop
+        # transform correctly does not have, and host_overhead was re-emitted as next_target
+        # forever with no recordable rung left. Same species as the three fixes in f41ac046a5.
+        "trace-capture",
     }
     is_knob = (kernel_kind or "").lower() in _KNOB_KINDS
     is_tp = (kernel_kind or "").lower() == "tp-fracture"
