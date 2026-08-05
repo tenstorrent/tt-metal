@@ -4,7 +4,7 @@ Two files carry loop state. Neither ever grows without bound.
 
 | File | Read | Written | Bound |
 |---|---|---|---|
-| `CAMPAIGN.md` | **Always**, every round, whole | **Regenerated** each round | Hard cap ~150 lines |
+| `CAMPAIGN.md` | **Always**, every round, whole | **Regenerated** each round | Hard cap 200 lines |
 | `lineage.jsonl` | Never whole — `jq` it | Appended, one object per round | Unbounded, but O(1) to append and query |
 
 This split is the whole design. A single append-only markdown file cannot be
@@ -83,15 +83,47 @@ attempts.md (rounds 1–7) · optimizations.md (3) · source-ideas.md (11) · am
 
 ### Section bounds
 
+Caps below were derived by measuring a real campaign's hot state, not chosen —
+see "Where these numbers come from".
+
 | Section | Cap | On overflow |
 |---|---|---|
-| Loop state | 1 row | Regenerated from lineage |
-| Working point | ~10 lines | — |
-| Fixed baseline | ~10 lines | Immutable; never grows |
-| Gates | one row per gate | — |
-| Pending work | ~20 lines | Oldest deferred items → `ledgers/attempts.md` as `deferred` rows |
-| Pitfalls | ~30 lines | **Graduate** general ones to `../shared/known-issues.md`, then delete here |
-| Latest amendment | ~10 lines | Older ones already in the ledger |
+| Header | 5 | — |
+| Loop state | 8 | Regenerated from lineage |
+| Working point | 30 | — |
+| Fixed baseline | 12 | Immutable; never grows |
+| Gates | 15 | One row per gate |
+| Pending work | 45 | Detail moves to `ledgers/attempts.md`; keep one line per item plus its task id |
+| Pitfalls | 25 | **Graduate** general ones to `../shared/known-issues.md`, then delete here |
+| Latest amendment | 12 | The one-line finding, the result, and a ledger pointer — **not** the full body |
+| Ledger index | 3 | — |
+
+**Total cap: 200 lines.**
+
+### Where these numbers come from
+
+The H3 campaign's compacted hot state was measured against a first draft of this
+table and every section was over:
+
+| Section | Measured | First-draft cap |
+|---|---|---|
+| Working point | 27 | 10 |
+| Pending work | 65 | 20 |
+| Pitfalls | 105 | 30 |
+| Latest amendment | 58 | 10 |
+| **Total** | **255** | **150** |
+
+Two things came out of that. The caps above are the measured sizes rounded up,
+except where a rule genuinely shrinks the section: `Pending work` because item
+detail belongs in the ledger, and `Latest amendment` because the checkpoint needs
+the finding, not the evidence tables.
+
+And `Pitfalls` stays tight because **all six** of that campaign's pitfall
+categories — machine/process, measurement scope, metrics that lie, ttnn API
+traps, reference-comparison traps, test-harness traps — were general tt_dit
+knowledge, not campaign-local. Graduated, they leave almost nothing behind. If
+your `Pitfalls` section is near its cap, the likely fault is that graduation is
+not happening, not that the cap is too small.
 
 **Graduation is the pressure valve.** A pitfall that is true of tt_dit generally
 belongs in `../shared/known-issues.md`, where every skill sees it; one true only

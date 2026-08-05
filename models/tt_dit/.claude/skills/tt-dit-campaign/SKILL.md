@@ -100,6 +100,7 @@ boundaries that bound what the loop may do unattended.
 | # | Step | Detail |
 |---|---|---|
 | 1 | **Orient** | Read `CAMPAIGN.md` **only**. Need history? `jq` the lineage or grep a ledger — never read a ledger whole |
+| 1a | **Priority rule** | A **failing gate outranks everything in `Pending work`**. Never stack perf work on a red correctness gate — the measurement is meaningless and the regression compounds |
 | 2 | **Gap decision** | Target met within 2%? → stop-gate check. Else continue |
 | 3 | **Evidence** | Profile at layer scope via `tt-dit-benchmark-profile`. Warm window established, op-to-op gap median **and** mean reported. Artifacts to `artifacts/round-<N>/` |
 | 4 | **Kernel evidence** *(conditional)* | Invoke `tt-dit-kernel-research` **only** when the target op is top-3 in the warm window *and* `../tt-dit-benchmark-profile/existing-fast-paths.md` shows no fast path already engaged |
