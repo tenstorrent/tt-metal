@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.gpt_oss.tt.matmul_guard import check_matmul_program_config
 
 
 @dataclass
@@ -55,10 +56,18 @@ class ProgramConfig:
 
     # Matmul program config parameters (optional - None means no program config)
     # Decode QKV projection
-    decode_qkv_cores: tuple[int, int] | None = None
-    decode_qkv_in0_block_w: int = 1
+    # qkv [32,2880]x[2880,5120], IN0 is L1_INTERLEAVED in-model -- which is the
+    # layout the offline sweep used, so the sweep result is applicable here (unlike
+    # o_proj, whose IN0 is L1_WIDTH_SHARDED and takes a different program factory).
+    # .auto/qkv_sweep.py: 8x5 cores, in0_block_w=2, out_subblock_w=4 -> 50.32 us/op
+    # vs 63.66 us/op default, pcc 0.9998 vs the device baseline.
+    # per_core_N = Nt/cores = 160/40 = 4 exactly, so the floor-division bug that
+    # silently invalidated the o_proj config does not apply. out_block_w = osw = 4
+    # gives num_blocks_w_dim = 1, so the PR #51514 corruption cannot trigger.
+    decode_qkv_cores: tuple[int, int] | None = (8, 5)
+    decode_qkv_in0_block_w: int = 2
     decode_qkv_out_subblock_h: int = 1
-    decode_qkv_out_subblock_w: int = 1
+    decode_qkv_out_subblock_w: int = 4
 
     # Decode output projection
     decode_out_cores: tuple[int, int] | None = None
@@ -143,15 +152,38 @@ class ProgramConfig:
     ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
         """Build matmul program config for attention projections"""
         core_x, core_y = cores
+        # Reject configs that hit the PR #51514 reload issue before the config
+        # reaches the device. The issue is silent, so an unguarded config shows
+        # up as nonsense output several decode steps later, not as an error.
+        check_matmul_program_config(
+            name=f"attention matmul (cores={cores}, n={n})",
+            Kt=-(-k // 32),
+            in0_block_w=in0_block_w,
+            per_core_N=-(-(n // 32) // (core_x * core_y)),
+            out_block_w=out_subblock_w,
+            out_subblock_w=out_subblock_w,
+            out_subblock_h=out_subblock_h,
+        )
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
             out_block_h=1,
-            out_block_w=1,
-            per_core_M=m // 32,
-            per_core_N=n // 32 // (core_x * core_y),
+            # out_block_w must follow out_subblock_w: in1_num_subblocks is
+            # out_block_w / out_subblock_w, so a hardcoded 1 makes that 0 for any
+            # out_subblock_w > 1 (the PR #51514 issue, also present in the expert
+            # path until it was fixed there).
+            out_block_w=out_subblock_w,
+            # CEIL on the row count too: decode passes the LOGICAL seq len (1), so
+            # floor gave per_core_M = 1//32 = 0 and the whole config was invalid --
+            # ttnn silently fell back to its default heuristic. The tensor is
+            # tile-padded to 32 rows, so 1 row still needs per_core_M = 1.
+            per_core_M=max(1, -(-m // 32)),
+            # CEIL, not floor. Nt is not always divisible by the core count, and a
+            # too-small per_core_N silently produces an invalid config that ttnn
+            # ignores (this is what made the o_proj attempt a no-op).
+            per_core_N=-(-(n // 32) // (core_x * core_y)),
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,

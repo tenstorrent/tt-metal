@@ -81,10 +81,62 @@ class RMSNorm(nn.Module):
             ttnn.deallocate(tt_gathered_stats)
             return tt_output
         else:
+            # Decode single-row case ([1,1,1,W] padded to [.,.,32,W]): the default
+            # interleaved path auto-selects a SINGLE core to reduce all W/32 tiles
+            # (~40us, 3% BW). Width-shard across cores + sharded program config
+            # parallelizes the reduction (swept best = 9 cores for W=2880). The
+            # shard HEIGHT must be the padded tile height (32), not the logical H=1.
+            W = x.shape[-1]
+            H = x.shape[-2]
+            TILE = ttnn.TILE_SIZE
+            Wt = W // TILE
+            Ht = max(1, -(-H // TILE))  # ceil rows in tiles (H may be 1 at decode)
+            ncores = 9 if Wt % 9 == 0 else next((c for c in (10, 6, 5, 3) if Wt % c == 0), 1)
+            # Width-shard the norm across cores + sharded program config to parallelize
+            # the reduction (1-core interleaved default ~40us/op at ~3% BW). Also moves
+            # the tensor DRAM->L1 (higher aggregate BW). Wrapped in try/except: sharded
+            # program build can TT_THROW on shapes not seen at development time (e.g.
+            # multi-tile-row prefill norms), so fall back to the safe default path.
+            if (
+                x.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+                and ncores > 1
+                and W % TILE == 0
+                and Ht <= 4  # cap L1 shard footprint; larger seqs use default path
+            ):
+                try:
+                    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ncores - 1, 0))})
+                    # shard shape: padded tile-row height, width split across cores
+                    shard_spec = ttnn.ShardSpec(grid, [Ht * TILE, W // ncores], ttnn.ShardOrientation.ROW_MAJOR)
+                    sharded_mem = ttnn.MemoryConfig(
+                        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
+                    )
+                    x_sh = ttnn.to_memory_config(x, sharded_mem)
+                    pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                        compute_with_storage_grid_size=ttnn.CoreCoord(ncores, 1),
+                        subblock_w=1,
+                        block_h=Ht,
+                        block_w=Wt // ncores,
+                        inplace=False,
+                    )
+                    out_sh = ttnn.rms_norm(
+                        x_sh,
+                        weight=self.tt_weight,
+                        epsilon=self.eps,
+                        program_config=pc,
+                        memory_config=sharded_mem,
+                    )
+                    x_sh.deallocate(True)
+                    # Convert back to L1 interleaved (not DRAM): keeps the norm output
+                    # on-chip for the downstream matmul/router instead of round-tripping
+                    # through DRAM. L1 has far higher aggregate BW than DRAM.
+                    tt_output = ttnn.sharded_to_interleaved(out_sh, ttnn.L1_MEMORY_CONFIG)
+                    out_sh.deallocate(True)
+                    return tt_output
+                except Exception:
+                    pass  # fall through to the robust default path
             tt_output = ttnn.rms_norm(
                 x,
                 weight=self.tt_weight,
                 epsilon=self.eps,
-                # program_config=program_config,
             )
             return tt_output

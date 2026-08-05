@@ -108,13 +108,11 @@ def _process_prefill_chunk(
 
     # # Do partial swiglu before up projection to save memory (fused gate projection + swiglu gate activation)
     # Part 1
-    gate = ttnn.clamp(gate, min=None, max=config.swiglu_limit, output_tensor=gate)
-    gate_alpha = ttnn.mul(gate, config.alpha)
-    gate_sigmoid = ttnn.sigmoid(gate_alpha)
-    gate_alpha.deallocate(True)
-    glu = ttnn.mul(gate, gate_sigmoid, output_tensor=gate)
-
-    gate_sigmoid.deallocate(True)
+    # Build-time alpha-fold (see weights.py): gate is pre-scaled by alpha, so
+    # silu(gate) = alpha*gate_raw*sigmoid(alpha*gate_raw); the 1/alpha is absorbed
+    # into the down weights. Single fused silu instead of mul+sigmoid+mul.
+    gate = ttnn.clamp(gate, min=None, max=config.alpha * config.swiglu_limit, output_tensor=gate)
+    glu = ttnn.silu(gate, output_tensor=gate)
 
     # Up projection
     up = ttnn.sparse_matmul(

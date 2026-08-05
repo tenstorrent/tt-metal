@@ -10,6 +10,7 @@ import math
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.gpt_oss.tt.matmul_guard import check_matmul_program_config
 
 
 @dataclass
@@ -160,13 +161,31 @@ class ProgramConfig:
                 divisors = [d for d in range(2, in0_block_w + 1) if Kt % d == 0]
                 in0_block_w = max(divisors) if divisors else Kt
 
+        # Reject configs that hit the PR #51514 reload issue. That issue is
+        # silent: no crash, no warning, just wrong values that grow to infinity
+        # a few decode steps later. Checked after in0_block_w is snapped above,
+        # so the values here are the ones the kernel actually receives.
+        check_matmul_program_config(
+            name=f"expert matmul (cores={cores}, n={n})",
+            Kt=int(math.ceil((k if k is not None else n) / 32)),
+            in0_block_w=in0_block_w,
+            per_core_N=per_core_N,
+            out_block_w=out_subblock_w,
+            out_subblock_w=out_subblock_w,
+            out_subblock_h=1,
+        )
+
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
             in0_block_w=in0_block_w,
             out_subblock_h=1,
             out_subblock_w=out_subblock_w,
             out_block_h=1,
-            out_block_w=1,
+            # out_block_w must be derived from out_subblock_w: in1_num_subblocks =
+            # out_block_w / out_subblock_w, so a hardcoded 1 makes that 0 for any
+            # out_subblock_w > 1 (the PR #51514 deadlock). Same fix Lucas Chin
+            # applied to moe_sparse_matmul_sweep.py.
+            out_block_w=out_subblock_w,
             per_core_M=max(32, m) // 32,
             per_core_N=per_core_N,
             fuse_batch=False,

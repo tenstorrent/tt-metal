@@ -221,6 +221,24 @@ class Model:
 
         # Initialize on-device sampling (supported when padded per-device vocab fits in 64K)
         self._supports_on_device_sampling = per_device_padded <= 64 * 1024
+
+        # When on-device sampling is DISABLED (TP=1: pow2 per-device vocab > 64K),
+        # decode uses host-greedy ttnn.argmax (no topk), so the pow2 vocab padding
+        # (262144 vs ~201088 real) is dead weight -- the lm_head matmul computes ~23%
+        # zero columns/token. Trim the loaded weight ON-DEVICE to tile-aligned real
+        # vocab (the pow2 tail is all zeros; real vocab is a prefix, so argmax over the
+        # trimmed logits returns the identical greedy token). The lm_head program
+        # config derives Nt from shape[-1] so it adapts automatically.
+        if not self._supports_on_device_sampling and self.lm_head_weight is not None:
+            tile_vocab = ((self.vocab_size + 31) // 32) * 32
+            if self.lm_head_weight.shape[-1] > tile_vocab:
+                _shp = list(self.lm_head_weight.shape)
+                _starts = [0] * len(_shp)
+                _ends = list(_shp)
+                _ends[-1] = tile_vocab
+                _trimmed = ttnn.slice(self.lm_head_weight, _starts, _ends)
+                ttnn.deallocate(self.lm_head_weight)
+                self.lm_head_weight = _trimmed
         self._prefill_sampling_active = False
         # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
         self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
@@ -411,7 +429,43 @@ class Model:
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
-        logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        # lm_head 1D-mcast program config from matmul_sweep (per_core_N=64,
+        # out_subblock_w=4). Keep OUTPUT IN DRAM (default): forcing the huge
+        # [.,.,32,~262K] logits to L1 regressed wall-clock 2x (L1 pressure on the
+        # argmax tail), even though device matmul time dropped. Test config alone.
+        lm_pc = None
+        try:
+            M = hidden_states.shape[-2]
+            if M <= 32:
+                Nt = (self.lm_head_weight.shape[-1] + 31) // 32
+                per_core_N = 64
+                num_cores = (Nt + per_core_N - 1) // per_core_N
+                gx = min(13, num_cores)
+                gy = (num_cores + gx - 1) // gx
+                if 0 < gx * gy <= 130:
+                    lm_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                        in0_block_w=1,
+                        out_subblock_h=1,
+                        out_subblock_w=4,
+                        per_core_M=1,
+                        per_core_N=per_core_N,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        mcast_in0=True,
+                    )
+        except Exception:
+            lm_pc = None
+        if lm_pc is not None:
+            # Emit bf16 logits. The host-side greedy path needs bf16/fp32 for
+            # ttnn.argmax and was typecasting bf8 -> bf16 every token (58 us of
+            # device time, plus a full host dispatch because that op runs OUTSIDE
+            # the captured decode trace). Writing bf16 here costs ~6 MB more
+            # (~0.012 ms at 512 GB/s) and removes both. bf16 is strictly more
+            # precise than bf8, so the greedy argmax result cannot get worse.
+            logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat16, program_config=lm_pc)
+        else:
+            logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat16)
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False
         # TP all-gather is deferred to process_output_prefill / process_output_decode

@@ -25,6 +25,10 @@ class ExpertWeights:
     up_proj_bias: ttnn.Tensor
     down_proj_bias: ttnn.Tensor
     intermediate_size_per_device: int
+    # Fused gate+up weight (concat along N) built ON-DEVICE from the cached gate/up
+    # tensors, so one sparse_matmul produces [gate|up]; output splits [..,:I]/[..,I:].
+    gate_up_proj: ttnn.Tensor = None
+    gateup_bias: ttnn.Tensor = None  # concat[gate_bias|up_bias] [1,E,1,2I] for fused SwiGLU
 
 
 def load_expert_weights(
@@ -152,7 +156,34 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # SwiGLU alpha-fold (build-time): gate*sigmoid(a*gate)*(up+1) = silu(a*gate)/a*(up+1).
+    # Pre-scale gate weights+bias by alpha and down weights by 1/alpha ON-DEVICE so the
+    # per-token SwiGLU can use a single fused ttnn.silu (no separate mul-by-alpha op),
+    # with ZERO runtime correction (the 1/alpha is absorbed into down_proj). Block-float
+    # weights are per-block scale-invariant, so folding a scalar is quantization-neutral.
+    # Done on-device (not in torch) to stay cache-safe (warm cache = device tensors).
+    # The SwiGLU clamp becomes alpha*swiglu_limit (see operations.py / prefill.py).
+    _alpha = config.alpha
+    gate_proj_tt = ttnn.mul(gate_proj_tt, _alpha, dtype=weight_dtype)
+    gate_proj_bias_tt = ttnn.mul(gate_proj_bias_tt, _alpha, dtype=bias_dtype)
+    down_proj_tt = ttnn.mul(down_proj_tt, 1.0 / _alpha, dtype=weight_dtype)
+
+    # Build the fused gate+up weight on-device by concatenating the (already cached /
+    # loaded) gate and up tensors along the output dim. Works with warm cache
+    # (state_dict=None) since gate_proj_tt/up_proj_tt exist as device tensors. One-time
+    # at model build. Halves the gate/up sparse_matmul launches at inference.
+    gate_up_proj_tt = ttnn.concat([gate_proj_tt, up_proj_tt], dim=3)
+
+    # Prebuild concat[gate_bias|up_bias] as [1,E,1,2I] for the fused SwiGLU (one-time
+    # at model build, OUTSIDE the traced decode path). gate/up bias are [1,E,I].
+    _E = config.num_experts
+    _I = intermediate_size_per_device
+    gateup_bias_tt = ttnn.concat(
+        [ttnn.reshape(gate_proj_bias_tt, (1, _E, 1, _I)), ttnn.reshape(up_proj_bias_tt, (1, _E, 1, _I))], dim=3
+    )
+
     return ExpertWeights(
+        gateup_bias=gateup_bias_tt,
         gate_proj=gate_proj_tt,
         up_proj=up_proj_tt,
         down_proj=down_proj_tt,
@@ -160,4 +191,5 @@ def load_expert_weights(
         up_proj_bias=up_proj_bias_tt,
         down_proj_bias=down_proj_bias_tt,
         intermediate_size_per_device=intermediate_size_per_device,
+        gate_up_proj=gate_up_proj_tt,
     )

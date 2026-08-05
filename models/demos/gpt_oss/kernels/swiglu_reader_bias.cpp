@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Final fused-SwiGLU reader WITH bias streaming: reads gate/up from raw AND the
+// matching gate/up bias tiles from the prebuilt bias tensor [1,E,1,2I], for the
+// active experts only. Feeds cb_gate/cb_up/cb_gbias/cb_ubias to the bias-fold
+// compute kernel. Removes the wide [1,E,1,2I] bias-add op.
+//
+// raw & bias share the SAME expert-major page layout: expert e, tile-col j at
+// page e*Wt2 + j. gate half = [0,Ht), up half = [Ht,2Ht).
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+
+constexpr uint32_t cb_gate_id = get_compile_time_arg_val(0);
+constexpr uint32_t cb_up_id = get_compile_time_arg_val(1);
+constexpr uint32_t cb_gbias_id = get_compile_time_arg_val(2);
+constexpr uint32_t cb_ubias_id = get_compile_time_arg_val(3);
+constexpr uint32_t cb_idx_id = get_compile_time_arg_val(4);
+constexpr uint32_t Ht = get_compile_time_arg_val(5);
+constexpr uint32_t Wt2 = get_compile_time_arg_val(6);
+constexpr uint32_t nact = get_compile_time_arg_val(7);
+constexpr uint32_t ct_idx_raw = 8;
+constexpr uint32_t ct_idx_bias = TensorAccessorArgs<ct_idx_raw>::next_compile_time_args_offset();
+constexpr uint32_t ct_idx_idx = TensorAccessorArgs<ct_idx_bias>::next_compile_time_args_offset();
+
+void kernel_main() {
+    const uint32_t raw_addr = get_arg_val<uint32_t>(0);
+    const uint32_t bias_addr = get_arg_val<uint32_t>(1);
+    const uint32_t idx_addr = get_arg_val<uint32_t>(2);
+    const uint32_t start_tile = get_arg_val<uint32_t>(3);
+    const uint32_t n_tiles = get_arg_val<uint32_t>(4);
+
+    constexpr auto raw_args = TensorAccessorArgs<ct_idx_raw>();
+    constexpr auto bias_args = TensorAccessorArgs<ct_idx_bias>();
+    constexpr auto idx_args = TensorAccessorArgs<ct_idx_idx>();
+    const auto raw = TensorAccessor(raw_args, raw_addr);
+    const auto bias = TensorAccessor(bias_args, bias_addr);
+    const auto idxt = TensorAccessor(idx_args, idx_addr);
+
+    Noc noc;
+    DataflowBuffer cb_gate(cb_gate_id);
+    DataflowBuffer cb_up(cb_up_id);
+    DataflowBuffer cb_gbias(cb_gbias_id);
+    DataflowBuffer cb_ubias(cb_ubias_id);
+    DataflowBuffer cb_idx(cb_idx_id);
+    const uint32_t gp = get_local_cb_interface(cb_gate_id).fifo_page_size;
+    const uint32_t up_ = get_local_cb_interface(cb_up_id).fifo_page_size;
+    const uint32_t gbp = get_local_cb_interface(cb_gbias_id).fifo_page_size;
+    const uint32_t ubp = get_local_cb_interface(cb_ubias_id).fifo_page_size;
+    const uint32_t idx_page = get_local_cb_interface(cb_idx_id).fifo_page_size;
+
+    cb_idx.reserve_back(1);
+    noc.async_read(idxt, cb_idx, idx_page, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    cb_idx.push_back(1);
+    volatile tt_l1_ptr uint32_t* exp = (volatile tt_l1_ptr uint32_t*)get_local_cb_interface(cb_idx_id).fifo_rd_ptr;
+
+    for (uint32_t t = 0; t < n_tiles; ++t) {
+        const uint32_t a = start_tile + t;
+        const uint32_t slot = a / Ht;
+        const uint32_t ti = a % Ht;
+        const uint32_t e = exp[slot];
+        const uint32_t gpage = e * Wt2 + ti;
+        const uint32_t upage = e * Wt2 + Ht + ti;
+        cb_gate.reserve_back(1);
+        cb_up.reserve_back(1);
+        cb_gbias.reserve_back(1);
+        cb_ubias.reserve_back(1);
+        noc.async_read(raw, cb_gate, gp, {.page_id = gpage}, {.offset_bytes = 0});
+        noc.async_read(raw, cb_up, up_, {.page_id = upage}, {.offset_bytes = 0});
+        noc.async_read(bias, cb_gbias, gbp, {.page_id = gpage}, {.offset_bytes = 0});
+        noc.async_read(bias, cb_ubias, ubp, {.page_id = upage}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_gate.push_back(1);
+        cb_up.push_back(1);
+        cb_gbias.push_back(1);
+        cb_ubias.push_back(1);
+    }
+}

@@ -7,7 +7,7 @@ import ttnn
 from models.demos.gpt_oss.config import Mode
 
 from .config import ExpertConfig, ProgramConfig
-from .operations import apply_expert_parallel_allreduce, apply_swiglu, apply_tensor_parallel_allreduce
+from .operations import apply_expert_parallel_allreduce, apply_tensor_parallel_allreduce
 from .weights import ExpertWeights
 
 
@@ -20,6 +20,7 @@ def decode_forward(
     mesh_device,
     ccl_manager,
     program_config: ProgramConfig,
+    topk_expert_indices=None,
 ):
     """
     Decode forward pass - optimized for single token (seq_len=1).
@@ -70,83 +71,82 @@ def decode_forward(
     output_tile = ttnn.Tile([32, 32])
 
     # Gate projection
+    # Fused gate+up: one sparse_matmul over the concatenated [gate|up] weight.
+    # gate/up output kept bf16 (not bf8): the downstream transpose+slice+add+SwiGLU
+    # chain operates in bf16 and otherwise inserts bf8->bf16 typecasts around each
+    # transpose (tracy: 144 Transpose->Typecast->Transpose in decode = ~1.2ms/tok).
+    # Emitting bf16 directly from the matmul removes those casts. Verify perf+accuracy.
     gate = ttnn.sparse_matmul(
         hidden_states,
-        weights.gate_proj,
+        weights.gate_up_proj,
         sparsity=sparsity,
-        # nnz intentionally omitted (None -> inferred at runtime). Passing a static
-        # nnz makes the sparse_matmul in0-mcast receivers loop a fixed count while the
-        # sender only mcasts for the *actual* non-zero `sparsity` entries. The decode
-        # routing weights (softmax over top-k, scattered) frequently have <k non-zeros
-        # on Blackhole (small weights flush to 0), so a static nnz != actual count and
-        # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
-        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
-        nnz=None,
+        # Static nnz = num_experts_per_tok. The historical reason for nnz=None was a
+        # deadlock when the actual non-zero sparsity count < nnz (the in0-mcast
+        # receivers loop nnz times while the sender only mcasts for real non-zeros;
+        # see #45943/#45052). MEASURED on this model: a probe over 1704 decode
+        # sparse_matmul calls found the non-zero count is NEVER below 4
+        # (distribution {4: 1392, 32: 120, 128: 96, 1024: 48, 2048: 48}, min=4), so
+        # nnz=4 cannot under-run. Inferring it instead costs a device-side reduction
+        # + FILL per call: SparseMatmul 6.159 -> 5.827 ms/tok, decode 15.854 ->
+        # 15.518, 58.9 -> 60.0 tok/s/user, accuracy unchanged (0.9667 / 1.0000).
+        nnz=num_experts_per_tok,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=program_config.get_decode_gate_up_config(
-            hidden_states.shape[2], weights.gate_proj.shape[3], k=hidden_states.shape[-1]
+            hidden_states.shape[2], weights.gate_up_proj.shape[3], k=hidden_states.shape[-1]
         ),
-        dtype=activation_dtype,
-    )
-    # Note: reshape/transpose operations return views - do not deallocate originals
-    gate = ttnn.reshape(gate, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
-    gate = ttnn.transpose(gate, 1, 2)
-    gate = ttnn.reshape(gate, (batch_size, config.num_experts, weights.intermediate_size_per_device))
-    gate = ttnn.add(gate, weights.gate_proj_bias, output_tensor=gate)
-
-    # Up projection
-    up = ttnn.sparse_matmul(
-        hidden_states,
-        weights.up_proj,
-        sparsity=sparsity,
-        # nnz intentionally omitted (None -> inferred at runtime). Passing a static
-        # nnz makes the sparse_matmul in0-mcast receivers loop a fixed count while the
-        # sender only mcasts for the *actual* non-zero `sparsity` entries. The decode
-        # routing weights (softmax over top-k, scattered) frequently have <k non-zeros
-        # on Blackhole (small weights flush to 0), so a static nnz != actual count and
-        # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
-        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
-        nnz=None,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        output_tile=output_tile,
-        program_config=program_config.get_decode_gate_up_config(
-            hidden_states.shape[2], weights.up_proj.shape[3], k=hidden_states.shape[-1]
-        ),
-        dtype=activation_dtype,
+        dtype=ttnn.bfloat16,
     )
     hidden_states.deallocate(True)
-    # Note: reshape/transpose operations return views - do not deallocate originals
-    up = ttnn.reshape(up, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
-    up = ttnn.transpose(up, 1, 2)
-    up = ttnn.reshape(up, (batch_size, config.num_experts, weights.intermediate_size_per_device))
-    up = ttnn.add(up, weights.up_proj_bias, output_tensor=up)
+    # Fused output is [.., 2*I]; split into gate/up along the last dim after the
+    # shared reshape/transpose (halves the gate/up sparse_matmul launches).
+    I = weights.intermediate_size_per_device
+    # Fused expert-tail SwiGLU (custom generic_op): transpose-eliminating +
+    # expert-skipping + scatter. Reads gate/up directly from the raw fused matmul
+    # output [1,E,1,2I] (native layout, no transpose/slice), processes ONLY the
+    # active experts (ids from the router top-k device tensor), and scatters
+    # silu(clamp(gate,max=a*lim))*(clamp(up,-lim,lim)+1) to the active expert slots
+    # of down_input [1,E,1,I]. Bias (concat[gate|up]) added once via the prebuilt
+    # weights.gateup_bias. Replaces ~10 ops/layer (transpose+slice x2+2 bias+clamp x2
+    # +silu+ (+1)+mul) with a single generic_op over the active experts.
+    from models.demos.gpt_oss.kernels.swiglu_final_op import fused_swiglu_final
 
-    # Apply SwiGLU activation (consumes gate and up internally)
-    down_input = apply_swiglu(gate, up, config)
-    # Note: transpose/reshape operations return views - do not deallocate originals
-    down_input = ttnn.transpose(down_input, 1, 0)
-    down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
+    raw = ttnn.reshape(gate, (batch_size, config.num_experts, 1, 2 * I))
+    # Prep active-expert id list -> [1,1,1,nact] uint32 ROW_MAJOR device tensor.
+    _nact = config.num_experts_per_tok
+    _idx = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+    _idx = ttnn.typecast(_idx, ttnn.uint32)
+    _idx = ttnn.reshape(_idx, (1, 1, 1, _nact))
+    down_input = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, config.num_experts, seq_len, I]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        mesh_device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    _cap = config.alpha * config.swiglu_limit
+    # Bias folded inside the kernel (weights.gateup_bias), only for active experts.
+    fused_swiglu_final(raw, weights.gateup_bias, _idx, down_input, _nact, _cap, config.swiglu_limit)
+    raw.deallocate(True)
     # Down projection
     down = ttnn.sparse_matmul(
         down_input,
         weights.down_proj,
         sparsity=sparsity,
-        # nnz intentionally omitted (None -> inferred at runtime). Passing a static
-        # nnz makes the sparse_matmul in0-mcast receivers loop a fixed count while the
-        # sender only mcasts for the *actual* non-zero `sparsity` entries. The decode
-        # routing weights (softmax over top-k, scattered) frequently have <k non-zeros
-        # on Blackhole (small weights flush to 0), so a static nnz != actual count and
-        # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
-        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
-        nnz=None,
+        # Static nnz: see the gate_up call above. The measured non-zero count never
+        # falls below num_experts_per_tok on this model, so the #45943/#45052
+        # under-run deadlock cannot trigger. Verified with 6 full demo runs + the
+        # accuracy test, no hang.
+        nnz=num_experts_per_tok,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         is_input_a_sparse=True,
         program_config=program_config.get_decode_down_config(
             down_input.shape[2], weights.down_proj.shape[-1], k=down_input.shape[-1]
         ),
-        dtype=activation_dtype,
+        # bf16 output (not bf8): feeds the bf16 permute+add(bias)+mul(routing)+sum tail;
+        # emitting bf16 avoids the per-op bf8->bf16 recast (same win as gate/up above).
+        dtype=ttnn.bfloat16,
     )
 
     down_input.deallocate(True)

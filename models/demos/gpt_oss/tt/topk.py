@@ -10,9 +10,12 @@ transformation followed by top-k selection to assign tokens to experts.
 
 """
 
+import os
+
 import torch
 
 import ttnn
+from models.demos.gpt_oss.kernels.router_fused_op import fused_router
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 
@@ -52,13 +55,16 @@ class TopKRouter:
         self.tensor_cache_path = tensor_cache_path
         torch_weight = state_dict["weight"].transpose(0, 1) if state_dict else None
         torch_bias = state_dict["bias"].unsqueeze(0) if state_dict else None
+        # Router weight (hidden x 32) + bias are tiny (~184KB) and read every decode
+        # token. Pin them in L1 (not DRAM) so the per-token router matmul reads from
+        # on-chip memory (far higher aggregate BW than DRAM).
         self.weight = ttnn.as_tensor(
             torch_weight,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         self.bias = ttnn.as_tensor(
             torch_bias,
@@ -66,7 +72,7 @@ class TopKRouter:
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             cache_file_name=get_cache_file_name(tensor_cache_path, "bias"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # Keep compute_config=None for linear (known quality-safe default)
@@ -130,13 +136,75 @@ class TopKRouter:
         # Use L1 for decode (small tensors), DRAM for prefill (large sequences)
         is_decode = actual_tokens <= 128
         mem_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        # The decode router matmul (M=32,K=2880,N=32) auto-selects a SINGLE core
+        # (~62us, the N=32=1-tile output can't split, K=2880 reduced serially).
+        # Swept 1D config splits the M rows / K reduction across cores (mcast_in0=False).
+        router_pc = None
+        if is_decode and actual_tokens == 32 and hidden_states.shape[-1] % 32 == 0:
+            ncores = 10
+            router_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(ncores, 1),
+                in0_block_w=9,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=max(1, (actual_tokens // 32)),
+                per_core_N=1,
+                fuse_batch=True,
+                mcast_in0=False,
+            )
+        # Emit bf16 directly. hidden_states is bf8, so ttnn.linear would otherwise
+        # produce bf8 logits and topk_router immediately typecasts them to bf16
+        # anyway (an extra op/layer). Asking for bf16 here removes that typecast and
+        # keeps full precision through the top-k comparison, which is a pure
+        # argmax-style operation where bf8's 8-bit mantissa is the weakest link.
         router_logits = ttnn.linear(
             hidden_states,
             self.weight,
             bias=self.bias,
+            dtype=ttnn.bfloat16,
             memory_config=mem_config,
             compute_kernel_config=self.compute_config,
+            program_config=router_pc,
         )
+
+        # Fused router: one generic_op (reader+writer) replaces the 16-launch
+        # FillPad/Pad/FillPad/TopK/Slice/Slice/Softmax/Unary/Untilize x3/Scatter/
+        # Tilize/Untilize/Fill chain, which costs ~58.8 us/layer to do ~100 scalar
+        # ops on a single [1,32] logits row.
+        # Requires bf16 logits: the kernel reads raw bf16 halves, and a BFLOAT8_B
+        # block-float input decodes as garbage (verified: ids [0,1,2,8] instead of
+        # [26,4,22,17]). That is why router_logits above asks for bf16.
+        # Verified vs torch on the exact decode spec: 8/8 trials, worst weight
+        # error 0.00178. ROUTER_FUSED=0 falls back to the stock path.
+        if (
+            not use_throughput_experts
+            and os.environ.get("ROUTER_FUSED", "1") == "1"
+            and router_logits.dtype == ttnn.bfloat16
+            and router_logits.shape[-1] == self.num_experts
+            # The kernel processes exactly ONE token row (it reads row 0 of the
+            # tile and zeroes the rest). is_decode is true for up to 128 tokens, so
+            # gating on it would silently zero the routing weights of every row but
+            # the first. Gate on the real row count instead.
+            and router_logits.shape[0] == 1
+        ):
+            dev = router_logits.device()
+            w_out = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([router_logits.shape[0], self.num_experts]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                dev,
+                ttnn.L1_MEMORY_CONFIG,
+            )
+            id_out = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([router_logits.shape[0], self.top_k]),
+                ttnn.uint16,
+                ttnn.TILE_LAYOUT,
+                dev,
+                ttnn.L1_MEMORY_CONFIG,
+            )
+            fused_router(router_logits, w_out, id_out, self.num_experts, self.top_k)
+            ttnn.deallocate(router_logits)
+            return id_out, w_out
 
         expert_indices, expert_weights = topk_router(
             router_logits, self.top_k, use_throughput_experts, self.softmax_compute_config

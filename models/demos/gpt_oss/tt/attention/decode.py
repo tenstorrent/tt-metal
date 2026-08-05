@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
+from models.demos.gpt_oss.kernels.qkv_headsplit_op import qkv_headsplit
 
 from .config import AttentionConfig, ProgramConfig
 from .operations import apply_rope
@@ -60,21 +63,64 @@ def decode_forward(
     # constraint for DRAM-interleaved inputs; before that fix this path
     # produced silent corruption (every odd Q/K/V head returned the previous
     # user's row).
-    qkv_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mesh_config.tp > 1 else ttnn.DRAM_MEMORY_CONFIG
-    xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
-    ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    # TP=1: use L1_INTERLEAVED (not DRAM). nlp_create_qkv_heads_decode reads the
+    # DRAM-interleaved input on a SINGLE core at ~44us/op (tracy); reading from L1
+    # interleaved is much faster and avoids the per-core CB overflow that width-
+    # sharding the TP-larger QKV would cause. (The PR #43292 aligned-read fix applies
+    # to interleaved inputs regardless of DRAM vs L1.)
+    qkv_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mesh_config.tp > 1 else ttnn.L1_MEMORY_CONFIG
+    # Fuse the qkv bias into the matmul (ttnn.linear bias=) instead of a separate
+    # in-place add, removing one op/layer.
+    xqkv_fused = ttnn.linear(
+        hidden_states,
+        weights.wqkv,
+        bias=weights.wqkv_bias,
+        dtype=ttnn.bfloat16,
+        memory_config=qkv_memory_config,
+        program_config=program_config.get_decode_qkv_config(
+            hidden_states.shape[-2], weights.wqkv.shape[-1], hidden_states.shape[-1]
+        ),
+    )
 
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
     head_dim = config.head_dim
 
-    tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
-        xqkv_fused,
-        num_heads=num_local_heads,
-        num_kv_heads=num_local_kv_heads,
-        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-    )
+    # QKV head split. The stock op shards its output by LOGICAL batch, so at
+    # decode (batch=1) it runs on 1 core of 130 at 23.28us/op = 0.558 ms/tok. It is
+    # not bandwidth bound, just single-core, so a custom generic_op that splits the
+    # work by output tile-row across 4 cores is 2.6x faster (9.36 vs 24.76 us/op,
+    # bit-identical output). Set QKV_HEADSPLIT=0 to fall back to the stock op.
+    if os.environ.get("QKV_HEADSPLIT", "1") == "1" and mesh_config.tp == 1:
+        # Allocate HEIGHT_SHARDED directly: RoPE requires it, and letting the
+        # kernel write straight into that layout avoids a conversion op (a
+        # to_memory_config here costs ~22us and would erase the win).
+        def _hs(n_rows):
+            shard = ttnn.ShardSpec(
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),
+                [max(n_rows, 32), head_dim],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            return ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, n_rows, head_dim]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                xqkv_fused.device(),
+                ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard),
+            )
+
+        tt_q = _hs(num_local_heads)
+        tt_k = _hs(num_local_kv_heads)
+        tt_v = _hs(num_local_kv_heads)
+        qkv_headsplit(xqkv_fused, tt_q, tt_k, tt_v, num_local_heads, num_local_kv_heads, head_dim)
+    else:
+        tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            xqkv_fused,
+            num_heads=num_local_heads,
+            num_kv_heads=num_local_kv_heads,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        )
 
     xqkv_fused.deallocate(True)
 
@@ -163,13 +209,19 @@ def decode_forward(
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
 
+    # Fuse the o_proj bias-add and the bf8 output cast into the linear (bias= and
+    # dtype=) instead of a separate add + typecast. Removes 2 ops/layer (~48 op
+    # launches/token) to cut trace-execute dispatch overhead (the dominant decode
+    # cost). Output goes to L1 interleaved (matches the prior post-add layout).
     tt_out = ttnn.linear(
-        tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        tt_sdpa_out,
+        weights.o_proj,
+        bias=weights.o_proj_bias,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     tt_sdpa_out.deallocate(True)
-    tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-    tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
 
     # Calculate padded hidden size for tile-aligned CCL operations.
     local_hidden = hidden_size // mesh_config.tp

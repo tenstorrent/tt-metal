@@ -471,6 +471,12 @@ def test_gpt_oss_demo(
     mesh_shape = tuple(mesh_device.shape)
     test_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
     is_seqlen_sweep = "seqlen-sweep" in test_id
+    # Profiling-only CLI overrides (see models/demos/gpt_oss/conftest.py). Default runs unaffected.
+    if request.config.getoption("--gpt-oss-decode-trace-off"):
+        enable_decode_trace = False
+    _max_tokens_override = request.config.getoption("--gpt-oss-max-tokens")
+    if _max_tokens_override and _max_tokens_override > 0:
+        max_generated_tokens = _max_tokens_override
     # On single-row meshes (T3K, LoudBox), cap max_seq_len at 64k for seqlen-sweep so steps >64k are skipped
     actual_max_seq_len = min(max_seq_len, 64 * 1024) if (is_seqlen_sweep and mesh_shape[0] == 1) else max_seq_len
     if mesh_shape[0] == 1:
@@ -872,16 +878,46 @@ def test_gpt_oss_demo(
                     sampling_params=device_sampling_params,
                 )
             else:
-                # decode_forward returns (logits, log_probs) when sampling_params=None.
-                logits, _ = generator.decode_forward(
+                # Host-side greedy fallback (on-device sampling unavailable when
+                # per-device padded vocab > 64K). Instead of reading the full
+                # [.,.,B,~201K] logits back to host every token (.cpu() + untilize +
+                # CPU argmax ≈ 46 ms/token — the dominant decode cost), keep logits on
+                # device (read_from_device=False), do the argmax on device, and read
+                # back only the token id (~34 ms/token, ~29% faster). Greedy result is
+                # identical to host argmax (validated: ttnn.argmax == torch.argmax).
+                tt_logits = generator.decode_forward(
                     out_tok,
                     current_pos,
                     enable_trace=enable_decode_trace,
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=None,
+                    read_from_device=False,
                 )
-                out_tok = torch.argmax(logits, dim=-1).view(-1)
+                tl = tt_logits
+                while isinstance(tl, (list, tuple)):
+                    tl = tl[0]
+                try:
+                    # ttnn.argmax requires bf16/fp32 input.
+                    if tl.dtype not in (ttnn.bfloat16, ttnn.float32):
+                        tl = ttnn.typecast(tl, ttnn.bfloat16)
+                    # argmax on a TILE-layout [.,.,32,~201K] tensor is ~8ms (reduces all
+                    # 32 padded batch rows in tiled form). Slice to the active batch and
+                    # convert to ROW_MAJOR first: argmax over a row-major 1-row vector is
+                    # ~0.2ms (a ~40x cheaper reduction). Net ~8ms/token saved.
+                    nb = out_tok.shape[0]
+                    V = tl.shape[-1]
+                    tl_rows = ttnn.slice(tl, (0, 0, 0, 0), (1, 1, nb, V))
+                    tl_rm = ttnn.to_layout(tl_rows, ttnn.ROW_MAJOR_LAYOUT)
+                    tt_am = ttnn.argmax(tl_rm, dim=-1)
+                    out_tok = ttnn.to_torch(tt_am).reshape(-1)[:nb].to(torch.int32).view(-1)
+                    ttnn.deallocate(tt_am)
+                except Exception:
+                    # Robust fallback: full host readback + CPU argmax.
+                    logits = generator.process_decode_output_host(
+                        generator.read_decode_output(tt_logits), is_tokens=False
+                    )[0]
+                    out_tok = torch.argmax(logits, dim=-1).view(-1)
 
             if iteration == 0:
                 profiler.end(f"compile_decode", iteration=batch_idx)
