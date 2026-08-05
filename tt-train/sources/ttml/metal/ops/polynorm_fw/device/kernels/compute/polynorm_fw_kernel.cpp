@@ -254,9 +254,8 @@ void kernel_main() {
     cb_wait_front(cb_w2, onetile);
     cb_wait_front(cb_bias, onetile);
 
-    compute_kernel_hw_startup(cb_input_pass_1, cb_output);
-    copy_init(cb_input_pass_1);
     binary_op_init_common(cb_input_pass_1, cb_input_pass_1, cb_output);
+    copy_init(cb_input_pass_1);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         (void)row;

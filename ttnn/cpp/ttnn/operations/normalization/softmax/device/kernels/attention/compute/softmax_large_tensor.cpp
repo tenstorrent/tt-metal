@@ -348,7 +348,6 @@ void kernel_main() {
     DataflowBuffer dfb_recip_obj(dfb_recip);
     DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
-    compute_kernel_hw_startup(dfb_mask_padded, dfb_mask_padded);
     copy_init(dfb_mask_padded);
 
     dfb_max_scaler_obj.wait_front(1);  // comes from the reader

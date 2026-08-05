@@ -502,9 +502,8 @@ void kernel_main() {
     cb_wait_front(cb_beta_idx, Wt);
 #endif
 
-    compute_kernel_hw_startup(cb_input_idx, cb_output_idx);
-    copy_init(cb_input_idx);
     binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_output_idx);
+    copy_init(cb_input_idx);
     reconfig_data_format(cb_scaler_idx, cb_sum_idx);
     matmul_init(cb_sum_idx, cb_scaler_idx);
 

@@ -318,9 +318,8 @@ void kernel_main() {
     cb_wait_front(cb_mat_mul_reduce, onetile);
     cb_wait_front(cb_zero_idx, onetile);
 
-    compute_kernel_hw_startup(cb_input_idx, cb_dL_da_idx);
-    copy_init(cb_input_idx);
     binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_dL_da_idx);
+    copy_init(cb_input_idx);
     reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         cb_wait_front(cb_rms_a_idx, onetile);

@@ -282,9 +282,8 @@ void kernel_main() {
         cb_wait_front(cb_mask, onetile);
     }
 
-    compute_kernel_hw_startup(cb_input, cb_output);
-    copy_init(cb_input);
     binary_op_init_common(cb_input, cb_gamma, cb_output);
+    copy_init(cb_input);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         calculate_sum_x_squared();
 

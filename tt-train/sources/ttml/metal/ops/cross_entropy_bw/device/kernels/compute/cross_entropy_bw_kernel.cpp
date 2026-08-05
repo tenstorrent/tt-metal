@@ -368,9 +368,8 @@ void kernel_main() {
     }
     cb_wait_front(cb_reduction_scaler, onetile);
 
-    compute_kernel_hw_startup(cb_input, cb_output);
-    copy_init(cb_input);
     binary_op_init_common(cb_input, cb_input, cb_output);
+    copy_init(cb_input);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         find_max_value_in_row();  // find max value in each row

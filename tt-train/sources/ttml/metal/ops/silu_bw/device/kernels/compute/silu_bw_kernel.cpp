@@ -137,9 +137,8 @@ inline void compute_times_grad() {
 }
 
 void kernel_main() {
-    compute_kernel_hw_startup(cb_input_idx, cb_dL_da_idx);
-    copy_init(cb_input_idx);
     binary_op_init_common(cb_input_idx, cb_dL_out_idx, cb_dL_da_idx);
+    copy_init(cb_input_idx);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         for (uint32_t col = 0; col < Wt; col += block_size) {
             cb_wait_front(cb_input_idx, block_size);

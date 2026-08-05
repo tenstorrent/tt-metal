@@ -474,9 +474,8 @@ void kernel_main() {
     }
     cb_wait_front(cb_scaler_idx, onetile);
 
-    compute_kernel_hw_startup(cb_x_hat_idx, cb_dx_idx);
-    copy_init(cb_x_hat_idx);
     binary_op_init_common(cb_x_hat_idx, cb_gamma_idx, cb_dx_idx);
+    copy_init(cb_x_hat_idx);
     reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
