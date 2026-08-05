@@ -2623,11 +2623,10 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_i
             using T = std::decay_t<decltype(src)>;
             if constexpr (std::is_same_v<T, std::filesystem::path>) {
                 TT_FATAL(!src.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
-                return KernelSource(
-                    resolve_kernel_file_path(src, context_id).string(), KernelSource::SourceType::FILE_PATH);
+                return KernelSource::from_path(context_id, src);
             } else if constexpr (std::is_same_v<T, KernelSpec::SourceCode>) {
                 TT_FATAL(!src.code.empty(), "KernelSpec '{}' has empty inline source code", kernel_spec.unique_id);
-                return KernelSource(src.code, KernelSource::SourceType::SOURCE_CODE);
+                return KernelSource::from_source(src.code);
             } else {
                 static_assert(!sizeof(T*), "Unhandled KernelSpec::source alternative");
             }

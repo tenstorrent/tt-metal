@@ -181,11 +181,7 @@ KernelHandle CreateKernel(
     const QuasarDataMovementConfig& config) {
     const CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     return CreateQuasarDataMovementKernel(
-        program,
-        KernelSource(
-            resolve_kernel_file_path(file_name, program.impl().get_context_id()).string(), KernelSource::FILE_PATH),
-        core_ranges,
-        config);
+        program, KernelSource::from_path(program.impl().get_context_id(), file_name), core_ranges, config);
 }
 
 KernelHandle CreateQuasarComputeKernel(
@@ -214,11 +210,7 @@ KernelHandle CreateKernel(
     const QuasarComputeConfig& config) {
     const CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     return CreateQuasarComputeKernel(
-        program,
-        KernelSource(
-            resolve_kernel_file_path(file_name, program.impl().get_context_id()).string(), KernelSource::FILE_PATH),
-        core_ranges,
-        config);
+        program, KernelSource::from_path(program.impl().get_context_id(), file_name), core_ranges, config);
 }
 
 }  // namespace tt::tt_metal::experimental::quasar
