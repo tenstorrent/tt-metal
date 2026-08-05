@@ -370,3 +370,30 @@ def test_no_estimate_changes_nothing(fid):
     out = _render()
     assert "~" not in next(l for l in out.splitlines() if "Compute FLOPs" in l)
     assert "TTFT never measured" in out
+
+
+def test_the_utilization_row_uses_the_measurement(fid):
+    """THE INCONSISTENCY: the roofline cell read the measured stage while this row read only the
+    estimate, so one report answered the same question two ways -- "15.90 ms (trace_replay)" above
+    and "TTFT never measured" below. A guess lit the bar and a measurement did not."""
+    out = _render(stage_ms={"prefill": 15.9})
+    row = next(l for l in out.splitlines() if "Compute (prefill)" in l)
+    assert "10.4 / 15.9 ms" in row and row.rstrip().endswith("↑ better"), row
+    assert "never measured" not in row, row
+
+
+def test_the_measurement_wins_over_an_estimate(fid):
+    """Both present: the measured value is the one that renders, in BOTH cells."""
+    out = _render(stage_ms={"prefill": 15.9}, prefill_est_ms=13.1)
+    assert "15.90 ms (trace_replay)" in out
+    row = next(l for l in out.splitlines() if "Compute (prefill)" in l)
+    assert "15.9 ms" in row and "13.1" not in row, row
+
+
+def test_both_cells_agree_on_what_is_known(fid):
+    """Whatever the inputs, the two cells must not disagree about whether prefill is known."""
+    for kw in ({}, {"stage_ms": {"prefill": 15.9}}, {"prefill_est_ms": 13.1}):
+        out = _render(**kw)
+        roof_known = "not measured" not in next(l for l in out.splitlines() if "Compute FLOPs" in l)
+        util_known = "never measured" not in next(l for l in out.splitlines() if "Compute (prefill)" in l)
+        assert roof_known == util_known, (kw, out)

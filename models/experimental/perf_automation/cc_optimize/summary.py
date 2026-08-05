@@ -800,13 +800,14 @@ def _roofline_tables(
     out.append(_split(W))
     _fid, _cc = _fidelity_breakdown(profile)
     _cc_floor = float(_cc) if (_cc and _cc > 0) else None
+    _pf_measured = (stage_ms or {}).get("prefill")
+    _pf_measured = float(_pf_measured) if isinstance(_pf_measured, (int, float)) and _pf_measured > 0 else None
     if _cc and _cc > 0:
         # USE THE MEASUREMENT IF THERE IS ONE. This cell printed a hardcoded "not measured" while
         # trace_replay's own prefill stage sat in the state file and the block-timing section below
         # rendered it -- one report stating in two places that the same phase both was and was not
         # measured. Only the model's DECLARED prefill stage counts; no stage name is guessed.
-        _pf = (stage_ms or {}).get("prefill")
-        _pf = float(_pf) if isinstance(_pf, (int, float)) and _pf > 0 else None
+        _pf = _pf_measured
         # The time band is INVERTED: lower ms is better, so 80% efficiency costs MORE time.
         _lo, _hi = _cc / 0.80, _cc / 0.60
         out.append(
@@ -842,6 +843,11 @@ def _roofline_tables(
             )
     else:
         out.append(" %-25s %-18s │ %-21s │ %s   %s" % ("Compute FLOPs", "not modelled", "—", "n/a — not measured", "✗"))
+    # ONE resolution of the prefill figure, measurement first. The roofline cell read the measured
+    # stage while this row read only the estimate, so the same report answered the same question two
+    # ways: "15.90 ms (trace_replay)" above, "TTFT never measured" below. A guess lit the bar and a
+    # measurement did not.
+    _prefill_ms = _pf_measured or prefill_est_ms
     disp = _dispatch_ms_per_unit(profile, per_unit_ms)
     cap = _capacity_bytes()
     out.append(rule)
@@ -918,13 +924,11 @@ def _roofline_tables(
         ),
         (
             "Compute (prefill)",
-            (_cc_floor / prefill_est_ms) if (prefill_est_ms and _cc_floor) else None,
-            ("%.1f / %.1f ms" % (_cc_floor, prefill_est_ms))
-            if (prefill_est_ms and _cc_floor)
-            else "TTFT never measured",
+            (_cc_floor / _prefill_ms) if (_prefill_ms and _cc_floor) else None,
+            ("%.1f / %.1f ms" % (_cc_floor, _prefill_ms)) if (_prefill_ms and _cc_floor) else "TTFT never measured",
             # Same shape as every other row: achieved / total, and higher is better for a compute
             # utilisation just as it is for bandwidth.
-            "\u2191 better" if (prefill_est_ms and _cc_floor) else "",
+            "\u2191 better" if (_prefill_ms and _cc_floor) else "",
         ),
     ]
     if disp is not None and per_unit_ms:
