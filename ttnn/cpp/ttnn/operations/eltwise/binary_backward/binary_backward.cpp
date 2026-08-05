@@ -711,9 +711,9 @@ std::vector<std::optional<Tensor>> div_bw(
         }
         if (are_required_outputs.at(1)) {
             // -grad * input_a / other^2, evaluated as -grad * ((input_a / other) / other).
-            // Squaring first flushes to zero for |other| < 1.0842e-19 and returns infinity
-            // where the exact gradient is an ordinary float32; see the note in rdiv_bw. The
-            // op count is unchanged: one reciprocal and two multiplies either way.
+            // Squaring first loses the answer at both ends -- infinity below
+            // |other| = 1.0842e-19, zero above 2^63; see the note in rdiv_bw. The op count is
+            // unchanged: one reciprocal and two multiplies either way.
             Tensor recip_other = ttnn::reciprocal(other, output_mem_config);
             ttnn::multiply(
                 ttnn::neg(grad_tensor, output_mem_config),
