@@ -263,6 +263,34 @@ def _eq_ne_stimuli_specs():
     return _face_spec(a_face), _face_spec(b_face)
 
 
+def _comparison_stimuli_specs():
+    """Three-way paired stimuli for lt/gt/le/ge: a < b, a == b, a > b in equal thirds.
+
+    These four ops were commented out of the random float sweep because independent draws
+    land arbitrarily close together, and a near-tie that the kernel and the total-order
+    golden round differently reads as a failure. The fix is to drive the comparison
+    deliberately rather than to drop the ops: the gaps here are +/-1.0 against operands of
+    order 1, far wider than any rounding, so every element's verdict is unambiguous.
+
+    The exact-equality third is the point. It is the only input where lt/gt and le/ge
+    disagree, so it is what separates the four kernels from each other, and a continuous
+    random sweep essentially never produces it.
+    """
+
+    def a_face(size, dtype, generator):
+        j = torch.arange(size, dtype=torch.float32)
+        return (1.0 + (j % 8)).to(dtype)  # 1..8
+
+    def b_face(size, dtype, generator):
+        j = torch.arange(size, dtype=torch.float32)
+        base = 1.0 + (j % 8)
+        # j % 3 == 0 -> equal, 1 -> b greater (a < b), 2 -> b smaller (a > b)
+        delta = torch.where(j % 3 == 0, 0.0, torch.where(j % 3 == 1, 1.0, -1.0))
+        return (base + delta).to(dtype)
+
+    return _face_spec(a_face), _face_spec(b_face)
+
+
 def _logsigmoid_stimuli_spec():
     # logsigmoid(x) = -softplus(-x). in1 (exp(-x)) is only read in the x > 4 branch, so
     # restrict x to [-8, 3.9] (never uses in1) and sweep the passthrough (x < -4) and
@@ -475,15 +503,12 @@ def sfpu_binary(
         # Eq/Ne moved to test_sfpu_binary_eq_ne: independent random draws are never
         # equal here, so the golden collapses to a constant — they need crafted paired
         # stimuli to exercise the equal branch.
-        # Lt/Gt/Le/Ge intentionally excluded from this random-stimuli sweep: the generated
-        # operands produce near-ties that diverge from the total-order golden (and inflate
-        # the Blackhole smoke runtime past its budget). The sfpi comparison kernels
-        # (calculate_binary_comp_fp32_*) are validated at the ttnn level; see
-        # ckernel_sfpu_binary_comp.h.
-        # MathOperation.SfpuElwLt,
-        # MathOperation.SfpuElwGt,
-        # MathOperation.SfpuElwLe,
-        # MathOperation.SfpuElwGe,
+        # Lt/Gt/Le/Ge stay out of this *random* sweep for the original reasons: independent
+        # draws land arbitrarily close together, and a near-tie the kernel and the
+        # total-order golden round differently reads as a failure (it also inflated the
+        # Blackhole smoke runtime). They are covered by test_sfpu_binary_float_comparison
+        # below, which drives a < b / a == b / a > b in equal thirds with unambiguous gaps
+        # -- including the exact tie, the only input that tells lt/gt from le/ge.
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
@@ -652,6 +677,28 @@ def test_sfpu_binary_eq_ne(formats, dest_acc, mathop):
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _eq_ne_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[
+        MathOperation.SfpuElwLt,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuElwLe,
+        MathOperation.SfpuElwGe,
+    ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_float_comparison(formats, dest_acc, mathop):
+    # lt/gt/le/ge(a, b) with a = tile0, b = tile1. Crafted so a third of the elements are
+    # exactly equal and the rest differ by +/-1.0: the tie is what distinguishes the strict
+    # comparisons from the non-strict ones, and the wide gaps keep every other element's
+    # verdict independent of rounding. See _comparison_stimuli_specs.
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
+
+    spec_A, spec_B = _comparison_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
