@@ -59,6 +59,22 @@ uses that and still writes the ring cache so chunk 1 has history.
 - `kv_cache_batch_idx` must fold the layer in as `slot*num_layers + layer`, or
   every layer reads layer 0's cache.
 
+### Measured long-context prefill
+
+TP=8 x CP=4 on a BH Galaxy, 31B, 60 layers, chunks of 4096. Output scale is stable
+across chunks (chunk 1 differs because it carries the real prompt; the rest are
+deterministic filler), which is the signal that the ring history read is not
+drifting as the prefix grows.
+
+| context | chunks | wall | first / last chunk std |
+| --- | --- | --- | --- |
+| 32768 | 8 | 37.1 s | 3.92 / 5.07 |
+| 65536 | 16 | 12.7 s | 3.92 / 4.85 |
+| 131072 | 32 | 27.6 s | 3.92 / 4.91 |
+
+Wall-clock differences between runs are dominated by first-chunk kernel compile
+and JIT cache state, not by the prefill itself; steady-state is ~0.5-0.8 s/chunk.
+
 ### RoPE under multi-chunk
 
 Position-sharding the RoPE cache only works when `max_seq_len == chunk`. For chunk
