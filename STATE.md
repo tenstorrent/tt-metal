@@ -3406,3 +3406,372 @@ a question about this clone's refs, and a `remotes/` ref is only as fresh as its
 whether a commit exists on the server, ask the server: `git ls-remote`. Convenient conclusions about
 someone else's branch deserve that extra round trip -- and this one had been carried, unchallenged,
 through sixteen amendments.
+
+---
+
+## Amendment 89 (2026-08-05) — SCOPE CHANGE: FFLF (`fl2va`), and the vision tower arrives by merge
+
+The t2va scope declared in amendment 72 is **complete and committed** (`7d4797dad76`, then
+`18a71579f49` correcting amendment 72's provenance claim). New scope by user directive
+2026-08-05: **`fl2va`** — generate a clip conditioned on a first keyframe, a last keyframe, or
+both, the tasks the codebase calls `fl2va` / `fl2va_last_frame`.
+
+Plan: `~/.claude/plans/wild-wandering-ember.md`. Re-read it and this file every iteration.
+
+Gated at the same working point as t2va so the two are comparable: **1344x768, 124 frames @
+24 fps** (37 latent frames, 207 audio latents), 50 steps -> 49 forwards, mesh 4x8, TP=4 axis 0 /
+SP=8 axis 1, ring, 2 links. One anchor adds `rows_per_frame` = **1008** condition rows.
+
+**Decisions taken with the directive:**
+
+- Conditioner accuracy (amendment 90) is settled by cheap discriminators first, host-side where
+  possible, with the pipeline work proceeding in parallel rather than blocking on it.
+- **All three anchor modes** are gated end to end: `first`, `last`, `first+last`.
+- The two loose ends inherited from the t2va campaign are **deliberately parked, not dropped**:
+  `models/vae/minimax_h3/stitch_device_minimax_h3.py` and its test stay uncommitted and unwired
+  (a device-side tile blend validated at PCC 100.0000 % against the host original at production
+  geometry, worth ~0.66 s of VAE decode, but wiring it first needs the two-axis all-gather batch
+  permutation of amendment 84 pinned down); and amendment 85's VAE decode stage numbers stay
+  flagged as measured on the readback amendment 86 retracted. Neither is on a path `fl2va`
+  changes, and both are recorded here so they are not rediscovered as mystery files.
+
+### What already exists, and what has to be built
+
+The host side is further along than the milestone map suggests. Already present and gated
+bit-exact against the reference, by amendments 73-78: `build_packed_sequence(...,
+keyframe_anchors=("first",) | ("first","last"))` producing the `[text | cond | audio | target]`
+layout with per-anchor rotary anchor times and `num_condition_video_rows`; `build_row_timesteps`
+pinning condition rows at `max(t, 0.999)`; `conditioning.encode_keyframes` / `sample_posterior`
+(seed 42, independent of the request seed) / `keyframe_condition_noise` /
+`normalize_keyframe_pixels`; `scheduler.scale_noise`; and `MiniMaxH3Vae.encode_clip` at
+`temporal_taps=1`, the M8a keyframe path.
+
+To build: the vision tower (arriving by merge), the conditioner with an image, the keyframe VAE
+encode on device, and the pipeline plumbing — which is `t2va`-only today and deliberately so.
+
+### The merge
+
+`gh/jonathansu-minimax-h3-textencoder` @ `2a63692e005`, merge-base `42ecb2e0339`, 13 commits,
++3196/-9 over 13 files. Only **two** non-test source files: a new
+`encoders/qwen3vl/vision_qwen3vl.py` (554 lines, the whole tower plus its host-side position and
+rotary helpers) and `encoders/qwen3vl/model_qwen3vl.py` (+248/-9, wiring vision into the decoder
+by embedding scatter and deepstack). It has **no** `pipelines/minimax_h3/` and no
+`loader_minimax_h3.py`, so nothing of ours is superseded.
+
+Three conflicts, all mechanical, plus one hazard git does not mark: **both branches inserted
+`head_dim=head_dim` at different offsets in four places**, which the trivial merge turns into
+`SyntaxError: keyword argument repeated` with no conflict marker. Resolution takes ours on
+`head_dim` (optional on the internal classes, divisibility guard retained in the `None` fallback,
+so the Ideogram-4 8B callers stay bit-for-bit unchanged) and keeps every additive block of theirs
+verbatim.
+
+Amendment 74's mRoPE conclusion — that `mrope_interleaved: true` is bit-identically equivalent to
+the chunked section split `create_rope_tensors` implements, because a text-only prompt gives all
+three axes the same `arange` — is **void the moment an image enters the prompt.** A keyframe's
+vision block has real 2-D positions, so `mrope_interleaved` becomes load-bearing. That is what
+the merged branch's `test_qwen3vl_mrope.py` exists for, and it is where this phase starts.
+
+---
+
+## Amendment 90 (2026-08-05) — CORRECTION to the handoff: there is no released-weights `fl2va` conditioner parity. The gate is red at 98.6224 %
+
+**What the plan handoff claimed.** That the branch being merged "claims **end-to-end fl2va
+conditioner parity with an image on the released weights**, so treat it as the reference
+implementation for step 2, not as scaffolding", and that the conditioner-with-image PCC gate is
+"largely on the merged branch".
+
+**What is actually on the branch**, read before merging:
+
+| test | weights / geometry | result |
+|---|---|---|
+| `tests/encoders/qwen3vl/test_qwen3vl_fused_conditioner.py::test_fused_conditioner_with_an_image` | **random weights**, 4 layers, tap 3, vision head_dim 48 | green, PCC 99.9917 % |
+| `tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py::test_vision_tower_real_weights` | released 595 M tower, 448x448 and 1344x768 | green — merged tokens 99.6532 % / 99.5953 %, deepstack 99.89/99.87/99.67 %, **~9.4 % RMSE/sigma** |
+| `tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py::test_fused_conditioner_real_weights` | released, 64 layers, tap 50, 448x448, `torch.rand` image | **RED — PCC 98.6224 % against a 0.99 bar, committed failing on purpose, cause not established** |
+
+The branch's own test header says so outright: *"Do not read a green run of this file as fl2va
+being verified end to end."* The tower alone is green; the fused conditioner the pipeline actually
+consumes is not. The red number is bit-reproducible over four runs, in-suite and with `-k`, before
+and after a device reboot — not flaky, not cross-test interference, not hardware.
+
+**What changes.** The conditioner-with-image gate is **not** inherited work, it is open work, and
+`fl2va` end-to-end must be sequenced so it does not block on it: the device pipeline path (the
+transformer condition stream, the keyframe encode, the row-write mask) is independent of the VLM
+and gets its own bringup gate with a text-only prompt, where frame-0 fidelity is already a real
+signal because `noise_aug = 0.999` leaves the anchor essentially the clean VAE latent.
+
+### Second finding: that gate taps one layer deeper than production reads
+
+Production reads `outputs.hidden_states[50]` (`diffusers/modular_pipelines/minimax_h3/encoders.py`).
+In `transformers` 5.12.1 `hidden_states` is collected by a per-layer forward hook with
+`hidden_states[0] = args[0]` of layer 0, so `hidden_states[50]` is **the output of decoder layer
+49** — which is exactly what our `loader_minimax_h3.py:142` builds
+(`activation_layers=(num_layers - 1,)` = `(49,)` over 50 loaded layers) and what
+`test_text_encoder_minimax_h3.py:186-188` states in its own comment. That is the configuration
+that measured **99.9892 % at 512 tokens** in amendment 76.
+
+The branch's failing test hooks `lm.layers[50]` and sets `activation_layers=(50,)` — i.e.
+`hidden_states[51]` on **both** sides. Self-consistent, so this is *not* the PCC gap, but it gates
+a tensor production never reads, forces 64 layers of weights on device where 50 suffice, and the
+prose it added to `MiniMaxH3.md` ("the unnormalized output of decoder layer 50 of 64") would
+propagate the off-by-one. Repaired during the merge.
+
+### The hypothesis, and the correction to my own first reading of it
+
+My first reading was that this is amendment 76's effect again — a gate set at an invented shape,
+with the real shape being worse, because with an image the prompt is ~1054 tokens instead of 512
+and a 50-layer causal stack accumulates over its context.
+
+**That reading is refuted by arithmetic.** The failing measurement is at **206** tokens
+(448x448 -> 196 image tokens), which is *shorter* than the green 512-token gate. Context length
+cannot take 99.999 % to 98.62 %.
+
+The honest-floor hypothesis survives in a different and *cheaper to test* form: **196 of those 206
+rows (95 %) enter the stack already carrying the tower's own error.** PCC 99.6532 % corresponds to
+relative RMSE ~8.3 %, with the three deepstack features adding 3.7 / 4.5 / 7.0 % onto layers 0-2.
+Measured 98.6224 % out corresponds to ~16.6 % relative RMSE — a ~2x amplification of an 8 % input
+perturbation through 51 layers, which is unremarkable for a transformer. So the question is
+"garbage-in propagation floor", not "context accumulation", and that version is measurable **on
+the host with no device at all**: perturb the reference's own vision output at the measured
+magnitudes and push it back through the reference decoder.
+
+The gate's shape *and* its content are still invented by amendment 76's standard — 448x448 is not
+a canvas `resolve_canvas_size` produces for a keyframe, and the image is uniform `torch.rand`,
+against a documented 3.4 points of content sensitivity in the branch's own docstring (solid colour
+96.2 % vs textured 99.6 %). Neither the floor nor the production number is known yet.
+
+**What is being run to settle it, cheapest first, each with a stop rule** (details in the plan):
+
+| # | Experiment | Cost | Device |
+|---|---|---|---|
+| E0 | our position ids and rope tables vs HF's `get_rope_index` / `Qwen3VLTextRotaryEmbedding`, **with an image**, tables compared at the bf16 floor per amendment 76 | ~5 s | none |
+| E1c | the reference tower run bf16 vs fp32 against itself — its own dtype floor for 27 blocks | ~30 s | none |
+| E2 | `_scatter_rows` bit-exactness across tile boundaries (the passing reduced test has seq_len 19, one tile row-block, so its slices never cross a tile; amendment 75 records this exact hazard *asserting* in the DiT packing path) | ~60 s | 1x1 |
+| E1a/E1b | the reference decoder fed a perturbation of the measured magnitude, then our tower's actual output | ~10 min | none |
+
+E0 and E2 together cost under two minutes and cover the only two surfaces where a structural
+review against `transformers` 5.12.1 found an untested divergence — `mrope_position_ids`,
+`vision_position_ids`, `_apply_interleaved_mrope`, the deepstack placement and the vision rope all
+mirror the reference, with the remaining differences dtype-shaped only.
+
+**The method note, which is the reusable part.** *A bar inherited from a reduced-geometry
+random-weight test is a bar with no floor behind it.* Amendment 76 established that a gate's shape
+is part of the gate; this adds that a gate's **input content** and its **upstream error** are too.
+Before deciding whether 98.6224 % is a bug, measure what the number *should* be — the reference's
+own dtype floor, and the arithmetic consequence of the input error it is fed. Both are host-side
+and cost minutes, against an hour of Galaxy time for a depth bisect that answers a different
+question.
+
+---
+
+## Amendment 91 (2026-08-05) — Phase 0: the vision tower is merged, all four gates green, t2va unmoved
+
+Branch `kevinmi/minimax-h3-fl2va` cut from `18a71579f49`; `git merge --no-commit --no-ff
+gh/jonathansu-minimax-h3-textencoder` (@ `2a63692e005`, merge-base `42ecb2e0339`).
+
+Three conflicts, resolved as planned. The **fourth** hazard predicted in the plan was real and git
+marked none of it: both branches had inserted `head_dim=head_dim` at different offsets in four
+places — the `Qwen3VlDecoderLayer(...)` construction, the `Qwen3VlAttention(...)` construction, and
+both `__init__` signatures — which the trivial merge turns into `SyntaxError: keyword argument
+repeated` / `duplicate argument`. `ast.parse` is the right check: both are *parser*-level errors, so
+one parse settles all four at once rather than the four sequential import failures the plan expected.
+
+| gate | result |
+|---|---|
+| G1 compile | `ast.parse` clean on `model_qwen3vl.py` and `vision_qwen3vl.py`; no conflict markers |
+| G2 nothing lost | 3 lines removed from our side, **all accounted for**: 2 comment lines deliberately reworded, and one `if attention_mask is not None:` that theirs turns into `elif` under a new `position_ids` branch — a rewrite preserving the old path, not a loss |
+| G3 collection | 318 tests collected across `tests/encoders/qwen3vl` + `tests/models/minimax_h3`, no import errors |
+| G3 host suite | **100 passed**, 32.5 s — exactly the amendment-73 baseline |
+| G3 host text-encoder | 4 passed, including the newly ported `test_interleaved_selection_is_a_noop_for_text_only` |
+| **G4 device, t2va critical path** | **PCC 99.9892 %, CCC 99.9889 %, RMSE/sigma 1.5 % at 512 tokens** — unchanged to the digit from amendment 76. 39-token prompt 99.9998 %. 1 passed in 123.2 s, device closed cleanly |
+
+Command: `timeout 3900 ./python_env/bin/python -m pytest
+models/tt_dit/tests/models/minimax_h3/test_text_encoder_minimax_h3.py::test_text_encoder_tap_matches_reference
+-q -s --timeout 3600`, 4x8 Blackhole Galaxy, TP=4 axis 0 + FSDP axis 1, 552 tensors / 50.3 GB bf16,
+`TT_DIT_CACHE_DIR` set. SHA `18a71579f49` + merge in progress.
+
+Resolutions of record: **ours** on `head_dim` (optional on the internal classes, divisibility guard
+retained in the `None` fallback, so the Ideogram-4 8B callers are bit-for-bit unchanged, while both
+of their new call sites pass it by keyword); **ours wholesale** on
+`test_text_encoder_minimax_h3.py`, plus one assertion of theirs ported because ours genuinely did not
+cover it — that the `interleaved=` *selection* is a no-op for text-only, which is a stronger and
+different claim from our `mrope_section`-permutation invariance; `MiniMaxH3.md` unioned with their
+stale `## Vision tower — not yet ported` heading corrected and their tap prose repaired per
+amendment 90.
+
+`test_fused_conditioner_real_weights` is `xfail(strict=True)` with the reason naming the open
+question, so it keeps being measured and **fails if it ever passes**.
+
+---
+
+## Amendment 92 (2026-08-05) — E0: the multimodal rotary path is exonerated, at production geometry
+
+The merged branch already gates position ids against HF's `get_rope_index` and the interleaved
+tables against `Qwen3VLTextRotaryEmbedding`. **But every case was a toy** — the largest image grid
+was `(1, 4, 6)`, six token slots. Amendment 76 is exactly about this: the rope-table comparison
+passed at 13-22 tokens with `atol=1e-4` and *failed* at 512, because longer prompts put more entries
+on a rounding boundary.
+
+Two production cases added to `tests/encoders/qwen3vl/test_qwen3vl_mrope.py`, matching what `fl2va`
+actually presents — `"<Picture 1>: "` (5 tokens) + the vision block + the prompt:
+
+| case | grid | image tokens | sequence | position ids vs `get_rope_index` | tables vs HF |
+|---|---|---|---|---|---|
+| `keyframe_768x1344` | `[1, 48, 84]` | 1008 | 1054 | **exactly equal** | within the 1-ulp `inv_freq` budget |
+| `two_keyframes_768x1344` | two of the above | 2016 | 2067 | **exactly equal** | within the 1-ulp `inv_freq` budget |
+
+`4 passed in 5.87 s`, host-only, no weights, no device. **Stop rule not fired: the multimodal rotary
+path is not the bug**, at the shape that ships and for both one and two anchors. `mrope_interleaved`
+being load-bearing with an image (the handoff's headline trap) is now checked where it matters.
+
+---
+
+## Amendment 93 (2026-08-05) — E1c: the vision tower is NOT at bf16's floor. It is ~4x above it, and the cause is accumulation width
+
+Loaded the **reference** `Qwen3VLVisionModel` — only the `model.visual.*` sub-tree, 351 tensors,
+595 M params — twice from the released checkpoint, once bf16 and once fp32, and scored them against
+each other on identical `pixel_values`. Zero TT involvement: this is the reference implementation's
+own floor for a 27-block tower.
+
+| geometry | reference bf16-vs-fp32 | **our tower vs reference** (amendment 90) |
+|---|---|---|
+| 448x448, 784 patches | merged tokens **99.9228 %**, RMSE/sigma 3.95 % | 99.6532 %, ~9.4 % |
+| 1344x768, 4032 patches | merged tokens **99.8724 %**, RMSE/sigma 5.15 % | 99.5953 % |
+| deepstack 0/1/2 @ 448 | 99.9897 / 99.9810 / 99.9531 % | 99.9341 / 99.9046 / 99.7551 % |
+
+**Our tower carries ~4.5x the PCC error and ~2.4x the RMSE of the reference at the same storage
+dtype.** So the file header's claim — *"Every block scores ~99.999 % in isolation, so this is bf16
+accumulation over 27 of them rather than a bad op"* — is right about the mechanism and wrong to
+imply the number is unavoidable. It is not the floor; there are ~0.27 points above it.
+
+### The assumption that had to be checked first, and was
+
+The reading above only holds if torch's CPU bf16 matmul accumulates *wider* than bf16 — otherwise
+the reference run would itself be a bf16-accumulate run and the comparison would mean something
+else. Measured rather than assumed, on a K=4096 dot product against an fp64 reference:
+
+```
+exact fp64        : -8.030952
+torch bf16 matmul : -7.906250   err 0.124702
+explicit bf16 acc : -9.000000   err 0.969048     (7.8x worse)
+```
+
+Torch accumulates in fp32. **So E1c's floor is the floor for bf16 *storage* with fp32
+accumulation**, and the gap to our tower is attributable to `layers/linear.py`'s documented
+"HiFi2 + packer_l1_acc + **bf16 acc**" — the repo-wide lever the branch identified and deliberately
+declined to pull, since it moves every tt_dit model.
+
+**Neither branch of the plan's decision rule, exactly.** Not "at the dtype floor, nothing to fix"
+and not "0.3 points of mystery port error": it is 0.27 points attributable to a known, deliberate,
+repo-wide accumulation choice. The tower is a *candidate* contributor to the fused conditioner's
+98.6224 %, and E1a/E1b remain the experiments that decide whether its magnitude arithmetically
+accounts for it.
+
+**Method note.** Two, both cheap. First: a "dtype floor" is only a floor for the precision
+*decisions* the reference happens to share — storage dtype and accumulation width are separate axes,
+and comparing across them silently answers a different question than the one asked. Second, a
+process note: this script's first run returned **NaN everywhere**. Cause was building the reference on
+`meta` and calling `to_empty` — the vision rotary's `inv_freq` is a *non-persistent* buffer, absent
+from the state dict, so it stayed uninitialized while a strict `load_state_dict` reported success.
+A finiteness assertion over parameters *and buffers* after loading is now in the script; `strict=True`
+does not cover buffers it was never given.
+
+---
+
+## Amendment 94 (2026-08-05) — E2: `_scatter_rows` is bit-exact across tile boundaries. Injection mechanics exonerated
+
+The vision injection's green record was collected without a run ever crossing a tile boundary.
+`test_qwen3vl_vision_injection.py` runs at `SEQ = 64` with runs `(8,16)`, `(0,8)`, `(56,8)` and
+`(4,8)+(20,12)` — every one of them inside a single 32-row tile block — and the reduced fused
+conditioner is `seq_len 19`, one block. The released-weights case crosses 6 boundaries and production
+crosses 31. Amendment 75 records this exact hazard *asserting* in the DiT's packed-sequence path.
+
+Gated now, at `HIDDEN = 5120` for the production cases so nothing is measured at a toy width:
+
+| case | seq | runs | replace | add |
+|---|---|---|---|---|
+| reduced control, one tile | 19 | `[(5, 6)]` | **bit-exact** | 0.62 ulps, bias +0.000 |
+| released 448sq, crosses 6 | 206 | `[(5, 196)]` | **bit-exact** | 0.62 ulps |
+| production keyframe, crosses 31 | 1054 | `[(5, 1008)]` | **bit-exact** | 0.62 ulps, bias -0.000 |
+| production two keyframes | 2067 | `[(5, 1008), (1018, 1008)]` | **bit-exact** | 0.62 ulps, bias +0.000 |
+
+`8 passed in 22.6 s`, 1x1 submesh, no weights. **Stop rule not fired: the injection is not the bug.**
+`replace` is gated on `torch.equal` rather than PCC deliberately — it is pure data movement, and the
+sibling's `pcc=0.999` would tolerate ~1 row in 1000 landing a tile off at these row counts, which is
+precisely the failure mode tile boundaries invite.
+
+### Two wrong bars on the `add` path, both mine, both the same mistake
+
+`add` is not a data movement, and it took two attempts to gate it honestly. First bar: `2**-8`
+relative, which read 1.12 and looked like a real error. **`2**-8` is *half* a bf16 ulp** — bf16 stores
+7 mantissa bits, so the spacing is `2**-7` relative — so the bar was below the resolution of the
+thing being measured. Second bar: bit-exactness against a bf16-rounded golden, on the theory that
+both sides round one exact sum the same way. Also wrong: `ttnn.add` and torch do not round
+identically, and ~11 % of elements differ by up to one ulp.
+
+What settled it as a rounding-mode difference rather than a tile effect: **the `seq=19` single-tile
+control failed exactly as hard as the 2067-row case.** A tile-boundary defect cannot do that. Final
+formulation is ≤ 2 bf16 ulps *plus* a mean-bias check under 0.1 ulps, because a ~50 % differing
+fraction is expected for a rounding difference (so the rope-table gate's "fraction differing" clause
+does not transfer) while truncation instead of round-to-nearest would show up as a consistent
+half-ulp bias that a magnitude bar alone waves through. Measured: worst 0.62 ulps, bias 0.000.
+
+**Method note.** This is amendment 76's trap twice in one test, and the tell each time was the same:
+the discrepancy sat exactly at the resolution of a lower precision. Also worth keeping — *the control
+case is what localises a failure.* Adding `seq=19` cost nothing and converted "the scatter breaks at
+production geometry" into "the add rounds differently everywhere", which is a different bug with a
+different fix.
+
+---
+
+## Amendment 95 (2026-08-05) — E1a: RETRACTION of the framing in amendment 90. 98.6224 % is not a downstream defect; it is BETTER than the tower's error magnitude predicts
+
+**What amendment 90 set up.** That the fused conditioner's 98.6224 % might be a "garbage-in
+propagation floor" — 95 % of rows entering the stack with the tower's ~8 % error, amplified ~2x
+through 51 layers — and that E1a would confirm or refute it by perturbing the reference's own vision
+output at the measured magnitude and pushing it back through the reference decoder.
+
+**Measured, entirely inside the reference, no device.** Perturbation scaled to exactly the tower's
+measured relative RMSE (8.33 % on merged tokens, 3.63 / 4.37 / 7.00 % on the three deepstack
+features, derived from amendment 90's PCCs via `r**2 = 1/rho**2 - 1`, which agrees with the branch's
+directly-reported ~9.4 %). Two perturbation shapes, because iid noise and our tower's row-correlated
+error are not the same perturbation:
+
+| geometry | seq | image tokens | iid noise -> tap PCC | row-coherent -> tap PCC | **our fused conditioner** |
+|---|---|---|---|---|---|
+| 448x448 | 216 | 196 | **94.7847 %** (RMSE/sigma 33.8 %) | **92.4278 %** (38.2 %) | **98.6224 %** |
+| 1344x768 | 1028 | 1008 | **98.9662 %** (14.4 %) | **99.4925 %** (10.1 %) | not yet measured |
+
+**The hypothesis is refuted, in the direction opposite to the worry.** A perturbation of our tower's
+own magnitude, injected into the *reference* decoder, degrades the tap to 92-95 % at 448x448 — four
+to six points **worse** than the 98.6224 % our full pipeline actually achieves. So there is no
+downstream defect eating accuracy: the fused conditioner is *outperforming* what its input error
+alone would predict, which means our tower's error is structured far more benignly than
+equal-magnitude noise (consistent with a systematic scale or smoothing effect rather than
+independent error). The branch's conclusion that "the bulk of the ~1.4 % shortfall lives downstream —
+in the decoder with vision injected" is **wrong**, and so was amendment 90's more cautious version of
+the same idea.
+
+**The 0.99 bar is unreachable at 448x448 and was never a floor.** With the tower at 99.65 %, no
+decoder can deliver 99 % at that geometry; the reference itself cannot.
+
+**The production shape is more forgiving, not less.** This contradicts the plan, which said to
+"expect `photo_prod` worse than `photo_448`" on the grounds that the tower's error is worse at
+1344x768 and the context is 5x longer. Measured, the same relative perturbation costs *far* less at
+1028 tokens than at 216 (98.97-99.49 % against 92.43-94.78 %). With 1008 of 1028 rows carrying vision
+the tap is dominated by vision content whose perturbation is partly common-mode, whereas at 216 rows
+the golden tap has a much larger std (36.06 vs 20.55) and the same relative noise lands differently.
+Whatever the mechanism, **the direction is measured and the plan's prediction was backwards.**
+
+**What changes.** The next measurement is the one that matters and it is now a positive-expectation
+run rather than a diagnosis: **the fused conditioner at the production canvas.** If the propagation
+result transfers, production may land near or above 0.99 — in which case the red test is red purely
+because it gates 448x448, an invented shape, exactly as amendment 76 describes. The depth bisect
+planned as the escalation is **not needed**: E0, E2 and E1a between them exonerate the rotary path,
+the injection and the decoder, and none of them needed a Galaxy.
+
+**The method note, which is the reusable part.** *Before deciding a number is too low, compute what it
+should be.* The branch spent four confirmation runs, a device reboot and a standalone script
+establishing that 98.6224 % was reproducible and not hardware — all true, and none of it addressed
+whether the number was wrong. One host-side run of the reference against itself, at the measured input
+error, answered that in ten minutes and reversed the sign of the conclusion. A reproducible number is
+not thereby a defect.
