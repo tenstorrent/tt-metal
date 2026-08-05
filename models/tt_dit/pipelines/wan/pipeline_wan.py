@@ -23,12 +23,14 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
-from models.tt_dit.solvers import UniPCSolver, UniPCVariant
+from models.tt_dit.solvers import solver_for_scheduler
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.tensor import float32_tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from diffusers.schedulers import SchedulerMixin
 
 _UNSET = object()  # sentinel for "use config default" in WanPipelineConfig.default
 
@@ -226,8 +228,9 @@ class WanPipeline(PipelineAPIMixin):
             Number of links to use for CCL operations.
         checkpoint_name (`str`, *optional*, defaults to `"Wan-AI/Wan2.2-T2V-A14B-Diffusers"`):
             HuggingFace Hub repo ID to load model weights from.
-        scheduler (`UniPCMultistepScheduler`, *optional*):
-            Scheduler to use for denoising. Defaults to `UniPCMultistepScheduler` loaded from the checkpoint.
+        scheduler (`SchedulerMixin`, *optional*):
+            Scheduler to use for denoising; it also selects the solver family. Defaults to
+            `UniPCMultistepScheduler` loaded from the checkpoint.
         boundary_ratio (`float`, *optional*, defaults to `0.875`):
             Ratio of total timesteps used as the boundary for switching between the two transformers in two-stage
             denoising. `transformer` handles timesteps >= boundary_timestep and `transformer_2` handles timesteps <
@@ -261,6 +264,7 @@ class WanPipeline(PipelineAPIMixin):
         num_frames: int = 81,
         cfg_enabled: bool = True,
         max_sequence_length: int = 512,
+        scheduler: SchedulerMixin | None = None,
         pipeline_class: type[WanPipeline] | None = None,
     ) -> WanPipeline:
         config = WanPipelineConfig.default(
@@ -273,13 +277,14 @@ class WanPipeline(PipelineAPIMixin):
             max_sequence_length=max_sequence_length,
         )
         pipeline_class_ = pipeline_class or cls
-        return pipeline_class_(device=mesh_device, config=config)
+        return pipeline_class_(device=mesh_device, config=config, scheduler=scheduler)
 
     def __init__(
         self,
         *,
         device: ttnn.MeshDevice,
         config: WanPipelineConfig,
+        scheduler: SchedulerMixin | None = None,
         run_warmup: bool = True,
         lora_enabled: bool = False,
     ) -> None:
@@ -360,15 +365,9 @@ class WanPipeline(PipelineAPIMixin):
             TransformerState(self.transformer_2, self._checkpoint_2, guidance_scale=3.0),
         ]
 
-        self._scheduler = UniPCMultistepScheduler.from_pretrained(
-            self.checkpoint_name, subfolder="scheduler", flow_shift=12.0
-        )
-        # Construction-time default, restored whenever a call omits flow_shift so a
-        # per-request value never persists into a later request (see __call__).
-        self._default_flow_shift = self._scheduler.config.flow_shift
-        self._solver = UniPCSolver(
-            order=self._scheduler.config.solver_order,
-            variant=UniPCVariant(self._scheduler.config.solver_type),
+        self._solver = solver_for_scheduler(
+            scheduler
+            or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=12.0)
         )
 
         # persistent latent buffers to enable safe tracing.
@@ -434,7 +433,7 @@ class WanPipeline(PipelineAPIMixin):
         self,
         *,
         step: int,
-        t: torch.Tensor,
+        t: float,
         ts: TransformerState,
         permuted_latent_tt: ttnn.Tensor,
         mask: torch.Tensor,
@@ -451,7 +450,7 @@ class WanPipeline(PipelineAPIMixin):
             # batch_size, seq_len
             timestep = temp_ts.unsqueeze(0).expand(latents_batch_size, -1)
         else:
-            timestep = t.expand(latents_batch_size)
+            timestep = torch.full((latents_batch_size,), t, dtype=torch.float32)
 
         permuted_model_input = self.get_model_input(permuted_latent_tt, cond_latents)
 
@@ -601,15 +600,13 @@ class WanPipeline(PipelineAPIMixin):
         on_event(SectionEnd("encoder"))
 
         # 4. Prepare schedule
-        # flow_shift is host-side only (it reshapes the sigma schedule); set it on the
-        # scheduler config before set_timesteps so the new schedule is recomputed. No
-        # captured trace depends on it. Always assign so a per-request value never
-        # persists into a later request — fall back to the construction-time default
-        # when omitted, mirroring effective_boundary_ratio above.
-        self._scheduler.config.flow_shift = flow_shift if flow_shift is not None else self._default_flow_shift
-        self._scheduler.set_timesteps(num_inference_steps)
-        self._solver.set_schedule(self._scheduler.sigmas.tolist())
-        timesteps = self._scheduler.timesteps
+        # flow_shift is host-side only (it reshapes the sigma schedule); no captured trace
+        # depends on it. Omitting it restores the scheduler's construction-time value, so a
+        # per-request value never persists into a later request. Only passed when set, since
+        # a subclass running on a flow-match scheduler names its shift `shift` instead.
+        shift_kwargs = {} if flow_shift is None else {"flow_shift": flow_shift}
+        self._solver.set_schedule(num_inference_steps, **shift_kwargs)
+        timesteps = self._solver.timesteps
 
         # 5. Prepare latent variables
         torch.manual_seed(seed)
@@ -631,7 +628,7 @@ class WanPipeline(PipelineAPIMixin):
 
         # 6. Denoising loop
         if effective_boundary_ratio is not None:
-            boundary_timestep = effective_boundary_ratio * 1000
+            boundary_timestep = effective_boundary_ratio * self._solver.schedule.num_train_timesteps
         else:
             boundary_timestep = -1  # Always use transformer (no transformer_2)
 
@@ -713,7 +710,7 @@ class WanPipeline(PipelineAPIMixin):
                 )
 
                 progress_bar.update()
-                on_event(DenoiseStep(step=i + 1, total=num_inference_steps, sigma=float(self._scheduler.sigmas[i])))
+                on_event(DenoiseStep(step=i + 1, total=num_inference_steps, sigma=self._solver.sigmas[i]))
 
         self._current_timestep = None
 

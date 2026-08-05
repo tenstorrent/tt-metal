@@ -24,7 +24,6 @@ import ttnn
 from models.tt_dit.experimental.pipelines.pipeline_wan_lora import LoRASpec, WanPipelineI2VLora
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
-from models.tt_dit.solvers import EulerSolver, UniPCSolver, UniPCVariant
 
 Regime = Literal["python", "comfyui"]
 
@@ -92,16 +91,8 @@ class WanPipelineSVI(WanPipelineI2VLora):
             config=config,
             lora_high=lora_high,
             lora_low=lora_low,
+            scheduler=scheduler,
         )
-        # Override the base's scheduler/solver — breaks tracing.
-        self._scheduler = scheduler
-        if isinstance(scheduler, FlowMatchEulerDiscreteScheduler):
-            self._solver = EulerSolver()
-        else:
-            self._solver = UniPCSolver(
-                order=scheduler.config.solver_order,
-                variant=UniPCVariant(scheduler.config.solver_type),
-            )
 
     @staticmethod
     def _configure_regime(

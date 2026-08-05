@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import os
-from typing import List, NamedTuple, Optional, Union
+from typing import TYPE_CHECKING, List, NamedTuple, Optional, Union
 
 import torch
 from PIL import Image
@@ -20,6 +20,9 @@ from ...utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_widt
 from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host, unflatten
 from .pipeline_wan import WanPipeline, WanPipelineConfig
 
+if TYPE_CHECKING:
+    from diffusers.schedulers import SchedulerMixin
+
 _DEFAULT_I2V_CHECKPOINT = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
 
 
@@ -29,9 +32,11 @@ class ImagePrompt(NamedTuple):
 
 
 class WanPipelineI2V(WanPipeline):
-    def __init__(self, *, device: ttnn.MeshDevice, config: WanPipelineConfig) -> None:
+    def __init__(
+        self, *, device: ttnn.MeshDevice, config: WanPipelineConfig, scheduler: SchedulerMixin | None = None
+    ) -> None:
         # initialize without warmup; we warm up below with a sample image_prompt.
-        super().__init__(device=device, config=config, run_warmup=False)
+        super().__init__(device=device, config=config, scheduler=scheduler, run_warmup=False)
 
         self.tt_vae_encoder = WanEncoder(
             base_dim=self._vae.config.base_dim,
@@ -76,6 +81,7 @@ class WanPipelineI2V(WanPipeline):
         width: int = 832,
         num_frames: int = 81,
         cfg_enabled: bool = True,
+        scheduler: SchedulerMixin | None = None,
         pipeline_class: type[WanPipeline] | None = None,
     ) -> WanPipelineI2V:
         config = WanPipelineConfig.default(
@@ -88,7 +94,7 @@ class WanPipelineI2V(WanPipeline):
             model_type="i2v",
         )
         pipeline_class_ = pipeline_class or cls
-        return pipeline_class_(device=mesh_device, config=config)
+        return pipeline_class_(device=mesh_device, config=config, scheduler=scheduler)
 
     def get_model_input(self, latents, cond_latents):
         """

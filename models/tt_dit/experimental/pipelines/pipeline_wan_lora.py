@@ -17,6 +17,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
@@ -27,6 +28,9 @@ from models.tt_dit.experimental.utils.lightx2v_loader import wan_lightx2v_to_dif
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.utils import cache
+
+if TYPE_CHECKING:
+    from diffusers.schedulers import SchedulerMixin
 
 
 @dataclass(frozen=True)
@@ -301,6 +305,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
         config: WanPipelineConfig,
         lora_high: LoRAArg = None,
         lora_low: LoRAArg = None,
+        scheduler: SchedulerMixin | None = None,
     ) -> None:
         high_specs = _normalize_lora_arg(lora_high)
         low_specs = _normalize_lora_arg(lora_low)
@@ -321,7 +326,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
         # Cleared after TT cache handoff (see _prepare_transformer) to free CPU memory.
         self._fused_state_dicts: dict[int, dict[str, torch.Tensor] | None] = {0: None, 1: None}
 
-        super().__init__(device=device, config=config)
+        super().__init__(device=device, config=config, scheduler=scheduler)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         # guidance_scale=1.0 → encoder returns None for negative embeds; combined_step
