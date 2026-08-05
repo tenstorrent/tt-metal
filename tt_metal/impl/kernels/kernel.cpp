@@ -120,6 +120,7 @@ KernelSource::KernelSource(const std::string& source, const SourceType& source_t
 };
 
 Kernel::Kernel(
+    ContextId context_id,
     HalProgrammableCoreType programmable_core_type,
     HalProcessorClassType processor_class,
     const KernelSource& kernel_src,
@@ -134,6 +135,7 @@ Kernel::Kernel(
     const std::vector<std::string>& common_runtime_arg_names,
     const std::vector<TensorBindingHandle>& tensor_binding_handles,
     const KernelCrtaLayout& crta_layout) :
+    context_id_(context_id),
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
@@ -151,8 +153,8 @@ Kernel::Kernel(
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
     watcher_assert_enabled_(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-        !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled()),
+        tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_watcher_enabled() &&
+        !tt::tt_metal::MetalContext::instance(context_id).rtoptions().watcher_assert_disabled()),
     watcher_count_word_offset_(watcher_assert_enabled_ ? 1 : 0) {
     this->register_kernel_with_watcher();
 
@@ -180,11 +182,11 @@ Kernel::Kernel(
 }
 
 void Kernel::register_kernel_with_watcher() {
-    auto& watcher = MetalContext::instance().watcher_server();
+    auto& watcher = MetalContext::instance(context_id_).watcher_server();
     if (!watcher) {
         // Null for mock and emulated targets (no watcher created); nothing to register.
         TT_FATAL(
-            MetalContext::instance().get_cluster().is_mock_or_emulated(),
+            MetalContext::instance(context_id_).get_cluster().is_mock_or_emulated(),
             "Watcher server is unavailable, and the target is not a mock or emulated device");
         this->watcher_kernel_id_ = -1;
         return;
