@@ -4783,14 +4783,8 @@ RING_MLA_CHUNKED_MODEL_CONFIGS = {
     name: replace(cfg, d_v=RING_MLA_CHUNKED_LATENT_D_V) for name, cfg in CHUNKED_PREFILL_MODEL_CONFIGS.items()
 }
 
-# Kimi-K3 MLA: same latent geometry as Kimi-K2.6 (d_q = d_k = 576, latent d_v = 512, one
-# MQA-collapsed KV head); only the Q head count differs, at 96 / TP=4 = 24 per device.
-#
-# nhq is pinned to the production 24 rather than following CHUNKED_PREFILL_HEADS_PER_RING's
-# galaxy/non-galaxy split, because here the head count is what the k_chunk sweep is measuring (it is
-# what decides whether K3's tuned 640 SDPA entry needs a dense head cap -- see mla_config.py).
-# 2x4-only in practice: open_ring_joint_sdpa_runtime forces FABRIC_1D_RING above sp_size 2, and ring
-# does not map on a larger mesh for any variant, K2.6 included.
+# Kimi-K3 MLA: K2.6's latent geometry (d_q = d_k = 576, latent d_v = 512, one MQA KV head), with
+# nhq pinned to the production 96 / TP=4 = 24 -- no galaxy split, unlike CHUNKED_PREFILL_HEADS_PER_RING.
 KIMI_K3_HEADS_PER_DEVICE = 24
 RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
     name="kimi_k3",
@@ -4804,7 +4798,8 @@ RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
     q_dtype=ttnn.bfloat16,
     kv_dtype=ttnn.bfloat8_b,
     q_chunk_sizes=[32],
-    k_chunk_sizes=[32, 128, 256, 512, 640],
+    # K2.6's list. 640 is what K3 deploys; a wider k sweep is a local run, not CI cost.
+    k_chunk_sizes=[512, 640],
     seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
 )
 
