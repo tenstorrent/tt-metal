@@ -243,6 +243,8 @@ public:
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
+    // Rejects DFB configs that build fine but would hang at run time. Called from LaunchProgram.
+    void validate_dataflow_buffers_for_launch() const;
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
     void allocate_scratchpads(const IDevice* device);
