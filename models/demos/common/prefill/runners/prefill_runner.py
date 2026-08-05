@@ -99,6 +99,14 @@ assert not (DFLASH_ENABLED and USE_TRACE), (
     "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
 )
 
+# Traced writes go through the metadata tensors, which cannot supply the host kv_actual_global the
+# TP-sharded reader needs to pick its 1/tp source window. Unreachable today (trace is already rejected for
+# every sparse/DSA model, and tp_shard_kv is sparse-only), so this is the tripwire for when that lifts.
+assert not (TP_SHARD_KV and USE_TRACE), (
+    "PREFILL_TP_SHARD_KV=1 is not supported with PREFILL_USE_TRACE=1: the traced metadata write path has "
+    "no host kv_actual_global, so the TP-sharded reader and the writer would disagree on the chunk start."
+)
+
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
 _shutdown = False
