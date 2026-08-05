@@ -65,7 +65,7 @@ firmware end. For a layer or block scope add a contribution column; an op is
 |---|---|
 | `OP CODE` | C++ class name |
 | `OP TYPE` | `tt_dnn_device` ran on device; `python_fallback` / `tt_dnn_cpu` did not |
-| `CORE COUNT` | Cores dispatched to. Grid is 64 on Wormhole B0, 140 on Blackhole. Low count on a heavy op = under-parallelized |
+| `CORE COUNT` | Cores dispatched to. Compare against the grid the device reports (`mesh_device.compute_with_storage_grid_size()`), not the SoC nominal — harvesting varies. Low count on a heavy op = under-parallelized |
 | `PARALLELIZATION STRATEGY` | Missing or fallback usually means suboptimal placement |
 | `MATH FIDELITY` | LoFi / HiFi2 / HiFi3 / HiFi4. Over-specified fidelity is a common silent cost |
 | `DEVICE FW DURATION [ns]` | Headline |
@@ -96,6 +96,10 @@ Record the tag; lever selection belongs to `tt-dit-performance`.
 `SLOW`. Different question from the per-RISC tags — this classifies the op, not
 which RISC blocks inside it.
 
+The cutoffs below are **rules of thumb for picking a lever family, not measured
+constants** — treat a value near a boundary as "inspect per-RISC", not as a
+verdict.
+
 | DRAM % | FLOPs % | Bound |
 |---|---|---|
 | < 40 | < 40 | **overhead / sync** — dispatch, barriers, undersized blocks |
@@ -106,7 +110,7 @@ which RISC blocks inside it.
 Confirm the class before proposing levers. Compute-bound levers on an
 overhead-bound op is the most common way an optimization loop stalls.
 
-**Overhead confirmation:** `overhead_ratio = (FW − KERNEL) / FW`. Under 15%,
+**Overhead confirmation (same caveat — indicative bands):** `overhead_ratio = (FW − KERNEL) / FW`. Under 15%,
 compute or bandwidth dominates. Over 40%, dispatch and sync dominate regardless
 of FLOPs%.
 

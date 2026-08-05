@@ -54,10 +54,10 @@ where a naive port emits four.
 
 `DistributedLayerNorm.forward` absorbs AdaLN scale **and** shift, since LayerNorm
 has a bias term — `dynamic_weight=(1.0 + scale)`, `dynamic_bias=shift`. It
-asserts they are supplied together. This is the Wan block pattern
-(`transformer_wan.py:198`) and LTX reuses it for `norm_out`
-(`transformer_ltx.py:999`, commented "Fuse the AdaLN (1 + scale) * normed + shift
-modulation into norm_out (WAN pattern)").
+asserts they are supplied together. This is the Wan block pattern (`transformer_wan.py`, the `self.norm1(...)` call
+in the block forward) and LTX reuses it for `norm_out` in `transformer_ltx.py`,
+commented "Fuse the AdaLN (1 + scale) * normed + shift modulation into norm_out
+(WAN pattern)".
 
 Buffer sizing depends on the combination, so `get_fused_norm_stats_buffer` is
 keyed on `(shape, heads-per-device, per_head_norm, rope present, weight shape)`
@@ -68,8 +68,8 @@ affine geometry is a real hazard the key exists to prevent.
 
 | Pattern | Fused form | Where |
 |---|---|---|
-| **AdaLN coefficients laid out on an outer dim** | `Parameter(total_shape=[coeff, 1, 1, D])`, then `ttnn.chunk(x, coeff, dim=0)` | Keeps each modulation parameter on the **non-tiled** dim 0, so the per-block chunk is a free tile-aligned slice — avoids `untilize → slice → re-tilize`. `transformer_ltx.py:154` (`adaln_coeff` 6, or 9 with cross-attention AdaLN) |
-| **Fused column-parallel QKV** | `ColParallelLinear(dim, 3 * dim, chunks=3)` | One GEMM producing three chunks (Q, K, V) instead of three matmuls. `attention_ltx.py:124`. `minimal_matmul_split` is the split-output primitive |
+| **AdaLN coefficients laid out on an outer dim** | `Parameter(total_shape=[coeff, 1, 1, D])`, then `ttnn.chunk(x, coeff, dim=0)` | Keeps each modulation parameter on the **non-tiled** dim 0, so the per-block chunk is a free tile-aligned slice — avoids `untilize → slice → re-tilize`. See `adaln_coeff` in `transformer_ltx.py` (6, or 9 with cross-attention AdaLN) |
+| **Fused column-parallel QKV** | `ColParallelLinear(dim, 3 * dim, chunks=3)` | One GEMM producing three chunks (Q, K, V) instead of three matmuls. See `self.to_qkv` in `attention_ltx.py`. `minimal_matmul_split` is the split-output primitive |
 | **Output-projection epilogue with gate** | `dit_minimal_matmul_addcmul_fused` | `residual + gate × (matmul + bias)` in one dispatch — the whole block epilogue |
 
 ---

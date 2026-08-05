@@ -1,6 +1,8 @@
 # Lever catalogue
 
-Multipliers are measured on real TT-DiT campaigns — calibration, not promises.
+Multipliers are from real TT-DiT campaigns, some on branches not yet merged.
+They are **order-of-magnitude calibration for choosing a lever, not reproducible
+benchmarks** — measure your own shape.
 Match every lever to the **measured bound class** from
 `../tt-dit-benchmark-profile/reading-profiles.md`; compute-bound levers on an
 overhead-bound op is the most common way a loop stalls.
