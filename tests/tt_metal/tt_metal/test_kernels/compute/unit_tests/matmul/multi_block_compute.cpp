@@ -55,7 +55,7 @@ void kernel_main() {
         tile_regs_acquire();
 #ifndef PACKER_L1_ACC
         if (block_id > 0) {
-            copy_tile_to_dst_init_short(partials_id);
+            copy_init(partials_id);
             cb_partials.wait_front(out_block_num_tiles);
             for (uint32_t i = 0; i < out_block_num_tiles; i++) {
                 copy_tile(partials_id, i, i);
@@ -124,7 +124,7 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
     pack_reconfig_l1_acc(0);
 
-    copy_tile_to_dst_init_short(partials_id);
+    copy_init(partials_id);
     cb_partials.wait_front(out_block_num_tiles);
     tile_regs_acquire();
     for (uint32_t i = 0; i < out_block_num_tiles; i++) {

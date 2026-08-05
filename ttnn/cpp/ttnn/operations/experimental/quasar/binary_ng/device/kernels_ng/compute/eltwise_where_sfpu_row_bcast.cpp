@@ -45,7 +45,8 @@ void kernel_main() {
     DataflowBuffer exp_cb_left(cb_left);
     DataflowBuffer exp_cb_right(cb_right);
 
-    unary_op_init_common(cb_in0, cb_out);
+    compute_kernel_hw_startup(cb_in0, cb_out);
+    copy_init(cb_in0);
     BINARY_SFPU_INIT
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
@@ -75,11 +76,11 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_tile_to_dst_init_short(cb_left);
+        copy_init(cb_left);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_left, i, i * 3);
         }
-        copy_tile_to_dst_init_short(cb_right);
+        copy_init(cb_right);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
 // TTS: tensor is true value, goes to dst_reg 1
 #if WHERE_TTS

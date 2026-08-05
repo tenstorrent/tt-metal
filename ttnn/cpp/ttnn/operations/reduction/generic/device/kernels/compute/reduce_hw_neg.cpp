@@ -49,7 +49,7 @@ void kernel_main() {
                 dfb_input_obj.wait_front(onetile);
 
                 tile_regs_acquire();
-                copy_tile_init(dfb_input);
+                copy_init(dfb_input);
                 copy_tile(dfb_input, 0, reduce_dst_idx);
                 negative_tile_init();
                 negative_tile(reduce_dst_idx);
@@ -72,7 +72,7 @@ void kernel_main() {
 
                 tile_regs_acquire();
                 if (wt > 0 || ht > 0) {
-                    copy_tile_init(dfb_acc);
+                    copy_init(dfb_acc);
                     copy_tile(dfb_acc, 0, reduce_dst_idx);
                 }
                 constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
@@ -102,7 +102,7 @@ void kernel_main() {
         dfb_acc_obj.wait_front(onetile);
 
         tile_regs_acquire();
-        copy_tile_init(dfb_acc);
+        copy_init(dfb_acc);
         copy_tile(dfb_acc, 0, reduce_dst_idx);
         negative_tile_init();
         negative_tile(reduce_dst_idx);

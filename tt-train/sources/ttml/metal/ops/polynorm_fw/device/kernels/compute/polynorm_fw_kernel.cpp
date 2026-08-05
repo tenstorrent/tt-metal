@@ -115,7 +115,7 @@ void accumulate_sum_x2_x4_x6_for_row() {
         cb_wait_front(cb_input_pass_1, block_size);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             tile_regs_acquire();
-            copy_tile_init(cb_input_pass_1);
+            copy_init(cb_input_pass_1);
             copy_tile(cb_input_pass_1, block_idx, reg_x);
             mul_binary_tile_init();
             mul_binary_tile(reg_x, reg_x, reg_x2);    // x^2
@@ -142,10 +142,10 @@ inline void emit_weighted_coeff(const uint32_t cb_inv, const uint32_t inv_tile_i
 
     tile_regs_acquire();
     reconfig_data_format_srca(cb_inv);
-    copy_tile_init(cb_inv);
+    copy_init(cb_inv);
     copy_tile(cb_inv, inv_tile_idx, reg_coeff);
     reconfig_data_format_srca(cb_weight);
-    copy_tile_init(cb_weight);
+    copy_init(cb_weight);
     copy_tile(cb_weight, /*tile_idx=*/0U, reg_weight);
     mul_binary_tile_init();
     mul_binary_tile(reg_coeff, reg_weight, reg_coeff);
@@ -200,7 +200,7 @@ void emit_output_for_row() {
             // Seed the accumulator with coeff2 (cubic branch) and load x once.
             unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/2U, reg_acc);
-            copy_tile_init(cb_input_pass_2);
+            copy_init(cb_input_pass_2);
             copy_tile(cb_input_pass_2, block_idx, reg_x);
 
             // Horner step 1: acc = x · coeff2.
@@ -208,7 +208,7 @@ void emit_output_for_row() {
             mul_binary_tile(reg_acc, reg_x, reg_acc);
 
             // Horner step 2: acc = coeff1 + x·coeff2; then acc *= x.
-            // Re-init bcast because the preceding copy_tile_init changed srcA to cb_input_pass_2.
+            // Re-init bcast because the preceding copy_init changed srcA to cb_input_pass_2.
             unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/1U, reg_tmp);
             add_binary_tile_init();
@@ -225,7 +225,7 @@ void emit_output_for_row() {
             mul_binary_tile(reg_acc, reg_x, reg_acc);
 
             // Final affine shift and output write for this tile.
-            copy_tile_init(cb_bias);
+            copy_init(cb_bias);
             copy_tile(cb_bias, 0, reg_tmp);
             add_binary_tile_init();
             add_binary_tile(reg_acc, reg_tmp, reg_acc);
@@ -254,7 +254,8 @@ void kernel_main() {
     cb_wait_front(cb_w2, onetile);
     cb_wait_front(cb_bias, onetile);
 
-    init_sfpu(cb_input_pass_1, cb_output);
+    compute_kernel_hw_startup(cb_input_pass_1, cb_output);
+    copy_init(cb_input_pass_1);
     binary_op_init_common(cb_input_pass_1, cb_input_pass_1, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {

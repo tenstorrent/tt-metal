@@ -33,7 +33,8 @@ void kernel_main() {
     const uint32_t in2_id = dfb_in2.get_id();
 #endif
 
-    init_sfpu(in0_id, out_id);
+    compute_kernel_hw_startup(in0_id, out_id);
+    copy_init(in0_id);
 #ifdef SFPU_OP_INIT_0
     SFPU_OP_INIT_0
 #endif
@@ -50,14 +51,14 @@ void kernel_main() {
             dfb_out.reserve_back(1);
 
             tile_regs_acquire();
-            copy_tile_to_dst_init_short(in0_id);
+            copy_init(in0_id);
             copy_tile(in0_id, /*tile_index=*/0, /*dst_index=*/0);
 #if defined(SFPU_BINARY_OP) || defined(SFPU_TERNARY_OP)
-            copy_tile_to_dst_init_short(in1_id);
+            copy_init(in1_id);
             copy_tile(in1_id, /*tile_index=*/0, /*dst_index=*/1);
 #endif
 #if defined(SFPU_TERNARY_OP)
-            copy_tile_to_dst_init_short(in2_id);
+            copy_init(in2_id);
             copy_tile(in2_id, /*tile_index=*/0, /*dst_index=*/2);
 #endif
 #ifdef SFPU_OP_CHAIN_0

@@ -30,7 +30,7 @@ void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_t
         tile_regs_acquire();
         reconfig_data_format_srca(cb_in_scores);
         // copy tile from scores cb to destination register 0
-        copy_tile_to_dst_init_short(cb_in_scores);
+        copy_init(cb_in_scores);
         copy_tile(cb_in_scores, 0, 0);
         // perform sigmoid on tile
         sigmoid_tile_init();
@@ -178,9 +178,10 @@ void topk_group_scores(
 
     tile_regs_acquire();
     // copy scores tiles to dest reg 0 and index tiles to dest reg 2
-    copy_tile_to_dst_init_short(cb_group_summed_scores);
+    copy_init(cb_group_summed_scores);
     copy_tile(cb_group_summed_scores, 0, 0);
-    copy_tile_to_dst_init_short_with_dt(cb_group_summed_scores, cb_group_index_template);
+    reconfig_data_format_srca(cb_group_summed_scores, cb_group_index_template);
+    copy_init(cb_group_index_template);
     copy_tile(cb_group_index_template, 0, 2);
 
     // llk_topk_sort -> inplace

@@ -134,13 +134,13 @@ void kernel_main() {
                                 // Intermediate step - tiles are already transposed
                                 // Process value tiles
                                 reconfig_data_format_srca(input_tensor_cb_id);
-                                copy_tile_to_dst_init_short(input_tensor_cb_id);
+                                copy_init(input_tensor_cb_id);
                                 copy_tile(input_tensor_cb_id, 0, input_dest_start);
                                 copy_tile(input_tensor_cb_id, 1, input_dest_end);
 
                                 // Process index tiles
                                 reconfig_data_format_srca(index_tensor_cb_id);
-                                copy_tile_to_dst_init_short(index_tensor_cb_id);
+                                copy_init(index_tensor_cb_id);
                                 copy_tile(index_tensor_cb_id, 0, index_dest_start);
                                 copy_tile(index_tensor_cb_id, 1, index_dest_end);
                             }

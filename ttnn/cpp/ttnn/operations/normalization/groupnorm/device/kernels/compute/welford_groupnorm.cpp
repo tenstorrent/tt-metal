@@ -487,7 +487,7 @@ void kernel_main() {
                         if (group_offset == 0) {
                             // When group_offset is 0, this is the first group for this tile,
                             // so we can copy the results to cb_x_id without needing to add them
-                            copy_tile_init(dfb_xmm_id);
+                            copy_init(dfb_xmm_id);
 
                             dfb_xmm.wait_front(1);
                             tile_regs_acquire();
@@ -580,7 +580,7 @@ void kernel_main() {
                     }
 
                     // Write out the final output
-                    copy_tile_init(dfb_x_id);
+                    copy_init(dfb_x_id);
                     reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
 
                     dfb_x.wait_front(1);

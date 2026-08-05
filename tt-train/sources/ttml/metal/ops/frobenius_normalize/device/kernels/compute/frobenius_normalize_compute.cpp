@@ -56,7 +56,8 @@ void kernel_main() {
     constexpr uint32_t accum_reg = 0;
     constexpr uint32_t work_reg = 1;
 
-    init_sfpu(cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_output);
+    copy_init(cb_input);
     binary_op_init_common(cb_input, cb_input, cb_output);
 
     // =========================================================================
@@ -68,7 +69,7 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_tiles_per_core; ++i) {
                 cb_wait_front(cb_input, 1);
                 const auto reg = (i == 0) ? accum_reg : work_reg;
-                copy_tile_init(cb_input);
+                copy_init(cb_input);
                 copy_tile(cb_input, 0, reg);
                 mul_binary_tile_init();
                 mul_binary_tile(reg, reg, reg);
@@ -92,10 +93,13 @@ void kernel_main() {
     {
         cb_wait_front(cb_sq_acc, 1);
 
-        init_sfpu(cb_sq_acc, cb_sq_partial);
+        // Mid-kernel phase switch (hw startup already done at kernel top): reconfig SrcA + Pack for the
+        // new operands instead of a mid-kernel init_sfpu. TODO(#22948): verify formats on tt-train.
+        reconfig_data_format_srca(cb_sq_acc);
+        pack_reconfig_data_format(cb_sq_partial);
 
         tile_regs_acquire();
-        copy_tile_init(cb_sq_acc);
+        copy_init(cb_sq_acc);
         copy_tile(cb_sq_acc, 0, 0);
         cb_pop_front(cb_sq_acc, 1);
 
@@ -117,7 +121,7 @@ void kernel_main() {
             cb_wait_front(cb_recv, 1);
 
             tile_regs_acquire();
-            copy_tile_init(cb_recv);
+            copy_init(cb_recv);
             copy_tile(cb_recv, 0, 0);
             cb_pop_front(cb_recv, 1);
 
@@ -146,9 +150,12 @@ void kernel_main() {
         const uint32_t norm_u32 = read_tile_value(cb_norm, 0, 0);
         cb_pop_front(cb_norm, 1);
 
-        init_sfpu(cb_input, cb_output);
+        // Mid-kernel phase switch (hw startup already done at kernel top): reconfig Pack for the new
+        // output; the SrcA reconfig + copy_init below complete the datapath re-init (was init_sfpu).
+        pack_reconfig_data_format(cb_output);
 
-        copy_tile_to_dst_init_short_with_dt(cb_output, cb_input);
+        reconfig_data_format_srca(cb_output, cb_input);
+        copy_init(cb_input);
         binop_with_scalar_tile_init();
 
         for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {

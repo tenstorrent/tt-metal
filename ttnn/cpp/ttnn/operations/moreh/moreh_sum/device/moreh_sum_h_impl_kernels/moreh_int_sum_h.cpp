@@ -22,7 +22,8 @@ void kernel_main() {
     constexpr uint32_t TILE_H = 32;
     constexpr bool do_mask_h = (origin_H % TILE_H) != 0;
 
-    unary_op_init_common(cb_in0, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_out0);
+    copy_init(cb_in0);
 
     constexpr int onetile = 1;
     constexpr int idx0 = 0;

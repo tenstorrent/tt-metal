@@ -29,6 +29,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -39,7 +40,8 @@ void kernel_main() {
     // Phase 1: blocked consumer of the DM-produced strided x blocked DFB.
     DataflowBuffer dfb_consumer(dfb::remapper_in);
 
-    unary_op_init_common(dfb::remapper_in, dfb::remapper_in);
+    compute_kernel_hw_startup(dfb::remapper_in, dfb::remapper_in);
+    copy_init(dfb::remapper_in);
 
     for (uint32_t i = 0; i < num_entries_consumer; i++) {
         acquire_dst();
@@ -57,7 +59,8 @@ void kernel_main() {
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
 #endif
 
-    unary_op_init_common(dfb::intra_out, dfb::intra_out);
+    reconfig_data_format_srca(dfb::remapper_in, dfb::intra_out);
+    copy_init(dfb::intra_out);
 
     for (uint32_t i = 0; i < entries_per_neo; i++) {
         dfb_intra.reserve_back(1);

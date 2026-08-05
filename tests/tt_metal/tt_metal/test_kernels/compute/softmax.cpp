@@ -107,7 +107,7 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             tile_regs_acquire();
             cb_wait_front(cb_in0, ndst);
-            copy_tile_init(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
+            copy_init(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
             for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
                 copy_tile(cb_in0, wt8, wt8);  // copy from c_in[0] to DST[0]
             }

@@ -28,7 +28,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_block_w) {
     CircularBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+    copy_init(mm_partials_cb_id);
     mm_partials_cb.wait_front(out_subblock_num_tiles);
 
     uint32_t start_dst_index = 0;

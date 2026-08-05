@@ -19,6 +19,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 namespace {
@@ -33,7 +34,8 @@ constexpr uint32_t kTilesPerDfb = 1u;
 void kernel_main() {
     uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
 
-    unary_op_init_common(0, 0);
+    compute_kernel_hw_startup(0, 0);
+    copy_init(0);
 
     if (neo_id == 0) {
         DRAIN_ALL_DFB(0);

@@ -21,7 +21,8 @@ void kernel_main() {
     DataflowBuffer dfb_in(cb_input);
     DataflowBuffer dfb_out(cb_output);
 
-    init_sfpu(cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_output);
+    copy_init(cb_input);
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         dfb_in.wait_front(1);
@@ -29,7 +30,7 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_tile_to_dst_init_short(cb_input);
+        copy_init(cb_input);
         copy_tile(cb_input, 0, 0);
         copy_tile(cb_input, 0, 1);
 

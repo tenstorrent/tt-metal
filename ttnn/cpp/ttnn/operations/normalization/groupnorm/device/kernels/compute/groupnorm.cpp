@@ -645,7 +645,7 @@ void kernel_main() {
                     uint32_t index_h1_offset = 0;
 
                     if (copy_or_add == true) {
-                        copy_tile_init(dfb_xmm_id);
+                        copy_init(dfb_xmm_id);
                     } else {
                         add_tiles_init(dfb_reread_out_id, dfb_xmm_id);
                     }
@@ -706,7 +706,7 @@ void kernel_main() {
                             if (apply_gamma_beta[j]) {
                                 mul_bcast_rows_init_short(dfb_reread_write_out_id, dfb_gamma_id);
                             } else {
-                                copy_tile_init(dfb_reread_write_out_id);
+                                copy_init(dfb_reread_write_out_id);
                             }
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;
@@ -739,7 +739,7 @@ void kernel_main() {
                             if (apply_gamma_beta[j]) {
                                 add_bcast_rows_init_short(dfb_inbeta_id, dfb_beta_id);
                             } else {
-                                copy_tile_init(dfb_inbeta_id);
+                                copy_init(dfb_inbeta_id);
                             }
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;

@@ -25,7 +25,8 @@ void kernel_main() {
     CircularBuffer cb_mask(cb_mask_idx);
     CircularBuffer cb_out(cb_out_idx);
 
-    unary_op_init_common(cb_grad_idx, cb_out_idx);
+    compute_kernel_hw_startup(cb_grad_idx, cb_out_idx);
+    copy_init(cb_grad_idx);
 
     for (uint32_t i = 0; i < input_height; ++i) {
         cb_grad.wait_front(max_tiles_per_core);

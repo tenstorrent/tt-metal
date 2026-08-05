@@ -47,8 +47,8 @@ void kernel_main() {
         DataflowBuffer dfb_scaler_obj(dfb_scaler);
         DataflowBuffer dfb_output_obj(dfb_output);
 
-        init_sfpu(dfb_input, dfb_output);
-        copy_tile_to_dst_init_short(dfb_input);
+        compute_kernel_hw_startup(dfb_input, dfb_output);
+        copy_init(dfb_input);
         dfb_scaler_obj.wait_front(onetile);
         PACK((llk_pack_reduce_mask_config<REDUCE_DIM, PackMode::Default>(dfb_output)));
 
@@ -130,7 +130,7 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 dfb_input_obj.wait_front(onetile);
                 tile_regs_acquire();
-                copy_tile_init(dfb_input);
+                copy_init(dfb_input);
                 copy_tile(dfb_input, 0, dst_idx);
                 negative_tile_init();
                 negative_tile(dst_idx);
@@ -145,7 +145,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 if (wt > 0) {
                     dfb_acc_obj.wait_front(onetile);
-                    copy_tile_init(dfb_acc);
+                    copy_init(dfb_acc);
                     copy_tile(dfb_acc, 0, dst_idx);
                 }
 
@@ -171,7 +171,7 @@ void kernel_main() {
 
             dfb_acc_obj.wait_front(onetile);
             tile_regs_acquire();
-            copy_tile_init(dfb_acc);
+            copy_init(dfb_acc);
             copy_tile(dfb_acc, 0, dst_idx);
             negative_tile_init();
             negative_tile(dst_idx);

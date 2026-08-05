@@ -29,7 +29,7 @@ void kernel_main() {
 
     // Seed DEST with the first input tile.
     input_dfb_obj.wait_front(one_tile);
-    copy_tile_to_dst_init_short(input_dfb);
+    copy_init(input_dfb);
     copy_tile(input_dfb, 0, 0);
     input_dfb_obj.pop_front(one_tile);
 

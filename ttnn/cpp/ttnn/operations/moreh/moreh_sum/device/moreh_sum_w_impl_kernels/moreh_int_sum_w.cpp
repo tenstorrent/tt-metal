@@ -26,7 +26,8 @@ void kernel_main() {
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
 
-    unary_op_init_common(cb_in0, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_out0);
+    copy_init(cb_in0);
 
     if (do_mask_w) {
         dfb_mask_w_obj.wait_front(onetile);

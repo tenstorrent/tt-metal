@@ -103,11 +103,13 @@ ALWI void process_tile(
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
+        reconfig_data_format_srca(cb_post_rhs, cb_post_lhs);
+        copy_init(cb_post_lhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_lhs, i, i * 2);
         }
-        copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);
+        reconfig_data_format_srca(cb_post_lhs, cb_post_rhs);
+        copy_init(cb_post_rhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
 
@@ -170,7 +172,8 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
 
-    unary_op_init_common(cb_post_lhs, cb_out);
+    compute_kernel_hw_startup(cb_post_lhs, cb_out);
+    copy_init(cb_post_lhs);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif

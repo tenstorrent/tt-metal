@@ -67,7 +67,7 @@ inline void compute_x_hat_preprocessing(const uint32_t num_tiles) {
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, tile_idx + block_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
-            copy_tile_init(cb_rstd_bcast_idx);
+            copy_init(cb_rstd_bcast_idx);
             copy_tile(cb_rstd_bcast_idx, 0, temp_reg);
 
             // Multiply by rstd: (input - mean) * rstd
@@ -110,7 +110,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
                 // Limitation: mask_tile only works when the mask register is immediately next to the data register.
                 const uint32_t mask_register = target_register + 1U;
 
-                copy_tile_init(cb_mask_w_idx);
+                copy_init(cb_mask_w_idx);
                 copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
                 mask_tile_init();
@@ -181,7 +181,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, target_register);
 
         // Load x_normalized for this tile
-        copy_tile_init(cb_x_hat_idx);
+        copy_init(cb_x_hat_idx);
         copy_tile(cb_x_hat_idx, col, temp_register);
 
         // Multiply: (dy * gamma) * x_normalized
@@ -194,7 +194,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
                 // Limitation: mask_tile only works when the mask register is immediately next to the data register.
                 const uint32_t mask_register = target_register + 1U;
 
-                copy_tile_init(cb_mask_w_idx);
+                copy_init(cb_mask_w_idx);
                 copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
                 mask_tile_init();
@@ -266,7 +266,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
                     // Limitation: mask_tile only works when the mask register is immediately next to the data register.
                     const uint32_t mask_register = target_register + 1U;
 
-                    copy_tile_init(cb_mask_w_idx);
+                    copy_init(cb_mask_w_idx);
                     copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
                     mask_tile_init();
@@ -346,7 +346,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
             const uint32_t target_register = (global_col == 0) ? sum_register : working_register;
 
             // Load x_normalized (x_hat)
-            copy_tile_init(cb_x_hat_idx);
+            copy_init(cb_x_hat_idx);
             copy_tile(cb_x_hat_idx, block_idx, x_norm_register);
 
             // Compute dy * gamma
@@ -364,7 +364,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
                     // Limitation: mask_tile only works when the mask register is immediately next to the data register.
                     const uint32_t mask_register = target_register + 1U;
 
-                    copy_tile_init(cb_mask_w_idx);
+                    copy_init(cb_mask_w_idx);
                     copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
                     mask_tile_init();
@@ -424,7 +424,7 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
 
     // Load pre-scaled sum: (1/N) * sum(dy*gamma)
     reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaled_dy_gamma_sum_idx);
-    copy_tile_init(cb_scaled_dy_gamma_sum_idx);
+    copy_init(cb_scaled_dy_gamma_sum_idx);
     copy_tile(cb_scaled_dy_gamma_sum_idx, 0, temp_register);
 
     // Subtract: dy*gamma - (1/N) * sum(dy*gamma)
@@ -442,7 +442,7 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
 
     // Multiply by rstd: dx = rstd * (...)
     reconfig_data_format(cb_rstd_bcast_idx, cb_rstd_bcast_idx);
-    copy_tile_init(cb_rstd_bcast_idx);
+    copy_init(cb_rstd_bcast_idx);
     copy_tile(cb_rstd_bcast_idx, 0, temp_register);
     mul_binary_tile_init();
     mul_binary_tile(dx_register, temp_register, dx_register);
@@ -464,7 +464,7 @@ inline void compute_dgamma_components(
 // acquire in the inner loop, push after block is processed
 inline void compute_dbeta_components(
     const uint32_t dy_tile_idx, const uint32_t dbeta_register, const uint32_t global_col) {
-    copy_tile_init(cb_dL_out_idx);
+    copy_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, dy_tile_idx, dbeta_register);
 }
 
@@ -474,7 +474,8 @@ void kernel_main() {
     }
     cb_wait_front(cb_scaler_idx, onetile);
 
-    init_sfpu(cb_x_hat_idx, cb_dx_idx);
+    compute_kernel_hw_startup(cb_x_hat_idx, cb_dx_idx);
+    copy_init(cb_x_hat_idx);
     binary_op_init_common(cb_x_hat_idx, cb_gamma_idx, cb_dx_idx);
     reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
 
