@@ -19,7 +19,7 @@ import os
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
+from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, interleaved_prefill_config, matmul_rows
 
 from .weights import AttentionWeights
 
@@ -97,11 +97,47 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     """Fused QKV matmul (no bias for Gemma4).
 
     ``memory_config`` lets the packed-verify decode keep the projection output
-    resident on L1; ``None`` keeps the op default (DRAM) for existing callers.
+    resident on L1; ``None`` defers to ``interleaved_prefill_config`` and then to
+    the op default (DRAM).
+
+    On the interleaved-weight path (everything off Blackhole) prefill gets an
+    explicit program config instead of ttnn's auto selection — see
+    ``interleaved_prefill_config``. This adds no ops: the config and the output
+    memory config are arguments to the same single ``ttnn.linear``, and in0 is
+    already L1-interleaved here, so nothing is resharded. Prefill output defaults
+    to L1 *block-sharded* (QKV sweep winner); callers that reshape / split heads
+    should run ``interleave_qkv_if_sharded`` first.
     """
     if isinstance(weights.wqkv, DramShardedLinear):
         return weights.wqkv(hidden_states, out_memory_config=memory_config)
-    return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config)
+    program_config, tuned_out_memcfg, compute_kernel_config = interleaved_prefill_config(
+        matmul_rows(hidden_states), int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
+    )
+    return ttnn.linear(
+        hidden_states,
+        weights.wqkv,
+        program_config=program_config,
+        memory_config=memory_config if memory_config is not None else tuned_out_memcfg,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+
+def interleave_qkv_if_sharded(xqkv, memory_config=None):
+    """Convert block-/width-/height-sharded fused-QKV to interleaved for head split.
+
+    ``nlp_create_qkv_heads`` and batched reshape expect interleaved layout.
+    Default destination is L1 interleaved (keeps the activation on-chip after the
+    block-sharded matmul write); pass DRAM via ``memory_config`` when needed.
+    """
+    if not xqkv.is_sharded():
+        return xqkv
+    dest = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
+    # Only L1/DRAM interleaved destinations are valid for sharded_to_interleaved.
+    if dest not in (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG):
+        dest = ttnn.L1_MEMORY_CONFIG
+    out = ttnn.sharded_to_interleaved(xqkv, dest)
+    xqkv.deallocate(True)
+    return out
 
 
 def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
