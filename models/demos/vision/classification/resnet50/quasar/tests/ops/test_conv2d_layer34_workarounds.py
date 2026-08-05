@@ -163,6 +163,7 @@ _LAYER3_HS = [
     (256, 1024, 14, 14, (1, 1), 1, 0),  # layer3.conv3 (expand)
     (1024, 256, 14, 14, (1, 1), 1, 0),  # layer3.conv1 (modules 2-6)
     (256, 256, 14, 14, (3, 3), 1, 1),   # layer3.conv2 (modules 2-6)
+    (512, 1024, 28, 28, (1, 1), 2, 0),  # layer3_module1.downsample (28->14) -- was forced BLOCK; now HS on quasar
 ]
 # fmt: on
 
