@@ -4,7 +4,7 @@
 """
 TTTv2 Llama-3.2-1B-Instruct demo — accuracy and performance measurement.
 
-Uses ``EagerLlama32_1BExecutor`` / ``TracedLlama32_1BExecutor`` directly (no vLLM adapter).
+Uses the model-owned ``Llama32_1BExecutor`` directly (no vLLM adapter).
 
 **Mesh note:** Llama-3.2-1B-Instruct has 32 attention heads and 8 KV heads, so N150 (1),
 N300 (2) and T3K (8) are all supported (32 and 8 each divide 1/2/8). PERF.md publishes
@@ -46,24 +46,23 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
-from models.common.models.executor import (
+from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.lane_group import LaneGroupExecutor
+from models.common.models.llama32_1b.executor import Llama32_1BExecutor, Llama32_1BExecutorConfig
+from models.common.models.llama32_1b.hf_adaptor import from_pretrained
+from models.common.models.llama32_1b.model import LLAMA32_1B_ACCURACY, LLAMA32_1B_PERFORMANCE, Llama32_1BTransformer1D
+from models.common.sampling.sampling_params import SamplingParams
+from models.common.tests.demos.cleanup_utils import cleanup_model_case
+from models.common.tests.demos.run_helpers import (
+    assert_no_special_tokens,
     load_eval_repeat_prompts_batch32,
+    make_contiguous_page_table,
     run_eval_repeat_batch32,
     run_perf_benchmark,
     run_teacher_forcing,
 )
-from models.common.models.llama32_1b.model import (
-    LLAMA32_1B_ACCURACY,
-    LLAMA32_1B_PERFORMANCE,
-    EagerLlama32_1BExecutor,
-    Llama32_1BTransformer1D,
-    TracedLlama32_1BExecutor,
-)
-from models.common.sampling.sampling_params import SamplingParams
-from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -87,7 +86,7 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # gap once seen at this cell (~128 vs ~153 t/s/u) was closed by the shared on-device decode loop.
 # The gate stays at the TTTv1 value (better-of rule); TTTv2 now measures ~152/150 t/s/u (perf/acc,
 # T3K on_device_topk), TTTv1 parity within the 5% PERF_TOLERANCE. Enabled on the perf path via
-# TracedLlama32_1BExecutor(ondevice_decode_loop=...). Every cell is now at parity-or-better.
+# The traced model-owned executor keeps the established throughput gates unchanged.
 # =============================================================================
 
 # top1/top5 are teacher-forcing accuracy floors (sampling-independent). Perf metrics for batch-1
@@ -278,16 +277,9 @@ def mesh_device(ttnn_mesh_device):
 
 def _skip_unless_heads_divide_mesh(mesh_device: ttnn.MeshDevice, hf_model_id: str) -> None:
     n_dev = mesh_device.get_num_devices()
-    if n_dev <= 1:
+    if n_dev in (1, 2, 8):
         return
-    cfg = AutoConfig.from_pretrained(hf_model_id)
-    n_h, n_kv = cfg.num_attention_heads, cfg.num_key_value_heads
-    if n_h % n_dev == 0 and n_kv % n_dev == 0:
-        return
-    pytest.skip(
-        f"Incompatible mesh for {hf_model_id}: {n_dev} devices, "
-        f"num_attention_heads={n_h}, num_key_value_heads={n_kv}."
-    )
+    pytest.skip(f"Incompatible mesh for {hf_model_id}: Llama-3.2-1B supports 1, 2, or 8 devices, got {n_dev}")
 
 
 def get_device_name(mesh_device: ttnn.MeshDevice) -> str:
@@ -451,20 +443,74 @@ def create_model(
     precision = LLAMA32_1B_PERFORMANCE if optimizations == "performance" else LLAMA32_1B_ACCURACY
 
     try:
-        model = Llama32_1BTransformer1D.from_pretrained(
+        llm = from_pretrained(
             mesh_device,
-            hf_model,
+            hf_model=hf_model,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
-            num_layers=None,
+            n_layers=None,
             cache_dir=cache_dir,
-            precision=precision,
-            executor_mode=True,
+            optimizations=precision,
         )
     except Exception as e:
         pytest.skip(f"Could not build Llama-3.2-1B model (weights / memory / mesh): {e}")
 
+    model = llm.model
+    model.demo_tokenizer = llm.tokenizer
     return model
+
+
+def create_executor(
+    model: Llama32_1BTransformer1D, *, traced: bool, device_sampling_enabled: bool
+) -> Llama32_1BExecutor:
+    block_size = 32
+    max_num_blocks = ((model.config.max_seq_len + block_size - 1) // block_size) * model.config.max_batch_size
+    attention_config = model.config.block_configs[0].attention_config
+    return Llama32_1BExecutor(
+        model,
+        model.model_args,
+        Llama32_1BExecutorConfig(
+            trace=TraceConfig(mode="all" if traced else "none"),
+            warmup=WarmupConfig(),
+            paged_kv_cache=PagedKVCacheConfig(
+                block_size=block_size,
+                max_num_blocks=max_num_blocks,
+                num_blocks=max_num_blocks,
+                dtype=attention_config.kv_cache_dtype,
+            ),
+            device_sampling_enabled=device_sampling_enabled,
+        ),
+    )
+
+
+def _warmup_demo_executor(executor, *, kv_cache, page_table):
+    config = getattr(executor, "config", None)
+    if config is None:
+        config = executor.lanes[0].config
+    can_sample_on_device = config.device_sampling_enabled
+    max_batch_size = getattr(executor, "max_batch_size", None)
+    if max_batch_size is None:
+        max_batch_size = int(executor.model.config.max_batch_size)
+    prefill_kwargs = {
+        "kv_cache": kv_cache,
+        "can_sample_on_device": can_sample_on_device,
+    }
+    decode_kwargs = {
+        "kv_cache": kv_cache,
+        "max_batch_size": int(max_batch_size),
+        "num_blocks": int(page_table.shape[-1]),
+        "can_sample_on_device": can_sample_on_device,
+    }
+
+    # Compile both graph families before capturing either trace so trace plans
+    # never depend on which warmup happens to run first.
+    executor.warmup_model_decode(enable_trace=False, **decode_kwargs)
+    executor.warmup_model_prefill(enable_trace=False, **prefill_kwargs)
+
+    if config.trace.prefill_enabled:
+        executor.warmup_model_prefill(enable_trace=True, **prefill_kwargs)
+    if config.trace.decode_enabled:
+        executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
 
 
 # =============================================================================
@@ -520,41 +566,6 @@ def _dp_or_skip(mesh_device: ttnn.MeshDevice, data_parallel: int) -> None:
         pytest.skip(f"DP-{data_parallel} needs {data_parallel} single-device groups; have {n} devices")
 
 
-def assert_no_special_tokens(
-    generated_token_ids, tokenizer, *, case_name: str = "", is_ci_env: bool | None = None
-) -> None:
-    """Garbage guard: no special token mid-stream. Mirrors TTTv1 ``simple_text_demo.py``.
-
-    TTTv2's ``result.generated_token_ids[user]`` already starts at the first generated token
-    (prefill argmax), so unlike TTTv1 we do not slice off the prompt — these are output-only. Each
-    user's output is truncated at the first stop token (EoS / eot) before scanning, then checked for
-    any ``tokenizer.all_special_ids`` member. Following TTTv1, a survivor logs a warning always but
-    hard-fails only under CI (``CI == "true"``), so local runs finish while CI stays strict.
-    """
-    if is_ci_env is None:
-        is_ci_env = os.environ.get("CI") == "true"
-    special = set(tokenizer.all_special_ids)
-    stop = set()
-    if tokenizer.eos_token_id is not None:
-        stop.add(tokenizer.eos_token_id)
-    eot = tokenizer.convert_tokens_to_ids("<|eot_id|>")
-    if isinstance(eot, int) and eot >= 0:
-        stop.add(eot)
-    offenders = 0
-    for out in generated_token_ids:
-        seq = list(out)
-        for i, t in enumerate(seq):
-            if t in stop:
-                seq = seq[:i]
-                break
-        if any(t in special for t in seq):
-            offenders += 1
-    if offenders:
-        logger.warning(f"[{case_name}] model produced special tokens ({offenders}/{len(generated_token_ids)} users)")
-        if is_ci_env:
-            assert False, f"model produced special tokens ({offenders} users)"
-
-
 def _run_dp_smoke(
     mesh_device: ttnn.MeshDevice,
     optimizations: str,
@@ -566,16 +577,14 @@ def _run_dp_smoke(
 ) -> None:
     """Single-user data-parallel scaling smoke across ``data_parallel`` submeshes.
 
-    Builds one model + one traced executor + one KV cache + one page table per submesh
-    (one user each), runs ``run_perf_benchmark`` per submesh sequentially, collects the
-    per-submesh output, and asserts no special tokens. Every executor and model is cleaned
-    up in ``finally`` even on mid-loop failure.
+    Builds one model + traced executor per submesh, composes them through the migrated
+    ``LaneGroupExecutor``, and runs one global batch through its lane routing, decode
+    partitioning, output assembly, and cleanup paths.
     """
     _dp_or_skip(mesh_device, data_parallel)
 
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
     _skip_unless_heads_divide_mesh(mesh_device, hf_model)
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
     precision = LLAMA32_1B_PERFORMANCE if optimizations == "performance" else LLAMA32_1B_ACCURACY
 
     submeshes = create_dp_submeshes(mesh_device, data_parallel)
@@ -590,71 +599,73 @@ def _run_dp_smoke(
     }
 
     models: list = []
-    executors: list = []
-    all_generated: list = []
+    lanes: list = []
+    group = None
     try:
-        for i, sm in enumerate(submeshes):
+        for sm in submeshes:
             try:
-                model = Llama32_1BTransformer1D.from_pretrained(
+                llm = from_pretrained(
                     sm,
-                    hf_model,
+                    hf_model=hf_model,
                     max_batch_size=1,
                     max_seq_len=max_seq_len,
-                    num_layers=None,
+                    n_layers=None,
                     cache_dir=cache_dir,
-                    precision=precision,
-                    executor_mode=True,
+                    optimizations=precision,
                 )
+                model = llm.model
+                model.demo_tokenizer = llm.tokenizer
             except Exception as e:
                 pytest.skip(f"Could not build Llama-3.2-1B model (weights / memory / mesh): {e}")
             models.append((model, sm))
-
-            traced_executor = TracedLlama32_1BExecutor(model, sm)
-            executors.append(traced_executor)
-
-            ma = model.model_args
-            assert ma is not None
-
-            block_size = 32
-            n_dev_sm = sm.get_num_devices()
-            max_num_blocks_per_user = ma.max_seq_len // block_size
-            max_num_blocks = max_num_blocks_per_user * ma.max_batch_size  # max_batch_size == 1
-
-            kv_cache_shape = (max_num_blocks, ma.n_kv_heads // n_dev_sm, block_size, ma.head_dim)
-            kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-            page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(
-                ma.max_batch_size, max_num_blocks_per_user
+            lanes.append(
+                create_executor(
+                    model,
+                    traced=True,
+                    device_sampling_enabled=sampling_mode in _on_device_params,
+                )
             )
 
-            input_tokens, prompt_lens = tokenize_prompts(prompts[i : i + 1], tokenizer)
+        group = LaneGroupExecutor(lanes, mesh_device=mesh_device)
+        tokenizer = models[0][0].demo_tokenizer
+        kv_cache = group.allocate_kv_cache()
+        # Each lane owns an independent physical block pool, so every global row uses the
+        # same lane-local contiguous mapping instead of global cross-lane block offsets.
+        page_table = make_contiguous_page_table(1, max_seq_len, 32).repeat(data_parallel, 1)
+        _warmup_demo_executor(group, kv_cache=kv_cache, page_table=page_table)
+        input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer)
 
-            sampling_params = (
-                _on_device_params[sampling_mode]
-                if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
-                else None
-            )
-            logger.info(
-                f"[ci-b1-DP-{data_parallel}] submesh {i} SAMPLING_MODE={sampling_mode} "
-                f"-> sampling_params={sampling_params}, stop_at_eos={stop_at_eos}"
-            )
+        sampling_params = (
+            _on_device_params[sampling_mode]
+            if sampling_mode in _on_device_params and getattr(models[0][0], "supports_on_device_sampling", False)
+            else None
+        )
+        logger.info(
+            f"[ci-b1-DP-{data_parallel}] SAMPLING_MODE={sampling_mode} "
+            f"-> sampling_params={sampling_params}, stop_at_eos={stop_at_eos}"
+        )
 
-            result = run_perf_benchmark(
-                traced_executor,
-                tokens=input_tokens,
-                kv_cache=kv_cache,
-                page_table=page_table,
-                num_decode_tokens=max_gen_tokens,
-                max_batch_size=1,
-                prompt_lens=prompt_lens,
-                sampling_params=sampling_params,
-            )
-            all_generated.append(result.generated_token_ids[0])
-            log_generated_text(prompts[i : i + 1], result.generated_token_ids, tokenizer)
-
-        assert_no_special_tokens(all_generated, tokenizer, case_name=f"ci-b1-DP-{data_parallel}")
+        result = run_perf_benchmark(
+            group,
+            tokens=input_tokens,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            num_decode_tokens=max_gen_tokens,
+            max_batch_size=data_parallel,
+            prompt_lens=prompt_lens,
+            sampling_params=sampling_params,
+            prefill_sampling_params=None,
+        )
+        assert len(result.generated_token_ids) == data_parallel
+        assert all(result.generated_token_ids), f"ci-b1-DP-{data_parallel}: every DP lane must return output"
+        log_generated_text(prompts, result.generated_token_ids, tokenizer)
+        assert_no_special_tokens(result.generated_token_ids, tokenizer, case_name=f"ci-b1-DP-{data_parallel}")
     finally:
-        for ex in executors:
-            ex.cleanup()
+        if group is not None:
+            group.cleanup()
+        else:
+            for lane in lanes:
+                lane.cleanup()
         for model, sm in models:
             cleanup_model_case(model, sm)
         # When data_parallel > 1 we carved child submeshes off the fixture-owned parent
@@ -793,20 +804,13 @@ def _run_token_accuracy(model: Llama32_1BTransformer1D, mesh_device, expected):
 
     prompt_tokens = reference_tokens[:prompt_len].unsqueeze(0)
 
-    executor = EagerLlama32_1BExecutor(model, mesh_device)
-    ma = model.model_args
-    assert ma is not None
-
-    max_batch_size = ma.max_batch_size
+    executor = create_executor(model, traced=False, device_sampling_enabled=False)
+    max_batch_size = model.config.max_batch_size
     prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)
     block_size = 32
-    max_seq_len = ma.max_seq_len
-    max_num_blocks_per_user = max_seq_len // block_size
-    max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-    kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-    kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+    max_seq_len = model.config.max_seq_len
+    kv_cache = executor.allocate_kv_cache()
+    page_table = make_contiguous_page_table(max_batch_size, max_seq_len, block_size)
 
     target_top5 = select_teacher_forcing_top5_slice(
         top5_tokens,
@@ -831,6 +835,7 @@ def _run_token_accuracy(model: Llama32_1BTransformer1D, mesh_device, expected):
         profiler=profiler,
     )
     profiler.end("run")
+    executor.cleanup()
 
     top1 = result.top1_accuracy() * 100
     top5 = result.top5_accuracy() * 100
@@ -864,7 +869,7 @@ def _run_token_accuracy(model: Llama32_1BTransformer1D, mesh_device, expected):
             ml_model_name=hf_model,
             ml_model_type="llm",
             device_name=get_device_name(mesh_device),
-            num_layers=ma.n_layers,
+            num_layers=model.config.n_layers,
             batch_size=1,
             input_sequence_length=prompt_len,
             output_sequence_length=num_target,
@@ -910,7 +915,7 @@ def _run_perf_benchmark(
     max_prefill_len: int | None = None,
     num_decode_tokens: int | None = None,
 ):
-    """Timed prefill + decode (``TracedLlama32_1BExecutor``).
+    """Timed prefill + decode with the traced model-owned executor.
 
     Prefill uses each prompt's natural token length (TTTv1 ``preprocess_inputs_prefill``
     semantics — the executor buckets to ``get_padded_prefill_len``); decode runs for
@@ -922,7 +927,7 @@ def _run_perf_benchmark(
     decode position never overruns the page table (the ``batch-32-ci`` leg requests 1024).
     """
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
+    tokenizer = model.demo_tokenizer
 
     # On-device sampling toggle for N150/N300 evidence-gathering (see sampling handoff docs):
     #   host            -> sampling_params=None (host-argmax, the default shipped path)
@@ -939,37 +944,29 @@ def _run_perf_benchmark(
         if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
         else None
     )
+    pipeline_readback = os.environ.get("PIPELINE_READBACK", "1").lower() not in ("0", "false", "no")
     logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
+    logger.info(f"[{case_name}] PIPELINE_READBACK={pipeline_readback}")
 
     # Batched-prefill A/B knob (parity caveat #12): set DISABLE_BATCHED_PREFILL=1 to force the
     # sequential per-user prefill loop (the pre-feature baseline) for before/after TTFT comparison.
     # Companion knob (PLAN_01): DISABLE_MINIMAL_MATMUL=1 forces QKV/W2 prefill back to ttnn.linear
     # (read at model build time, so it must be in the env before from_pretrained — it already is here).
-    if os.environ.get("DISABLE_BATCHED_PREFILL") and model.model_args is not None:
-        model.model_args.disable_batched_prefill = True
-
-    # Free-running perf run: enable the executor's on-device decode loop on the on-device sampling
-    # path (inert on host/force-argmax; gated to the top-k path by _decode_loop_active). This is the
-    # #49282 T3K batch-1 decode-gap fix — it must be active on the perf path for the T3K b1 gate.
-    # fast_prefill_last_token: slice the single consumed last-token row on device before readback so the
-    # batch-1 host concat/readback moves one row instead of the full [1,1,32,vocab] tile — closes most of
-    # the residual T3K batch-1 PREFILL TTFT gap vs TTTv1 (which reads back only tokens). Inert for batch>1.
-    traced_executor = TracedLlama32_1BExecutor(
-        model, mesh_device, ondevice_decode_loop=sampling_params is not None, fast_prefill_last_token=True
+    # Free-running on-device sampling pipelines each token readback behind the next traced decode.
+    # This is the shared-runtime counterpart of the legacy executor's on-device decode loop and is
+    # required for the established T3K batch-1 throughput gate.
+    traced_executor = create_executor(
+        model,
+        traced=True,
+        device_sampling_enabled=sampling_params is not None,
     )
     try:
-        ma = model.model_args
-        assert ma is not None
-
         block_size = 32
-        max_seq_len = ma.max_seq_len
-        max_batch_size = ma.max_batch_size
-        max_num_blocks_per_user = max_seq_len // block_size
-        max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-        kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-        kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-        page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+        max_seq_len = model.config.max_seq_len
+        max_batch_size = model.config.max_batch_size
+        kv_cache = traced_executor.allocate_kv_cache()
+        page_table = make_contiguous_page_table(max_batch_size, max_seq_len, block_size)
+        _warmup_demo_executor(traced_executor, kv_cache=kv_cache, page_table=page_table)
 
         # Decode-token budget, clamped to the KV-cache headroom. Prompts bucket to ~128 and
         # we keep a 16-token margin, so the high-water decode position stays inside max_seq_len.
@@ -1001,6 +998,8 @@ def _run_perf_benchmark(
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
             sampling_params=sampling_params,
+            prefill_sampling_params=None if mesh_device.get_num_devices() > 1 else sampling_params,
+            pipeline_readback=pipeline_readback,
             profiler=profiler,
         )
         profiler.end("run")
@@ -1034,7 +1033,7 @@ def _run_perf_benchmark(
                 ml_model_name=hf_model,
                 ml_model_type="llm",
                 device_name=get_device_name(mesh_device),
-                num_layers=ma.n_layers,
+                num_layers=model.config.n_layers,
                 batch_size=result.batch_size,
                 input_sequence_length=prefill_seq_len,
                 output_sequence_length=effective_decode,
@@ -1072,33 +1071,29 @@ def _run_eval_repeat_batch32(model: Llama32_1BTransformer1D, mesh_device):
     deterministic and mesh-agnostic, the recommended default for the determinism assert).
     """
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
-
-    ma = model.model_args
-    assert ma is not None
+    tokenizer = model.demo_tokenizer
 
     # Batched-prefill A/B knob (parity caveat #12): DISABLE_BATCHED_PREFILL=1 forces the pure
     # per-bucket sequential prefill (the Phase-1 path) so eval-32 can be validated both ON and OFF.
-    if os.environ.get("DISABLE_BATCHED_PREFILL"):
-        ma.disable_batched_prefill = True
-
     block_size = 32
-    max_seq_len = ma.max_seq_len
-    max_batch_size = ma.max_batch_size
-    max_num_blocks_per_user = max_seq_len // block_size
-    max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-    kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+    max_seq_len = model.config.max_seq_len
+    max_batch_size = model.config.max_batch_size
+    page_table = make_contiguous_page_table(max_batch_size, max_seq_len, block_size)
 
     # Fresh traced executor + zeroed KV cache per repeat (driver owns the lifecycle), so the
     # rotated batches are fully independent — see run_eval_repeat_batch32 for why reuse corrupts
     # the 3rd repeat on hardware.
     def make_executor():
-        return TracedLlama32_1BExecutor(model, mesh_device)
+        return create_executor(
+            model,
+            traced=True,
+            device_sampling_enabled=sampling_params is not None,
+        )
 
     def allocate_kv_cache(executor):
-        return executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+        kv_cache = executor.allocate_kv_cache()
+        _warmup_demo_executor(executor, kv_cache=kv_cache, page_table=page_table)
+        return kv_cache
 
     # TTTv1 ci-eval-32 numeric prompts (parity). NOTE: on small models these can in principle
     # degenerate into repetitive loops whose argmax ties flip by batch slot under on-device sampling
