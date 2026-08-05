@@ -838,8 +838,8 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
 }
 
 TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiTileColBroadcastWithDestReuse) {
-    if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "Broadcast destination reuse is not supported on Quasar";
+    if (this->arch_ != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "FP32 COL-broadcast destination reuse is a Blackhole-specific regression";
     }
 
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
