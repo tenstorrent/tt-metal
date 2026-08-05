@@ -47,6 +47,23 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.ccl import cp_degree
 
+TILE_HEIGHT = 32
+
+# Counts ring_joint history reads. The long-context test asserts this advances:
+# without it, a silent fallback to the mask path would still produce finite,
+# stable-looking output (each chunk attending only within itself), so every
+# smoke assertion would pass while history was being ignored.
+RING_ATTENTION_CALLS = 0
+
+
+def reset_ring_attention_calls():
+    global RING_ATTENTION_CALLS
+    RING_ATTENTION_CALLS = 0
+
+
+def ring_attention_calls():
+    return RING_ATTENTION_CALLS
+
 
 def ring_cache_seq_len(max_seq_len, cp):
     """Per-rank cache sequence length. Each rank stores 1/cp of every chunk."""
@@ -134,6 +151,11 @@ def write_chunk_to_ring_cache(
     chunk-aligned boundary that reduces to ``chunk_index * slab``.
     """
     for cache, chunk in ((cache_k, tt_k), (cache_v, tt_v)):
+        # The writer requires cache.dtype == input.dtype, and the cache is BFP8_B
+        # because that is what ring_joint requires of K/V (with BF16 Q). The model
+        # carries K/V in bf16, so cast on the way in.
+        if chunk.dtype != cache.dtype:
+            chunk = ttnn.typecast(chunk, cache.dtype)
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             cache,
             chunk,
@@ -174,14 +196,28 @@ def ring_prefill_attention(
     Returns ``[1, num_local_q_heads, q_local, head_dim]`` — this rank's rows only, so
     the output stays CP-sharded exactly like the input.
     """
+    global RING_ATTENTION_CALLS
+    RING_ATTENTION_CALLS += 1
     program_config = program_config or ring_prefill_program_config(mesh_device, ccl_manager, head_dim)
     cp = cp_degree(mesh_config)
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
 
-    # The gather buffer must span the FULL cache capacity, not logical_n: ring_joint
-    # gathers the entire per-device shard regardless of how much is valid. Sizing to
-    # logical_n only survives a 2-chunk run and then fails "gather dim 2 too small".
-    gather_seq = cache_seq * cp
+    # Buffer size depends on the mode, and the two requirements are opposites.
+    #
+    # Dense (no window): ring_joint gathers the entire per-device shard, so the buffer
+    # must span the FULL cache capacity — not logical_n, which survives a 2-chunk run
+    # and then fails "gather dim 2 too small".
+    #
+    # Sliding: only the predecessor halo is exchanged, and the op *requires* a compact
+    # buffer (gathered rows < cache_seq * ring), rejecting a full-capacity one with
+    # "requires a compact halo buffer". Size it to the halo, which is the window
+    # rounded up to whole k chunks.
+    if sliding_window:
+        k_chunk = program_config.k_chunk_size
+        halo_tokens = -(-(sliding_window - 1) // k_chunk) * k_chunk
+        gather_seq = max(halo_tokens, TILE_HEIGHT)
+    else:
+        gather_seq = cache_seq * cp
     buffer_k = ccl_manager.get_ring_gather_buffer("ring_k", num_local_kv_heads, gather_seq, head_dim, cache_k.dtype)
     buffer_v = ccl_manager.get_ring_gather_buffer("ring_v", num_local_kv_heads, gather_seq, head_dim, cache_v.dtype)
 

@@ -140,6 +140,7 @@ class Gemma4DecoderLayer:
             weight_dtype=attention_dtype,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
             ring_prefill_chunk_size=ring_prefill_chunk_size,
+            max_seq_len=max_seq_len,
         )
 
         # Shared/dense MLP (HF key: "mlp")
