@@ -15,6 +15,41 @@ from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
+_WH_KV_PAD_NOTE = """Why Wormhole decode skips the ttnn.pad before the KV-cache reshard.
+
+The decode cache write used to be, for both the paged and the per-head branch:
+
+    p    = ttnn.pad(t, [1, B, 32, HD], ...)      # t is [1,B,NKV,HD] or [1,B,1,HD]
+    ttnn.deallocate(t)                           # free the pad's INPUT
+    sh   = ttnn.to_memory_config(p, kv_update_shard_cfg)
+    ttnn.deallocate(p)
+    ttnn.experimental.paged_update_cache(cache, sh, ...)
+
+The pad moves no data: in TILE layout the head dim is already padded to 32 physically. But
+freeing its input immediately hands that L1 back to the allocator while the pad's write is still
+pending, and the shard allocation on the next line reuses the same region and clobbers it. At
+B<=8 the footprint is too small for the reused region to collide; at B=32 (4x the L1) it does,
+which is why the corruption was NON-DETERMINISTIC and arrived in whole 32-column tile blocks.
+
+Controlled 2x2 on N300, 5 reps, correct user rows out of B:
+
+    pad + dealloc early   B=8 8/8    B=32 10-13/32   <-- the original sequence
+    pad + dealloc late    B=8 8/8    B=32 32/32
+    NO pad (Wormhole now) B=8 8/8    B=32 32/32      <-- and one fewer op per tensor
+
+Resharding the unpadded tensor is equivalent: to_memory_config shards on the PADDED height
+(B*32), which is exactly paged_update_cache's documented "height sharded on B cores" input, and
+num_kv_heads still comes from the cache. Verified identical shard specs (grid/shape/orientation)
+against the native nlp_create_qkv_heads_decode output at B=8/16/32.
+
+Downstream effect of the fix on N300, B=32: attention pos0 PCC 0.42-0.91 -> 0.99993-0.99996;
+test_model_tp batched decode/chunked-prefill 0.6162-0.9697 -> 0.9993-0.9996.
+
+Blackhole deliberately stays on the original path: it has 1.84x the L1 (140 cores vs 80), so the
+collision was likely never reachable there, and the fix is unverified on P150 from this bring-up
+host. The same removal should be applied there once it can be tested.
+"""
+
 
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     """Shard one full-attention layer's weights across the mesh."""
@@ -575,15 +610,23 @@ class TPAttention:
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
             keys, values = self.paged_k, self.paged_v
-            k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-            v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
+            # Wormhole drops the pad to [1,B,32,HD] (see _WH_KV_PAD_NOTE); Blackhole keeps the
+            # original pad-then-reshard sequence verbatim.
             _kv_cfg = self._kv_shard_cfg(B)
-            k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
-            v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
-            ttnn.deallocate(k_p)
-            ttnn.deallocate(v_p)
+            if tpc.is_blackhole():
+                k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
+                v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
+                ttnn.deallocate(k)
+                ttnn.deallocate(v)
+                k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
+                v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
+                ttnn.deallocate(k_p)
+                ttnn.deallocate(v_p)
+            else:
+                k_sh = ttnn.to_memory_config(k, _kv_cfg)
+                v_sh = ttnn.to_memory_config(v, _kv_cfg)
+                ttnn.deallocate(k)
+                ttnn.deallocate(v)
             # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
             ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
             ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
@@ -603,19 +646,26 @@ class TPAttention:
             )
             ttnn.deallocate(q)
         else:
-            # Internal per-head KV caches; pad NKV head dim to 32 for tile-aligned update
+            # Internal per-head KV caches. Wormhole reshards the [1,B,1,HD] single-head slice
+            # directly; Blackhole keeps the original pad-to-32 sequence verbatim (_WH_KV_PAD_NOTE).
             for h in range(NKV):
                 k_h = ttnn.slice(k, (0, 0, h, 0), (1, B, h + 1, HD))
                 v_h = ttnn.slice(v, (0, 0, h, 0), (1, B, h + 1, HD))
-                k_hp = ttnn.pad(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-                v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-                ttnn.deallocate(k_h)
-                ttnn.deallocate(v_h)
                 _kv_cfg = self._kv_shard_cfg(B)
-                k_sh = ttnn.to_memory_config(k_hp, _kv_cfg)
-                v_sh = ttnn.to_memory_config(v_hp, _kv_cfg)
-                ttnn.deallocate(k_hp)
-                ttnn.deallocate(v_hp)
+                if tpc.is_blackhole():
+                    k_hp = ttnn.pad(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+                    v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+                    ttnn.deallocate(k_h)
+                    ttnn.deallocate(v_h)
+                    k_sh = ttnn.to_memory_config(k_hp, _kv_cfg)
+                    v_sh = ttnn.to_memory_config(v_hp, _kv_cfg)
+                    ttnn.deallocate(k_hp)
+                    ttnn.deallocate(v_hp)
+                else:
+                    k_sh = ttnn.to_memory_config(k_h, _kv_cfg)
+                    v_sh = ttnn.to_memory_config(v_h, _kv_cfg)
+                    ttnn.deallocate(k_h)
+                    ttnn.deallocate(v_h)
                 ttnn.experimental.paged_update_cache(self.k_caches[h], k_sh, update_idxs_tensor=cur_pos_tt)
                 ttnn.experimental.paged_update_cache(self.v_caches[h], v_sh, update_idxs_tensor=cur_pos_tt)
                 ttnn.deallocate(k_sh)
