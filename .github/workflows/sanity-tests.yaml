@@ -187,6 +187,11 @@ on:
         default: false
         type: boolean
         description: "Enable LLK asserts"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
   push:
     branches: ["main"]
   schedule:
