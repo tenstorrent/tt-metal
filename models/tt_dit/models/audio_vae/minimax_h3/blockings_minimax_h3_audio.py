@@ -19,22 +19,36 @@ is a performance-pass job -- these exist only so the correctness gates can run.
 
 from __future__ import annotations
 
+import os
+
 from ....utils.conv3d import _FP32_BLOCKINGS, aligned_channels
 
 # 16 overshot L1 by 1.26x (1979264 B against 1572864 B) at the widest audio convs.
 T_OUT_BLOCK = 8
 C_OUT_BLOCK = 32
-MAX_C_IN_BLOCK = 128
+
+# ``C_in_block`` is not only a performance knob: conv3d accumulates one partial sum per block over the
+# reduction and those partials are rounded, so a narrower block is measurably less accurate *in isolation*
+# -- on `conv_pre` (Cin 2048 x k 7) the error falls monotonically, 2.40e-03 at 32, 1.86e-03 at 128,
+# 1.63e-03 at 512, and with operand splitting on, 512 is 1.48x better than 128.
+#
+# **That does not transfer end to end, so 128 stays.** Measured with every other lever on: 128 gives
+# 3.20 % chain RMSE, 256 gives 3.31 % (no better), and 512 fails outright
+# (`program.cpp:1706`). The reason is structural -- the chain is dominated by the 126 AMP convs at
+# Cin 8-512, where the block cannot widen anyway, so only `conv_pre` and `dec_in_proj` would gain and
+# there are two of them against 126. Override with ``MINIMAX_H3_AUDIO_MAX_C_IN_BLOCK`` to re-sweep;
+# see STATE.md am. 113.
+MAX_C_IN_BLOCK = int(os.environ.get("MINIMAX_H3_AUDIO_MAX_C_IN_BLOCK", "128"))
 
 
 def _c_in_block(in_channels: int) -> int:
-    """Largest 32-multiple <= 256 that divides ``in_channels`` evenly.
+    """Largest 32-multiple <= ``MAX_C_IN_BLOCK`` that divides ``in_channels`` evenly.
 
     The kernel requires ``C_in_block`` to be a multiple of the tile width and to divide the
     padded input channel count.
     """
     aligned = aligned_channels(in_channels)
-    for block in range(min(MAX_C_IN_BLOCK, aligned), 0, -32):
+    for block in range(min(MAX_C_IN_BLOCK, aligned) // 32 * 32, 0, -32):
         if aligned % block == 0:
             return block
     return 32

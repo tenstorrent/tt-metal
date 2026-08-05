@@ -49,25 +49,38 @@ export TT_DIT_CACHE_DIR=/data/kevinmi/tt_dit_cache
 
 ## Pending work
 
-### Audio decode precision — implemented behind a flag; one decision left (am. 111, 112)
-`MINIMAX_H3_AUDIO_CONV_SPLIT` ∈ `off` (default) / `weight` / `full` splits the fp32 conv operands into
-`bf16 hi + exact residual`, beating the multiplier-mantissa floor. Measured end to end at 5 s stereo:
+### Audio decode precision — levers exhausted; one decision left (am. 111, 112, 113)
+`MINIMAX_H3_AUDIO_ACCURATE=1` reaches **0.45 %** relative RMSE against the diffusers reference, from a
+10.46 % default — 23x less error, PCC 99.5451 % → **99.9990 %**, PSNR 40.29 → **67.53 dB** — for ~3x the
+stage time (4.03 s → 13.24 s, i.e. ~+9 s on a 63–74 s e2e). Three independent levers, each fixing a
+different one of the three sources, strongly complementary because the chain error is set by whichever
+source is worst:
 
-| mode | convs | rel_rmse | PCC | PSNR | mel | warm median |
+| split | mac | tap | rel_rmse | PCC | PSNR | warm |
 |---|---|---|---|---|---|---|
-| `off` | 1 | 0.1046 | 99.5451 % | 40.29 dB | 0.0783 | 4.03 s |
-| `weight` | 2 | 0.0793 | 99.7397 % | 42.70 dB | 0.0600 | 5.00 s |
-| **`full`** | 3 | **0.0538** | **99.8950 %** | **46.07 dB** | 0.0478 | 5.10 s |
+| off | 0 | 0 | 0.1046 | 99.5451 % | 40.29 dB | 4.03 s |
+| full | 0 | 0 | 0.0538 | 99.8950 % | 46.07 dB | 5.36 s |
+| off | 1 | 0 | 0.0920 | 99.6111 % | 41.41 dB | 8.72 s |
+| full | 1 | 0 | 0.0320 | 99.9522 % | 50.58 dB | 9.50 s |
+| full | 0 | 1 | 0.0371 | 99.9526 % | 49.31 dB | 9.97 s |
+| **full** | **1** | **1** | **0.0045** | **99.9990 %** | **67.53 dB** | **13.24 s** |
 
-**Open decision: whether to make `full` the default.** It halves the error for ~+25 % on the stage
-(~+1 s on a 63–74 s e2e). Blocked on nothing technical — the traced path passes with it on — but
-flipping it changes published latency and obsoletes `AUDIO_RELATIVE_RMSE = 0.12`, which deliberately
-still describes the default path and would need re-deriving from the 5.4 % measurement.
+**Open decision: whether to enable it by default.** Nothing technical blocks it — the traced path matches
+eager exactly (PSNR inf) — but it changes published latency by ~12 % of e2e and obsoletes
+`AUDIO_RELATIVE_RMSE = 0.12`, which deliberately still describes the default path. Accurate mode also
+needs a larger **trace region** (375463936 B measured vs the default path's 300 MB; the test now asks for
+450 MB) and exceeds `test_audio_trace_minimax_h3.py`'s 300 s pytest timeout, so it wants `--timeout=1200`.
 
-Still unexploited: `C_in_block` 512 stacks for a further ~1.4x on `conv_pre` (am. 111), which needs a
-per-shape "largest legal block" picker since 1024/2048 are rejected by the op's blocking rules. Also
-untouched are the depthwise resample taps, which go through `ttnn.conv1d` rather than `conv3d` and so
-are not covered by the split.
+**Exhausted, with measurements** (do not re-try these): a 3-way operand split is *bit-identical* to a
+2-way one on both conv3d and matmul, so 2-way already recovers the whole operand mantissa and 3.13e-04 is
+a hard matmul floor; `C_in_block` widening gains 1.48x on an isolated conv but nothing end to end (256 is
+no better, 512 fails outright) because the chain is dominated by the 126 narrow-channel AMP convs where it
+cannot widen; `ttnn.snake_beta` is already fp32-grade at 7.2e-08, as are the upsampler (7.4e-08) and `sin`
+(4.2e-08), so none is worth replacing; and HiFi4 + `fp32_dest_acc_en` was already optimal across all 8
+`(math_fidelity, fp32_dest_acc_en)` combinations. What remains after all three levers is the matmul
+multiply floor itself.
+
+Untouched: the encoder's convs (only the decode path was measured).
 
 ### Perf 1 — VAE decode readback (task #12)
 Device-side stitch via all-gather is **a wash** and is left unwired behind
@@ -274,3 +287,87 @@ that am. 109/110 argued over.
 **A measurement note.** A single warm rep put these at 1.29 / 1.56 / 2.02 s — about 3x too fast, because
 the first call after compile is not steady state. Five reps and a median is the minimum here; am. 82's
 ±8 % run-to-run was measured on a warm loop, not on the first iteration of one.
+
+---
+
+## Amendment 113 (2026-08-05) — the audio decode's dominant error was never the convs: 10.46 % → 0.45 %
+
+Ran the levers to exhaustion. `MINIMAX_H3_AUDIO_ACCURATE=1` now reaches **0.45 %** relative RMSE against
+the diffusers reference (PCC **99.9990 %**, PSNR **67.53 dB**, mel distance 0.0034) from a 10.46 % default
+— **23x** less error, for ~3x the stage time.
+
+### The bisection that redirected everything
+
+After am. 112 I assumed the convs were the whole story. Walking the chain per stage said otherwise: the
+`ups` stages mostly *shrink* the relative error (0.55–1.4x) while every AMP resblock grows it, and with
+operand splitting on the growth factors got **worse** (7.91x vs 4.67x at stage 0). That is the signature
+of a fixed absolute injection the split does not touch.
+
+Feeding one AMP block the reference's own exact activation separated injection from amplification:
+
+| | split off | split full | split full + MAC |
+|---|---|---|---|
+| one AMP block injects | 5.868e-03 | 4.284e-03 | **1.088e-03** |
+| one `Activation1d` injects | 1.544e-03 | **1.544e-03** (identical) | **1.052e-07** |
+
+The activation's injection was *bit-identical* across split modes — entirely outside the conv path. Six
+activations per block in quadrature is 3.78e-03 against the block's 4.28e-03: the anti-aliased activation
+**was** the remaining error, not the convs.
+
+### Which part, and the surprise
+
+| part of `Activation1d` | rel_rmse |
+|---|---|
+| upsample | 7.443e-08 |
+| **downsample** | **1.544e-03** |
+| `ttnn.snake_beta` (fused) | 7.242e-08 |
+| snake_beta as a composite | 6.091e-08 |
+| `sin` alone | 4.228e-08 |
+
+`downsample` alone was 100 % of it. I had suspected `ttnn.snake_beta` — a fused SFPU op called with **no**
+`compute_kernel_config`, so its precision cannot be configured, only replaced — and it is fp32-grade.
+Measuring beat the suspicion.
+
+Both resample filters go through the same `depthwise_tap_filter`, so the difference had to be *which path*
+they took. It was: `depthwise_tap_filter` tries a HEIGHT_SHARDED `ttnn.conv1d` and falls back to
+shift-multiply-add when the DRAM slicer cannot configure it. Forcing MAC took the downsampler from
+1.5437e-03 to **5.3334e-08** — ~29000x — and the reason is structural rather than incidental: **MAC is a
+sum of elementwise multiplies and adds, and those are exact in fp32 here**, while `conv1d` goes through the
+~11-bit FPU multiply. The upsampler only looked clean because at stage 0 it already fell back to MAC.
+
+### The third lever, and the two that are not
+
+With the filters exact, what was left was conv3d — and its residual after splitting is *not* operand
+mantissa (a 3-way split is bit-identical to a 2-way one) but partial-sum rounding across `C_in_block`,
+which matmul does not have. A stride-1 conv needs no im2col matrix to become a matmul:
+`y[t] = sum_j W_j @ x[t + dilation*j]`. Measured 1.78–3.47x per conv across every real shape, including
+k=7, k=11, causal padding and the transposed upsamplers.
+
+Ruled out, with numbers: **3-way splitting** is bit-identical to 2-way on conv3d *and* matmul at every
+shape, so 3.13e-04 is a hard matmul floor; **`C_in_block` widening** gains 1.48x isolated but nothing end
+to end — 256 measures 3.31 % against 128's 3.20 % and 512 fails outright — because the chain is dominated
+by the 126 narrow-channel AMP convs where the block cannot widen, so only 2 convs of 128 would gain.
+`MAX_C_IN_BLOCK` therefore stays 128, now with a measurement behind it instead of being a stub value.
+
+### Two bugs the tests found, both from bypassing the conv3d route
+
+- `ConvTranspose1dViaConv3d` builds a **causal** inner conv and then forces `external_pad_front = 0`
+  because it supplies its own symmetric padding. A tap path deriving padding from `padding_mode` would
+  prepend `eff_k - 1` zeros to all 7 upsamplers. Fixed by deriving from `external_pad_front +
+  internal_padding[0]`, the same fields conv3d uses.
+- `_AlignedOutConv1d` rounds a non-32-multiple `C_out` up (ups[5] emits 16) and the **bias** is allocated
+  at the rounded width; conv3d pads it inside `prepare_conv3d_weight_state`, which the tap route bypasses.
+  Caught only at `decoder.ups.5.conv.bias` in a full-model load, because every shape in my unit cases was
+  a 32-multiple. The gate now includes a narrow-`C_out` causal case.
+
+### Gates
+
+`test_depthwise_mac_is_more_accurate_than_conv1d` (1.855e-03 vs 8.082e-08 at the real stage-1 downsampler
+shape) and `test_tap_matmul_beats_conv3d` (4 shapes incl. the narrow-`C_out` causal case), both gating
+inequalities rather than hardware-dependent absolutes, plus an output-shape agreement assertion.
+Suite **13 passed** on the default path; traced accurate mode matches eager exactly (PSNR inf).
+
+**The method note.** Am. 112's cost estimate leaned on a profile of a *different* conv class and was wrong
+in magnitude; this time the redirect came from measuring injection with an exact input rather than reasoning
+from where the error appeared. A growth factor that gets *worse* when you improve the input is the tell that
+the stage injects rather than amplifies — and that is what said "stop optimising the convs".

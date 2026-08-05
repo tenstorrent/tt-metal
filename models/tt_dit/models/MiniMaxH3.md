@@ -313,3 +313,45 @@ is all in the 50-layer decoder. **The default is deliberately left alone**: one 
 not evidence about LTX, Wan or Ideogram-4. And it changes the video not at all (40-48 dB PSNR
 frame-to-frame, identical anchor and CLIP numbers), so this is a conditioner-fidelity knob rather than a
 quality one. See STATE.md amendments 101-102.
+
+## Audio decode precision
+
+`MINIMAX_H3_AUDIO_ACCURATE=1` takes the audio VAE decode from 10.5 % to **0.45 %** relative RMSE against
+the diffusers reference, for ~3x the stage time. It turns on three independent levers, each of which
+targets a different one of the three error sources the default 10.5 % is made of. They are strongly
+complementary — the chain error is set by whichever source is worst, so enabling one moves the total far
+less than enabling all three:
+
+| `MINIMAX_H3_AUDIO_CONV_SPLIT` | `..._DEPTHWISE_MAC` | `..._TAP_MATMUL` | rel RMSE | PCC | PSNR | warm |
+|---|---|---|---|---|---|---|
+| `off` | 0 | 0 | 0.1046 | 99.5451 % | 40.29 dB | 4.03 s |
+| `full` | 0 | 0 | 0.0538 | 99.8950 % | 46.07 dB | 5.36 s |
+| `off` | 1 | 0 | 0.0920 | 99.6111 % | 41.41 dB | 8.72 s |
+| `full` | 1 | 0 | 0.0320 | 99.9522 % | 50.58 dB | 9.50 s |
+| `full` | 0 | 1 | 0.0371 | 99.9526 % | 49.31 dB | 9.97 s |
+| **`full`** | **1** | **1** | **0.0045** | **99.9990 %** | **67.53 dB** | **13.24 s** |
+
+Why each exists — all three answer the same hardware fact, that an fp32 **multiply** on this hardware
+keeps only ~11 significand bits (the FPU takes ~5 mantissa bits per fidelity pass and HiFi4's 4 passes is
+the ceiling), so the error is *flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher
+fidelity can help. Elementwise fp32 ops, by contrast, are exact.
+
+- **`CONV_SPLIT`** (`weight` = 2 convs, `full` = 3) splits an operand into `bf16 hi` plus its exact
+  residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
+  bit-identical to a 2-way one, so 2-way already recovers the whole operand mantissa.
+- **`DEPTHWISE_MAC`** runs the anti-aliased resample filters as shift-multiply-add instead of
+  `ttnn.conv1d`. This was the single largest source: one `Activation1d` injected 1.54e-03, *all* of it
+  from its downsampler, against ~7e-08 for `snake_beta` and the upsampler. MAC is elementwise, hence
+  exact — 1.5e-03 → 5.3e-08.
+- **`TAP_MATMUL`** runs stride-1 convs as `sum_j W_j @ x[t + dilation*j]`. conv3d's residual *after*
+  splitting is partial-sum rounding across `C_in_block`, which matmul does not have; worth 1.8–3.5x per
+  conv.
+
+Two things that look like levers and are not: widening `C_in_block` helps an isolated conv (1.48x) but
+**not** end to end, because the chain is dominated by the 126 narrow-channel AMP convs where it cannot
+widen — and 512 fails outright. And `ttnn.snake_beta` is already fp32-grade at 7.2e-08, so the fused op
+is not worth replacing. Full derivation in `STATE.md` amendments 111–113.
+
+Accurate mode needs a **larger trace region** (375463936 B measured, against the default path's 300 MB)
+and runs long enough to exceed `test_audio_trace_minimax_h3.py`'s 300 s pytest timeout; pass
+`--timeout=1200`. The traced output matches eager exactly (PSNR inf).
