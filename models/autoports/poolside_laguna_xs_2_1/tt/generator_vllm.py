@@ -945,6 +945,7 @@ class LagunaForCausalLM:
 
             k_max = int(os.environ.get("TT_LAGUNA_SPEC_K", "4"))
             traced = os.environ.get("TT_LAGUNA_SPEC_TRACED", "1") == "1"  # 0 = eager verify (bisection)
+            single = os.environ.get("TT_LAGUNA_SPEC_SINGLE", "") == "1"  # 1 = fixed-K, one resident verify trace
             self._spec = SpeculativeDecoder(
                 self,
                 kv_cache=kv_cache,
@@ -955,12 +956,12 @@ class LagunaForCausalLM:
                 ngram_max_n=int(os.environ.get("TT_LAGUNA_SPEC_NGRAM_MAX", "10")),
                 verify_mode="decode",
                 traced=traced,
-                adaptive=True,
+                adaptive=not single,  # single mode: fixed K=k_max so only the K1=k_max+1 trace is ever used
                 k_min=1,
                 k_max=k_max,
-                guard=True,
+                guard=not single,  # single mode: never fall back to a K1=1 native step (would need a 2nd trace)
             )
-            self._spec_log(f"serve INIT: traced={traced} k_max={k_max}")
+            self._spec_log(f"serve INIT: traced={traced} k_max={k_max} single={single}")
             self._spec_tok = self.gen._rep(torch.zeros([1, 1, 1, 1], dtype=torch.int32), ttnn.uint32)
         # per-call context refresh (the request's block table grows as it advances)
         self._spec.kv_cache = kv_cache
@@ -1073,28 +1074,55 @@ class LagunaForCausalLM:
         Fully on-device — the greedy token per row is produced by the same Sampling1D (top-k=1) the
         model's serving decode uses, so the verify matches what the hardware actually greedy-decodes."""
         g = self.gen
+        # LOGITS mode (default): the trace ends at the mesh-sharded logits; the greedy token is argmax'd ON
+        # HOST after replay (verify_forward_decode's known-correct path). This AVOIDS the on-device Sampling1D,
+        # which under trace at K1>=2 deterministically miscomputes some rows (float-garbage or valid-but-wrong
+        # ids in the tok buffer -> corrupts the always-committed anchor -> garbage output). The forward
+        # (decode_layers + lm_head) is still traced, so the dispatch-elimination speedup is preserved; the only
+        # added cost is reading K1 x vocab logits to host + a host argmax per step. Set TT_LAGUNA_SPEC_LOGITS=0
+        # to use the (buggy) on-device sampler path instead.
+        # ROOT CAUSE of the traced-verify garbage: the on-device greedy argmax (inside Sampling1D) is the
+        # multicore ttnn.argmax, which is ROW-PARALLEL and returns GARBAGE unless the batch (row) dim is
+        # tile-aligned to 32 (gemma4 spec_decode._argmax_last: "1/5 rows -> wrong; padded to 32 -> exact").
+        # The verify batch is K1=2..5 rows -> unaligned -> some rows (incl. the always-committed anchor) get
+        # float-bit garbage / wrong ids -> cascades to garbage output. FIX (on-device, matches gemma4): run
+        # the FORWARD at K1 rows (padding it would write KV at 32 positions -> OOB) but PAD THE LOGITS to 32
+        # rows just before the argmax, then slice back to K1. Nearly free (tiled matmul already pays for a
+        # 32-row tile). TT_LAGUNA_SPEC_LOGITS=1 keeps the host-argmax fallback (correct, but transfers logits).
+        logits_mode = os.environ.get("TT_LAGUNA_SPEC_LOGITS", "0") == "1"
+        R32 = 32
         tok = g._rep(torch.zeros([1, 1, 1, K1], dtype=torch.int32), ttnn.uint32)
         cur = g._rep(torch.zeros([K1], dtype=torch.int32), ttnn.int32)
         ridx = g._rep(torch.zeros([1, K1], dtype=torch.int32), ttnn.uint32)
-        k = g._rep(torch.ones([K1], dtype=torch.int32), ttnn.uint32)  # greedy: top-k=1
-        p = g._rep(torch.ones([K1], dtype=torch.float32), ttnn.bfloat16)
-        t = g._rep(torch.ones([K1], dtype=torch.float32), ttnn.bfloat16)
-        seeds = g._rep(torch.zeros([K1], dtype=torch.int32), ttnn.uint32)
-        sampler = g._sampler(K1)
         pt = self._page_table_to_device(pt_host)
         ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(tokens.reshape(K1, 1), K1), tok)
         ttnn.copy_host_to_device_tensor(self._host_pos_batch(pos), cur)
         ttnn.copy_host_to_device_tensor(self._host_ridx_batch(pos), ridx)
+        st = dict(tid=None, tok=tok, cur=cur, ridx=ridx, pt=pt, logits_mode=logits_mode, k1=K1)
+        if not logits_mode:
+            # FORCE-ARGMAX path (Sampling1D._sample_argmax = all-gather vocab + ttnn.argmax). Passing k/p/temp
+            # all None selects it (allow_force_argmax=True); passing k=1/p=1/temp=1 instead selects the top-k
+            # path (per-shard top-1 + gather) which returned WRONG rows in the batched verify. Sampler + output
+            # run at 32 tile-aligned rows; the forward stays K1 (padding it would OOB the KV writes).
+            sampler = g._sampler(R32)
+            tok_out = g._rep(torch.zeros([1, 1, 1, R32], dtype=torch.int32), ttnn.uint32)  # 32-row argmax output
+            st["tok_out"] = tok_out
 
         def step():
             hh = self.model.embed_decode(ttnn.reshape(tok, (1, K1)))
             hh = self.model.decode_layers(hh, cur, ridx, pt, kv_cache, sequential_kv_write=True)
-            shards = self.model.lm_head_shards_decode(hh)
-            sampler.decode_forward(shards, k=k, p=p, temp=t, seeds=seeds, tt_out_tok=tok)
+            shards = self.model.lm_head_shards_decode(hh)  # [1,1,K1,V/D]
+            if logits_mode:
+                st["logits"] = shards  # persistent trace-output handle; ConcatMesh+argmax on host post-replay
+            else:
+                # pad logits rows K1->32 (tile-align) so the multicore argmax is row-correct, then force-argmax
+                s32 = ttnn.pad(shards, [(0, 0), (0, 0), (0, R32 - K1), (0, 0)], value=0.0) if K1 < R32 else shards
+                sampler.decode_forward(s32, tt_out_tok=tok_out)  # k/p/temp None -> force-argmax
 
         step()  # compile (warm program cache) — no trace resident yet, so allocations here are safe
         ttnn.synchronize_device(self.mesh_device)
-        return dict(tid=None, tok=tok, cur=cur, ridx=ridx, pt=pt, _step=step)
+        st["_step"] = step
+        return st
 
     def _trace_verify_decode(self, K1, st):
         """Phase 2 of verify-trace warmup: capture the trace using the buffers _alloc_verify_decode
@@ -1159,7 +1187,11 @@ class LagunaForCausalLM:
                 flush=True,
             )
             st = self._capture_verify_decode(K1, kv_cache, tokens, pos, pt_host)  # lazy fallback
-            return self._read_tokens_host(st["tok"], K1)
+            if st.get("logits_mode"):
+                return torch.argmax(self.model.logits_to_host(st["logits"]).reshape(K1, int(self.vocab)), dim=-1).to(
+                    torch.int32
+                )
+            return ttnn.to_torch(ttnn.get_device_tensors(st["tok_out"])[0]).reshape(-1)[:K1].to(torch.int32)
         ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(tokens.reshape(K1, 1), K1), st["tok"])
         ttnn.copy_host_to_device_tensor(self._host_pos_batch(pos), st["cur"])
         ttnn.copy_host_to_device_tensor(self._host_ridx_batch(pos), st["ridx"])
@@ -1172,7 +1204,34 @@ class LagunaForCausalLM:
                 ttnn.copy_host_to_device_tensor(self._page_table_to_device_host(pt_host), st["pt"])
                 st["last_pt_host"] = pt_host.clone()
         ttnn.execute_trace(self.mesh_device, st["tid"], cq_id=0, blocking=True)
-        traced_ids = self._read_tokens_host(st["tok"], K1)  # per-row greedy ids sampled ON DEVICE
+        if st.get("logits_mode"):
+            # host argmax of the traced logit shards (same gather as eager verify_forward_decode) — bypasses
+            # the buggy on-device sampler. traced_ids is bit-correct iff the traced FORWARD matches eager.
+            logits = self.model.logits_to_host(st["logits"]).reshape(K1, int(self.vocab))
+            traced_ids = torch.argmax(logits, dim=-1).to(torch.int32)
+        else:
+            # ON-DEVICE argmax (padded to 32 rows) — read the device-0 replica (gemma4 _ids_to_host pattern),
+            # then slice off the row-padding back to K1.
+            th = ttnn.to_torch(ttnn.get_device_tensors(st["tok_out"])[0])
+            traced_ids = th.reshape(-1)[:K1].to(torch.int32)
+        # CORRECTNESS GUARD: the traced on-device Sampling1D DETERMINISTICALLY fails to write some rows for
+        # certain logit distributions, leaving stale FLOAT bit-patterns in the uint32 tok buffer (e.g.
+        # 1096876032=0x41600000=14.0f, or a negative) — an out-of-range "token". When that lands on row 0
+        # (the anchor, always committed) it corrupts output. Detect any out-of-vocab id and recompute the
+        # WHOLE round via the eager host-argmax verify (verify_forward_decode — known bit-correct). Cheap:
+        # only fires on the rare bad round. (Root cause is the sampler kernel under trace; this makes the
+        # served path correct without it.)
+        ids_t = torch.as_tensor(traced_ids).reshape(-1).to(torch.int64)
+        if bool(((ids_t < 0) | (ids_t >= int(self.vocab))).any()):
+            elog = self.verify_forward_decode(
+                tokens, pos, page_table=page_table, kv_cache=kv_cache, page_tables_per_layer=page_tables_per_layer
+            )
+            eager_ids = torch.argmax(elog, dim=-1).to(torch.int32)
+            self._spec_log(
+                f"GUARD: out-of-vocab traced id at K1={K1} pos0={int(pos[0])} "
+                f"traced={[int(x) for x in ids_t]} -> eager fallback={[int(x) for x in eager_ids]}"
+            )
+            traced_ids = eager_ids
         if os.environ.get("TT_LAGUNA_SPEC_DEBUG", "") == "1":
             # Shadow the traced verify with an EAGER verify (known-correct host-argmax path) on the SAME
             # tokens/positions/pt/kv. Both read the CURRENT (post-trace) KV, so agreement means the trace's
@@ -1624,10 +1683,15 @@ class LagunaForCausalLM:
         # B==1 (no padding). Mirrors the standalone driver's capture_decode_trace=False.
         if self._spec_mode == "1":
             k_max = int(os.environ.get("TT_LAGUNA_SPEC_K", "4"))
-            self.warmup_verify_decode_multi(list(range(0, k_max + 1)), kv_cache, int(num_blocks) if num_blocks else 1)
+            single = os.environ.get("TT_LAGUNA_SPEC_SINGLE", "") == "1"
+            # SINGLE mode: capture ONLY the K1=k_max+1 verify trace (one resident trace, fixed-K, always-spec).
+            # Tests whether multi-trace COEXISTENCE is the intermittent-corruption source: the standalone driver
+            # (single fixed-K verify trace) is correct; serving uses adaptive-K -> up to 5 coexisting traces.
+            draft_lens = [k_max] if single else list(range(0, k_max + 1))
+            self.warmup_verify_decode_multi(draft_lens, kv_cache, int(num_blocks) if num_blocks else 1)
             print(
-                f"[laguna spec] warmup: captured verify traces K1=1..{k_max + 1}; normal decode trace OMITTED "
-                f"(deadlock-safe, batch-1 greedy spec-decode)",
+                f"[laguna spec] warmup: captured verify traces K1={[d + 1 for d in draft_lens]}; "
+                f"normal decode trace OMITTED (deadlock-safe, batch-1 greedy spec-decode; single={single})",
                 flush=True,
             )
             return None

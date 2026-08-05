@@ -6,8 +6,10 @@
 #     (`: > ~/tail.log`) and appends — the inode never changes, so a running `tail -f ~/tail.log`
 #     keeps following across every future run. (The old version did `ln -sfn` per run, which swapped
 #     the inode and stranded the user's tail — that's why they had to re-tail each time. Fixed.)
-#   * every line (full stdout+stderr, unbuffered) is tee'd to BOTH ~/tail.log and a per-run archive
-#     doc/vllm_integration/_runs/<run-name>.rawout (kept for history / result-reading).
+#   * every line (full stdout+stderr, unbuffered) is PREFIXED WITH A WALL-CLOCK TIMESTAMP [HH:MM:SS] and
+#     tee'd to BOTH ~/tail.log and a per-run archive doc/vllm_integration/_runs/<run-name>.rawout (kept for
+#     history / result-reading). The timestamp is when run_bg.sh received the line, so the user can follow
+#     elapsed time / spot stalls directly in `tail -f ~/tail.log`.
 #   * a header names the run so `tail -f ~/tail.log` self-identifies.
 #
 # Usage:  run_bg.sh <run-name> <cmd...>   (run the cmd WITH `python -u` for unbuffered output)
@@ -31,5 +33,10 @@ TAIL="$HOME/tail.log"
   echo "tail:  tail -f ~/tail.log   (permanent — survives every run, no need to re-tail)"
   echo "=================================================================="
 } | tee -a "$TAIL" >> "$RAW"
-# Every line goes to BOTH the permanent tail file and the per-run archive, line-buffered.
-exec stdbuf -oL -eL "$@" > >(stdbuf -oL tee -a "$TAIL" >> "$RAW") 2>&1
+# Every line goes to BOTH the permanent tail file and the per-run archive, line-buffered, each PREFIXED with
+# a wall-clock [HH:MM:SS]. awk strftime stamps the moment the line is read (real time), and fflush keeps the
+# tail live. Carriage-return-only TUI streams (no newline) are handled by splitting on \r too, so progress
+# bars still get stamped instead of buffering into one giant line.
+exec stdbuf -oL -eL "$@" 2>&1 \
+  | stdbuf -oL awk '{ printf "[%s] %s\n", strftime("%H:%M:%S"), $0; fflush() }' \
+  | stdbuf -oL tee -a "$TAIL" >> "$RAW"
