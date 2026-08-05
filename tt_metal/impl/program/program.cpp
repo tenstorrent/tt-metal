@@ -2341,10 +2341,19 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     TTZoneScopedD(PROGRAM);
 
-    const auto& cluster = MetalContext::instance(extract_context_id(device)).get_cluster();
+    const ContextId device_context_id = extract_context_id(device);
+    TT_FATAL(
+        context_id_ == device_context_id,
+        "Program {} was created for context_id {} but is being compiled on a device from context_id {}. "
+        "Metal 1.0 CreateProgram() binds DEFAULT_CONTEXT_ID; use Metal 2.0 MakeProgramFromSpec (or a future "
+        "CreateProgram that takes MetalEnv) when compiling against a non-default context.",
+        this->id,
+        context_id_.get(),
+        device_context_id.get());
 
-    const auto& build_env =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
+    const auto& cluster = MetalContext::instance(device_context_id).get_cluster();
+
+    const auto& build_env = BuildEnvManager::get_instance(device_context_id).get_device_build_env(device->build_id());
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
