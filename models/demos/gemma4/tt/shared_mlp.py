@@ -24,6 +24,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     TILE_SIZE,
     DramShardedLinear,
     can_dram_shard,
+    interleaved_down_proj_prefill_config,
     interleaved_gate_up_prefill_config,
     matmul_rows,
 )
@@ -193,7 +194,7 @@ class SharedMLP:
                 ),
             )
         else:
-            down_proj = ttnn.as_tensor(
+            self.down_proj = ttnn.as_tensor(
                 down_proj_weight,
                 device=mesh_device,
                 dtype=dtype,
@@ -204,7 +205,6 @@ class SharedMLP:
                 ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            self.down_proj = lambda x: ttnn.linear(x, down_proj)
 
     def _gate_up_linear(self, hidden_states):
         """Fused gate+up matmul — DramShardedLinear on BH, tuned 1D prefill off BH."""
@@ -236,6 +236,34 @@ class SharedMLP:
             act_l1.deallocate(True)
         return gate_up
 
+    def _down_proj_linear(self, hidden):
+        """Row-parallel down projection — DramShardedLinear on BH, tuned 1D prefill off BH."""
+        if isinstance(self.down_proj, DramShardedLinear):
+            return self.down_proj(hidden)
+
+        # Interleaved-weight prefill: 1d_c42_bw4 + L1 in0/out + HiFi2
+        # (test_down_proj_matmul_sweep overall winner at TP=8).
+        m = matmul_rows(hidden)
+        k = int(hidden.shape[-1])
+        n = int(self.down_proj.shape[-1])
+        program_config, out_memcfg, compute_kernel_config = interleaved_down_proj_prefill_config(m, k, n)
+        act = hidden
+        act_l1 = None
+        if program_config is not None and not hidden.is_sharded():
+            if hidden.memory_config().buffer_type != ttnn.BufferType.L1:
+                act_l1 = ttnn.to_memory_config(hidden, ttnn.L1_MEMORY_CONFIG)
+                act = act_l1
+        output = ttnn.linear(
+            act,
+            self.down_proj,
+            program_config=program_config,
+            memory_config=out_memcfg,
+            compute_kernel_config=compute_kernel_config,
+        )
+        if act_l1 is not None:
+            act_l1.deallocate(True)
+        return output
+
     def __call__(self, hidden_states):
         """
         GeGLU MLP forward with TP support.
@@ -264,7 +292,7 @@ class SharedMLP:
         up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = self.down_proj(hidden)
+        output = self._down_proj_linear(hidden)
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj
