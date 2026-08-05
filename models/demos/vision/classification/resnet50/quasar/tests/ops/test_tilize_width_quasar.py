@@ -61,3 +61,55 @@ def test_quasar_tilize_width(mesh_device, width_tiles, height_tiles):
     # to_torch untilizes back to row-major, so it should equal the input.
     assert_with_pcc(torch_in.reshape(tt_out.shape), tt_out, pcc=0.999)
     print(f"tilize width_tiles={width_tiles} height_tiles={height_tiles} PASSED (no 0x19)")
+
+
+# Reproduce the conv-internal failing tilize IN ISOLATION (no conv reader, no matmul): a HEIGHT_SHARDED
+# row-major input tilized via the quasar tilize op, which selects TilizeMultiCoreShardedProgramFactory --
+# the SAME factory the failing 1x1_256to128_s1_56x56 conv uses (per-core [1568,256] = 49 height-tiles x
+# 8 width-tiles). The existing test above uses DRAM-interleaved input (a DIFFERENT factory) and only tiny
+# heights, so it never exercises this. Sweep h/w to separate "block width == 8" from "block count == 49":
+#   h49_w8 = the exact failing config; if it alone reproduces PCC~0.16 while the controls pass, the tilize
+#   itself (not the conv/matmul) is the bug and this is the minimal repro.
+_SHARDED_CASES = [
+    (49, 8, "h49_w8_FAILCONFIG"),  # 256ch activation, 56x56/2-core: the exact failing tilize
+    (49, 4, "h49_w4"),  # same block count, narrower -> isolates width-8 vs block-count
+    (8, 8, "h8_w8"),  # width-8 but few blocks -> isolates block-count
+    (1, 8, "h1_w8"),  # single block control
+]
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("h_tiles, w_tiles, tid", _SHARDED_CASES, ids=[c[-1] for c in _SHARDED_CASES])
+def test_quasar_tilize_sharded(mesh_device, h_tiles, w_tiles, tid):
+    """HEIGHT_SHARDED RM [1,1,shard_h*2, C] -> quasar tilize -> PCC. Isolates the conv's internal tilize."""
+    device = mesh_device
+    torch.manual_seed(0)
+    num_cores = 2
+    shard_h = h_tiles * 32
+    C = w_tiles * 32
+    nhw = shard_h * num_cores
+
+    grid = device.compute_with_storage_grid_size()
+    if num_cores > grid.x * grid.y:
+        pytest.skip(f"needs {num_cores} cores; grid has {grid.x * grid.y}")
+    core_grid = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
+
+    torch_in = torch.randn((1, 1, nhw, C), dtype=torch.bfloat16).float()
+    in_mem = ttnn.create_sharded_memory_config(
+        shape=(1, 1, shard_h, C),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_in = ttnn.from_torch(
+        torch_in, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+    )
+    # quasar tilize op -> TilizeMultiCoreShardedProgramFactory (the exact failing path). A 0x19 aborts here;
+    # otherwise PCC vs the input (tilize is a pure layout change, values unchanged) exposes wrong tiles.
+    tt_tiled = ttnn.experimental.quasar.tilize(tt_in)
+    tt_out = ttnn.to_torch(ttnn.from_device(tt_tiled)).float()
+    assert torch.isfinite(tt_out).all(), f"{tid}: tilize produced NaN/Inf"
+    assert_with_pcc(torch_in.reshape(tt_out.shape), tt_out, pcc=0.999)
+    print(f"sharded tilize {tid} (h={h_tiles} w={w_tiles} cores={num_cores}) PASSED")
