@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DiffusionGemma Chat</title>
+<style>
+  :root {
+    --bg: #0f1116; --panel: #171a21; --panel2: #1e222b; --border: #2a2f3a;
+    --text: #e6e9ef; --muted: #9aa3b2; --accent: #6ea8fe; --accent2: #3b82f6;
+    --user: #2a3550; --asst: #1e222b; --danger: #ff6b6b; --ok: #37d67a;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg:#f4f6fa; --panel:#fff; --panel2:#eef1f6; --border:#d9dee7;
+      --text:#131722; --muted:#5b6472; --accent:#2563eb; --accent2:#2563eb;
+      --user:#dbeafe; --asst:#eef1f6; --danger:#d63031; --ok:#0f9d58;
+    }
+  }
+  * { box-sizing: border-box; }
+  html,body { height:100%; margin:0; }
+  body {
+    background:var(--bg); color:var(--text); font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex; flex-direction:column; height:100vh;
+  }
+  header {
+    display:flex; align-items:center; gap:10px; padding:10px 16px;
+    background:var(--panel); border-bottom:1px solid var(--border); flex:0 0 auto;
+  }
+  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.2px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); flex:0 0 auto; }
+  .dot.ok { background:var(--ok); } .dot.err { background:var(--danger); }
+  header .spacer { flex:1; }
+  header button, .settings button {
+    background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    border-radius:8px; padding:6px 12px; font-size:13px; cursor:pointer;
+  }
+  header button:hover, .settings button:hover { border-color:var(--accent); }
+  .settings {
+    background:var(--panel); border-bottom:1px solid var(--border); padding:12px 16px;
+    display:none; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px 16px; flex:0 0 auto;
+  }
+  .settings.open { display:grid; }
+  .settings label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+  .settings input, .settings select {
+    background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    border-radius:7px; padding:7px 9px; font-size:13px;
+  }
+  #chat { flex:1 1 auto; overflow-y:auto; padding:20px 0; }
+  .wrap { max-width:820px; margin:0 auto; padding:0 16px; }
+  .msg { display:flex; gap:12px; margin:14px 0; }
+  .msg .role { flex:0 0 30px; width:30px; height:30px; border-radius:8px; display:grid; place-items:center; font-size:12px; font-weight:700; }
+  .msg.user .role { background:var(--accent2); color:#fff; }
+  .msg.assistant .role { background:var(--panel2); color:var(--accent); border:1px solid var(--border); }
+  .msg .body {
+    background:var(--asst); border:1px solid var(--border); border-radius:12px; padding:10px 14px;
+    white-space:pre-wrap; word-wrap:break-word; overflow-wrap:anywhere; flex:1 1 auto; min-width:0;
+  }
+  .msg.user .body { background:var(--user); }
+  .msg .body.err { border-color:var(--danger); color:var(--danger); }
+  .cursor::after { content:"▋"; color:var(--accent); animation:blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  .empty { color:var(--muted); text-align:center; margin-top:12vh; font-size:14px; }
+  footer { flex:0 0 auto; border-top:1px solid var(--border); background:var(--panel); padding:12px 16px; }
+  .inrow { max-width:820px; margin:0 auto; display:flex; gap:10px; align-items:flex-end; }
+  #input {
+    flex:1; resize:none; background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    border-radius:12px; padding:11px 14px; font:inherit; max-height:180px; min-height:46px;
+  }
+  #input:focus { outline:none; border-color:var(--accent); }
+  #send { background:var(--accent2); color:#fff; border:none; border-radius:12px; padding:0 20px; height:46px; font-weight:600; cursor:pointer; }
+  #send:disabled { opacity:.5; cursor:default; }
+  .hint { max-width:820px; margin:6px auto 0; color:var(--muted); font-size:11px; text-align:center; }
+  code { background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="statusDot"></span>
+  <h1>DiffusionGemma Chat</h1>
+  <span class="spacer"></span>
+  <span id="statusText" style="color:var(--muted);font-size:12px"></span>
+  <button id="clearBtn">New chat</button>
+  <button id="gearBtn">⚙ Settings</button>
+</header>
+
+<div class="settings" id="settings">
+  <label>Base URL
+    <input id="baseUrl" value="http://localhost:8000" />
+  </label>
+  <label>Model
+    <input id="model" value="diffusiongemma-26B-A4B-it" />
+  </label>
+  <label>Endpoint
+    <select id="endpoint">
+      <option value="chat" selected>/v1/chat/completions (Gemma template)</option>
+      <option value="completions">/v1/completions (raw prompt)</option>
+    </select>
+  </label>
+  <label>max_tokens
+    <input id="maxTokens" type="number" value="256" min="1" step="1" />
+  </label>
+  <label>temperature
+    <input id="temperature" type="number" value="0" min="0" max="2" step="0.1" />
+  </label>
+  <label>top_p
+    <input id="topP" type="number" value="1" min="0" max="1" step="0.05" />
+  </label>
+  <label>Stream
+    <select id="stream"><option value="1" selected>on</option><option value="0">off</option></select>
+  </label>
+  <label>&nbsp;
+    <button id="pingBtn">Test connection</button>
+  </label>
+</div>
+
+<div id="chat"><div class="wrap"><div class="empty" id="empty">Start a conversation. Set the Base URL in ⚙ Settings if your server isn't at <code>localhost:8000</code>.</div></div></div>
+
+<footer>
+  <div class="inrow">
+    <textarea id="input" placeholder="Type a message…  (Enter to send, Shift+Enter for newline)"></textarea>
+    <button id="send">Send</button>
+  </div>
+  <div class="hint">DiffusionGemma commits a 256-token block per step, so replies arrive in block-sized chunks. Stop with the button while generating.</div>
+</footer>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const chat = $("chat"), wrap = chat.querySelector(".wrap"), empty = $("empty");
+  const input = $("input"), sendBtn = $("send");
+  const els = {
+    baseUrl:$("baseUrl"), model:$("model"), endpoint:$("endpoint"), maxTokens:$("maxTokens"),
+    temperature:$("temperature"), topP:$("topP"), stream:$("stream")
+  };
+  const SETTINGS_KEYS = Object.keys(els);
+  const messages = [];              // {role:'user'|'assistant', content:string}
+  let controller = null;            // AbortController for the in-flight request
+
+  // ---- settings persistence ----
+  try {
+    const saved = JSON.parse(localStorage.getItem("dgchat") || "{}");
+    for (const k of SETTINGS_KEYS) if (saved[k] != null) els[k].value = saved[k];
+  } catch {}
+  const saveSettings = () => {
+    const o = {}; for (const k of SETTINGS_KEYS) o[k] = els[k].value;
+    localStorage.setItem("dgchat", JSON.stringify(o));
+  };
+  SETTINGS_KEYS.forEach(k => els[k].addEventListener("change", saveSettings));
+
+  // ---- ui helpers ----
+  const setStatus = (state, text) => {
+    $("statusDot").className = "dot" + (state ? " " + state : "");
+    $("statusText").textContent = text || "";
+  };
+  const scroll = () => chat.scrollTop = chat.scrollHeight;
+  function addMsg(role, content) {
+    if (empty) empty.style.display = "none";
+    const el = document.createElement("div");
+    el.className = "msg " + role;
+    el.innerHTML = `<div class="role">${role === "user" ? "You" : "DG"}</div><div class="body"></div>`;
+    el.querySelector(".body").textContent = content || "";
+    wrap.appendChild(el); scroll();
+    return el.querySelector(".body");
+  }
+
+  // ---- prompt building for /v1/completions (base-model conversation) ----
+  function buildPrompt(history, nextUser) {
+    let p = "";
+    for (const m of history) p += (m.role === "user" ? "User: " : "Assistant: ") + m.content + "\n";
+    p += "User: " + nextUser + "\nAssistant:";
+    return p;
+  }
+
+  function reqBody(userText) {
+    const base = {
+      model: els.model.value.trim(),
+      max_tokens: parseInt(els.maxTokens.value) || 256,
+      temperature: parseFloat(els.temperature.value) || 0,
+      top_p: parseFloat(els.topP.value) || 1,
+      stream: els.stream.value === "1",
+    };
+    if (els.endpoint.value === "chat") {
+      return { path:"/v1/chat/completions", body:{ ...base, messages:[...messages, {role:"user", content:userText}] } };
+    }
+    return { path:"/v1/completions", body:{ ...base, prompt: buildPrompt(messages, userText), stop:["\nUser:","\n\nUser:"] } };
+  }
+  const pickDelta = (obj, isChat) => {
+    const c = obj.choices && obj.choices[0]; if (!c) return "";
+    return isChat ? ((c.delta && c.delta.content) || "") : (c.text || "");
+  };
+
+  async function send() {
+    const text = input.value.trim();
+    if (!text || controller) return;
+    input.value = ""; input.style.height = "auto";
+    addMsg("user", text);
+    messages.push({ role:"user", content:text });
+    const bodyEl = addMsg("assistant", "");
+    bodyEl.classList.add("cursor");
+    sendBtn.textContent = "Stop"; sendBtn.classList.add("stopping");
+    controller = new AbortController();
+    setStatus("", "generating…");
+
+    const { path, body } = reqBody(text);
+    const url = els.baseUrl.value.replace(/\/+$/,"") + path;
+    let acc = "";
+    try {
+      const res = await fetch(url, {
+        method:"POST", headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify(body), signal: controller.signal,
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(()=> "");
+        throw new Error(`HTTP ${res.status} ${res.statusText}\n${t.slice(0,500)}`);
+      }
+      const isChat = els.endpoint.value === "chat";
+      if (body.stream && res.body) {
+        const reader = res.body.getReader(), dec = new TextDecoder();
+        let buf = "";
+        const eat = (line) => {
+          const s = line.trim(); if (!s.startsWith("data:")) return;
+          const data = s.slice(5).trim(); if (!data || data === "[DONE]") return;
+          try { acc += pickDelta(JSON.parse(data), isChat); } catch {}
+        };
+        for (;;) {
+          const { value, done } = await reader.read();   // process value BEFORE breaking on done
+          if (value) buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf("\n")) >= 0) { eat(buf.slice(0, i)); buf = buf.slice(i + 1); }
+          bodyEl.textContent = acc; scroll();
+          if (done) { eat(buf); bodyEl.textContent = acc; break; }   // flush trailing line
+        }
+      } else {
+        const obj = await res.json();
+        const c = obj.choices && obj.choices[0];
+        acc = isChat ? (c && c.message && c.message.content || "") : (c && c.text || "");
+        bodyEl.textContent = acc;
+      }
+      messages.push({ role:"assistant", content: acc });
+      setStatus("ok", "done");
+    } catch (e) {
+      bodyEl.classList.add("err");
+      const hint = (e.name === "AbortError") ? "(stopped)" :
+        "\n\n⚠ If this is a CORS/connection error: (1) SSH-tunnel the server " +
+        "(ssh -L 8000:localhost:8000 bhqb), (2) check the Base URL, (3) start vLLM with --allowed-origins '*' if the browser blocks cross-origin.";
+      bodyEl.textContent = (acc ? acc + "\n\n" : "") + "Error: " + e.message + (e.name==="AbortError"? " "+hint : hint);
+      setStatus("err", "error");
+      // roll back the empty assistant turn from history
+      if (messages[messages.length-1]?.role === "user") {} // keep user turn
+    } finally {
+      bodyEl.classList.remove("cursor");
+      controller = null; sendBtn.textContent = "Send"; sendBtn.classList.remove("stopping");
+      input.focus();
+    }
+  }
+
+  async function ping() {
+    setStatus("", "pinging…");
+    const base = els.baseUrl.value.replace(/\/+$/,"");
+    try {
+      const r = await fetch(base + "/v1/models");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      const names = (j.data||[]).map(m=>m.id).join(", ");
+      setStatus("ok", "connected · " + (names || "no models"));
+    } catch (e) {
+      setStatus("err", "unreachable (" + e.message + ")");
+    }
+  }
+
+  // ---- events ----
+  sendBtn.addEventListener("click", () => controller ? controller.abort() : send());
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  input.addEventListener("input", () => {
+    input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 180) + "px";
+  });
+  $("gearBtn").addEventListener("click", () => $("settings").classList.toggle("open"));
+  $("pingBtn").addEventListener("click", ping);
+  $("clearBtn").addEventListener("click", () => {
+    messages.length = 0;
+    wrap.innerHTML = '<div class="empty">New conversation.</div>';
+    setStatus("", "");
+  });
+  ping();
+})();
+</script>
+</body>
+</html>

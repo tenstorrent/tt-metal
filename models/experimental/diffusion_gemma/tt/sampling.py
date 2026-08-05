@@ -256,19 +256,18 @@ def canvas_sample(logits, temperature: float, gumbel_noise):
 
 
 def _gumbel_from_uniform(u, *, deallocate_input: bool = True):
-    u_eps = ttnn.add(u, 1.0e-10)
-    log_u = ttnn.log(u_eps)
-    neg_log_u = ttnn.multiply(log_u, -1.0)
-    neg_log_u_eps = ttnn.add(neg_log_u, 1.0e-10)
-    log_neg_log_u = ttnn.log(neg_log_u_eps)
-    gumbel = ttnn.multiply(log_neg_log_u, -1.0)
-    if deallocate_input:
-        u.deallocate(True)
-    u_eps.deallocate(True)
-    log_u.deallocate(True)
-    neg_log_u.deallocate(True)
-    neg_log_u_eps.deallocate(True)
-    log_neg_log_u.deallocate(True)
+    # This transform used to retain six full-shape intermediates until the end.
+    # At the production [1, 1, 256, 256K] shape that is 1.5 GiB of avoidable
+    # device traffic and makes post-trace Gumbel refresh impossible. Consume the
+    # uniform draw in place (the default contract already deallocates it); keep
+    # the uncommon non-consuming path by cloning once.
+    gumbel = u if deallocate_input else ttnn.clone(u)
+    ttnn.add(gumbel, 1.0e-10, output_tensor=gumbel)
+    ttnn.log(gumbel, output_tensor=gumbel)
+    ttnn.multiply(gumbel, -1.0, output_tensor=gumbel)
+    ttnn.add(gumbel, 1.0e-10, output_tensor=gumbel)
+    ttnn.log(gumbel, output_tensor=gumbel)
+    ttnn.multiply(gumbel, -1.0, output_tensor=gumbel)
     return gumbel
 
 

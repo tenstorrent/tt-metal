@@ -297,10 +297,10 @@ def test_diffusiongemma_backbone_logits_pcc(mesh_device, reset_seeds, request):
     from models.common.utility_functions import comp_pcc
     from models.demos.gemma4.config import MeshConfig, ModeConfig
     from models.demos.gemma4.tests.test_factory import compare_tensors
+    from models.demos.gemma4.tt.ccl import CCLManager
     from models.demos.gemma4.tt.model import Gemma4Model
     from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
     from models.demos.gemma4.tt.precision import Gemma4Precision
-    from models.experimental.diffusion_gemma.tt.ccl import CCLManager
 
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
     if tp < 2:

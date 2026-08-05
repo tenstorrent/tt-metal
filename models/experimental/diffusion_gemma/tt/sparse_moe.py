@@ -111,12 +111,8 @@ def _quantize_ragged_groups(groups, token_slot, packed_rows):
         padded_size = _ladder_group_size(group_size)
         pad_rows = (padded_size - group_size) * rows_per_segment
         if pad_rows:
-            slot_token = torch.cat(
-                [slot_token.reshape(-1), torch.zeros(pad_rows, dtype=slot_token.dtype)]
-            )
-            slot_valid = torch.cat(
-                [slot_valid.reshape(-1, 1), torch.zeros((pad_rows, 1), dtype=slot_valid.dtype)]
-            )
+            slot_token = torch.cat([slot_token.reshape(-1), torch.zeros(pad_rows, dtype=slot_token.dtype)])
+            slot_valid = torch.cat([slot_valid.reshape(-1, 1), torch.zeros((pad_rows, 1), dtype=slot_valid.dtype)])
             padded_sparsity = torch.zeros((1, 1, padded_size, sparsity.shape[-1]), dtype=sparsity.dtype)
             padded_sparsity[0, 0, :group_size] = sparsity[0, 0]
             padded_sparsity[0, 0, group_size:, 0] = 1

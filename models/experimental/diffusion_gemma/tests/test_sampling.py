@@ -635,7 +635,7 @@ def test_the_deleted_host_serving_mode_is_not_offered():
     The distinction matters because both are spelled "host gumbel". Deleted: the per-step
     full-vocabulary torch draw offered as ``DG_VLLM_GUMBEL_MODE=host``. Kept: replaying a torch
     run's exact pre-computed noise onto the device so TT decisions are token-for-token comparable
-    to a torch oracle -- ``tests/replay_hf_tt.py`` depends on ``make_host_gumbel_noise_fn``.
+    to a torch oracle -- ``demo/replay_hf_tt.py`` depends on ``make_host_gumbel_noise_fn``.
     """
     serving = pytest.importorskip("models.experimental.diffusion_gemma.tt.serving")
     generate = pytest.importorskip("models.experimental.diffusion_gemma.tt.generate")

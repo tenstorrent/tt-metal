@@ -63,13 +63,13 @@ if os.environ.get("DG_RUN_DEVICE") == "1":
         _create_hf_text_config,
         _hf_model_state_to_tt_state,
     )
+    from models.demos.gemma4.tt.ccl import CCLManager
     from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
     from models.experimental.diffusion_gemma.config import DiffusionConfig
     from models.experimental.diffusion_gemma.reference.denoise_loop import denoise_block as ref_denoise_block
     from models.experimental.diffusion_gemma.reference.self_conditioning import SelfConditioning
     from models.experimental.diffusion_gemma.tests.trajectory_pcc import compare_trajectories
     from models.experimental.diffusion_gemma.tt.attention_merge import merge_attention_partials
-    from models.experimental.diffusion_gemma.tt.ccl import CCLManager
     from models.experimental.diffusion_gemma.tt.denoise_forward import (
         DenoiseLogitsAdapter,
         denoise_attention_forward,

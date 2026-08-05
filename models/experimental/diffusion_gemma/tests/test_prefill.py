@@ -21,13 +21,13 @@ from transformers.models.gemma4.configuration_gemma4 import Gemma4TextConfig
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
+from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.reference.attention_mask import (
     build_canvas_denoise_mask,
     build_canvas_reveal_denoise_mask,
     build_canvas_reveal_denoise_window_mask,
 )
-from models.experimental.diffusion_gemma.tt.ccl import CCLManager
 from models.experimental.diffusion_gemma.tt import chunked_prefill as cp
 from models.experimental.diffusion_gemma.tt import ccl as dg_ccl
 from models.experimental.diffusion_gemma.tt import commit_decode as CD

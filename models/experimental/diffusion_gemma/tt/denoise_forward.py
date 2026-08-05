@@ -983,7 +983,16 @@ def denoise_logits_forward(
 
 
 def _apply_denoise_lm_head(hidden_states, tt_model):
-    """Project denoise states using DG's pre-created TP semaphores."""
+    """Project denoise hidden states without the shared plain all-gather.
+
+    ``create_tt_model_dg`` currently returns the shared Gemma4Model in the
+    default precision mode. Its ``_apply_lm_head`` ends in ``ttnn.all_gather``;
+    captured denoise traces then replay that broadcast with op-owned
+    semaphores, and a later replay can wedge all devices in
+    ``broadcast_rm_writer::noc_semaphore_wait``. Keep the shared projection and
+    softcap exactly, but route the TP gather through DG's pre-created
+    semaphores.
+    """
     from models.demos.gemma4.tt.model import _get_lm_head_program_config
 
     if tt_model.lm_head_weight is not None:
@@ -1249,7 +1258,7 @@ def read_prompt_kv_cache_by_layer(
         )
 
     # Only forward the kwarg when borrowing is actually requested: ``read_fn`` is a documented
-    # injection point and existing test doubles / tests/replay_hf_tt.py monkeypatches accept only
+    # injection point and existing test doubles / demo/replay_hf_tt.py monkeypatches accept only
     # (kv_cache, *, prompt_len, seq_len_start).
     extra = {"borrow_full_span": True} if borrow_full_span else {}
     if layer_idx is not None:

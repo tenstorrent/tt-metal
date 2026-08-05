@@ -36,7 +36,6 @@ concurrent per-request tables remain #47488/#47557; see
 
 from __future__ import annotations
 
-import os
 import time
 from numbers import Integral
 from typing import NamedTuple
@@ -208,6 +207,7 @@ class BlockDiffusionServingSession:
         degeneracy_stop_token_ids=None,
         page_table=None,
         page_tables_per_layer=None,
+        prefill_execution_len: int | None = None,
         adapter_kwargs: dict | None = None,
         denoise_block_fn=None,
         logits_fn_builder_factory=make_generation_logits_fn_builder_from_checkpoint_state,
@@ -220,6 +220,7 @@ class BlockDiffusionServingSession:
         self.canvas_length = self.config.canvas_length
         self.page_table = page_table
         self.page_tables_per_layer = page_tables_per_layer
+        self.prefill_execution_len = None if prefill_execution_len is None else int(prefill_execution_len)
         self.gumbel_mode = gumbel_mode
         self.gumbel_vocab_chunk_size = gumbel_vocab_chunk_size
         # ``None`` selects ordinary eager denoise. The vLLM wrapper passes only the
@@ -310,7 +311,9 @@ class BlockDiffusionServingSession:
         chat-templated/tokenized by the caller — vLLM owns tokenization). Any
         valid prompt length is accepted; prefill pads to a 32-tile multiple
         internally and reports both the logical ``prompt_len`` and the aligned
-        ``cache_len`` used for the frozen-prefix read. Returns ``cache_len``.
+        ``cache_len`` used for the frozen-prefix read. ``prefill_execution_len``
+        may make the compute tensor larger without moving that logical cache
+        boundary. Returns ``cache_len``.
 
         """
         _validate_prompt_tokens(prompt_tokens)
@@ -329,35 +332,22 @@ class BlockDiffusionServingSession:
         # emits both in the prefill_block0 metric that run_upfront_gpqa.sh greps.
         self.prefill_reused = False
         self.prefill_time_s = 0.0
+        execution_len = getattr(self, "prefill_execution_len", None)
         if self._persistent_adapter is not None:
-            logger.info(f"DG_UPFRONT_MARK prefill_device_begin prompt_len={prompt_len} cache_len={cache_len}")
-        # DG_PREFILL_CPU_PROBE=1 separates "the device is busy" from "this thread is not
-        # running". Prefill is the only hot NON-traced dispatch left (traced denoise issues
-        # one Python call per step and sits at a flat 195.8 ms/step), and its wall time is
-        # bimodal in serving -- 0.134 s floor versus 4.9-11.9 s, prompt-length INDEPENDENT --
-        # while the same code in repro_prefill_instrumented.py is flat at 0.171 s. A 30-layer
-        # forward is thousands of Python-level ttnn calls, so if wall >> thread CPU the cost
-        # is host-side dispatch starvation, not device work; if wall ~= thread CPU it is real
-        # host compute; if both are small but wall is large the thread is blocked on the
-        # device. Cheap enough to leave in, off by default.
-        probe = os.environ.get("DG_PREFILL_CPU_PROBE", "0") == "1"
-        cpu0 = (time.process_time(), time.thread_time()) if probe else None
+            logger.info(
+                f"DG_UPFRONT_MARK prefill_device_begin prompt_len={prompt_len} cache_len={cache_len} "
+                f"execution_len={execution_len or cache_len}"
+            )
         t0 = time.perf_counter()
+        execution_kwargs = {"execution_len": execution_len} if execution_len is not None else {}
         prefill = prefill_prompt_tokens(
             self.tt_model,
             prompt_tokens,
             page_table=self.page_table,
             page_tables_per_layer=self.page_tables_per_layer,
+            **execution_kwargs,
         )
         self.prefill_time_s = time.perf_counter() - t0
-        if cpu0 is not None:
-            proc_cpu = time.process_time() - cpu0[0]
-            thread_cpu = time.thread_time() - cpu0[1]
-            logger.info(
-                f"DG_PREFILL_CPU cache_len={cache_len} wall_s={self.prefill_time_s:.4f} "
-                f"process_cpu_s={proc_cpu:.4f} thread_cpu_s={thread_cpu:.4f} "
-                f"thread_cpu_frac={thread_cpu / max(self.prefill_time_s, 1e-9):.3f}"
-            )
         prompt_len = prefill.prompt_len
         cache_len = prefill.cache_len
         if self._persistent_adapter is not None:

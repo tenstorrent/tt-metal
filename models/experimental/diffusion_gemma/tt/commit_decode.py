@@ -601,8 +601,12 @@ def commit_decode_forward(
     if skip_lm_head and on_device_logits:
         raise ValueError("skip_lm_head is incompatible with on_device_logits (no logits produced)")
     if x.dtype in (ttnn.uint32, ttnn.int32):
-        # The default DG build returns the shared Gemma4Model, whose embedding
-        # gather uses the semaphore-creating shared collective.
+        # ``create_tt_model_dg`` currently returns the shared Gemma4Model when
+        # no experts-dtype override is set. Calling its ``embed_tokens`` here
+        # would therefore route commit through the shared plain all-gather,
+        # which can deadlock after persistent denoise traces are captured.
+        # Import at call time to avoid the generate -> commit_decode import
+        # cycle; generate is fully initialized before commit starts.
         from models.experimental.diffusion_gemma.tt.generate import _embed_tokens_dg
 
         input_embeds = _embed_tokens_dg(tt_model, x)
