@@ -398,12 +398,9 @@ class RunTimeOptions {
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
-    // Disable shared memory tracking for tt-smi (whole feature). Enabled by default; disable with
-    // TT_METAL_SHM_TRACKING_DISABLED=1.
+    // Disable shared memory tracking for tt-smi
     bool shm_tracking_disabled = false;
-    // Per-program CB (circular buffer) aggregation rescans all active programs and is the only
-    // expensive part of SHM tracking, so it is OFF by default. Enable with
-    // TT_METAL_SHM_CB_TRACKING_ENABLED=1. Note: opposite polarity to shm_tracking_disabled above.
+    // Enable per-program CB (circular buffer) tracking for tt-smi
     bool shm_cb_tracking_enabled = false;
     bool shm_verbose = false;
 

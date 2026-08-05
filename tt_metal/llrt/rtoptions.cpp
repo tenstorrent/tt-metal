@@ -1676,15 +1676,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
 
         // TT_METAL_SHM_TRACKING_DISABLED
-        // Disable shared memory tracking for tt-smi (whole feature).
+        // Disable shared memory tracking for tt-smi.
         // Default: 0 (SHM tracking enabled)
         // Usage: export TT_METAL_SHM_TRACKING_DISABLED=1
         case EnvVarID::TT_METAL_SHM_TRACKING_DISABLED: this->shm_tracking_disabled = is_env_enabled(value); break;
 
         // TT_METAL_SHM_CB_TRACKING_ENABLED
-        // Enable per-program CB (circular buffer) aggregation, the only expensive part of SHM
-        // tracking (it rescans all active programs on every program dispatch). Off by default so
-        // DRAM/L1/L1_SMALL/TRACE tracking stays live while only the CB column reads 0.
+        // Enable per-program CB (circular buffer) aggregation tracking.
         // Default: 0 (CB aggregation disabled)
         // Usage: export TT_METAL_SHM_CB_TRACKING_ENABLED=1
         case EnvVarID::TT_METAL_SHM_CB_TRACKING_ENABLED: this->shm_cb_tracking_enabled = is_env_enabled(value); break;
