@@ -151,9 +151,17 @@ class TtTransformerLM:
         `03_plan.md` P6 is where this moves on-device via `ttnn.sampling`.
         """
         t = ys.shape[1]
-        last = ttnn.slice(ys, [0, t - 1, 0], [1, t, ys.shape[2]])
+        # A single-row `ys` needs no slice, and taking one anyway is actively
+        # harmful: `ttnn.slice` over the full extent returns an **alias of the
+        # input**, so the `deallocate` below would free the caller's tensor. That
+        # is invisible while `ys` is a fresh per-step allocation the caller frees
+        # regardless -- and fatal once it is the trace's persistent output buffer,
+        # where it surfaces as "Input Tensor is not allocated" on the *next* step.
+        owned = t > 1
+        last = ttnn.slice(ys, [0, t - 1, 0], [1, t, ys.shape[2]]) if owned else ys
         logits = ttnn.linear(last, self.head_w, bias=self.head_b, compute_kernel_config=self.cc)
-        ttnn.deallocate(last)
+        if owned:
+            ttnn.deallocate(last)
         out = ttnn.to_torch(logits).float().reshape(-1)
         ttnn.deallocate(logits)
         return out
@@ -229,7 +237,7 @@ class TtTransformerLM:
         sampler: str = "ras",
         max_tokens: int | None = None,
         seed: int | None = None,
-        use_trace: bool = False,
+        use_trace: bool = True,
     ) -> list[int]:
         """Text token IDs -> semantic speech token IDs.
 
@@ -253,26 +261,18 @@ class TtTransformerLM:
         max_len = self.cache_width(prefix_len, cap)
         ys, caches = self.prefill(prefix, max_len)
         ttnn.deallocate(prefix)
-        # Pull the prefill's logits to the host BEFORE any trace capture.
-        # `begin_trace_capture` reserves the trace region and the prefill's output
-        # does not survive it -- reading it afterwards fails with "Input Tensor is
-        # not allocated", pointing at the read rather than at the capture.
+        # The prefill's logits are read before capture. Not strictly required --
+        # the prefill's `ys` does survive `begin_trace_capture` -- but it keeps the
+        # loop below to a single source of logits.
         pending_logits = self.logits_for_last(ys)
         ttnn.deallocate(ys)
         ys = None
 
-        # Trace capture is measured at **2.22x** on the decode step (34.92 -> 15.72
-        # ms, 63.6 tok/s) and verified bit-exact against the untraced path over 8
-        # steps -- see `tests/perf/test_trace.py`, which exercises
-        # `TracedDecodeStep` directly and passes.
-        #
-        # It is **off by default here** because wiring it into this loop is not
-        # finished. Driven from a bare prefill it works; driven from `generate()`,
-        # which runs the text encoder and builds the prefix first, the trace's
-        # output buffer reads back as unallocated. The interaction between that
-        # earlier allocation traffic and the trace region is unresolved, and a
-        # 2.22x speedup is not worth shipping a path that fails on the second
-        # token. Pass `use_trace=True` to try it.
+        # Trace capture: 2.22x on the decode step (34.92 -> 15.72 ms, 63.6 tok/s),
+        # verified bit-exact against the untraced path. Only the decode step is
+        # traced -- prefill runs once per utterance with a different shape, so
+        # tracing it would buy one dispatch saving for a second capture. Capture
+        # costs two warm-up passes, so it is skipped for very short generations.
         traced = None
         if use_trace and cap > 8:
             from .decoder import TracedDecodeStep
