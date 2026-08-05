@@ -3775,3 +3775,107 @@ establishing that 98.6224 % was reproducible and not hardware — all true, and 
 whether the number was wrong. One host-side run of the reference against itself, at the measured input
 error, answered that in ten minutes and reversed the sign of the conclusion. A reproducible number is
 not thereby a defect.
+
+---
+
+## Amendment 96 (2026-08-05) — Phase 2+3: the transformer condition stream and the pipeline's fl2va path. t2va provably unmoved
+
+### The design problem, and why the metadata was not permuted
+
+`transformer_minimax_h3.py` assembled `streams = [text, audio, video]` and sliced outputs at
+`l_len + a_len`. That is correct **only** because t2va has zero condition rows: the packed layout is
+`[text | cond | audio | target]`, so prepending conditioning rows to the video stream would place them
+after audio, out of step with `position_ids`, `adaln_indices` and the rope tables.
+
+Resolved by an optional fourth stream, `condition_1BKC`, projected with the same `proj_in` and placed
+between text and audio. `None` leaves every t2va expression textually unchanged. Two alternatives were
+rejected on measured grounds rather than taste:
+
+- **Splitting a prepended video tensor with `ttnn.slice`.** Legal and lossless --- `slice.cpp:236-249`
+  sets `rm_only` and routes through ROW_MAJOR when `begins[-2] % tile_h != 0`, which production already
+  does at `:420` (`l_len + a_len = 453`) --- but it untilizes the *whole* input, here
+  `[1,1,38304,1344]` bf16 = 103 MB/device, twice per step for 49 steps. The two existing output slices
+  pay the same cost on 96- and 32-wide tensors, 14x and 42x narrower.
+- **Permuting the metadata in the pipeline instead.** Numerically valid (full attention with per-row
+  rope and per-row AdaLN is permutation-equivariant) and rejected because
+  `test_transformer_minimax_h3.py:159-165` *measures* the gate as too blunt to catch a mistake there:
+  feeding rows metadata belonging to other rows read 0.999888, only 8.6e-5 below the real number. It
+  would also create two frames of reference for row indices and put an ungated transform between
+  `packing.py` --- the bit-exact, 100-host-test artifact --- and the device.
+
+`forward` returns the **target** video rows only, deliberately unlike the reference's return shape. The
+caller discards conditioning-row velocity, the two blocks are non-contiguous in the packed layout, and
+attention is full so a wrong conditioning rope or AdaLN tag still surfaces in the target output.
+
+### Gate: 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, 2 links, 2 layers, real weights
+
+| case | seq -> padded | rows/device | video PCC | audio PCC |
+|---|---|---|---|---|
+| `prod_768p_5s` (t2va) | 38222 -> 38400 | 4800 | **99.9979 %** | **99.9974 %** |
+| `prod_768p_5s_fl2va` (one anchor) | 39230 -> 39424 | 4928 | **99.9978 %** | **99.9989 %** |
+| `prod_768p_5s_fl2va_first_last` | 40238 -> 40448 | 5056 | **99.9980 %** | **99.9971 %** |
+
+The t2va row is **identical to amendment 76's recorded 99.9979 / 99.9974**, so the four-way assembly
+did not move the three-stream path. `4 passed in 679 s`. Command:
+`timeout 3600 ./python_env/bin/python -m pytest .../test_transformer_minimax_h3.py -k "real_weights and
+prod_768p_5s" -q -s --timeout 3300`. SHA `5aa8c47872f` + working tree.
+
+### User directive 2026-08-05: production shapes only, for every unit test we write
+
+Two cases written earlier this session were removed as invented shapes:
+
+- `cond_only_unaligned` (512/256/96 over a 4x12 grid, cond 48) --- built specifically because
+  production *masks* an omission of `c_len % tile` from the `tile_aligned` predicate: production's
+  target video is unaligned anyway, so the ROW_MAJOR path is entered either way. It passed at
+  99.9974/99.9975 before removal. Coverage of the second residue is instead had honestly, from the
+  `first`+`last` production case: 2016 condition rows is `0 mod 32` where one anchor's 1008 is `16`.
+  Note the predicate is a *performance* switch, not a correctness one --- `ttnn.concat` massages a
+  tile-padded concat dim via `untilize_rm_retilize` --- so a wrong predicate is a silent slowdown.
+- `_scatter_rows`'s `seq=19` control and `seq=206` (448x448) cases, leaving only the two geometries
+  `fl2va` presents (1054 and 2067 rows). What the control established during bringup is recorded in
+  the test docstring rather than re-run forever.
+
+### Pipeline
+
+`draw_request_latents` is a module-level pure function so the generator draw order --- conditioning
+noise **first**, then video, then audio --- is testable without a mesh. The reference spreads those
+draws across two blocks; the observable contract is the order off one generator.
+
+`_denoise` now writes `video_rows[num_cond:]` in place, the reference's
+`MiniMaxH3LoopSchedulerStep` form. The anchors survive because nothing ever writes them --- there is no
+re-imposition step. At `num_cond == 0` the slice is the whole tensor, so t2va is bit-identical.
+
+Ordering follows the reference's `MiniMaxH3Blocks` sequence, including `vae_encoder` **before**
+`prepare_layout`, which also gives the keyframe encoder its residency window before the DiT exists.
+Three reference details that are easy to get wrong and are pinned in code: `keyframe_condition_noise`'s
+argument order is `(shapes, latent_channels, patch_size)`, the *reverse* of the reference's, so
+copying the reference call site would silently swap them; the canvas comes from the **source**
+keyframe's size, before `prepare_keyframe_image`; and `stretch` keys on position in the list, so a lone
+`last_image` is the geometry anchor and is stretched.
+
+Also fixed: `MINIMAX_H3_PIXEL_MEAN/STD` existed twice, in `pipeline_minimax_h3.py` and
+`conditioning.py`. The keyframe path is the first caller for which a drift between them is a silent
+*asymmetric* bug --- normalize into the VAE with one, revert out of it with the other --- so the
+pipeline now imports the conditioning module's copy.
+
+`encode_prompt(keyframes=...)` raises `NotImplementedError` rather than falling back to a text-only
+presentation. A fallback would read a text-only embedding for an fl2va request and produce a plausible
+video carrying the keyframe's conditioning rows but none of its semantics.
+
+### Gate: t2va end to end, unchanged to every digit
+
+| statistic | amendment 78 | now |
+|---|---|---|
+| frame std | 46.05 | **46.05** |
+| mean frame delta | 9.88 | **9.88** |
+| audio peak | 0.076 | **0.076** |
+| CLIP mean | 37.37 (amendment 86) | **37.37** (min 36.52, max 38.44, bar 33.0) |
+| spatial seam v / h | --- | 1.016 / 0.692 |
+| temporal seam @ 17 | --- | 0.994 |
+
+`1 passed in 158.7 s`, `RUN_VBENCH=0`. Latency in that test is logged, not gated, and this run had no
+warmup pass, so its 77.7 s denoise is not comparable to amendment 81's warm 61.7 s.
+
+Host suite **104 passed** (was 100): four new production-shape tests covering the t2va draw
+bit-identity, the conditioning-noise-first order for one and two anchors, and the rows-per-anchor
+agreement between the encode and the layout.
