@@ -604,7 +604,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_mesh_workload
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(args, coord, tensor_args, output);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
+        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), cached_program.shared_variables);
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
