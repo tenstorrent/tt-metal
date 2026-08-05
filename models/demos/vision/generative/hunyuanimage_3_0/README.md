@@ -39,6 +39,10 @@ All commands from the tt-metal repo root. `HY3_SINGLE_CHIP=1` runs fabric-free o
 # per-component PCC (single-chip + TP=8 sharded)
 ./python_env/bin/python -m pytest models/demos/vision/generative/hunyuanimage_3_0/tests/pcc -s
 
+# trace + 2CQ contract (Command 3): host-free capture/replay PCC + zero host aten ops
+./python_env/bin/python -m pytest \
+  models/demos/vision/generative/hunyuanimage_3_0/tests/e2e/test_trace_2cq.py -s
+
 # text→image demo (hybrid path)
 ./python_env/bin/python -m models.demos.vision.generative.hunyuanimage_3_0.demo.demo_image3_t2i \
   --prompt "a red panda astronaut, studio lighting" --steps 50 --size 1024x1024 --out panda.png
