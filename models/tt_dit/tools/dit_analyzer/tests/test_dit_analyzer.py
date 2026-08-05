@@ -348,6 +348,35 @@ def test_concat_keeps_the_sharded_operands_distribution():
     assert st.dist.shard[SP] == 2, st.dist.shard  # the shard survives the concat
 
 
+def test_connected_pipeline_reveals_a_cross_boundary_redundant_gather():
+    """Whole-pipeline linking (phase 10c): a collective at the end of one stage, judged by
+    what the next stage actually reads back, can be redundant in a way per-stage analysis
+    cannot see.
+
+    Stage `enc` gathers a TP-sharded tensor to full; stage `dec` consumes it. Analyzed
+    standalone (connect=False), enc's gather is necessary — its output is a graph output
+    seeded on every device. Linked with connect=True, only the final stage seeds demand and
+    the boundary reads back device 0, so the gather to the other devices is exposed as
+    redundant across the stage boundary.
+    """
+    from dit_analyzer.link import link_stages
+
+    enc = GraphBuilder("enc", MESH)
+    x = enc.input("x", [1, 256, 1024], shard={TP: 2})  # TP-sharded on dim2
+    enc_g = enc.finish([enc.all_gather(x, dim=2, mesh_axis=TP, label="gather_out")])  # -> replicated
+
+    dec = GraphBuilder("dec", MESH)
+    y = dec.input("y", [1, 256, 1024])  # replicated input, shape matches enc's output
+    dec_g = dec.finish([dec.pointwise("act", [y], label="use")])
+
+    redundancy = ("unused_gather", "participant_shrink", "dead_collective")
+    disconnected = analyze_graph(link_stages([("enc", enc_g), ("dec", dec_g)]))
+    assert not any(f.rule in redundancy for f in disconnected.findings), [f.rule for f in disconnected.findings]
+
+    connected = analyze_graph(link_stages([("enc", enc_g), ("dec", dec_g)], connect=True))
+    assert any(f.rule in redundancy for f in connected.findings), [f.rule for f in connected.findings]
+
+
 def test_symmetric_halo_is_necessary_but_asymmetric_halo_shrinks():
     """participant_shrink compares needed (output frame) with local (input frame). A halo
     grows the frame by pad_left, so without reconciling the two a *symmetric* halo -- where

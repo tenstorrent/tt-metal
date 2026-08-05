@@ -30,11 +30,31 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence, Tuple
 
-from .ir import Graph, Node, Placement, TensorSymbol
+from .ir import PARAM, Graph, Node, Placement, TensorSymbol
 
 
-def link_stages(stages: Sequence[Tuple[str, Graph]]) -> Graph:
-    """Merge ``(stage_name, graph)`` pairs into one linked multi-stage graph."""
+def _primary_input(g: Graph, shape) -> Optional[str]:
+    """A stage's handoff input: an activation symbol consumed but produced by nothing
+    (a graph entry), preferring one whose shape matches the previous stage's output."""
+    produced = {o for n in g.nodes for o in n.outputs}
+    consumed = {x for n in g.nodes for x in n.inputs}
+    entries = [s for s in consumed if s not in produced and g.symbols[s].kind != PARAM]
+    return next((s for s in entries if g.symbols[s].shape == shape), entries[0] if entries else None)
+
+
+def link_stages(stages: Sequence[Tuple[str, Graph]], connect: bool = False) -> Graph:
+    """Merge ``(stage_name, graph)`` pairs into one linked multi-stage graph.
+
+    ``connect=False`` (default): each stage's outputs stay graph outputs, separated by a
+    decorative readback boundary — per-stage findings, no demand across the boundary.
+
+    ``connect=True`` **data-connects** consecutive stages (phase 10c): stage N's output is
+    read back at the boundary and fed as stage N+1's matching input, and only the *last*
+    stage's outputs seed demand. Backward demand then crosses the boundary, so a collective
+    at the end of one stage is judged by what the next stage actually consumes — e.g. a
+    gather that replicates to every device feeding a boundary that reads back only device 0
+    surfaces as redundant, which neither stage reveals alone.
+    """
     if not stages:
         raise ValueError("link_stages needs at least one stage")
 
@@ -43,7 +63,7 @@ def link_stages(stages: Sequence[Tuple[str, Graph]]) -> Graph:
 
     prev_out: Optional[str] = None
     prev_mesh: Optional[str] = None
-    outputs: List[str] = []  # every stage's outputs are read back at its boundary
+    outputs: List[str] = []
     for i, (name, g) in enumerate(stages):
         pfx = name + "/"
         mesh_id = None if i == 0 else name  # first stage is the primary mesh
@@ -54,10 +74,17 @@ def link_stages(stages: Sequence[Tuple[str, Graph]]) -> Graph:
             return pfx + x
 
         # a readback boundary separates this stage from the previous one
+        redirect: Optional[Tuple[str, str]] = None
         if prev_out is not None:
             hs = pfx + "__enter"
             src = linked.symbols[prev_out]
-            linked.symbols[hs] = TensorSymbol(id=hs, shape=src.shape, dtype=src.dtype, value_id=hs, mesh=prev_mesh)
+            # when connected the handoff lands on this stage's mesh and carries the dist its
+            # matching entry expected, so this stage analyses exactly as it did standalone
+            wired = _primary_input(g, src.shape) if connect else None
+            hmesh = mesh_id if connect else prev_mesh
+            linked.symbols[hs] = TensorSymbol(id=hs, shape=src.shape, dtype=src.dtype, value_id=hs, mesh=hmesh)
+            if wired is not None and wired in g.placements:
+                linked.placements[hs] = Placement(dist=g.placements[wired].dist, region=g.placements[wired].region)
             linked.nodes.append(
                 Node(
                     id=pfx + "__boundary",
@@ -69,6 +96,8 @@ def link_stages(stages: Sequence[Tuple[str, Graph]]) -> Graph:
                     mesh=prev_mesh,
                 )
             )
+            if wired is not None:
+                redirect = (rid(wired), hs)  # this stage's consumers read the handoff, not a fresh entry
 
         for sid, s in g.symbols.items():
             linked.symbols[rid(sid)] = TensorSymbol(
@@ -83,11 +112,14 @@ def link_stages(stages: Sequence[Tuple[str, Graph]]) -> Graph:
         for sid, p in g.placements.items():
             linked.placements[rid(sid)] = Placement(dist=p.dist, region=p.region)
         for n in g.nodes:
+            ins = [rid(x) for x in n.inputs]
+            if redirect is not None:
+                ins = [redirect[1] if x == redirect[0] else x for x in ins]
             linked.nodes.append(
                 Node(
                     id=rid(n.id),
                     op=n.op,
-                    inputs=[rid(x) for x in n.inputs],
+                    inputs=ins,
                     outputs=[rid(x) for x in n.outputs],
                     attrs=dict(n.attrs),
                     mesh_axis=n.mesh_axis,
@@ -100,10 +132,15 @@ def link_stages(stages: Sequence[Tuple[str, Graph]]) -> Graph:
                 )
             )
 
-        outputs.extend(rid(o) for o in g.outputs)
+        if not connect:
+            outputs.extend(rid(o) for o in g.outputs)  # disconnected: every stage seeds demand
         prev_out = rid(g.outputs[0]) if g.outputs else None
         prev_mesh = mesh_id
 
+    if connect:  # only the final stage seeds demand; upstream stages are pulled through the boundaries
+        last_name, last_g = stages[-1]
+        outputs = [last_name + "/" + o for o in last_g.outputs]
     linked.outputs = outputs
     linked.meta["stages"] = [n for n, _ in stages]
+    linked.meta["connected"] = connect
     return linked
