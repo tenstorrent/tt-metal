@@ -103,9 +103,11 @@ class TrainingConfig(BaseTrainingConfig):
         self.project_name = tc.get("project_name", "tt_train_nano_gpt")
         self.data_path = tc.get("data_path", "")
         self.scheduler_type = tc.get("scheduler_type", "identity")
-        # warmup_linear knobs: warmup_steps (absolute) overrides warmup_ratio (fraction of the schedule).
+        # warmup_linear knobs: warmup_steps (absolute) overrides warmup_ratio (fraction of the
+        # schedule). Unset is None rather than 0 so an explicit 0 means "no warmup".
         self.warmup_ratio = float(tc.get("warmup_ratio", _WARMUP_LINEAR_WARMUP_FRACTION))
-        self.warmup_steps = int(tc.get("warmup_steps", 0))
+        warmup_steps = tc.get("warmup_steps")
+        self.warmup_steps = None if warmup_steps is None else int(warmup_steps)
         self.min_lr_ratio = float(tc.get("min_lr_ratio", _WARMUP_LINEAR_MIN_LR_FRACTION))
         # Steps the LR curve is shaped over; 0 = the run length. Set larger than max_steps to run
         # only a prefix of a longer curve (e.g. max_steps=500, lr_schedule_steps=1000 = first half).
@@ -195,8 +197,12 @@ def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[Causal
 
 
 def resolve_warmup_steps(training_cfg: TrainingConfig, total_steps: int) -> int:
-    """Absolute warmup length: explicit `warmup_steps` wins, else `warmup_ratio` of the schedule."""
-    warmup = training_cfg.warmup_steps or round(total_steps * training_cfg.warmup_ratio)
+    """Absolute warmup length: explicit `warmup_steps` wins (0 = none), else `warmup_ratio`."""
+    warmup = (
+        round(total_steps * training_cfg.warmup_ratio)
+        if training_cfg.warmup_steps is None
+        else training_cfg.warmup_steps
+    )
     return max(0, min(warmup, total_steps))
 
 

@@ -34,7 +34,7 @@ Apply to `scheduler_type: warmup_linear`.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `warmup_ratio` | float | 0.1 | Warmup length as a fraction of the schedule |
-| `warmup_steps` | int | 0 | Absolute warmup length; overrides `warmup_ratio` when non-zero |
+| `warmup_steps` | int | unset | Absolute warmup length; overrides `warmup_ratio`. Omit to use the ratio; set to 0 for no warmup |
 | `min_lr_ratio` | float | 0.01 | Final LR as a fraction of the peak LR |
 | `lr_schedule_steps` | int | 0 | Steps the LR curve is shaped over; 0 = the run length. Set larger than `max_steps` to run only a prefix of a longer curve |
 | `tokenizer_type` | str | "char" | Tokenizer type ("char" or "bpe") |
