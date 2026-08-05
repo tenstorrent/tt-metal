@@ -212,7 +212,7 @@ jobs:
           repository: tenstorrent/vllm-tt-plugin
           path: docker-job/vllm-tt-plugin
           ref: ${{ inputs.vllm-tt-plugin-ref }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: ⬇️ Checkout vLLM fork
         if: ${{ inputs.vllm-source == 'fork' }}
