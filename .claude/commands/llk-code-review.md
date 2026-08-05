@@ -36,11 +36,24 @@ above in every Task prompt so each subagent receives an exact readable path.
   parent's appended system prompt, conversation history, or prior tool results.
   Every Task prompt MUST therefore tell the subagent which exact knowledge files
   to read and include the PR title, description, change summary, and existing-
-  discussion digest. Refer to files by path; do not paste the full corpus.
+  discussion digest. Every Task prompt MUST also repeat the shell and filesystem
+  constraints below. Refer to files by path; do not paste the full corpus.
 - Tools are functional. Do not test them or make exploratory calls. Use a tool
   only when it is required for the review.
-- Use `gh` for GitHub data. Do not use web fetch. Do not run builds or tests and
-  do not download a compiler/toolchain during the review.
+- Keep the working tree read-only. Never call Write, Edit, or NotebookEdit, and
+  never save PR data, diffs, summaries, plans, comments, or intermediate results
+  to a file. Keep coordination and comment preparation in context.
+- Use Read, Grep, and Glob for repository files. Use Bash only for one direct,
+  single-line `gh` command per tool call. Do not use pipes, `&&`, `||`, `;`, `&`,
+  redirects, heredocs, command/process substitution, inline environment
+  assignments, or multiple commands. Use separate tool calls when more than one
+  GitHub query is needed.
+- Use `gh`'s native `--json` and `--jq` flags instead of an external parser. Use
+  literal repository, PR, path, line, and SHA values learned from prior tool
+  results rather than shell variables. Pass comment bodies as arguments to the
+  direct `gh` call; do not use stdin or temporary files.
+- Do not use web fetch. Do not run builds or tests and do not download a
+  compiler/toolchain during the review.
 - Use an MCP source only to settle a specific LLK/architecture fact that the
   repository cannot settle; do not perform broad documentation searches.
 - Review only issues introduced by this PR, but read surrounding and cross-file
@@ -127,9 +140,10 @@ Follow these steps precisely:
    falsifier, and never use GitHub suggestion blocks. Do not expose internal
    severity labels or validation narration in comments.
 
-7. Output a concise findings summary to the terminal. If `--comment` was not
-   provided, stop without writing to GitHub. If it was provided and no findings
-   survived, post this issue-level comment and stop:
+7. Return a concise findings summary in your response; do not use Bash or a file
+   for the summary. If `--comment` was not provided, stop without writing to
+   GitHub. If it was provided and no findings survived, post this issue-level
+   comment with one direct `gh pr comment` call and stop:
 
    ```markdown
    ## Code review
@@ -141,7 +155,7 @@ Follow these steps precisely:
 8. If findings survived, refresh the PR's issue comments and inline review
    comments immediately before posting. Remove any finding another reviewer has
    already covered since step 3. Prepare one self-contained comment per unique
-   issue; do not publish the preparation list.
+   issue in context; do not create a file or publish the preparation list.
 
 9. Post each finding as an inline comment with `gh api`. Do not call
    `mcp__github_inline_comment__create_inline_comment`: claude-code-action does
@@ -150,18 +164,16 @@ Follow these steps precisely:
    Get the current head SHA immediately before posting:
 
    ```bash
-   gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha'
+   gh api "repos/OWNER/REPOSITORY/pulls/PR_NUMBER" --jq '.head.sha'
    ```
+
+   Read the SHA from that tool result and place it literally in the separate
+   posting call. Do not assign a shell variable or combine the calls.
 
    Then post using the changed-file path and a valid new-side diff line:
 
    ```bash
-   gh api --method POST "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments" \
-     --raw-field body="COMMENT_BODY" \
-     --raw-field commit_id="HEAD_SHA" \
-     --raw-field path="CHANGED_FILE_PATH" \
-     --field line=NEW_SIDE_LINE_NUMBER \
-     --raw-field side="RIGHT"
+   gh api --method POST "repos/OWNER/REPOSITORY/pulls/PR_NUMBER/comments" --raw-field body="COMMENT_BODY" --raw-field commit_id="HEAD_SHA" --raw-field path="CHANGED_FILE_PATH" --field line=NEW_SIDE_LINE_NUMBER --raw-field side="RIGHT"
    ```
 
    Verify every successful write returns an `html_url`. If an inline anchor is

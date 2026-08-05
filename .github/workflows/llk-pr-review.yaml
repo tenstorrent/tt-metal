@@ -119,6 +119,11 @@ jobs:
             echo "all output. Every surviving finding must be introduced by this PR, actionable,"
             echo "deduplicated against existing review comments, and anchored to a changed line"
             echo "or posted with an explicit file/line fallback."
+            echo
+            echo "Keep the working tree read-only. Never use Write/Edit or temporary files. Use"
+            echo "Bash only for one direct, single-line gh command per call, with no pipes,"
+            echo "redirects, shell composition, substitution, or inline environment assignment."
+            echo "Repeat these constraints in every delegated Task prompt."
           } > "$out"
           echo "Prepared compact coordination prompt ($(wc -w < "$out") words); validated ${#required[@]} knowledge files"
 
