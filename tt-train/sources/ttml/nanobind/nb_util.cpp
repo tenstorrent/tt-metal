@@ -489,6 +489,7 @@ ttnn::Tensor make_metal_tensor(
     nb::object shape_obj = numpy_data_obj.attr("shape");
     nb::tuple shape_tuple = nb::cast<nb::tuple>(shape_obj);
     std::vector<size_t> shape_from_python;
+    shape_from_python.reserve(rank);
     for (size_t i = 0; i < rank; ++i) {
         shape_from_python.push_back(nb::cast<size_t>(shape_tuple[i]));
     }

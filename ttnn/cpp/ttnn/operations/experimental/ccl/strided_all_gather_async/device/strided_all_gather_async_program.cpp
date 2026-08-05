@@ -320,7 +320,9 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     std::set<CoreRange> mux_forward_core_ranges;
     std::set<CoreRange> mux_backward_core_ranges;
     std::vector<CoreCoord> sender_forward_cores;
+    sender_forward_cores.reserve(num_links * num_workers_per_direction);
     std::vector<CoreCoord> sender_backward_cores;
+    sender_backward_cores.reserve(num_links * num_workers_per_direction);
     uint32_t core_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -435,7 +437,9 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     }
 
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
+    reader_kernel_ids.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+    writer_kernel_ids.reserve(num_links * num_directions_per_link * num_workers_per_direction);
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
