@@ -131,7 +131,12 @@ class Gemma4Attention:
         # prefill is actually in play; the paged cache above is untouched.
         self.ring_kv_cache = None
         self.ring_max_seq_len = None
-        if create_kv_cache and cp_degree(mesh_config) > 1 and ring_prefill_chunk_size:
+        # Deliberately NOT gated on create_kv_cache. Gemma4Model builds the paged
+        # cache itself after constructing the layer and assigns it to
+        # ``self_attn.kv_cache``, so this constructor always sees create_kv_cache
+        # False on the model path — gating on it left the ring cache unallocated and
+        # every cross-chunk read silently fell back to the mask path.
+        if cp_degree(mesh_config) > 1 and ring_prefill_chunk_size:
             num_local_kv_heads = 1 if self.weights.kv_replicated else config.num_key_value_heads // mesh_config.tp
             self.ring_kv_cache = init_ring_kv_cache(
                 mesh_device=mesh_device,
