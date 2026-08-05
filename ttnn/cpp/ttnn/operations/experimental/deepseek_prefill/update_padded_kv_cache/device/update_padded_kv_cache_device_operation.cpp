@@ -500,9 +500,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // The writer's offset math then needs no change. tp_axis==nullopt => tp_factor=1 collapses all of this.
     const uint32_t tp_factor =
         args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
-    const uint32_t tp_coord = args.tp_axis.has_value() ? ::ttnn::ccl::get_linearized_index_from_physical_coord(
-                                                             cache, coord, args.tp_axis.value())
-                                                       : 0;
+    const uint32_t tp_coord = args.tp_axis.has_value()
+                                  ? ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.tp_axis)
+                                  : 0;
     const uint32_t linear_factor = sp_factor * tp_factor;           // effective block-cyclic chip count
     const uint32_t linear_coord = sp_coord * tp_factor + tp_coord;  // this chip's position in that order
     const uint32_t chunk_local_t = input_Ht / tp_factor;            // tile-rows THIS chip actually writes
