@@ -1777,6 +1777,62 @@ plus one fused SwiGLU = 2 ops, no split, no separate silu):
 Also worth stating: the fused weight is a **duplicate** of w1 and w3 concatenated — 57 MB/layer,
 **1.46 GB over 26 layers** against a 3.9 GB working set. Even at parity it would be a poor trade.
 
+### 6.25 — wo gets a program config: +0.196 ms/frame bit-exact, and the knob is `in0_block_w`
+
+§6.24's ceiling argument produced a target. Each decode linear's time is bytes/ceiling plus overhead,
+and the overhead is all a restructuring can attack — **only wo had any**:
+
+| weight | bytes | floor µs | actual | overhead |
+|---|---|---|---|---|
+| wqkv | 20,054,016 | 103.4 | 103.2 | −0.2 → 0% |
+| **wo** | 13,369,344 | 68.9 | 85.9 | **+17.0 → 20%** |
+| w1 / w3 | 30,081,024 | 155.1 | 158.1 / 158.4 | +3.0 / +3.3 → 2% |
+| w2 | 56,623,104 | 291.9 | 284.1 | −7.8 → −3% |
+
+**THE KNOB IS `in0_block_w`, NOT THE CORE COUNT — my hypothesis was wrong.** I went in expecting
+N=3072's 96 tiles splitting 1.5-per-core over 64 cores to be the problem. It is not: 8x8 / 8x6 / 8x4
+measure 68.2 / 68.1 / 68.5 µs, i.e. the grid barely matters. What matters is how many of K's 128 tiles
+load per inner iteration:
+
+| in0_block_w | 1 | 2 | **4** | 8 | 16 | 32 |
+|---|---|---|---|---|---|---|
+| µs | 152.0 | 83.2 | **68.1** | 73.7 | 80.5 | 89.4 |
+| GB/s | 88 | 161 | **196** | 182 | 166 | 150 |
+
+The default runs at 162 GB/s; `in0_block_w=4` runs at **196 — the ceiling**. Both directions lose.
+
+**TWO OPTIONS, and the bit-exact one ships:**
+
+| config | µs | vs default | ms/frame | accuracy |
+|---|---|---|---|---|
+| default | 82.3 | 1.000x | — | baseline |
+| **8x4, in0_block_w=2 ← SHIPS** | 74.7 | 1.102x | **+0.196** | **byte-identical on all six gate columns** |
+| 8x6, in0_block_w=4 | 68.1 | 1.209x | +0.370 | mean +0.02, p90 +0.01 pp; min PCC 0.999040 → 0.999219 (better); max 3.05% → 4.76% |
+
+The faster one costs 0.054 pp of mean per ms — the same ballpark as w2's 0.096 that §6.16 rejected —
+and takes the worst sample from 3.05% to 4.76%. Max is an unstable order statistic and not decisive on
+its own, but 0.174 ms/frame is 0.34% of a frame and not worth the argument. **`in0_block_w=4` is left
+documented and available** if that trade is ever wanted; nothing else needs to change to take it.
+
+Verified: 122/122 tests, decode gate byte-identical, long-form WER 0 of 298, 15/15 `[END_AUDIO]`,
+voice identity PASS. Pipeline **−0.0024 RTF = −0.19 ms/frame** against the isolated +0.196 — they agree,
+as in §6.22, because this changes no layout that a consumer has to re-optimise around.
+
+**DECODE ONLY.** `per_core_M=1` assumes M is one tile, true of a single decode position and false of
+prefill's S rows, so `_layer` deliberately has no program config.
+
+**⚠ THE NEAR-MISS, and it is the most useful thing here.** The first sweep flagged every
+`in0_block_w=4` variant as **WRONG** — they differed from the DEFAULT by 5.3e-03 relative, and those
+were exactly the fast ones. Checking against a torch **fp64** reference instead showed every config
+sitting at the *same* 6.640e-04 from truth, with PCC 0.9999742 vs the default's 0.9999745. **The
+default is not ground truth.** Comparing a variant against it rather than against the real answer
+almost discarded a genuine 1.2x as a correctness failure.
+
+This also retires the older "hand-tuned matmul program configs measured SLOWER (169 vs 193 GB/s)"
+finding as scope-limited rather than wrong: that was measured on **wq**, already at 94% of its floor.
+Sweeping an op with no headroom finds none — which is why §6.24's floor table is the right way to pick
+what to sweep.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
