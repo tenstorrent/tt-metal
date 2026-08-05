@@ -679,6 +679,13 @@ def _build_decode_harness(mesh_device, model_path, decode_pos, max_seq_len=8192,
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000},
             id="1x4",
         ),
+        # 31B needs TP=8: at TP=4 its bfp8 shared_mlp+attention weights are
+        # ~8.6 GB/chip plus ~1.8 GB KV, which crowds the ~12.8 GB WH budget.
+        pytest.param(
+            (1, 8),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000},
+            id="1x8",
+        ),
     ],
     indirect=True,
 )
