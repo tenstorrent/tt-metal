@@ -1,0 +1,236 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""TransformerLM: text -> semantic speech tokens, autoregressively, on device.
+
+    text tokens ------> text_embedding (51866 x 512)
+                    --> ConformerEncoder, 6 blocks, 16 heads, d=1024, **causal**
+                    --> text_encoder_affine (1024 -> 1024)
+    speaker x-vector -> L2 normalise, affine (192 -> 1024)
+    prompt tokens ----> speech_embedding (4096 x 1024)
+
+    prefix = [sos | speaker | text | task_id | prompt speech tokens]
+    loop: AR decoder (14 blocks, KV cache) -> llm_decoder (1024 -> 4097)
+          -> RAS sampling -> next token -> speech_embedding -> loop
+
+The two encoders in this checkpoint are the same class family with **different
+attention patterns and different feed-forward activations**, which the config only
+implies:
+
+* the text encoder sets `static_chunk_size: 1`, and `subsequent_chunk_mask` turns
+  that into a plain causal mask -- unlike the flow encoder, whose `static_chunk_size`
+  is 0 and which therefore attends fully;
+* `ConformerEncoder` defaults `activation_type` to `"swish"` while
+  `TransformerEncoder` defaults it to `"relu"`, and cosyvoice.yaml overrides
+  neither -- so the text encoder's FFN is SiLU and the AR decoder's is ReLU.
+
+Both facts are carried in the exported metadata rather than hardcoded here.
+
+Generation length is bounded by the *text* length: `min_len = 2 * text_len` and
+`max_len = 20 * text_len`, with the EOS token masked out until `min_len`. Those
+bounds are what stop the sampler ending an utterance after one token.
+"""
+from __future__ import annotations
+
+import torch
+
+import ttnn
+
+from ..flow.encoder import TtConformerEncoder, _linear, espnet_rel_positional_encoding
+from ..hifigan.conv import accurate_compute_config
+from .decoder import TtARDecoder, causal_bias
+from .sampling import greedy, ras_sampling
+
+
+class TtTransformerLM:
+    """The LLM stage. Activations are `[1, T, C]`."""
+
+    def __init__(self, device, bag, meta, dtype=ttnn.bfloat16):
+        self.device, self.dtype, self.meta = device, dtype, meta
+        self.cc = accurate_compute_config(device)
+        self.text_meta = meta["text_encoder"]
+        self.ar_meta = meta["ar_decoder"]
+        self.speech_token_size = meta["speech_token_size"]
+        self.eos_token = meta["eos_token"]
+        self.sos, self.task_id = meta["sos"], meta["task_id"]
+
+        self.text_embedding = ttnn.from_torch(
+            bag.tensor("text_embedding.weight"), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.text_encoder = TtConformerEncoder(device, bag.sub("text_encoder"), self.text_meta, dtype)
+        self.affine_w, self.affine_b = _linear(device, bag, "text_encoder_affine_layer", dtype)
+        self.spk_w, self.spk_b = _linear(device, bag, "spk_embed_affine_layer", dtype)
+
+        # llm_embedding holds exactly two rows: sos and task_id.
+        self.llm_embedding = bag.tensor("llm_embedding.weight")
+        self.speech_embedding_host = bag.tensor("speech_embedding.weight")
+        self.speech_embedding = ttnn.from_torch(
+            self.speech_embedding_host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.decoder = TtARDecoder(device, bag.sub("llm"), self.ar_meta, dtype)
+        self.head_w, self.head_b = _linear(device, bag, "llm_decoder", dtype)
+        self._causal: dict[int, object] = {}
+
+    # ----------------------------------------------------------------------
+    def causal_mask(self, size: int):
+        """Additive causal bias, cached per size. Prefill only."""
+        if size not in self._causal:
+            self._causal[size] = ttnn.from_torch(
+                causal_bias(size), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        return self._causal[size]
+
+    def encode_text(self, text_tokens):
+        """Token IDs `[1, T]` -> `[1, T, 1024]`, causally masked."""
+        emb = ttnn.embedding(text_tokens, self.text_embedding, layout=ttnn.TILE_LAYOUT)
+        t = emb.shape[1]
+        pos = ttnn.from_torch(
+            espnet_rel_positional_encoding(t, self.text_meta["d_model"]),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        h = self.text_encoder(emb, pos, mask=self.causal_mask(t))
+        ttnn.deallocate(emb)
+        ttnn.deallocate(pos)
+        out = ttnn.linear(h, self.affine_w, bias=self.affine_b, compute_kernel_config=self.cc)
+        ttnn.deallocate(h)
+        return out
+
+    def speaker_embedding(self, embedding):
+        """`[1, 1, 192]` -> `[1, 1, 1024]`: L2 normalise then affine."""
+        sq = ttnn.multiply(embedding, embedding)
+        s = ttnn.sum(sq, dim=-1, keepdim=True)
+        ttnn.deallocate(sq)
+        inv = ttnn.rsqrt(s)
+        ttnn.deallocate(s)
+        unit = ttnn.multiply(embedding, inv)
+        ttnn.deallocate(inv)
+        out = ttnn.linear(unit, self.spk_w, bias=self.spk_b, compute_kernel_config=self.cc)
+        ttnn.deallocate(unit)
+        return out
+
+    def build_prefix(self, text_enc, spk_emb=None, prompt_speech_tokens=None):
+        """`[sos | speaker | encoded text | task_id | prompt speech tokens]`.
+
+        The speaker row is omitted entirely when there is no x-vector -- the
+        reference builds a zero-width tensor, which is the same thing.
+        """
+        d = self.ar_meta["input_size"]
+        sos = ttnn.from_torch(
+            self.llm_embedding[self.sos].reshape(1, 1, d), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
+        task = ttnn.from_torch(
+            self.llm_embedding[self.task_id].reshape(1, 1, d),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        parts = [sos]
+        if spk_emb is not None:
+            parts.append(spk_emb)
+        parts.append(text_enc)
+        parts.append(task)
+        if prompt_speech_tokens is not None and prompt_speech_tokens.shape[1] > 0:
+            parts.append(ttnn.embedding(prompt_speech_tokens, self.speech_embedding, layout=ttnn.TILE_LAYOUT))
+        out = ttnn.concat(parts, dim=1)
+        ttnn.deallocate(sos)
+        ttnn.deallocate(task)
+        if len(parts) > 4 and parts[-1] is not text_enc:
+            ttnn.deallocate(parts[-1])
+        return out
+
+    # ----------------------------------------------------------------------
+    def logits_for_last(self, ys):
+        """`llm_decoder(y[:, -1])` -> `[1, 4097]` on the host, ready for sampling.
+
+        The head is the one place a host round trip is unavoidable in Stage 1:
+        RAS needs the full 4097-way distribution *and* the history of emitted
+        tokens, and its repetition branch rewrites a score before resampling.
+        `03_plan.md` P6 is where this moves on-device via `ttnn.sampling`.
+        """
+        t = ys.shape[1]
+        last = ttnn.slice(ys, [0, t - 1, 0], [1, t, ys.shape[2]])
+        logits = ttnn.linear(last, self.head_w, bias=self.head_b, compute_kernel_config=self.cc)
+        ttnn.deallocate(last)
+        out = ttnn.to_torch(logits).float().reshape(-1)
+        ttnn.deallocate(logits)
+        return out
+
+    def prefill(self, prefix):
+        """Run the whole prompt through the decoder with a causal mask."""
+        length = prefix.shape[1]
+        ys, caches = self.decoder.forward_chunk(prefix, caches=None, mask=self.causal_mask(length))
+        return ys, caches
+
+    def decode_step(self, token_id: int, caches):
+        """One token in, one `[1, 1, 1024]` hidden state out. No mask needed: every
+        cached position is real history, and upstream's `[1, 1, 1]` all-true mask
+        gets sliced to the score width and masks nothing."""
+        row = self.speech_embedding_host[token_id].reshape(1, 1, -1)
+        x = ttnn.from_torch(row, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+        ys, caches = self.decoder.forward_chunk(x, caches=caches, mask=None)
+        ttnn.deallocate(x)
+        return ys, caches
+
+    # ----------------------------------------------------------------------
+    def generate(
+        self,
+        text_tokens,
+        spk_emb=None,
+        prompt_speech_tokens=None,
+        *,
+        text_len: int | None = None,
+        sampler: str = "ras",
+        max_tokens: int | None = None,
+        seed: int | None = None,
+    ) -> list[int]:
+        """Text token IDs -> semantic speech token IDs.
+
+        `sampler='greedy'` makes the stream deterministic, which is what the device
+        tests use; `'ras'` reproduces the reference's stochastic policy.
+        """
+        if seed is not None:
+            torch.manual_seed(seed)
+        sample = greedy if sampler == "greedy" else None
+        cfg = self.meta.get("sampling", {})
+
+        text_enc = self.encode_text(text_tokens)
+        prefix = self.build_prefix(text_enc, spk_emb, prompt_speech_tokens)
+        ttnn.deallocate(text_enc)
+
+        n_text = text_len if text_len is not None else text_tokens.shape[1]
+        min_len = int(n_text * self.meta.get("min_token_text_ratio", 2))
+        cap = max_tokens or int(n_text * self.meta.get("max_token_text_ratio", 20))
+
+        ys, caches = self.prefill(prefix)
+        ttnn.deallocate(prefix)
+
+        out: list[int] = []
+        for i in range(cap):
+            logits = self.logits_for_last(ys)
+            ttnn.deallocate(ys)
+            logp = torch.log_softmax(logits, dim=-1)
+            if i < min_len:
+                # EOS is suppressed until the utterance is long enough for the text
+                logp[self.eos_token] = -float("inf")
+            token = (
+                sample(logp)
+                if sample is not None
+                else ras_sampling(
+                    logp,
+                    out,
+                    top_p=cfg.get("top_p", 0.8),
+                    top_k=cfg.get("top_k", 25),
+                    win_size=cfg.get("win_size", 10),
+                    tau_r=cfg.get("tau_r", 0.1),
+                )
+            )
+            if token == self.eos_token:
+                break
+            out.append(token)
+            ys, caches = self.decode_step(token, caches)
+
+        ttnn.deallocate(ys)
+        TtARDecoder.free_caches(caches)
+        return out
