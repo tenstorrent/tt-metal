@@ -122,6 +122,7 @@ def test_two_sequential_dp_profiles_release_children_between_carves(monkeypatch)
     [
         ("models/common/tests/demos/qwen2_7b/demo.py", "_create_dp_submeshes"),
         ("models/common/tests/demos/qwen25_7b/demo.py", "_create_dp_submeshes"),
+        ("models/common/tests/demos/deepseek_r1_distill_qwen_14b/demo.py", "_create_dp_submeshes"),
         ("models/common/tests/demos/llama32_1b/demo.py", "create_dp_submeshes"),
         ("models/common/tests/demos/llama32_3b/demo.py", "create_dp_submeshes"),
     ],

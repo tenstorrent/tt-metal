@@ -14,6 +14,8 @@ import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
 from models.common.llm_runtime.execution import EagerExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
+from models.common.models.deepseek_r1_distill_qwen_14b import executor as deepseek_executor
+from models.common.models.deepseek_r1_distill_qwen_14b import generator as deepseek_generator
 from models.common.models.llama32_1b import executor as llama32_executor
 from models.common.models.llama32_1b import generator as llama32_generator
 from models.common.models.llama32_3b import executor as llama32_3b_executor
@@ -93,6 +95,25 @@ EXECUTOR_BINDINGS = {
         ),
         make_lane=lambda llm, config: _FakeLane(llm, config),
         hf_model="Qwen/Qwen2.5-7B-Instruct",
+    ),
+    "deepseek_r1_distill_qwen_14b": SimpleNamespace(
+        executor_module=deepseek_executor,
+        executor_class=deepseek_executor.DeepSeekR1Qwen14BExecutor,
+        executor_config_class=deepseek_executor.DeepSeekR1Qwen14BExecutorConfig,
+        generator_module=deepseek_generator,
+        generator_class=deepseek_generator.DeepSeekR1Qwen14BGenerator,
+        generator_config_class=deepseek_generator.DeepSeekR1Qwen14BGeneratorConfig,
+        build_generator_name="build_deepseek_r1_distill_qwen_14b_generator",
+        build_executor_name="build_deepseek_r1_distill_qwen_14b_executor",
+        make_model=lambda **kwargs: _make_qwen2_model(**kwargs),
+        make_runtime_config=lambda: _make_qwen2_runtime_config(max_prefill_batch_size=32),
+        make_executor_config=lambda mode="none": _make_qwen2_executor_config(mode, module=deepseek_executor),
+        make_recording_target=lambda **kwargs: _RecordingTarget(_make_qwen2_model(), **kwargs),
+        make_product=lambda mesh_device, max_batch_size: _make_qwen2_product(
+            mesh_device, max_batch_size, max_prefill_batch_size=32
+        ),
+        make_lane=lambda llm, config: _FakeLane(llm, config),
+        hf_model="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
     ),
 }
 
@@ -205,7 +226,11 @@ def _make_qwen2_runtime_config(*, max_prefill_batch_size=32):
 
 
 def _make_qwen2_executor_config(mode="none", *, module=qwen2_executor):
-    config_class = getattr(module, "Qwen2ExecutorConfig", None) or module.Qwen25ExecutorConfig
+    config_class = (
+        getattr(module, "Qwen2ExecutorConfig", None)
+        or getattr(module, "Qwen25ExecutorConfig", None)
+        or module.DeepSeekR1Qwen14BExecutorConfig
+    )
     return config_class(
         trace=TraceConfig(mode),
         warmup=WarmupConfig(prefill_seq_lens=(128, 1024), prefill_batch_sizes=(1,)),
