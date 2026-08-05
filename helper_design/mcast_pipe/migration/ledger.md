@@ -26,7 +26,7 @@ now fully current at API v10:
 | `conv2d-weights-single-sender-rect` | 1 | fully end-to-end migrated @ v10 | 2 | `CONV-HEIGHT`: 48 passed, 16 expected skips; DRAM-config 1 passed; shared DRAM: 14 passed |
 | `conv2d-weights-fixed-line` | 1 | fully end-to-end migrated @ v10 | 2 | `CONV-BLOCK`: 48 passed, 16 expected skips; DRAM-config 1 passed; shared DRAM: 14 passed |
 | `matmul-in1-mcast-padding-host` | 4 | fully end-to-end migrated @ v10 — **re-verified 2026-08-05** | 2 | `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected |
-| `groupnorm-sharded-v2-mcast-host` | 4 | fully end-to-end migrated @ v10 | 4 | legacy: 108 passed, 2 expected skips; Welford: 108 passed, 2 expected skips; fixed/default: 19 passed, 6 expected skips |
+| `groupnorm-sharded-v2-mcast-host` | 4 | fully end-to-end migrated @ v10 | 4 | mapped production geometry is zero-edge; synthetic splitter geometry 3/3; legacy perf +0.248%; Welford perf -0.485%; inventories 108/2 each; fixed/default 19/6 |
 | `sort-single-row-control` | 1 | fully end-to-end migrated @ v10 | 2 migrated + 1 helper-neutral | handshaked row-start + no-handshake sub-stage Pipes; long 7/7; Ht=2 2/2; helper 77/77; perf +1.195124% |
 | `conv2d-activation-width-sharded` | 1 | fully end-to-end migrated @ v10 | 1 hybrid | exact fresh-cache JIT at PCC 0.9999992598; features 48 passed / 16 expected skips; DRAM-config 1 passed; helper 73/73 |
 

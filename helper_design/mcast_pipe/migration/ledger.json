@@ -217,7 +217,8 @@
         "fixed/default routing: 19 passed, 6 expected skips",
         "McastHostFixture: 19 passed",
         "test_mcast_pipe.py: 68 passed",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; GroupNormMcastGeometry synthetic zero/one/two-edge coverage passed 3/3; legacy +0.248% versus baseline passed the 1.5% gate"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
@@ -245,7 +246,8 @@
         "McastHostFixture degenerate cases: passed",
         "test_mcast_pipe.py including test_f3_degenerate: 68 passed",
         "coverage gap: no mapped device operation test reaches the GroupNorm v2 use_mcast=false binding",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; GroupNormMcastGeometry synthetic zero/one/two-edge coverage passed 3/3; legacy +0.248% versus baseline passed the 1.5% gate"
       ],
       "coverage_confidence": "medium",
       "last_verified": "2026-08-05",
@@ -276,7 +278,8 @@
         "fixed/default routing: 19 passed, 6 expected skips",
         "McastHostFixture: 19 passed",
         "test_mcast_pipe.py: 68 passed",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; GroupNormMcastGeometry synthetic zero/one/two-edge coverage passed 3/3; Welford -0.485% versus baseline passed the 1.5% gate"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
@@ -304,7 +307,8 @@
         "McastHostFixture degenerate cases: passed",
         "test_mcast_pipe.py including test_f3_degenerate: 68 passed",
         "coverage gap: no mapped device operation test reaches the GroupNorm v2 use_mcast=false binding",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; GroupNormMcastGeometry synthetic zero/one/two-edge coverage passed 3/3; Welford -0.485% versus baseline passed the 1.5% gate"
       ],
       "coverage_confidence": "medium",
       "last_verified": "2026-08-05",
@@ -847,7 +851,8 @@
         "GN legacy inventory: 108 passed, 2 expected skips",
         "fixed/default-routing GN nodes: 19 passed, 6 expected skips",
         "fresh sender and receiver JIT paths verified",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; synthetic zero/one/two-edge splitter coverage passed 3/3; legacy +0.248% versus baseline passed the 1.5% gate"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
@@ -867,7 +872,8 @@
       "commit": "acd84d7f3fc30f9744101883b3ada5a5dc8da652",
       "validation_set": [
         "GN legacy inventory: 124 passed, 8 expected skips",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; synthetic zero/one/two-edge splitter coverage passed 3/3; legacy +0.248% versus baseline passed the 1.5% gate"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
@@ -947,7 +953,8 @@
         "GN Welford inventory: 108 passed, 2 expected skips",
         "fixed/default-routing GN nodes: 19 passed, 6 expected skips",
         "fresh sender and receiver JIT paths verified",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; synthetic zero/one/two-edge splitter coverage passed 3/3; Welford -0.485% versus baseline passed the 1.5% gate"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
@@ -985,7 +992,8 @@
       "commit": "acd84d7f3fc30f9744101883b3ada5a5dc8da652",
       "validation_set": [
         "GN Welford inventory: 116 passed, 8 expected skips",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; synthetic zero/one/two-edge splitter coverage passed 3/3; Welford -0.485% versus baseline passed the 1.5% gate"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
