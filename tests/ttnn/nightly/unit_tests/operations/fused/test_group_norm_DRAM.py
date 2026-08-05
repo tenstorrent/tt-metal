@@ -194,8 +194,7 @@ def test_group_norm_DRAM_oft_unit_shapes(
     base.test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps, specify_grid)
 
 
-# Layout combinations on the legacy ROW_MAJOR DRAM path.
-@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only")
+@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", base.GROUP_NORM_ROW_MAJOR_SHAPES)
 @pytest.mark.parametrize("welford_mode", ["legacy"])
@@ -205,11 +204,10 @@ def test_group_norm_DRAM_oft_unit_shapes(
         (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
         (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
         (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
-        (ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
     ],
-    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT", "TILE_IN_TILE_OUT"],
+    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
 )
-def test_group_norm_DRAM_row_major_layouts(
+def test_group_norm_DRAM_row_major(
     device,
     N,
     C,
@@ -241,7 +239,7 @@ def test_group_norm_DRAM_row_major_layouts(
 
 
 # Optional weight/bias and input-mask coverage, one representative shape.
-@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only")
+@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
 @pytest.mark.parametrize("use_input_mask", [True, False], ids=["mask", "no_mask"])
 @pytest.mark.parametrize(

@@ -71,17 +71,23 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
 // Tiles the row-major path keeps resident in c_17 for one per-core group.
 uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt);
 
+// Auto-select num_out_blocks from tensor volume / virtual core count: next power of two,
+// capped at 256. Shared by the program factories and the L1-fit estimate.
+// `volume` is H * W * C (padded), `num_virtual_cores` is num_virtual_cols * num_virtual_rows.
+uint32_t groupnorm_heuristic_num_out_blocks(uint32_t volume, uint32_t num_virtual_cores);
+
 // Percent of usable L1 we allow the estimate to reach; the margin covers the approximated small CBs.
 inline constexpr uint64_t kGroupnormTilizedL1UsagePercent = 95;
 
-// Allowance, in tiles, for the small scalar/reduction CBs the estimate does not sum individually.
+// Flat tile budget covering the small 1-tile CBs (eps, ex/ex2 partials, etc.)
 inline constexpr uint32_t kGroupnormSmallCbAllowanceTiles = 32;
 
-// Estimates whether a legacy (non-Welford) group_norm fits in L1; if not, group_norm() tilizes or
-// untilizes as separate ops instead. Deliberately over-estimates, so a "fits" answer is always safe.
-// `tilize_in` adds the resident group, `untilize_out` adds the row-major output scratch.
-// `per_batch_hw` is padded_shape[1] * padded_shape[2], `available_l1` is usable per-core L1 in bytes,
-// and `num_out_blocks_arg` takes -1 for auto.
+// At or below this many active cores, prefer composite over fused RM.
+inline constexpr uint32_t kGroupnormLegacyRmMinCoresForOnChip = 32;
+
+// Estimates whether a legacy (non-Welford) group_norm fits in L1; if not, group_norm()
+// tilizes/untilizes as separate ops. Over-estimates on purpose so "fits" is always safe.
+// `tilize_in` adds the resident group; `untilize_out` adds the RM output scratch.
 bool groupnorm_legacy_rm_input_fits_l1(
     uint32_t Ht,
     uint32_t W,
@@ -98,5 +104,9 @@ bool groupnorm_legacy_rm_input_fits_l1(
     bool tilize_in,
     bool untilize_out,
     uint64_t available_l1);
+
+// Prefer composite (host tilize + TILE GN) over fused RM for small grids or uneven batch mapping.
+// num_cores = num_virtual_cols * num_virtual_rows.
+bool groupnorm_legacy_rm_prefer_composite_for_perf(uint32_t num_cores, uint32_t num_virtual_rows, uint32_t num_batches);
 
 }  // namespace ttnn::prim

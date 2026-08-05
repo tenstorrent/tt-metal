@@ -214,7 +214,6 @@ void kernel_main() {
     bool apply_gamma_beta[block_w];
     constexpr uint32_t data_per_core_N_per_group = (per_core_N * tile_width / group);
 
-    // Gamma/beta wiring, same for both layouts.
     constexpr int dfb_outgamma_id = do_beta ? dfb_in_id : dfb_out0_id;
     constexpr int dfb_inbeta_id = do_gamma ? dfb_outgamma_id : dfb_reread_write_out_id;
     constexpr int dfb_outbeta_id = dfb_out0_id;
@@ -260,7 +259,6 @@ void kernel_main() {
     DataflowBuffer dfb_kmsq(dfb_kmsq_id);
 
 #ifdef TILIZE_IN
-    // Tilize source: repacked channels or dfb_in0.
 #ifdef READER_REPACK
     constexpr uint32_t dfb_in_rm_id = dfb_repack_id;
 #else
@@ -899,7 +897,7 @@ void kernel_main() {
                 // End Optional Beta
 
 #ifdef UNTILIZE_OUT
-                // Untilize this block for the writer.
+                // untilize - DEST capacity auto-detected.
                 compute_kernel_lib::untilize<
                     block_w,
                     dfb_untilize_in_id,
@@ -912,7 +910,7 @@ void kernel_main() {
             }
             // End Final Val Calc
 #ifdef TILIZE_IN
-            // All three passes are done with the group.
+            // All passes done with the group, resident group popped.
             dfb_in_resident.pop_front(num_out_blocks_padded * out_block_hw_normal);
 #endif
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {

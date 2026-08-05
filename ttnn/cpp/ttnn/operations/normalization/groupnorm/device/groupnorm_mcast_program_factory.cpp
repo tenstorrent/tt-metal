@@ -174,20 +174,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         "num_groups_per_core ({}) must be <= 16 when use_welfords is true.",
         num_groups_per_core);
 
-    // -1 sentinel from GroupNormMultiCoreProgramConfig means "auto select":
-    // pick num_out_blocks from a simple input-size / grid-size heuristic, rounded
-    // up to the next power of two and capped at MAX_HEURISTIC_NUM_OUT_BLOCKS.
+    // -1 sentinel from GroupNormMultiCoreProgramConfig means "auto select".
     // Any other value is taken as an explicit user choice and validated below.
     if (num_out_blocks == static_cast<uint32_t>(-1)) {
-        const uint32_t HEURISTIC_BLOCK_SIZE_BASE = 256 * 256;
-        const uint32_t MAX_HEURISTIC_NUM_OUT_BLOCKS = 256;
-        uint32_t heuristic_num_out_blocks =
-            (shape[1] * shape[2] * shape[3]) / (HEURISTIC_BLOCK_SIZE_BASE * (num_virtual_cols * num_virtual_rows));
-        heuristic_num_out_blocks = heuristic_num_out_blocks ? heuristic_num_out_blocks : 1;
-        num_out_blocks = 1;
-        while (num_out_blocks < heuristic_num_out_blocks && num_out_blocks < MAX_HEURISTIC_NUM_OUT_BLOCKS) {
-            num_out_blocks <<= 1;
-        }
+        num_out_blocks =
+            groupnorm_heuristic_num_out_blocks(shape[1] * shape[2] * shape[3], num_virtual_cols * num_virtual_rows);
     }
 
     TT_FATAL(

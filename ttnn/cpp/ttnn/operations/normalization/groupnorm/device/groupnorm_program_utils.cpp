@@ -71,6 +71,21 @@ uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_block
     return num_out_blocks_padded * out_block_h_normal * block_wt;
 }
 
+uint32_t groupnorm_heuristic_num_out_blocks(uint32_t volume, uint32_t num_virtual_cores) {
+    constexpr uint32_t HEURISTIC_BLOCK_SIZE_BASE = 256 * 256;
+    constexpr uint32_t MAX_HEURISTIC_NUM_OUT_BLOCKS = 256;
+    if (num_virtual_cores == 0) {
+        return 1;
+    }
+    uint32_t heuristic = volume / (HEURISTIC_BLOCK_SIZE_BASE * num_virtual_cores);
+    heuristic = heuristic ? heuristic : 1;
+    uint32_t num_out_blocks = 1;
+    while (num_out_blocks < heuristic && num_out_blocks < MAX_HEURISTIC_NUM_OUT_BLOCKS) {
+        num_out_blocks <<= 1;
+    }
+    return num_out_blocks;
+}
+
 bool groupnorm_legacy_rm_input_fits_l1(
     uint32_t Ht,
     uint32_t W,
@@ -93,7 +108,7 @@ bool groupnorm_legacy_rm_input_fits_l1(
         num_virtual_cols -= 1;
     }
     if (num_virtual_cols == 0) {
-        return false;  // Invalid grid; report "does not fit" so we take the composite path.
+        return false;  // Invalid grid; report "does not fit" (fall back to the composite path)
     }
     const uint32_t num_virtual_rows = (grid_x / num_virtual_cols) * grid_y;
     if (num_virtual_rows == 0 || Ht < num_virtual_rows) {
@@ -114,14 +129,7 @@ bool groupnorm_legacy_rm_input_fits_l1(
     // num_out_blocks: -1 means use the factory's power-of-two heuristic.
     uint32_t num_out_blocks;
     if (num_out_blocks_arg < 0) {
-        const uint32_t HEURISTIC_BLOCK_SIZE_BASE = 256 * 256;
-        const uint32_t MAX_HEURISTIC_NUM_OUT_BLOCKS = 256;
-        uint32_t heuristic = (per_batch_hw * W) / (HEURISTIC_BLOCK_SIZE_BASE * (num_virtual_cols * num_virtual_rows));
-        heuristic = heuristic ? heuristic : 1;
-        num_out_blocks = 1;
-        while (num_out_blocks < heuristic && num_out_blocks < MAX_HEURISTIC_NUM_OUT_BLOCKS) {
-            num_out_blocks <<= 1;
-        }
+        num_out_blocks = groupnorm_heuristic_num_out_blocks(per_batch_hw * W, num_virtual_cols * num_virtual_rows);
     } else {
         num_out_blocks = num_out_blocks_arg == 0 ? 1 : static_cast<uint32_t>(num_out_blocks_arg);
     }
@@ -151,6 +159,13 @@ bool groupnorm_legacy_rm_input_fits_l1(
     }
 
     return est * 100 <= available_l1 * kGroupnormTilizedL1UsagePercent;
+}
+
+bool groupnorm_legacy_rm_prefer_composite_for_perf(
+    uint32_t num_cores, uint32_t num_virtual_rows, uint32_t num_batches) {
+    const bool imbalanced =
+        num_virtual_rows != 0 && num_batches >= num_virtual_rows && (num_batches % num_virtual_rows) != 0;
+    return num_cores <= kGroupnormLegacyRmMinCoresForOnChip || imbalanced;
 }
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {

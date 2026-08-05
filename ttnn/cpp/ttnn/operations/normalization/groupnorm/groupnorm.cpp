@@ -271,8 +271,7 @@ Tensor group_norm(
 
     const auto arch = input_tensor.device()->arch();
 
-    // The interleaved (non-sharded) ROW_MAJOR path regresses on Blackhole, so it is enabled only on
-    // Wormhole. Blackhole regression: #12345
+    // Interleaved (non-sharded) ROW_MAJOR is Wormhole-only, it regresses on Blackhole; see #52279.
     if (!input_tensor.is_sharded() && arch != tt::ARCH::WORMHOLE_B0) {
         TT_FATAL(
             input_tensor.layout() == Layout::TILE,
@@ -431,8 +430,6 @@ Tensor group_norm(
             effective_reciprocals);
     }
 
-    // Composite fallbacks, legacy path only. We only reroute when per-batch H*W is tile-aligned:
-    // otherwise the padding would corrupt mean/variance, so let the device op reject it instead.
     const uint32_t per_batch_hw = input_padded_shape[1] * input_padded_shape[2];
     const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
     const bool per_batch_hw_tile_aligned = per_batch_hw % tile_h == 0;
@@ -462,14 +459,22 @@ Tensor group_norm(
             available_l1);
     };
 
-    // If the resident group will not fit in L1, tilize once on host instead of re-tilizing on every pass.
+    // Composite fallback: L1 does not fit, or fused RM is expected to be slower.
     Tensor gn_input = input_tensor;
     if (!use_welford && input_tensor.layout() == Layout::ROW_MAJOR && per_batch_hw_tile_aligned) {
-        if (!legacy_rm_fits_l1(/*tilize_in=*/true, /*untilize_out=*/requested_out_layout == Layout::ROW_MAJOR)) {
+        const bool fits_l1 =
+            legacy_rm_fits_l1(/*tilize_in=*/true, /*untilize_out=*/requested_out_layout == Layout::ROW_MAJOR);
+        const uint32_t num_virtual_cols = compute_num_virtual_cols(core_grid->x, num_groups, input_padded_shape[3]);
+        const uint32_t num_virtual_rows = num_virtual_cols == 0 ? 0 : (core_grid->x / num_virtual_cols) * core_grid->y;
+        const uint32_t num_cores = num_virtual_cols * num_virtual_rows;
+        const bool prefer_composite = ttnn::prim::groupnorm_legacy_rm_prefer_composite_for_perf(
+            num_cores, num_virtual_rows, input_padded_shape[0]);
+        if (!fits_l1 || prefer_composite) {
             log_debug(
                 tt::LogOp,
                 "group_norm: tilizing ROW_MAJOR input on host and running the TILE path (composite) -- "
-                "resident tilized group does not fit L1.");
+                "reason: {}.",
+                !fits_l1 ? "resident tilized group does not fit L1" : "composite preferred for perf");
             // Keep the input's memory config; output_mem_config may well be different.
             gn_input = ttnn::tilize_with_zero_padding(input_tensor, input_tensor.memory_config());
         }
