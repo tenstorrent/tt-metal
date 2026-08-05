@@ -109,29 +109,6 @@ def _load_hf_drafter(load_weights: bool = True):
     return model
 
 
-def _drafter_cfg_from_hf(c) -> DFlashDrafterConfig:
-    """Build the device config from the HF model's config so dims + rope params match the checkpoint."""
-    rs = dict(getattr(c, "rope_scaling", None) or getattr(c, "rope_parameters", None) or {})
-    dfc = dict(getattr(c, "dflash_config", None) or {})
-    d = DFlashDrafterConfig()  # defaults fill anything the config omits
-    return DFlashDrafterConfig(
-        hidden_size=c.hidden_size,
-        head_dim=getattr(c, "head_dim", c.hidden_size // c.num_attention_heads),
-        num_attention_heads=c.num_attention_heads,
-        num_key_value_heads=c.num_key_value_heads,
-        num_hidden_layers=c.num_hidden_layers,
-        rms_norm_eps=c.rms_norm_eps,
-        target_layer_ids=tuple(dfc.get("target_layer_ids", d.target_layer_ids)),
-        rope_theta=float(rs.get("rope_theta") or getattr(c, "rope_theta", None) or d.rope_theta),
-        rope_factor=float(rs.get("factor", d.rope_factor)),
-        rope_beta_fast=float(rs.get("beta_fast", d.rope_beta_fast)),
-        rope_beta_slow=float(rs.get("beta_slow", d.rope_beta_slow)),
-        rope_orig_max_pos=int(rs.get("original_max_position_embeddings", d.rope_orig_max_pos)),
-        rope_mscale=float(rs.get("mscale", d.rope_mscale)),
-        rope_mscale_all_dim=float(rs.get("mscale_all_dim", d.rope_mscale_all_dim)),
-    )
-
-
 def cache_kv(pkv, i):
     """Pull layer i's (key, value) from a DynamicCache across transformers API variants."""
     if hasattr(pkv, "key_cache") and len(pkv.key_cache) > i:
@@ -222,14 +199,14 @@ def hf_drafter(use_pretrained):
     context-KV weights matter). Skips if ``$DFLASH_HF_MODEL`` is unset / unbuildable."""
     model = _load_hf_drafter(load_weights=use_pretrained)
     if not use_pretrained:
-        model.load_state_dict(_random_state_dict(_drafter_cfg_from_hf(model.config)), strict=False)
+        model.load_state_dict(_random_state_dict(DFlashDrafterConfig.from_hf_config(model.config)), strict=False)
     return model
 
 
 @pytest.fixture
 def drafter_cfg(hf_drafter) -> DFlashDrafterConfig:
     """The device ``DFlashDrafterConfig`` derived from the HF checkpoint's config (dims + rope params)."""
-    return _drafter_cfg_from_hf(hf_drafter.config)
+    return DFlashDrafterConfig.from_hf_config(hf_drafter.config)
 
 
 @pytest.fixture

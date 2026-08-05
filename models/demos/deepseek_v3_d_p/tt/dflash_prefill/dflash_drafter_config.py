@@ -50,16 +50,13 @@ class DFlashDrafterConfig:
         return len(self.target_layer_ids) * self.hidden_size  # 6 * 7168 = 43008
 
     @classmethod
-    def from_pretrained(cls, path: str) -> "DFlashDrafterConfig":
-        """Build the device drafter config from a HF checkpoint dir (``$DFLASH_HF_MODEL``): reads
-        ``config.json`` for dims + rope params (+ ``dflash_config.target_layer_ids``). The device rope is
-        built from these scalar params via :func:`build_drafter_rope_hf_config` (NOT the transformers
-        ROPE_INIT_FUNCTIONS), so only the numeric rope params are extracted here — no rope-type remapping is
-        needed on the device side. Mirrors the test conftest's ``_drafter_cfg_from_hf`` so the production
-        runtime, the standalone test, and the HF reference all consume identical dims/rope."""
-        from transformers import AutoConfig
-
-        c = AutoConfig.from_pretrained(path, trust_remote_code=True)
+    def from_hf_config(cls, c) -> "DFlashDrafterConfig":
+        """Build the device drafter config from an already-loaded HF config object: extracts dims + rope
+        params (+ ``dflash_config.target_layer_ids``); defaults fill anything the checkpoint config omits.
+        Only the numeric rope params are extracted — the device rope is built from these scalars (via
+        ``utils.build_drafter_rope_hf_config``), NOT the transformers ROPE_INIT_FUNCTIONS, so no rope-type
+        remapping is needed on the device side. Shared by :meth:`from_pretrained` and the test conftest so the
+        production runtime, the standalone test, and the HF reference all consume identical dims/rope."""
         rs = dict(getattr(c, "rope_scaling", None) or getattr(c, "rope_parameters", None) or {})
         dfc = dict(getattr(c, "dflash_config", None) or {})
         d = cls()  # defaults fill anything the checkpoint config omits
@@ -79,3 +76,11 @@ class DFlashDrafterConfig:
             rope_mscale=float(rs.get("mscale", d.rope_mscale)),
             rope_mscale_all_dim=float(rs.get("mscale_all_dim", d.rope_mscale_all_dim)),
         )
+
+    @classmethod
+    def from_pretrained(cls, path: str) -> "DFlashDrafterConfig":
+        """Build the device drafter config from a HF checkpoint dir (``$DFLASH_HF_MODEL``): reads
+        ``config.json`` via ``AutoConfig`` and extracts dims + rope params through :meth:`from_hf_config`."""
+        from transformers import AutoConfig
+
+        return cls.from_hf_config(AutoConfig.from_pretrained(path, trust_remote_code=True))
