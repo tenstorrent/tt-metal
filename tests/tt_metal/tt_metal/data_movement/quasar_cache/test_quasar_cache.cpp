@@ -198,7 +198,7 @@ bool run_l1_dcache_test(distributed::MeshDevice& mesh_device, const L1DCacheTest
 // Test Suite: L2 Cache Operations
 // =============================================================================
 
-class QuasarL2CacheOps : public QuasarMeshDeviceSingleCardFixture {};
+class QuasarL2CacheOps : public QuasarUnitMeshFixture {};
 
 TEST_F(QuasarL2CacheOps, FlushLine) {
     if (unit_tests::dm::quasar_cache::should_skip_test()) {
@@ -278,7 +278,7 @@ TEST_F(QuasarL2CacheOps, InvalidateFreshRead) {
 // Test Suite: L1 Data Cache Operations
 // =============================================================================
 
-class QuasarL1DCacheOps : public QuasarMeshDeviceSingleCardFixture {};
+class QuasarL1DCacheOps : public QuasarUnitMeshFixture {};
 
 TEST_F(QuasarL1DCacheOps, FlushLine) {
     if (unit_tests::dm::quasar_cache::should_skip_test()) {

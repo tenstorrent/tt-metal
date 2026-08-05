@@ -38,7 +38,7 @@ std::shared_ptr<distributed::MeshBuffer> make_mesh_buffer(
 
 }  // namespace
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadDRAM) {
+TEST_F(QuasarUnitMeshFixture, MeshBufferWriteReadDRAM) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
@@ -58,7 +58,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadDRAM) {
     ASSERT_EQ(dst, src);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsDRAM) {
+TEST_F(QuasarUnitMeshFixture, MeshBufferMultipleWriteReadRoundsDRAM) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
@@ -79,7 +79,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsDRAM)
     }
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadL1) {
+TEST_F(QuasarUnitMeshFixture, MeshBufferWriteReadL1) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
@@ -99,7 +99,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadL1) {
     ASSERT_EQ(dst, src);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsL1) {
+TEST_F(QuasarUnitMeshFixture, MeshBufferMultipleWriteReadRoundsL1) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
@@ -120,7 +120,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsL1) {
     }
 }
 
-TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, MeshBufferCrossCQWriteReadRoundsDRAM) {
+TEST_F(QuasarMultiCQUnitMeshFixture, MeshBufferCrossCQWriteReadRoundsDRAM) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";

@@ -19,7 +19,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // This test requires simulator environment
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
+TEST_F(QuasarUnitMeshFixture, QuasarComputeKernelMultipleThreads) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
@@ -88,7 +88,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
 }
 
 // This test requires simulator environment
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
+TEST_F(QuasarUnitMeshFixture, QuasarComputeKernelSingleThread) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
@@ -157,7 +157,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
 }
 
 // This test requires simulator environment
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSingleCluster) {
+TEST_F(QuasarUnitMeshFixture, QuasarCreateMultipleComputeKernelsSingleCluster) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "

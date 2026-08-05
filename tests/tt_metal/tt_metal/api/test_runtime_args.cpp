@@ -1035,7 +1035,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
 // Metal 2.0 reserves DM0/DM1 on Quasar, leaving DM2..DM7 (6 cores) available for user kernels.
 // TODO: Once SW supports multiple quasar clusters/cores, expand to multiple NodeRangeSets
 // to verify CRTA dispatch across different Kernel groups
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
+TEST_F(QuasarUnitMeshFixture, QuasarCRTASharedL1Address) {
     constexpr CoreCoord core = {0, 0};
     CoreRange core_range(core);
     CoreRangeSet core_range_set(std::vector{core_range});
@@ -1077,7 +1077,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
 // Metal 2.0 reserves DM0/DM1 on Quasar, leaving DM2..DM7 (6 cores) available -- one kernel per user DM
 // TODO: Once SW supports multiple quasar clusters/cores, expand to multiple NodeRangeSets
 // to verify CRTA dispatch across different Kernel groups
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
+TEST_F(QuasarUnitMeshFixture, QuasarCRTAUniqueL1Addresses) {
     constexpr CoreCoord core = {0, 0};
     CoreRange core_range(core);
     CoreRangeSet core_range_set(std::vector{core_range});
@@ -1114,7 +1114,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
     unit_tests::runtime_args::verify_quasar_crtas(this->device(), core, all_crtas, /*expect_shared_address*/ false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
+TEST_F(QuasarUnitMeshFixture, QuasarMergeProgramRunArgs) {
     const experimental::NodeCoord node{0, 0};
     CoreRange core_range(CoreCoord{0, 0});
     CoreRangeSet core_range_set(std::vector{core_range});
@@ -1171,7 +1171,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
     ASSERT_EQ(out, std::vector<uint32_t>({value_1, value_2}));
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
+TEST_F(QuasarUnitMeshFixture, QuasarUpdateProgramRunArgs) {
     const experimental::NodeCoord node{0, 0};
     CoreRange core_range(CoreCoord{0, 0});
     CoreRangeSet core_range_set(std::vector{core_range});

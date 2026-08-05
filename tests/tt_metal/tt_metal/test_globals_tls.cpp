@@ -30,7 +30,7 @@ constexpr uint32_t NUM_USER_DMS = 6;
 constexpr uint32_t TOTAL_RESULT_BYTES = NUM_DM_CORES * TLS_CHECK_RESULT_SLOT_BYTES;
 
 // This test requires simulator environment
-TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
+TEST_F(QuasarUnitMeshFixture, GlobalsAndTLS) {
     IDevice* device = this->device().get_devices()[0];
 
     const uint32_t signal_address = 100 * 1024;
@@ -269,7 +269,7 @@ static constexpr uint32_t NUM_COMPUTE_SLOTS =
     QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
 static constexpr uint32_t QUASAR_FIRST_COMPUTE_HARTID = 8;  // DM 0-7, compute 8-23
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
+TEST_F(QuasarUnitMeshFixture, QuasarComputeKernelTLS) {
     IDevice* device = this->device().get_devices()[0];
 
     char* env_var = std::getenv("TT_METAL_SIMULATOR");

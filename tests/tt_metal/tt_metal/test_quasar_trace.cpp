@@ -23,7 +23,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
+TEST_F(QuasarUnitMeshFixture, QuasarTraceSingleReplay) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
@@ -85,7 +85,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
     this->device().release_mesh_trace(trace_id);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
+TEST_F(QuasarUnitMeshFixture, QuasarTraceMultipleReplays) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
@@ -154,7 +154,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
     this->device().release_mesh_trace(trace_id);
 }
 
-TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcrossCQs) {
+TEST_F(QuasarMultiCQUnitMeshFixture, QuasarTraceMultipleReplaysAcrossCQs) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";

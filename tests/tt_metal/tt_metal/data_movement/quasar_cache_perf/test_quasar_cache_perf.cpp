@@ -84,7 +84,7 @@ bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_by
 
 }  // namespace unit_tests::dm::quasar_cache_perf
 
-class QuasarCacheWrite : public QuasarMeshDeviceSingleCardFixture {};
+class QuasarCacheWrite : public QuasarUnitMeshFixture {};
 
 namespace unit_tests::dm::quasar_cache_perf {
 // Sizes are multiples of 8 (kernel does 8-byte stores, no sub-8B tail). 24 = 3x uint64

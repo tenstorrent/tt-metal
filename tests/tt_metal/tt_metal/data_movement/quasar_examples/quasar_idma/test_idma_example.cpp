@@ -186,7 +186,7 @@ bool run_idma_1d_strided_test(distributed::MeshDevice& mesh_device) {
 // Test Suite: Quasar IDMA
 // =============================================================================
 
-class QuasarIdmaOps : public QuasarMeshDeviceSingleCardFixture {};
+class QuasarIdmaOps : public QuasarUnitMeshFixture {};
 
 TEST_F(QuasarIdmaOps, IDMA_Basic) {
     if (unit_tests::dm::quasar_idma::should_skip_test()) {

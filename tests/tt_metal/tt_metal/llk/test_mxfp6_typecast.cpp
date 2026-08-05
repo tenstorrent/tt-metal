@@ -454,7 +454,7 @@ namespace mxfp6_tc = unit_tests::llk::mxfp6_typecast;
 // Widening conversion: every MXFP6R value should be representable in BF16.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16b) {
+TEST_F(QuasarUnitMeshFixture, TensixMxFp6RToFloat16b) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::MxFp6R,
@@ -465,7 +465,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16b) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16bFp32Dest) {
+TEST_F(QuasarUnitMeshFixture, TensixMxFp6RToFloat16bFp32Dest) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::MxFp6R,
@@ -483,7 +483,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToFloat16bFp32Dest) {
 // large dynamic range but per-element rounding error scales with magnitude.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6R) {
+TEST_F(QuasarUnitMeshFixture, TensixFloat16bToMxFp6R) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::Float16_b,
@@ -494,7 +494,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6R) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RFp32Dest) {
+TEST_F(QuasarUnitMeshFixture, TensixFloat16bToMxFp6RFp32Dest) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::Float16_b,
@@ -509,7 +509,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RFp32Dest) {
 // MXFP6R → MXFP6R (identity)
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToMxFp6R) {
+TEST_F(QuasarUnitMeshFixture, TensixMxFp6RToMxFp6R) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::MxFp6R,
@@ -520,7 +520,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToMxFp6R) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToMxFp6RFp32Dest) {
+TEST_F(QuasarUnitMeshFixture, TensixMxFp6RToMxFp6RFp32Dest) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::MxFp6R,
@@ -536,7 +536,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToMxFp6RFp32Dest) {
 // Widening conversion: every MXFP6P value should be representable in BF16.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16b) {
+TEST_F(QuasarUnitMeshFixture, TensixMxFp6PToFloat16b) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::MxFp6P,
@@ -547,7 +547,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16b) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16bFp32Dest) {
+TEST_F(QuasarUnitMeshFixture, TensixMxFp6PToFloat16bFp32Dest) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::MxFp6P,
@@ -565,7 +565,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToFloat16bFp32Dest) {
 // has less headroom than MXFP6R.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6P) {
+TEST_F(QuasarUnitMeshFixture, TensixFloat16bToMxFp6P) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::Float16_b,
@@ -576,7 +576,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6P) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6PFp32Dest) {
+TEST_F(QuasarUnitMeshFixture, TensixFloat16bToMxFp6PFp32Dest) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::Float16_b,
@@ -591,7 +591,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6PFp32Dest) {
 // MXFP6P → MXFP6P (identity)
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToMxFp6P) {
+TEST_F(QuasarUnitMeshFixture, TensixMxFp6PToMxFp6P) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::MxFp6P,
@@ -602,7 +602,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToMxFp6P) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToMxFp6PFp32Dest) {
+TEST_F(QuasarUnitMeshFixture, TensixMxFp6PToMxFp6PFp32Dest) {
     mxfp6_tc::run_random_typecast_test(
         this->device(),
         tt::DataFormat::MxFp6P,
@@ -633,7 +633,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToMxFp6PFp32Dest) {
 //   0b100001 (storage 0x84) = -0.0625
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToBf16SpecialCases) {
+TEST_F(QuasarUnitMeshFixture, TensixMxFp6RToBf16SpecialCases) {
     auto layout = mxfp6_tc::get_mxfp6_tile_layout();
 
     // Block 0: scale = 0xFF → all 32 elements should be NaN.
@@ -700,7 +700,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6RToBf16SpecialCases) {
 //   0b100001 (storage 0x84) = -0.125
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToBf16SpecialCases) {
+TEST_F(QuasarUnitMeshFixture, TensixMxFp6PToBf16SpecialCases) {
     auto layout = mxfp6_tc::get_mxfp6_tile_layout();
 
     // Block 0: scale = 0xFF → all 32 elements should be NaN.
@@ -755,7 +755,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp6PToBf16SpecialCases) {
 // ±max-normal element. NaN inputs propagate via NaN-scale.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RSpecialCases) {
+TEST_F(QuasarUnitMeshFixture, TensixFloat16bToMxFp6RSpecialCases) {
     // Block layout (32 BF16 elements per block):
     //   0: all +NaN  → block must read as NaN (NaN propagation).
     //   1: all +Inf  → NaN or +max-normal (saturation; MXFP6R has no Inf).
@@ -820,7 +820,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RSpecialCases) {
 // expectations (MXFP6P is also finite-only).
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6PSpecialCases) {
+TEST_F(QuasarUnitMeshFixture, TensixFloat16bToMxFp6PSpecialCases) {
     constexpr uint16_t kBf16PosNaN = 0x7FC0;
     constexpr uint16_t kBf16PosInf = 0x7F80;
     constexpr uint16_t kBf16NegInf = 0xFF80;

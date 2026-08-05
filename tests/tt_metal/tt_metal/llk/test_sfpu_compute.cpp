@@ -1906,7 +1906,7 @@ INSTANTIATE_TEST_SUITE_P(
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
+TEST_F(QuasarUnitMeshFixture, QuasarSfpuRelu) {
     // 1 and 4-tile, SyncFull and SyncHalf
     for (const uint32_t num_tiles : {1u, 4u}) {
         for (const bool dst_full_sync_en : {true, false}) {
@@ -1917,7 +1917,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
     }
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
+TEST_F(QuasarUnitMeshFixture, QuasarSfpuUnpackToDest16b) {
     // 16-bit operand explicitly unpacked to Dest
     for (const bool dst_full_sync_en : {true, false}) {
         for (uint32_t num_tiles : {1u, 4u}) {

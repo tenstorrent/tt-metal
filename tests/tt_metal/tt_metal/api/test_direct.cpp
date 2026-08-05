@@ -600,7 +600,7 @@ TEST_F(AnyDispatchMeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWri
     }
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDatacopyToDestWriter) {
+TEST_F(QuasarUnitMeshFixture, QuasarDatacopyToDestWriter) {
     // Int32/Float32 x SyncFull/SyncHalf
     for (const tt::DataFormat data_format : {tt::DataFormat::Int32, tt::DataFormat::Float32}) {
         for (const bool dst_full_sync_en : {true, false}) {

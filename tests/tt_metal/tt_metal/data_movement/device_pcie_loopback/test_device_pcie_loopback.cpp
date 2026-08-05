@@ -63,7 +63,7 @@ void sync_debug_servers_before_teardown() {
 
 }  // namespace
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
+TEST_F(QuasarUnitMeshFixture, HostHugepagePcieLoopback) {
     IDevice* device = this->device().get_devices()[0];
     TT_FATAL(device->is_mmio_capable(), "Host hugepage test requires an MMIO-capable device");
 

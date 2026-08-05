@@ -533,7 +533,7 @@ Program create_quasar_l1_write_program(
 
 }  // namespace
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning) {
+TEST_F(QuasarUnitMeshFixture, QuasarDispatchSInstantiatedAndRunning) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         GTEST_SKIP() << "Requires fast dispatch";
     }

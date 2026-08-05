@@ -1126,11 +1126,11 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
     }
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixUnpackReconfigQuasarDfb) {
+TEST_F(LLKQuasarUnitMeshFixture, TensixUnpackReconfigQuasarDfb) {
     ASSERT_TRUE(unit_tests::compute::reconfig::single_core_unpack_reconfig_quasar(this->device()));
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixPackReconfigQuasarDfb) {
+TEST_F(LLKQuasarUnitMeshFixture, TensixPackReconfigQuasarDfb) {
     ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(this->device()));
 }
 

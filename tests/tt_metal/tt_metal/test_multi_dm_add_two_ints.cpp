@@ -22,7 +22,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // This test requires simulator environment
-TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
+TEST_F(QuasarUnitMeshFixture, MultiDmAddTwoInts) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "

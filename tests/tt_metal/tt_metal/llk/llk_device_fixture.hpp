@@ -30,7 +30,7 @@ namespace detail {
 
 // Per-fixture-chain shared MeshDevice state. Distinct instances exist for
 // LLKMeshDeviceFixture (all chips), LLKMeshDeviceSingleCardFixture (MMIO chips),
-// and LLKQuasarMeshDeviceSingleCardFixture (single unit-mesh). Derived variants
+// and LLKQuasarUnitMeshFixture (single unit-mesh). Derived variants
 // that do not override shared_state() reuse their base class's handles.
 struct LLKSharedDevices {
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
@@ -212,16 +212,14 @@ protected:
 
 // Quasar-only UnitMesh fixture with suite-shared single unit-mesh device.
 // Inherits device()/RunProgram/WriteBuffer/ReadBuffer from UnitMeshFixture
-// (via QuasarMeshDeviceSingleCardFixture) while keeping SetUpTestSuite sharing
+// (via QuasarUnitMeshFixture) while keeping SetUpTestSuite sharing
 // so TopologyDiscovery is not repeated per test.
-class LLKQuasarMeshDeviceSingleCardFixture : public QuasarMeshDeviceSingleCardFixture {
+class LLKQuasarUnitMeshFixture : public QuasarUnitMeshFixture {
 protected:
     template <class F>
     friend void detail::apply_shared_state(F&, const detail::LLKSharedDevices&);
 
-    static detail::LLKSharedDevices& shared_state() {
-        return detail::shared_state_storage<LLKQuasarMeshDeviceSingleCardFixture>();
-    }
+    static detail::LLKSharedDevices& shared_state() { return detail::shared_state_storage<LLKQuasarUnitMeshFixture>(); }
 
     static void SetUpTestSuite() {
         if (detail::detect_arch() != tt::ARCH::QUASAR) {

@@ -45,7 +45,7 @@ constexpr std::uint32_t CB_API_NUM_READER_THREADS = 3;
 // MathThreadId) matched by a single mailbox_read (MATH <- UnpackThreadId). No CB/DFB is
 // involved, isolating whether the mailbox mechanism itself faults independent of the
 // dataflow-buffer address computation in QuasarCbL1ReadApi.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarMailboxMinimal) {
+TEST_F(LLKQuasarUnitMeshFixture, QuasarMailboxMinimal) {
     auto mesh_device = devices_.at(0);
     auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
@@ -92,7 +92,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarMailboxMinimal) {
 // back through both APIs and each records what it observed into its own slice of the result
 // buffer. Checking all three slices (rather than only UNPACK's) is what makes this cover the
 // mailbox delivery -- verifying UNPACK alone would pass even if MATH/PACK received nothing.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
+TEST_F(LLKQuasarUnitMeshFixture, QuasarCbL1ReadApi) {
     auto* device = this->device().get_devices()[0];
 
     const std::uint32_t tile_page_size = tt::tile_size(CB_API_DATA_FORMAT);

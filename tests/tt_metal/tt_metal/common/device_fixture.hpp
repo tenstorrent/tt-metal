@@ -213,7 +213,7 @@ protected:
     }
 };
 
-class QuasarMeshDeviceSingleCardFixture : public UnitMeshFixture {
+class QuasarUnitMeshFixture : public UnitMeshFixture {
 protected:
     void SetUp() override {
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -227,7 +227,7 @@ protected:
     }
 };
 
-class QuasarMultiCQMeshDeviceSingleCardFixture : public QuasarMeshDeviceSingleCardFixture {
+class QuasarMultiCQUnitMeshFixture : public QuasarUnitMeshFixture {
 protected:
     size_t num_command_queues() const override { return 2; }
 };

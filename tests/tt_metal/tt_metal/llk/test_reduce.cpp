@@ -867,7 +867,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWTinyTiles) {
 // column (H) reduce is valid for MxFp4_2x: it issues GAPOOLs, the only op_mmul-family op (with
 // MVMUL/MVMULDI) that reads the 2x-packed SrcA correctly. Row/Scalar reduce commit per-face
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
+TEST_F(LLKQuasarUnitMeshFixture, TensixComputeReduceColumnMxFp4X2) {
     ReduceConfig test_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
         .reduce_dim = ReduceDim::H,

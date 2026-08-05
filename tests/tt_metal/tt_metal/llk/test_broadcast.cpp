@@ -577,7 +577,7 @@ INSTANTIATE_TEST_SUITE_P(
                           MathFidelity::HiFi4,
                           20}));  // Row 20
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb) {
+TEST_F(QuasarUnitMeshFixture, TensixComputeBinaryBroadcastQuasarDfb) {
     for (uint8_t op = uint8_t(EltwiseOp::ADD); op <= uint8_t(EltwiseOp::MUL); op++) {
         for (uint8_t dim = uint8_t(BroadcastDim::ROW); dim <= uint8_t(BroadcastDim::SCALAR); dim++) {
             for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
