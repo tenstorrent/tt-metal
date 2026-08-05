@@ -44,13 +44,15 @@ inline void calculate_sfpu_isclose(
         sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        // Cache integer views of a, b and their abs bits up front. These feed
-        // both the |b| computation for the tolerance and the merged Inf/NaN
-        // fix-up branch below, so computing them once avoids any duplicated
-        // bit-mask work.
+        // Integer views of a, b and their abs bit patterns. Two constraints: the abs
+        // bits must stay vInt (a vFloat against inf_bits binds to the float overload,
+        // converting it to 2139095040.0f), and the mask cannot be replaced by
+        // bit-casting sfpi::abs() because SFPABS float mode leaves -NaN sign-set.
+        // vConstIntPrgm0 holds 0x7FFFFFFF, programmed in isclose_init.
         sfpi::vInt a_bits = sfpi::as<sfpi::vInt>(a);
         sfpi::vInt b_bits = sfpi::as<sfpi::vInt>(b);
-        sfpi::vFloat a_abs = sfpi::abs(a);
+        sfpi::vInt a_abs_bits = a_bits & sfpi::vConstIntPrgm0;
+        sfpi::vInt b_abs_bits = b_bits & sfpi::vConstIntPrgm0;
         sfpi::vFloat b_abs = sfpi::abs(b);
 
         // abs(a - b) via sign-bit clear.
@@ -72,18 +74,18 @@ inline void calculate_sfpu_isclose(
         // Single fix-up branch covering every "special" lane (Inf or NaN).
         // Detected by `abs_bits >= inf_bits` which holds iff exp == 0xFF.
         // Inside, we discard the tolerance result and rebuild from scratch:
-        //   * matching-sign Inf  -> 1     (a_abs == inf AND a_bits == b_bits)
-        //   * both NaN, EQUAL_NAN -> 1    (a_abs >  inf AND b_abs >  inf)
+        //   * matching-sign Inf  -> 1     (a_abs_bits == inf AND a_bits == b_bits)
+        //   * both NaN, EQUAL_NAN -> 1    (a_abs_bits >  inf AND b_abs_bits >  inf)
         //   * everything else (mismatched Inf, one-sided NaN, EQUAL_NAN=false
         //     NaN) stays at 0.
         // Folding both old fix-ups into one v_if removes two predicate-stack
         // push/pop pairs from the hot loop.
-        v_if(a_abs >= inf_bits || b_abs >= inf_bits) {
+        v_if(a_abs_bits >= inf_bits || b_abs_bits >= inf_bits) {
             result = 0.0f;
-            v_if(a_abs == inf_bits && a_bits == b_bits) { result = 1.0f; }
+            v_if(a_abs_bits == inf_bits && a_bits == b_bits) { result = 1.0f; }
             v_endif;
             if constexpr (EQUAL_NAN) {
-                v_if(a_abs > inf_bits && b_abs > inf_bits) { result = 1.0f; }
+                v_if(a_abs_bits > inf_bits && b_abs_bits > inf_bits) { result = 1.0f; }
                 v_endif;
             }
         }
@@ -93,5 +95,9 @@ inline void calculate_sfpu_isclose(
         sfpi::dst_reg++;
     }
 }
+
+// Programs the sign-clear mask into a constant register so the hot loop does not
+// rebuild it with a per-element SFPLOADI inside the replay block.
+inline void isclose_init() { sfpi::vConstIntPrgm0 = 0x7FFFFFFF; }
 
 }  // namespace ckernel::sfpu

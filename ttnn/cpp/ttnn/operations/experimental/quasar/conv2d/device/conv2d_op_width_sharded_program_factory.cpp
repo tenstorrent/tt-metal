@@ -726,7 +726,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
     m2::DataMovementHardwareConfig weights_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        weights_hw = m2::DataMovementGen2Config{};
+        // This weights reader does explicit reserve_back/push_back on WEIGHTS/BIAS. Full-tile page reads avoid
+        // the sub-tile *stall* the act reader hits, but they do NOT avoid the Quasar *counter double-count*: the
+        // implicit-sync ISR bumps the same 16-bit tile counter as the explicit push -> overflow ->
+        // TILE_COUNTERS fault on the compute unpack consuming WEIGHTS. Opt out so explicit credits are
+        // authoritative.
+        weights_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         weights_hw =
             m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};

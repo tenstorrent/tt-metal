@@ -38,7 +38,7 @@ def baseline_pack_untilize_block_ct_dim(ct_dim, dest_acc):
     dest_acc=fast_untilize_dest_acc_modes,
     rt_dim=FAST_UNTILIZE_RT_DIMS,
     ct_dim=FAST_UNTILIZE_CT_DIMS,
-    loop_factor=[1, 4, 16],
+    loop_factor=[16, 32, 64],
 )
 def test_perf_fast_untilize_baseline_compare(
     perf_report, formats, dest_acc, rt_dim, ct_dim, loop_factor

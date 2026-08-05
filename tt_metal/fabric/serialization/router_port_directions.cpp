@@ -84,6 +84,7 @@ RouterPortDirectionsData deserialize_router_port_directions_from_bytes(const std
             RoutingDirection direction = static_cast<RoutingDirection>(direction_entry.direction());
 
             std::vector<chan_id_t> channels;
+            channels.reserve(direction_entry.channels().size());
             for (const auto& channel : direction_entry.channels()) {
                 channels.push_back(channel);
             }
