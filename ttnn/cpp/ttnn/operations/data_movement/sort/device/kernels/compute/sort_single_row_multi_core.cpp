@@ -275,13 +275,12 @@ void kernel_main() {
                             }
 
                             if constexpr (is_row_major) {
-                                // Untilize the 2 sorted tiles one at a time. pack_untilize_block
-                                // with block_rt_dim>1 reuses fifo_rd_ptr tile 0 for every row
-                                // (llk_unpack_A ignores r) and rewrites the same output pages
-                                // (fifo_wr_ptr does not advance between rows). Doing two
-                                // block_ct_dim=1 / block_rt_dim=1 calls with a push+pop between
-                                // them correctly advances both pointers so each tile is untilized
-                                // into its own TILE_H output pages.
+                                // Reconfig packer to bf16 before value untilize: the preceding
+                                // index pack_tile leaves the packer in uint32 format, and
+                                // pack_untilize_init alone does not fully reset that state.
+                                binary_op_init_common(input_tensor_cb_id, index_tensor_cb_id, rm_output_value_cb_id);
+                                // Untilize tiles one at a time so each tile is written into its own
+                                // TILE_H output pages (block_rt_dim>1 would stall both pointers).
                                 pack_untilize_init<1>(input_tensor_output_cb_id, rm_output_value_cb_id);
                                 input_tensor_output_dfb.wait_front(2);
                                 for (uint32_t t = 0; t < 2; ++t) {
