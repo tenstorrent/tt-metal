@@ -32,7 +32,7 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
 tests/
 ├── conftest.py                         — Pinned checkpoint fixture plus perf and optional
 │                                         long-running marker registration.
-├── test_cache_fingerprints.py           — Persistent tensor-cache identities.
+├── test_cache_fingerprints.py           — Persistent tensor and CPU-oracle cache identities.
 ├── utils.py                            — Three numeric contracts; case builders,
 │                                         reconstruction, and profiling support.
 ├── checkpoint/

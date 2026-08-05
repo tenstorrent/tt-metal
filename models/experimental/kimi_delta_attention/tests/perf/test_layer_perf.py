@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -48,12 +49,23 @@ _SEQUENCE = 5120
 _REPETITIONS = 10
 _PCC_THRESHOLD = 0.98
 _PERF_TARGETS_PATH = Path(__file__).parent / "perf_targets" / "bh_loudbox.json"
-_CPU_REFERENCE_CACHE_VERSION = 1
+_CPU_REFERENCE_CACHE_VERSION = 2
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
     storage = tensor.detach().cpu().contiguous().view(torch.uint8).numpy()
     return hashlib.sha256(memoryview(storage)).hexdigest()
+
+
+def _update_state_dict_fingerprint(fingerprint: Any, state_dict: Mapping[str, torch.Tensor]) -> None:
+    for name in sorted(state_dict):
+        tensor = state_dict[name]
+        metadata = json.dumps(
+            [name, str(tensor.dtype), list(tensor.shape)],
+            separators=(",", ":"),
+        )
+        fingerprint.update(metadata.encode())
+        fingerprint.update(_tensor_sha256(tensor).encode())
 
 
 def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
@@ -65,6 +77,7 @@ def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
     fingerprint.update(case.checkpoint_dir.name.encode())
     fingerprint.update((case.checkpoint_dir / "config.json").read_bytes())
     fingerprint.update(_tensor_sha256(case.hidden).encode())
+    _update_state_dict_fingerprint(fingerprint, case.state_dict)
     for source_path in (reference_dir / "layer.py", reference_dir / "ops.py"):
         fingerprint.update(source_path.read_bytes())
     return (
