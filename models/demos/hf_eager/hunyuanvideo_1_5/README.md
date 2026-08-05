@@ -18,7 +18,8 @@ sampler calls repeatedly:
 - **Branch:** `sdawle/hunyuanvideo-bringup_bh_glx`
 - **18/18** DiT modules **on device** (native ttnn, PCC-verified)
 - **Full 121-frame video generation: 5:59 end-to-end** (32-chip sp=4, tile-sharded VAE)
-  — 3.2× vs the ~19 min 8-chip baseline; text-encode + DiT + tiled VAE all on-device
+  — 3.2× vs the ~19 min 8-chip baseline. DiT + tiled VAE on device (all 32 chips);
+  text-encode (Qwen) on host — see "What runs where" below
 - **Per-step DiT device time optimized `6.43 → 5.10 ms` (1.26×)** via 16 committed
   fusion/sharding wins + an L1-fit guard (tt-hw-planner `optimize`)
 
@@ -89,7 +90,7 @@ Every flag is an env var; all are optional with the defaults below.
 | `HY_MESH` | (parametrized) | DiT mesh as `rows,cols` (e.g. `4,8`). With `HY_DIT_SP=1`: **rows → sp, cols → tp** |
 | `HY_DIT_SP` | `0` | **Sequence parallelism** — shard the latent sequence across mesh rows (`sp=rows`, head-`tp=cols`). **Required for any multi-row mesh**; without it the mesh flattens to `tp=N_devices` and the 16-head DiT errors (`heads_total=16 not divisible by tp=32`) |
 | `HY_DIT_BF16` | `0` | Load DiT weights + run block matmuls in **bf16** (faster; used for all perf numbers) |
-| `HY_TT_QWEN` | `0` | Run the **Qwen text encoder on device** (else on host) |
+| `HY_TT_QWEN` | `0` | Run the **Qwen text encoder on device** if a submesh can be carved; **at sp=4 there's no room (DiT fills all rows) so it falls back to host** |
 | `HY_TT_VAE` | `0` | Run the **VAE decode on device** (else on host); auto **tile-shards** across the mesh when `ndev>1` |
 | `HY_VAE_TILE` | `0` | Enable **tiled VAE decode** (split the latent into H/W tiles) — required at high frame counts |
 | `HY_VAE_TILE_PX` | `0` | Per-tile pixel size; `0` = model default. **Use `128` at 121f** (192 px fragments DRAM) |
@@ -155,6 +156,19 @@ At 121 frames the VAE tiles must be **128 px, not 192 px** — the high frame co
 makes each tile's decode ~8× larger and 192 px fragments DRAM; 128 px fits with margin and
 still gives the two-round win. `ndev=1` falls back to the sequential path unchanged; the
 tile-shard flags default off.
+
+#### What runs where (5:59 sp=4 config)
+
+| stage | placement | detail |
+|---|---|---|
+| Text encode (Qwen 2.5-VL) | **host (CPU)** | one-time; at sp=4 the DiT fills all 4 mesh rows, so no Qwen submesh can be carved (`HY_TT_QWEN=1` falls back to CPU) |
+| DiT denoise (50 steps) | **on device** | all 32 chips, sp=4 × tp=8 |
+| VAE decode | **on device** | tile-sharded across all 32 chips, reusing the full mesh after denoise |
+
+So the 5:59 is **host text-encode + on-device DiT + on-device VAE**. Text-encode runs once
+(not per-step), so keeping it on CPU costs little. At **sp=2** (16-chip) a spare mesh row
+*does* leave room to carve a Qwen submesh, so text-encode runs on device there — but the
+smaller DiT (denoise 6:21) makes that config slower overall (10:38 e2e).
 
 ## PCC validation
 
