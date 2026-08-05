@@ -31,9 +31,6 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
         args.dim >= 0 && args.dim < static_cast<int>(input_tensor.padded_shape().rank()),
         "Dim being split must be from 0 to rank - 1");
     TT_FATAL(input_tensor.padded_shape()[0] == 1, "shape[0] must be 1 (batch 1 only)");
-    // The logical check below is the real precondition for correct chunk widths. Once
-    // logical[dim] % (num_splits × tile) == 0 holds, padded[dim] == logical[dim] for TILE, so the
-    // two padded divisibility checks that follow are implied — kept for their targeted messages.
     TT_FATAL(
         input_tensor.padded_shape()[args.dim] % args.num_splits == 0,
         "Dim being split must be evenly divisible by number of splits");
@@ -43,12 +40,8 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
         "Tile count in split dim ({} tiles) must be divisible by num_splits ({})",
         input_tensor.padded_shape()[args.dim] / tile_size,
         args.num_splits);
-    // The kernel splits on padded tile boundaries. compute_output_specs reports logical chunk
-    // widths, which only match the kernel when the logical dim is tile-aligned and the logical
-    // tile count divides by num_splits. Without this, a direct prim::split call (bypassing the
-    // composite can_use_tile_kernel guard) would emit wrong-data chunks whose reported width
-    // truncates (e.g. logical 100 / 2 = 50 while the kernel writes 64).
-    // Not reachable from pytest: prim::split has no nanobind binding; only the composite is exposed.
+    // Kernel splits on padded tile boundaries; logical dim must match so reported chunk widths
+    // agree with what the kernel writes.
     TT_FATAL(
         input_tensor.logical_shape()[args.dim] % (args.num_splits * tile_size) == 0,
         "logical dim {} ({}) must be divisible by num_splits ({}) × tile ({})",
@@ -61,7 +54,6 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
 SplitDeviceOperation::spec_return_value_t SplitDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    // First divisor use in the launch path (create_output_tensors → here, before validate).
     TT_FATAL(args.num_splits > 0, "num_splits must be non-zero");
     auto input_shape_array = input_tensor.logical_shape().to_array_4D();
     auto output_shape_array = input_shape_array;
