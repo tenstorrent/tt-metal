@@ -441,12 +441,12 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 }
 
 
-// Lock the `n` held entries. The locked region starts at the write pointer (producer) or read pointer
-// (consumer), with entries spaced by stride_size: for the ALL access pattern stride_size == entry_size, so
-// the locked entries are contiguous; for STRIDED stride_size > entry_size, so they are non-contiguous.
-// For each held entry, do two things:
-//     - cache op: invalidate the L2 range on acquire (both producer and consumer); flush on release
-//       (producer only)
+// Lock the `n` held entries. The locked region starts at the write pointer (scoped_write_lock) or the
+// read pointer (scoped_read_lock), with entries spaced by stride_size: for the ALL access pattern
+// stride_size == entry_size, so the locked entries are contiguous; for STRIDED stride_size > entry_size,
+// so they are non-contiguous. For each held entry, do two things:
+//     - cache op: invalidate the L2 range on acquire (both lock kinds); flush on release (write lock
+//       only)
 //     - record the scoped-lock event
 template <bool is_write>
 inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t num_entries) {

@@ -324,7 +324,8 @@ public:
 #endif
 
     // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
-    // prefer with scoped_lock when poking L1. Prefer noc.h for Class 1 transfers (pass the DFB).
+    // prefer holding a scoped_write_lock/scoped_read_lock when poking L1. Prefer noc.h for Class 1
+    // transfers (pass the DFB).
     uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
     uint32_t get_read_ptr() const { return get_read_ptr_impl(); }
 

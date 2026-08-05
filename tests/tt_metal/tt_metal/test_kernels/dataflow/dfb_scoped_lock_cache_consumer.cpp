@@ -31,7 +31,7 @@ void kernel_main() {
 #if defined(DFB_CACHE_MULTI_ALL)
     // WAITER (1-producer / multi-consumer ALL invalidate test). ALL N consumer threads wait on the
     // publisher (producer) to seed the shared stale state (shared L2 = OLD, TL1 = NEW), then concurrently
-    // invalidate the SHARED held entries via scoped_lock and re-read into their own result block.
+    // invalidate the SHARED held entries via a read lock and re-read into their own result block.
     (void)is_active;
     (void)mode;
     (void)new_val;
@@ -68,7 +68,7 @@ void kernel_main() {
             result_uncached[s] = uncached[s * wpe];
         }
     } else {
-        // INVALIDATE-on-acquire: both roles invalidate, so the held entries' cache lines are discarded.
+        // INVALIDATE-on-acquire: both lock kinds invalidate, so the held entries' cache lines are discarded.
         invalidate_l2_cache_range(ring_base, num_entries * entry_size);
         for (uint32_t s = 0; s < num_entries; ++s) {
             volatile uint32_t v = cached[s * wpe];  // fetch OLD (host pre-filled TL1) into the coherent cache
