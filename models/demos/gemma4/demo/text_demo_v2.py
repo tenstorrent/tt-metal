@@ -213,7 +213,7 @@ def _device_params():
     Default ``num_command_queues=1`` (safe with host or on-device sampling).
     Set ``GEMMA4_NUM_CQS=2`` for serving/H2D-bound workloads once sampling stays
     on-device (Phase D3); measure batched users, not single-stream 128k TTFT.
-    ``GEMMA4_TRACE_REGION_SIZE`` overrides the BH trace budget.
+    ``GEMMA4_TRACE_REGION_SIZE`` overrides the trace budget (both arches).
 
     CCL residual knobs (set before pytest collection):
       ``GEMMA4_FABRIC=ring`` → ``FABRIC_1D_RING`` (default ``1d``; ring
@@ -237,10 +237,16 @@ def _device_params():
         # CCL all_gather allocates semaphores in L1_SMALL when this is > 0.
         "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
     }
-    if is_blackhole():
-        params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
-    else:
-        params["trace_region_size"] = 30_000_000
+    # ``trace_region_size`` must cover the CUMULATIVE size of every captured
+    # trace, not the largest one: batch-1 warms a prefill trace per ISL bucket
+    # (128/512/1024) plus the decode trace, so the limit is first hit at the
+    # *last* end_trace_capture (decode). The old WH value of 30 MB sat ~15%
+    # under the 60-layer 31B footprint, so any per-layer op-count increase
+    # (e.g. the width-sharded prefill RMSNorm's reshard pair) hard-failed the
+    # demo with "Creating trace buffers of size N > trace_region_size".
+    # 64 MB leaves ~1.8x headroom and is negligible against WH's 12 GB/chip.
+    default_trace_region = 256_000_000 if is_blackhole() else 64_000_000
+    params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
 
     pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
     if pkt_env is None:
