@@ -36,6 +36,7 @@ set(TTNN_OP_TRANSFORMER_SRCS
     chunk_gated_delta_rule/device/chunk_gdn_phased.cpp
     chunk_gated_delta_rule/device/chunk_gdn_phased_program_factory.cpp
     chunk_gated_delta_rule/chunk_gated_delta_rule.cpp
+    kda/device/kda_factory_utils.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from
