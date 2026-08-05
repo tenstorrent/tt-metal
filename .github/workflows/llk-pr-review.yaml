@@ -37,7 +37,7 @@ concurrency:
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 80          # the command fans out subagents; this bounds it
+    timeout-minutes: 100         # extra headroom for the multi-agent review
     permissions:
       contents: read             # read the checkout
       pull-requests: write       # post inline review comments
@@ -155,7 +155,7 @@ jobs:
           claude_args: |
             --effort ${{ github.event.inputs.effort || 'max' }}
             --allowedTools "Agent,Task,Read,Grep,Glob,Skill,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(rg:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(tail:*),Bash(sed:*),Bash(awk:*),Bash(cat:*),Bash(ls:*),Bash(wc:*),Bash(nl:*),Bash(cut:*),Bash(sort:*),Bash(uniq:*),Bash(tree:*),Bash(basename:*),Bash(dirname:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
-            --max-turns 100
+            --max-turns 150
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
 
