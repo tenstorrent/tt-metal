@@ -277,23 +277,71 @@ def _read_json(path) -> object:
         return None
 
 
-def _stage_table_lines(stages: list) -> list:
-    """Render the per-stage (block-level) trace timing as bars — the SAME view the HITL pause screen
-    shows, so both hitl and non-hitl RUN_REPORT.md surface where device time went per stage/block.
-    Fed by the agent's stages passed to record_kernel_attempt. Empty list when no stages present."""
-    st = [s for s in (stages or []) if isinstance(s, dict)]
-    if not st:
+def _measured_stage_ms(model: str = "", task: str = "") -> dict:
+    """trace_replay's per-stage timings, or {}.
+
+    These come from the PIPELINE_STAGES the MODEL declares -- prefill/decode measured by the
+    harness -- so they are the only phase numbers in this report that are not prose.
+    """
+    try:
+        from .perf_mcp import read_stage_ms
+
+        return read_stage_ms(model=model, task=task) or {}
+    except Exception:  # noqa: BLE001
+        try:
+            from perf_mcp import read_stage_ms  # type: ignore
+
+            return read_stage_ms(model=model, task=task) or {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+
+def _stage_rows(rows: list, indent: str = "    ", mark_hottest: bool = True) -> list:
+    """name / ms / proportional bar / % of this block's total. Bars scale to the block's own peak."""
+    if not rows:
         return []
-    peak = max((s.get("ms") or 0) for s in st) or 1.0
-    hot = max(st, key=lambda s: s.get("ms") or 0)
+    peak = max((ms for _n, ms in rows)) or 1.0
+    total = sum(ms for _n, ms in rows) or 1.0
+    hot = max(rows, key=lambda r: r[1])
     out = []
-    for s in st:
-        ms = s.get("ms") or 0
-        filled = int(round((ms / peak) * 22)) if peak else 0
-        bar = "#" * filled + "." * (22 - filled)
-        dom = f" · {s['dominant']}" if s.get("dominant") else ""
-        mark = "  <- hottest" if s is hot else ""
-        out.append(f"  {str(s.get('name', '?')):<12} {ms:>9.2f} ms  {bar}{dom}{mark}")
+    for name, ms in rows:
+        n = max(0, min(_BAR_W, int(round((ms / peak) * _BAR_W))))
+        bar = "\u2588" * n + "\u2591" * (_BAR_W - n)
+        mark = "   \u2190 hottest" if (mark_hottest and (name, ms) == hot) else ""
+        out.append("%s%-22s %8.2f ms  %s  %5.1f%%%s" % (indent, str(name)[:22], ms, bar, 100.0 * ms / total, mark))
+    return out
+
+
+def _stage_table_lines(stages: list, model: str = "", task: str = "") -> list:
+    """The block-level timing view, in two parts that do NOT have the same standing.
+
+    MEASURED (top): trace_replay's per-stage timings, derived from the PIPELINE_STAGES the model
+    declares. Real numbers, phase-correct, and absent when the pipeline declares no stages.
+
+    ANNOTATION (bottom): the agent's own breakdown, passed as stages_json to record_kernel_attempt.
+    Free text -- nothing validates the names, and on this model four of fourteen carry no phase at
+    all. It is the more USEFUL view for finding hot spots, so it stays; it just stops being
+    presentable as measurement.
+
+    The two are kept apart rather than merged because decode ms and prefill ms are not the same
+    currency: decode recurs on every token and sets tok/s/u, prefill happens once and sets TTFT. A
+    phase split guessed from prose can put time in the wrong pool and be acted on, which is worse
+    than having no split. Each block therefore carries its OWN total, and percentages are within a
+    block -- the two totals describe different things and should not be added.
+    """
+    out = []
+    meas = _measured_stage_ms(model, task)
+    if meas:
+        rows = sorted(meas.items(), key=lambda kv: -kv[1])
+        out.append("  %-44s %8.2f ms" % ("measured by trace_replay", sum(v for _k, v in rows)))
+        out.extend(_stage_rows(rows, mark_hottest=False))
+    st = [x for x in (stages or []) if isinstance(x, dict) and (x.get("ms") or 0) > 0]
+    if st:
+        rows = [(x.get("name", "?"), float(x.get("ms") or 0)) for x in st]
+        if out:
+            out.append("")
+        out.append("  %-44s %8.2f ms" % ("agent breakdown (annotation, not measurement)", sum(m for _n, m in rows)))
+        out.extend(_stage_rows(rows))
     return out
 
 
@@ -1234,7 +1282,7 @@ def render_summary(
                 pass
         _vint = " · totals %.2f ms; per-stage notes are the agent's words AT CAPTURE TIME" % _stot if _stot > 0 else ""
         lines.append(f"Block-level timing (per-stage trace) — {_lbl}{_vint}:")
-        lines.extend(_stage_table_lines(_stages))
+        lines.extend(_stage_table_lines(_stages, model, task))
         lines.append("")
 
     if _model_levers:

@@ -289,6 +289,9 @@ def test_utilisation_names_the_ceiling_it_is_measured_against(tmp_path, monkeypa
         "unit": "token",
     }
     out = "\n".join(sm._roofline_lines(snap, None, {"per_token_ms": 16.99}, "m", "main"))
-    line = next(l for l in out.splitlines() if l.startswith("  utilization"))
-    assert "(measured / ceiling)" in line, line
+    # Thefive-line block became a three-block table; the denominator is now printed BESIDE the bar
+    # ("345 / 512 GB/s") instead of being named in a trailing parenthetical. Same requirement --
+    # the percentage must not float free of what it is a percentage OF.
+    line = next(l for l in out.splitlines() if "DRAM bandwidth" in l and "%" in l)
+    assert "/" in line and "GB/s" in line, line
     assert "70%" in line, line

@@ -2254,6 +2254,50 @@ def _workload_failure_tail(out: str, keep: int = 12) -> str:
     return "\n  workload output:\n    " + "\n    ".join(x[:220] for x in picked)
 
 
+def _stage_ms_path():
+    """Where the MEASURED per-phase timings live, keyed like every other per-run artifact."""
+    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    task = os.environ.get("PERF_MCP_TASK", "main")
+    return state_dir() / ("perf_mcp_stage_ms_%s_%s.json" % (model, task))
+
+
+def _persist_stage_ms(stage_ms: dict) -> None:
+    """Record trace_replay's per-stage timings so the report can show a MEASURED phase split.
+
+    Written to a file rather than threaded through _run_full_pipeline_ms's return, because that
+    function has five return sites and the report is rendered by a different process.
+
+    Why this matters: the only per-stage rows the report could show came from the agent's
+    stages_json -- free text it writes, which nothing validates. Decode ms and prefill ms are not
+    the same currency (decode recurs per token, prefill once per request), so a phase split guessed
+    from prose can put time in the wrong pool and be acted on. These names come from the
+    PIPELINE_STAGES the model declares, measured by the harness.
+    """
+    if not stage_ms:
+        return
+    try:
+        p = _stage_ms_path()
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps({"stages": stage_ms}))
+        os.replace(str(tmp), str(p))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def read_stage_ms(state_dir_path=None, model="", task="") -> dict:
+    """The measured per-phase split, or {}. Read by the report renderer."""
+    try:
+        from pathlib import Path as _P
+
+        base = _P(state_dir_path) if state_dir_path else state_dir()
+        m = model or (_MODEL_ROOT.name if _MODEL_ROOT else "model")
+        t = task or os.environ.get("PERF_MCP_TASK", "main")
+        doc = json.loads((base / ("perf_mcp_stage_ms_%s_%s.json" % (m, t))).read_text())
+        return {k: float(v) for k, v in (doc.get("stages") or {}).items() if float(v) > 0}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _run_full_pipeline_ms():
     ptr = _MANIFEST.get("perf_test_resolved", {}) or {}
     node = ptr.get("path")
@@ -2301,6 +2345,7 @@ def _run_full_pipeline_ms():
     if case:
         cmd += ["-k", case]
     per_tokens = []
+    stage_ms = {}
     headline_units = []
     walls = []
     prefills = []
@@ -2362,6 +2407,23 @@ def _run_full_pipeline_ms():
         if _run_reported_clamp(out):
             globals()["_LAST_RUN_CLAMPED"] = True
         for line in out.splitlines():
+            # PHASE TIMINGS, MEASURED. trace_replay prints one of these per stage it traced, derived
+            # from the PIPELINE_STAGES the model itself declares -- so "prefill"/"decode" here are
+            # tool measurements, not names a model typed. They were printed and discarded; the report
+            # then had no phase accounting at all and the only per-stage rows it could show were the
+            # agent's own stages_json prose, which nothing validates.
+            #
+            # Decode ms and prefill ms are not the same currency (decode recurs per token, prefill
+            # once per request), so a phase split guessed from free text can put time in the wrong
+            # pool and be acted on. Measured, it cannot.
+            if "TRACE_STAGE_MS[" in line:
+                try:
+                    _nm = line.split("TRACE_STAGE_MS[", 1)[1].split("]", 1)[0].strip()
+                    _sv = float(line.split("]=", 1)[1].split()[0])
+                    if _nm and _sv > 0:
+                        stage_ms[_nm] = _sv
+                except Exception:  # noqa: BLE001
+                    pass
             if "TRACE_PER_TOKEN_MS=" in line:
                 try:
                     per_tokens.append(float(line.split("TRACE_PER_TOKEN_MS=", 1)[1].split()[0]))
@@ -2440,6 +2502,7 @@ def _run_full_pipeline_ms():
     if per_tokens:
         if headline_units:
             os.environ["PERF_MCP_LAST_HEADLINE_UNIT"] = headline_units[-1]
+        _persist_stage_ms(stage_ms)
         return statistics.median(per_tokens), "trace", None, decode_path
     if walls:
         return statistics.median(walls), "eager", None, None
