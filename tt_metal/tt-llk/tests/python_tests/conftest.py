@@ -472,12 +472,11 @@ def pytest_ignore_collect(collection_path, config):
 
 
 def _statically_skipped(definition) -> bool:
-    conds = [m.args[0] for m in definition.iter_markers(name="skipif") if m.args]
-    return (
-        bool(conds)
-        and not any(isinstance(c, str) for c in conds)
-        and any(c for c in conds)
-    )
+    conds = []
+    for m in definition.iter_markers(name="skipif"):
+        conds.extend(m.args)
+        conds.append(m.kwargs.get("condition"))
+    return any(c for c in conds if c is not None and not isinstance(c, str))
 
 
 @pytest.hookimpl(tryfirst=True)
