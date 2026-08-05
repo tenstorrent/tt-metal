@@ -228,8 +228,8 @@ fallback would let a Phase-1 measurement be reported as a Phase-2 one.
 - **More than 64 mux channels on one mux refused.** One stream register per channel, 64 per Tensix worker,
   and a mux binds exactly one link -- so `num_links` is the only lever.
 
-  **This never fires at `num_links=2`, and is therefore NOT a real scope limit -- it is an artefact of the
-  test suite hard-coding `num_links=1`.** Measured, same binary, `TT_AGMM_DIRECT_L1=1`:
+  **This does not fire at the production `num_links=2`, so it is not a limit anyone meets in practice.**
+  Measured, same binary, `TT_AGMM_DIRECT_L1=1`:
 
       num_links=1   28/40 pass   12 refused (8x Ns>1, 4x channel cap on LINE: 70/70/72/84 channels)
       num_links=2   32/40 pass    8 refused (8x Ns>1 -- the cap does not fire at all)
@@ -239,11 +239,11 @@ fallback would let a Phase-1 measurement be reported as a Phase-2 one.
   both ~2x the ring's (a stripe must fan out both ways from its origin, so the origin drives two muxes) and
   rank-dependent. Ring never hit it at either link count.
 
-  So `Ns>1` is the ONLY genuine scope limit of this change. The test suite still runs at `num_links=1`
-  (deliberately left alone: it is the tighter mux budget, and it is what found this ceiling), so a default
-  `TT_AGMM_DIRECT_L1=1` run of that file still shows the 4 line refusals. Bumping the suite to 2 links --
-  which is the link count every measurement above uses, and the production one for this shape -- would take
-  it to 32/40; that is a change to the suite's contract and has not been made here.
+  The correctness suite now runs at `NUM_LINKS = 2`, matching production and matching every measurement
+  above -- previously it hard-coded 1 link, which is how this got written up as a scope limit in the first
+  place. **`Ns>1` is therefore the only genuine scope limit of this change.** The `TT_FATAL` stays: it is
+  the right error for a real per-worker hardware ceiling, and it names `num_links` as the lever if anyone
+  runs a LINE at one link.
 - **Mux channel DEPTH is sized down to fit L1** (8 -> 4 -> 2 -> 1 buffers/channel) rather than the packet
   size, since the spec asks to optimise for the default 4 KiB packet. Without this, 48 channels x 8 buffers
   x 4 KiB = 1.5 MB against a 1.5 MB worker L1.
@@ -251,9 +251,9 @@ fallback would let a Phase-1 measurement be reported as a Phase-2 one.
   immediately close their mux channels, which HANGS (reproduced twice) rather than measuring a floor.
   `nowait` does work and is hooked into the direct-L1 arrival wait.
 
-Test status with `TT_AGMM_DIRECT_L1=1`: **32/40 at `num_links=2`, 28/40 at `num_links=1` (the suite's
-current value); every failure in both is a refusal, with zero correctness failures and zero hangs.** The
-staged path is 40/40 at both link counts.
+Test status with `TT_AGMM_DIRECT_L1=1`, at the suite's `NUM_LINKS = 2`: **32/40 pass and the other 8 are
+`Ns>1` refusals -- zero correctness failures and zero hangs.** The staged path is 40/40, at 1 and 2 links
+both.
 
 ## Trap list for this area (from the branch's own history)
 

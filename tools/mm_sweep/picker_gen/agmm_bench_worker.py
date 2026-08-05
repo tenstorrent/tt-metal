@@ -20,7 +20,7 @@ that matters on a mesh: durations are keyed by (device, core, risc), so cores fr
 cannot overwrite each other. Per invocation we report the MAKESPAN -- max over devices of that device's
 own max-core duration -- because a fused multi-device op is only finished when its slowest device is.
 
-argv: variant M K N tp topology [num_links] [nblocks]      topology = ring | line
+argv: variant M K N tp topology [num_links] [nblocks]      topology = ring | line, num_links defaults to 2
 """
 import csv
 import json
@@ -40,7 +40,10 @@ VARIANT = sys.argv[1]
 M, K, N = (int(x) for x in sys.argv[2:5])
 TP = int(sys.argv[5])
 TOPO = sys.argv[6]
-LINKS = int(sys.argv[7]) if len(sys.argv) > 7 else 1
+# 2 = the production config for these shapes on Galaxy, and what the correctness suite uses (NUM_LINKS in
+# test_all_gather_regime_a_matmul_async.py). Keep the two in step: measuring one link count while the tests
+# cover another is how ">64 mux channels" got reported as a scope limit when it was a 1-link artefact.
+LINKS = int(sys.argv[7]) if len(sys.argv) > 7 else 2
 NBLOCKS = int(sys.argv[8]) if len(sys.argv) > 8 else 2
 
 

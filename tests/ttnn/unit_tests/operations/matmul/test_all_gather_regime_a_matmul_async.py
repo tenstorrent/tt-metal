@@ -35,14 +35,9 @@
 #
 #   (unset)                                        Phase 0: all_gather_async + matmul, the correctness oracle
 #   TT_AGMM_FUSED_GATHER=1                         Phase 1: fused gather via a DRAM staging buffer -- 40/40
-#   TT_AGMM_FUSED_GATHER=1 TT_AGMM_DIRECT_L1=1     Phase 2: fabric writes straight into cb0 -- 28/40 here,
-#                                                  with the other 12 REFUSED at program creation, not
-#                                                  failing: 8x Ns>1 and 4x ">64 mux channels" on the LINE
-#                                                  cases. The latter 4 are an artefact of num_links=1
-#                                                  BELOW -- at num_links=2 the same binary is 32/40 and the
-#                                                  channel cap never fires, so Ns>1 is the only real limit.
-#                                                  1 link is kept deliberately (tighter mux budget; it is
-#                                                  what found that ceiling). See
+#   TT_AGMM_FUSED_GATHER=1 TT_AGMM_DIRECT_L1=1     Phase 2: fabric writes straight into cb0 -- 32/40 at the
+#                                                  NUM_LINKS=2 below, with the other 8 REFUSED at program
+#                                                  creation (Ns>1), not failing. See
 #                                                  tools/mm_sweep/AGMM_DIRECT_L1_DESIGN.md, "Scope limits".
 #
 # A refusal is a TT_FATAL, never a silent fallback -- so a Phase-2 run can never be reported as Phase 2 when
@@ -79,6 +74,17 @@ TOPOLOGIES = [("ring", ttnn.Topology.Ring), ("line", ttnn.Topology.Linear)]
 TOPOLOGY_IDS = [t[0] for t in TOPOLOGIES]
 
 PCC = 0.999
+
+# Fabric links per direction. 2 is the PRODUCTION config for these shapes on Galaxy, and it is what every
+# number in tools/mm_sweep/AGMM_DIRECT_L1_DESIGN.md was measured at, so the correctness suite and the
+# benchmarks now agree rather than testing one config and reporting another.
+#
+# It also matters structurally, not just for speed: a mux binds exactly ONE link, so num_links is what
+# decides how many mux cores a direction's fabric clients are spread over. Under TT_AGMM_DIRECT_L1 every
+# consumer core is a client, and at 1 link a LINE at tp=8 needs 70-84 channels on a single mux against a
+# hard 64-per-worker ceiling (one stream register each) -- refused. At 2 links the same clients split
+# 84 -> 42 and every case runs. Measured with the identical binary: 28/40 at 1 link, 32/40 at 2.
+NUM_LINKS = 2
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +354,7 @@ def _run_agmm(
                 persistent_output_buffer=persistent,
                 multi_device_global_semaphore=semaphores,
                 barrier_semaphore=barrier,
-                num_links=1,
+                num_links=NUM_LINKS,
                 topology=topology,
                 cluster_axis=cluster_axis,
                 **kw,
@@ -469,7 +475,7 @@ def test_agmm_regime_a_matches_single_chip(tp, label, M, K, N):
             persistent_output_buffer=persistent,
             multi_device_global_semaphore=semaphores,
             barrier_semaphore=barrier,
-            num_links=1,
+            num_links=NUM_LINKS,
             topology=ttnn.Topology.Ring,
             cluster_axis=cluster_axis,
         )
