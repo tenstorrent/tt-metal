@@ -1523,6 +1523,22 @@ and 24's nominal 0.002 ms lead is 10x below the noise. **Below 6 it does cost**:
 reduction to reorder — the opposite of the norm, where changing the reduce tree moved the 26-layer
 result by 1.0 absolute (§6.18).
 
+**AND THE GRID NEVER REACHES THE CONSUMERS** — asked directly, since sharding differently ought to
+affect `nlp_create_qkv_heads_decode`, `paged_update_cache` and `sdpa_decode`. It does not:
+that op imposes its own output layout, and at input grids of 1 / 6 / 8 / 24 / 48 cores, `qh`, `kh`
+and `vh` all come out **1 core, shard (32, 128)**, identically. So the two cache writes and
+`sdpa_decode` never see this config; only the shard fill and the split op can. That is a structural
+reason for the flatness, and a better one than "the aggregate did not move."
+
+**A failed attempt to confirm that, worth recording as a method warning.** Timing the consumer chain
+*in isolation* inverts the answer: it makes 1 core look 0.157 ms CHEAPER where the 26-layer step has
+it 0.273 ms DEARER. Cause: the isolated probe feeds a pre-computed qkv tensor from DRAM instead of the
+wqkv matmul's fresh output. The prefix split also produced a **negative** marginal cost for
+`paged_update_cache V`, which is proof the method had broken down at these sizes rather than a small
+inaccuracy. **Third instance today of the same failure** — after the norm grid (§6.18) and
+`[gpt-05]`'s stale contrast — of an isolated measurement disagreeing with, and losing to, the
+end-to-end one.
+
 **Two different divisor sets, and it explains why 32 is the norm's optimum and illegal here.** The
 qkv shard's unit is the HEAD: 6144 = 48 heads x 128 and the consumers want whole heads per core, so
 the count must divide **48**. The norm's unit is the 32-wide TILE, so its count must divide **96**.
