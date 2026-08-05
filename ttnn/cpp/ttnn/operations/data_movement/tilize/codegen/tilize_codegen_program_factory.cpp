@@ -40,6 +40,8 @@ constexpr uint32_t kBlockThreshold = 32;
 // ops/tilize/spec.py _L1_RESERVE — L1 held back for kernel code and stacks, so the CB plan is
 // sized against l1_size_per_core() minus this, not the whole physical bank.
 constexpr uint32_t kL1Reserve = 128 * 1024;
+// ops/tilize/spec.py _tilize_use_fast: the fast-tilize LLK's block-width cap.
+constexpr uint32_t kFastTilizeMaxChunkTiles = 256;
 
 constexpr const char* kReaderStickUnified =
     "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/reader_stick_interleaved_unified.cpp";
@@ -219,6 +221,18 @@ std::vector<UnpackToDestMode> unpack_to_dest_fp32_modes(uint32_t cb_index) {
     std::vector<UnpackToDestMode> modes(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     modes[cb_index] = UnpackToDestMode::UnpackToDestFp32;
     return modes;
+}
+
+// ops/tilize/spec.py _tilize_use_fast — compute_tilize.cpp's third CT arg.
+//
+// The fast-tilize LLK datapath accepts fp32/bf16 input with a non-fp32 output, but native forces an
+// fp32 input onto the lossless standard path (fast tilize truncates fp32 to tf32), which leaves
+// bf16->bf16 as the only combination this device op can reach that may take it. The chunk width is a
+// runtime arg on every path here, so one kernel binary covers any width under the LLK's cap.
+uint32_t tilize_use_fast(DataType input_dtype, DataType output_dtype, uint32_t max_chunk_tiles) {
+    const bool fast = input_dtype == DataType::BFLOAT16 && output_dtype == DataType::BFLOAT16 && max_chunk_tiles > 0 &&
+                      max_chunk_tiles < kFastTilizeMaxChunkTiles;
+    return fast ? 1u : 0u;
 }
 
 struct Geometry {
@@ -548,8 +562,10 @@ ProgramDescriptor build_row(
     compute_desc.kernel_source = kComputeTilize;
     compute_desc.core_ranges = all_cores;
     // Width and chunking reach compute_tilize.cpp as runtime args, so one kernel binary serves
-    // cores with different widths (the ragged column split below relies on that).
-    compute_desc.compile_time_args = {kCbInId, kCbOutId};
+    // cores with different widths (the ragged column split below relies on that). Only the
+    // fast-tilize selector is compile-time, since it picks between two LLK datapaths.
+    compute_desc.compile_time_args = {
+        kCbInId, kCbOutId, tilize_use_fast(attrs.input_dtype, attrs.output_dtype, chunk_wt)};
     ComputeConfigDescriptor compute_cfg;
     compute_cfg.fp32_dest_acc_en = fp32;
     if (attrs.input_dtype == DataType::FLOAT32) {
@@ -717,7 +733,10 @@ ProgramDescriptor build_2d_column(
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kComputeTilize;
     compute_desc.core_ranges = core_grid;
-    compute_desc.compile_time_args = {kCbInId, kCbOutId};
+    // The widest column block bounds the selector, matching the reference's max(block_Wts): one
+    // binary serves every width group, so the cap must hold for the widest of them.
+    compute_desc.compile_time_args = {
+        kCbInId, kCbOutId, tilize_use_fast(attrs.input_dtype, attrs.output_dtype, shape.max_tpc)};
     ComputeConfigDescriptor compute_cfg;
     compute_cfg.fp32_dest_acc_en = fp32;
     // The unpack-to-DEST override keys off the INPUT dtype alone: it exists to stop an RM fp32
@@ -916,7 +935,9 @@ ProgramDescriptor build_block(
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kComputeTilize;
     compute_desc.core_ranges = all_core_grid;
-    compute_desc.compile_time_args = {kCbInId, kCbOutId};
+    // Bounded by the widest per-core compute chunk, as in build_2d_column.
+    compute_desc.compile_time_args = {
+        kCbInId, kCbOutId, tilize_use_fast(attrs.input_dtype, attrs.output_dtype, shape.max_compute_chunk)};
     ComputeConfigDescriptor compute_cfg;
     compute_cfg.fp32_dest_acc_en = fp32;
     // Input dtype alone drives the override — see build_2d_column.

@@ -28,6 +28,108 @@ def _make_input(shape, dtype):
 
 _DEMOTED = [
     (
+        [1, 1, 64, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.int32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 1, 64, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 1, 64, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 1, 64, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.int32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 1, 64, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 1, 64, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 10, 64, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 10, 64, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 10, 64, 96],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 2, 32, 96],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 2, 32, 96],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 32, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.int32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 32, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 32, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 32, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.int32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 32, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 32, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
         [1, 4, 96, 32],
         {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
         ttnn.bfloat16,
@@ -67,112 +169,27 @@ _DEMOTED = [
         [2, 1, 96, 32],
         {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
         ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 12, 64, 96],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 12, 64, 96],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [224, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [224, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [3, 2, 128, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [3, 2, 128, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [3, 2, 64, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [3, 2, 64, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.float32,
         ttnn.ROW_MAJOR_LAYOUT,
     ),
 ]
 _DEMOTED_IDS = [
+    "[1, 1, 64, 64]|memory_config=dram|int32|row_major",
+    "[1, 1, 64, 64]|memory_config=dram|uint16|row_major",
+    "[1, 1, 64, 64]|memory_config=dram|uint32|row_major",
+    "[1, 1, 64, 64]|memory_config=l1|int32|row_major",
+    "[1, 1, 64, 64]|memory_config=l1|uint16|row_major",
+    "[1, 1, 64, 64]|memory_config=l1|uint32|row_major",
+    "[1, 10, 64, 64]|memory_config=dram|bfloat16|row_major",
+    "[1, 10, 64, 64]|memory_config=l1|bfloat16|row_major",
+    "[1, 10, 64, 96]|memory_config=l1|bfloat16|row_major",
+    "[1, 2, 32, 96]|memory_config=dram|uint16|row_major",
+    "[1, 2, 32, 96]|memory_config=l1|uint16|row_major",
+    "[1, 32, 64]|memory_config=dram|int32|row_major",
+    "[1, 32, 64]|memory_config=dram|uint16|row_major",
+    "[1, 32, 64]|memory_config=dram|uint32|row_major",
+    "[1, 32, 64]|memory_config=l1|int32|row_major",
+    "[1, 32, 64]|memory_config=l1|uint16|row_major",
+    "[1, 32, 64]|memory_config=l1|uint32|row_major",
     "[1, 4, 96, 32]|memory_config=dram|bfloat16|row_major",
     "[1, 4, 96, 32]|memory_config=l1|bfloat16|row_major",
     "[2, 1, 96, 32]|memory_config=dram|int32|row_major",
@@ -180,23 +197,6 @@ _DEMOTED_IDS = [
     "[2, 1, 96, 32]|memory_config=dram|uint32|row_major",
     "[2, 1, 96, 32]|memory_config=l1|int32|row_major",
     "[2, 1, 96, 32]|memory_config=l1|uint16|row_major",
-    "[2, 1, 96, 32]|memory_config=l1|uint32|row_major",
-    "[2, 12, 64, 96]|memory_config=dram|bfloat16|row_major",
-    "[2, 12, 64, 96]|memory_config=l1|bfloat16|row_major",
-    "[2, 32, 32]|memory_config=dram|int32|row_major",
-    "[2, 32, 32]|memory_config=dram|uint16|row_major",
-    "[2, 32, 32]|memory_config=dram|uint32|row_major",
-    "[2, 32, 32]|memory_config=l1|int32|row_major",
-    "[2, 32, 32]|memory_config=l1|uint16|row_major",
-    "[2, 32, 32]|memory_config=l1|uint32|row_major",
-    "[2, 96, 32]|memory_config=dram|float32|row_major",
-    "[2, 96, 32]|memory_config=l1|float32|row_major",
-    "[224, 32]|memory_config=dram|bfloat16|row_major",
-    "[224, 32]|memory_config=l1|bfloat16|row_major",
-    "[3, 2, 128, 32]|memory_config=dram|float32|row_major",
-    "[3, 2, 128, 32]|memory_config=l1|float32|row_major",
-    "[3, 2, 64, 32]|memory_config=dram|float32|row_major",
-    "[3, 2, 64, 32]|memory_config=l1|float32|row_major",
 ]
 
 
@@ -257,3 +257,72 @@ def test_tilize_codegen_rejects_an_unknown_implementation(device, expect_error, 
     # otherwise answer without dispatching, so an unknown value never passes silently.
     with expect_error(RuntimeError, "unknown implementation selector"):
         ttnn.tilize(xt, **kwargs, implementation=selector)
+
+
+# ---------------------------------------------------------------------------
+# Hand-added: execution-control routing.
+#
+# use_multicore / use_low_perf / tile / sub_core_grids decide WHERE work lands or with what tile
+# geometry rather than what the result contains, and the coverage ledger varies none of them — so
+# the generated block above cannot reach these legs. Accepting such a call on codegen would land
+# work on cores the caller reserved, or emit the standard 32x32 tile where another was requested.
+# ---------------------------------------------------------------------------
+
+_EXEC_SHAPE = [128, 128]
+_EXEC_DTYPE = ttnn.bfloat16
+_EXEC_KWARGS = {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)}
+
+# Four of the compute grid's cores. Two or more, so native keeps its multicore route and the only
+# difference from the base case is the restriction itself.
+_SUB_CORE_GRIDS = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+# A tiny tile height, which native supports for non-blocked dtypes (the tile width must stay 32)
+# and the codegen kernels do not: they pack a full 32-row tile unconditionally.
+_TINY_TILE = ttnn.Tile([16, 32])
+
+# Honoured by the codegen factory (its single-core row route) but demoted for perf, so `auto` keeps
+# them on native.
+_DEMOTED_CONTROLS = [{"use_multicore": False}, {"use_low_perf": True}]
+_DEMOTED_CONTROL_IDS = ["use_multicore", "use_low_perf"]
+# Honoured by no codegen builder, so forced codegen must refuse them by name.
+_REFUSED_CONTROLS = [{"tile": _TINY_TILE}, {"sub_core_grids": _SUB_CORE_GRIDS}]
+_REFUSED_CONTROL_IDS = ["tile", "sub_core_grids"]
+
+
+def _exec_control_tensor(device):
+    x = _make_input(_EXEC_SHAPE, _EXEC_DTYPE)
+    return ttnn.from_torch(x, dtype=_EXEC_DTYPE, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+
+def test_tilize_codegen_execution_control_base_case_reaches_codegen(device):
+    # Precondition for the routing test below: with no control set this case is in scope and not
+    # demoted, so `auto` compiles a codegen program of its own. Were the base case already on
+    # native, every "stays on native" assertion below would hold vacuously.
+    xt = _exec_control_tensor(device)
+    golden = ttnn.to_torch(ttnn.tilize(xt, **_EXEC_KWARGS, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.tilize(xt, **_EXEC_KWARGS, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = "auto did not route the execution-control base case to codegen; the routing test below proves nothing"
+    assert device.num_program_cache_entries() > entries_before, msg
+
+
+@pytest.mark.parametrize(
+    "control", _DEMOTED_CONTROLS + _REFUSED_CONTROLS, ids=_DEMOTED_CONTROL_IDS + _REFUSED_CONTROL_IDS
+)
+def test_tilize_codegen_auto_keeps_execution_controls_on_native(device, control):
+    xt = _exec_control_tensor(device)
+    # The native golden warms the program `auto` has to reuse; a codegen dispatch would add its own.
+    golden = ttnn.to_torch(ttnn.tilize(xt, **_EXEC_KWARGS, **control, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.tilize(xt, **_EXEC_KWARGS, **control, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = f"auto routed a call carrying {next(iter(control))} to codegen (program cache grew); expected native"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+
+@pytest.mark.parametrize("control", _REFUSED_CONTROLS, ids=_REFUSED_CONTROL_IDS)
+def test_tilize_codegen_refuses_an_execution_control_it_cannot_honour(device, expect_error, control):
+    # Naming the control, rather than accepting the call and widening the placement or the tile.
+    xt = _exec_control_tensor(device)
+    with expect_error(RuntimeError, "cannot honour"):
+        ttnn.tilize(xt, **_EXEC_KWARGS, **control, implementation=_CODEGEN)
