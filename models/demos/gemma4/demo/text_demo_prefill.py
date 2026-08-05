@@ -1062,6 +1062,7 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
     non-degenerate, and the last chunk's statistics must be in the same range as the
     first, which is what breaks if the ring read drifts as the prefix grows.
     """
+    from models.demos.gemma4.tt.attention import ring_prefill
     from models.demos.gemma4.tt.ccl import cp_degree
 
     chunk = LONG_CONTEXT_CHUNK
@@ -1084,6 +1085,7 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
     tokens_first, _tokenizer, _prompt_len = _prompt_tokens(model_path, chunk)
     torch.manual_seed(1234)
 
+    ring_prefill.reset_ring_attention_calls()
     stats = []
     t_start = time.time()
     for chunk_idx in range(n_chunks):
@@ -1131,6 +1133,17 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
     # The ring read must not drift as the prefix grows: a halo pointing at the wrong
     # predecessor slab, or a cache offset walking off, shows up as the last chunk's
     # scale departing from the first's rather than as an outright failure.
+    # Every chunk after the first must have read history through the ring, on every
+    # layer. A silent fallback to the mask path would leave the assertions above
+    # intact while each chunk attended only within itself.
+    expected_ring_calls = (n_chunks - 1) * len(model.layers)
+    actual_ring_calls = ring_prefill.ring_attention_calls()
+    logger.info(f"[long_ctx] ring history reads: {actual_ring_calls} (expected {expected_ring_calls})")
+    assert actual_ring_calls == expected_ring_calls, (
+        f"ring attention ran {actual_ring_calls} times, expected {expected_ring_calls} "
+        f"(({n_chunks} - 1) chunks x {len(model.layers)} layers) — history was not read through the ring"
+    )
+
     first_std, last_std = stats[0][2], stats[-1][2]
     assert last_std / first_std < 5.0 and first_std / last_std < 5.0, (
         f"output scale drifted across chunks: first std={first_std:.4f}, last std={last_std:.4f} — "
