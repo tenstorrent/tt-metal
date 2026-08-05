@@ -34,6 +34,19 @@ inline bool wrap_ge(uint32_t a, uint32_t b) {
     return (diff << shift) >= 0;
 }
 
+// Paired acquire/release reference counting for the on-device scoped-lock and DFB-region events.
+template <typename Map, typename Key>
+void refcount_acquire(Map& counts, const Key& key) {
+    ++counts[key];
+}
+
+template <typename Map, typename Key>
+void refcount_release(Map& counts, const Key& key) {
+    if (auto it = counts.find(key); it != counts.end() && --it->second == 0) {
+        counts.erase(it);
+    }
+}
+
 NOCDebugState::LockedBufferInfo::LockType get_lock_type(NocDebuggingEventMetadata::NocDebugEventType event_type) {
     if (event_type == NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK ||
         event_type == NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK) {
@@ -245,25 +258,22 @@ void NOCDebugState::handle_scoped_lock_event(
     if (event.event_type == EventType::DFB_REGION_START || event.event_type == EventType::DFB_REGION_END) {
         const L1Extent region{event.locked_address_base, event.num_bytes};
         if (event.event_type == EventType::DFB_REGION_START) {
-            ++state.dfb_region_refcount[region];
-        } else if (auto it = state.dfb_region_refcount.find(region);
-                   it != state.dfb_region_refcount.end() && --it->second == 0) {
-            state.dfb_region_refcount.erase(it);
+            detail::refcount_acquire(state.dfb_region_refcount, region);
+        } else {
+            detail::refcount_release(state.dfb_region_refcount, region);
         }
         update_latest_risc_timestamp(core, processor_id, timestamp);
         return;
     }
 
-    // Merge intervals is not required.
-    // for unlocking, the start and end address of the request will be the same as from the lock request.
-    // if multiple locks and unlocks are requested for the same buffer, then only one will be removed as eventually
-    // the Lock destructor will release the lock
+    // Merging intervals is not required: unlock carries the same start address and size as its lock, so
+    // the two always key to the same entry.
     auto& bufs = state.locked_buffers[processor_id];
-    auto lock_type = detail::get_lock_type(event.event_type);
+    const LockedBufferInfo buf{{event.locked_address_base, event.num_bytes}, detail::get_lock_type(event.event_type)};
     if (event.is_lock()) {
-        bufs.insert({{event.locked_address_base, event.num_bytes}, lock_type});
+        detail::refcount_acquire(bufs, buf);
     } else {
-        bufs.erase({{event.locked_address_base, event.num_bytes}, lock_type});
+        detail::refcount_release(bufs, buf);
     }
 
     update_latest_risc_timestamp(core, processor_id, timestamp);
@@ -532,7 +542,7 @@ const NOCDebugState::LockedBufferInfo* NOCDebugState::CoreDebugState::get_noc_wr
         if (same_core && proc_id == writer_processor_id) {
             continue;
         }
-        for (const auto& buf : bufs[proc_id]) {
+        for (const auto& [buf, hold_count] : bufs[proc_id]) {
             const uint32_t buf_end = buf.extent.address + buf.extent.size;
             if (write_end > buf.extent.address && buf_end > write_start) {
                 return &buf;
@@ -558,9 +568,9 @@ bool NOCDebugState::CoreDebugState::write_into_unlocked_dfb(const NocWriteEvent&
     }
 
     // The write must be fully covered by the union of the writer's own locks.
-    // locked_buffers[proc] is an ordered set.
+    // locked_buffers[proc] is ordered by (address, size, type), so a single ascending sweep suffices.
     uint32_t covered_to = write_start;
-    for (const auto& buf : locked_buffers[writer_processor_id]) {
+    for (const auto& [buf, hold_count] : locked_buffers[writer_processor_id]) {
         if (buf.extent.address > covered_to) {
             break;  // gap before this lock -> not fully covered
         }

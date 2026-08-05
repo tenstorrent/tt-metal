@@ -24,7 +24,13 @@ void kernel_main() {
     dfb.reserve_back(1);
 
     {
-        auto lock = dfb.scoped_write_lock();  // whole ring locked for this scope
+        auto lock = dfb.scoped_write_lock();  // holds the entry for the whole scope
+
+        // Take and immediately drop a second guard over the SAME entry. The extent must stay locked
+        // for the outer guard.
+        {
+            auto nested = dfb.scoped_write_lock();
+        }
 
         // Publish the locked entry address to the writer (stage in local L1, then NOC it across).
         volatile tt_l1_ptr uint32_t* staged = (volatile tt_l1_ptr uint32_t*)(uintptr_t)local_scratch;
