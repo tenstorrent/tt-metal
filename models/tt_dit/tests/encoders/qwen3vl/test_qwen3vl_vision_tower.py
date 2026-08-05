@@ -5,7 +5,7 @@
 # =============================================================================
 # Qwen3-VL vision tower end to end, on device, against the HF reference.
 #
-# One test, parametrized over five grids and three parallel configurations. It runs
+# One test, parametrized over eighteen grids and three parallel configurations. It runs
 # the assembled tower -- patch embed, interpolated position embeddings, every
 # block, the output merger and the deepstack mergers -- and checks both things the
 # decoder consumes:
@@ -21,14 +21,13 @@
 # concatenated group of four over `hidden_size * merge ** 2`, so the two compute
 # different statistics and cannot share weights.
 #
-# Every shape here is one the model actually runs: depth 27 with deepstack taps at
-# 8/16/24, and patch grids of 48 on the short edge and at most 48x84, which is what
-# `resolve_canvas_size` produces at a 16-pixel patch. Nothing is scaled down -- the
-# tower is only 595M parameters, so a dummy-weight copy at full depth is cheap, and
-# a reduced one would exercise shapes that never occur.
+# Every shape here is one the model actually runs, at the released depth of 27 with
+# deepstack taps at 8/16/24. Nothing is scaled down: the tower is only 595M
+# parameters, so a dummy-weight copy at full depth is cheap, and a reduced one would
+# exercise geometry that never occurs. See the grid tables below for the two
+# distinct sizing rules and why both orientations of each aspect are present.
 #
-# The multi-reference grids make `cu_seqlens` blocking load-bearing. The same paths
-# on the released weights live in
+# The same paths on the released weights live in
 # tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py.
 # =============================================================================
 
@@ -60,24 +59,57 @@ HIDDEN_ACT = "gelu_pytorch_tanh"
 DEPTH = 27
 DEEPSTACK_INDEXES = [8, 16, 24]
 
-# Real patch grids only. `resolve_canvas_size` puts the short edge at 768 px and caps the area at
-# 768x1344, and the patch size is 16, so the canvas is 48 patches on the short edge and at most 48x84.
-# 48x48 is the 1:1 canvas, 48x64 a 4:3 one, and 48x84 the largest canvas MiniMax-H3
-# produces. Reference sizes are otherwise whatever the image processor resolves, not a fixed set.
+# Every grid the model can actually present, measured end to end through the checkpoint's own image
+# processor rather than derived by hand. TWO sizing rules feed the tower and they differ 4x on the short
+# edge, which is the thing most easily got wrong:
 #
-# Grids are chosen for how many ATTENTION BLOCKS they produce. `cu_seqlens =
-# repeat_interleave(h*w, t).cumsum()` makes an image one block and a video one block PER FRAME, and
-# attention must never cross a boundary -- the `ref2va` requirement. `two_images` and `video_3_frames`
-# are the pair worth having: the first gets its blocks from separate grid rows, the second from a single
-# row with `t > 1`. Both must agree, and a tower ignoring blocking would still pass the single-block
-# grids.
-GRIDS = {
-    "square": [[1, 48, 48]],  # 2304 patches, the 1:1 canvas, bilinear position table live
-    "keyframe": [[1, 48, 84]],  # 4032, the largest canvas; NOT a multiple of 128, so SP=4 skips it
-    "two_images": [[1, 48, 48], [1, 48, 48]],  # 4608, two blocks from two rows
-    "video_3_frames": [[3, 48, 48]],  # 6912, three blocks from ONE row
-    "images_and_video": [[1, 48, 48], [2, 48, 48], [1, 48, 64]],  # 9984, four blocks, two lengths
+#   - keyframes (`fl2va`) and reference VIDEOS go through `resolve_canvas_size`: 768 px short edge, area
+#     capped at 768x1344, each axis rounded to a multiple of 32 px. At a 16-pixel patch that is 48
+#     patches on the short edge -- except at the aspect extremes, where the AREA CAP binds first and
+#     pushes the short edge down to 32.
+#   - reference IMAGES (`ref2va`) go through `resolve_reference_image_size`: 2048 px short edge, NO area
+#     cap, upscaling intended. That is 128 patches on the short edge and up to 512 on the long one.
+#
+# Both orientations of every aspect are present. They are not redundant despite equal patch counts:
+# `canvas_16to9` is 48x84 while `canvas_4to1` is 32x126, both 4032, and only the pairing catches an
+# `h`-versus-`w` error in the bilinear position table or the 2x2 merge reshape. Every grid has even `h`
+# and `w`, so the merge is always valid.
+#
+# All four area-capped canvases are 4032 patches, which is 31.5 x 128, so NONE of them can be
+# sequence-parallel at SP=4. That is a property of the model's geometry: at the largest canvas, SP=4 is
+# simply unavailable.
+_CANVAS = {  # patches  blocks  SP=4
+    "canvas_1to1": [[1, 48, 48]],  # 2304    1     ok
+    "canvas_4to3": [[1, 48, 64]],  # 3072    1     ok
+    "canvas_3to4": [[1, 64, 48]],  # 3072    1     ok
+    "canvas_16to9": [[1, 48, 84]],  # 4032    1     skip -- area cap
+    "canvas_9to16": [[1, 84, 48]],  # 4032    1     skip -- area cap
+    "canvas_4to1": [[1, 32, 126]],  # 4032    1     skip -- area cap, short edge forced to 32
+    "canvas_1to4": [[1, 126, 32]],  # 4032    1     skip -- area cap
 }
+_REFERENCE = {
+    "ref_1to1": [[1, 128, 128]],  # 16384    1     ok
+    "ref_4to3": [[1, 128, 170]],  # 21760    1     ok
+    "ref_3to4": [[1, 170, 128]],  # 21760    1     ok
+    "ref_16to9": [[1, 128, 228]],  # 29184    1     ok
+    "ref_9to16": [[1, 228, 128]],  # 29184    1     ok
+    "ref_4to1": [[1, 128, 512]],  # 65536    1     ok
+    "ref_1to4": [[1, 512, 128]],  # 65536    1     ok
+}
+# `cu_seqlens = repeat_interleave(h*w, t).cumsum()` makes an image one block and a video one block PER
+# FRAME, and attention must never cross a boundary. `two_refs` gets its blocks from separate grid rows
+# and `video_3_frames` from a single row with `t > 1`; both must agree, and a tower that ignored blocking
+# would still pass every single-block grid above. `image_and_video` is the only case that mixes the two
+# sizing rules inside one sequence.
+_MULTI = {
+    "two_refs": [[1, 128, 128], [1, 128, 170]],  # 38144    2     ok, unequal lengths
+    "video_3_frames": [[3, 48, 48]],  # 6912    3     ok, one grid row
+    "image_and_video": [[1, 128, 128], [3, 48, 48]],  # 23296    4     ok, both rules
+    # The documented ceiling: nine reference images and three reference videos.
+    "max_load": [[1, 128, 128]] * 9 + [[3, 48, 48]] * 3,  # 168192   18     ok
+}
+
+GRIDS = {**_CANVAS, **_REFERENCE, **_MULTI}
 
 
 def _config():
@@ -165,9 +197,9 @@ def _parallel_args(submesh, tp_axis, sp_axis, num_links):
 def _skip_if_sp_misaligned(total, submesh, sp_axis):
     """Ring SDPA needs `N_local_q % 32 == 0`, stricter than the merger's 4-row merge group.
 
-    At SP=4 that means a multiple of 128 patches. Every grid here satisfies it except `keyframe`
-    (48 x 84 = 4032 = 31.5 x 128), so the largest canvas cannot be sequence-parallel at this factor.
-    That is a property of the shape, not of the test.
+    At SP=4 that means a multiple of 128 patches. Every grid here satisfies it except the four
+    area-capped canvases, which are all 4032 = 31.5 x 128 -- so at the largest output canvas, in any
+    aspect ratio, SP=4 is unavailable. That is a property of the model's geometry, not of the test.
     """
     if sp_axis is None:
         return
