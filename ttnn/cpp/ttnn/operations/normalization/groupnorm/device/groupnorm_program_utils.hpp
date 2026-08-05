@@ -68,4 +68,35 @@ void split_and_form_rectangle_grids(
 
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width = 32);
 
+// Tiles the row-major path keeps resident in c_17 for one per-core group.
+uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt);
+
+// Percent of usable L1 we allow the estimate to reach; the margin covers the approximated small CBs.
+inline constexpr uint64_t kGroupnormTilizedL1UsagePercent = 95;
+
+// Allowance, in tiles, for the small scalar/reduction CBs the estimate does not sum individually.
+inline constexpr uint32_t kGroupnormSmallCbAllowanceTiles = 32;
+
+// Estimates whether a legacy (non-Welford) group_norm fits in L1; if not, group_norm() tilizes or
+// untilizes as separate ops instead. Deliberately over-estimates, so a "fits" answer is always safe.
+// `tilize_in` adds the resident group, `untilize_out` adds the row-major output scratch.
+// `per_batch_hw` is padded_shape[1] * padded_shape[2], `available_l1` is usable per-core L1 in bytes,
+// and `num_out_blocks_arg` takes -1 for auto.
+bool groupnorm_legacy_rm_input_fits_l1(
+    uint32_t Ht,
+    uint32_t W,
+    uint32_t per_batch_hw,
+    uint32_t num_batches,
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t num_groups,
+    int num_out_blocks_arg,
+    uint32_t tile_width,
+    uint32_t single_tile_size,
+    bool has_gamma,
+    bool has_beta,
+    bool tilize_in,
+    bool untilize_out,
+    uint64_t available_l1);
+
 }  // namespace ttnn::prim

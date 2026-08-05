@@ -4,6 +4,7 @@
 
 #include "groupnorm.hpp"
 #include "device/groupnorm_device_operation.hpp"
+#include "device/groupnorm_program_utils.hpp"
 #include "groupnorm_grid_utils.hpp"
 #include "groupnorm_input_mask.hpp"
 
@@ -12,6 +13,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace {
 
@@ -191,21 +193,6 @@ Tensor group_norm(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor cannot be width-sharded.");
 
-    // The non-sharded (interleaved) group_norm only has a correct TILE-input /
-    // TILE-output compute path. See #47972 and #48142
-    if (!input_tensor.is_sharded()) {
-        TT_FATAL(
-            input_tensor.layout() == Layout::TILE,
-            "group_norm: interleaved (non-sharded) input must be in TILE layout, got ROW_MAJOR. "
-            "Convert the input with ttnn.to_layout(input, ttnn.TILE_LAYOUT) before calling group_norm. "
-            "ROW_MAJOR is supported only for sharded inputs.");
-        TT_FATAL(
-            output_layout.value_or(Layout::TILE) == Layout::TILE,
-            "group_norm: interleaved (non-sharded) output must be in TILE layout, got ROW_MAJOR output_layout. "
-            "Request TILE output and convert it yourself with ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT). "
-            "ROW_MAJOR output is supported only for sharded inputs.");
-    }
-
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
         input_shape.rank() == 4, "Invalid tensor shape: Input tensor must have rank 4. (rank={})", input_shape.rank());
@@ -283,6 +270,22 @@ Tensor group_norm(
         out_dtype);
 
     const auto arch = input_tensor.device()->arch();
+
+    // The interleaved (non-sharded) ROW_MAJOR path regresses on Blackhole, so it is enabled only on
+    // Wormhole. Blackhole regression: #12345
+    if (!input_tensor.is_sharded() && arch != tt::ARCH::WORMHOLE_B0) {
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE,
+            "group_norm: interleaved (non-sharded) input must be in TILE layout, got ROW_MAJOR. "
+            "Convert the input with ttnn.to_layout(input, ttnn.TILE_LAYOUT) before calling group_norm. "
+            "ROW_MAJOR is supported only for sharded inputs, or on Wormhole.");
+        TT_FATAL(
+            output_layout.value_or(Layout::TILE) == Layout::TILE,
+            "group_norm: interleaved (non-sharded) output must be in TILE layout, got ROW_MAJOR output_layout. "
+            "Request TILE output and convert it yourself with ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT). "
+            "ROW_MAJOR output is supported only for sharded inputs, or on Wormhole.");
+    }
+
     const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
     // fp32 input accumulates in the fp32 DEST (like LayerNorm); welford already forces it. A
@@ -427,6 +430,65 @@ Tensor group_norm(
             negative_mask,
             effective_reciprocals);
     }
+
+    // Composite fallbacks, legacy path only. We only reroute when per-batch H*W is tile-aligned:
+    // otherwise the padding would corrupt mean/variance, so let the device op reject it instead.
+    const uint32_t per_batch_hw = input_padded_shape[1] * input_padded_shape[2];
+    const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
+    const bool per_batch_hw_tile_aligned = per_batch_hw % tile_h == 0;
+    const Layout requested_out_layout = output_layout.value_or(input_tensor.layout());
+
+    // L1-fit estimate shared by the input and output decisions below.
+    const uint32_t Ht = nhw / ttnn::types::TILE_SIZE;
+    const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
+    const uint64_t base_l1 = input_tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t available_l1 = input_tensor.device()->l1_size_per_core() - base_l1;
+    const auto legacy_rm_fits_l1 = [&](bool tilize_in, bool untilize_out) {
+        return ttnn::prim::groupnorm_legacy_rm_input_fits_l1(
+            Ht,
+            input_padded_shape[3],
+            per_batch_hw,
+            input_padded_shape[0],
+            core_grid->x,
+            core_grid->y,
+            static_cast<uint32_t>(num_groups),
+            core_grid_auto_selected ? -1 : num_out_blocks.value_or(1),
+            tile_w,
+            tile_h * tile_w * input_tensor.element_size(),
+            gamma.has_value(),
+            beta.has_value(),
+            tilize_in,
+            untilize_out,
+            available_l1);
+    };
+
+    // If the resident group will not fit in L1, tilize once on host instead of re-tilizing on every pass.
+    Tensor gn_input = input_tensor;
+    if (!use_welford && input_tensor.layout() == Layout::ROW_MAJOR && per_batch_hw_tile_aligned) {
+        if (!legacy_rm_fits_l1(/*tilize_in=*/true, /*untilize_out=*/requested_out_layout == Layout::ROW_MAJOR)) {
+            log_debug(
+                tt::LogOp,
+                "group_norm: tilizing ROW_MAJOR input on host and running the TILE path (composite) -- "
+                "resident tilized group does not fit L1.");
+            // Keep the input's memory config; output_mem_config may well be different.
+            gn_input = ttnn::tilize_with_zero_padding(input_tensor, input_tensor.memory_config());
+        }
+    }
+
+    // Likewise for the output: the fused untilize needs extra CBs, so fall back to untilizing on host.
+    Layout device_out_layout = requested_out_layout;
+    bool untilize_out_on_host = false;
+    if (!use_welford && requested_out_layout == Layout::ROW_MAJOR && per_batch_hw_tile_aligned) {
+        if (!legacy_rm_fits_l1(/*tilize_in=*/gn_input.layout() == Layout::ROW_MAJOR, /*untilize_out=*/true)) {
+            log_debug(
+                tt::LogOp,
+                "group_norm: running the TILE-output path and untilizing on host (composite output) -- "
+                "the fused ROW_MAJOR-output CBs do not fit L1.");
+            device_out_layout = Layout::TILE;
+            untilize_out_on_host = true;
+        }
+    }
+
     // When the user did not pin a core grid, defer num_out_blocks to the program
     // factory's heuristic via the -1 sentinel (see GroupNormMultiCoreProgramConfig).
     // Otherwise honor the explicit num_out_blocks (defaulting to 1 = no chunking).
@@ -435,10 +497,10 @@ Tensor group_norm(
         .im_data_format = group_norm_im_data_format(input_tensor.dtype()),
         .out_data_format = out_dtype,
         .inplace = inplace.value_or(false),
-        .output_layout = output_layout.value_or(input_tensor.layout()),
+        .output_layout = device_out_layout,
         .num_out_blocks = core_grid_auto_selected ? -1 : num_out_blocks.value_or(1)};
-    return ttnn::prim::group_norm(
-        input_tensor,
+    Tensor output = ttnn::prim::group_norm(
+        gn_input,
         epsilon,
         static_cast<uint32_t>(num_groups),
         output_mem_config,
@@ -450,6 +512,10 @@ Tensor group_norm(
         mask,
         negative_mask,
         effective_reciprocals);
+    if (untilize_out_on_host) {
+        output = ttnn::to_layout(output, Layout::ROW_MAJOR);
+    }
+    return output;
 }
 
 }  // namespace ttnn

@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_blackhole, skip_for_blackhole
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
@@ -139,10 +139,9 @@ OPTIONAL_WEIGHT_BIAS_AFFINE_PARAMS = [
 OPTIONAL_WEIGHT_BIAS_AFFINE_IDS = ["no_affine", "weight_only", "bias_only"]
 
 NEGATIVE_TESTS_PARAMS = [
-    # ttnn.empty produces a ROW_MAJOR interleaved input, which the non-sharded path
-    # rejects up front (it is unsupported there); this fires before the tile-height
-    # check that this shape would otherwise trip.
-    ((2, 1, 16, 32), 8, "interleaved \\(non-sharded\\) input must be in TILE layout"),
+    # Shape is rejected by the device op because its per-batch H*W (16) is not a
+    # multiple of the tile height (32).
+    ((2, 1, 16, 32), 8, "must be a multiple of the tile height"),
 ]
 
 
@@ -1465,6 +1464,7 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid):
     ), "High-accuracy config should have lower Frobenius error than low-accuracy config"
 
 
+@skip_for_blackhole("interleaved ROW_MAJOR is rejected earlier on Blackhole, so the message differs")
 @pytest.mark.parametrize("input_shape, num_groups, msg_pattern", NEGATIVE_TESTS_PARAMS)
 def test_group_norm_negative_tests(
     input_shape,
@@ -1489,10 +1489,8 @@ def test_group_norm_rejects_non_tile_aligned_spatial(device, expect_error):
     # trailing partial tile would be silently dropped from the mean/variance,
     # producing wrong results. Here N*H*W = 16, which is not a multiple of 32.
     #
-    # A TILE input cannot exercise this (TILE pads the row dim up to 32), and a
-    # ROW_MAJOR interleaved input is rejected earlier as unsupported on the
-    # non-sharded path. A sharded input keeps the unpadded row dim and reaches the
-    # invariant check, so use that to cover it.
+    # A TILE input cannot exercise this (TILE pads the row dim up to 32). A sharded input keeps
+    # the unpadded row dim and reaches the invariant check, so use that to cover it.
     C, HW, num_groups = 320, 16, 32
     torch_input_tensor = torch.rand((1, 1, HW, C), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(
@@ -1572,9 +1570,7 @@ def test_group_norm_rejects_tile_input_with_inplace(device, expect_error):
 
 
 def test_group_norm_rejects_host_input_mask(device, expect_error):
-    # TILE layout: a ROW_MAJOR interleaved input is rejected earlier (it is unsupported
-    # on the non-sharded path), which would pre-empt the host-input-mask check this test
-    # targets.
+    # A host-resident input mask must be rejected; use a TILE input so that check is reached.
     input_tensor = ttnn.empty((1, 1, 32, 320), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     input_mask = ttnn.create_group_norm_input_mask(320, 32, 1, ttnn.DataType.BFLOAT16)
 

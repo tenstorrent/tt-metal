@@ -12,6 +12,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "groupnorm_zero_fill.hpp"
+#include "groupnorm_reader_rm.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
 void kernel_main() {
@@ -206,6 +207,10 @@ void kernel_main() {
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
     constexpr uint32_t dfb_x_id = tt::CBIndex::c_24;
     constexpr uint32_t dfb_reread_out_id = tt::CBIndex::c_23;
+#ifdef UNTILIZE_OUT
+    // Scratch for the row-major output reread; compute tilizes it into c_23.
+    constexpr uint32_t dfb_reread_rm_id = tt::CBIndex::c_20;
+#endif
 
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex2_partial(dfb_ex2_partial_id);
@@ -217,6 +222,9 @@ void kernel_main() {
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
     DataflowBuffer dfb_out0(dfb_out0_id);
     DataflowBuffer dfb_reread_out(dfb_reread_out_id);
+#ifdef UNTILIZE_OUT
+    DataflowBuffer dfb_reread_rm(dfb_reread_rm_id);
+#endif
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
     const DataFormat out_data_format = get_dataformat(dfb_out0_id);
@@ -323,6 +331,23 @@ void kernel_main() {
                         }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
+#ifdef TILIZE_IN
+                        // Read once: the tilized group stays in L1 for all three passes.
+                        if (cur_read_iteration == 0) {
+                            const auto src_a = TensorAccessor(src0_args, src_addr);
+                            groupnorm_gather_rm_block<tile_width, tile_height, block_w, datum_size_bytes>(
+                                noc,
+                                src_a,
+                                dfb_in0,
+                                start_id,
+                                out_block_start_id_offset,
+                                index_b_offset,
+                                index_g_offset,
+                                num_channels_tiles,
+                                out_block_h_actual,
+                                out_block_hw_normal);
+                        }
+#else
                         const uint32_t src0_tile_bytes = get_tile_size(dfb_in0_id);
                         const auto src_a = TensorAccessor(src0_args, src_addr);
                         uint32_t l1_write_addr;
@@ -342,6 +367,7 @@ void kernel_main() {
                             }
                         }
                         dfb_in0.push_back(out_block_hw_normal);
+#endif
 #endif
                         if (cur_read_iteration== 0 || cur_read_iteration== 1) {
                             if (cur_read_iteration== 0) {
@@ -420,6 +446,20 @@ void kernel_main() {
                             uint32_t block_w_curr =
                                 index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
+#ifdef UNTILIZE_OUT
+                            // Reread the rows we already wrote, so the next group can accumulate onto them.
+                            groupnorm_gather_rm_block<tile_width, tile_height, block_w, datum_size_bytes>(
+                                noc,
+                                dst_a,
+                                dfb_reread_rm,
+                                out_start_id,
+                                out_block_start_id_offset,
+                                index_b_offset,
+                                index_g_offset,
+                                num_channels_tiles,
+                                out_block_h_actual,
+                                out_block_hw_normal);
+#else
                             const uint32_t dst_tile_bytes = get_tile_size(dfb_reread_out_id);
                             uint32_t l1_write_addr;
                             l1_write_addr = dfb_reread_out.get_write_ptr();
@@ -442,6 +482,7 @@ void kernel_main() {
                                 }
                             }
                             dfb_reread_out.push_back(out_block_hw_normal);
+#endif
                         }
                         out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                     }
