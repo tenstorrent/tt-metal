@@ -5717,9 +5717,9 @@ else:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
         ("kimi50k", 32, 640, 4, 66.05),
-        # Kimi-K3, UNMEASURED. The is_high_power gate skips this test on QB2 entirely (fixed by
-        # #52190), so 0.0 cannot fire today; swap in the measured math_util once that lands.
-        ("kimi_k3", 32, 640, 4, 0.0),
+        # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
+        # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
+        ("kimi_k3", 32, 640, 4, 67.07),
     ]
 
 
