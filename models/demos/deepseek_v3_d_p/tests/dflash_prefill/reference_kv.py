@@ -5,11 +5,11 @@
 """Shared, test-framework-free helpers to build the REAL HF ``DFlashDraftModel`` and run its context-KV
 forward — the ground truth the device drafter is PCC'd against.
 
-These were factored out of ``tests/dflash_prefill/conftest.py`` so BOTH the pytest integration test and the
-production prefill runtime (``TtPrefillRuntime.dflash_pcc_check``, issue #49586) can reach them. Nothing here
-imports ``pytest``: ``load_hf_drafter`` RAISES (``DrafterUnavailable`` for a missing/incomplete checkpoint,
-``RuntimeError`` for a genuine build failure) instead of calling ``pytest.skip``; the conftest wraps it and
-translates ``DrafterUnavailable`` into a skip for the test context."""
+These were factored out of ``conftest.py`` (issue #49586) so the drafter tests — the 61-layer integration
+test and the standalone ``test_dflash`` — can share them without importing ``pytest`` here: ``load_hf_drafter``
+RAISES (``DrafterUnavailable`` for a missing/incomplete checkpoint, ``RuntimeError`` for a genuine build
+failure) instead of calling ``pytest.skip``; the conftest wraps it and translates ``DrafterUnavailable`` into
+a skip for the test context."""
 
 import os
 
@@ -21,9 +21,8 @@ from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import
 
 
 class DrafterUnavailable(RuntimeError):
-    """The DFlash drafter checkpoint is absent or incomplete — a soft/expected condition. Tests translate
-    this to a skip; production translates it to a hard error (the drafter was already built from the same
-    checkpoint, so reaching it here means a real misconfiguration)."""
+    """The DFlash drafter checkpoint is absent or incomplete — a soft/expected condition. The conftest
+    translates this to a ``pytest.skip``."""
 
 
 def is_drafter(m) -> bool:

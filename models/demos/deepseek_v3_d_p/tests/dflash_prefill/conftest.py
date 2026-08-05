@@ -7,12 +7,10 @@ import os
 import pytest
 import torch
 
-from models.demos.deepseek_v3_d_p.reference.dflash_prefill.reference_kv import DrafterUnavailable
-from models.demos.deepseek_v3_d_p.reference.dflash_prefill.reference_kv import (
-    drafter_cfg_from_hf as _drafter_cfg_from_hf,
-)
-from models.demos.deepseek_v3_d_p.reference.dflash_prefill.reference_kv import hf_context_kv as _hf_context_kv
-from models.demos.deepseek_v3_d_p.reference.dflash_prefill.reference_kv import load_hf_drafter
+from models.demos.deepseek_v3_d_p.tests.dflash_prefill.reference_kv import DrafterUnavailable
+from models.demos.deepseek_v3_d_p.tests.dflash_prefill.reference_kv import drafter_cfg_from_hf as _drafter_cfg_from_hf
+from models.demos.deepseek_v3_d_p.tests.dflash_prefill.reference_kv import hf_context_kv as _hf_context_kv
+from models.demos.deepseek_v3_d_p.tests.dflash_prefill.reference_kv import load_hf_drafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 
 HF_ENV = "DFLASH_HF_MODEL"
