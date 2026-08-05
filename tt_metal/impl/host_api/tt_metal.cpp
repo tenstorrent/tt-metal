@@ -954,6 +954,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         {
             detail::CompileProgram(device, program);
         }
+        program.impl().validate_dataflow_buffers_for_launch();
         program.impl().finalize_dataflow_buffer_configs();
         if (!program.impl().is_finalized()) {
             program.impl().finalize_offsets(device);
@@ -1152,6 +1153,14 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                             offset += serialized.size();
                         }
                         bytes_written = offset;
+                    }
+
+                    // write_to_device transfers whole 32-bit words and silently drops a trailing partial
+                    // word, which would truncate the tail of the last record. Pad to a whole word; the
+                    // reserved L1 region is already L1-aligned, so there is room.
+                    bytes_written = tt::align(bytes_written, sizeof(uint32_t));
+                    if (dfb_config_vec.size() < bytes_written) {
+                        dfb_config_vec.resize(bytes_written, 0);
                     }
 
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;

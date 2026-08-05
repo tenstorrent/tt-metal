@@ -75,11 +75,12 @@ struct dfb_init_entry_hdr_t {
     uint8_t broadcast_tc;         // DM pack byte 22 → iface.broadcast_tc (DM unpack only)
     uint8_t remapper_pair_index;  // TRISC byte 22; DM pack byte 23
     uint8_t intra_shadow_tc_id;   // TRISC byte 23: intra-tensix ClientR shadow TC; 0xFF / unused on DM
+    uint8_t block_size;           // wire byte 28: BLOCKED block size (>=1); TRISC unused (1)
 };
-static_assert(sizeof(dfb_init_entry_hdr_t) == 28, "dfb_init_entry_hdr_t must pack to 28B with no padding");
+static_assert(sizeof(dfb_init_entry_hdr_t) == 32, "dfb_init_entry_hdr_t must match the 32B wire header");
 static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignment should follow uint32_t");
 
-// Read the entire 28B dfb_hart_init_entry_t (__attribute__((packed))) as 7 u32s.
+// Read the entire 32B dfb_hart_init_entry_t (__attribute__((packed))) as 8 u32s.
 // Two variants with identical unpack logic; only the pointer type differs:
 //   - dfb_read_init_entry_header        — uncached alias (TRISC path, no L2 coherency)
 //   - dfb_read_init_entry_header_cached — cached TL1 pointer (DM path, after L2 invalidate)
@@ -93,15 +94,17 @@ static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignmen
 //   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index
 //      [31:24]=intra_shadow_tc_id (TRISC) / remapper_pair_index (DM pack)
 //   w6 [15:0]=num_entries  [31:16]=capacity
+//   w7 [7:0]=dm_block_size  [31:8]=_pad3
 
 // Shared unpack helper: TRISC blob w3–w6 (legacy SoA byte layout).
 template <typename PtrT>
 FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
-    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6];
+    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7];
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id             = static_cast<uint8_t>(w0);
     h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
     h.flags = static_cast<uint8_t>(w0 >> 16);
+    h.block_size = 1;  // TRISC: block-aware advance is DM-only (w7 byte 28 is DM's)
     h.entry_size                 = w1;
     h.stride_size_precomp        = w2;
     h.stride_size_tiles          = static_cast<uint8_t>(w3);
@@ -126,11 +129,13 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
 // See dfb_write_dm_scalar_pack_to_blob.
 template <typename PtrT>
 FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
-    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6];
+    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7];
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id             = static_cast<uint8_t>(w0);
     h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
     h.flags = static_cast<uint8_t>(w0 >> 16);
+    // 0 is never written by the host, but normalise anyway -- the device computes % block_size
+    h.block_size = static_cast<uint8_t>(w7) ? static_cast<uint8_t>(w7) : uint8_t{1};  // byte 28
     h.entry_size                 = w1;
     h.stride_size_precomp        = w2;
     h.stride_size_tiles          = 0;
@@ -163,7 +168,7 @@ FORCE_INLINE void dfb_write_dm_iface_scalars_from_hdr(LocalDFBInterface& iface, 
     const uint32_t pack_w2 = static_cast<uint32_t>(eh.num_entries_per_txn_id_per_tc) |
                              (static_cast<uint32_t>(eh.num_txn_ids) << 8) |
                              (static_cast<uint32_t>(eh.broadcast_tc) << 16) |
-                             (static_cast<uint32_t>(eh.remapper_pair_index) << 24);
+                             (static_cast<uint32_t>(eh.block_size) << 24);
     uint32_t* const dm_scalar = reinterpret_cast<uint32_t*>(&iface.num_tcs_to_rr);
     dm_scalar[0] = pack_w0;
     dm_scalar[1] = pack_w1;
@@ -765,11 +770,11 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
 
         const uint32_t num_tcs = eh.num_tcs;
 
-        // Advance to the next entry: 28B header + ((num_tcs*9 + 3) & ~3).
+        // Advance to the next entry: 32B header + ((num_tcs*9 + 3) & ~3).
         const uint32_t entry_bytes = dfb_hart_init_entry_byte_size(num_tcs);
         p = reinterpret_cast<const volatile uint8_t*>(e_addr + entry_bytes);
 
-        // AoP TC tail starts right after the 28B header: pairs first, ptc bytes after all pairs.
+        // AoP TC tail starts right after the 32B header: pairs first, ptc bytes after all pairs.
         const uintptr_t tc_base_addr = e_addr + sizeof(dfb_hart_init_entry_t);
 
         WAYPOINT("L1");
@@ -817,7 +822,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
 
         // --- TC slot population ---
         // AoP TC tail: dfb_blob_tc_pair_t[num_tcs] (8B each, base+limit adjacent per slot)
-        // immediately after the 28B header, then uint8_t ptc[num_tcs] padded to 4B.
+        // immediately after the 32B header, then uint8_t ptc[num_tcs] padded to 4B.
         // Preload ptc as 1–2 word reads before the loop; in-loop ptc is a register bit-extract.
         // Running pair pointer advances 8B per slot. DM uses a cached pointer (blob already
         // invalidated into L2); TRISC uses the uncached alias.
