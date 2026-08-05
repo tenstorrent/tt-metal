@@ -15,7 +15,6 @@
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
-#include "buffers/create_buffer.hpp"
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
@@ -1738,44 +1737,6 @@ GlobalSemaphore CreateGlobalSemaphore(
 GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
     return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
-}
-
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
-    return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
-}
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address) {
-    return Buffer::create(config.device, address, config.size, config.page_size, config.buffer_type);
-}
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubDeviceId sub_device_id) {
-    return Buffer::create(
-        config.device, config.size, config.page_size, config.buffer_type, std::nullopt, std::nullopt, sub_device_id);
-}
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
-    return Buffer::create(
-        config.device,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
-}
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address) {
-    return Buffer::create(
-        config.device,
-        address,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
-}
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id) {
-    return Buffer::create(
-        config.device,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        BufferShardingArgs(config.shard_parameters, config.buffer_layout),
-        std::nullopt,
-        sub_device_id);
 }
 
 void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
