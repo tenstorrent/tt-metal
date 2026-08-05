@@ -63,6 +63,22 @@ class WeightBag:
     def optional(self, name: str, dtype=torch.float32) -> torch.Tensor | None:
         return self.tensor(name, dtype) if self.has(name) else None
 
+    def children(self) -> int:
+        """How many indexed children sit directly under this prefix.
+
+        `count("x")` asks about `x.N`; this asks about `N` itself, which is what
+        an `nn.ModuleList` reached via `.sub()` looks like.
+        """
+        base = f"{self._prefix}." if self._prefix else ""
+        idx = set()
+        for k in self._arrays:
+            if base and not k.startswith(base):
+                continue
+            head = k[len(base) :].split(".", 1)[0]
+            if head.isdigit():
+                idx.add(int(head))
+        return len(idx)
+
     def count(self, pattern: str) -> int:
         """How many indexed children exist under `pattern.N`."""
         base = self._key(pattern)
