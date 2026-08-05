@@ -256,6 +256,7 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
     device->enable_program_cache();
 
     std::vector<BenchmarkResult> results;
+    results.reserve(core_grid_configs.size());
 
     for ([[maybe_unused]] auto _ : state) {
         results.clear();
