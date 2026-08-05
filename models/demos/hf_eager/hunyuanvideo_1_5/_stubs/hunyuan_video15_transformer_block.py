@@ -533,8 +533,17 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         # derives height from the ragged logical L and fails tile-alignment) so the
         # width dim spreads over a row of gx cores instead of the default tiny grid.
         B, L, Cx = (int(d) for d in x.shape)
-        Mt = (B * L + 31) // 32
-        Nt = Cx // 32
+        # TT pads each logical dimension independently. For example, logical
+        # [2, 14, 2048] has physical [2, 32, 2048], so rounding B*L to one tile
+        # produces shard height 32 for storage whose flattened height is 64.
+        # Size the shard/program from physical storage while preserving the
+        # tensor's logical shape metadata.
+        padded_m = 1
+        padded_shape = list(x.padded_shape)
+        for d in padded_shape[:-1]:
+            padded_m *= int(d)
+        Mt = padded_m // 32
+        Nt = int(padded_shape[-1]) // 32
         gx = 8
         while gx > 1 and Nt % gx != 0:
             gx -= 1
@@ -544,7 +553,6 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         # LN when the per-core shard won't fit L1.
         if (Mt * 32) * ((Nt // gx) * 32) * 2 > 700_000:
             return ttnn.layer_norm(x, epsilon=eps, compute_kernel_config=compute_config)
-        padded_m = Mt * 32
         shard_shape = [padded_m, (Nt // gx) * 32]
         grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, 0))})
         spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)

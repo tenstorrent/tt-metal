@@ -95,8 +95,14 @@ def build(device, torch_module):
         # tile-PADDED manual L1 spec (create_sharded_memory_config fails alignment
         # on the ragged logical row). Same lever proven on the transformer block.
         B, L, Cx = (int(d) for d in x.shape)
-        Mt = (B * L + 31) // 32
-        Nt = Cx // 32
+        # TT pads each logical dimension independently; derive the flattened
+        # shard height from physical storage rather than rounded logical B*L.
+        padded_m = 1
+        padded_shape = list(x.padded_shape)
+        for d in padded_shape[:-1]:
+            padded_m *= int(d)
+        Mt = padded_m // 32
+        Nt = int(padded_shape[-1]) // 32
         gx = 8
         while gx > 1 and Nt % gx != 0:
             gx -= 1
