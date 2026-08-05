@@ -133,7 +133,24 @@ class TtRelPosAttention:
         )
 
     def _heads(self, x, b, t):
-        """[B, T, d_model] -> [B, h, T, d_k]."""
+        """[B, T, d_model] -> [B, h, T, d_k].
+
+        **At `T == 1` the permute is a relabelling and is skipped.** `[b, 1, h, d_k]`
+        and `[b, h, 1, d_k]` enumerate the same elements in the same order when the
+        time axis has extent 1, so the reshape alone reaches the target shape and
+        the permute has nothing left to move.
+
+        This is a decode-path optimisation with a measured motive rather than a
+        tidiness one. Counting the ops in one decode step (`scripts/count_decode_ops
+        .py`) puts `reshape` and `permute` together at **196 of 636 ops -- 31 %**,
+        more than every `linear` and `matmul` combined, on a step that `bfloat8_b`
+        weights showed to be per-op-bound rather than bandwidth-bound. Attention
+        calls this three times per layer for q, k and v.
+
+        The positional branch still permutes: its length is `2 * key_len - 1`, not 1.
+        """
+        if t == 1:
+            return ttnn.reshape(x, (b, self.h, 1, self.d_k))
         x = ttnn.reshape(x, (b, t, self.h, self.d_k))
         return ttnn.permute(x, (0, 2, 1, 3))
 
@@ -230,8 +247,11 @@ class TtRelPosAttention:
 
         ctx = ttnn.matmul(attn, v, compute_kernel_config=self.cc)  # [B, h, T, d_k]
         ttnn.deallocate(attn)
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3))
-        ctx = ttnn.reshape(ctx, (b, t, self.h * self.d_k))
+        if t == 1:
+            ctx = ttnn.reshape(ctx, (b, 1, self.h * self.d_k))  # see _heads: permute is a no-op at T=1
+        else:
+            ctx = ttnn.permute(ctx, (0, 2, 1, 3))
+            ctx = ttnn.reshape(ctx, (b, t, self.h * self.d_k))
         out = ttnn.linear(ctx, self.wo, bias=self.bo, compute_kernel_config=self.cc)
         ttnn.deallocate(ctx)
 
