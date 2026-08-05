@@ -65,6 +65,7 @@ class TtInterpolateRegulator:
 
     def __init__(self, device, bag, channels: int = 80, dtype=ttnn.bfloat16):
         from ..hifigan.conv import TtConv1d
+        from .estimator import TtGroupNorm
 
         self.device, self.dtype, self.channels = device, dtype, channels
         # model is [Conv, GroupNorm, Mish] * 4 then a final Conv1d(k=1).
@@ -81,19 +82,10 @@ class TtInterpolateRegulator:
                 self.convs.append(TtConv1d(device, w, sub.optional("bias"), padding=(k - 1) // 2, dtype=dtype))
                 nsub = bag.sub(f"model.{i + 1}")
                 if nsub.has("weight") and nsub.tensor("weight").dim() == 1:
-                    self.norms.append(
-                        (
-                            ttnn.from_torch(
-                                nsub.tensor("weight").reshape(1, -1),
-                                dtype=dtype,
-                                layout=ttnn.TILE_LAYOUT,
-                                device=device,
-                            ),
-                            ttnn.from_torch(
-                                nsub.tensor("bias").reshape(1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
-                            ),
-                        )
-                    )
+                    # groups=1 here, so the statistic spans all 80 channels and the
+                    # whole segment jointly. Same TtGroupNorm as the estimator uses --
+                    # see its docstring for why that beats ttnn.group_norm.
+                    self.norms.append(TtGroupNorm(device, bag, f"model.{i + 1}", num_groups=1, dtype=dtype))
                     i += 3  # Conv, GroupNorm, Mish
                 else:
                     self.norms.append(None)
@@ -147,15 +139,14 @@ class TtInterpolateRegulator:
         h = x
         for conv, norm in zip(self.convs, self.norms):
             out, _ = conv(h, length, batch)
-            if h is not x:
+            if h is not x:  # the caller's tensor is not ours to free
                 ttnn.deallocate(h)
             h = out
             if norm is not None:
-                g, b = norm
-                # GroupNorm(1, C) normalises over channels AND time jointly, which
-                # for [B, T, C] is a whole-sample statistic, not a per-row one.
-                h = ttnn.group_norm(h, num_groups=1, weight=g, bias=b)
-                h = ttnn.mish(h)
+                n = norm(h)
+                ttnn.deallocate(h)
+                h = ttnn.mish(n)
+                ttnn.deallocate(n)
         return h
 
     @staticmethod
