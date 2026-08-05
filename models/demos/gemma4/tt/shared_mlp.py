@@ -213,8 +213,11 @@ class SharedMLP:
         gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard])
         gate_up.deallocate(True)
 
-        gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
-        hidden = ttnn.mul(gate, up)
+        # Keep the GeGLU intermediate L1-resident so down_proj reads its input
+        # from L1 instead of round-tripping through DRAM (report's own advice
+        # for the down_proj matmul: "place input 0 in L1").
+        gate = ttnn.gelu(gate, fast_and_approximate_mode=True, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden = ttnn.mul(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
         gate.deallocate(True)
         up.deallocate(True)
 
