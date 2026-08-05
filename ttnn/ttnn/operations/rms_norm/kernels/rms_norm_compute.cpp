@@ -51,8 +51,10 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reduce.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
+// PERMANENT per-stage device-profiler instrumentation (never remove; free when
+// the profiler is off -- see the header's durability contract).
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/streaming_reduce_helpers.hpp"
@@ -61,35 +63,115 @@
 
 namespace ckl = compute_kernel_lib;
 
-// Lamp L6b: the finalize's rsqrt, scoped to the tile's COLUMN faces.
+// Lamp L6b+ (Perf 1, descriptor D17): the WHOLE finalize chain scoped to the lanes
+// pass B actually reads, in TWO passes over DEST instead of three.
 //
-// RAW-LLK SUBSTITUTION, with the reason.  `rsqrt_tile` hard-codes
-// `VectorMode::RC` (api/compute/eltwise_unary/rsqrt.h:45) and exposes no
-// VectorMode seam -- neither a template parameter nor a runtime argument -- so
-// there is no helper that can express "rsqrt only the half of the tile that is
-// read".  cb_row_stat is a REDUCE_ROW result whose only consumer is pass B's
-// mul<BroadcastDim::Col>, i.e. column 0; in the 2x2-faces-of-16x16 tile layout
-// that column lives in faces 0 and 2, which is exactly `VectorMode::C`
-// (llk_math_eltwise_sfpu_common.h walks faces 0 and 2 for C).  Halving the
-// datums the SFPU's 8-iteration rsqrt walks is the whole lever.
+// RAW-LLK SUBSTITUTION -- one comment, four functions, one reason.  The finalize's
+// SFPU ops each hard-code `VectorMode::RC` and expose NO VectorMode seam -- neither a
+// template parameter nor a runtime argument:
+//     mul_unary_tile / add_unary_tile   api/compute/eltwise_unary/binop_with_scalar.h
+//     rsqrt_tile                        api/compute/eltwise_unary/rsqrt.h:38
+// and the SFPU walks a face as [rg0-even, rg0-odd, rg1-even, ...], so COLUMN PARITY is
+// the INNER walk axis -- unreachable through `ITERATIONS`, which truncates contiguously.
+// cb_row_stat is a REDUCE_ROW result whose ONLY consumer is pass B's
+// mul<BroadcastDim::Col>, i.e. COLUMN 0.  Column 0 lives in faces 0 and 2
+// (== VectorMode::C, llk_math_eltwise_sfpu_common.h) and is EVEN, so an even-parity
+// walk over DEST offsets 0,2,4,6 reaches it with 4 vector ops per face instead of 8.
+// The NET dst_reg advance is +8 == the stock ITERATIONS=8, so VectorMode::C's
+// face-0 -> face-2 stepping (_llk_math_eltwise_sfpu_apply_vector_mode_) composes
+// unchanged.
 //
-// This is the same macro `rsqrt_tile` itself expands to, with one argument
-// changed, and it follows an established in-tree pattern for exactly this
-// (sdpa/.../compute_common.hpp:251-256 `recip_tile_first_column`).  It stays
-// inside the transform_in_place lambda, which is already this kernel's one
+// `rms_stat_scale_body` additionally folds *(1/W) and +eps into ONE pass over DEST.  At
+// fp32_dest_acc_en == false a DEST word is 16 bit, so the stock 3-call chain rounded the
+// `*(1/W)` result to bf16 on its way through DEST; keeping it in an fp32 LREG removes
+// that rounding.  Accuracy is therefore >= the chain this replaces, not a trade -- the
+// user's precision contract (math_fidelity / fp32_dest_acc_en / math_approx_mode /
+// dtypes) is untouched, and these use the same APPROX / DST_ACCUM_MODE / DST_SYNC_MODE
+// macros the stock calls use.
+//
+// MEASURED AUTHORISATION (blackhole p150b, 1350 MHz, at the op's pinned config --
+// bf16 / HiFi2 / fp32_dest_acc_en=False / math_approx_mode=False, UNCHANGED; isolated
+// bench perf_experiments/root_finalize_scope, copy+pack+inits outside the timed zone for
+// the isolated column and inside it for the stage column):
+//     isolated MATH-thread ns per finalize call   600.7 (RC mul+add, C rsqrt) -> 244.5
+//     stage ns/tile, copy+pack+CB handshake incl. 762.1                       -> 372.8
+//   i.e. 2.04x on the finalize stage; rsqrt costs ~23.1 ns per 32-lane vector op and
+//   mul_unary/add_unary ~3.6 ns each, so 38% of the previous stage was scaling the 32
+//   vectors nobody reads.  Do NOT "restore" this to helper calls without re-measuring.
+//
+// SAFETY IS MEASURED, NOT ASSUMED.  An isolated bench ran pass B's exact consumer
+// (BinaryFpu<x, stat, Mul, BroadcastDim::Col>, OperandKind::Col) on a stat tile whose
+// columns 1..31 were seeded five orders of magnitude wrong, and got pcc 0.999992 /
+// rel-RMS 0.00403: the column broadcast reads COLUMN 0 ONLY.  The skipped lanes hold the
+// raw, finite reduce result -- the same kind of defined-but-meaningless datum the
+// gather's faces 1/3 already carry -- and nothing zeroes them, so this is not
+// Refinement 4's zeroing race.  If a future consumer ever reads the stat tile whole (a
+// debug dump, stat-as-output, an SFPU or reduce pass over it), the scope must widen.
+//
+// INVARIANT: STRIDE/ITERS must be IDENTICAL in the two bodies (both <2,4>), and their
+// product must stay 8.  The rsqrt must never run on a lane the scale body skipped, or an
+// all-zero row would be rsqrt(0) = inf -- the +eps guard only exists on the lanes the
+// scale body visited.
+//
+// Precedent for the substitution: sdpa/.../compute_common.hpp:251-256
+// `recip_tile_first_column`.  It stays inside the finalize, which is this kernel's one
 // sanctioned raw-LLK site.
 #ifdef TRISC_MATH
-template <bool legacy_compat = false, bool FAST_APPROX = false>
-ALWI void rsqrt_tile_col(uint32_t idst) {
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_rsqrt,
-        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, FAST_APPROX, legacy_compat),
-        idst,
-        VectorMode::C);
+#include "ckernel_sfpu_sqrt.h"              // ckernel::sfpu::_calculate_sqrt_body_
+#include "ckernel_sfpu_binop_with_unary.h"  // ckernel::sfpu::Converter::as_float
+
+template <int STRIDE, int ITERS>
+sfpi_inline void rms_stat_scale_body(uint32_t inv_w_bits, uint32_t eps_bits) {
+    const sfpi::vFloat iw = ckernel::sfpu::Converter::as_float(inv_w_bits);
+    const sfpi::vFloat ep = ckernel::sfpu::Converter::as_float(eps_bits);
+    for (int i = 0; i < ITERS; ++i) {
+        sfpi::dst_reg[0] = sfpi::dst_reg[0] * iw + ep;
+        sfpi::dst_reg += STRIDE;
+    }
 }
-#endif
+
+template <int STRIDE, int ITERS>
+sfpi_inline void rms_stat_rsqrt_body() {
+    for (int i = 0; i < ITERS; ++i) {
+        sfpi::vFloat t =
+            ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false /*FAST_APPROX*/>(sfpi::dst_reg[0]);
+        if constexpr (!DST_ACCUM_MODE) {
+            t = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = t;
+        sfpi::dst_reg += STRIDE;
+    }
+}
+
+// *(1/W) and +eps in ONE pass, 4 even-parity vectors per face -> columns 0,2,..,14.
+ALWI void stat_scale_col_skip(uint32_t idst, uint32_t inv_w_bits, uint32_t eps_bits) {
+    _llk_math_eltwise_unary_sfpu_params_(rms_stat_scale_body<2, 4>, idst, VectorMode::C, inv_w_bits, eps_bits);
+}
+// rsqrt over exactly the same lane set.
+ALWI void rsqrt_tile_col_skip(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_(rms_stat_rsqrt_body<2, 4>, idst, VectorMode::C);
+}
+#endif  // TRISC_MATH
+
+// The SFPU payload only, no init -- so the eltwise_chain element can hoist the init out
+// of the per-tile loop while the transform_in_place lambda keeps it inside.
+template <uint32_t RMS_INV_W, uint32_t RMS_EPS>
+ALWI void stat_finalize_payload(uint32_t dst) {
+    MATH((stat_scale_col_skip(dst, RMS_INV_W, RMS_EPS)));
+    MATH((rsqrt_tile_col_skip(dst)));
+}
+
+// User-defined eltwise_chain element on the documented UnaryOp<Derived, Slot> CRTP
+// surface (eltwise_chain.inl:644-660).  It exists because NO stock element exposes a
+// VectorMode seam, so the element has to carry the scoped chain itself rather than
+// composing MulUnary + AddUnary + Rsqrt.  `init()` runs ONCE per chain call -- that init
+// hoist is worth a measured 25 ns/tile over transform_in_place, which re-emits it per
+// tile.
+template <uint32_t RMS_INV_W, uint32_t RMS_EPS>
+struct StatFinalize : compute_kernel_lib::UnaryOp<StatFinalize<RMS_INV_W, RMS_EPS>, compute_kernel_lib::Dst::D0> {
+    static ALWI void init() { rsqrt_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) { stat_finalize_payload<RMS_INV_W, RMS_EPS>(slot_offset); }
+};
 
 namespace {
 constexpr uint32_t cb_input_sticks = 0;
@@ -145,9 +227,6 @@ void kernel_main() {
     //                                                 chunked -> x read ONCE
     //   STREAM        X_RESIDENT=0, NUM_W_CHUNKS>1    x re-read in pass B
     constexpr uint32_t X_RES = get_compile_time_arg_val(15);
-    // Refinement 4 / Lamp L6b (descriptor D15): scope the finalize's rsqrt to the
-    // tile's column faces (see rsqrt_tile_col above).  1 = scoped, 0 = whole tile.
-    constexpr uint32_t RSQRT_COL = get_compile_time_arg_val(16);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // tile-rows owned by this core
     // Only the core holding the row's LAST width tile applies the partial-W
@@ -256,6 +335,27 @@ void kernel_main() {
         ckl::DestAccumulation::PerRow);
     constexpr auto SQ_OUT = SQ_FOLD ? SQ_OUT_FOLDED : ckl::output(cb_x_squared);
 
+    // Perf 1 (descriptor D16): the group root's fold of the gathered partials.
+    //
+    // The gather lands the group's GROUP_SIZE partials for ONE row CONTIGUOUSLY
+    // (writer: page = r * GROUP_SIZE + my_slot), so folding a row is a SINGLE
+    // streaming chain call: copy each partial into DEST and PACK-ACCUMULATE it into
+    // the row's cb_row_stat tile.  L1Accumulation::SeedFirst makes the first tile a
+    // plain pack and every later one a pack-add, so there is nothing to zero and no
+    // separate seed call -- and the running sum lives in the fp32 CB rather than in
+    // a DEST register that is 16-bit at fp32_dest_acc_en == False, so this is at
+    // least as accurate as the GROUP_SIZE-call `add` chain it replaces.
+    //
+    // (OneUpfront, OneAtEnd) is the policy pair L1 accumulation requires: the whole
+    // call pins ONE output tile.  Hence one call per row rather than one per block.
+    constexpr auto ROOT_FOLD_OUT = ckl::output(
+        cb_row_stat,
+        ckl::ReservePolicy::OneUpfront,
+        ckl::PushPolicy::OneAtEnd,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::PackRelu::Disabled,
+        ckl::L1Accumulation::SeedFirst);
+
     // ---- the operand specs, ONE definition each ---------------------------
     // Every one carries XOFF, so the L5 regime differs from Phase 0 only in the
     // (compile-time-elided) `+ base` on the tile index -- there is no second
@@ -291,27 +391,47 @@ void kernel_main() {
     // Pass B's Col operand: the multicast landing CB when the stat was combined
     // across cores, the local accumulator otherwise.
     constexpr uint32_t CB_STAT_B = CROSS_CORE ? cb_row_final : cb_row_stat;
+    // Perf 1 (descriptor D18): on the COMBINE path pass A's reduce packs its partial
+    // STRAIGHT into cb_sum_handoff, deleting the fp32 tile copy that used to move
+    // cb_row_stat -> cb_sum_handoff on EVERY core of EVERY group.
+    //
+    // Legal because the combine path takes its width slice in ONE chunk -- the writer
+    // already `static_assert`s `!CROSS_CORE || NUM_W_CHUNKS == 1`.  With num_blocks == 1
+    // the reduce never re-reads its accumulator (reduce_helpers_compute.inl only enters
+    // the reload branch for a later chunk), so the accumulator CB is WRITE-ONLY here and
+    // does not have to be a re-readable accumulator at all.
+    //
+    // This SATISFIES the CB-ownership rule rather than bending it: cb_sum_handoff now has
+    // compute's pack as its single producer and the writer as its single consumer, and
+    // cb_row_stat becomes strictly compute-private AND root-only.  Page counts are
+    // unchanged -- the reduce pushes exactly the `rows` pages the copy used to push.
+    //
+    // MEASURED (isolated bench perf_experiments/reduce_pack_to_handoff, blackhole p150b
+    // 1350 MHz, one fresh-cache profiled run per variant): the modelled pass-A tail goes
+    // 11933 -> 9377 ns at rows=10/width=1 (1.27x), and wins at all 11 rows x width
+    // geometries swept (1.13x-1.46x); the output is `torch.equal`-IDENTICAL to
+    // reduce-then-copy at every gated point.  The win GROWS as rows-per-block shrinks
+    // (-158 ns/tile-row at rows=1 vs -60 at rows=32) because the deleted copy paid a
+    // per-CALL cost regardless of tile count -- so the decode / width-sharded profiles
+    // gain most.
+    constexpr uint32_t CB_REDUCE_ACC = CROSS_CORE ? cb_sum_handoff : cb_row_stat;
 
-    // 1/rms = rsqrt(sum/W + eps).  ONE definition, used by the local path and by
-    // the root's post-combine finalize -- INV_W is the LOGICAL width either way.
+    // 1/rms = rsqrt(sum/W + eps).  ONE definition, used by the local path and by the
+    // root's post-combine finalize -- INV_W is the LOGICAL width either way.
+    // rsqrt_tile_init() is MANDATORY, not decorative: rms_stat_rsqrt_body reads
+    // sfpi::vConstIntPrgm0 / vConstFloatPrgm1..2, which sfpu::rsqrt_init programs
+    // (ckernel_sfpu_sqrt.h) -- persistent SFPU PROGRAM registers, which is what makes
+    // hoisting it out of a per-tile loop legal at all.
     auto finalize = [](uint32_t dst) {
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst, INV_W_BITS);  // x (1/W): the LOGICAL width (R1)
-        add_unary_tile(dst, EPS_BITS);
         rsqrt_tile_init();
-        // The scaled/eps-shifted value is now in every lane; only the lanes pass B
-        // reads back need the rsqrt (L6b).  The init is vector-mode-agnostic.
-        if constexpr (RSQRT_COL != 0) {
-            MATH((rsqrt_tile_col(dst)));
-        } else {
-            rsqrt_tile(dst);
-        }
+        stat_finalize_payload<INV_W_BITS, EPS_BITS>(dst);
     };
 
     // ---- gamma: resident for the whole core's assignment (RESIDENT) -------
     // ROW_RESIDENT holds the whole tile-row of gamma too, so it tilizes every
     // chunk the reader staged; NUM_W_CHUNKS == 1 makes this the Phase-0 single call.
     if constexpr (HAS_G && X_RESIDENT && G_RM) {
+        MaybeDeviceZoneScope("compute_gamma_tilize");
         for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
             ckl::tilize<WT_CHUNK, cb_gamma_sticks, cb_gamma_tiles>(1);
         }
@@ -328,28 +448,33 @@ void kernel_main() {
             // ROW_RESIDENT, where cb_input_tiles / cb_gamma_tiles span the whole row.
             const uint32_t hold_base = ROW_RESIDENT ? (c * WT_CHUNK) : 0;
             if constexpr (RM) {
+                MaybeDeviceZoneScope("compute_tilize_x");
                 ckl::tilize<WT_CHUNK, cb_input_sticks, cb_input_tiles>(rows);
             }
             // x^2, either packed to cb_x_squared per width tile or folded into DEST
             // (D12).  `square` cannot carry the tile base, so the chain is spelled
             // out; it is exactly what square<> expands to.
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::grid(rows, WT_CHUNK),
-                ckl::BinaryFpu<
-                    X_IN_A,
-                    X_IN_A,
-                    ckl::BinaryFpuOp::Mul,
-                    ckl::BroadcastDim::None,
-                    ckl::Dst::D0,
-                    SQ_OUT.dest_accumulation>{hold_base, hold_base},
-                ckl::PackTile<SQ_OUT>{});
+            {
+                MaybeDeviceZoneScope("compute_square");
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(rows, WT_CHUNK),
+                    ckl::BinaryFpu<
+                        X_IN_A,
+                        X_IN_A,
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None,
+                        ckl::Dst::D0,
+                        SQ_OUT.dest_accumulation>{hold_base, hold_base},
+                    ckl::PackTile<SQ_OUT>{});
+            }
 
+            MaybeDeviceZoneScope("compute_reduce");
             ckl::accumulate_reduce_block<
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
                 cb_x_squared,
                 cb_scaler,
-                cb_row_stat,
+                CB_REDUCE_ACC,
                 REDUCE_POLICY,
                 ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                 ReduceFp32Mode::Fast,
@@ -359,30 +484,61 @@ void kernel_main() {
         // ================= finalize: 1/rms = rsqrt(sum/W + eps) ============
         // Pops before reserving, so the `rows`-page accumulator CB suffices.
         if constexpr (!CROSS_CORE) {
+            MaybeDeviceZoneScope("compute_finalize");
             for (uint32_t i = 0; i < rows; ++i) {
                 ckl::transform_in_place(cb_row_stat, finalize);
             }
         } else {
-            // Hand this core's RAW partial to the writer, which ships it to the
-            // group root.  cb_sum_handoff is DEDICATED to that handoff so the
-            // writer never becomes a second consumer of cb_row_stat.
-            ckl::copy<ckl::input(cb_row_stat), ckl::output(cb_sum_handoff)>(ckl::EltwiseShape::tiles(rows));
+            // Pass A's reduce has ALREADY packed this core's raw partial into
+            // cb_sum_handoff (D18), so there is nothing to hand off here -- the writer
+            // ships it to the group root straight out of the reduce's own output pages.
+            // The `compute_partial_handoff` zone that used to sit here is retired with the
+            // copy it measured.
             if (is_root != 0) {
                 // Sum the group's GROUP_SIZE partials ELEMENTWISE: each is a
                 // column-shaped REDUCE_ROW result, so the row total is their
                 // elementwise sum regardless of which lanes the datapath filled.
-                // Slot 0 seeds the accumulator (this core's own partial), then the
-                // remaining slots fold in-place -- per-tile streaming throughout,
-                // so no slot has to be contiguous with any other.
-                ckl::copy<ckl::input(cb_partials_gathered), ckl::output(cb_row_stat)>(ckl::EltwiseShape::tiles(rows));
-                for (uint32_t g = 1; g < GROUP_SIZE; ++g) {
-                    ckl::add<ckl::input(cb_row_stat), ckl::input(cb_partials_gathered), ckl::output(cb_row_stat)>(
-                        ckl::EltwiseShape::tiles(rows));
+                //
+                // Perf 1 (D16): ONE streaming chain call per row folds that row's
+                // GROUP_SIZE partials -- CONTIGUOUS in the gather CB by the writer's
+                // row-major landing layout -- into a single pack-accumulated
+                // cb_row_stat tile.  Phase 0 spent GROUP_SIZE separate helper calls
+                // per row-block (a copy plus GROUP_SIZE-1 in-place adds); on a decode
+                // profile (rows == 1, so every call carried ONE tile) that per-call
+                // cost WAS the combine -- 31 one-tile calls measured 6619 ns of an
+                // 11202 ns whole-op latency on (1,1,32,5120) WIDTH-sharded 32c.
+                {
+                    MaybeDeviceZoneScope("compute_root_sum");
+                    for (uint32_t r = 0; r < rows; ++r) {
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::tiles(GROUP_SIZE),
+                            ckl::CopyTile<ckl::input(cb_partials_gathered)>{},
+                            ckl::PackTile<ROOT_FOLD_OUT>{});
+                    }
                 }
-                for (uint32_t i = 0; i < rows; ++i) {
-                    ckl::transform_in_place(cb_row_stat, finalize);
-                }
-                ckl::copy<ckl::input(cb_row_stat), ckl::output(cb_stat_handoff)>(ckl::EltwiseShape::tiles(rows));
+                // Perf 1 (descriptor D19): the finalize READS cb_row_stat and WRITES
+                // cb_stat_handoff in ONE pass -- one unpack and one pack per tile instead
+                // of two of each.  The separate `ckl::copy` handoff stage is GONE; its
+                // 8177 ns on the (1,1,8192,1024) BLOCK-sharded 64c profile was pure copy,
+                // ~10% of that shape's whole-op wall.  The chain element also hoists
+                // rsqrt_tile_init() out of the per-tile loop, which transform_in_place
+                // re-emits every tile (a measured 25 ns/tile).
+                //
+                // MEASURED (isolated bench perf_experiments/root_finalize_scope): the
+                // finalize+handoff stage PAIR goes 24389 -> 20110 ns at rows=32 for the
+                // A->B restructure alone (1.21x), and 24389 -> ~8.5k with the column-scoped
+                // finalize above (~2.9x).  `ckl::input(cb_row_stat)` takes the default
+                // per-tile wait/pop, so the net CB effect is identical to the pair it
+                // replaces: cb_row_stat drained, `rows` tiles pushed to cb_stat_handoff.
+                //
+                // The retired `compute_stat_handoff` zone's cost now lives inside
+                // `compute_root_finalize` -- there is no separate stage left to measure.
+                MaybeDeviceZoneScope("compute_root_finalize");
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(rows),
+                    ckl::CopyTile<ckl::input(cb_row_stat)>{},
+                    StatFinalize<INV_W_BITS, EPS_BITS>{},
+                    ckl::PackTile<ckl::output(cb_stat_handoff)>{});
             }
         }
 
@@ -393,9 +549,11 @@ void kernel_main() {
             // the whole tile-row of x tiles (and of gamma) in L1.  This is the
             // pass-B re-read that Lamp L5 exists to delete.
             if constexpr (RM && !X_RESIDENT) {
+                MaybeDeviceZoneScope("compute_tilize_x_b");
                 ckl::tilize<WT_CHUNK, cb_input_sticks, cb_input_tiles>(rows);
             }
             if constexpr (HAS_G && !X_RESIDENT && G_RM) {
+                MaybeDeviceZoneScope("compute_gamma_tilize_b");
                 ckl::tilize<WT_CHUNK, cb_gamma_sticks, cb_gamma_tiles>(1);
             }
 
@@ -403,18 +561,22 @@ void kernel_main() {
             // broadcasts back ACROSS columns (BroadcastDim::Col) and must be
             // operand B. OperandKind::Col indexes it by row only, and it is not
             // popped -- every width chunk of this block re-reads it.
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::grid(rows, WT_CHUNK),
-                ckl::BinaryFpu<
-                    X_IN_B,
-                    ckl::input(CB_STAT_B, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
-                    ckl::BinaryFpuOp::Mul,
-                    ckl::BroadcastDim::Col>{hold_base},
-                ckl::PackTile<ckl::output(NORM_OUT)>{});
+            {
+                MaybeDeviceZoneScope("compute_scale");
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(rows, WT_CHUNK),
+                    ckl::BinaryFpu<
+                        X_IN_B,
+                        ckl::input(CB_STAT_B, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::Col>{hold_base},
+                    ckl::PackTile<ckl::output(NORM_OUT)>{});
+            }
 
             if constexpr (HAS_G) {
                 // gamma is row-shaped (1 x W, valid in row 0) -> broadcasts DOWN
                 // rows (BroadcastDim::Row), indexed by column (OperandKind::Row).
+                MaybeDeviceZoneScope("compute_gamma_mul");
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::grid(rows, WT_CHUNK),
                     ckl::BinaryFpu<
@@ -427,6 +589,7 @@ void kernel_main() {
             }
 
             if constexpr (RM) {
+                MaybeDeviceZoneScope("compute_untilize");
                 ckl::untilize<WT_CHUNK, cb_output_tiles, cb_output_sticks>(rows);
             }
 

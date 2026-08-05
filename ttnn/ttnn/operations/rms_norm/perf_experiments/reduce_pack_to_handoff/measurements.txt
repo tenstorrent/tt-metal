@@ -1,0 +1,27 @@
+MEASURED (blackhole p150b, 1350 MHz, bf16/HiFi2/fp32_dest_acc_en=False, DEVICE KERNEL DURATION [ns], one fresh-cache profiled run per variant; the test_bitwise_identical block re-runs every sweep point and is the independent REPLICATE column)
+
+geometry(rows x width, blocks)   baseline    baseline_rep   candidate   cand_rep   speedup   delta_ns   ns/tile-row
+focus 10x1  blocks=4 (40 rows)     11933          -            9377         -        1.27x     -2556       -64
+1x1   blocks=32 (32 rows)          15932       15939          10951      10822       1.46x     -5049      -158
+1x4   blocks=32                    15637       15650          11373      11258       1.38x     -4328      -135
+1x32  blocks=32                    23470       23474          19374        -         1.21x     -4097      -128
+2x1   blocks=16 (32 rows)          12160       12160           9034       8941       1.35x     -3172       -99
+2x4   blocks=16                    11857       11859           9275       9142       1.29x     -2650       -83
+2x32  blocks=16                    19598       19590          17094        -         1.15x     -2500       -78
+10x1  blocks=3  (30 rows)           9026        9047           7124       7004       1.28x     -1972       -66
+10x4  blocks=3                      8979        8990           7194       7080       1.26x     -1848       -62
+10x32 blocks=3                     16051       16044          14245        -         1.13x     -1802       -60
+32x1  blocks=1  (32 rows)           9107        9109           7267       7129       1.27x     -1910       -60
+32x4  blocks=1                      9131        9131           7382       7243       1.25x     -1837       -58
+
+ADJACENT (candidate variant, rows=10 blocks=4 = 40 reduce calls, whole-stage ns / pcc / rel-RMS):
+per-call width   AccumulateViaAdd (op picks this)     ReduceTile
+  1              9374 / 0.999973 / 0.00337            3219 / 0.999963 / 0.00314   <- 2.91x faster, precision-equal
+  4              9484 / 0.999914 / 0.00290            4890 / 0.999758 / 0.00339   <- 1.94x faster, slightly worse pcc
+ 32             18883 / 0.998994 / 0.00213           24992 / 0.986729 / 0.01165   <- SLOWER and clearly worse
+
+ZONES (focus point, max ns/core per RISC; TRISC_0=UNPACK 1=MATH 2=PACK):
+baseline : bench_reduce 6463/9880/8254   bench_handoff 4816/1504/3013   whole-kernel 11758
+candidate: bench_reduce 8178/9102/8634   bench_handoff  --              whole-kernel  9226
+-> the handoff overlaps partly with the reduce, so the op's 4089 ns compute_partial_handoff zone
+   OVERSTATES the recoverable time; the whole-kernel delta (~64 ns/tile-row at rows=10) is the real number.

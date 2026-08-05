@@ -39,8 +39,6 @@ Knob map (all tunable parameters, none inlined):
                             tile-rows a core must own before the ROW_RESIDENT
                             regime is taken at a SHALLOWER depth than STREAM
                             would use (Lamp L5; see D14)
-    RSQRT_COL_SCOPE         scope the finalize's rsqrt to the tile faces pass B
-                            actually reads back (Lamp L6b; see D15)
 
   derived buffer depths
     CB_X_DEPTH / CB_OUT_DEPTH   the depth the regime search settled on; forced
@@ -509,6 +507,15 @@ the scheme, topology, work split and helper mapping are unchanged):
       This is the one raw-LLK addition: `rsqrt_tile` hard-codes VectorMode::RC and
       exposes no seam (see the substitution note at the head of rms_norm_compute.cpp).
 
+      PERF 1 RETIRED THE `RSQRT_COL_SCOPE` KNOB.  D17 extends the scope to the WHOLE
+      finalize chain and makes it the only path, so the whole-tile spelling and its
+      selector are gone (compute CT arg 16 with them).  Nothing needed the unscoped
+      form: it was the slowest cell measured at every geometry, and an isolated bench
+      ran pass B's real consumer over a stat tile with columns 1..31 poisoned five
+      orders of magnitude wrong and still passed the PCC gate -- the lanes the whole-tile
+      path bothered to finalize are provably never read.  The A/B table below is kept as
+      the measurement that justified the scope in the first place.
+
       MEASURED (same config, A/B on RSQRT_COL_SCOPE):
 
         shape                          RC (whole)   C (scoped)   speedup
@@ -702,14 +709,6 @@ GATHER_FACES = 2
 # nothing and wins on bytes even at one row-block.
 # 0 would take L5 whenever it fits; a very large value disables it on the TILE path.
 ROW_RESIDENT_MIN_ROWS_PER_CORE = 2
-
-# Scope the finalize's rsqrt to the faces pass B reads back (op_design.md Lamp L6b,
-# descriptor D15).  cb_row_stat is a REDUCE_ROW result and its only consumer is a
-# mul<BroadcastDim::Col>, so only tile column 0 -- faces 0 and 2 -- is ever read;
-# `VectorMode::C` makes the SFPU's 8-iteration rsqrt walk half the datums.
-#   1  scoped (shipped)      0  whole tile (VectorMode::RC, Refinement 3's behaviour)
-RSQRT_COL_SCOPE = 1
-
 
 # ---------------------------------------------------------------------------
 # Small host helpers (ttnn exposes no div_up / round_up binding).
@@ -1942,7 +1941,6 @@ def create_program_descriptor(
         plan.group_size,  # 13 cores per width group (GRID_W)
         x_squared_wt,  # 14 reduce's per-call width == cb_x_squared's row stride (D12)
         1 if x_resident else 0,  # 15 X_RESIDENT: x/gamma held across both passes (D14)
-        RSQRT_COL_SCOPE,  # 16 scope the finalize's rsqrt to the read faces (D15)
     ]
     assert x_squared_wt in (1, wt_chunk), "rms_norm: x_squared_wt must be 1 (DEST fold) or WT_CHUNK"
 

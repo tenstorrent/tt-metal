@@ -597,3 +597,209 @@
   `probes/read_perf_csv.py` — prints kernel ns + the per-RISC breakdown from the newest
   profiler CSV, keyed by shape + placement; the BR-vs-TR2 split in it is what identified the
   sharded geometries as finalize-bound rather than gather-bound.
+
+## Perf 1 — the cross-core combine's ROOT chain (a fan-out tournament)
+- Date: 2026-08-05
+- A **perf tournament**, not a refinement: `SUPPORTED` is untouched, `EXCLUSIONS` is
+  untouched, and `verify_supported` categories are identical before and after. Seven ideas
+  were floated at the measured bottleneck, each fanned out to its own
+  `blocking-perf-part-optimizer` with its own isolated on-device micro-benchmark under
+  `perf_experiments/<slug>/` (all seven artifacts are committed). **All seven measured a WIN;
+  four graduated, three are deferred to Perf 2 with their numbers intact.**
+
+### Permanent instrumentation (new, and never to be removed)
+- Added `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` — `MaybeDeviceZoneScope("<stage>")`
+  with its **durability contract** written into the header: it compiles to nothing when the
+  profiler is off, so there is never a perf reason to strip it, and stripping it would make the
+  next round *guess* where the time goes. 19 stage zones now span the reader, every compute
+  phase and the writer. `probes/zone_breakdown.py` reports per-zone ns per RISC per launch.
+
+### Measured breakdown, and the ranked bottleneck
+blackhole p150b, 110-core grid, CHIP_FREQ **1350 MHz** (== the reference clock, so no scaling);
+bf16 / TILE / HiFi2 / `fp32_dest_acc_en=False` — the `_perf_case` config. One fresh-cache
+profiled run per variant.
+
+`feature_spec.py` carries **no `attention:` note**, so the focus shape was free-selected as the
+largest *measured* headroom: **`(1,1,8192,1024)` BLOCK_SHARDED, shard `[1024,128]`, grid `(8,8)`
+= 64 cores — 84836 ns against a 25640 ns reference, 3.31x off.** Every knob it declares is in
+`SUPPORTED`, so no generality gap and no proxy shape.
+
+Per-stage, max ns per core, focus shape:
+
+| stage | ns | note |
+|---|---|---|
+| `compute_root_sum` | 26773 | root cores only — **rank 1** |
+| `compute_root_finalize` | 22501 | root only — **rank 2** |
+| `compute_stat_handoff` | 8177 | root only, a **pure fp32 tile copy** — rank 3 |
+| `compute_reduce` / `compute_square` / `compute_gamma_mul` | 7970 / 6667 / 7077 | all 64 cores |
+| `compute_partial_handoff` | 4089 | all 64 cores, another **pure copy** |
+| `writer_gather_wait` / `writer_gather_zero` | 4727 / 7816 | round handshake / one-time boot |
+| `reader_read_x` / `writer_write` | **59** / **53** | DM is already ZERO (native zero-copy shard CBs both ends) |
+
+`compute_scale` 62604, `writer_mcast_recv` 52733 and `writer_gather_ship` 35932 are
+`cb_wait_front` **waits on the stat** — consequences of the root chain, not independent stages.
+The root core's TRISC zones sum to **83.4 us of its 84.5 us kernel wall** (full arithmetic
+closure, no gap), so the **root's serial combine chain — root_sum + root_finalize +
+stat_handoff = 57.5 us = 68% of the whole-op wall — IS the critical path**, and all seven other
+cores of its group block behind it.
+
+**Cumulative payload peel** (payload only; every CB reserve/push/wait/pop and every loop trip
+count preserved): full **84836** -> finalize-SFPU-stubbed **68532** -> + root-adds-stubbed
+**52096**. So those two stages' payload is 32.7 us and a *further* ~16.6 us of their zone time is
+pack/unpack/DEST-sync **scaffolding that only a fusion deletes** — which is what put the fusion
+idea in the portfolio.
+
+**Roofline-gated, deliberately not targeted** (`/perf-ceiling-dm`): `reader_read_x` = 59 ns and
+`writer_write` = 53 ns on the focus shape (already zero — native sharding is a *precondition* to
+this pass, not one of its levers); and `reader_read_x` on interleaved prefill w1024 moves
+196 kB/core x 110 cores in 24.4 us ~= **880 GB/s aggregate, at the DRAM roofline**.
+
+**This measurement REFUTED a prior round's recorded guess.** Refinement 4 named the remaining
+sharded cost as the combine **round count**; measured, round count is worth ~4.7 us of
+`writer_gather_wait` across 4 rounds, while the root's per-tile **compute** is 57.5 us. Ranking
+by measurement rather than by the prior note is what aimed this tournament correctly.
+
+A second regime was measured and ranked too — interleaved prefill `(1,1,8192,1024)`, 104632 ns:
+`reader_read_gamma` **61099 ns of the 104 us wall**, i.e. 2.5x the x read at a third of the
+bytes, because all 110 cores read the *identical* 2 kB of gamma from the same DRAM pages.
+
+### The portfolio (7 ideas; overlap and fusion deliberately allowed)
+| idea | verdict | measured | domain |
+|---|---|---|---|
+| `fuse_root_combine` — sum+finalize+handoff in ONE DEST window | **WIN** | 11933 -> 7409 ns/round (1.61x), 3655 with a scoped finalize (3.26x) | everywhere on COMBINE, no exceptions |
+| `root_sum_accumulate` — stop the accumulator's L1 round trip | **WIN** | `dest_acc_any` **2.20x** (GS=8,rows=10) / **2.16x** (GS=32,rows=1) vs the in-tree fold | everywhere, no parity predicate |
+| `root_finalize_scope` — (a) column-scope the whole finalize, (b) delete the handoff copy | **WIN** | (a) 762.1 -> 372.8 ns/tile (**2.04x**); (b) **1.21x**; together **3.02x** | everywhere; `cskip_fused` inexpressible off power-of-4 W |
+| `reduce_pack_to_handoff` — reduce packs straight into the handoff CB | **WIN** | 11933 -> 9377 ns (**1.27x**), wins all 11 geometries, `torch.equal`-identical | everywhere on COMBINE |
+| `compact_partial_transpose` — pack 32 tile-rows' partials into ONE tile | **WIN** | root stage 41944 -> 9535 (4.4x) at BR=10, -> 4341 (9.7x) at BR=32 | everywhere for `BLOCK_ROWS > 1` |
+| `hierarchical_gather` — tree / row-split instead of a flat root | **WIN** | `rowsplit` **1.80x** focus, `tree_k4` **2.10x** secondary | `GROUP_SIZE == 4` a measured regression (0.955x) |
+| `gamma_mcast_reuse` — one injector broadcasts gamma | **WIN** | stage **3.92x**, reader wall **1.24x**, whole-op **1.19-1.27x**, BIT-EXACT | sharing group >= ~12 cores |
+
+**Nothing was null this round** — unusual, and it is the measured breakdown's doing: every idea
+was aimed at a stage that a peel had already proven dominant.
+
+### What graduated, how widely, and what was deleted
+Four changes landed. **All four are unqualified single paths with ZERO carve-outs**, and each
+deleted the code it replaced.
+
+- **D16 — row-major gather + a per-row fold.** Adopted (it arrived in the tree mid-tournament,
+  uncommitted and unattributed, so it is measured and recorded here rather than silently kept).
+  Whole-op, standalone: **1.13-1.36x on the width-shard profiles**, 1.05x on the focus shape.
+  Its gather-layout half is load-bearing — two winners require a row's partials contiguous.
+- **D17 — the WHOLE finalize chain scoped to column 0** (`cskip2`, raw sfpi). Replaces the
+  three-call `VectorMode::RC` chain *and* folds `*(1/W)` and `+eps` into one DEST pass.
+  **Deleted: the `RSQRT_COL_SCOPE` knob, its whole-tile branch, compute CT arg 16, and the old
+  `rsqrt_tile_col`.** This is the widest-domain graduation in the round — the *local*
+  (non-combine) finalize runs on every shape the op supports, so every cell gets it. Nothing
+  earned a guard: the unscoped form was the slowest cell measured at every geometry.
+- **D18 — pass A's reduce packs straight into `cb_sum_handoff`.** Deleted the
+  `compute_partial_handoff` copy on every core of every group. **Satisfies** the CB-ownership
+  rule rather than bending it (compute is the single producer, the writer the single consumer,
+  and `cb_row_stat` becomes strictly compute-private and root-only). Legal because the combine
+  path is already `static_assert`ed to one width chunk, so the reduce never re-reads its
+  accumulator — an *asserted precondition*, not a runtime guard.
+- **D19 — the root finalize reads `cb_row_stat` and writes `cb_stat_handoff` in one chain.**
+  Deleted the `compute_stat_handoff` copy and its now-meaningless zone (its cost lives inside
+  `compute_root_finalize`; an empty zone reporting ~0 ns would mislead the next round).
+
+**Raw-LLK bypass — one, D17**, carrying its measured justification at the definition so a later
+helper-usage pass will not "fix" it back: `mul_unary_tile` / `add_unary_tile` / `rsqrt_tile` all
+hard-code `VectorMode::RC` and expose no seam, and column parity is the SFPU's *inner* walk axis
+so `ITERATIONS` cannot reach it. **Safety is measured, not assumed**: an isolated bench ran pass
+B's real consumer (`mul<BroadcastDim::Col>`) over a stat tile with columns 1..31 seeded five
+orders of magnitude wrong and got pcc 0.999992 — the column broadcast reads column 0 only.
+Precedent: `sdpa/.../compute_common.hpp` `recip_tile_first_column`.
+
+### Whole-op before/after (one fresh-cache profiled run per variant)
+| target | reference | before | after | speedup | vs reference |
+|---|---|---|---|---|---|
+| **`(1,1,8192,1024)` BLOCK 64c** | 25640 | 84836 | **64641** | **1.31x** | 3.31x -> **2.52x off** |
+| `(1,1,32,5120)` WIDTH 32c | 5267 | 11263 | **7612** | **1.48x** | 2.14x -> 1.45x off |
+| `(1,1,32,7168)` WIDTH 28c | 5481 | 10871 | **7385** | **1.47x** | 1.98x -> 1.35x off |
+| `(1,1,32,1024)` WIDTH 8c | 4110 | 5767 | **4374** | **1.32x** | 1.40x -> 1.06x off |
+| `(1,1,32,2304)` WIDTH 9c | 4617 | 6640 | **5270** | **1.26x** | 1.44x -> 1.14x off |
+| `(1,1,8192,1024)` interleaved | 96744 | 104632 | 103985 | 1.01x | flat |
+| `(1,1,8192,2304)` interleaved | 211345 | 221661 | 223501 | 0.99x | flat (noise) |
+| `(1,1,8192,7168)` interleaved | 1032281 | 652323 | 644964 | 1.01x | already 1.60x better |
+| `(1,1,8192,5120)` interleaved | 738307 | 463627 | see below | **flat** | already 1.54x better |
+
+The interleaved prefill profiles are flat by construction: they take the *local* finalize (2081 ns
+of a 104 us wall) and none of the combine path, so only D17 reaches them and it cannot move a
+reader-bound shape.
+
+**Guard-set no-regression: no supported cell got slower.** One apparent exception was chased to
+ground rather than guarded: `(1,1,8192,5120)` first read as 0.97x. `compute_finalize` measures
+**1672 ns of that shape's 478 us wall (0.35%)**, so the only graduated change touching it cannot
+account for a 15 us swing. An A/B probe reverting *only* the finalize spelling measured stock
+476476 / 475303 / 477779 against scoped 477994 / 481342 / 478860 — **0.5% apart, i.e. flat**. The
+round-1 single-run 463627 was a low outlier on a bandwidth-bound shape (Refinement 4 recorded
+468093; the D16 tree 468887). **No predicate was erected** — a suspicion is not a justification.
+
+### Correctness (green throughout; counts numerically identical to Refinement 4)
+- Golden cartesian, run as four placement slices: **5037 pass / 1365 xfail / 0 fail**
+  (INTERLEAVED 1500+420, HEIGHT 1167+315, WIDTH 1185+315, BLOCK 1185+315), `supported_fail = 0`.
+- Golden loose cases: **384 pass / 3 infeasible-skip / 0 xfail**. Golden total **5421 pass**.
+- `test_regression.py` **15/15**. `test_translated.py` **105/106** — the one failure bit-identical
+  at frobenius **0.1122406** to the pre-existing `{bfloat8_b, w_non_aligned}` pad-poison
+  non-issue `feature_spec.INVALID` declares out of scope (recorded the same way in Refinements
+  2, 2b, 3 and 4).
+- Unit suite **463 passed / 30 skipped** — precision baselines, wide-W precision, pad-poison, all
+  three sharded schemes x both layouts, the RM BAND geometries, and the perf probes. Zero hangs.
+- **Precision contract untouched**: `fp32_dest_acc_en`, `math_fidelity`, `math_approx_mode` and
+  every dtype are exactly as the caller passed them. D17 *removes* a bf16 DEST rounding (it keeps
+  `*(1/W)` in an fp32 LREG), so it is at least as accurate as the chain it replaces; D18 is
+  `torch.equal`-identical. No option that traded precision for speed was graduated.
+
+### Deferred to Perf 2 — three measured WINs, with their numbers, not re-litigations
+Each needs re-measuring against the *new* critical path before it is worth integrating, which is
+the designed use of a second round. Deferring a measured win has a real cost and it is recorded
+as such, not as a null.
+1. **`compact_partial_transpose`** — the single biggest lever (root stage 4.4x at BR=10, 9.7x at
+   BR=32; extrapolated 1.94x whole-op). Mechanism is a column permutation by ONE `matmul_tiles`
+   against a one-hot tile (26 ns/tile-row to pack, 43-69 to un-pack, against 1211 ns/tile-row
+   deleted) — *not* a `transpose_wh`. Deferred because it is extrapolated rather than
+   end-to-end; it **conflicts with D17's column scoping above `BLOCK_ROWS = 16`** (a compact tile
+   with >16 packed rows has live data in faces 1/3, so the root's rsqrt would have to widen back
+   to `RC`); it needs a one-hot L1 bank (fp32, 80-256 kB); it relies on the packer leaving DEST
+   zeroed; and it requires every operand column to be FINITE (`inf*0 = NaN`). Also worth noting:
+   it makes the gather's boot-zeroing unnecessary, since every compact position is defined by
+   construction. Its own baseline is what D16-D19 just replaced, so re-measure first.
+2. **`hierarchical_gather`** — `rowsplit` 1.80x on the focus, `tree_k4`/`k8` 2.10x on the
+   secondary; single rule "spend gatherers on rows first, then a slot tree with `k` nearest 4".
+   Its author's own composition note says the absolute win scales down with the per-fold cost —
+   and this round cut per-fold cost — so it *must* be re-measured. Carries a real earned
+   carve-out (`GROUP_SIZE == 4` with rows>1 measured 0.955x, expressed as the mechanism
+   `GROUP_SIZE - (m + k) >= 2`), needs a 4th semaphore, and it also *lowers* L1.
+3. **`gamma_mcast_reuse`** — `mcast_1inj_noc0`, stage 3.92x, whole-op **1.19-1.27x** on every
+   interleaved prefill profile, **bit-exact**. It has the largest integration surface (a second
+   mcast family in the descriptor, sems 3-4, and the gamma group is a grid *column* while the
+   stat group is a *row*). Its author also corrected the breakdown honestly: the 61.1 us
+   `reader_read_gamma` zone **overstates** gamma's marginal cost, because the reader is
+   DRAM-bound at ~405 GB/s and gamma is 30% of reader *bytes*, not 59% of the wall. Earned
+   carve-out: sharing groups of <= 8 cores measured 0.78-0.89x. Keep the reader on NOC_0 — x
+   reads cost 1.65x on NOC_1.
+4. **`root_sum_accumulate`'s `dest_acc_any`** (2.20x/2.16x on the fold) — deferred only because
+   it needs a new 1-page fp32 `cb_zero_tile` (a *constant* 4 kB, so it does not perturb the
+   `BLOCK_ROWS` solve the way a per-row term would) and this round had no golden budget left to
+   validate a descriptor change. `dest_acc_wide_pad` is ~2x better again but needs the gather CB
+   widened to `GROUP_SIZE + GROUP_SIZE % 2` pages per row with the pad boot-zeroed.
+
+### Two adjacent findings, measured in passing, NOT built
+- **The reduce is on the wrong datapath at `X_SQUARED_WT == 1`.** At a per-call reduce width of 1
+  — which Refinement 4's L6d DEST fold *creates* — `ReduceTile` is **2.91x faster than
+  AccumulateViaAdd at equal-or-better precision** (3219 vs 9374 ns for 40 calls; rel-RMS 0.00314
+  vs 0.00337). `AccumulateViaAdd` from width 1 to 4 is flat, i.e. pure per-call overhead.
+  `REDUCE_ACC_VIA_ADD_MIN_CHUNK_WT` exists to prevent exactly this but is evaluated against
+  `wt_chunk` rather than the reduce's *actual* per-call width. A one-line descriptor change —
+  but the crossover sits between width 4 and 32 and the precision cost at wide widths is real
+  (`ReduceTile` at 32 is both slower *and* pcc 0.9867), so it must stay width-gated and needs its
+  own measurement. `compute_reduce` is 7970 ns on all 64 cores of the focus shape.
+- **TILE gamma reads 64 kB per core where 2 kB is meaningful.** Gamma is a `(1,1,1,W)` vector
+  padded to 32 tile rows, and the consumer is `BroadcastDim::Row`, which reads row 0 only.
+  Fetching just the meaningful face-rows is a ~32x byte reduction that *composes* with the gamma
+  broadcast above, shrinking gamma's DRAM share from ~30% to ~1%. Unbenched.
+
+### Repo hygiene fixed in passing
+`perf_experiments/__init__.py` made `ttnn/ttnn/operations/__init__.py`'s `pkgutil.walk_packages`
+import and EXECUTE every experiment scratch file on every `import ttnn` — it broke `import ttnn`
+repo-wide twice mid-tournament. Removed, with the reason recorded in
+`perf_experiments/README.md` so it is not re-added.

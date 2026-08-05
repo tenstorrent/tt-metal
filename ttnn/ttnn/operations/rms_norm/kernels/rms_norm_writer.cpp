@@ -70,6 +70,9 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
+// PERMANENT per-stage device-profiler instrumentation (never remove; free when
+// the profiler is off -- see the header's durability contract).
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
@@ -195,6 +198,7 @@ void kernel_main() {
     // in ONE row-block, and which the ROW_MAJOR BAND scheme hits immediately (its
     // per-block gather CB is GROUP_SIZE fp32 tiles, so L1 caps BLOCK_ROWS low).
     auto write_block = [&](uint32_t blk) {
+        MaybeDeviceZoneScope("writer_write");
         if constexpr (NATIVE) {
             return;  // zero-copy: compute packed into the shard; the pages ARE the tensor
         }
@@ -263,27 +267,41 @@ void kernel_main() {
         // Whatever the gather does not write stays whatever was in the root's L1, so
         // the number is only lowerable as far as the faces the datapath actually
         // reads; see D13 for the measurement that fixed it.
-        //   4  the whole tile -- one contiguous run over all `rows` tiles.
+        //   4  the whole tile.
         //   3  faces 0,1,2 contiguously -- one transfer per tile, 3/4 of the bytes.
         //   2  faces 0 and 2 only (the pair that can hold a column vector) -- two
         //      face-sized transfers per tile, HALF the bytes.
         static_assert(GATHER_FACES >= 2 && GATHER_FACES <= 4, "rms_norm: GATHER_FACES must be 2, 3 or 4");
         const uint32_t face_bytes = stat_bytes / 4;
+        // ROW-MAJOR GATHER LAYOUT (Perf 1, descriptor D16).  A sender's partial for
+        // row r lands at PAGE `r * GROUP_SIZE + my_slot` of the root's gather CB, i.e.
+        // the group's GROUP_SIZE partials for ONE row are CONTIGUOUS.  That is what
+        // lets the root fold them with a single streaming chain call per row (compute
+        // kernel: CopyTile -> L1Accumulation::SeedFirst pack) instead of GROUP_SIZE
+        // separate helper calls.  The Phase-0 layout was slot-major
+        // (`my_slot * rows + r`), which put a row's partials on a stride of `rows` --
+        // a gapped window no chain walk can express.
+        //
+        // The cost is transfer COUNT, not bytes: a sender now issues one transfer per
+        // row instead of one per block (GATHER_FACES == 4 loses its single contiguous
+        // run).  The gather is tiny (a `rows`-tile column vector per sender) and rides
+        // NoC1, which is idle through pass A; the root-side serial fold it unlocks was
+        // measured at 6.6 us of an 11.2 us decode profile.
+        //
         // ONE definition of the member -> root partial transfer, used by the root for
-        // its own slot (local) and by every member (remote).
+        // its own slot (local) and by every member (remote).  `dst_noc` is the root's
+        // gather-CB BASE (slot offset is applied per row here, not by the caller).
         auto ship_partial = [&](uint32_t src, uint64_t dst_noc, uint32_t rows) {
-            if constexpr (GATHER_FACES == 4) {
-                noc_async_write(src, dst_noc, rows * stat_bytes);  // one contiguous run
-            } else if constexpr (GATHER_FACES == 3) {
-                for (uint32_t r = 0; r < rows; ++r) {
-                    const uint32_t off = r * stat_bytes;
-                    noc_async_write(src + off, dst_noc + off, 3 * face_bytes);
-                }
-            } else {
-                for (uint32_t r = 0; r < rows; ++r) {
-                    const uint32_t off = r * stat_bytes;
-                    noc_async_write(src + off, dst_noc + off, face_bytes);
-                    noc_async_write(src + off + 2 * face_bytes, dst_noc + off + 2 * face_bytes, face_bytes);
+            for (uint32_t r = 0; r < rows; ++r) {
+                const uint32_t s_off = r * stat_bytes;
+                const uint32_t d_off = (r * GROUP_SIZE + my_slot) * stat_bytes;
+                if constexpr (GATHER_FACES == 4) {
+                    noc_async_write(src + s_off, dst_noc + d_off, stat_bytes);
+                } else if constexpr (GATHER_FACES == 3) {
+                    noc_async_write(src + s_off, dst_noc + d_off, 3 * face_bytes);
+                } else {
+                    noc_async_write(src + s_off, dst_noc + d_off, face_bytes);
+                    noc_async_write(src + s_off + 2 * face_bytes, dst_noc + d_off + 2 * face_bytes, face_bytes);
                 }
             }
         };
@@ -297,6 +315,7 @@ void kernel_main() {
         // root pays.
         if constexpr (GATHER_FACES < 4) {
             if (is_root != 0) {
+                MaybeDeviceZoneScope("writer_gather_zero");
                 DataflowBuffer gather_dfb(cb_partials_gathered);
                 const uint32_t pages = gather_dfb.get_total_size_bytes() / stat_bytes;
                 for (uint32_t p = 0; p < pages; ++p) {
@@ -316,13 +335,13 @@ void kernel_main() {
                 const uint32_t rows = (num_rows - r0 < BLOCK_ROWS) ? (num_rows - r0) : BLOCK_ROWS;
 
                 // 1. the root's own partial goes into slot 0 of its own gather CB.
-                cb_wait_front(cb_sum_handoff, rows);
-                cb_reserve_back(cb_partials_gathered, GROUP_SIZE * rows);
-                ship_partial(
-                    get_read_ptr(cb_sum_handoff),
-                    get_noc_addr(get_write_ptr(cb_partials_gathered) + my_slot * rows * stat_bytes),
-                    rows);
-                noc_async_write_barrier();
+                {
+                    MaybeDeviceZoneScope("writer_gather_ship");
+                    cb_wait_front(cb_sum_handoff, rows);
+                    cb_reserve_back(cb_partials_gathered, GROUP_SIZE * rows);
+                    ship_partial(get_read_ptr(cb_sum_handoff), get_noc_addr(get_write_ptr(cb_partials_gathered)), rows);
+                    noc_async_write_barrier();
+                }
                 // NO self-signal here.  Semaphore::up(value) is a NON-ATOMIC local
                 // read-modify-write (noc_semaphore.h: "multiple cores incrementing
                 // simultaneously may lead to lost updates"), so a local bump on the
@@ -333,9 +352,12 @@ void kernel_main() {
                 cb_pop_front(cb_sum_handoff, rows);
 
                 // 2. publish the gathered block once every member has landed.
-                arrivals += GROUP_SIZE - 1;
-                gather_sem.wait_min(arrivals);
-                cb_push_back(cb_partials_gathered, GROUP_SIZE * rows);
+                {
+                    MaybeDeviceZoneScope("writer_gather_wait");
+                    arrivals += GROUP_SIZE - 1;
+                    gather_sem.wait_min(arrivals);
+                    cb_push_back(cb_partials_gathered, GROUP_SIZE * rows);
+                }
 
                 // 3. multicast the finalized stat back to the whole group.
                 //
@@ -345,16 +367,19 @@ void kernel_main() {
                 // EXCLUDES the sender (mcast_host.hpp sender_rect_), while Mcast2D's
                 // rect contains it -- an in-place send takes the same EXCLUDE path
                 // in both, so the root is never served twice and never skipped.
-                cb_wait_front(cb_stat_handoff, rows);
-                cb_reserve_back(cb_row_final, rows);
-                const uint32_t stat_dst = get_write_ptr(cb_row_final);
-                noc_async_write(get_read_ptr(cb_stat_handoff), get_noc_addr(stat_dst), rows * stat_bytes);
-                noc_async_write_barrier();
-                if constexpr (mc.active) {
-                    sender.send(stat_dst, stat_dst, rows * stat_bytes);
+                {
+                    MaybeDeviceZoneScope("writer_mcast_send");
+                    cb_wait_front(cb_stat_handoff, rows);
+                    cb_reserve_back(cb_row_final, rows);
+                    const uint32_t stat_dst = get_write_ptr(cb_row_final);
+                    noc_async_write(get_read_ptr(cb_stat_handoff), get_noc_addr(stat_dst), rows * stat_bytes);
+                    noc_async_write_barrier();
+                    if constexpr (mc.active) {
+                        sender.send(stat_dst, stat_dst, rows * stat_bytes);
+                    }
+                    cb_push_back(cb_row_final, rows);
+                    cb_pop_front(cb_stat_handoff, rows);
                 }
-                cb_push_back(cb_row_final, rows);
-                cb_pop_front(cb_stat_handoff, rows);
 
                 // 4. drain THIS block's output before the next combine round, so
                 //    compute is never blocked on a full output CB (see write_block).
@@ -369,19 +394,25 @@ void kernel_main() {
                 const uint32_t rows = (num_rows - r0 < BLOCK_ROWS) ? (num_rows - r0) : BLOCK_ROWS;
 
                 // 1. ship this core's raw partial to the root's slot, then signal.
-                cb_wait_front(cb_sum_handoff, rows);
-                ship_partial(
-                    get_read_ptr(cb_sum_handoff),
-                    get_noc_addr(root_x, root_y, get_write_ptr(cb_partials_gathered) + my_slot * rows * stat_bytes),
-                    rows);
-                noc_async_write_barrier();  // data before signal
-                gather_sem.up(noc, root_x, root_y, 1);
-                cb_pop_front(cb_sum_handoff, rows);
+                {
+                    MaybeDeviceZoneScope("writer_gather_ship");
+                    cb_wait_front(cb_sum_handoff, rows);
+                    ship_partial(
+                        get_read_ptr(cb_sum_handoff),
+                        get_noc_addr(root_x, root_y, get_write_ptr(cb_partials_gathered)),
+                        rows);
+                    noc_async_write_barrier();  // data before signal
+                    gather_sem.up(noc, root_x, root_y, 1);
+                    cb_pop_front(cb_sum_handoff, rows);
+                }
 
                 // 3. reserve the landing slot FIRST: receive()'s ack means "free".
-                cb_reserve_back(cb_row_final, rows);
-                receiver.receive();
-                cb_push_back(cb_row_final, rows);
+                {
+                    MaybeDeviceZoneScope("writer_mcast_recv");
+                    cb_reserve_back(cb_row_final, rows);
+                    receiver.receive();
+                    cb_push_back(cb_row_final, rows);
+                }
 
                 // 4. same interleave as the root's.
                 write_block(blk);

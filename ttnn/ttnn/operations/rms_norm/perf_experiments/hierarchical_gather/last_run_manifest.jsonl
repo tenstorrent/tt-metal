@@ -1,0 +1,4 @@
+{"config": "warmup", "variant": "flat", "group_size": 4, "num_groups": 1, "block_rows": 1, "num_rows": 1, "k": 1, "w_max": 0, "pcc": 0.9999797378481157, "rel_rms": 0.0032844628282202516}
+{"config": "g4_ng8_r32b10", "variant": "flat", "group_size": 4, "num_groups": 8, "block_rows": 10, "num_rows": 32, "k": 1, "w_max": 0, "pcc": 0.9999880749914428, "rel_rms": 0.003155407272338018}
+{"config": "g4_ng8_r32b10", "variant": "tree_k2", "group_size": 4, "num_groups": 8, "block_rows": 10, "num_rows": 32, "k": 2, "w_max": 0, "pcc": 0.9999873985604206, "rel_rms": 0.0035508044675089897}
+{"config": "g4_ng8_r32b10", "variant": "rowsplit_w4", "group_size": 4, "num_groups": 8, "block_rows": 10, "num_rows": 32, "k": 1, "w_max": 4, "pcc": 0.9999880749914428, "rel_rms": 0.003155407272338018}

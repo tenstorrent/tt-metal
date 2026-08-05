@@ -1,0 +1,25 @@
+{
+ "notes": "blackhole p150b, 1350 MHz. DEVICE KERNEL DURATION [ns], one fresh program per (config,variant).",
+ "focus_run2": {
+  "flat": 63263,
+  "tree_k2": 56887,
+  "tree_k4": 55709,
+  "rowsplit_w8": 35254,
+  "rowsplit_w4": 38132
+ },
+ "secondary_run2": {
+  "flat": 9599,
+  "tree_k2": 6496,
+  "tree_k4": 4881,
+  "tree_k8": 4576
+ },
+ "g4_r32b10_run2": {
+  "flat": 47387,
+  "tree_k2": 49651,
+  "rowsplit_w4": 27224
+ },
+ "g4_r1b1_run2": {
+  "flat": 3233,
+  "tree_k2": 3185
+ }
+}

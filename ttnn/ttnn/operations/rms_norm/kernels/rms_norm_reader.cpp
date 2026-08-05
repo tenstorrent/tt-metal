@@ -53,6 +53,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+// PERMANENT per-stage device-profiler instrumentation (never remove; free when
+// the profiler is off -- see the header's durability contract).
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
@@ -173,28 +176,32 @@ void kernel_main() {
     //                    partial : [0/1 mask]                      -> 1 tile
     // The tile COUNT is the descriptor's SCALER_TILES, which the compute kernel
     // pops -- this branch must agree with it (asserted host-side).
-    if constexpr (REDUCE_ACC_VIA_ADD != 0) {
-        if constexpr (PARTIAL_W != 0) {
-            // 0/1 mask in the row-0 broadcast layout AccumulateViaAdd's masked
-            // accumulating broadcast-mul consumes for the last width tile.
-            dataflow_kernel_lib::prepare_reduce_mask<cb_scaler, ckernel::ReduceDim::REDUCE_ROW>(PARTIAL_W);
+    {
+        MaybeDeviceZoneScope("reader_scaler_boot");
+        if constexpr (REDUCE_ACC_VIA_ADD != 0) {
+            if constexpr (PARTIAL_W != 0) {
+                // 0/1 mask in the row-0 broadcast layout AccumulateViaAdd's masked
+                // accumulating broadcast-mul consumes for the last width tile.
+                dataflow_kernel_lib::prepare_reduce_mask<cb_scaler, ckernel::ReduceDim::REDUCE_ROW>(PARTIAL_W);
+            } else {
+                dataflow_kernel_lib::
+                    prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
+            }
+        } else if constexpr (PARTIAL_W != 0) {
+            dataflow_kernel_lib::prepare_partial_reduce_scalers<
+                cb_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                PARTIAL_W>(1.0f);
         } else {
             dataflow_kernel_lib::
                 prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
         }
-    } else if constexpr (PARTIAL_W != 0) {
-        dataflow_kernel_lib::prepare_partial_reduce_scalers<
-            cb_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            PARTIAL_W>(1.0f);
-    } else {
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-            1.0f);
     }
 
     // ---- boot: establish the pad-lane invariant on the RM staging ring ----
     if constexpr (RM && STAGE_ZERO != 0) {
+        MaybeDeviceZoneScope("reader_stage_zero");
         Noc noc;
         DataflowBuffer stage_dfb(cb_input_sticks);
         noc.async_write_zeros(stage_dfb, stage_dfb.get_total_size_bytes());
@@ -208,6 +215,7 @@ void kernel_main() {
     // whole-row schemes it is 0 and this is byte-identical to Phase 0.
     auto stage_gamma_chunk = [&](uint32_t c) {
         if constexpr (HAS_G) {
+            MaybeDeviceZoneScope("reader_read_gamma");
             const auto g_acc = TensorAccessor(gamma_args, gamma_addr);
             const uint32_t first_wt = w_start + c * WT_CHUNK;
             if constexpr (G_RM) {
@@ -283,6 +291,7 @@ void kernel_main() {
     // L1 content is undefined; zero them once so they contribute exactly 0 to
     // sum(x^2) (the same pad-lane invariant the ROW_MAJOR staging ring gets).
     if constexpr (NATIVE_X) {
+        MaybeDeviceZoneScope("reader_native_publish");
         if (w_real < WT_CHUNK) {
             const uint32_t tile_bytes = get_tile_size(cb_input_tiles);
             const uint32_t pad_tiles = WT_CHUNK - w_real;
@@ -349,6 +358,7 @@ void kernel_main() {
     };
 
     auto stage_x_chunk = [&](uint32_t r0, uint32_t rows, uint32_t c) {
+        MaybeDeviceZoneScope("reader_read_x");
         const uint32_t first_tile_row = row_start + r0;
         if constexpr (NATIVE_X) {
             return;  // already resident and published above -- no NoC read for x
