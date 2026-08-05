@@ -274,6 +274,14 @@ void kernel_main() {
                             }
 
                             if constexpr (is_row_major) {
+                                // Reconfig the packer to the value-output format before the value
+                                // untilize: the preceding index pack_tile leaves the packer in the
+                                // 32-bit index format, and pack_untilize_init alone does not fully
+                                // reset that state (#51215, item 2 - silent stride-2 corruption of
+                                // the bf16 value output).
+                                // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+                                compute_kernel_hw_startup(
+                                    input_tensor_cb_id, index_tensor_cb_id, rm_output_value_cb_id);
                                 // Untilize the 2 sorted tiles into TILE_H pair-rows,
                                 // matching the reader's pair-row input CB layout.
                                 // block_ct_dim=2, block_rt_dim=1 → TILE_H rows of
