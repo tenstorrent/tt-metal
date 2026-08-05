@@ -243,6 +243,8 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             output_layout == Layout::ROW_MAJOR,
             "If using negative mask, output tensor must be in ROW_MAJOR layout, but layout is {}",
             output_layout);
+        // The welford sharded kernels have no negative-mask path; the combination hangs the device.
+        TT_FATAL(!args.use_welford, "Negative mask is not supported with use_welford, use the legacy reduction");
     }
 
     // Reciprocals tensor validation
