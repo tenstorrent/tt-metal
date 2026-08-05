@@ -57,7 +57,7 @@ namespace ckernel {
 inline void weighted_reduce_init_short(
     const std::uint32_t weights_cb, const std::uint32_t qk_cb, const std::uint32_t partial_cb) {
     // SrcA <- qk (operandA), SrcB <- weights (operandB).
-    reconfig_data_format<SrcOrder::Regular, true>(qk_cb, weights_cb);
+    reconfig_full_operand(qk_cb, weights_cb);
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0)));
     UNPACK(TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0));
 }
@@ -201,7 +201,7 @@ inline void weighted_reduce_pack(const std::uint32_t partial_cb, const std::uint
 // Restore dataformats, and cfgs to what is needed for sdpa_custom_mm_block
 inline void weighted_reduce_uninit(const std::uint32_t q_in_cb, const std::uint32_t k_in_cb) {
     // SrcA <- k_in (operandA), SrcB <- q_in (operandB).
-    reconfig_data_format<SrcOrder::Regular, true>(k_in_cb, q_in_cb);
+    reconfig_full_operand(k_in_cb, q_in_cb);
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1)));
     // UnpA unpacks full tiles
     constexpr std::uint32_t unpA_x_end = TILE_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1;
