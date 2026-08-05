@@ -204,11 +204,19 @@ class PerfTarget:
     aggregate_rate: float = 0.0
 
 
-def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0) -> int:
+def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0, batch: int = 1) -> int:
     """Bytes streamed from DRAM per decode step, summed per-tensor at each tensor's real dtype.
 
     Dense: Σ tensor_bytes(all weight tensors). MoE: shared_bytes + top_k * per_expert_bytes
-    (the reachable read set — NOT all experts). Optional KV term when seq_len>0."""
+    (the reachable read set — NOT all experts). Optional KV term when seq_len>0.
+
+    BATCH SCALES THE KV TERM AND NOTHING ELSE, which is the whole reason batching pays: the weights
+    are read ONCE and amortised across every user in the step, while each user carries their own
+    KV history and reads all of it. So doubling the batch does not double the bytes -- it adds one
+    more KV history to a fixed weight cost, and the per-user ceiling falls only by that much.
+
+    Omitting the factor made batch free: an 8-user step was costed as a 1-user step, the ceiling came
+    out too high, and every at-floor verdict computed against it inherited the error."""
     if regime != "decode":
         raise NotImplementedError("perf_target models the decode regime only (prefill is FLOP-bound)")
     mf = model_facts or {}
@@ -237,6 +245,7 @@ def active_bytes(model_facts: dict, *, regime: str = "decode", seq_len: int = 0)
     if seq_len and mf.get("layers") and mf.get("kv_heads") and mf.get("head_dim"):
         kv_dt = mf.get("kv_dtype") or mf.get("dominant_dtype") or "bfloat16"
         kv = 2.0 * int(mf["layers"]) * int(mf["kv_heads"]) * int(mf["head_dim"]) * int(seq_len) * _bytes_per_elem(kv_dt)
+        kv *= max(1, int(batch or 1))
 
     total = wb + kv
     # Non-finite means the facts are junk (a corrupted/hand-edited perf_target_inputs.json: json.loads

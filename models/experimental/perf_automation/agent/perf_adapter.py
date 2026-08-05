@@ -71,6 +71,29 @@ def resolve_mesh_shape(default_rows: int = 1, default_cols: int = 1) -> tuple[in
     return default_rows, default_cols
 
 
+def resolve_batch(pipeline, requested: int = 0) -> int:
+    """How many users this pipeline serves: the request, else what the pipeline declares, else 1.
+
+    The generated perf test used to hardcode `batch=1`, so a pipeline emit-e2e built for 8 users was
+    measured serving one and its aggregate throughput under-reported eightfold. Batch is a property
+    of the ARTIFACT, not of the harness, so the artifact is asked.
+
+    `requested > 0` always wins, which is what makes a batch sweep possible without rebuilding the
+    demo. Names are tried in decreasing specificity and every model that declares any of them is
+    covered; a pipeline that declares none is batch 1, exactly as before.
+    """
+    if int(requested or 0) > 0:
+        return int(requested)
+    for attr in ("max_batch_size", "batch_size", "batch", "max_batch"):
+        try:
+            v = int(getattr(pipeline, attr, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    return 1
+
+
 class PipelineDecodeAdapter:
     """Generic PerfAdapter over any pipeline exposing the decode contract above.
 
@@ -81,15 +104,19 @@ class PipelineDecodeAdapter:
     batch       users in the batch — forwarded so trace_replay derives tokens_per_sec.
     """
 
-    def __init__(self, build_fn: Callable[[object], object], prompt_ids=None, *, batch: int = 1) -> None:
+    def __init__(self, build_fn: Callable[[object], object], prompt_ids=None, *, batch: int = 0) -> None:
         self._build = build_fn
         self._prompt = prompt_ids
-        self.batch = int(batch or 1)
+        # 0 = ask the pipeline in setup(), once it exists. Resolving here is impossible: the pipeline
+        # is not built until setup(device).
+        self._requested_batch = int(batch or 0)
+        self.batch = max(1, self._requested_batch)
         self._pipe = None
         self._state = None
 
     def setup(self, device) -> None:
         self._pipe = self._build(device)
+        self.batch = resolve_batch(self._pipe, self._requested_batch)
         step = getattr(self._pipe, "decode_step", None)
         if not callable(step):
             raise NotTraceCapable(
@@ -97,10 +124,42 @@ class PipelineDecodeAdapter:
                 "run the structural decode lever to add a cached single-token step"
             )
         prefill = getattr(self._pipe, "decode_prefill", None)
-        self._state = prefill(self._prompt) if callable(prefill) else None
+        # PREFILL THE WHOLE BATCH, not one sequence. This passed the bare prompt whatever the batch,
+        # so a batch-8 run built single-user state and then had its throughput multiplied by 8 --
+        # the same manufactured speedup PipelineStageAdapter._inputs_dict had, by a different route.
+        # Replication is attempted only for batch > 1, and falls back to the raw prompt: a pipeline
+        # whose decode_prefill wants a 1-D sequence must keep working exactly as before.
+        self._state = self._prefill_batch(prefill) if callable(prefill) else None
         if bool(getattr(self._pipe, "self_traced", False)):
             self.self_traced = True
             self.trace_path = getattr(self._pipe, "trace_path", None)
+
+    def _prefill_batch(self, prefill):
+        """Prefill state for ALL `batch` users, falling back to the single-sequence call.
+
+        Whether a pipeline accepts a batched prompt is settled by CALLING it, not by inspecting a
+        signature: the decode contract is duck-typed across every model emit-e2e produces, so the
+        only reliable test is whether the call goes through.
+
+        When it does not, `self.batch` is CORRECTED TO 1. trace_replay reads that attribute to derive
+        tokens_per_sec, so leaving it at 8 after serving one user would report an 8x aggregate that
+        never happened -- the same manufactured speedup this whole change exists to remove.
+        """
+        if self.batch <= 1 or self._prompt is None:
+            return prefill(self._prompt)
+        try:
+            import torch
+
+            ids = torch.as_tensor(self._prompt).reshape(-1)
+            batched = ids.unsqueeze(0).expand(self.batch, ids.numel()).contiguous()
+        except Exception:  # noqa: BLE001
+            self.batch = 1
+            return prefill(self._prompt)
+        try:
+            return prefill(batched)
+        except Exception:  # noqa: BLE001
+            self.batch = 1
+            return prefill(self._prompt)
 
     def step(self):
         self._state = self._pipe.decode_step(self._state)
@@ -139,20 +198,33 @@ class PipelineStageAdapter:
     before — the perf test's guard then falls back to FORWARD_WALL_MS.
     """
 
-    def __init__(self, build_fn: Callable[[object], object], prompt_ids=None, *, batch: int = 1) -> None:
+    def __init__(self, build_fn: Callable[[object], object], prompt_ids=None, *, batch: int = 0) -> None:
         self._build = build_fn
         self._prompt = prompt_ids
-        self.batch = int(batch or 1)
+        # 0 = ask the pipeline in setup(); see resolve_batch.
+        self._requested_batch = int(batch or 0)
+        self.batch = max(1, self._requested_batch)
         self._pipe = None
         self.stages = []
 
     def _inputs_dict(self):
+        """The prompt, REPLICATED to `batch` rows -- every user gets the FULL sequence.
+
+        This reshaped instead: `torch.tensor(ids).reshape(self.batch, -1)`, which SPLITS one prompt
+        across the rows. At batch 8 a 128-token prompt became eight sequences of 16, so ISL silently
+        fell to a eighth of what the test declared while the scorecard still multiplied throughput by
+        8 -- a batch speedup manufactured out of a shorter sequence. It also raised outright whenever
+        ISL was not divisible by batch.
+
+        Batch B means B users each doing the DECLARED work, so the row count is the only thing that
+        changes with B; the sequence length does not.
+        """
         if self._prompt is None:
             return None
         import torch
 
-        ids = [int(x) for x in self._prompt]
-        return {"input_ids": torch.tensor(ids, dtype=torch.long).reshape(self.batch, -1)}
+        ids = torch.tensor([int(x) for x in self._prompt], dtype=torch.long).reshape(-1)
+        return {"input_ids": ids.unsqueeze(0).expand(self.batch, ids.numel()).contiguous()}
 
     def _call_with_inputs(self, fn, primary):
         try:
@@ -165,6 +237,7 @@ class PipelineStageAdapter:
 
     def setup(self, device) -> None:
         p = self._pipe = self._build(device)
+        self.batch = resolve_batch(p, self._requested_batch)
         stages = []
         _stage_names = getattr(p, "PIPELINE_STAGES", None)
         if not _stage_names:

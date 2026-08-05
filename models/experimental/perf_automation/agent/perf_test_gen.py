@@ -40,6 +40,13 @@ PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
 # reader never has to guess the conditions.
 PERF_ISL_TOKENS = int(os.environ.get("TT_PERF_ISL_TOKENS", "128"))
 PERF_OSL_TOKENS = int(os.environ.get("TT_PERF_OSL_TOKENS", "128"))
+# BATCH BELONGS TO THE MODEL, not to this generator. It was written into the generated test as a
+# literal `batch=1`, so a pipeline emit-e2e built to serve 8 users was measured serving one, and its
+# aggregate throughput under-reported by 8x. 0 means "ask the pipeline" -- it already knows, via
+# max_batch_size / batch_size / batch, whichever it exposes -- and any positive value overrides, for
+# sweeping batch without rebuilding the demo. Unlike ISL and OSL, which are the TOOL's choice of
+# measurement condition, batch is a property of the artifact under test.
+PERF_BATCH = int(os.environ.get("TT_PERF_BATCH", "0"))
 # DEPTH. A POSITIVE TT_PERF_LAYERS caps the profiled window so a deep model's marker stream (x mesh
 # chips) does not overflow the profiler; the tool sends that number for tracy runs. The variable being
 # ABSENT means ALL LAYERS -- the tool expresses "whole model" by REMOVING the cap, never by sending a
@@ -54,7 +61,7 @@ PERF_LAYERS = int(_pl) if (_pl.isdigit() and int(_pl) > 0) else None
 # unset env behaves exactly as the demo does. If the source uses a `mesh_device` FIXTURE, keep that
 # fixture + its parametrize and feed this tuple in; if it SELF-OPENS, pass it to MeshShape().
 # A copied MESH_DEVICE board table on its own cannot see --devices/--mesh.
-from models.experimental.perf_automation.agent.perf_adapter import resolve_mesh_shape
+from models.experimental.perf_automation.agent.perf_adapter import resolve_batch, resolve_mesh_shape
 _MESH_SHAPE = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)
 
 _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
@@ -120,7 +127,7 @@ def test_<task>_perf(device_params, device):
         print("PERF_OSL_TOKENS=%d" % PERF_OSL_TOKENS, flush=True)
         # Stage adapter profiles WHATEVER emit-e2e emitted: every PIPELINE_STAGES entry gets
         # traced. Falls back to the single decode contract for pipelines that expose only decode_step.
-        measure_adapter(PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=1), device)
+        measure_adapter(PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=PERF_BATCH), device)
 
     def _try_traced():
         try:
@@ -162,7 +169,7 @@ import ttnn
 # unset env behaves exactly as the demo does. If the source uses a `mesh_device` FIXTURE, keep that
 # fixture + its parametrize and feed this tuple in; if it SELF-OPENS, pass it to MeshShape().
 # A copied MESH_DEVICE board table on its own cannot see --devices/--mesh.
-from models.experimental.perf_automation.agent.perf_adapter import resolve_mesh_shape
+from models.experimental.perf_automation.agent.perf_adapter import resolve_batch, resolve_mesh_shape
 _MESH_SHAPE = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)
 
 _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
@@ -195,7 +202,9 @@ def test_<task>_perf(device_params, device):
     assert out is not None                              # perf only — NO PCC
     print("FORWARD_WALL_MS=%.4f" % _ms)
     print("TRACE_PER_TOKEN_MS=%.4f" % _ms)
-    print("TRACE_REPLAY_PATH=trace+1cq native batch=1")
+    # resolve_batch, not PERF_BATCH: 0 means "ask the pipeline", and printing 0 would tell the gate
+    # this run served nobody. This path has the built pipeline in hand, so it can ask.
+    print("TRACE_REPLAY_PATH=trace+1cq native batch=%d" % resolve_batch(pipe, PERF_BATCH))
 """
 
 
@@ -585,8 +594,8 @@ def skeleton_for(root: Path) -> str:
             "            # the single decode contract it does expose: decode_prefill(ids) then decode_step(state).\n",
         )
         .replace(
-            "_adapter = PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=1)",
-            "_adapter = PipelineDecodeAdapter(_build_for_perf, _prompt_ids, batch=1)",
+            "_adapter = PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=PERF_BATCH)",
+            "_adapter = PipelineDecodeAdapter(_build_for_perf, _prompt_ids, batch=PERF_BATCH)",
         )
     )
 
@@ -1197,7 +1206,7 @@ def generate_perf_test(
         "`_DEV_PARAMS`/`device_params` fixture entirely). Keep `_build_for_perf(dev)` building the pipeline "
         "on the passed-in `dev` so both the eager forward and the trace run the SAME sharded topology.\n"
         "- MESH SHAPE — honor the tool's topology, HOWEVER this test obtains its device. The shape MUST come "
-        "from `from models.experimental.perf_automation.agent.perf_adapter import resolve_mesh_shape` / "
+        "from `from models.experimental.perf_automation.agent.perf_adapter import resolve_batch, resolve_mesh_shape` / "
         "`rows, cols = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)`. That is "
         "what lets --devices/--mesh reshape the run (single->1x1, N chips->the planned TP x DP); with the env "
         "unset it returns the source's own shape, so a bare manual run behaves exactly as before. It applies "
