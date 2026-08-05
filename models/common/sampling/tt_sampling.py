@@ -119,6 +119,12 @@ class TTSampling(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
+        # ttnn.topk rejects stable=True outright on any architecture whose LLK lacks the stable bitonic
+        # network -- only Wormhole B0 and Blackhole implement it -- so ask for it just where it exists
+        # instead of taking a TT_FATAL everywhere else. Requesting it is best effort regardless
+        # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what guarantees the greedy pick,
+        # so falling back to the default network costs correctness nothing.
+        self._topk_stable = ttnn.device.is_wormhole_b0(mesh_device) or ttnn.device.is_blackhole(mesh_device)
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
@@ -239,12 +245,14 @@ class TTSampling(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
         )
         # The tie-break sentinel has to outrank every real global index. Vocabularies this large are
-        # far beyond anything shipped, but a silent wrap would corrupt the greedy token rather than
-        # fail, so it is worth one assert at construction.
-        assert self.padded_vocab_size <= TIEBREAK_INDEX_SENTINEL, (
-            f"padded_vocab_size {self.padded_vocab_size} exceeds the greedy tie-break sentinel "
-            f"{TIEBREAK_INDEX_SENTINEL}; raise TIEBREAK_INDEX_SENTINEL (keeping it a power of two)"
-        )
+        # far beyond anything shipped, but exceeding it would corrupt the greedy token silently rather
+        # than fail, so check it at construction. Raise rather than assert: this guards a correctness
+        # invariant and must survive python -O.
+        if self.padded_vocab_size > TIEBREAK_INDEX_SENTINEL:
+            raise ValueError(
+                f"padded_vocab_size {self.padded_vocab_size} exceeds the greedy tie-break sentinel "
+                f"{TIEBREAK_INDEX_SENTINEL}; raise TIEBREAK_INDEX_SENTINEL (keeping it a power of two)"
+            )
         # Persistent per-user ARGMAX mask [1,1,N,1] (1.0 where k==1), distributed like k_tensor. Used by
         # _adjust_values_for_tiebreak to boost the lowest-index tied-max for greedy users only. Built
         # host-side and kept in sync in reset_sampling_params (an on-device reshape of the [N] k_tensor
@@ -803,10 +811,11 @@ class TTSampling(LightweightModule):
                     indices_tensor=indices_tensor_list[i],
                     # Break exact-value ties by lowest index instead of array position, so which
                     # of a set of tied candidates enters the top-k does not depend on placement.
-                    # Best effort only -- the stable bitonic network is still an open LLK issue
+                    # Best effort only, and only where the LLK has the network at all (see
+                    # self._topk_stable) -- the stable bitonic network is an open LLK issue
                     # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
                     # guarantees the greedy pick.
-                    stable=True,
+                    stable=self._topk_stable,
                 )
                 topk_values_list.append(topk_values)
                 topk_indices_list.append(topk_indices)
@@ -842,10 +851,11 @@ class TTSampling(LightweightModule):
                 indices_tensor=self.tt_indices_tensor,
                 # Break exact-value ties by lowest index instead of array position, so which
                 # of a set of tied candidates enters the top-k does not depend on placement.
-                # Best effort only -- the stable bitonic network is still an open LLK issue
+                # Best effort only, and only where the LLK has the network at all (see
+                # self._topk_stable) -- the stable bitonic network is an open LLK issue
                 # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
                 # guarantees the greedy pick.
-                stable=True,
+                stable=self._topk_stable,
             )
 
             # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.
