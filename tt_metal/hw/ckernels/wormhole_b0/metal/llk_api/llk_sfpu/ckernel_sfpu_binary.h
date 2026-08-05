@@ -121,7 +121,7 @@ inline void calculate_sfpu_binary(
             sfpi::vFloat m = in0;
             v_if (in1 > in0) { m = in1; }
             v_endif;
-            sfpi::vFloat exp_neg = _calculate_exponential_body_<is_fp32_dest_acc_en>(-abs_diff);
+            sfpi::vFloat exp_neg = _sfpu_exp_fp32_accurate_(-abs_diff);
             sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = 1.0f + exp_neg;
             _calculate_log_body_<false>(0, dst_index_out);
             result = m + sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi];
@@ -132,7 +132,7 @@ inline void calculate_sfpu_binary(
             sfpi::vFloat m = in0;
             v_if (in1 > in0) { m = in1; }
             v_endif;
-            sfpi::vFloat exp2_neg = _calculate_exponential_body_<is_fp32_dest_acc_en>(-abs_diff * 0.6931472f);
+            sfpi::vFloat exp2_neg = _sfpu_exp_fp32_accurate_(-abs_diff * 0.6931472f);
             sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = 1.0f + exp2_neg;
             _calculate_log_body_<false>(0, dst_index_out);
             result = m + sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * 1.4426950f;
