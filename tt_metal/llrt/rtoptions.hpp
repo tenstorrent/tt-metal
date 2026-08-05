@@ -398,8 +398,9 @@ class RunTimeOptions {
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
-    // Disable shared memory tracking for tt-smi
-    bool shm_tracking_disabled = false;
+    // Disable shared memory tracking for tt-smi. Disabled by default; re-enable with
+    // TT_METAL_SHM_TRACKING_DISABLED=0.
+    bool shm_tracking_disabled = true;
     bool shm_verbose = false;
 
     SanitizerSettings sanitizer_settings;

@@ -602,7 +602,7 @@ bool Device::initialize(
         return true;
     }
 
-    // Create shared memory stats provider (enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1).
+    // Create shared memory stats provider (disabled by default, re-enable with TT_METAL_SHM_TRACKING_DISABLED=0).
     // Snapshot the SHM rtoptions once here -- they are process-wide debug toggles, so capturing
     // them at construction time avoids the SHM helpers having to look up a MetalContext on every
     // allocation (and avoids any "find any context" walk that mock+silicon coexistence forced).
