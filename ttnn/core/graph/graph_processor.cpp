@@ -461,7 +461,14 @@ void GraphProcessor::track_function_start(
     graph[counter].input_tensors = current_input_tensors;
 }
 
-void GraphProcessor::track_function_end_impl() {
+bool GraphProcessor::track_function_end_impl() {
+    // An end with no matching start would index an empty stack. TT_ASSERT compiles out in
+    // release, so check explicitly and drop the event rather than reading out of bounds.
+    if (current_op_id.empty()) {
+        log_warning(tt::LogAlways, "track_function_end without a matching track_function_start; ignoring event");
+        return false;
+    }
+
     // Calculate duration - get end time first for accuracy
     uint64_t duration_ns = 0;
     if (!function_start_times.empty()) {
@@ -496,12 +503,14 @@ void GraphProcessor::track_function_end_impl() {
     if (stacking_level == 1 && capture_detailed_buffer_tracing_ && !captured_mesh_devices.empty()) {
         per_op_buffers_[function_start_id] = ttnn::reports::get_buffers(captured_mesh_devices);
     }
+    return true;
 }
 
 void GraphProcessor::track_function_end() {
     const std::lock_guard<std::mutex> lock(mutex);
-    this->track_function_end_impl();
-    TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
+    if (!this->track_function_end_impl()) {
+        return;
+    }
     current_op_id.pop();
 }
 
@@ -514,7 +523,9 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     };
 
     const std::lock_guard<std::mutex> lock(mutex);
-    this->track_function_end_impl();
+    if (!this->track_function_end_impl()) {
+        return;
+    }
 
     const auto* const it = std::ranges::find(
         end_function_any_map, output_tensors.type(), [](const auto& pair) -> const auto& { return pair.first; });
@@ -524,7 +535,6 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     } else {
         log_debug(tt::LogAlways, "output any type name ignored: {}", output_tensors.type().name());
     }
-    TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
     current_op_id.pop();
 }
 

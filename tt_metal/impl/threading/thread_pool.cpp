@@ -13,6 +13,7 @@
 #include <sys/resource.h>  // Needed for setting process priorities
 #include <numa.h>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/tt_pause.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
@@ -313,16 +314,6 @@ public:
         }
     }
 
-    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override {
-        // If the user does not provide the Device ID tied to this task, determine the thread to use
-        // based on the internally stored thread_idx. Tasks will get round-robined across threads,
-        // when relying on the thread_idx.
-        // If the device id is specified, use the thread tied to the device.
-        uint32_t thread_id =
-            device_idx.has_value() ? phys_device_to_thread_id_[device_idx.value()] : ((thread_idx_++) % num_workers_);
-        workers_[thread_id]->enqueue(std::move(f));
-    }
-
     void wait() override {
         thread_idx_ = 0;  // Reset thread_idx for next call without Device ID specified.
         std::exception_ptr exception;
@@ -337,6 +328,17 @@ public:
         if (exception) {
             std::rethrow_exception(exception);
         }
+    }
+
+protected:
+    void enqueue_impl(std::function<void()>&& f, std::optional<uint32_t> device_idx) override {
+        // If the user does not provide the Device ID tied to this task, determine the thread to use
+        // based on the internally stored thread_idx. Tasks will get round-robined across threads,
+        // when relying on the thread_idx.
+        // If the device id is specified, use the thread tied to the device.
+        uint32_t thread_id =
+            device_idx.has_value() ? phys_device_to_thread_id_[device_idx.value()] : ((thread_idx_++) % num_workers_);
+        workers_[thread_id]->enqueue(std::move(f));
     }
 
 private:
@@ -356,11 +358,21 @@ private:
 class PassThroughThreadPool : public ThreadPool {
 public:
     PassThroughThreadPool() = default;
-    void enqueue(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override { f(); }
     void wait() override {}
+
+protected:
+    // Runs inline on the calling thread, which already owns the capture context, so the
+    // propagation applied by ThreadPool::enqueue is a self-assignment here.
+    void enqueue_impl(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/) override { f(); }
 };
 
 }  // namespace thread_pool_impls
+
+void ThreadPool::enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx) {
+    // Single choke point for graph-capture context propagation: returns `f` untouched
+    // unless a capture is active, so a non-capturing dispatch pays one is_enabled() check.
+    enqueue_impl(GraphTracker::instance().wrap_with_current_context(std::move(f)), device_idx);
+}
 
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id, int num_threads) {
     return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, num_threads);

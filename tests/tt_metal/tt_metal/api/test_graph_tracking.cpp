@@ -5,7 +5,9 @@
 // Host-only tests for tt::tt_metal::GraphTracker focused on its multi-threading
 // contract: `processors` and `hook` are thread_local, so a graph capture pushed
 // on thread A only observes ops dispatched on thread A, and concurrent
-// push/pop on another thread cannot race with the dispatch hot path.
+// push/pop on another thread cannot race with the dispatch hot path. Work handed
+// to a thread pool is the one exception — `wrap_with_current_context` installs the
+// enqueuing thread's processors on the worker for the duration of the task.
 
 #include <gtest/gtest.h>
 
@@ -35,6 +37,24 @@ public:
     void track_function_end() override { function_ends.fetch_add(1); }
 
     void track_function_end(const std::any& /*output_tensors*/) override { function_ends.fetch_add(1); }
+};
+
+// Stands in for permanently-registered background processors such as ShmTrackingProcessor,
+// which is pushed at device init and never popped.
+class BackgroundProcessor : public CountingProcessor {
+public:
+    bool is_capture_processor() const override { return false; }
+};
+
+class SuppressingHooks : public IGraphHooks {
+public:
+    bool hook_allocate(const Buffer* /*buffer*/) override { return true; }
+    bool hook_deallocate(Buffer* /*buffer*/) override { return true; }
+    bool hook_program(Program* /*program*/) override { return true; }
+    bool hook_write_to_device(const Buffer* /*buffer*/) override { return true; }
+    bool hook_read_from_device(Buffer* /*buffer*/) override { return true; }
+    bool hook_read_from_device(const distributed::MeshBuffer* /*mesh_buffer*/) override { return true; }
+    bool hook_write_to_device(const distributed::MeshBuffer* /*mesh_buffer*/) override { return true; }
 };
 
 }  // namespace
@@ -198,6 +218,65 @@ TEST(GraphTrackerThreading, WrapIsTransparentWhenNoCaptureActive) {
 
     EXPECT_EQ(ran.load(), 1);
     EXPECT_TRUE(tracker.get_processors().empty());
+}
+
+// Background processors (ShmTrackingProcessor is registered at device init and never
+// popped) leave `processors` non-empty on an ordinary run. The no-capture fast path must
+// key off is_enabled(), not emptiness, or every dispatch would copy the processor stack
+// onto the worker — adding allocations to the hot path and letting a background processor
+// observe worker-thread events it never saw before.
+TEST(GraphTrackerThreading, WrapIsTransparentWithOnlyBackgroundProcessors) {
+    auto& tracker = GraphTracker::instance();
+    tracker.clear();
+
+    auto background = std::make_shared<BackgroundProcessor>();
+    tracker.push_processor(background);
+    ASSERT_FALSE(tracker.is_enabled());
+    ASSERT_FALSE(tracker.get_processors().empty());
+
+    auto task = tracker.wrap_with_current_context([]() { GraphTracker::instance().track_function_end(); });
+
+    std::atomic<bool> worker_saw_processors{true};
+    std::thread worker([task = std::move(task), &worker_saw_processors]() mutable {
+        auto& worker_tracker = GraphTracker::instance();
+        worker_tracker.clear();
+        task();
+        worker_saw_processors.store(!worker_tracker.get_processors().empty());
+    });
+    worker.join();
+
+    tracker.pop_processor();
+
+    EXPECT_FALSE(worker_saw_processors.load());
+    EXPECT_EQ(background->function_ends.load(), 0);
+}
+
+// Hooks are intentionally left behind: they change behaviour (under RunMode::NO_DISPATCH
+// they suppress writes and program dispatch) rather than just observing it, so propagating
+// them would alter what offloaded work does. Propagation stays purely additive.
+TEST(GraphTrackerThreading, WrapDoesNotPropagateHook) {
+    auto& tracker = GraphTracker::instance();
+    tracker.clear();
+
+    auto processor = std::make_shared<CountingProcessor>();
+    tracker.push_processor(processor);
+    ASSERT_TRUE(tracker.add_hook(std::make_shared<SuppressingHooks>()));
+
+    auto task = tracker.wrap_with_current_context([]() {});
+
+    std::atomic<bool> worker_had_hook{true};
+    std::thread worker([task = std::move(task), &worker_had_hook]() mutable {
+        auto& worker_tracker = GraphTracker::instance();
+        worker_tracker.clear();
+        task();
+        worker_had_hook.store(worker_tracker.get_hook() != nullptr);
+    });
+    worker.join();
+
+    tracker.pop_processor();
+    tracker.clear_hook();
+
+    EXPECT_FALSE(worker_had_hook.load());
 }
 
 // The wrapper must restore whatever capture state the worker thread already had,

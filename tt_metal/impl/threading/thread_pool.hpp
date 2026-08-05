@@ -24,8 +24,16 @@ public:
     // DeviceBoundThreadPool), the worker thread "closest" to the physical device will be used to execute
     // the specified task. This can lead to better host performance. If not specified, the thread-pool
     // will choose a thread based on a round robin distribution strategy.
-    virtual void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) = 0;
+    //
+    // Non-virtual so that every task, regardless of pool implementation or call site, gets any active
+    // graph-capture context propagated onto the worker thread that runs it. Graph-capture state is
+    // thread_local, so without this a task would run with an empty processor list and silently drop the
+    // events it fires. This is a no-op unless a capture is active. See GraphTracker's threading contract.
+    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt);
     virtual void wait() = 0;
+
+protected:
+    virtual void enqueue_impl(std::function<void()>&& f, std::optional<uint32_t> device_idx) = 0;
 };
 
 // API accespting the number of threads to spawn in the pool. Will bind each thread to a CPU core, but the
