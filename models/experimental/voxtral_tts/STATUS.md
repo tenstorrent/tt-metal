@@ -1553,6 +1553,54 @@ cores against 21.2 on 32" as a contrast to this one. Those are isolated-norm tim
 §6.18 showed is anti-correlated with end-to-end. The real contrast is much narrower: both grids are
 nearly free, the norm's end-to-end spread is 0.16 ms and this one's is 0.02.
 
+### 6.20 — sharding control DOES unlock something: 0.454 ms/frame, bit-exact
+
+Asked whether hand-rolling `nlp_create_qkv_heads_decode`, `paged_update_cache` and `sdpa_decode`
+would be faster, since we could then control the sharding. **Hand-rolling: no, and it was already
+tried. The underlying intuition: yes, and it was worth the largest single win of the session.**
+
+**Why not hand-rolling.** A hand-rolled decode interior was built and measured, and the fused
+decode-native path beat it by **6.6 ms/frame** ([gpt-05]) — more than double the entire 2.34 ms those
+three ops cost today. Block 2's hand-rolled head split measured 158 µs against the fused op's 122
+([flow-10]). Cost here is per-LAUNCH, and every hand-rolled decomposition trades one op for three to
+eight, so it is the wrong direction by construction.
+
+**But the sharding really was blocking a fused op.** `ttnn.experimental.paged_fused_update_cache`
+exists, writes both caches in one call, and we had never used it. It refuses K and V on the same
+core — and `nlp_create_qkv_heads_decode` puts q, k and v all on core (0,0) by default. The chain to
+unblock it, each link forced by the next:
+
+1. `nlp_create_qkv_heads_decode(..., overlap_qk_coregrid=False)` puts q on (0,0), k on (1,0).
+2. That flag asserts `head_dim % shard_width == 0` — a whole head per core. `_QKV_WIDTH/48 = 128` is
+   **exactly one head**, and the only feasible width: 64 columns would need 96 cores. So the qkv
+   shard moves 8 → 48 cores, which the §6.19 sweep had already shown costs nothing (+0.014 ms, inside
+   the 0.020 ms spread).
+3. With k on (1,0), rope breaks — **silently, returning 3.376e+38, uninitialised L1** — because
+   `_ROPE_SHARD` pins cos/sin to (0,0) and rope reads its table from the tensor's own core. Fixed with
+   a second cos/sin pinned to (1,0). Built once per FRAME, so ~4 extra launches.
+4. `paged_fused_update_cache` then validates, and 52 cache-write launches per frame become 26.
+
+| | ms/step | vs shipped | output |
+|---|---|---|---|
+| shipped: overlap=True, 2x update | 24.406 | — | — |
+| overlap=False + k-rope, 2x update | 24.388 | +0.017 | **bit-exact** |
+| **overlap=False + k-rope, 1x fused update** | **23.952** | **+0.454** | **bit-exact** |
+
+Spread 0.004–0.014 ms, so 0.454 is ~30x the noise. **Bit-exactness verified at the gate**: all six
+columns of `--gate decode` on 15 prompts are byte-identical to before — mean 0.92%, p90 1.28%, max
+3.05%, min PCC 0.999040, both spreads. Pipeline: **−0.44 ms/frame** over 12 comparable cases, RTF
+0.61–0.71, long-form WER 0 of 298, 15/15 `[END_AUDIO]`, voice identity PASS, 122/122 tests.
+
+**AND THE ISOLATED AND PIPELINE NUMBERS AGREE FOR ONCE** — 0.454 against 0.44, where §6.17 and §6.18
+each showed a factor of ~3 shortfall. The difference is what the change *does*: removing launches is
+layout-neutral, so nothing downstream re-optimises around it. Grid and blocking changes alter how
+every consumer receives its data, which is exactly why they measure differently in isolation.
+
+**Two things to keep straight if this is ever touched.** The 48-core qkv shard is now
+**load-bearing**, not cosmetic — drop it back to 8 and `overlap_qk_coregrid=False` fails to build and
+the chain collapses. And rope reading the wrong core does **not raise**; it returns ~FLT_MAX, so any
+future change to head placement must re-check the rope tables rather than trust a clean run.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
