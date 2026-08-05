@@ -266,7 +266,7 @@ void kernel_main() {
                         uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
 #ifdef UNTILIZE_OUT
-                        // Reread the rows we already wrote, so the next group can accumulate onto them.
+                        // Reread the rows written; the next group accumulates onto them.
                         groupnorm_gather_rm_block<tile_width, tile_height, block_w, datum_size_bytes>(
                             noc,
                             dst_a,
