@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from dit_analyzer import GraphBuilder, analyze_graph, load_graph  # noqa: E402
+from dit_analyzer.analysis import run_forward  # noqa: E402
 from dit_analyzer.capture import Trace, TraceOp, trace_to_graph  # noqa: E402
 from dit_analyzer.ir import Dist, Graph, Mesh  # noqa: E402
 from dit_analyzer.region import Box, RegionSet  # noqa: E402
@@ -228,6 +229,43 @@ def test_unknown_op_taints_confidence():
     report = analyze_graph(b.finish([out]))
     assert any(d.code == "UNKNOWN_OP" for d in report.diagnostics)
     assert all(f.confidence == "suspicious" for f in report.findings), [(f.rule, f.confidence) for f in report.findings]
+
+
+def test_gqa_split_qkv_gives_each_device_its_grouped_kv_heads():
+    """Per-device fused QKV with kv_heads < heads (Qwen3-VL / MiniMax-H3).
+
+    Global: 8 q heads, 4 kv heads, head_dim 4 -> fused width (8+2*4)*4 = 64,
+    fractured over TP=4. Each device slice holds [q(2h) | k(1h) | v(1h)]: 2 q heads
+    but only 1 k and 1 v head, so the analyzer must map columns to heads per output.
+    """
+    b = GraphBuilder("gqa", MESH)
+    qkv = b.input("qkv", [1, 6, 64], shard={TP: 2})  # fused feature axis fractured over TP
+    q, k, v = b.split_qkv_heads(qkv, heads=8, head_dim=4, kv_heads=4)
+    graph = b.finish([q, k, v])
+    node = next(n for n in graph.nodes if n.op == "split_qkv_heads")
+    assert node.attrs["heads"] == 8 and node.attrs["kv_heads"] == 4
+    fwd = run_forward(graph)
+    for dev in MESH.devices():
+        t = MESH.index_in_group(dev, TP)  # 0..3: which TP slice this device is
+        assert fwd.final[q.id].regions[dev].bounds(1) == (2 * t, 2 * t + 2), dev
+        assert fwd.final[k.id].regions[dev].bounds(1) == (t, t + 1), dev
+        assert fwd.final[v.id].regions[dev].bounds(1) == (t, t + 1), dev
+        assert fwd.final[q.id].regions[dev].bounds(2) == (0, 6), dev  # full sequence
+
+
+def test_embedding_output_is_hidden_fractured_like_the_weight():
+    """A hidden-parallel embedding table yields a hidden-fractured activation."""
+    b = GraphBuilder("emb", MESH)
+    ids = b.input("ids", [1, 6], dtype="int32")  # token ids, replicated
+    w = b.param("wte", [100, 32], shard={TP: 1})  # [V, H], hidden fractured over TP
+    y = b.embedding(ids, w)
+    fwd = run_forward(b.finish([y]))
+    st = fwd.final[y.id]
+    assert st.dist.shard[TP] == 2  # output hidden (last) axis carries the weight's shard
+    assert st.dist.shard[SP] is None
+    for dev in MESH.devices():
+        t = MESH.index_in_group(dev, TP)
+        assert st.regions[dev].bounds(2) == (8 * t, 8 * t + 8), dev  # 32 / 4 hidden per device
 
 
 def test_mergeable_hint_is_not_a_redundancy_finding():

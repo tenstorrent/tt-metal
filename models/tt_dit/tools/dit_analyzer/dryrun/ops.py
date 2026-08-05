@@ -602,19 +602,47 @@ def dit_fused_distributed_rmsnorm(x, mesh_axis=None, mesh_device=None, semaphore
 
 
 def nlp_create_qkv_heads(inp: Tensor, num_heads: int = 1, num_kv_heads: int = 0, **k):
+    """Move heads onto axis 1 -- two call shapes share this ttnn op.
+
+    ``num_kv_heads == 0`` (LTX / Ideogram / Wan, ``out, _, _ = ...``): a *single*
+    already-projected ``[_, B, N, num_heads*head_dim]`` tensor, one head-split output.
+
+    ``num_kv_heads > 0`` (Qwen3-VL / Gemma / MiniMax-H3, ``q, k, v = ...``): a *fused*
+    per-device ``[.., 1, N, (num_heads + 2*num_kv_heads)*head_dim]`` tensor, split into
+    q (``num_heads``) and grouped-query k, v (``num_kv_heads``). All counts are local
+    (per-device); the global head count is ``count * tp``.
+    """
     m = _feature_mesh_axis(inp)
-    total = num_heads * (CTX.mesh.shape[m] if m is not None else 1)
-    b, n, f = inp.logical[1], inp.logical[2], inp.logical[3]
-    head_dim = f // total
-    out = recorder.emit(
-        "split_heads",
+    tp = CTX.mesh.shape[m] if m is not None else 1
+    if not num_kv_heads:
+        total = num_heads * tp
+        b, n, f = inp.logical[1], inp.logical[2], inp.logical[3]
+        head_dim = f // total
+        out = recorder.emit(
+            "split_heads",
+            [inp],
+            [b, total, n, head_dim],
+            _remap_dist(inp.dist, {3: 1, 2: 2, 1: 0}),
+            attrs={"head_dim": head_dim},
+            base="heads",
+        )
+        return out, None, None
+    b, n, f = inp.logical[0], inp.logical[-2], inp.logical[-1]
+    head_dim = f // ((num_heads + 2 * num_kv_heads) * tp)
+    total_q, total_kv = num_heads * tp, num_kv_heads * tp
+    out_dist = _remap_dist(inp.dist, {len(inp.logical) - 1: 1, len(inp.logical) - 2: 2})
+    outs = [
+        ([b, total_q, n, head_dim], out_dist),
+        ([b, total_kv, n, head_dim], out_dist),
+        ([b, total_kv, n, head_dim], out_dist),
+    ]
+    return recorder.emit_multi(
+        "split_qkv_heads",
         [inp],
-        [b, total, n, head_dim],
-        _remap_dist(inp.dist, {3: 1, 2: 2, 1: 0}),
-        attrs={"head_dim": head_dim},
-        base="heads",
+        outs,
+        attrs={"heads": total_q, "kv_heads": total_kv, "head_dim": head_dim, "qkv_layout": "per_device"},
+        base="qkv",
     )
-    return out, None, None
 
 
 def concatenate_heads(x: Tensor, **k) -> Tensor:
@@ -695,6 +723,20 @@ def split_query_key_value_and_split_heads(x, num_heads: int = 1, **k):
     )
 
 
+def embedding(inp: Tensor, weight: Tensor, **k) -> Tensor:
+    """Token-id lookup: ``[.., S] x [V, H] -> [.., S, H]``.
+
+    The ids are replicated; the produced activation inherits the weight's hidden
+    (last-axis) sharding, so a hidden-parallel embedding table yields a
+    hidden-fractured output (Qwen3-VL / MiniMax-H3 `Embedding(mesh_axes=[None, tp])`).
+    """
+    hidden = weight.logical[-1]
+    out_logical = list(inp.logical) + [hidden]
+    wl, ol = len(weight.logical), len(out_logical)
+    out_dist = _remap_dist(weight.dist, {wl - 1: ol - 1})
+    return recorder.emit("embedding", [inp, weight], out_logical, out_dist, base="embed")
+
+
 # -----------------------------------------------------------------------------
 # op tables: ttnn.<name>, ttnn.experimental.<name>, ttnn.transformer.<name>
 # -----------------------------------------------------------------------------
@@ -725,6 +767,7 @@ TENSOR_OPS = {
     "conv2d": conv2d,
     "group_norm": group_norm,
     "softmax": softmax,
+    "embedding": embedding,
     "copy": copy,
     "add_": _inplace("add"),
     "multiply_": _inplace("mul"),

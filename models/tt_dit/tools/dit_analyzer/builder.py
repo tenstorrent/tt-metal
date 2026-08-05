@@ -233,14 +233,33 @@ class GraphBuilder:
 
     # -- attention ------------------------------------------------------------
     def split_qkv_heads(
-        self, qkv: Value, heads: int, head_dim: int, label: Optional[str] = None
+        self,
+        qkv: Value,
+        heads: int,
+        head_dim: int,
+        kv_heads: Optional[int] = None,
+        qkv_layout: str = "per_device",
+        label: Optional[str] = None,
     ) -> Tuple[Value, Value, Value]:
+        """Fused QKV -> q, k, v. ``kv_heads`` (< ``heads``) makes it grouped-query."""
+        kv = kv_heads if kv_heads is not None else heads
         b, s = qkv.shape[0], qkv.shape[1]
+        counts = (heads, kv, kv)
         outs = [
-            self._symbol((label or "qkv") + "_" + n, [b, heads, s, head_dim], qkv.symbol.dtype) for n in ("q", "k", "v")
+            self._symbol((label or "qkv") + "_" + n, [b, counts[i], s, head_dim], qkv.symbol.dtype)
+            for i, n in enumerate(("q", "k", "v"))
         ]
-        self._node("split_qkv_heads", [qkv], outs, {"heads": heads, "head_dim": head_dim}, label=label)
+        attrs = {"heads": heads, "head_dim": head_dim, "qkv_layout": qkv_layout}
+        if kv_heads is not None:
+            attrs["kv_heads"] = kv
+        self._node("split_qkv_heads", [qkv], outs, attrs, label=label)
         return outs[0], outs[1], outs[2]
+
+    def embedding(self, ids: Value, weight: Value, label: Optional[str] = None) -> Value:
+        """Token-id lookup [.., S] x [V, H] -> [.., S, H]."""
+        y = self._symbol(label or "embed", list(ids.shape) + [weight.shape[-1]], weight.symbol.dtype)
+        self._node("embedding", [ids, weight], [y], {}, label=label)
+        return y
 
     def split_heads(self, x: Value, heads: int, head_dim: int, label: Optional[str] = None) -> Value:
         """nlp_create_qkv_heads / fused norm+split: [1, N, H*Dh] -> [1, H, N, Dh]."""

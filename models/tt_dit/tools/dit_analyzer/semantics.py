@@ -495,6 +495,45 @@ register(
     ),
     aliases=("ttnn.conv2d",),
 )
+
+
+def _embedding_apply(c: ApplyCtx) -> None:
+    """[.., S] x [V, H] -> [.., S, H], hidden-parallel like a col-parallel matmul.
+
+    A data-dependent row gather, so the result is a fresh value on every device;
+    its hidden axis is fractured wherever the weight's hidden axis (its last) is.
+    """
+    from .state import device_region
+
+    ys = c.out_sym(0)
+    dist = Dist.replicated(c.mesh)
+    if len(c.node.inputs) > 1:
+        w, ws = c.in_state(1), c.in_sym(1)
+        for m in range(len(c.mesh.shape)):
+            a = w.dist.shard[m]
+            if a is not None and _axis(a, ws.ndim) == _cols_axis(ws):  # weight hidden axis (last)
+                dist = dist.with_shard(m, _cols_axis(ys))  # -> output hidden axis (last)
+    regions = {d: device_region(c.mesh, ys, dist, d) for d in c.mesh.devices()}
+    c.define(0, dist, regions, derive_value_id("embedding", c.value_of_inputs(), c.node.attrs), c.tainted_inputs())
+
+
+def _embedding_demand(c: DemandCtx) -> None:
+    # A data-dependent gather: any id may select any row, so demand the whole id
+    # tensor and whatever weight rows each device holds.
+    for i in range(len(c.node.inputs)):
+        c.need_all_local(i)
+
+
+register(
+    OpSpec(
+        "embedding",
+        COMPUTE,
+        _embedding_apply,
+        _embedding_demand,
+        doc="Token-id lookup [.., S] x [V, H] -> [.., S, H]; hidden fractured where the weight's hidden axis is.",
+    ),
+    aliases=("ttnn.embedding",),
+)
 register(
     OpSpec(
         "matmul",
@@ -949,33 +988,67 @@ def _qkv_layout(node: Node) -> str:
     return node.attrs.get("qkv_layout", "per_device")
 
 
+def _qkv_heads_layout(node: Node) -> Tuple[int, int, int]:
+    """``(q_heads, kv_heads, head_dim)`` for a split_qkv node.
+
+    ``kv_heads`` defaults to ``q_heads`` for plain multi-head attention; it is
+    smaller under grouped-query attention (Qwen3-VL / MiniMax-H3), where the fused
+    tensor is ``(q_heads + 2*kv_heads)*head_dim`` wide rather than ``3*q_heads*``.
+    """
+    hq = int(node.attrs["heads"])
+    hkv = int(node.attrs.get("kv_heads", hq))
+    return hq, hkv, int(node.attrs["head_dim"])
+
+
+def _shard_size_on(mesh, dist: Dist, sym_axis: int, ndim: int) -> int:
+    """How many devices ``sym_axis`` is fractured across (1 if replicated on it)."""
+    if dist is None:
+        return 1
+    for m in range(len(mesh.shape)):
+        a = dist.shard[m]
+        if a is not None and _axis(a, ndim) == sym_axis:
+            return mesh.size(m)
+    return 1
+
+
 def _split_qkv_apply(c: ApplyCtx) -> None:
-    """[B, S, 3*H*Dh] -> q,k,v each [B, H, S, Dh] (heads on axis 1)."""
+    """[B, S, (Hq+2*Hkv)*Dh] -> q [B,Hq,S,Dh], k,v [B,Hkv,S,Dh] (heads on axis 1).
+
+    GQA-aware: q carries ``heads`` heads, k and v carry ``kv_heads`` (which equals
+    ``heads`` for plain MHA). ``per_device`` means each device's column shard is a
+    self-contained ``[q_local | k_local | v_local]`` block (nlp_create_qkv_heads);
+    otherwise the fused tensor is the global ``[Q | K | V]`` concatenation.
+    """
     x = c.in_state(0)
     xs = c.in_sym(0)
-    heads = int(c.node.attrs["heads"])
-    head_dim = int(c.node.attrs["head_dim"])
+    hq, hkv, hd = _qkv_heads_layout(c.node)
     per_device = _qkv_layout(c.node) == "per_device"
     cols = _cols_axis(xs)
+    tp = _shard_size_on(c.mesh, x.dist, cols, xs.ndim)
+    counts = (hq, hkv, hkv)  # global head count of q, k, v
+    loc = (hq // tp, hkv // tp, hkv // tp)  # per-device head count of q, k, v
+    loc_off = (0, loc[0], loc[0] + loc[1])  # per-device head offset within a shard
+    full_off = (0, hq, hq + hkv)  # global head offset within [Q|K|V]
+    w_local = (hq + 2 * hkv) * hd // tp
     for i in range(len(c.node.outputs)):
         ys = c.out_sym(i)
         regions = {}
         for dev in c.mesh.devices():
             rows = x.regions[dev].bounds(_rows_axis(xs))
+            b = x.regions[dev].bounds(cols)
+            if b is None or rows is None:
+                regions[dev] = RegionSet.empty(ys.ndim)
+                continue
             if per_device:
-                # Each head occupies 3 * head_dim columns of the fused tensor,
-                # so the device's column range maps straight onto its heads.
-                b = x.regions[dev].bounds(cols)
-                span = (b[0] // (3 * head_dim), b[1] // (3 * head_dim)) if b else None
+                di = b[0] // w_local  # which device slice this column range sits in
+                base = loc_off[i] * hd  # local column start of output i's head block
+                s, e = max(b[0] - di * w_local, base), min(b[1] - di * w_local, base + loc[i] * hd)
+                span = (di * loc[i] + (s - base) // hd, di * loc[i] + -(-(e - base) // hd)) if s < e else None
             else:
-                got = _slice_region(x.regions[dev], cols, i * heads * head_dim, (i + 1) * heads * head_dim)
-                b = got.bounds(cols)
-                span = (
-                    ((b[0] - i * heads * head_dim) // head_dim, -(-(b[1] - i * heads * head_dim) // head_dim))
-                    if b
-                    else None
-                )
-            if span is None or rows is None:
+                base = full_off[i] * hd  # global column start of output i's head block
+                s, e = max(b[0], base), min(b[1], base + counts[i] * hd)
+                span = ((s - base) // hd, -(-(e - base) // hd)) if s < e else None
+            if span is None:
                 regions[dev] = RegionSet.empty(ys.ndim)
                 continue
             regions[dev] = RegionSet.of(Box.full(ys.shape).replace_axis(1, *span).replace_axis(2, *rows))
@@ -990,10 +1063,14 @@ def _split_qkv_demand(c: DemandCtx) -> None:
     xid = c.node.inputs[0]
     xs = c.sym(xid)
     x = c.before.get(xid)
-    heads = int(c.node.attrs["heads"])
-    head_dim = int(c.node.attrs["head_dim"])
+    hq, hkv, hd = _qkv_heads_layout(c.node)
     per_device = _qkv_layout(c.node) == "per_device"
     cols = _cols_axis(xs)
+    tp = _shard_size_on(c.mesh, x.dist if x else None, cols, xs.ndim)
+    loc = (hq // tp, hkv // tp, hkv // tp)  # per-device head count of q, k, v
+    loc_off = (0, loc[0], loc[0] + loc[1])  # per-device head offset within a shard
+    full_off = (0, hq, hq + hkv)  # global head offset within [Q|K|V]
+    w_local = (hq + 2 * hkv) * hd // tp
     for i in range(len(c.node.outputs)):
         dem = c.demand_out(i)
         for dev in c.mesh.devices():
@@ -1004,14 +1081,16 @@ def _split_qkv_demand(c: DemandCtx) -> None:
             rows = want.bounds(2)
             box = Box.full(xs.shape).replace_axis(_rows_axis(xs), *rows)
             if per_device:
-                shard = x.regions[dev].bounds(cols) if x else (0, xs.shape[cols])
-                hs = shard[0] // (3 * head_dim)
-                hc = shard[1] // (3 * head_dim) - hs
-                base = shard[0] + i * hc * head_dim
-                box = box.replace_axis(cols, base + (hb[0] - hs) * head_dim, base + (hb[1] - hs) * head_dim)
+                shard = x.regions[dev].bounds(cols) if x else (0, (hq + 2 * hkv) * hd)
+                di = shard[0] // w_local  # which device slice this shard sits in
+                lh0, lh1 = max(0, hb[0] - di * loc[i]), min(loc[i], hb[1] - di * loc[i])
+                if lh0 >= lh1:
+                    continue
+                base = shard[0] + loc_off[i] * hd  # column start of output i's block in this shard
+                box = box.replace_axis(cols, base + lh0 * hd, base + lh1 * hd)
             else:
-                base = i * heads * head_dim
-                box = box.replace_axis(cols, base + hb[0] * head_dim, base + hb[1] * head_dim)
+                base = full_off[i] * hd
+                box = box.replace_axis(cols, base + hb[0] * hd, base + hb[1] * hd)
             c.need(xid, dev, RegionSet.of(box))
 
 
