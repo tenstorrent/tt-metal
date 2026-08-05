@@ -36,12 +36,10 @@ def _canonical_mesh_mapper(mapper_config) -> dict:
     else:
         out = {"strategy": "replicate", "dim": None, "dims": None}
     # Omit defaults so fingerprints stay byte-identical to pre-override cache hashes.
-    override = getattr(mapper_config, "mesh_shape_override", None)
-    if override is not None:
-        out["mesh_shape_override"] = list(override)
-    offset_override = getattr(mapper_config, "mesh_offset_override", (0, 0))
-    if any(offset_override):
-        out["mesh_offset_override"] = list(offset_override)
+    if mapper_config.mesh_shape_override is not None:
+        out["mesh_shape_override"] = list(mapper_config.mesh_shape_override)
+    if any(mapper_config.mesh_offset_override):
+        out["mesh_offset_override"] = list(mapper_config.mesh_offset_override)
     return out
 
 
