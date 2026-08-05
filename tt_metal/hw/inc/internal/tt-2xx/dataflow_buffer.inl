@@ -29,11 +29,15 @@ inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
 }
 #else
-inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) :
-    logical_dfb_id_(logical_dfb_id),
-    local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)),
-    region_tracker_(address_units_to_bytes(local_dfb_interface_.tc_slots[0].base_addr), get_ring_span_bytes()) {
+inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
+    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)) {
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
+    // Declare this DFB's L1 extent to the NOC-debug tracker so a write into it without holding the
+    // lock can be flagged.
+    RECORD_SCOPED_LOCK_EVENT(
+        NocDebuggingEventMetadata::NocDebugEventType::DFB_REGION_START,
+        address_units_to_bytes(local_dfb_interface_.tc_slots[0].base_addr),
+        get_ring_span_bytes());
 }
 #endif
 

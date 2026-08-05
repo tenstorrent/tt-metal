@@ -230,8 +230,9 @@ private:
         // Buffers currently locked by each RISC, reference-counted.
         std::array<std::map<LockedBufferInfo, uint32_t>, MAX_PROCESSORS> locked_buffers{};
 
-        // Live DFB L1 extents on each RISC, reference-counted
-        std::map<L1Extent, uint32_t> dfb_region_refcount;
+        // Live DFB L1 extents on each RISC. A DFB's constructor declares its ring extent, and the firmware
+        // clears this RISC's whole set once the kernel exits.
+        std::array<std::set<L1Extent>, MAX_PROCESSORS> dfb_regions{};
 
         // Latest RISC timestamp for each processor
         std::array<uint64_t, MAX_PROCESSORS> latest_risc_timestamp{};
