@@ -4746,3 +4746,67 @@ parallel factor must have run at all.
 - Amendment 71's fused-FIR proposal remains the *other* lever, and my amendment 103 profile refines its
   target: `Conv2d` is 4.0 % of the stage while concat/ternary/untilize/padded-slice/tilize/permute are
   ~70 %.
+
+---
+
+## Amendment 108 (2026-08-05) — `neighbor_pad_async` is NOT the bug. The halo exchange is correct in isolation
+
+Amendment 107 pointed at `neighbor_pad_async` because the op name surfaced in a stack trace and because
+the T-parallel audio decode delivers garbage on shards >= 1. Isolated and gated it:
+`test_neighbor_pad_t_minimax_h3.py`, factor 4 on the 4-wide axis, against a host-computed expectation,
+**per shard**.
+
+| pad (left, right) | mode | shard 0 | 1 | 2 | 3 |
+|---|---|---|---|---|---|
+| (6, 0) causal | zeros | OK | OK | OK | OK |
+| (6, 0) causal | replicate | OK | OK | OK | OK |
+| (3, 3) same | zeros | OK | OK | OK | OK |
+| (3, 3) same | replicate | OK | OK | OK | OK |
+| (11, 0) causal | zeros | OK | OK | OK | OK |
+| (11, 0) causal | replicate | OK | OK | OK | OK |
+
+`6 passed`. The exchange delivers the right neighbour rows, at three pad widths, in both padding modes,
+on every shard. **So the halo is exonerated and the bug is downstream of it.**
+
+Two design choices made this test able to answer the question:
+
+- **Row `t` carries the value `t`.** A wrong row is then identifiable on sight rather than by distance,
+  the same trick that made amendment 105's permutation readable. The failure message prints which local
+  rows are wrong and what they hold against what they should.
+- **Gated per shard, not on a whole-tensor metric.** Amendment 107's entire diagnosis was *which* shard
+  is wrong; a single PSNR over the concatenation cannot express that.
+
+### Two false starts in writing it, both instructive
+
+1. **`ShardTensorToMesh(dim=1)` is not how the vocoder shards.** It splits 32 ways across the whole
+   mesh, giving a local T of 8 rather than 64, and then `pad_left=11 > 8` trips
+   `neighbor_pad_async_device_operation.cpp:42`. Production uploads **replicated** and shards with
+   `ttnn.mesh_partition(dim=1, cluster_axis=...)`, which splits along *one* mesh axis and leaves the
+   other replicated. A test that shards differently from production is asking a different question, and
+   this one asked it for two runs.
+2. That TT_FATAL — `padding_left <= input_tensor_shape[dim]` — is a *good* error and it was mine, not
+   the op's.
+
+### Where the bug must be
+
+The T-parallel path has two distinct patterns and only one uses the halo:
+
+- **Causal convs** (`audio_ops.py:791`) use `_t_neighbor_pad` — now proven correct.
+- **Transposed / strided convs** (`MiniMaxH3AudioConv1d.forward`) **all-gather T**, compute unsharded,
+  then `_partition_t` back. That should be numerically identical to the unsharded path by construction,
+  which makes any divergence there a bookkeeping error rather than a missing-context one.
+
+So the candidates are now: the gather-compute-partition round trip in the strided convs; the resample
+stages in `audio_resample.py`, where a strided filter on a sharded T needs shard boundaries to respect
+the stride; the `_t_padding` alignment to `TILE_HEIGHT * factor`; or the final assembly.
+
+**Next step: bisect by depth.** Run the vocoder T-parallel and unsharded side by side and compare the
+intermediate activation after each of the 7 upsample stages, to find the first stage that diverges. That
+is `testing-and-accuracy.md`'s "when a gate fails" procedure, and with the halo excluded it is now a
+search over ~7 points rather than over 381 halo calls.
+
+**Method note.** *Being named in a stack trace is not evidence of being wrong.* `neighbor_pad_async`
+appeared in a TT_FATAL under a mis-parameterized run (amendment 107's own second process error) and
+that is the whole reason it became the suspect. Twenty minutes of isolating it at the smallest scope
+exonerated it and cut the search space by two orders of magnitude — which is cheaper than any fix
+attempt would have been.
