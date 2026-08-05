@@ -453,6 +453,19 @@ void kernel_main() {
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_inner_dim_block = (in0_block_w_i == in0_num_blocks_w - 1);
+                // [#48552 DIAG - remove after] block-sharded 0x19 localizer. Prints on MATH (the faulting
+                // TRISC1) so the LAST BS* line in that file before the 0x19 pins the stall point:
+                //   BSLOOP present but no "mmin0-ok" -> stuck in cb_mm_in0.wait_front (tilized act never
+                //     delivered by the mcast reader / tilize never completed for this K-block).
+                //   "mmin0-ok" but no "in1-ok"       -> stuck in cb_in1.wait_front (weights never delivered
+                //     by the DM3 weights mcast).
+                //   "in1-ok" (+ existing MMBLK/MMMV) then fault -> the matmul MVMULs read missing SrcA/SrcB.
+                MATH(DPRINT(
+                    "BSLOOP w={} h={} kb={}/{}\n",
+                    (uint32_t)in1_block_w_i,
+                    (uint32_t)in0_block_h_i,
+                    (uint32_t)in0_block_w_i,
+                    (uint32_t)in0_num_blocks_w));
                 if constexpr (!height_sharded) {
                     if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
                         if constexpr (pack_relu && !fuse_bias) {
@@ -619,7 +632,9 @@ void kernel_main() {
                     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
 
+                MATH(DPRINT("BS kb={} pre-mmin0 n={}\n", (uint32_t)in0_block_w_i, (uint32_t)in0_block_num_tiles));
                 cb_mm_in0.wait_front(in0_block_num_tiles);
+                MATH(DPRINT("BS kb={} mmin0-ok\n", (uint32_t)in0_block_w_i));  // [#48552 DIAG - remove after]
 
                 uint32_t in0_index_subblock_offset = 0;
 #ifdef CHECK_SKIP_COMPUTE
@@ -629,7 +644,9 @@ void kernel_main() {
                 }
 #endif
 
+                MATH(DPRINT("BS kb={} pre-in1 n={}\n", (uint32_t)in0_block_w_i, (uint32_t)in1_block_num_tiles));
                 cb_in1.wait_front(in1_block_num_tiles);
+                MATH(DPRINT("BS kb={} in1-ok\n", (uint32_t)in0_block_w_i));  // [#48552 DIAG - remove after]
 
                 if (last_inner_dim_block) {
                     if constexpr (!fuse_bias) {
