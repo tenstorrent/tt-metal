@@ -28,7 +28,7 @@ void kernel_main() {
 
         // Publish the locked entry address to the writer (stage in local L1, then NOC it across).
         volatile tt_l1_ptr uint32_t* staged = (volatile tt_l1_ptr uint32_t*)(uintptr_t)local_scratch;
-        *staged = dfb.get_write_ptr();
+        *staged = static_cast<uint32_t>(lock.get_ptr().get_address());
         CoreLocalMem<uint32_t> addr_src(local_scratch);
         noc.async_write(
             addr_src,

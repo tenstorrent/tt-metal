@@ -25,29 +25,32 @@ void kernel_main() {
 
     dfb.reserve_back(1);
 
-    // scoped_write_lock() locks the one entry at get_write_ptr(). target_entry_offset picks the write's
-    // slot: 0 = that entry, 0<offset<ring_size = another in-region (unlocked) entry, ==ring_size = past it.
-    uint32_t target_addr = dfb.get_write_ptr() + target_entry_offset;
+    // The write lands at ring_base + target_entry_offset: 0 = the one entry scoped_write_lock() locks,
+    // 0<offset<ring_size = another in-region (unlocked) entry, ==ring_size = past the region.
+    uint32_t ring_base = 0;
     auto do_write = [&]() {
         noc.async_write(
             src_buffer,
             unicast_endpoint,
             write_size,
             {},
-            {.noc_x = self_noc_x, .noc_y = self_noc_y, .addr = target_addr});
+            {.noc_x = self_noc_x, .noc_y = self_noc_y, .addr = ring_base + target_entry_offset});
         noc.async_write_barrier();
     };
 
     if (skip_lock) {
         // Never take the lock: a NOC write into the DFB ring with no lock held -> WRITE_TO_UNLOCKED_DFB.
+        ring_base = dfb.get_write_ptr();
         do_write();
     } else if (write_after_unlock) {
         {
             auto lock = dfb.scoped_write_lock();
+            ring_base = static_cast<uint32_t>(lock.get_ptr().get_address());
         }
         do_write();  // lock released before the write -> also WRITE_TO_UNLOCKED_DFB
     } else {
         auto lock = dfb.scoped_write_lock();
+        ring_base = static_cast<uint32_t>(lock.get_ptr().get_address());
         do_write();  // held lock covers only its entry: offset 0 -> no issue, in-region ->
                      // WRITE_TO_UNLOCKED_DFB, past -> no issue
     }
