@@ -210,8 +210,9 @@ public:
     FORCE_INLINE void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
 
     // ===== CONTROL channel (a pure ready signal, no data block) =====
-    // Broadcast a plain readiness signal (a doorbell). Always plain (EXCLUDE-source) — no data
-    // accompanies it. Pairs with ReceiverPipe::receive_signal().
+    // Broadcast a plain readiness signal (a doorbell). PRE_HANDSHAKE waits for and resets the
+    // configured consumer acknowledgements first, exactly as send() does. The signal itself is
+    // always EXCLUDE-source because no data accompanies it. Pairs with ReceiverPipe::receive_signal().
     void send_signal();
 
 private:
@@ -287,7 +288,9 @@ public:
     // On return the block is in the receiver's dst L1, bit-exact (signal arrival => data arrival).
     void receive(uint32_t round = 0);
 
-    // Wait the control signal. Symmetric with SenderPipe::send_signal(). (Does not use the coords.)
+    // Wait the control signal. Symmetric with SenderPipe::send_signal(). PRE_HANDSHAKE first sends a
+    // readiness acknowledgement to the current sender coordinate; no-handshake mode leaves the
+    // coordinates untouched.
     //   * Flag    — a plain doorbell: returns once the signal arrives, then clears it.
     //   * Counter — returns the monotone round number reached.
     uint32_t receive_signal();

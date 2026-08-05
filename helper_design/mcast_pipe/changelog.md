@@ -6,6 +6,27 @@ feedback round lands.
 
 ---
 
+## Round 19 — signal-only handshake policy and Sort channel split (2026-08-05)
+
+- **Trigger (API-003/MIG-002):** `send_signal()` and `receive_signal()` ignored the channel's
+  handshake bit, forcing Sort to retain a raw reader-ready semaphore around an otherwise migrated
+  row-start event.
+- **API:** handshaked signal-only sends now wait/reset consumer readiness and receivers acknowledge
+  the current sender before waiting. `handshake=false` retains the existing Counter/Flag behavior.
+  No call-site spelling changed and no prior handshaked signal-only caller depended on the exception,
+  so the rollout remains `MCAST_PIPE_API_VERSION 10`.
+- **Sort:** one handshaked row-start Counter channel owns semaphore IDs 0/1; one no-handshake
+  sub-stage Counter channel owns ID 2. The raw reader-ready semaphore is removed. The independent
+  writer-done counter moves to ID 3 and remains operation-owned.
+- **Coverage:** the control-only matrix now covers both handshake policies over 1x2/1x8 and 2/32
+  rounds; the complete cold-cache helper suite passed 77/77. The exact cold-JIT long Sort case,
+  both `Ht=2` deadlock regressions, and all seven long cases passed.
+- **Performance:** three 3-warmup/20-record run medians were 145,201,100.414, 144,983,524.867, and
+  145,768,174.937 ns. Their median is 145,201,100.414 ns, +1.195124% versus the
+  143,486,262.222 ns baseline and within the 1.5% gate.
+
+---
+
 ## Round 18 — self-describing rotating wire, API v10 (2026-08-05)
 
 - **Trigger (API-001):** rotating kernels repeated the host-generated sender span as a third

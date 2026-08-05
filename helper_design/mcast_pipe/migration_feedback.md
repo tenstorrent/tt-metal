@@ -84,7 +84,7 @@ DRAM-config route and the shared 14-case DRAM inventory.
 ## MIG-002 — Sort row-start handshake remains outside the Pipe
 
 - **Date:** 2026-08-04
-- **Status:** Open
+- **Status:** Implemented
 - **Kernels:** `coordinator_single_row_multi_core.cpp` and
   `reader_single_row_multi_core.cpp`
 - **Related API feedback:** `api_feedback.md`, API-003
@@ -110,8 +110,19 @@ migration after API-003 is resolved; the likely formulation is separate
 handshaked row-start and no-handshake sub-stage control channels. The distinct
 writer-done counter should remain operation-owned.
 
-Until then, the migration is behaviorally validated but should not be described
-as having absorbed the complete row-start multicast-handshake block.
+### Resolution
+
+Implemented on 2026-08-05. The host binding emits two contiguous, chained
+`Mcast2D` blocks: a handshaked Counter channel for row start and a no-handshake
+Counter channel for sub-stage release. The coordinator and reader construct
+both Pipe faces once and use the appropriate channel at each protocol point.
+The raw reader-ready semaphore and its explicit atomic increment/wait/reset
+sequence are gone. The writer-done counter remains independent operation
+protocol on semaphore 3.
+
+The exact cold-JIT long case, both `Ht=2` deadlock regressions, and all seven
+long cases passed. A durable source audit rejects reintroduction of the raw
+row-start readiness name and requires both configured channels in the factory.
 
 ## MIG-003 — Let `Mcast2D` own matmul-1D semaphores and splice opaque arg blocks
 

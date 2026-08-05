@@ -248,8 +248,8 @@ def test_coverage(device, variant, rect_name, n_iters, payload_tiles):
     )
 
 
-# ---------- control-only Counter: back-to-back events accumulate without a receiver ACK ----------
-def _run_control_only_counter(device, recv_rect, sender_logical, n_iters):
+# ---------- control-only Counter: both configured handshake policies ----------
+def _run_control_only_counter(device, recv_rect, sender_logical, n_iters, handshake):
     (rx0, ry0), (rx1, ry1) = recv_rect
     sx, sy = sender_logical
     num_recv = (rx1 - rx0 + 1) * (ry1 - ry0 + 1)
@@ -263,7 +263,7 @@ def _run_control_only_counter(device, recv_rect, sender_logical, n_iters):
         ttnn.CoreCoord(sx, sy),
         ttnn.McastConfig(
             base_sem_id=0,
-            handshake=False,
+            handshake=handshake,
             data_ready=ttnn.McastDataReady.Counter,
         ),
     )
@@ -328,13 +328,16 @@ def _run_control_only_counter(device, recv_rect, sender_logical, n_iters):
     output = ttnn.generic_op([input_tensor, output_tensor], pd)
     torch_out = ttnn.to_torch(output).to(torch.int64)
     assert torch.equal(torch_out, torch.full((num_recv, 8), n_iters, dtype=torch.int64))
-    logger.info(f"CONTROL-ONLY Counter rect={recv_rect} sender={sender_logical} N={n_iters}: PASS")
+    logger.info(
+        f"CONTROL-ONLY Counter handshake={handshake} rect={recv_rect} sender={sender_logical} N={n_iters}: PASS"
+    )
 
 
 @pytest.mark.parametrize("rect_name", ["1x2", "1x8"])
 @pytest.mark.parametrize("n_iters", [2, 32])
-def test_control_only_counter(device, rect_name, n_iters):
-    _run_control_only_counter(device, RECTS[rect_name], SENDER, n_iters)
+@pytest.mark.parametrize("handshake", [False, True], ids=["no_handshake", "handshaked"])
+def test_control_only_counter(device, rect_name, n_iters, handshake):
+    _run_control_only_counter(device, RECTS[rect_name], SENDER, n_iters, handshake)
 
 
 # ---------- NoC1 corner-ordering: McastRect must own the per-NoC start/end swap ----------
