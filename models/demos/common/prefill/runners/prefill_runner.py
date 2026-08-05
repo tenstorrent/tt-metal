@@ -676,7 +676,9 @@ def run_request_loop(
             runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, record_dev=metadata_device
         )
         # Interleaved migration: register this chunk's correlation, then migrate any chunk whose layers
-        # have all acked (single-rank: chunk c's acks are visible the moment _compute_and_send returns).
+        # have all acked. Acks arrive ASYNCHRONOUSLY on the D2H path (the LayerAckService reader thread
+        # injects them; _compute_and_send does not sync), so chunk c's acks may still be in flight here —
+        # pump() is cursor-based and picks them up on a later call, with the tail drain below as backstop.
         if migration_driver is not None:
             migration_driver.record_chunk(c, meta["slot_id"], meta["actual_start"], meta["actual_end"])
             logger.info(
@@ -757,11 +759,14 @@ def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in
             kv_actual = c * cfg.chunk_size
             inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
             meta = {"slot_id": slot_id, "actual_start": kv_actual, "actual_end": kv_actual + cfg.chunk_size}
-            metadata_device = None
         else:
-            inp, meta, metadata_device = _d2d_recv(d2d_in)
+            # The received metadata tensor is unused here: standalone emits no layer acks. The ack record
+            # is a per-chunk socket metadata tensor, and rank 0 synthesizes its chunks locally (no inbound
+            # socket, so no record) — single-rank standalone IS rank 0, so there is nothing to ack with.
+            # The D2H ack path is wired in _serve_request only; PREFILL_ENABLE_LAYER_ACK is not read here.
+            inp, meta, _ = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
-        t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out, record_dev=metadata_device)
+        t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
         if first is None:
             first = t
     # Every rank must finish receiving + forwarding the final chunk before any rank reclaims its

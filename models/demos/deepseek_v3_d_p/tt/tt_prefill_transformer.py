@@ -397,6 +397,14 @@ class TtPrefillTransformer(LightweightModule):
                             where "first_token" is a list of results for each temperature
                             (None if return_intermediates=False)
         """
+        # The two ack transports are mutually exclusive: the block takes the d2h_service branch and would
+        # silently drop on_layer_complete, so a caller wiring both would get half the acks it asked for
+        # with no diagnostic. The runner's single-rank and pipeline branches are disjoint today; keep it so.
+        assert d2h_service is None or on_layer_complete is None, (
+            "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
+            "d2h_service and would silently drop on_layer_complete"
+        )
+
         # Chunked prefill ([actual_start, actual_end) set) uses the prebuilt whole-cache indexed rope
         # and writes this chunk at the actual_start offset of user cache_user_id's slot; the single-shot
         # path builds per-call rope for this seq_len. The norm/lm_head/sample tail still runs and a token

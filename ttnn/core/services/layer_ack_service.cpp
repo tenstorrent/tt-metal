@@ -5,6 +5,7 @@
 #include "ttnn/services/layer_ack_service.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <thread>
 #include <vector>
@@ -52,7 +53,7 @@ void LayerAckService::reader_loop() {
         const bool all_ready =
             std::all_of(sockets.begin(), sockets.end(), [](auto* socket) { return socket->has_data(); });
         if (!all_ready) {
-            std::this_thread::yield();
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
             continue;
         }
         d2h_service_.read_metadata(ttsl::Span<std::byte>(metadata.data(), metadata.size()));

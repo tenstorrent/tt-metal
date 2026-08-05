@@ -610,9 +610,12 @@ class TtPrefillBlock(LightweightModule):
                         self.mla.sp_axis,
                     )
             if d2h_service is not None:
-                # Device-op ack on the same CQ as the zero above: no host sync, and no need for the
-                # SubDeviceTraceController's mid-trace ack split the host-callback path below requires —
-                # it is capturable inside the trace as-is.
+                # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
+                # host before the zero has executed, so the ack implies zero-complete with no host sync —
+                # unlike the host-callback path below, which needs an explicit flush.
+                # NOT used under trace: record_dev is the per-chunk socket metadata tensor, so its address
+                # changes every chunk and a capture would bake in a stale one. TtPrefillRuntime.prefill_chunk
+                # asserts d2h_service is None when use_trace.
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=record_dev)
             else:
                 # Trace path: route the ack through the controller. At capture it splits the trace here (a host
