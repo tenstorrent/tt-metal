@@ -19,6 +19,8 @@ The GPT runs in bf16 and its latents are cast to fp32 ROW_MAJOR at the handoff t
 the (fp32) HiFi-GAN decoder.
 """
 
+import time
+
 import torch
 import ttnn
 
@@ -130,11 +132,14 @@ class TtXtts(LightweightModule):
           3. VOCODER: HiFi-GAN on the generated latents.
         Only the host tokenizer / per-token sampling stay eager (the conditioning mel is now
         computed on device, inside the SETUP trace). Assumes a single conditioning chunk (ref wav
-        <= one chunk); returns ``(waveform [1, T_out, 1], codes)``. NOTE: all host->device writes
-        are done BEFORE any capture — writes are fatal inside a trace, so the raw wav is pre-placed
-        and the mel-frontend index cache is warmed by the first _setup() call before capture."""
+        <= one chunk); returns ``(waveform [1, T_out, 1], codes, perf)`` where ``perf`` has
+        ``replay_s`` (execute_trace only — final inference) and ``compile_s`` (warmup + capture).
+        NOTE: all host->device writes are done BEFORE any capture — writes are fatal inside a
+        trace, so the raw wav is pre-placed and the mel-frontend index cache is warmed by the
+        first _setup() call before capture."""
         dev = self.device
         gpt = self.gpt
+        t_all0 = time.perf_counter()
 
         # Pre-place every host input on device up front (no host->device write inside a capture).
         wav_dev = self._wav_chunk_to_device(chunk_wav(cond_wav)[0])  # single conditioning chunk
@@ -154,7 +159,9 @@ class TtXtts(LightweightModule):
         g, prompt_len = _setup()  # g + seeded caches are the trace's persistent outputs
         ttnn.end_trace_capture(dev, stid, cq_id=0)
         ttnn.synchronize_device(dev)
+        t0 = time.perf_counter()
         ttnn.execute_trace(dev, stid, blocking=True)
+        setup_replay_s = time.perf_counter() - t0
         ttnn.release_trace(dev, stid)
 
         # DECODE: FULLY on-device — one captured decode-STEP trace replayed for a fixed budget, with
@@ -163,7 +170,7 @@ class TtXtts(LightweightModule):
         # shape: the noise is drawn on host up front (preprocessing), nothing crosses to host inside
         # the loop, and STOP self-termination becomes a post-loop trim. The sampler now matches the
         # host path in distribution (validated CER ~0.017), so quality no longer regresses vs demo.
-        codes, latents = self.generator.generate_ondevice_traced(
+        codes, latents, decode_replay_s = self.generator.generate_ondevice_traced(
             prompt_len,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
@@ -186,6 +193,17 @@ class TtXtts(LightweightModule):
             wav_dev = voc(ttnn.clone(lat_in), g)
             ttnn.end_trace_capture(dev, vtid, cq_id=0)
             ttnn.synchronize_device(dev)
+            t0 = time.perf_counter()
             ttnn.execute_trace(dev, vtid, blocking=True)
+            vocoder_replay_s = time.perf_counter() - t0
             ttnn.release_trace(dev, vtid)
-        return wav_dev, codes
+        replay_s = setup_replay_s + decode_replay_s + vocoder_replay_s
+        compile_s = max(0.0, time.perf_counter() - t_all0 - replay_s)
+        perf = {
+            "replay_s": replay_s,
+            "compile_s": compile_s,
+            "setup_replay_s": setup_replay_s,
+            "decode_replay_s": decode_replay_s,
+            "vocoder_replay_s": vocoder_replay_s,
+        }
+        return wav_dev, codes, perf
