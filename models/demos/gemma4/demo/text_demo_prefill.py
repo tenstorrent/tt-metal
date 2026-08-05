@@ -1149,3 +1149,107 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
         f"output scale drifted across chunks: first std={first_std:.4f}, last std={last_std:.4f} — "
         f"suspect the ring history read"
     )
+
+
+# ── Test 7: long-context chunked prefill against a CPU reference, by PCC ──────
+
+
+@parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
+@pytest.mark.parametrize("context_len", [8192, 16384, 32768], ids=["ctx_8k", "ctx_16k", "ctx_32k"])
+def test_prefill_long_context_vs_cpu_reference(mesh_device, context_len, reset_seeds, request):
+    """Chunked CP prefill against a whole-sequence CPU reference, chunk by chunk.
+
+    ``test_prefill_long_context_chunked`` can only assert finiteness, spread and a
+    ring-read count. This is the numerical check: each chunk's output is compared to
+    the corresponding slice of a flat CPU forward over the same tokens, so a chunk
+    that read the wrong history — or none — shows up as a PCC collapse on that chunk
+    rather than as plausible-looking output.
+
+    Chunk 0 has no history, so its PCC is the single-chunk baseline. Chunks after it
+    exercise the ring read, and their PCC is the evidence that it works.
+
+    Capped at 32768: the reference forward grows quadratically in the full-attention
+    layers, so 256k extrapolates to ~51 h with an ~8.8 TB eager attention matrix per
+    layer. The larger device targets rest on the ring-read count plus the op-level
+    PCC of 0.99975 from the ring_joint probe.
+    """
+    from models.demos.gemma4.tests import cpu_prefill_reference as cpu_ref
+    from models.demos.gemma4.tt.attention import ring_prefill
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    chunk = LONG_CONTEXT_CHUNK
+    _guard_chunk(request, chunk)
+    mesh_config = _mesh_config(mesh_device)
+    cp = cp_degree(mesh_config)
+    if cp <= 1:
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+
+    model_path = _model_path()
+    reference = cpu_ref.load_long(model_path, context_len)
+    if reference is None:
+        pytest.skip(
+            f"No CPU reference at {cpu_ref.long_reference_path(model_path, context_len)}. Generate with:\n"
+            f"  GEMMA4_CPU_REF_CONTEXT={context_len} python -m models.demos.gemma4.tests.cpu_prefill_reference"
+        )
+
+    tokens_all = reference["tokens"]
+    ref_hidden = reference["hidden"]  # [1, context_len, hidden]
+    n_chunks = context_len // chunk
+    model_args, model, kv_cache, page_table_tt = _build_prefill_model(
+        mesh_device, model_path, chunk, context_len=context_len
+    )
+
+    # Same tokens the reference used, so a drift in tokenization cannot be mistaken
+    # for a numerical problem.
+    fresh, _tok, _plen = cpu_ref.build_token_sequence(model_path, chunk, context_len, model_args.vocab_size)
+    if cpu_ref.hash_tokens(fresh) != cpu_ref.hash_tokens(tokens_all):
+        pytest.skip("CPU reference is stale — token sequence changed; regenerate it")
+
+    ring_prefill.reset_ring_attention_calls()
+    threshold = get_pcc_threshold(request, default=0.93)
+    pccs = []
+    for chunk_idx in range(n_chunks):
+        chunk_start = chunk_idx * chunk
+        tokens = tokens_all[:, chunk_start : chunk_start + chunk].contiguous()
+        host_input = _host_tensor(
+            mesh_device, tokens, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_config=mesh_config, seq_dim=-1
+        )
+        device_input = ttnn.to_device(host_input, device=mesh_device)
+        with _lm_head_deferred(model):
+            embeds, page_table, chunk_page_table, _ = model.transform_and_embed_prefill_inputs_device(
+                device_input, page_table_tt, None, None
+            )
+            out = model.ttnn_prefill_forward(
+                x=embeds,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start,
+                kv_cache=kv_cache,
+                get_last_token=-1,
+                user_id=0,
+            )
+        ttnn.synchronize_device(mesh_device)
+
+        tt_hidden = _cp_gather_torch(out, mesh_device, mesh_config)
+        out.deallocate(True)
+        ref_slice = ref_hidden[:, chunk_start : chunk_start + chunk, :].reshape(1, 1, chunk, model_args.hidden_size)
+        _passing, pcc = compare_tensors(tt_hidden, ref_slice, pcc_threshold=0.0)
+        pccs.append(float(pcc))
+        logger.info(
+            f"[long_ctx_pcc] ctx={context_len} chunk {chunk_idx + 1}/{n_chunks} "
+            f"[{chunk_start}, {chunk_start + chunk}) PCC={pcc}"
+        )
+
+    ring_calls = ring_prefill.ring_attention_calls()
+    logger.info(
+        f"[long_ctx_pcc] ctx={context_len} PCC min={min(pccs):.5f} max={max(pccs):.5f} "
+        f"chunk0={pccs[0]:.5f} ring_reads={ring_calls}"
+    )
+    assert ring_calls == (n_chunks - 1) * len(model.layers), (
+        f"ring attention ran {ring_calls} times, expected {(n_chunks - 1) * len(model.layers)} — "
+        f"the history read did not happen, so these PCCs would not be testing it"
+    )
+    worst = min(pccs)
+    assert worst >= threshold, (
+        f"worst chunk PCC {worst:.5f} below {threshold} (per-chunk: " f"{', '.join(f'{p:.5f}' for p in pccs)})"
+    )
