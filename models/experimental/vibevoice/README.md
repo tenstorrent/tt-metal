@@ -527,7 +527,7 @@ tokenization; untimed warmup (`VV_ISL_WARMUP_TOKENS=32`) then timed `max_new_tok
 
 Steady decode is **~24.7 tok/s** (≈40–41 ms/tok) through mid ISLs, easing slightly to
 **~22.5 tok/s** at full prompt (longer KV). TTFT stays ~5.7s through ISL≈2k, then rises with
-prefill cost to ~30s at full length. Log: `tests/logs/test_e2e_isl_sweep_perf_full_steady.txt`.
+prefill cost to ~30s at full length.
 
 ### Performance tests (Tracy)
 
