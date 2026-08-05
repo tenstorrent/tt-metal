@@ -289,6 +289,22 @@ def _cp_or_replicate_mapper(mesh_device, mesh_config, seq_dim=-2):
     return ttnn.ReplicateTensorToMesh(mesh_device)
 
 
+def _per_token_pcc(actual, expected):
+    """PCC per token row, contracting over hidden only.
+
+    Whole-tensor PCC pools every token together, so a component shared across the
+    sequence carries the score and token order barely registers. Correlating each row
+    against the reference row at the same position removes that: a row that ends up in
+    the wrong place is scored against a different token's activations.
+    """
+    a = actual.reshape(-1, actual.shape[-1]).double()
+    b = expected.reshape(-1, expected.shape[-1]).double()
+    a = a - a.mean(dim=-1, keepdim=True)
+    b = b - b.mean(dim=-1, keepdim=True)
+    denom = (a.norm(dim=-1) * b.norm(dim=-1)).clamp_min(1e-12)
+    return (a * b).sum(dim=-1) / denom
+
+
 def _cp_gather_torch(tensor, mesh_device, mesh_config):
     """Read a CP-sharded mesh tensor back to one torch tensor, in position order.
 
@@ -1208,6 +1224,8 @@ def test_prefill_long_context_vs_cpu_reference(mesh_device, context_len, reset_s
     ring_prefill.reset_ring_attention_calls()
     threshold = get_pcc_threshold(request, default=0.93)
     pccs = []
+    tok_mins = []
+    decoys = []
     for chunk_idx in range(n_chunks):
         chunk_start = chunk_idx * chunk
         tokens = tokens_all[:, chunk_start : chunk_start + chunk].contiguous()
@@ -1235,9 +1253,33 @@ def test_prefill_long_context_vs_cpu_reference(mesh_device, context_len, reset_s
         ref_slice = ref_hidden[:, chunk_start : chunk_start + chunk, :].reshape(1, 1, chunk, model_args.hidden_size)
         _passing, pcc = compare_tensors(tt_hidden, ref_slice, pcc_threshold=0.0)
         pccs.append(float(pcc))
+
+        # Whole-tensor PCC is dominated by structure shared across every token, so it
+        # is blunt about token ORDER: on the 8k reference, a chunk against its own
+        # reversal still scores 0.907. That is the failure this layout could plausibly
+        # produce (chunk-major CP maps local row chunk*L+j to global chunk*C+r*L+j, so
+        # an off-by-one in the permutation misorders rows without losing content).
+        # Per-token PCC contracts over hidden only, so a misplaced row scores as the
+        # wrong token: adjacent tokens sit at 0.77 and distant ones at 0.06.
+        tok_pcc = _per_token_pcc(tt_hidden, ref_slice)
+        tok_mins.append(float(tok_pcc.min()))
+
+        # In-run discrimination control: the same output against a DIFFERENT chunk's
+        # reference. Without it a high PCC is unreadable — it could mean the model is
+        # right, or that any two slices of this reference look alike. They do not
+        # (chunk0 vs chunk1 is 0.112), and this asserts that in-run rather than
+        # relying on the offline spot check.
+        if chunk_idx > 0:
+            decoy_start = (chunk_idx - 1) * chunk
+            decoy = ref_hidden[:, decoy_start : decoy_start + chunk, :].reshape(1, 1, chunk, model_args.hidden_size)
+            _p, decoy_pcc = compare_tensors(tt_hidden, decoy, pcc_threshold=0.0)
+            decoys.append(float(decoy_pcc))
+
         logger.info(
             f"[long_ctx_pcc] ctx={context_len} chunk {chunk_idx + 1}/{n_chunks} "
-            f"[{chunk_start}, {chunk_start + chunk}) PCC={pcc}"
+            f"[{chunk_start}, {chunk_start + chunk}) PCC={pcc} "
+            f"per_token_min={tok_pcc.min():.5f} per_token_mean={tok_pcc.mean():.5f}"
+            + (f" decoy={decoys[-1]:.5f}" if chunk_idx > 0 else "")
         )
 
     ring_calls = ring_prefill.ring_attention_calls()
@@ -1253,3 +1295,23 @@ def test_prefill_long_context_vs_cpu_reference(mesh_device, context_len, reset_s
     assert worst >= threshold, (
         f"worst chunk PCC {worst:.5f} below {threshold} (per-chunk: " f"{', '.join(f'{p:.5f}' for p in pccs)})"
     )
+
+    # Per-token floor. Deliberately looser than the aggregate threshold: single tokens
+    # are noisier than the chunk mean, and this is here to catch misordering, not to
+    # re-litigate accuracy. Reversal-level damage lands far below it.
+    worst_token = min(tok_mins)
+    assert worst_token >= 0.80, (
+        f"worst per-token PCC {worst_token:.5f} below 0.80 — some token rows do not match "
+        f"their reference position, which points at the chunk-major row mapping rather "
+        f"than at numerics (per-chunk mins: {', '.join(f'{p:.5f}' for p in tok_mins)})"
+    )
+
+    # The comparison has to be able to tell chunks apart, or the numbers above mean
+    # nothing. Every ring chunk must match its own reference far better than its
+    # predecessor's.
+    if decoys:
+        assert max(decoys) < worst - 0.2, (
+            f"decoy PCC {max(decoys):.5f} is too close to the real PCC {worst:.5f} — the "
+            f"comparison does not discriminate between chunks, so it cannot be evidence "
+            f"the ring read the right history"
+        )
