@@ -358,7 +358,7 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Aligned_NoViolation_WH) {
     // bits (0x20) differ from the DRAM source's (0x40) — that divergence is
     // exactly what the broken 0xFF mask used to reject.
     constexpr uint32_t buf_size = 8192;
-    auto l1_buf = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto l1_buf = Buffer::create(mesh.get(), buf_size, buf_size, BufferType::L1);
     uint32_t base = static_cast<uint32_t>(l1_buf->address());
     uint32_t l1_dst = ((base + 0xFFu) & ~0xFFu) + 0x20u;  // 256-align, +0x20 -> low5=0, low8=0x20
     ASSERT_GE(l1_dst, base);
@@ -429,7 +429,7 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Aligned_NoViolation_BH) {
     // (0x80) differ from the DRAM source's (0x40) — that divergence is exactly
     // what an over-strict relative mask would wrongly reject.
     constexpr uint32_t buf_size = 8192;
-    auto l1_buf = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto l1_buf = Buffer::create(mesh.get(), buf_size, buf_size, BufferType::L1);
     uint32_t base = static_cast<uint32_t>(l1_buf->address());
     uint32_t l1_dst = ((base + 0xFFu) & ~0xFFu) + 0x80u;  // 256-align, +0x80 -> low6=0, low8=0x80
     ASSERT_GE(l1_dst, base);
@@ -493,7 +493,7 @@ TEST_F(MeshDeviceFixture, NocRead_L1_Aligned_NoViolation) {
     // fire for the wrong reason. The allocator aligns buffer starts to >=16 B, so
     // base and base+16 are both 16-byte aligned.
     constexpr uint32_t buffer_size = 1024;
-    auto buf = Buffer::create(device, buffer_size, buffer_size, BufferType::L1);
+    auto buf = Buffer::create(this->devices_[0].get(), buffer_size, buffer_size, BufferType::L1);
     uint32_t base = static_cast<uint32_t>(buf->address());
     ASSERT_EQ(base & 0xF, 0u);
 

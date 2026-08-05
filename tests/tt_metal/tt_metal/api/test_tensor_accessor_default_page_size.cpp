@@ -69,7 +69,6 @@ constexpr uint32_t TILE_NUM_PAGES = 1;
 constexpr uint32_t TILE_TOTAL_SIZE = TILE_NUM_PAGES * TILE_PAGE_SIZE;
 
 void verify_default_page_size(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const Buffer* input_buffer) {
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -80,7 +79,10 @@ void verify_default_page_size(const std::shared_ptr<distributed::MeshDevice>& me
     auto& prog = workload.get_programs().at(device_range);
 
     auto output_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device, .size = OUTPUT_PAGE_SIZE, .page_size = OUTPUT_PAGE_SIZE, .buffer_type = BufferType::DRAM});
+        .device = mesh_device.get(),
+        .size = OUTPUT_PAGE_SIZE,
+        .page_size = OUTPUT_PAGE_SIZE,
+        .buffer_type = BufferType::DRAM});
 
     CircularBufferConfig cb_config =
         CircularBufferConfig(OUTPUT_PAGE_SIZE, {{0, tt::DataFormat::RawUInt32}}).set_page_size(0, OUTPUT_PAGE_SIZE);
@@ -122,7 +124,6 @@ void verify_runtime_page_size(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const Buffer* input_buffer,
     uint32_t sentinel_page_size) {
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -133,7 +134,10 @@ void verify_runtime_page_size(
     auto& prog = workload.get_programs().at(device_range);
 
     auto output_buffer = CreateBuffer(InterleavedBufferConfig{
-        .device = device, .size = OUTPUT_PAGE_SIZE, .page_size = OUTPUT_PAGE_SIZE, .buffer_type = BufferType::DRAM});
+        .device = mesh_device.get(),
+        .size = OUTPUT_PAGE_SIZE,
+        .page_size = OUTPUT_PAGE_SIZE,
+        .buffer_type = BufferType::DRAM});
 
     CircularBufferConfig cb_config =
         CircularBufferConfig(OUTPUT_PAGE_SIZE, {{0, tt::DataFormat::RawUInt32}}).set_page_size(0, OUTPUT_PAGE_SIZE);
@@ -183,13 +187,13 @@ void verify_runtime_page_size(
 }
 
 std::shared_ptr<Buffer> create_interleaved_buffer(
-    IDevice* device, uint32_t page_size, uint32_t num_pages, BufferType buffer_type) {
+    distributed::MeshDevice* mesh_device, uint32_t page_size, uint32_t num_pages, BufferType buffer_type) {
     return CreateBuffer(InterleavedBufferConfig{
-        .device = device, .size = num_pages * page_size, .page_size = page_size, .buffer_type = buffer_type});
+        .device = mesh_device, .size = num_pages * page_size, .page_size = page_size, .buffer_type = buffer_type});
 }
 
 std::shared_ptr<Buffer> create_legacy_sharded_buffer(
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     uint32_t page_size,
     uint32_t num_pages,
     BufferType buffer_type,
@@ -201,7 +205,7 @@ std::shared_ptr<Buffer> create_legacy_sharded_buffer(
         shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape_in_pages);
 
     return CreateBuffer(tt_metal::ShardedBufferConfig{
-        .device = device,
+        .device = mesh_device,
         .size = num_pages * page_size,
         .page_size = page_size,
         .buffer_type = buffer_type,
@@ -248,32 +252,28 @@ namespace tt::tt_metal {
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedDramRowMajor) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
-        auto buffer = create_interleaved_buffer(device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::DRAM);
+        auto buffer = create_interleaved_buffer(mesh_device.get(), RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::DRAM);
         verify_default_page_size(mesh_device, buffer.get());
     }
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedDramTilized) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
-        auto buffer = create_interleaved_buffer(device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::DRAM);
+        auto buffer = create_interleaved_buffer(mesh_device.get(), TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::DRAM);
         verify_default_page_size(mesh_device, buffer.get());
     }
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1RowMajor) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
-        auto buffer = create_interleaved_buffer(device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::L1);
+        auto buffer = create_interleaved_buffer(mesh_device.get(), RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::L1);
         verify_default_page_size(mesh_device, buffer.get());
     }
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1Tilized) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
-        auto buffer = create_interleaved_buffer(device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::L1);
+        auto buffer = create_interleaved_buffer(mesh_device.get(), TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::L1);
         verify_default_page_size(mesh_device, buffer.get());
     }
 }
@@ -282,10 +282,9 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeInterleavedL1Tili
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeInterleavedDram) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
         // Input is a real interleaved row-major DRAM buffer; its address is passed to the kernel but
         // its page size is NOT -- the accessor must read the page size from the runtime sentinel.
-        auto input = create_interleaved_buffer(device, RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::DRAM);
+        auto input = create_interleaved_buffer(mesh_device.get(), RM_PAGE_SIZE, RM_NUM_PAGES, BufferType::DRAM);
         verify_runtime_page_size(mesh_device, input.get(), RUNTIME_PAGE_SIZE_SENTINEL);
     }
 }
@@ -294,9 +293,8 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeInterleavedDram) 
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDramRowMajor) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
         auto buffer = create_legacy_sharded_buffer(
-            device,
+            mesh_device.get(),
             RM_PAGE_SIZE,
             RM_NUM_PAGES,
             BufferType::DRAM,
@@ -309,18 +307,22 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDram
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedDramTilized) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
         auto buffer = create_legacy_sharded_buffer(
-            device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::DRAM, {TILE_H, TILE_W}, {TILE_H, TILE_W}, {1, 1});
+            mesh_device.get(),
+            TILE_PAGE_SIZE,
+            TILE_NUM_PAGES,
+            BufferType::DRAM,
+            {TILE_H, TILE_W},
+            {TILE_H, TILE_W},
+            {1, 1});
         verify_default_page_size(mesh_device, buffer.get());
     }
 }
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedL1RowMajor) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
         auto buffer = create_legacy_sharded_buffer(
-            device,
+            mesh_device.get(),
             RM_PAGE_SIZE,
             RM_NUM_PAGES,
             BufferType::L1,
@@ -333,9 +335,14 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedL1Ro
 
 TEST_F(MeshDispatchFixture, TensixTensorAccessorDefaultPageSizeLegacyShardedL1Tilized) {
     for (auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
         auto buffer = create_legacy_sharded_buffer(
-            device, TILE_PAGE_SIZE, TILE_NUM_PAGES, BufferType::L1, {TILE_H, TILE_W}, {TILE_H, TILE_W}, {1, 1});
+            mesh_device.get(),
+            TILE_PAGE_SIZE,
+            TILE_NUM_PAGES,
+            BufferType::L1,
+            {TILE_H, TILE_W},
+            {TILE_H, TILE_W},
+            {1, 1});
         verify_default_page_size(mesh_device, buffer.get());
     }
 }

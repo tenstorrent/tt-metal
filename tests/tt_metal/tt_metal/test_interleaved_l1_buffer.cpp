@@ -17,7 +17,8 @@ using namespace tt::tt_metal;
 
 namespace {
 
-void test_interleaved_l1_buffer_impl(IDevice* dev, int num_pages_one, int num_pages_two, uint32_t page_size) {
+void test_interleaved_l1_buffer_impl(
+    distributed::MeshDevice* dev, int num_pages_one, int num_pages_two, uint32_t page_size) {
     uint32_t buffer_size = num_pages_one * page_size;
 
     InterleavedBufferConfig buff_config_0{
@@ -59,5 +60,5 @@ TEST_F(MeshDeviceSingleCardFixture, InterleavedL1Buffer) {
     int num_bank_pages_one = 258;
     int num_bank_pages_two = 378;
 
-    test_interleaved_l1_buffer_impl(devices_[0]->get_devices()[0], num_bank_pages_one, num_bank_pages_two, page_size);
+    test_interleaved_l1_buffer_impl(devices_[0].get(), num_bank_pages_one, num_bank_pages_two, page_size);
 }

@@ -91,7 +91,8 @@ void check_semaphores_are_initialized(
 }  // namespace
 
 TEST_F(MeshDeviceSingleCardFixture, CoreRangeSet) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
 
     CoreRange core_range_one({0, 0}, {1, 1});
@@ -103,7 +104,7 @@ TEST_F(MeshDeviceSingleCardFixture, CoreRangeSet) {
     uint32_t buffer_size = single_tile_size * num_tiles;
 
     InterleavedBufferConfig dram_config{
-        .device = dev, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::DRAM};
+        .device = &mesh_device, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::DRAM};
 
     auto src_dram_buffer = CreateBuffer(dram_config);
 
@@ -115,7 +116,10 @@ TEST_F(MeshDeviceSingleCardFixture, CoreRangeSet) {
             for (auto y = start.y; y <= end.y; y++) {
                 CoreCoord logical_core(x, y);
                 InterleavedBufferConfig l1_config{
-                    .device = dev, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::L1};
+                    .device = &mesh_device,
+                    .size = buffer_size,
+                    .page_size = buffer_size,
+                    .buffer_type = BufferType::L1};
                 auto dst_l1_buffer = CreateBuffer(l1_config);
                 core_to_l1_buffer.emplace(logical_core, dst_l1_buffer);
             }

@@ -58,14 +58,14 @@ static vector<uint32_t> run_mxfp8_typecast(
     uint32_t output_tile_size = tt::tile_size(output_fmt);
 
     InterleavedBufferConfig src_config{
-        .device = dev,
+        .device = &mesh_device,
         .size = num_tiles * input_tile_size,
         .page_size = input_tile_size,
         .buffer_type = BufferType::DRAM};
     auto src_buffer = CreateBuffer(src_config);
 
     InterleavedBufferConfig dst_config{
-        .device = dev,
+        .device = &mesh_device,
         .size = num_tiles * output_tile_size,
         .page_size = output_tile_size,
         .buffer_type = BufferType::DRAM};

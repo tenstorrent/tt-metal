@@ -50,7 +50,6 @@ struct MulReduceScalarConfig {
 };
 
 bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulReduceScalarConfig& config) {
-    IDevice* device = mesh_device.get_devices()[0];
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
 
@@ -61,7 +60,7 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
 
     uint32_t input_buffer_size = config.num_tiles * tile_byte_size;
     tt_metal::InterleavedBufferConfig dram_config = {
-        .device = device,
+        .device = &mesh_device,
         .size = input_buffer_size,
         .page_size = tile_byte_size,
         .buffer_type = tt_metal::BufferType::DRAM};

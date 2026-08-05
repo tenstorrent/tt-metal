@@ -634,7 +634,7 @@ static bool run_dram_accessor(
     uint32_t num_pages = num_dram_banks;
 
     InterleavedBufferConfig buf_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = (size_t)num_pages * bytes_per_txn,
         .page_size = (uint32_t)bytes_per_txn,
         .buffer_type = BufferType::DRAM};

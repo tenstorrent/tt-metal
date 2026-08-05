@@ -55,7 +55,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     const size_t total_buffer_size_bytes = num_cores * per_core_size_bytes;
 
     InterleavedBufferConfig interleaved_buffer_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = total_buffer_size_bytes,
         .page_size = test_config.page_size_bytes,
         .buffer_type = BufferType::DRAM};

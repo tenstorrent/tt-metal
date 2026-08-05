@@ -29,7 +29,8 @@ namespace tt::tt_metal {
 TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -42,8 +43,8 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
     // That arrangement matches the narrative the kernel computes below
     // (overshoot Buffer A upward to stomp Buffer B).
     uint32_t buf_size = 1024;  // 1 KB each
-    auto buffer_b = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto buffer_b = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
+    auto buffer_a = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
 
     uint32_t addr_a = buffer_a->address();
     uint32_t addr_b = buffer_b->address();
@@ -112,15 +113,16 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
 TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
     // Top-down: first allocated lands highest. Order so addr_a < addr_b < addr_c.
     uint32_t buf_size = 1024;
-    auto buffer_c = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_b = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto buffer_c = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
+    auto buffer_b = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
+    auto buffer_a = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
     uint32_t addr_a = buffer_a->address();
     uint32_t addr_b = buffer_b->address();
     uint32_t addr_c = buffer_c->address();
@@ -173,13 +175,14 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
 TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
     uint32_t buf_size = 1024;
-    auto buffer_b = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto buffer_b = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
+    auto buffer_a = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
 
     // Resolve both buffers, write only within bounds of each — the
     // "intended write set" covers every buffer whose bytes change.
@@ -220,13 +223,14 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
 TEST_F(MeshDeviceFixture, Object_Intent_IOArg_Exempt_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
     uint32_t buf_size = 1024;
-    auto buffer_b = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto buffer_b = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
+    auto buffer_a = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
     uint32_t addr_a = buffer_a->address();
     uint32_t addr_b = buffer_b->address();
     ASSERT_LT(addr_a, addr_b);
@@ -277,7 +281,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_GloballyAllocatedCB_Exempt_NoViolation) 
     // Non-exempt L1 buffer, left untouched — makes Object Intent active (snapshots_
     // non-empty) without itself changing (so it never flags).
     uint32_t buf_size = 1024;
-    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto buffer_a = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
     (void)buffer_a;
 
     // Globally-allocated CB backing — exempt from the Object Intent snapshot.
@@ -286,7 +290,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_GloballyAllocatedCB_Exempt_NoViolation) 
     constexpr uint32_t num_pages = 2;
     // Single-bank backing (bank size == CB total_size), required for a
     // globally-allocated CB.
-    auto backing = Buffer::create(device, num_pages * page_size, num_pages * page_size, BufferType::L1);
+    auto backing = Buffer::create(&mesh_device, num_pages * page_size, num_pages * page_size, BufferType::L1);
     CircularBufferConfig cb_config = CircularBufferConfig(num_pages * page_size, {{cb_id, tt::DataFormat::Float16_b}})
                                          .set_page_size(cb_id, page_size)
                                          .set_globally_allocated_address(*backing);
@@ -331,13 +335,14 @@ TEST_F(MeshDeviceFixture, Object_Intent_GloballyAllocatedCB_Exempt_NoViolation) 
 TEST_F(MeshDeviceFixture, Object_Intent_MultiKernel_Core_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
     uint32_t buf_size = 1024;
-    auto buffer_1 = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_2 = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto buffer_1 = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
+    auto buffer_2 = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
 
     // Two kernels on the same core (RISCV_0 + RISCV_1), each resolving and writing
     // only its own buffer within bounds.

@@ -116,22 +116,21 @@ bool single_core_reconfig(
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_bfp16b{
-        .device = device,
+        .device = mesh_device.get(),
         .size = dram_buffer_size_bfp16b,
         .page_size = dram_buffer_size_bfp16b,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt::tt_metal::InterleavedBufferConfig dram_config_bfp8b{
-        .device = device,
+        .device = mesh_device.get(),
         .size = dram_buffer_size_bfp8b,
         .page_size = dram_buffer_size_bfp8b,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt::tt_metal::InterleavedBufferConfig dram_config_out0{
-        .device = device,
+        .device = mesh_device.get(),
         .size = dram_buffer_size_out0,
         .page_size = dram_buffer_size_out0,
         .buffer_type = tt::tt_metal::BufferType::DRAM};

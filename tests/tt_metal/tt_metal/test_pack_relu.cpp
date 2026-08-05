@@ -48,12 +48,18 @@ static void run_pack_relu_test(
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     InterleavedBufferConfig src_config{
-        .device = dev, .size = dram_buffer_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(),
+        .size = dram_buffer_size,
+        .page_size = single_tile_size,
+        .buffer_type = BufferType::DRAM};
     auto src_dram_buffer = CreateBuffer(src_config);
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
     InterleavedBufferConfig dst_config{
-        .device = dev, .size = dram_buffer_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(),
+        .size = dram_buffer_size,
+        .page_size = single_tile_size,
+        .buffer_type = BufferType::DRAM};
     auto dst_dram_buffer = CreateBuffer(dst_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 

@@ -90,14 +90,14 @@ std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const L1Config<T>& test_config) {
     auto* device = mesh_device->get_devices()[0];
     auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-                                            .device = device,
+                                            .device = mesh_device.get(),
                                             .size = test_config.size_bytes,
                                             .page_size = test_config.page_size_bytes,
                                             .buffer_type = test_config.buffer_type,
                                             .buffer_layout = test_config.buffer_layout,
                                             .shard_parameters = test_config.shard_spec()})
                                       : CreateBuffer(tt::tt_metal::BufferConfig{
-                                            .device = device,
+                                            .device = mesh_device.get(),
                                             .size = test_config.size_bytes,
                                             .page_size = test_config.page_size_bytes,
                                             .buffer_type = test_config.buffer_type});
@@ -150,9 +150,8 @@ bool l1_buffer_read_write(const std::shared_ptr<distributed::MeshDevice>& mesh_d
 template <typename T>
 std::shared_ptr<Buffer> make_height_sharded_l1_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const L1Config<T>& test_config) {
-    auto* device = mesh_device->get_devices()[0];
     return CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-        .device = device,
+        .device = mesh_device.get(),
         .size = test_config.size_bytes,
         .page_size = test_config.page_size_bytes,
         .buffer_type = test_config.buffer_type,
@@ -340,7 +339,7 @@ TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
         uint32_t page_size = tt::constants::TILE_HW * sizeof(uint32_t);
         uint32_t total_size = cores.size() * page_size;
         auto buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-            .device = device,
+            .device = mesh_device.get(),
             .size = total_size,
             .page_size = page_size,
             .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,

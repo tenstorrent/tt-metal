@@ -22,7 +22,8 @@ using namespace tt::tt_metal;
 // 4. Host reads from buffer written to in step 2.
 //////////////////////////////////////////////////////////////////////////////////////////
 TEST_F(MeshDeviceSingleCardFixture, DramLoopbackSingleCore) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -33,7 +34,10 @@ TEST_F(MeshDeviceSingleCardFixture, DramLoopbackSingleCore) {
     uint32_t l1_buffer_addr = 400 * 1024;
 
     InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+        .device = &mesh_device,
+        .size = dram_buffer_size,
+        .page_size = dram_buffer_size,
+        .buffer_type = BufferType::DRAM};
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 

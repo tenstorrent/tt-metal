@@ -58,13 +58,17 @@ KernelDescriptor MakeBlankReaderKernel(CoreCoord core = {0, 0}) {
     return kd;
 }
 
-std::shared_ptr<Buffer> MakeDramBuffer(IDevice* device, uint32_t size = 2048) {
-    InterleavedBufferConfig cfg{.device = device, .size = size, .page_size = size, .buffer_type = BufferType::DRAM};
+std::shared_ptr<Buffer> MakeDramBuffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t size = 2048) {
+    InterleavedBufferConfig cfg{
+        .device = mesh_device.get(), .size = size, .page_size = size, .buffer_type = BufferType::DRAM};
     return CreateBuffer(cfg);
 }
 
-std::shared_ptr<Buffer> MakeL1Buffer(IDevice* device, uint32_t size = 2048) {
-    InterleavedBufferConfig cfg{.device = device, .size = size, .page_size = size, .buffer_type = BufferType::L1};
+std::shared_ptr<Buffer> MakeL1Buffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t size = 2048) {
+    InterleavedBufferConfig cfg{
+        .device = mesh_device.get(), .size = size, .page_size = size, .buffer_type = BufferType::L1};
     return CreateBuffer(cfg);
 }
 
@@ -174,17 +178,14 @@ TEST(DescriptorPatching, ResolvedBindings_EmptyAfterAddingCb_IsFalse) {
 // SECTION 2: Device integration tests
 // ============================================================================
 
-class DescriptorPatchingDeviceTest : public GenericMeshDeviceFixture {
-protected:
-    IDevice* device() { return get_mesh_device()->get_devices()[0]; }
-};
+using DescriptorPatchingDeviceTest = GenericMeshDeviceFixture;
 
 // resolve_bindings correctly maps a single per-core buffer arg.
 // Layout: args = [buf_a, 42u] at core {0,0}.
 // Expected: one ResolvedRtArgBinding with kernel_idx=0, core={0,0}, arg_idx=0,
 //           tensor_buffer_idx=0, is_common=false.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_PerCoreBuffer_CorrectTuples) {
-    auto buf_a = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_runtime_args({0, 0}, {buf_a.get(), 42u});
@@ -210,7 +211,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_PerCoreBuffer_Correc
 // resolve_bindings with a buffer at arg index 1 (non-zero position).
 // Layout: args = [99u, buf_a] at core {0,0}. arg_idx should be 1.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferAtNonZeroArgIdx) {
-    auto buf_a = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_runtime_args({0, 0}, {99u, buf_a.get()});
@@ -230,8 +231,8 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_BufferAtNonZeroArgId
 // Layout: args = [buf_a, buf_b] at core {0,0}.
 // Expected: two entries with arg_idx 0 and 1, tensor_buffer_idx 0 and 1.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_TwoBuffers_CorrectIndices) {
-    auto buf_a = MakeDramBuffer(device(), 2048);
-    auto buf_b = MakeDramBuffer(device(), 4096);
+    auto buf_a = MakeDramBuffer(get_mesh_device(), 2048);
+    auto buf_b = MakeDramBuffer(get_mesh_device(), 4096);
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_runtime_args({0, 0}, {buf_a.get(), buf_b.get()});
@@ -253,7 +254,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_TwoBuffers_CorrectIn
 // resolve_bindings for a common (non-per-core) buffer arg.
 // is_common should be true; core field is irrelevant / unused.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonBuffer_IsCommonTrue) {
-    auto buf_a = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_common_runtime_args({50u, buf_a.get()});
@@ -460,8 +461,8 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_NoBufferArgs_Returns
 
 // apply_resolved_bindings patches per-core runtime args with the new buffer's address.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_PatchesPerCoreAddress) {
-    auto buf_a = MakeDramBuffer(device(), 2048);
-    auto buf_b = MakeDramBuffer(device(), 4096);
+    auto buf_a = MakeDramBuffer(get_mesh_device(), 2048);
+    auto buf_b = MakeDramBuffer(get_mesh_device(), 4096);
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_runtime_args({0, 0}, {buf_a.get(), 42u});
@@ -487,8 +488,8 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_PatchesPerCore
 
 // apply_resolved_bindings patches common runtime args with the new buffer's address.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_PatchesCommonAddress) {
-    auto buf_a = MakeDramBuffer(device(), 2048);
-    auto buf_b = MakeDramBuffer(device(), 4096);
+    auto buf_a = MakeDramBuffer(get_mesh_device(), 2048);
+    auto buf_b = MakeDramBuffer(get_mesh_device(), 4096);
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_common_runtime_args({77u, buf_a.get()});
@@ -514,9 +515,9 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_PatchesCommonA
 // apply_resolved_bindings can be called repeatedly with different buffer sets.
 // Each call should update the runtime arg to the current buffer's address.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_RepeatedApplication) {
-    auto buf_a = MakeDramBuffer(device(), 2048);
-    auto buf_b = MakeDramBuffer(device(), 4096);
-    auto buf_c = MakeDramBuffer(device(), 8192);
+    auto buf_a = MakeDramBuffer(get_mesh_device(), 2048);
+    auto buf_b = MakeDramBuffer(get_mesh_device(), 4096);
+    auto buf_c = MakeDramBuffer(get_mesh_device(), 8192);
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_runtime_args({0, 0}, {buf_a.get()});
@@ -543,8 +544,8 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyResolvedBindings_RepeatedApplic
 // to the slow path.  Before the fix, CB-only bindings made empty() return false,
 // causing the fast path to activate for factories that never opted in.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnly_PopulatesCbs_RtArgsEmpty) {
-    auto buf_dram = MakeDramBuffer(device());
-    auto buf_l1 = MakeL1Buffer(device());
+    auto buf_dram = MakeDramBuffer(get_mesh_device());
+    auto buf_l1 = MakeL1Buffer(get_mesh_device());
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     // Old-style: push buffer address as plain uint32_t (no Buffer* binding).
@@ -590,7 +591,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnly_PopulatesCbs_
 // The fix bails out and returns an empty ResolvedBindings, forcing the
 // adapter onto the slow path (rebuild the descriptor) for that cache hit.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_DuplicateBuffer_ReturnsEmpty) {
-    auto buf_a = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     // Two bindings for the same Buffer*, simulating an op that takes the same
@@ -615,7 +616,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_DuplicateBuffer_Retu
 // same-buffer-by-construction alias, not the ambiguous matmul(X, X) case.  With num_input_buffers
 // marking the input/output boundary, resolve_bindings must KEEP the fast path (non-empty bindings).
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_OutputAliasesInput_KeepsFastPath) {
-    auto buf_a = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_runtime_args({0, 0}, {buf_a.get()});
@@ -636,7 +637,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_OutputAliasesInput_K
 // #48928: a duplicate purely WITHIN the input region (two distinct input operands that coincide,
 // matmul(X, X)) must still bail even when num_input_buffers is given.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InputRegionDuplicate_ReturnsEmpty) {
-    auto buf_a = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_runtime_args({0, 0}, {buf_a.get(), buf_a.get()});
@@ -656,7 +657,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InputRegionDuplicate
 // Even with the in-place opt-in ON, the output-alias skip is granted ONCE; the extra input
 // occurrence still bails, so a later same-shape op(X, Y, out=X) cache hit can't patch input-b to X.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_OutputAliasRepeatedInInputs_ReturnsEmpty) {
-    auto buf_a = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_runtime_args({0, 0}, {buf_a.get()});
@@ -681,7 +682,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_OutputAliasRepeatedI
 //   - Default (opt-out): treated as an ambiguous input-region duplicate → BAIL to slow-path rebuild.
 //     This is the safe behavior for ops whose get_dynamic_runtime_args is incomplete.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InplaceOutputTensorInInputs_Default_ReturnsEmpty) {
-    auto buf_a = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_runtime_args({0, 0}, {buf_a.get()});
@@ -700,7 +701,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InplaceOutputTensorI
 //   - Opt-in (allow_inplace_output_tensor_alias=true): the op re-applies every cache-hit-varying arg
 //     itself (binary_ng), so the output_tensor is a safe in-place alias → KEEP the fast path.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InplaceOutputTensorInInputs_OptIn_KeepsFastPath) {
-    auto buf_a = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_runtime_args({0, 0}, {buf_a.get()});
@@ -726,8 +727,8 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InplaceOutputTensorI
 // path patch a changing input/output address on cache hits, so a missing
 // buffer is genuinely unrecoverable.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_RtArgBufferNotInTensorList_Throws) {
-    auto buf_a = MakeDramBuffer(device());
-    auto buf_other = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
+    auto buf_other = MakeDramBuffer(get_mesh_device());
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     kd.emplace_runtime_args({0, 0}, {buf_a.get()});
@@ -749,8 +750,8 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_RtArgBufferNotInTens
 // buffers have stable addresses across dispatches, so the fast path doesn't
 // need a binding for them.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbBufferNotInTensorList_SkipsBindingNoThrow) {
-    auto buf_l1_pegged = MakeL1Buffer(device());   // simulates GlobalCircularBuffer's backing buffer
-    auto buf_l1_in_args = MakeL1Buffer(device());  // a CB buffer that IS in tensor_args
+    auto buf_l1_pegged = MakeL1Buffer(get_mesh_device());   // simulates GlobalCircularBuffer's backing buffer
+    auto buf_l1_in_args = MakeL1Buffer(get_mesh_device());  // a CB buffer that IS in tensor_args
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
     ProgramDescriptor desc;
@@ -805,7 +806,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbBufferNotInTensorL
 // The check was removed; this test pins that behavior so it is not silently
 // reintroduced.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_ScalarMatchingBufferAddress_DoesNotThrow) {
-    auto buf_a = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
     const uint32_t collision_value = buf_a->address();
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
@@ -823,7 +824,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_ScalarMatchingBuffer
 
 // Regression: same idea for common runtime args.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonScalarMatchingBufferAddress_DoesNotThrow) {
-    auto buf_a = MakeDramBuffer(device());
+    auto buf_a = MakeDramBuffer(get_mesh_device());
     const uint32_t collision_value = buf_a->address();
 
     KernelDescriptor kd = MakeBlankReaderKernel({0, 0});

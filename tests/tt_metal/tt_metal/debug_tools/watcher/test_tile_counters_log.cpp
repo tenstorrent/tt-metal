@@ -50,7 +50,7 @@ void RunTest(
 
     // Allocate L1 buffer for sync flag
     tt_metal::InterleavedBufferConfig sync_buffer_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = sizeof(uint32_t),
         .page_size = sizeof(uint32_t),
         .buffer_type = tt_metal::BufferType::L1};

@@ -55,13 +55,14 @@ TEST_F(MeshDeviceFixture, Semaphore_Direct_Write_SanityCheck) {
 TEST_F(MeshDeviceFixture, Semaphore_OutsideRegion_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
     // A normal L1 buffer is allocated well away from the reserved semaphore
     // region (which lives in the low system area near EMULE_SEM_BASE).
-    auto buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto buf = Buffer::create(&mesh_device, 1024, 1024, BufferType::L1);
     uint32_t addr = static_cast<uint32_t>(buf->address());
 
     std::string kernel_src = R"(

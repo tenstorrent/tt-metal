@@ -87,7 +87,6 @@ void run_single_core_cumsum(
     Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -101,7 +100,7 @@ void run_single_core_cumsum(
     uint32_t dram_buffer_size = single_tile_size * test_config.N * test_config.Wt * test_config.Ht;
 
     tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = dram_buffer_size,
         .page_size = dram_buffer_size,
         .buffer_type = tt_metal::BufferType::DRAM};

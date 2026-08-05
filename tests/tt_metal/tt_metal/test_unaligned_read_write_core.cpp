@@ -41,7 +41,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
     bool pass = true;
 
     try {
@@ -55,7 +55,7 @@ TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
             2; /*** Non 4-byte aligned buffer size for BFLOAT16s. This is the point of this unaligned test. ***/
 
         tt_metal::InterleavedBufferConfig dram_interleaved_buffer_config{
-            .device = dev,
+            .device = &mesh_device,
             .size = dram_buffer_size,
             .page_size = dram_buffer_size,
             .buffer_type = tt_metal::BufferType::DRAM};
@@ -83,7 +83,7 @@ TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
             {1, dram_buffer_size / sizeof(uint16_t)},
             {1, 1});
         auto device_dram_sharded_buffer = CreateBuffer(tt_metal::ShardedBufferConfig{
-            .device = dev,
+            .device = &mesh_device,
             .size = dram_buffer_size,
             .page_size = dram_buffer_size,
             .buffer_type = tt_metal::BufferType::DRAM,
@@ -110,7 +110,7 @@ TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
             (single_tile_size * 4) +
             2; /*** Non 4-byte aligned buffer size for BFLOAT16s. This is the point of this unaligned test. ***/
         tt_metal::InterleavedBufferConfig l1_interleaved_buffer_config{
-            .device = dev,
+            .device = &mesh_device,
             .size = l1_buffer_size,
             .page_size = l1_buffer_size,
             .buffer_type = tt_metal::BufferType::L1};
@@ -140,7 +140,7 @@ TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
             {1, l1_buffer_size / sizeof(uint16_t)},
             {1, 1});
         auto device_l1_sharded_buffer = CreateBuffer(tt_metal::ShardedBufferConfig{
-            .device = dev,
+            .device = &mesh_device,
             .size = l1_buffer_size,
             .page_size = l1_buffer_size,
             .buffer_type = tt_metal::BufferType::L1,

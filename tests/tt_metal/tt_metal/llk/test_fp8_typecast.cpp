@@ -39,7 +39,6 @@ static vector<uint32_t> run_fp8_typecast(
     const vector<uint32_t>& src_vec,
     uint32_t num_tiles,
     bool fp32_dest_acc_en) {
-    IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
@@ -47,14 +46,14 @@ static vector<uint32_t> run_fp8_typecast(
     uint32_t output_tile_size = tt::tile_size(output_fmt);
 
     InterleavedBufferConfig src_config{
-        .device = dev,
+        .device = &mesh_device,
         .size = num_tiles * input_tile_size,
         .page_size = num_tiles * input_tile_size,
         .buffer_type = BufferType::DRAM};
     auto src_buffer = CreateBuffer(src_config);
 
     InterleavedBufferConfig dst_config{
-        .device = dev,
+        .device = &mesh_device,
         .size = num_tiles * output_tile_size,
         .page_size = num_tiles * output_tile_size,
         .buffer_type = BufferType::DRAM};

@@ -20,7 +20,8 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileBfp8b) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -31,7 +32,10 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileBfp8b) {
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+        .device = &mesh_device,
+        .size = dram_buffer_size,
+        .page_size = dram_buffer_size,
+        .buffer_type = BufferType::DRAM};
 
     auto src0_dram_buffer = CreateBuffer(dram_config);
     auto src1_dram_buffer = CreateBuffer(dram_config);

@@ -115,7 +115,6 @@ bool test_dropout_standalone(
         Program program = CreateProgram();
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
-        auto* const device = mesh_device->get_devices()[0];
 
         constexpr CoreCoord core = {0, 0};
         constexpr uint32_t single_tile_size = 2 * 1024;
@@ -123,7 +122,7 @@ bool test_dropout_standalone(
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
         tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
+            .device = mesh_device.get(),
             .size = dram_buffer_size,
             .page_size = dram_buffer_size,
             .buffer_type = tt_metal::BufferType::DRAM};

@@ -234,12 +234,13 @@ void WriteToUnitMeshBuffer(
     const std::vector<uint32_t>& src,
     const std::shared_ptr<distributed::MeshBuffer>& buf,
     const std::optional<BufferShardingArgs>& sharding_args) {
-    auto* device = mesh_device->get_devices()[0];
     std::shared_ptr<Buffer> slow_dispatch_buffer;
     if (sharding_args.has_value()) {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
+        slow_dispatch_buffer = Buffer::create(
+            mesh_device.get(), buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
     } else {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
+        slow_dispatch_buffer =
+            Buffer::create(mesh_device.get(), buf->address(), buf->size(), config.page_size, config.buftype);
     }
     detail::WriteToBuffer(*slow_dispatch_buffer, src);
 }
@@ -250,12 +251,13 @@ void ReadFromUnitMeshBuffer(
     std::vector<uint32_t>& dst,
     const std::shared_ptr<distributed::MeshBuffer>& buf,
     const std::optional<BufferShardingArgs>& sharding_args) {
-    auto* device = mesh_device->get_devices()[0];
     std::shared_ptr<Buffer> slow_dispatch_buffer;
     if (sharding_args.has_value()) {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
+        slow_dispatch_buffer = Buffer::create(
+            mesh_device.get(), buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
     } else {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
+        slow_dispatch_buffer =
+            Buffer::create(mesh_device.get(), buf->address(), buf->size(), config.page_size, config.buftype);
     }
     detail::ReadFromBuffer(*slow_dispatch_buffer, dst);
 }

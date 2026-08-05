@@ -66,7 +66,10 @@ bool reader_only(
     auto* device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
-        .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+        .device = mesh_device.get(),
+        .size = byte_size,
+        .page_size = byte_size,
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = input_dram_buffer->address();
@@ -136,7 +139,10 @@ bool writer_only(
     auto* device = mesh_device->get_devices()[0];
 
     tt_metal::InterleavedBufferConfig dram_config{
-        .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt_metal::BufferType::DRAM};
+        .device = mesh_device.get(),
+        .size = byte_size,
+        .page_size = byte_size,
+        .buffer_type = tt_metal::BufferType::DRAM};
 
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = output_dram_buffer->address();
@@ -200,7 +206,10 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     auto* device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
-        .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+        .device = mesh_device.get(),
+        .size = byte_size,
+        .page_size = byte_size,
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     auto input_dram_buffer = tt_metal::CreateBuffer(dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
@@ -344,9 +353,8 @@ static ReaderDatacopyWriterContext setup_reader_datacopy_writer_context(
     ReaderDatacopyWriterContext ctx;
     ctx.byte_size = test_config.num_tiles * test_config.tile_byte_size;
 
-    auto* device = mesh_device->get_devices()[0];
     tt::tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = ctx.byte_size,
         .page_size = ctx.byte_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM};

@@ -40,12 +40,13 @@ namespace tt::tt_metal {
 TEST_F(MeshDeviceFixture, Host_Alignment_L1_Unaligned_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     CoreCoord logical_core = {0, 0};
 
     // Allocate an L1 buffer so the poke targets a valid, non-reserved address.
     constexpr uint32_t buf_size = 256;
-    auto buf = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto buf = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::L1);
 
     // Deliberately unaligned: buffer base + 1 byte. On a DMA-backed build with a
     // real alignment > 1 this would be rejected; on emule it must be accepted.
@@ -70,11 +71,12 @@ TEST_F(MeshDeviceFixture, Host_Alignment_L1_Unaligned_NoViolation) {
 TEST_F(MeshDeviceFixture, Host_Alignment_DRAM_Unaligned_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
 
     // Allocate a DRAM buffer to obtain a valid, non-reserved DRAM address.
     constexpr uint32_t buf_size = 256;
-    auto buf = Buffer::create(device, buf_size, buf_size, BufferType::DRAM);
+    auto buf = Buffer::create(&mesh_device, buf_size, buf_size, BufferType::DRAM);
 
     uint32_t unaligned_addr = static_cast<uint32_t>(buf->address()) + 1;
     std::vector<uint8_t> payload = {0x01, 0x23, 0x45, 0x67};

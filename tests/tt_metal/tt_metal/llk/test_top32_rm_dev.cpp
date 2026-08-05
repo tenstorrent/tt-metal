@@ -164,7 +164,6 @@ bool verify_top32_outputs(
 
 bool run_top32_rm_dev(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t row_elements, uint32_t seed) {
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -183,13 +182,13 @@ bool run_top32_rm_dev(
     const uint32_t out1_bytes = kOutputTiles * tile_u32;
 
     InterleavedBufferConfig dram_in0{
-        .device = device, .size = in0_bytes, .page_size = in0_bytes, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(), .size = in0_bytes, .page_size = in0_bytes, .buffer_type = BufferType::DRAM};
     InterleavedBufferConfig dram_in1{
-        .device = device, .size = in1_bytes, .page_size = in1_bytes, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(), .size = in1_bytes, .page_size = in1_bytes, .buffer_type = BufferType::DRAM};
     InterleavedBufferConfig dram_out0{
-        .device = device, .size = out0_bytes, .page_size = out0_bytes, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(), .size = out0_bytes, .page_size = out0_bytes, .buffer_type = BufferType::DRAM};
     InterleavedBufferConfig dram_out1{
-        .device = device, .size = out1_bytes, .page_size = out1_bytes, .buffer_type = BufferType::DRAM};
+        .device = mesh_device.get(), .size = out1_bytes, .page_size = out1_bytes, .buffer_type = BufferType::DRAM};
 
     auto buf_in0 = CreateBuffer(dram_in0);
     auto buf_in1 = CreateBuffer(dram_in1);

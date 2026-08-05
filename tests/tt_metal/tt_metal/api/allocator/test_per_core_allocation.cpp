@@ -53,7 +53,8 @@ protected:
 static constexpr DeviceAddr PAGE_SIZE = 1024;
 
 TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
     ASSERT_GE(num_cores, 2u) << "Need at least 2 compute cores";
@@ -71,7 +72,7 @@ TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
     experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
 
-    auto buf = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+    auto buf = Buffer::create(&mesh_device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
 
     ASSERT_TRUE(per_core::is_per_core_allocation(*buf));
 
@@ -85,7 +86,8 @@ TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
 }
 
 TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
     ASSERT_GE(num_cores, 2u);
@@ -103,11 +105,11 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
     // Create per-core buffer
     auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
     experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
-    auto per_core_buf = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+    auto per_core_buf = Buffer::create(&mesh_device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
 
     // Create lockstep buffer on same cores
     auto lockstep_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
-    auto lockstep_buf = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, lockstep_args);
+    auto lockstep_buf = Buffer::create(&mesh_device, total_size, PAGE_SIZE, BufferType::L1, lockstep_args);
 
     // Both should be allocated successfully
     EXPECT_TRUE(per_core_buf->is_allocated());
@@ -123,7 +125,8 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
 }
 
 TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
     ASSERT_GE(num_cores, 2u);
@@ -143,13 +146,13 @@ TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
 
     // Create and destroy a buffer
     {
-        auto buf1 = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+        auto buf1 = Buffer::create(&mesh_device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
         EXPECT_TRUE(per_core::is_per_core_allocation(*buf1));
         // buf1 destroyed here, freeing per-core allocations
     }
 
     // Create another buffer on same cores — should succeed (space was freed)
-    auto buf2 = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+    auto buf2 = Buffer::create(&mesh_device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
     EXPECT_TRUE(per_core::is_per_core_allocation(*buf2));
     EXPECT_TRUE(buf2->is_allocated());
 }

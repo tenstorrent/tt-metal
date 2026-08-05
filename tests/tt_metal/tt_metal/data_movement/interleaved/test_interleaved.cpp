@@ -47,7 +47,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
 
     InterleavedBufferConfig interleaved_buffer_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = total_size_bytes,
         .page_size = test_config.page_size_bytes,
         .buffer_type = test_config.is_dram ? BufferType::DRAM : BufferType::L1};

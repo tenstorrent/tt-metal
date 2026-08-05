@@ -23,7 +23,8 @@ namespace tt::tt_metal {
 TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -36,7 +37,7 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
     // Allocate a real L1 buffer as the noc_async_read destination so the
     // tensor-area sanitizer doesn't fire before cb_pop_front triggers the
     // barrier check.
-    auto dst_buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto dst_buf = Buffer::create(&mesh_device, 1024, 1024, BufferType::L1);
 
     // 2. Kernel that reads then pops WITHOUT a barrier. Popping frees the page
     //    for the producer to refill while the read is still in flight — a race.
@@ -75,7 +76,8 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
 TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -86,8 +88,8 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
 
     // DRAM source for the page-accessor read + a real L1 destination (so the
     // tensor/OOB check doesn't pre-empt the pop-time race check).
-    auto src_buf = Buffer::create(device, 1024, 1024, BufferType::DRAM);
-    auto dst_buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto src_buf = Buffer::create(&mesh_device, 1024, 1024, BufferType::DRAM);
+    auto dst_buf = Buffer::create(&mesh_device, 1024, 1024, BufferType::L1);
 
     // The TensorAccessor reads its bank layout from compile-time args.
     std::vector<uint32_t> reader_ct_args;
@@ -128,7 +130,8 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
 TEST_F(MeshDeviceFixture, NoC_Barrier_Present_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -137,7 +140,7 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Present_NoViolation) {
         CircularBufferConfig(2048, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
     CreateCircularBuffer(program, logical_core, cb_config);
 
-    auto dst_buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto dst_buf = Buffer::create(&mesh_device, 1024, 1024, BufferType::L1);
 
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
@@ -179,7 +182,8 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Present_NoViolation) {
 TEST_F(MeshDeviceFixture, NoC_Barrier_MultiRead_SingleBarrier_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* device = mesh_device.get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -188,7 +192,7 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_MultiRead_SingleBarrier_NoViolation) {
         CircularBufferConfig(2048, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
     CreateCircularBuffer(program, logical_core, cb_config);
 
-    auto dst_buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto dst_buf = Buffer::create(&mesh_device, 1024, 1024, BufferType::L1);
 
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"

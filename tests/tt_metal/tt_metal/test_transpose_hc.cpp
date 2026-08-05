@@ -25,7 +25,8 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+    auto& mesh_device = *this->devices_[0];
+    auto* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     constexpr bool multibank = true;
 
@@ -48,7 +49,7 @@ TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
     const uint32_t page_size = (!multibank) ? dram_buffer_bytes : single_tile_bytes;
 
     const InterleavedBufferConfig dram_config = {
-        .device = dev, .size = dram_buffer_bytes, .page_size = page_size, .buffer_type = BufferType::DRAM};
+        .device = &mesh_device, .size = dram_buffer_bytes, .page_size = page_size, .buffer_type = BufferType::DRAM};
 
     auto src0_dram_buffer = CreateBuffer(dram_config);
     const uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();

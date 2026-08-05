@@ -56,7 +56,6 @@ void run_single_core_pack_rows_program(
     Program program = tt::tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -66,13 +65,16 @@ void run_single_core_pack_rows_program(
     uint32_t output_size = test_config.num_rows * 16 * 2;
 
     tt_metal::InterleavedBufferConfig input_dram_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = input_single_tile_size,
         .page_size = input_single_tile_size,
         .buffer_type = tt_metal::BufferType::DRAM};
 
     tt_metal::InterleavedBufferConfig output_dram_config{
-        .device = device, .size = output_size, .page_size = output_size, .buffer_type = tt_metal::BufferType::DRAM};
+        .device = mesh_device.get(),
+        .size = output_size,
+        .page_size = output_size,
+        .buffer_type = tt_metal::BufferType::DRAM};
 
     std::shared_ptr<tt_metal::Buffer> src0_dram_buffer = CreateBuffer(input_dram_config);
     uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();

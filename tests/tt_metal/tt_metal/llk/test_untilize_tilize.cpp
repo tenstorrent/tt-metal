@@ -206,7 +206,6 @@ static void validate_result(
 void run_single_core_tilize_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
-    auto* dev = mesh_device->get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const std::uint32_t num_tiles = test_config.num_tiles_r * test_config.num_tiles_c;
@@ -214,12 +213,12 @@ void run_single_core_tilize_program(
     const std::uint32_t output_dram_buffer_size = test_config.output_single_tile_size * num_tiles;
 
     tt_metal::InterleavedBufferConfig input_dram_config{
-        .device = dev,
+        .device = mesh_device.get(),
         .size = input_dram_buffer_size,
         .page_size = input_dram_buffer_size,
         .buffer_type = tt_metal::BufferType::DRAM};
     tt_metal::InterleavedBufferConfig output_dram_config{
-        .device = dev,
+        .device = mesh_device.get(),
         .size = output_dram_buffer_size,
         .page_size = output_dram_buffer_size,
         .buffer_type = tt_metal::BufferType::DRAM};
@@ -455,7 +454,6 @@ void run_single_core_unpack_tilizeA_B_program(
     Program program = tt::tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -464,12 +462,12 @@ void run_single_core_unpack_tilizeA_B_program(
     std::uint32_t output_dram_buffer_size = test_config.output_single_tile_size * num_tiles;
 
     tt_metal::InterleavedBufferConfig input_dram_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = input_dram_buffer_size,
         .page_size = input_dram_buffer_size,
         .buffer_type = tt_metal::BufferType::DRAM};
     tt_metal::InterleavedBufferConfig output_dram_config{
-        .device = device,
+        .device = mesh_device.get(),
         .size = output_dram_buffer_size,
         .page_size = output_dram_buffer_size,
         .buffer_type = tt_metal::BufferType::DRAM};
@@ -959,7 +957,6 @@ static void run_quasar_tilize_untilize_test(
     bool tilize_cross_tile_rows = false) {
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
-    IDevice* dev = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
@@ -978,12 +975,12 @@ static void run_quasar_tilize_untilize_test(
     std::uint32_t dst_dram_buffer_size = output_single_tile_size * num_tiles;
 
     InterleavedBufferConfig src_config{
-        .device = dev,
+        .device = mesh_device.get(),
         .size = src_dram_buffer_size,
         .page_size = src_dram_buffer_size,
         .buffer_type = BufferType::DRAM};
     InterleavedBufferConfig dst_config{
-        .device = dev,
+        .device = mesh_device.get(),
         .size = dst_dram_buffer_size,
         .page_size = dst_dram_buffer_size,
         .buffer_type = BufferType::DRAM};
