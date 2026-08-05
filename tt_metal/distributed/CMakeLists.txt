@@ -15,13 +15,11 @@ if(NOT DEFINED ENABLE_DISTRIBUTED)
     set(ENABLE_DISTRIBUTED OFF)
 endif()
 
-set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
-
-# Check if distributed is enabled and ULFM MPI exists, otherwise use system MPI, or fall back to single host
-if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
-    message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
+# Distributed builds require the configured ULFM MPI tree.
+if(ENABLE_DISTRIBUTED AND EXISTS "${TT_ULFM_PREFIX}/lib/libmpi.so.40")
+    message(STATUS "Using ULFM MPI from ${TT_ULFM_PREFIX}")
     list(APPEND DISTRIBUTED_SRC multihost/mpi_distributed_context.cpp)
-    set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
+    set(ULFM_LIB "${TT_ULFM_PREFIX}/lib/libmpi.so.40")
     set(USE_MPI TRUE)
 
     add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
@@ -39,22 +37,13 @@ if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
             IMPORTED_LOCATION
                 ${ULFM_LIB}
             INTERFACE_INCLUDE_DIRECTORIES
-                ${ULFM_PREFIX}/include
+                "${TT_ULFM_PREFIX}/include"
     )
 elseif(ENABLE_DISTRIBUTED)
-    # Try to find system MPI if distributed is enabled
-    find_package(MPI QUIET COMPONENTS C)
-    if(MPI_FOUND)
-        message(STATUS "ULFM MPI not found, using system MPI")
-        add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
-        set(USE_MPI TRUE)
-        list(APPEND DISTRIBUTED_SRC multihost/mpi_distributed_context.cpp)
-    else()
-        message(
-            FATAL_ERROR
-            "ENABLE_DISTRIBUTED is ON but no MPI implementation found. Please install MPI or disable distributed support."
-        )
-    endif()
+    message(
+        FATAL_ERROR
+        "ENABLE_DISTRIBUTED requires ULFM MPI at ${TT_ULFM_PREFIX}. Set TT_ULFM_PREFIX or disable distributed support."
+    )
 else()
     message(STATUS "Multihost compute with MPI disabled, using single host context.")
     set(USE_MPI FALSE)
