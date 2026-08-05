@@ -267,3 +267,106 @@ def test_the_share_names_the_declared_unit():
     names for one unit, side by side."""
     over = _render()[_render().index("Overheads") : _render().index("Utilization")]
     assert "of token" in over and "of step" not in over, over
+
+
+# ---------------------------------------------------------------- the block states what it lacks
+
+
+_FID = (
+    [("lofi", 7.34e12, 702.0, 10.45), ("hifi2", 0.0, 351.0, 0.0), ("hifi4", 0.0, 176.0, 0.0)],
+    10.45,
+)
+
+
+@pytest.fixture()
+def fid(monkeypatch):
+    monkeypatch.setattr(S, "_fidelity_breakdown", lambda p: _FID)
+
+
+def test_the_compute_row_uses_a_measured_prefill_stage(fid):
+    """It printed a hardcoded "not measured" while trace_replay's prefill stage sat in the state file
+    and the block-timing section below rendered it -- the same report saying, in two places, that one
+    phase both was and was not measured."""
+    out = _render(stage_ms={"prefill": 35.80, "decode": 138.49})
+    row = next(l for l in out.splitlines() if "Compute FLOPs" in l)
+    assert "35.80 ms" in row and "trace_replay" in row, row
+    assert "not measured" not in row, row
+
+
+def test_a_prefill_above_its_compute_band_is_flagged(fid):
+    """35.80 ms against a 13.1-17.4 ms ceiling says prefill is not compute-bound. The tick must not
+    say otherwise."""
+    row = next(l for l in _render(stage_ms={"prefill": 35.80}).splitlines() if "Compute FLOPs" in l)
+    assert row.rstrip().endswith("✗"), row
+
+
+def test_a_prefill_inside_its_compute_band_ticks(fid):
+    row = next(l for l in _render(stage_ms={"prefill": 12.0}).splitlines() if "Compute FLOPs" in l)
+    assert row.rstrip().endswith("✔"), row
+
+
+def _flat(t):
+    """Gap reasons are WRAPPED to the table width, so a phrase can straddle two lines. Match against
+    the collapsed text or the assertion tests the wrap point, not the wording."""
+    return " ".join(t.split())
+
+
+def test_no_stage_name_is_guessed(fid):
+    """Only the DECLARED prefill counts. Matching 'whatever looks like a prefill' would put a
+    decode-path number in a TTFT cell on any pipeline that names its stages differently."""
+    out = _render(stage_ms={"encode": 35.80, "generate": 138.49})
+    row = next(l for l in out.splitlines() if "Compute FLOPs" in l)
+    assert "35.80" not in row and "not measured" in row, row
+
+
+def test_a_zero_flop_rung_is_marked_measured_not_missing(fid):
+    """All four fidelities print so the reader sees the whole ladder; that only works if an empty
+    rung is visibly EMPTY rather than visibly unknown."""
+    out = _render(stage_ms={"prefill": 12.0})
+    row = next(l for l in out.splitlines() if "HiFi4" in l)
+    assert "no ops at this fidelity" in row, row
+    assert "no ops at this fidelity" not in next(l for l in out.splitlines() if "LoFi" in l)
+
+
+def test_the_report_offers_no_batch_advice():
+    """ "21.6 GiB unused - headroom for a larger batch" was editorial, not measurement: batching is an
+    emit-e2e decision, and the capacity row already states used-vs-total."""
+    assert "headroom" not in _render() and "larger batch" not in _render()
+
+
+def test_a_dispatch_share_at_or_above_one_is_refused():
+    """host_overhead sums per-op GAPS and op intervals OVERLAP, so on a concurrent profile the sum
+    runs past total device_ms (634.55 vs 293.20 on gemma-3-12b-it). Scaling that onto a token would
+    claim more launch overhead than the step contains, so the row is withheld -- never rendered as a
+    plausible-looking number."""
+    out = _render(profile={"device_ms": 293.20, "buckets": [{"id": "host_overhead", "device_ms": 634.55}]})
+    over = out[out.index("Utilization") :]
+    assert "Dispatch overhead" not in over, over
+
+
+# ---------------------------------------------------------------- an estimate is never a measurement
+
+
+def test_an_estimate_is_marked_by_a_tilde(fid):
+    row = next(l for l in _render(prefill_est_ms=17.0).splitlines() if "Compute FLOPs" in l)
+    assert "~17.0 ms" in row, row
+
+
+def test_an_estimate_earns_no_verdict(fid):
+    """A guess cannot be graded, however close to the band it lands -- a tick would assert the
+    model IS in band on the strength of a number nobody measured."""
+    for est in (14.0, 40.0):
+        row = next(l for l in _render(prefill_est_ms=est).splitlines() if "Compute FLOPs" in l)
+        assert not row.rstrip().endswith("✗") and not row.rstrip().endswith("✔"), row
+
+
+def test_the_prefill_row_matches_the_others(fid):
+    """achieved / total, same as bandwidth and capacity, and higher is better."""
+    row = next(l for l in _render(prefill_est_ms=13.1).splitlines() if "Compute (prefill)" in l)
+    assert "10.4 / 13.1 ms" in row and row.rstrip().endswith("↑ better"), row
+
+
+def test_no_estimate_changes_nothing(fid):
+    out = _render()
+    assert "~" not in next(l for l in out.splitlines() if "Compute FLOPs" in l)
+    assert "TTFT never measured" in out

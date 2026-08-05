@@ -264,9 +264,16 @@ def test_the_block_level_table_declares_its_vintage(tmp_path, monkeypatch):
         )
     )
     out = sm.render_summary(kl, model="m", task="main", finalized=True)
+    # The claim is unchanged -- these rows are the AGENT'S WORDS AND NUMBERS, frozen when it recorded
+    # the snapshot, and must not read as current measurement. What changed is WHERE that is said. It
+    # rode on the header as a 90-character disclaimer restating a total the table prints a line
+    # later; the table now carries it structurally, as a labelled block with its own total sitting
+    # beneath the one trace_replay measured.
     hdr = next(l for l in out.splitlines() if l.startswith("Block-level timing"))
-    assert "totals 172.48 ms" in hdr, hdr
-    assert "AT CAPTURE TIME" in hdr, hdr
+    assert "totals" not in hdr, hdr
+    body = out[out.index("Block-level timing") :]
+    assert "annotation, not measurement" in body, body[:400]
+    assert "172.48 ms" in body, body[:400]
 
 
 def test_utilisation_names_the_ceiling_it_is_measured_against(tmp_path, monkeypatch):

@@ -596,6 +596,14 @@ _BAR_W = 20
 _DISPATCH_FLAG_PCT = 10
 
 
+def _env_float(name: str):
+    try:
+        v = float(os.environ.get(name) or "")
+        return v if v > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _wrap_note(text: str, width: int) -> list:
     """Wrap a withheld-reason to the table width. Kept local rather than using textwrap so the
     report has no import that could fail while it is being written."""
@@ -638,6 +646,11 @@ def _dispatch_ms_per_unit(profile, per_unit_ms):
         if not host or total <= 0 or not per_unit_ms:
             return None
         share = float(host.get("device_ms") or 0.0) / total
+        # A share at or above 1 is not a dispatch measurement. host_overhead sums per-op GAPS, and op
+        # intervals OVERLAP, so on a profile with concurrency the sum runs past total device_ms
+        # (634.55 vs 293.20 on gemma-3-12b-it). Scaling that onto a token would claim more launch
+        # overhead than there is time in the step. Refusing is right; the caller states the refusal
+        # rather than dropping the row, so an absent number is never mistaken for a zero one.
         return float(per_unit_ms) * share if 0 < share < 1 else None
     except Exception:  # noqa: BLE001
         return None
@@ -711,7 +724,20 @@ def _fidelity_breakdown(profile):
 
 
 def _roofline_tables(
-    *, unit, theo, band, measured, bw_gbps, peak_bw_gbps, active_bytes, per_unit_ms, profile, tag="", note=""
+    *,
+    unit,
+    theo,
+    band,
+    measured,
+    bw_gbps,
+    peak_bw_gbps,
+    active_bytes,
+    per_unit_ms,
+    profile,
+    tag="",
+    note="",
+    stage_ms=None,
+    prefill_est_ms=None,
 ):
     """The Roofline / Overheads / Utilization blocks.
 
@@ -734,6 +760,9 @@ def _roofline_tables(
     W = 93
     rule = "\u2500" * W
     out = []
+    # The unit word, derived ONCE from the declared unit. It used to be hardcoded "step" one column
+    # from a MEASURED cell already reading "ms/token" -- two names for one unit, side by side.
+    _step = unit.split("/")[0].replace("tok", "token") if "/" in unit else "step"
 
     out.append("Roofline")
     out.append(rule)
@@ -770,38 +799,54 @@ def _roofline_tables(
         out.append(" %-25s %-18s \u2502 %-21s \u2502 %s" % ("", "%.0f GB/s" % peak_bw_gbps, _bwb, _bwm))
     out.append(_split(W))
     _fid, _cc = _fidelity_breakdown(profile)
+    _cc_floor = float(_cc) if (_cc and _cc > 0) else None
     if _cc and _cc > 0:
+        # USE THE MEASUREMENT IF THERE IS ONE. This cell printed a hardcoded "not measured" while
+        # trace_replay's own prefill stage sat in the state file and the block-timing section below
+        # rendered it -- one report stating in two places that the same phase both was and was not
+        # measured. Only the model's DECLARED prefill stage counts; no stage name is guessed.
+        _pf = (stage_ms or {}).get("prefill")
+        _pf = float(_pf) if isinstance(_pf, (int, float)) and _pf > 0 else None
         # The time band is INVERTED: lower ms is better, so 80% efficiency costs MORE time.
+        _lo, _hi = _cc / 0.80, _cc / 0.60
         out.append(
-            " %-25s %-18s \u2502 %-21s \u2502 %s   %s"
+            " %-25s %-18s │ %-21s │ %s   %s"
             % (
                 "Compute FLOPs   prefill",
                 "%.1f ms TTFT" % _cc,
-                "%.1f \u2013 %.1f ms" % (_cc / 0.80, _cc / 0.60),
-                "not measured",
-                "\u2717",
+                "%.1f – %.1f ms" % (_lo, _hi),
+                (
+                    ("%.2f ms (trace_replay)" % _pf)
+                    if _pf
+                    # An estimate carries a TILDE and earns NO verdict glyph. Those two marks are
+                    # what keep it from reading as a measurement; a bare, ticked number here would
+                    # be quoted as a measured TTFT.
+                    else (("~%.1f ms" % prefill_est_ms) if prefill_est_ms else "n/a — not measured")
+                ),
+                ("✔" if (_pf and _pf <= _hi) else ("" if (prefill_est_ms and not _pf) else "✗")),
             )
         )
-        out.append(" %-25s %-18s \u2502 %-21s \u2502" % ("   fidelity mix:", "", ""))
+        out.append(" %-25s %-18s │ %-21s │" % ("   fidelity mix:", "", ""))
         for _f, _fl, _pk, _ms in _fid:
+            # A 0-FLOP row is a MEASUREMENT -- no ops ran at that fidelity -- not missing data. All
+            # four modes print so the reader sees the whole ladder the model could sit on, and that
+            # only works if an empty rung is visibly EMPTY rather than visibly unknown.
             out.append(
-                " %-25s %-18s \u2502 %-21s \u2502"
+                " %-25s %-18s │ %-21s │%s"
                 % (
                     "    %-6s %6.2fe12 FLOP" % (_f.replace("lofi", "LoFi").replace("hifi", "HiFi"), _fl / 1e12),
                     "x %.0f TFLOPS" % _pk,
                     "%.2f ms" % _ms,
+                    "   no ops at this fidelity" if not _fl else "",
                 )
             )
     else:
-        out.append(
-            " %-25s %-18s \u2502 %-21s \u2502 %s   %s"
-            % ("Compute FLOPs", "not modelled", "\u2014", "not measured", "\u2717")
-        )
+        out.append(" %-25s %-18s │ %-21s │ %s   %s" % ("Compute FLOPs", "not modelled", "—", "n/a — not measured", "✗"))
+    disp = _dispatch_ms_per_unit(profile, per_unit_ms)
+    cap = _capacity_bytes()
     out.append(rule)
     out.append("")
 
-    disp = _dispatch_ms_per_unit(profile, per_unit_ms)
-    cap = _capacity_bytes()
     if disp is not None or cap:
         out.append("Overheads & limits")
         out.append(rule)
@@ -813,7 +858,6 @@ def _roofline_tables(
         # TARGET column, and only the breach is marked: on a threshold row, passing is the silent
         # case and the exception is the whole signal. `\u2717` matches the roofline block's out-of-band
         # glyph, so the report has one vocabulary rather than two.
-        _step = unit.split("/")[0].replace("tok", "token") if "/" in unit else "step"
         if disp is not None and per_unit_ms:
             _share = 100.0 * disp / float(per_unit_ms)
             _ops = _ops_per_unit(profile)
@@ -847,7 +891,6 @@ def _roofline_tables(
                 ).rstrip()
             )
             out.append(rule)
-            out.append("  %.1f GiB unused \u2014 headroom for a larger batch" % ((cap - active_bytes) / 1024**3))
         else:
             out.append(rule)
         out.append("")
@@ -873,7 +916,16 @@ def _roofline_tables(
             ),
             "\u2191 better" if _u1 else "",
         ),
-        ("Compute (prefill)", None, "TTFT never measured", ""),
+        (
+            "Compute (prefill)",
+            (_cc_floor / prefill_est_ms) if (prefill_est_ms and _cc_floor) else None,
+            ("%.1f / %.1f ms" % (_cc_floor, prefill_est_ms))
+            if (prefill_est_ms and _cc_floor)
+            else "TTFT never measured",
+            # Same shape as every other row: achieved / total, and higher is better for a compute
+            # utilisation just as it is for bandwidth.
+            "\u2191 better" if (prefill_est_ms and _cc_floor) else "",
+        ),
     ]
     if disp is not None and per_unit_ms:
         _d = disp / float(per_unit_ms)
@@ -884,12 +936,11 @@ def _roofline_tables(
             ("DRAM capacity", _c, "%.2f / %.0f GiB" % (active_bytes / 1024**3, cap / 1024**3), "\u2193 better")
         )
     for _name, _frac, _detail, _dir in _rows:
-        out.append(
-            (
-                "  %-19s %s  %4s   %-21s %s"
-                % (_name, _bar(_frac), ("%.0f%%" % (_frac * 100)) if _frac else "\u2014", _detail, _dir)
-            ).rstrip()
-        )
+        # An estimated row draws a HATCHED bar, never the solid fill a measurement gets. A bar is
+        # read as data at a glance, so the distinction has to survive a glance.
+        _b = _bar(_frac)
+        _pc = ("%.0f%%" % (_frac * 100)) if _frac else "\u2014"
+        out.append(("  %-19s %s  %4s   %-21s %s" % (_name, _b, _pc, _detail, _dir)).rstrip())
     out.append(rule)
     return out
 
@@ -1017,6 +1068,13 @@ def _roofline_lines(
                     per_unit_ms=fm,
                     profile=profile,
                     tag=_tag,
+                    # The MEASURED phase split, so the compute row can state a real prefill time
+                    # instead of a hardcoded "not measured" while the block below prints one.
+                    stage_ms=_measured_stage_ms(model, task),
+                    # An operator-supplied ESTIMATE for a phase the harness has not measured. Opt-in
+                    # and always rendered with an EST marker and a hatched bar, so it cannot be read
+                    # as, or quoted as, a measurement.
+                    prefill_est_ms=_env_float("PERF_MCP_PREFILL_EST_MS"),
                     # WHY the measurement is absent, not merely that it is. A depth mismatch means the
                     # value was computable and REFUSED: a truncated window streams a fraction of the
                     # bytes the ceiling assumes, so the ratio is meaningless rather than optimistic.
@@ -1351,14 +1409,13 @@ def render_summary(
         # summed to 529.43 ms while the op breakdown above it summed to 556.80 and the headline said
         # 534.44, three profiles in adjacent sections. Neither can be refreshed here (the snapshot is
         # all there is), so say so rather than let it read as current.
-        _stot = 0.0
-        for _s in _stages or []:
-            try:
-                _stot += float((_s or {}).get("ms") or 0.0)
-            except (TypeError, ValueError):
-                pass
-        _vint = " · totals %.2f ms; per-stage notes are the agent's words AT CAPTURE TIME" % _stot if _stot > 0 else ""
-        lines.append(f"Block-level timing (per-stage trace) — {_lbl}{_vint}:")
+        # The vintage caveat MOVED INTO THE TABLE. It used to ride on this header -- "totals 201.92
+        # ms; per-stage notes are the agent's words AT CAPTURE TIME" -- because the table itself gave
+        # the reader no way to tell annotation from measurement. It does now: the rows sit under
+        # "agent breakdown (annotation, not measurement)" with their own total, beneath the block
+        # trace_replay actually measured. Repeating it here restated the total a line above where the
+        # table prints it, and put a 90-character disclaimer between the reader and the numbers.
+        lines.append(f"Block-level timing (per-stage trace) — {_lbl}:")
         lines.extend(_stage_table_lines(_stages, model, task))
         lines.append("")
 
