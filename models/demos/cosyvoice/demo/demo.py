@@ -49,6 +49,48 @@ def write_wav(path: str, wav: torch.Tensor, sample_rate: int = SAMPLE_RATE) -> N
         fh.writeframes(data.tobytes())
 
 
+def write_run_dir(run_dir: str, wav: torch.Tensor, seconds: float) -> None:
+    """Lay the output out exactly as `run_reference.py` does, so
+    `scripts/eval_wer_sim.py --run-dir <this>` scores TTNN audio through the
+    identical code path that scored the PyTorch reference.
+
+    That identity is the point. A separate scoring path for the port would make
+    any WER difference ambiguous between "the model is worse" and "the harness
+    differs", which is precisely the ambiguity R9 exists to remove.
+    """
+    import json
+
+    from models.demos.cosyvoice.tt.common import golden_manifest
+
+    manifest = golden_manifest()
+    os.makedirs(run_dir, exist_ok=True)
+    name = "ttnn_zero_shot_zh.wav"
+    write_wav(os.path.join(run_dir, name), wav)
+    payload = {
+        "engine": "ttnn",
+        "device": "blackhole-p150a",
+        "checkpoint": manifest.get("model_dir", "CosyVoice-300M"),
+        "results": [
+            {
+                "mode": "zero_shot",
+                "lang": "zh",
+                "text": manifest["text"],
+                "wav": name,
+                "seconds": round(seconds, 3),
+                # The excitation is the device's own, not the reference's. WER and
+                # SIM are perceptual metrics, so this is the right variant to score
+                # -- the phase difference documented in tt/hifigan/source.py is
+                # inaudible, and scoring the injected-excitation variant would be
+                # measuring the reference's vocoder rather than the port's.
+                "excitation": "self-computed",
+            }
+        ],
+    }
+    with open(os.path.join(run_dir, "results.json"), "w") as fh:
+        json.dump(payload, fh, indent=2, ensure_ascii=False)
+    print(f"wrote {run_dir}/results.json + {name} -- score with scripts/eval_wer_sim.py --run-dir")
+
+
 def golden_inputs():
     """The captured utterance, so the demo runs with no front-end."""
     emb_g = load_golden("flow.input_embedding")
@@ -78,6 +120,12 @@ def main() -> int:
     ap.add_argument("--sampler", default="ras", choices=["ras", "greedy"])
     ap.add_argument("--seed", type=int, default=1986)
     ap.add_argument("--skip-llm", action="store_true", help="use the captured tokens instead of generating")
+    ap.add_argument(
+        "--run-dir",
+        default=None,
+        help="also write a results.json + wav laid out for scripts/eval_wer_sim.py, so TTNN audio "
+        "is scored by the identical code path as the PyTorch reference",
+    )
     args = ap.parse_args()
 
     hift_path = os.path.join(args.weights_dir, "hift_weights.npz")
@@ -149,6 +197,9 @@ def main() -> int:
     write_wav(args.out, out)
     secs = out.shape[1] / SAMPLE_RATE
     print(f"wrote {args.out}  ({secs:.2f} s, {SAMPLE_RATE} Hz, peak {float(out.abs().max()):.3f})")
+
+    if args.run_dir:
+        write_run_dir(args.run_dir, out, secs)
     ref = os.path.join(GOLDEN_DIR, "e2e.npz")
     if os.path.exists(ref):
         want = as_torch(np.load(ref)["waveform"])
