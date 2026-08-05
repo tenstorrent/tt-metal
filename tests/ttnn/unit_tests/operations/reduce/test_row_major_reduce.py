@@ -721,8 +721,10 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
 )
 def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, fast_and_approximate_mode, output_layout, shape):
     """H reduce on tall ROW_MAJOR input — exercises the multi-shard H-axis-split + combine path."""
-    if fast_and_approximate_mode and dtype != ttnn.float32:
-        pytest.skip("fast_and_approximate_mode only affects fp32")
+    # fast_and_approximate_mode toggles the accurate SFPU (False) vs FPU (True) fp32 reduce; only
+    # ttnn.mean accepts it and it only affects fp32, so the True variant is meaningful only there.
+    if fast_and_approximate_mode and not (reduce_op == "mean" and dtype == ttnn.float32):
+        pytest.skip("fast_and_approximate_mode only affects fp32 mean")
     if dtype == ttnn.bfloat16 and shape == (1, 1, 12544, 32):
         pytest.skip("bf16 accumulation-limited at H=12544; covered by the FP32 variant")
     torch.manual_seed(0)
@@ -733,20 +735,18 @@ def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, fast_and_appr
     assert tt_input.layout == ttnn.ROW_MAJOR_LAYOUT
 
     ttnn_op = _OPS[reduce_op][1]
-    tt_output = ttnn_op(
-        tt_input,
-        dim=-2,
-        keepdim=keepdim,
-        output_layout=output_layout,
-        fast_and_approximate_mode=fast_and_approximate_mode,
-    )
+    op_kwargs = {"dim": -2, "keepdim": keepdim, "output_layout": output_layout}
+    if reduce_op == "mean":
+        op_kwargs["fast_and_approximate_mode"] = fast_and_approximate_mode
+    tt_output = ttnn_op(tt_input, **op_kwargs)
     # None keeps the dense RM path's natural ROW_MAJOR output.
     assert tt_output.layout == (output_layout or ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(tt_output)
 
     if dtype == ttnn.float32:
         # The FPU path truncates to TF32, costing ~2x the SFPU path's relative error at these depths.
-        rtol = 0.004 if fast_and_approximate_mode else 0.002
+        # Only mean has an accurate fp32 SFPU reduce; sum always goes through the FPU.
+        rtol = 0.002 if (reduce_op == "mean" and not fast_and_approximate_mode) else 0.004
         pcc_threshold, atol, frobenius_threshold = 0.999, 1e-3, 0.0015
     else:
         pcc_threshold, rtol, atol, frobenius_threshold = 0.97, 0.01, 0.02, 0.004

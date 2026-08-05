@@ -95,7 +95,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reduction via SFPU mul_unary_tile inside the compute kernel.
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
 
-    // Int32 max/min/sum use the SFPU reduce path; fp32 SUM only for the accurate sum/mean opt-in.
+    // Int32 max/min/sum use the SFPU reduce path; fp32 SUM only for the accurate mean opt-in.
     const bool is_sfpu_reduce =
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
@@ -366,7 +366,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     if (use_post_mul) {
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
-    // Accurate fp32: route Float32 SUM through the SFPU (needs 32-bit DEST)
+    // Accurate fp32 mean: route Float32 SUM through the SFPU (needs 32-bit DEST)
     const bool fp32_sfpu_reduce = is_sfpu_reduce && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
     // A bf16 input packed into an FP32 partial needs the packer reconfigured, not just the unpacker.
     if (rm_path && dst_cb_data_format != src0_cb_data_format) {
