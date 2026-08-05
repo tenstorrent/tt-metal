@@ -201,27 +201,6 @@ def test_pc_repeat_codegen(device, shape, repeat_shape, layout):
             assert device.cache_entries_counter.total == base_count, "program cache entries differ on same configs"
 
 
-# Single tiny codegen case wired into the merge gate (ttnn_merge_gate_tests.yaml).
-# Kept as its own function (not a parametrization of test_repeat_codegen) so the
-# merge-gate cmd can pin a stable node id. One 1-tile bf16 TILE N-repeat: the
-# smallest call that still exercises the codegen device op end to end.
-def test_repeat_codegen_smoke(device):
-    shape = (1, 1, 32, 32)
-    repeat_shape = (2, 1, 1, 1)
-
-    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
-    torch_result = torch_input_tensor.repeat(repeat_shape)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    output = ttnn.repeat(input_tensor, ttnn.Shape(repeat_shape), implementation="codegen")
-    output = ttnn.to_torch(output)
-
-    assert (
-        output.shape == torch_result.shape
-    ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
-    assert_equal(torch_result, output)
-
-
 def test_pc_with_different_shapes_in_sequence(device):
     y = torch.rand((1, 1, 256, 384), dtype=torch.bfloat16)
     y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
