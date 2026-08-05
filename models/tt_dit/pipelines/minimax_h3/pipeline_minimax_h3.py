@@ -47,10 +47,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy
+import numpy as np
 import torch
 from loguru import logger
-from PIL import ImageOps
+from PIL import Image, ImageOps
 
 import ttnn
 
@@ -66,7 +66,7 @@ from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_mini
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
-from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
+from ...models.vae.minimax_h3.vae_minimax_h3 import DEFAULT_TILE_SIZE, MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache
@@ -77,10 +77,12 @@ from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
 from .conditioning import encode_keyframes, keyframe_condition_noise
 from .packing import (
     MINIMAX_H3_AUDIO_CHANNELS,
+    MINIMAX_H3_AUDIO_LATENTS_PER_SECOND,
     MINIMAX_H3_FPS,
     MINIMAX_H3_KEYFRAME_NOISE_AUG,
     MINIMAX_H3_TEXT_TAG,
     MINIMAX_H3_VIDEO_TAG,
+    MiniMaxH3PackedSequence,
     adaln_indices,
     align_num_frames,
     audio_latent_num_frames,
@@ -176,7 +178,7 @@ class MiniMaxH3Output:
 
 
 class MiniMaxH3Pipeline:
-    """`t2va` on a Blackhole mesh. Build with :meth:`create_pipeline`."""
+    """`t2va` and `fl2va` on a Blackhole mesh. Build with `create_pipeline`."""
 
     def __init__(
         self,
@@ -187,12 +189,19 @@ class MiniMaxH3Pipeline:
         sp_axis: int = 1,
         num_links: int = 2,
         topology: ttnn.Topology = ttnn.Topology.Ring,
+        coresident: bool | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
         self.tp_axis, self.sp_axis = tp_axis, sp_axis
         shape = tuple(mesh_device.shape)
+        if tp_axis == sp_axis:
+            msg = f"tp_axis and sp_axis must differ, both are {tp_axis}"
+            raise ValueError(msg)
         self.tp_factor, self.sp_factor = shape[tp_axis], shape[sp_axis]
+        # Resolved once here rather than read from the environment inside `_make_resident`, which runs
+        # several times per generation. Also makes it settable by a test without touching os.environ.
+        self.coresident = coresident if coresident is not None else os.environ.get("MINIMAX_H3_CORESIDENT", "1") == "1"
 
         self.ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self.dit_parallel_config = DiTParallelConfig(
@@ -308,7 +317,10 @@ class MiniMaxH3Pipeline:
         """
         if self._resident == stage:
             return
-        coresident = os.environ.get("MINIMAX_H3_CORESIDENT", "1") == "1"
+        # One `elif` chain, and the branches are mutually exclusive by construction: each tests
+        # `self._resident`, which holds exactly one value. It reads like a fallthrough of independent
+        # release actions and is not one.
+        coresident = self.coresident
         if self._resident == "text" and self._text_encoder is not None:
             logger.info("releasing the text encoder")
             self._text_encoder.deallocate_weights()
@@ -342,7 +354,7 @@ class MiniMaxH3Pipeline:
             self._image_processor = AutoImageProcessor.from_pretrained(str(self.weights_dir), subfolder="text_encoder")
         return self._image_processor
 
-    def _build_presentation(self, prompt: str, keyframes: Sequence):
+    def _build_presentation(self, prompt: str, keyframes: Sequence[Image.Image]):
         """MiniMax-H3's token presentation, exactly as `encoders.py::encode_prompt` assembles it.
 
         Returns `(input_ids [1, L], token_tags [L], mm_token_type_ids [1, L], pixel_values, grid_thw)`.
@@ -401,7 +413,7 @@ class MiniMaxH3Pipeline:
             )
         return self._vision_tower
 
-    def _embed_cache_path(self, prompt: str, keyframes: Sequence = ()) -> Path:
+    def _embed_cache_path(self, prompt: str, keyframes: Sequence[Image.Image] = ()) -> Path:
         """Disk cache path for one prompt presentation.
 
         The `t2va` key is byte-identical to what it was before keyframes existed, so an already
@@ -412,14 +424,14 @@ class MiniMaxH3Pipeline:
         cache_dir = Path(os.environ.get("TT_DIT_CACHE_DIR") or Path.home() / ".cache/tt-dit") / "minimax-h3-embeddings"
         cache_dir.mkdir(parents=True, exist_ok=True)
         if keyframes:
-            digests = [hashlib.md5(numpy.asarray(k.convert("RGB")).tobytes()).hexdigest() for k in keyframes]
+            digests = [hashlib.md5(np.asarray(k.convert("RGB")).tobytes()).hexdigest() for k in keyframes]
             raw = "fl2va-device||" + prompt + "||" + "|".join(digests)
         else:
             raw = f"t2va-device||{prompt}"
         return cache_dir / f"{hashlib.md5(raw.encode()).hexdigest()}.device.pt"
 
     def encode_prompt(
-        self, prompt: str, *, keyframes: Sequence = (), use_cache: bool = True
+        self, prompt: str, *, keyframes: Sequence[Image.Image] = (), use_cache: bool = True
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Prompt to `(prompt_embeds [1, L, 5120], text_token_tags [L])`, disk-cached.
 
@@ -492,8 +504,9 @@ class MiniMaxH3Pipeline:
             )
             runs = vision_token_runs(input_ids, self.tokenizer.convert_tokens_to_ids("<|image_pad|>"))
             expected_runs = len(keyframes)
-            if len(runs) != expected_runs:
-                raise AssertionError(f"expected {expected_runs} vision run(s) in the presentation, found {runs}")
+            assert (
+                len(runs) == expected_runs
+            ), f"expected {expected_runs} vision run(s) in the presentation, found {runs}"
             # merged tokens REPLACE the `<|image_pad|>` row embeddings; deepstack features are ADDED to
             # those same rows after the first three decoder layers. Not interchangeable.
             vision_kwargs = {"vision_embeds": merged, "vision_runs": runs, "deepstack_embeds": deepstack}
@@ -581,7 +594,7 @@ class MiniMaxH3Pipeline:
     def patch_size(self) -> tuple[int, int, int]:
         return tuple(self.transformer_config["patch_size"])
 
-    def _device_metadata(self, layout, padded_len: int):
+    def _device_metadata(self, layout: MiniMaxH3PackedSequence, padded_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Rotary tables for the padded global sequence, sharded on SP the way the model fractures it.
 
         Pad rows are excluded from attention by ring attention's `logical_n`, so their rotary values
@@ -696,7 +709,7 @@ class MiniMaxH3Pipeline:
                 logger.info(f"per-shape keyframe encoder {encode_shape} built in {time.time() - t0:.1f}s")
         return self._vae
 
-    def _encode_keyframes(self, keyframes: Sequence) -> torch.Tensor:
+    def _encode_keyframes(self, vae: MiniMaxH3Vae, keyframes: Sequence[Image.Image]) -> torch.Tensor:
         """Prepared keyframes to packed conditioning rows, via the device VAE encoder.
 
         `encode_keyframes` takes the encoder as an injected callable, so the device VAE plugs straight
@@ -704,12 +717,6 @@ class MiniMaxH3Pipeline:
         leaving that as the single decision point means the keyframe path cannot disagree with the
         VAE's own view of what a keyframe is.
         """
-        # Build first, then read `tile_size` off it -- `self._vae` is None until `_prepare_vae` runs.
-        # Every keyframe tile is exactly `tile_size` square: `split_tiles` returns `[tile_size] * n`
-        # lengths unless one tile covers the axis, and at 1344x768 with tile_size 256 neither axis does.
-        # So one `(1, 256, 256)` encoder serves all 28 tiles, which is one wave on a 32-device mesh.
-        vae = self._prepare_vae()
-        vae = self._prepare_vae(encode_shape=(1, vae.tile_size, vae.tile_size))
         return encode_keyframes(
             keyframes,
             vae.encode_clip,
@@ -718,19 +725,25 @@ class MiniMaxH3Pipeline:
             self.patch_size,
         )
 
-    def decode_unit_shape(self, num_latent_frames: int) -> tuple[int, int, int]:
+    def decode_unit_shape(self) -> tuple[int, int, int]:
         """The `(T, H, W)` of one decoder work unit: one temporal chunk of one spatial tile.
 
-        Fixed by the VAE's tiling independently of resolution and duration --- which is what lets one
-        per-shape decoder serve the whole video, and what the cache key records.
+        Takes no arguments, and that is the point --- the unit is fixed by the VAE's tiling
+        *independently of resolution and duration*, which is what lets one per-shape decoder serve the
+        whole video and what the cache key records. It previously accepted `num_latent_frames` and
+        computed two values it then discarded; the return never depended on them.
+
+        `tile_size` is read off the VAE when one exists and falls back to the module default otherwise.
+        The fallback is the branch t2va actually takes, because nothing has built the VAE at the point
+        the caller evaluates this argument --- so it must be the real default, not a literal.
         """
         config = self.vae_config
-        tokens = num_latent_frames + config.token_drop
-        pad = (-tokens) % config.tokens_chunk_size
-        chunk_frames = config.tokens_chunk_size + config.token_overlap
-        latent_tile = (self._vae.tile_size if self._vae else 256) // config.spatial_compression_ratio
-        del pad
-        return (chunk_frames, latent_tile, latent_tile)
+        tile_size = self._vae.tile_size if self._vae is not None else DEFAULT_TILE_SIZE
+        return (
+            config.tokens_chunk_size + config.token_overlap,
+            tile_size // config.spatial_compression_ratio,
+            tile_size // config.spatial_compression_ratio,
+        )
 
     def _prepare_audio_decoder(self) -> MiniMaxH3AudioDecoder:
         if self._audio_decoder is None:
@@ -777,21 +790,29 @@ class MiniMaxH3Pipeline:
         rate = 1
         for r in self.audio_config["decoder_rates"]:
             rate *= r
-        # 800 samples per latent at 40 latents/s == 32 kHz.
-        return rate * 40
+        # 800 samples per latent at 40 latents/s == 32 kHz. The latents-per-second figure is shared
+        # with `audio_latent_num_frames`, so the audio *length* and the audio *sample rate* cannot
+        # drift apart into a silent desync.
+        return rate * MINIMAX_H3_AUDIO_LATENTS_PER_SECOND
 
-    def _denormalize(self, latents: torch.Tensor, mean, std, ndim: int) -> torch.Tensor:
-        shape = (1, -1) + (1,) * (ndim - 2)
+    def _denormalize(self, latents: torch.Tensor, mean: Sequence[float], std: Sequence[float]) -> torch.Tensor:
+        """Undo a per-channel normalization. The channel axis is 1 and the rest broadcast.
+
+        `ndim` used to be a parameter; every call site passed `latents.ndim`, so it could only ever be
+        wrong, and a mismatched value broadcasts silently rather than raising.
+        """
+        shape = (1, -1) + (1,) * (latents.ndim - 2)
         return latents * torch.tensor(std).view(shape) + torch.tensor(mean).view(shape)
 
     # ------------------------------------------------------------------ the call
 
+    @torch.no_grad()
     def __call__(
         self,
         prompt: str,
         *,
-        image=None,
-        last_image=None,
+        image: Image.Image | None = None,
+        last_image: Image.Image | None = None,
         num_frames: int = 124,
         aspect_ratio: tuple[float, float] = (16, 9),
         height: int | None = None,
@@ -890,10 +911,13 @@ class MiniMaxH3Pipeline:
         if keyframes:
             # The 0.72 GB encoder upload is a prepare and stays outside the timed row, same rule as the
             # DiT and the per-shape decoder.
+            # Every keyframe tile is exactly `tile_size` square: `split_tiles` returns `[tile_size] * n`
+            # lengths unless one tile already covers the axis, and at 1344x768 neither does. So one
+            # `(1, 256, 256)` encoder serves all 28 tiles, which is one wave on a 32-device mesh.
             vae = self._prepare_vae()
-            self._prepare_vae(encode_shape=(1, vae.tile_size, vae.tile_size))
+            vae = self._prepare_vae(encode_shape=(1, vae.tile_size, vae.tile_size))
             t0 = time.time()
-            condition_rows = self._encode_keyframes(keyframes)
+            condition_rows = self._encode_keyframes(vae, keyframes)
             # `scheduler.scale_noise`, never a local copy: `conditioning.py` records that a local one
             # drifted 2.4e-7 by computing `1 - t` in Python double instead of the sample dtype, and
             # there is a test asserting no second implementation exists.
@@ -915,11 +939,10 @@ class MiniMaxH3Pipeline:
 
         # 5. Prepend the anchors, as the reference's `prepare_latents` does.
         if condition_rows is not None:
-            if condition_rows.shape[0] != layout.num_condition_video_rows:
-                raise AssertionError(
-                    f"keyframe encode produced {condition_rows.shape[0]} conditioning rows but the "
-                    f"layout expects {layout.num_condition_video_rows}"
-                )
+            assert condition_rows.shape[0] == layout.num_condition_video_rows, (
+                f"keyframe encode produced {condition_rows.shape[0]} conditioning rows but the layout "
+                f"expects {layout.num_condition_video_rows}"
+            )
             video_rows = torch.cat([condition_rows, video_rows])
 
         # 6. Denoise. The weight load is a prepare, so it sits outside the timed row.
@@ -934,7 +957,7 @@ class MiniMaxH3Pipeline:
 
         # 7. Decode both modalities. Same rule: `_prepare_*` before `t0`, never inside it -- and for
         # the VAE that includes the per-shape decoder, whose weight upload would otherwise be timed.
-        vae = self._prepare_vae(decode_shape=self.decode_unit_shape(num_latent_frames))
+        vae = self._prepare_vae(decode_shape=self.decode_unit_shape())
         t0 = time.time()
         video = self._decode_video(
             vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
@@ -952,8 +975,6 @@ class MiniMaxH3Pipeline:
 
         self.last_timings = list(timings)
         total = sum(seconds for _, seconds in timings)
-        for label, seconds in timings:
-            logger.info(f"TIMING {label}: {seconds:.1f} s")
         logger.info(f"Total (compute): {total:.1f}s | frames={tuple(video.shape)}")
 
         return MiniMaxH3Output(
@@ -968,8 +989,8 @@ class MiniMaxH3Pipeline:
         self,
         *,
         prompt: str = "warmup",
-        image=None,
-        last_image=None,
+        image: Image.Image | None = None,
+        last_image: Image.Image | None = None,
         num_frames: int = 124,
         height: int | None = None,
         width: int | None = None,
@@ -1007,7 +1028,16 @@ class MiniMaxH3Pipeline:
         )
         logger.info(f"warmup ({task}) done in {time.time() - t0:.1f}s, padded_len={self.last_padded_len}")
 
-    def _denoise(self, transformer, layout, prompt_embeds, video_rows, audio_rows, scheduler, audio_scheduler):
+    def _denoise(
+        self,
+        transformer: MiniMaxH3Transformer3DModel,
+        layout: MiniMaxH3PackedSequence,
+        prompt_embeds: torch.Tensor,
+        video_rows: torch.Tensor,
+        audio_rows: torch.Tensor,
+        scheduler: MiniMaxH3Scheduler,
+        audio_scheduler: MiniMaxH3Scheduler,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Denoise in place. `video_rows` is `[condition rows | target rows]`, cond first, as the
         reference's `latents` is; `num_condition_video_rows` is 0 for `t2va`.
         """
@@ -1088,35 +1118,48 @@ class MiniMaxH3Pipeline:
                 logger.info(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
 
         if anchor_rows is not None and not torch.equal(video_rows[:num_cond], anchor_rows):
+            # RuntimeError, not AssertionError: this is a real failure of the loop, not a caller error,
+            # and it must not be strippable by `python -O`.
             changed = int((video_rows[:num_cond] != anchor_rows).any(dim=-1).sum())
-            raise AssertionError(
+            msg = (
                 f"{changed} of {num_cond} keyframe anchor rows changed during denoising; the loop's "
                 "write mask is wrong and the keyframe conditioning is not being honoured"
             )
+            raise RuntimeError(msg)
 
         return video_rows, audio_rows
 
-    def _decode_video(self, vae, rows, num_latent_frames, latent_height, latent_width, num_condition_rows=0):
+    def _decode_video(
+        self,
+        vae: MiniMaxH3Vae,
+        rows: torch.Tensor,
+        num_latent_frames: int,
+        latent_height: int,
+        latent_width: int,
+        num_condition_video_rows: int,
+    ) -> torch.Tensor:
         """Decode the *target* rows. `fl2va`'s leading condition rows are dropped, not decoded --- they
         are the keyframe, which the caller already has.
         """
         latents = unpatchify_video_tokens(
-            rows[num_condition_rows:],
+            rows[num_condition_video_rows:],
             num_latent_frames,
             latent_height,
             latent_width,
             self.vae_config.latent_channels,
             self.patch_size,
         )
-        latents = self._denormalize(latents, self.vae_config.latents_mean, self.vae_config.latents_std, 5)
+        latents = self._denormalize(latents, self.vae_config.latents_mean, self.vae_config.latents_std)
         video = vae.decode(latents)
         # The VAE emits ImageNet-normalized RGB.
-        video = self._denormalize(video.float(), MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD, 5).clamp(0, 1)
+        video = self._denormalize(video.float(), MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD).clamp(0, 1)
         return video
 
-    def _decode_audio(self, audio_decoder, rows, num_audio_latents):
+    def _decode_audio(
+        self, audio_decoder: MiniMaxH3AudioDecoder, rows: torch.Tensor, num_audio_latents: int
+    ) -> torch.Tensor:
         latents = unpack_audio_tokens(rows, num_audio_latents)
-        latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"], 3)
+        latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
         waveform = audio_decoder(latents)
         # The audio VAE is mono and took the two stereo channels as two batch items.
         return waveform.float().permute(1, 0, 2)
