@@ -5,7 +5,7 @@
 
 The accuracy harness must validate the diffusion *decisions* — not just logits.
 Two of those decisions have **no entropy / −Σ p·log p computation anywhere in
-gemma4**, so they are net-new and built here on `ttnn.softmax/log/mul/sum` (+
+gemma4**, so they are net-new and built here on `ttnn.max/exp/log/div/mul/sum` (+
 `argmax`):
 
   * :func:`token_entropy` — per-position Shannon entropy ``H = −Σ p·log p`` of
@@ -20,19 +20,41 @@ gemma4**, so they are net-new and built here on `ttnn.softmax/log/mul/sum` (+
 These let the harness diff entropy *values* and Gumbel-max *argmax agreement*
 device-vs-torch, including under **bfp8** where small-probability drift can flip
 accept/renoise (the whole reason the harness validates decisions, not logits).
-``tests/test_device_entropy_harness.py`` measures both on QB2.
+``tests/test_sampling.py`` measures both on QB2.
 
-Numerical note: ``−Σ p·log p`` is computed directly per the issue. For finite
-logits ``softmax`` is > 0, so ``log`` is finite; with extreme underflow add a
-small eps before ``log`` (the harness inputs do not underflow). A logsumexp form
-(``H = logsumexp(z) − Σ p·z``) avoids ``log(p)`` entirely if needed downstream.
+Numerical note: entropy is computed as ``H = logsumexp(z) − Σ softmax(z)·z``.
+This is algebraically equivalent to ``−Σ p·log p`` while avoiding ``log(p)``
+underflow and reducing accept-boundary flips at the 256-token canvas length.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import NamedTuple
 
 import ttnn
+
+
+class ChunkedGumbelNoise(NamedTuple):
+    seed: int
+    vocab_chunk_size: int = 1024
+    dtype: object = ttnn.float32
+
+
+def argmax_last_dim(x, *, keepdim: bool = True):
+    """Multi-core argmax over the last (vocab) dim.
+
+    ``ttnn.argmax`` runs **single-core** on TILE input but **multi-core** on
+    ROW_MAJOR input for a last-dim reduction, and it always emits UINT32 ROW_MAJOR
+    output. Converting the input to ROW_MAJOR first is ~86x faster over the 262144
+    production vocab (measured on QB2: 1240ms TILE -> 14.4ms ROW_MAJOR) and is
+    bit-identical to the TILE result (verified exact match). The output layout/dtype
+    contract (UINT32 ROW_MAJOR) is unchanged, so downstream consumers are unaffected.
+    """
+    rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.argmax(rm, dim=-1, keepdim=keepdim)
+    if rm is not x:
+        rm.deallocate(True)
+    return out
 
 
 def temperature_scale(logits, temperature: float):
@@ -42,24 +64,42 @@ def temperature_scale(logits, temperature: float):
     return ttnn.multiply(logits, 1.0 / float(temperature))
 
 
+def _deallocate_scaled_if_temporary(scaled, logits) -> None:
+    if scaled is not logits:
+        scaled.deallocate(True)
+
+
 def token_entropy(logits, temperature: float = 1.0):
     """Per-position Shannon entropy ``H = −Σ p·log p`` of ``softmax(logits / T)``.
 
     ``logits``: ``[..., vocab]`` (TILE_LAYOUT). Returns ``[..., 1]`` (reduced over
-    the vocab axis). Built on ``ttnn.softmax`` / ``log`` / ``mul`` / ``sum``.
+    the vocab axis). Uses the logsumexp form to avoid ``log(p)`` underflow.
     """
     z = temperature_scale(logits, temperature)
-    p = ttnn.softmax(z, dim=-1)
-    # +eps before log: at the production vocab (262144) a near-one-hot row underflows
-    # the non-peak probs to exact 0 in bf16, and log(0)=-inf -> 0*-inf = NaN. The eps
-    # floors log at ~-20.7 so the 0*log term is 0; bias is negligible (eps << any real p).
-    logp = ttnn.log(ttnn.add(p, 1.0e-9))
-    plogp = ttnn.multiply(p, logp)
-    neg_h = ttnn.sum(plogp, dim=-1, keepdim=True)  # Σ p·log p  (negative)
-    p.deallocate(True)
-    logp.deallocate(True)
-    plogp.deallocate(True)
-    return ttnn.neg(neg_h)  # H = −Σ p·log p
+    zmax = ttnn.max(z, dim=-1, keepdim=True)
+    shifted = ttnn.subtract(z, zmax, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    exp_shifted = ttnn.exp(shifted, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    sum_exp = ttnn.sum(exp_shifted, dim=-1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    log_sum_exp = ttnn.log(sum_exp)
+    # H = logsumexp(z) - E[z].  Since shifted = z - zmax, compute the
+    # algebraically equivalent log(sum(exp(shifted))) - E[shifted] to avoid
+    # subtracting two large, nearly equal values for very confident logits.
+    # Use Σ(exp(shifted) * shifted) / Σexp directly so a full probability tensor
+    # is not live alongside the full shifted tensor in the production path.
+    expected_terms = ttnn.multiply(exp_shifted, shifted, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    sum_weighted_shifted = ttnn.sum(expected_terms, dim=-1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    expected_shifted = ttnn.div(sum_weighted_shifted, sum_exp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entropy = ttnn.subtract(log_sum_exp, expected_shifted)
+    zmax.deallocate(True)
+    shifted.deallocate(True)
+    exp_shifted.deallocate(True)
+    sum_exp.deallocate(True)
+    log_sum_exp.deallocate(True)
+    expected_terms.deallocate(True)
+    sum_weighted_shifted.deallocate(True)
+    expected_shifted.deallocate(True)
+    _deallocate_scaled_if_temporary(z, logits)
+    return entropy  # H = logsumexp(z) - Σ softmax(z)·z
 
 
 def gumbel_max(logits, temperature: float, noise):
@@ -68,16 +108,334 @@ def gumbel_max(logits, temperature: float, noise):
     ``logits`` / ``noise``: ``[..., vocab]`` (TILE_LAYOUT). ``noise`` is the torch
     run's exact injected Gumbel(0,1) noise (issue #47468 determinism). Returns
     argmax indices ``[..., 1]``. ``noise`` all-zeros reduces to plain
-    ``argmax(logits)`` (temperature scaling preserves the argmax).
+    ``argmax(logits)`` (temperature scaling preserves the argmax). ``noise=None``
+    is an explicit RUN-first shortcut for argmax sampling without allocating the
+    full-vocab Gumbel buffer.
     """
+    if isinstance(noise, ChunkedGumbelNoise):
+        return gumbel_max_with_chunked_noise(
+            logits,
+            temperature,
+            seed=noise.seed,
+            vocab_chunk_size=noise.vocab_chunk_size,
+            dtype=noise.dtype,
+        )
     z = temperature_scale(logits, temperature)
+    if noise is None:
+        sampled = argmax_last_dim(z)
+        _deallocate_scaled_if_temporary(z, logits)
+        return sampled
     perturbed = ttnn.add(z, noise)
-    return ttnn.argmax(perturbed, dim=-1, keepdim=True)
+    sampled = argmax_last_dim(perturbed)
+    perturbed.deallocate(True)
+    _deallocate_scaled_if_temporary(z, logits)
+    return sampled
 
 
-def softmax(logits, temperature: float = 1.0, *, compute_kernel_config: Optional[object] = None):
-    """``softmax(logits / T)`` over the vocab axis (the self-conditioning soft-embed prob)."""
-    z = temperature_scale(logits, temperature)
-    if compute_kernel_config is not None:
-        return ttnn.softmax(z, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config)
-    return ttnn.softmax(z, dim=-1)
+def _offset_argmax_indices(indices, offset: int):
+    indices = ttnn.typecast(indices, ttnn.uint32)
+    if offset == 0:
+        return indices
+    out = ttnn.add(indices, offset)
+    indices.deallocate(True)
+    return out
+
+
+def _select_by_mask(mask, candidate, current):
+    mask_t = ttnn.typecast(mask, candidate.get_dtype())
+    ones = ttnn.full(
+        list(candidate.shape),
+        1,
+        dtype=candidate.get_dtype(),
+        layout=ttnn.TILE_LAYOUT,
+        device=candidate.device(),
+    )
+    keep_t = ttnn.subtract(ones, mask_t)
+    selected_candidate = ttnn.multiply(candidate, mask_t)
+    selected_current = ttnn.multiply(current, keep_t)
+    out = ttnn.add(selected_candidate, selected_current)
+    mask_t.deallocate(True)
+    ones.deallocate(True)
+    keep_t.deallocate(True)
+    selected_candidate.deallocate(True)
+    selected_current.deallocate(True)
+    return out
+
+
+def gumbel_max_with_chunked_noise(
+    logits,
+    temperature: float,
+    *,
+    seed: int | None = None,
+    vocab_chunk_size: int = 1024,
+    dtype=ttnn.float32,
+):
+    """Gumbel-max without materializing full-vocab noise or perturbed logits.
+
+    Each vocab chunk computes local ``max`` and ``argmax`` for
+    ``logits / T + Gumbel``; the per-chunk winners are reduced to the global
+    winner with elementwise masks. This is the bounded-memory fit path for large
+    canvases where a full ``[B, L, vocab]`` Gumbel tensor does not fit. The current
+    QB2 1024-wide RNG has a known distribution bias, so this path is not the
+    official-quality reference until that RNG issue is fixed.
+    """
+    seed = _validate_ttnn_rand_seed(seed)
+    if vocab_chunk_size <= 0:
+        raise ValueError("vocab_chunk_size must be positive")
+    vocab_size = logits.shape[-1]
+    best_values = None
+    best_indices = None
+
+    for offset in range(0, vocab_size, vocab_chunk_size):
+        end = min(offset + vocab_chunk_size, vocab_size)
+        starts = [0] * len(logits.shape)
+        ends = list(logits.shape)
+        starts[-1] = offset
+        ends[-1] = end
+        chunk = ttnn.slice(
+            logits,
+            starts,
+            ends,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        z = temperature_scale(chunk, temperature)
+        noise = sample_gumbel_noise(
+            z.shape,
+            device=logits.device(),
+            seed=seed + offset,
+            dtype=dtype,
+        )
+        perturbed = ttnn.add(z, noise)
+        chunk_values = ttnn.max(perturbed, dim=-1, keepdim=True)
+        chunk_indices = _offset_argmax_indices(ttnn.argmax(perturbed, dim=-1, keepdim=True), offset)
+
+        perturbed.deallocate(True)
+        noise.deallocate(True)
+        _deallocate_scaled_if_temporary(z, chunk)
+        chunk.deallocate(True)
+
+        if best_values is None:
+            best_values = chunk_values
+            best_indices = chunk_indices
+            continue
+
+        take_chunk = ttnn.gt(chunk_values, best_values)
+        next_values = _select_by_mask(
+            take_chunk,
+            chunk_values,
+            best_values,
+        )
+        take_chunk_u32 = ttnn.typecast(take_chunk, ttnn.uint32)
+        next_indices = _select_by_mask(
+            take_chunk_u32,
+            chunk_indices,
+            best_indices,
+        )
+
+        take_chunk.deallocate(True)
+        take_chunk_u32.deallocate(True)
+        best_values.deallocate(True)
+        best_indices.deallocate(True)
+        chunk_values.deallocate(True)
+        chunk_indices.deallocate(True)
+        best_values = next_values
+        best_indices = next_indices
+
+    best_values.deallocate(True)
+    return best_indices
+
+
+def canvas_sample(logits, temperature: float, gumbel_noise):
+    """Deterministic canvas sampler for W4 using injected Gumbel noise.
+
+    This is the released per-position canvas draw used by the diffusion loop:
+    ``argmax(logits / T + gumbel)`` over every canvas position. The noise is
+    supplied by the caller for torch/device token-exact validation.
+    """
+    return gumbel_max(logits, temperature, gumbel_noise)
+
+
+def _gumbel_from_uniform(u, *, deallocate_input: bool = True):
+    # This transform used to retain six full-shape intermediates until the end.
+    # At the production [1, 1, 256, 256K] shape that is 1.5 GiB of avoidable
+    # device traffic and makes post-trace Gumbel refresh impossible. Consume the
+    # uniform draw in place (the default contract already deallocates it); keep
+    # the uncommon non-consuming path by cloning once.
+    gumbel = u if deallocate_input else ttnn.clone(u)
+    ttnn.add(gumbel, 1.0e-10, output_tensor=gumbel)
+    ttnn.log(gumbel, output_tensor=gumbel)
+    ttnn.multiply(gumbel, -1.0, output_tensor=gumbel)
+    ttnn.add(gumbel, 1.0e-10, output_tensor=gumbel)
+    ttnn.log(gumbel, output_tensor=gumbel)
+    ttnn.multiply(gumbel, -1.0, output_tensor=gumbel)
+    return gumbel
+
+
+def _rand_mesh_mapper(device):
+    if hasattr(device, "shape") and device.get_num_devices() > 1:
+        return ttnn.MeshMapperConfig(
+            placements=[ttnn.PlacementReplicate()],
+            mesh_shape_override=ttnn.MeshShape([device.get_num_devices()]),
+        )
+    return None
+
+
+def _validate_ttnn_rand_seed(seed: int) -> int:
+    seed = int(seed)
+    if seed <= 0:
+        raise ValueError("TTNN regenerated Gumbel noise requires a positive nonzero seed")
+    return seed
+
+
+def _validate_gumbel_noise_shape(shape, *, require_vocab_axis: bool = False) -> tuple[int, ...]:
+    shape = tuple(shape)
+    if not shape:
+        raise ValueError("Gumbel noise shape must be non-empty")
+    if any(dim <= 0 for dim in shape):
+        raise ValueError("Gumbel noise shape dimensions must be positive")
+    if require_vocab_axis and len(shape) < 2:
+        raise ValueError("Gumbel noise shape must include at least a sample axis and a vocab axis")
+    return shape
+
+
+def sample_gumbel_noise(shape, *, device, seed: int, dtype=ttnn.float32):
+    """Generate device Gumbel(0,1) noise with a deterministic TTNN rand seed."""
+    seed = _validate_ttnn_rand_seed(seed)
+    shape = _validate_gumbel_noise_shape(shape)
+    u = ttnn.rand(
+        shape,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        low=0.0,
+        high=1.0,
+        seed=seed,
+        mesh_mapper=_rand_mesh_mapper(device),
+    )
+    return _gumbel_from_uniform(u)
+
+
+def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=ttnn.float32):
+    """Generate regenerated Gumbel noise with vocab not produced as the rand innermost axis.
+
+    QB2's single-call ``ttnn.rand(shape=[..., vocab])`` path currently shows
+    last-dimension correlation that biases Gumbel-max distributions. Generating
+    the vocab axis first and permuting back preserves one random draw per logits
+    element and removes that correlation from the *vocab* axis, which is what the
+    W4 per-position marginal validation checks.
+
+    **It does not produce IID noise.** For the production shape ``(1, 1, 256, vocab)`` the
+    collapsed ``inner`` axis below IS the 256 canvas positions, so the last-dimension
+    correlation is relocated onto the canvas-position axis rather than removed. Measured on
+    device 2026-07-25 (P150x4, canvas 256, vocab 16384 and 262144 alike): 64 of the 256 position
+    rows are byte-identical to row ``i - 24`` -- ``ttnn.rand`` reuses 24 of every 32 row streams
+    per tile -- and with flat logits only 119/256 positions pick distinct tokens, against
+    255/256 for host IID Gumbel. That is worse than the plain vocab-innermost path (157/256) on
+    the axis the diffusion decisions are taken along. Chunking along vocab with distinct seeds
+    and both tile-aware layout workarounds were also measured and do not reach IID.
+
+    ``DG_VLLM_GUMBEL_MODE=host`` is the only IID arm today. See
+    ``doc/decision_fidelity/gumbel_position_correlation.md`` and the gate
+    ``tests/test_sampling.py``.
+    """
+    seed = _validate_ttnn_rand_seed(seed)
+    shape = _validate_gumbel_noise_shape(shape, require_vocab_axis=True)
+
+    # Generate with the vocab axis OUTERMOST (so it is never the rand innermost axis that
+    # carries the QB2 last-dim correlation) and every non-vocab axis collapsed into ONE
+    # trailing axis. The earlier form kept the batch/singleton axes as explicit trailing
+    # dims — e.g. rand([vocab, 1, canvas, 1]) — and TILE_LAYOUT pads each size-1 axis that
+    # lands in the last two positions up to a full 32-wide tile, inflating the buffer 32x
+    # per singleton (the [1,1,256,262144] canvas case ballooned 256 MiB -> 8 GiB and OOMed).
+    # A 2-D [vocab, inner] rand keeps both tiled axes tile-aligned, then we permute the vocab
+    # axis to innermost and reshape back to the requested logits shape (values differ from the
+    # old grid but the distribution — vocab-outermost draw — is unchanged).
+    vocab = int(shape[-1])
+    inner = 1
+    for dim in shape[:-1]:
+        inner *= int(dim)
+    raw_u = ttnn.rand(
+        (vocab, inner),
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        low=0.0,
+        high=1.0,
+        seed=seed,
+        mesh_mapper=_rand_mesh_mapper(device),
+    )
+    u2 = ttnn.permute(raw_u, (1, 0))  # [inner, vocab]
+    if u2 is not raw_u:
+        raw_u.deallocate(True)
+    u = ttnn.reshape(u2, tuple(int(d) for d in shape))
+    if u is not u2:
+        u2.deallocate(True)
+    return _gumbel_from_uniform(u)
+
+
+def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk_size: int = 1, dtype=ttnn.float32):
+    """Slow iid-by-vocab-chunk Gumbel generator for distributional validation.
+
+    QB2 currently shows last-dimension correlation when one large ``ttnn.rand``
+    call generates all vocab noise at once. Generating each vocab chunk with a
+    distinct seed removes that toy-vocab bias, but this is intentionally a
+    validation/diagnostic path rather than the full-vocab production sampler.
+    """
+    seed = _validate_ttnn_rand_seed(seed)
+    if vocab_chunk_size <= 0:
+        raise ValueError("vocab_chunk_size must be positive")
+
+    shape = _validate_gumbel_noise_shape(shape, require_vocab_axis=True)
+    vocab_size = shape[-1]
+    parts = []
+    for offset in range(0, vocab_size, vocab_chunk_size):
+        chunk_size = min(vocab_chunk_size, vocab_size - offset)
+        chunk_shape = (*shape[:-1], chunk_size)
+        u = ttnn.rand(
+            chunk_shape,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            low=0.0,
+            high=1.0,
+            seed=seed + offset,
+            mesh_mapper=_rand_mesh_mapper(device),
+        )
+        parts.append(_gumbel_from_uniform(u))
+
+    if len(parts) == 1:
+        return parts[0]
+    gumbel = ttnn.concat(parts, dim=-1)
+    for part in parts:
+        part.deallocate(True)
+    return gumbel
+
+
+# ---------------------------------------------------------------------------------------------
+# TP-sharded denoise terminal (DG_TERMINAL_SHARDED) — argmax / global-max / entropy on the
+# per-device vocab shard, skipping the per-step full-vocab all-gather (#47465, path to 100 t/s).
+#
+# The lm_head is column-parallel over vocab (``models/demos/gemma4/tt/model.py::_apply_lm_head``),
+# so each of the ``TP`` devices already holds the SOFTCAPPED shard ``[1,1,S,vocab/TP]`` covering
+# a contiguous, tile-aligned, unpadded vocab block ``[c*per_dev, (c+1)*per_dev)``. With
+# ``return_sharded=True`` the head skips the ~128 MiB/step ``ccl_allgather`` and these helpers do
+# the reduction on the shard + a tiny cross-shard combine:
+#   * argmax/gumbel  — per-shard local max+argmax, add the per-device offset, all-gather the tiny
+#     ``[S,TP]`` candidates, then a global max + lowest-index-among-winners fold. BIT-IDENTICAL to
+#     the replicated ``argmax_last_dim`` (max is a selection, no bf16 accumulation; the tie rule —
+#     lowest global index wins — is preserved via the offset ordering).
+#   * global max     — exact (bf16 max of bf16 values does no rounding, order-independent).
+#   * entropy        — distributed logsumexp with the exact shared max; fp32 per-shard partials +
+#     fp32 all-reduce(SUM). NOT bf16-bit-identical (the 262144-length sum is re-associated as
+#     ``TP`` partials), the same #48291 re-association class the full-canvas norm was held back for
+#     until fp32 partials made it bit-identical (see _norm_compute_kernel_config); decision-gated.
+#
+# Trace-safe: no ``ttnn.full`` / ``zeros_like`` (host writes rejected in trace capture) is used in
+# the combine — the tie fold is a masked-min in fp32; the offset constant is preallocated OUTSIDE
+# capture (``build_vocab_shard_offsets``); all shapes are fixed (``S``, ``TP``, ``per_dev``). The
+# ``all_gather`` / ``all_reduce`` are the same collectives gemma4 traced decode already captures.
+# ---------------------------------------------------------------------------------------------
+
+# Larger than any global vocab index (< 262144) so a non-winning shard's candidate index never
+# wins the cross-shard min; exact-enough in fp32 (its exact value is irrelevant, only its rank).
+_ARGMAX_TIE_PENALTY = 1.0e9
