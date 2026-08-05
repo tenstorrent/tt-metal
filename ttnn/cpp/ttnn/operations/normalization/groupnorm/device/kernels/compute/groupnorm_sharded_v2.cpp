@@ -215,7 +215,14 @@ void kernel_main() {
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
             reconfig_data_format_srcb(dfb_in0_id, dfb_input_mask_id);
-            mul_init(dfb_in0_id, dfb_input_mask_id);
+            // The row-masked set varies down the rows of a tile, so it can only be consumed by a
+            // full-tile multiply. Row-0-only synthesis and the row broadcast are therefore
+            // available exactly when there is no row mask, i.e. on tile-aligned H*W.
+            if constexpr (has_row_mask) {
+                mul_init(dfb_in0_id, dfb_input_mask_id);
+            } else {
+                mul_bcast_rows_init(dfb_in0_id, dfb_input_mask_id);
+            }
             dfb_x.reserve_back(block_hw);
             dfb_input_mask.wait_front(mask_tiles_per_group);
             for (uint32_t i = 0; i < block_h; ++i) {
@@ -236,12 +243,21 @@ void kernel_main() {
                         if (index >= per_core_MN) {
                             index = per_core_MN - 1;
                         }
-                        uint32_t index_mask = w + index_subblock_w_offset + mask_set_offset;
+                        if constexpr (has_row_mask) {
+                            const uint32_t index_mask = w + index_subblock_w_offset + mask_set_offset;
 #ifdef TILIZE_IN
-                        mul_tiles(dfb_in_id, dfb_input_mask_id, index, index_mask, w);
+                            mul_tiles(dfb_in_id, dfb_input_mask_id, index, index_mask, w);
 #else
-                        mul_tiles(dfb_in0_id, dfb_input_mask_id, index, index_mask, w);
+                            mul_tiles(dfb_in0_id, dfb_input_mask_id, index, index_mask, w);
 #endif
+                        } else {
+                            const uint32_t index_mask = w + index_subblock_w_offset;
+#ifdef TILIZE_IN
+                            mul_tiles_bcast_rows(dfb_in_id, dfb_input_mask_id, index, index_mask, w);
+#else
+                            mul_tiles_bcast_rows(dfb_in0_id, dfb_input_mask_id, index, index_mask, w);
+#endif
+                        }
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -342,7 +358,11 @@ void kernel_main() {
             dfb_ex_global.pop_front(1);
 
             reconfig_data_format_srcb(dfb_ex_global_id, dfb_input_mask_id);
-            mul_init(dfb_x_id, dfb_input_mask_id);
+            if constexpr (has_row_mask) {
+                mul_init(dfb_x_id, dfb_input_mask_id);
+            } else {
+                mul_bcast_rows_init(dfb_x_id, dfb_input_mask_id);
+            }
             dfb_x.wait_front(block_hw);
 
             for (uint32_t i = 0; i < block_h; i++) {
@@ -357,8 +377,11 @@ void kernel_main() {
                     tile_regs_acquire();
                     for (uint32_t w = 0; w < subblock_w; ++w) {
                         uint32_t index = w + index_subblock_w_offset;
-                        uint32_t index_mask = index + mask_set_offset;
-                        mul_tiles(dfb_x_id, dfb_input_mask_id, index, index_mask, w);
+                        if constexpr (has_row_mask) {
+                            mul_tiles(dfb_x_id, dfb_input_mask_id, index, index + mask_set_offset, w);
+                        } else {
+                            mul_tiles_bcast_rows(dfb_x_id, dfb_input_mask_id, index, index, w);
+                        }
                     }
                     tile_regs_commit();
 
@@ -540,7 +563,7 @@ void kernel_main() {
                 // zero out values in cb_tilized_in input by multiplying with negative mask for the current group
                 dfb_in_negative_mask.wait_front(block_w);
                 reconfig_data_format_srcb(dfb_x_id, dfb_in_negative_mask_id);
-                mul_init(dfb_in_id, dfb_in_negative_mask_id);
+                mul_bcast_rows_init(dfb_in_id, dfb_in_negative_mask_id);
 
                 for (uint32_t w = 0; w < block_w_curr; w++) {
                     index_h_offset = index_b_offset + index_g_offset;
@@ -551,7 +574,7 @@ void kernel_main() {
                         uint32_t index_in = w + index_h_offset;
                         uint32_t index_mask = w;
 
-                        mul_tiles(dfb_in_id, dfb_in_negative_mask_id, index_in, index_mask, dst0);
+                        mul_tiles_bcast_rows(dfb_in_id, dfb_in_negative_mask_id, index_in, index_mask, dst0);
                         tile_regs_commit();
 
                         tile_regs_wait();

@@ -425,8 +425,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     uint32_t in5_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
-    // The row-masked set shares the CB with the normal one, on top of the double-buffering.
-    uint32_t in_mask_CB_size = use_welford ? input_mask.value().physical_volume() * input_mask.value().element_size()
+    // Welford writer reserves block_w * num_groups_per_core tiles up-front and the compute kernel
+    // waits on all of them; non-Welford double-buffers block_wt tiles. Sized from block_wt rather
+    // than from the caller's tensor because a synthesized mask has no tensor to size against.
+    // mask_sets == 2 when the row-masked set is present -- it shares the CB with the normal set on
+    // top of the double-buffering. pad.active is false whenever use_welford, so mask_sets is always
+    // 1 on the Welford arm and is not needed there.
+    uint32_t in_mask_CB_size = use_welford ? input_mask_num_tiles_per_core * in_mask_single_tile_size
                                            : block_wt * in_mask_single_tile_size * 2 * mask_sets;
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;
     uint32_t interm_block_tiles_group_1 = in0_block_tiles_group_1;
@@ -471,8 +476,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     if (use_welford) {
         x_CB_size_group_1 = single_tile_size * 1;
         x_CB_size_group_2 = single_tile_size * 1;
-        xmm_CB_size_group_1 = single_tile_size * 3;
-        xmm_CB_size_group_2 = single_tile_size * 3;
+        // cb_xmm double buffer. After the Welford mask-multiply reorder
+        // (`((x − μ) · rsqrt) · mask`), only one tile is live in cb_xmm at
+        // a time, so the allocation drops from 3 to 2.
+        xmm_CB_size_group_1 = single_tile_size * 2;
+        xmm_CB_size_group_2 = single_tile_size * 2;
     }
 
     // c_17 holds the whole per-core group, tilized once and reused by all three passes.
@@ -720,6 +728,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_groups_per_core", num_groups_per_core},
         {"num_batches_per_core", num_batches_per_core_group_1},
         {"num_cols_per_group", num_channels_per_group_mod_tile_w},
+        {"num_channels_per_group", num_channels_per_group},
         {"num_tiles_per_batch", per_core_Mt_group_1 * Wt / num_batches_per_core_group_1},
         {"block_w_last", block_wt_last},
         {"GROUP_SIZE_IS_POWER_OF_2",
@@ -753,6 +762,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_groups_per_core", num_groups_per_core},
         {"num_batches_per_core", num_batches_per_core_group_2},
         {"num_cols_per_group", num_channels_per_group_mod_tile_w},
+        {"num_channels_per_group", num_channels_per_group},
         {"num_tiles_per_batch", per_core_Mt_group_2 * Wt / num_batches_per_core_group_2},
         {"block_w_last", block_wt_last},
         {"GROUP_SIZE_IS_POWER_OF_2",
@@ -796,6 +806,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     std::map<std::string, std::string> writer_defines;
     if (untilize_out) {
         writer_defines["UNTILIZE_OUT"] = "1";
+    }
+    // See groupnorm_sharded_program_factory.cpp for the mask data path
+    // selection (synthesize / full read). Synthesis fires only when the
+    // caller did not pass an input_mask tensor.
+    const bool synth_mask = !input_mask.has_value();
+    if (synth_mask) {
+        writer_defines["MASK_SYNTHESIZE"] = "1";
     }
 
     KernelDescriptor writer_desc_g1;
@@ -1208,7 +1225,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }}},
         });
     }
-    if (input_mask.has_value()) {
+    if (input_mask.has_value() || synth_mask) {
         constexpr uint32_t in_mask_cb_index = tt::CBIndex::c_28;
         desc.cbs.push_back(CBDescriptor{
             .total_size = in_mask_CB_size,

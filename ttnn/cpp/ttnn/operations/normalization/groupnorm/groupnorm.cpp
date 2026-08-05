@@ -6,7 +6,6 @@
 #include "device/groupnorm_device_operation.hpp"
 #include "device/groupnorm_program_utils.hpp"
 #include "groupnorm_grid_utils.hpp"
-#include "groupnorm_input_mask.hpp"
 
 #include <mutex>
 #include <tt-logger/tt-logger.hpp>
@@ -86,24 +85,6 @@ void validate_dram_grid(
     }
 }
 
-int64_t get_group_norm_cores_across_channel(
-    tt::tt_metal::TensorMemoryLayout memory_layout,
-    const ttnn::CoreGrid& core_grid,
-    const std::optional<tt::tt_metal::ShardOrientation>& shard_orientation) {
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::TensorMemoryLayout;
-    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        if (shard_orientation == ShardOrientation::ROW_MAJOR) {
-            return static_cast<int64_t>(core_grid.x);
-        }
-        return static_cast<int64_t>(core_grid.y);
-    }
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        return 1;
-    }
-    return static_cast<int64_t>(core_grid.x * core_grid.y);
-}
-
 }  // namespace
 
 namespace ttnn::operations::normalization {
@@ -176,7 +157,8 @@ Tensor group_norm(
     std::optional<int> num_out_blocks,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<Tensor>& negative_mask,
-    bool use_welford) {
+    bool use_welford,
+    bool synthesize_negative_mask) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),
@@ -198,6 +180,13 @@ Tensor group_norm(
     TT_FATAL(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor cannot be width-sharded.");
+
+    TT_FATAL(
+        !(synthesize_negative_mask && negative_mask.has_value()),
+        "group_norm: synthesize_negative_mask=True is mutually exclusive with a caller-supplied negative_mask tensor.");
+    // The remaining synthesize_negative_mask constraints (sharded-only, no Welford, ROW_MAJOR
+    // input and output) live in GroupNormDeviceOperation::validate_on_program_cache_miss so that
+    // direct ttnn::prim::group_norm callers are covered as well.
 
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
@@ -410,33 +399,42 @@ Tensor group_norm(
         validate_dram_grid(core_grid.value(), W, Ht, num_groups, input_padded_shape[0]);
     }
 
+    // Tile-aligned H*W: the caller's optional passes straight through, and when it is empty the
+    // writer kernel synthesizes the per-group {0.0, 1.0} selector directly in L1 from a small
+    // recurrence (see groupnorm_mask_synthesize.hpp) -- no host build, no DRAM tensor. Every
+    // (sharded/DRAM x welford/legacy) writer + compute combination supports synthesis.
+    //
     // Non-tile-aligned H*W: the tile-padding rows are not guaranteed to hold zeros (reshape, slice
     // and exp all leave non-zero bytes there), so they must be excluded from both accumulation
-    // passes. The input mask is already multiplied into both, so carry a second set of mask tiles
-    // with those rows zeroed; the kernels select it on the final row-tile of each batch. Nothing
-    // writes to the input tensor, which is what makes this work for sharded too. See #52685.
-    // Welford is unaffected: non-tile-aligned H*W already fell back to the two-pass path above.
+    // passes. That needs a second set of mask tiles with those rows zeroed, selected on each
+    // batch's final row-tile (#52685). Such a mask varies DOWN the rows of a tile, so it cannot be
+    // consumed by mul_tiles_bcast_rows and cannot be synthesized from row 0 alone -- a host-built
+    // mask tensor is required here. Welford is unaffected: non-tile-aligned H*W already fell back
+    // to the two-pass path above.
     const uint32_t rows_in_last_tile =
         (input_padded_shape[2] != input_shape[2] && !use_welford) ? (input_shape[2] % tile_height_align) : 0;
 
-    // auto generate mask tensor if both input_mask and negative_mask are not provided
-    ttnn::Tensor mask = operations::normalization::get_mask_tensor(
-        input_tensor, input_mask, negative_mask, core_grid.value(), num_groups, rows_in_last_tile);
+    std::optional<ttnn::Tensor> effective_input_mask = input_mask;
+    if (rows_in_last_tile != 0) {
+        // auto generate mask tensor if both input_mask and negative_mask are not provided
+        ttnn::Tensor mask = operations::normalization::get_mask_tensor(
+            input_tensor, input_mask, negative_mask, core_grid.value(), num_groups, rows_in_last_tile);
 
-    // Fallback for a caller-supplied mask not built with rows_in_last_tile: derive the second set
-    // here. Costs a host build, an upload, a multiply and a concat per call, so prefer passing
-    // rows_in_last_tile to create_group_norm_input_mask instead.
-    if (rows_in_last_tile != 0 && input_mask.has_value() &&
-        mask.padded_shape()[1] == static_cast<uint32_t>(num_groups)) {
-        const auto row_mask = operations::normalization::create_group_norm_row_mask(
-                                  rows_in_last_tile,
-                                  mask.padded_shape()[1],
-                                  mask.padded_shape()[3],
-                                  mask.dtype(),
-                                  tile_height_align)
-                                  .to_device(mask.device());
-        const auto row_masked = ttnn::multiply(mask, row_mask, mask.dtype());
-        mask = ttnn::concat({mask, row_masked}, 1);
+        // Fallback for a caller-supplied mask not built with rows_in_last_tile: derive the second
+        // set here. Costs a host build, an upload, a multiply and a concat per call, so prefer
+        // passing rows_in_last_tile to create_group_norm_input_mask instead.
+        if (input_mask.has_value() && mask.padded_shape()[1] == static_cast<uint32_t>(num_groups)) {
+            const auto row_mask = operations::normalization::create_group_norm_row_mask(
+                                      rows_in_last_tile,
+                                      mask.padded_shape()[1],
+                                      mask.padded_shape()[3],
+                                      mask.dtype(),
+                                      tile_height_align)
+                                      .to_device(mask.device());
+            const auto row_masked = ttnn::multiply(mask, row_mask, mask.dtype());
+            mask = ttnn::concat({mask, row_masked}, 1);
+        }
+        effective_input_mask = mask;
     }
 
     if (input_tensor.is_sharded()) {
@@ -456,9 +454,10 @@ Tensor group_norm(
             use_welford,
             gamma,
             beta,
-            mask,
+            effective_input_mask,
             negative_mask,
-            effective_reciprocals);
+            effective_reciprocals,
+            synthesize_negative_mask);
     }
 
     const uint32_t per_batch_hw = input_padded_shape[1] * input_padded_shape[2];
@@ -545,9 +544,12 @@ Tensor group_norm(
         use_welford,
         gamma,
         beta,
-        mask,
+        effective_input_mask,
         negative_mask,
-        effective_reciprocals);
+        effective_reciprocals,
+        // The interleaved factories have no negative-mask code path; forward the flag anyway so
+        // the device op rejects it instead of silently ignoring it.
+        synthesize_negative_mask);
     if (untilize_out_on_host) {
         output = ttnn::to_layout(output, Layout::ROW_MAJOR);
     }

@@ -14,6 +14,9 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#if defined(MASK_SYNTHESIZE) || defined(NEGATIVE_MASK_SYNTHESIZE)
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
+#endif
 
 void generate_tile_with_packed_bfloat16_values(uint32_t dfb_id, uint32_t packed_bf16_value) {
     DataflowBuffer dfb(dfb_id);
@@ -101,6 +104,12 @@ void kernel_main() {
     constexpr uint32_t mask_tiles_per_group = block_w;
 #endif
 
+#if defined(MASK_SYNTHESIZE) && defined(PAD_CORRECTION)
+// The synthesized mask is row-invariant (row 0 only, consumed by mul_tiles_bcast_rows), so it cannot
+// express the row-masked second set PAD_CORRECTION streams. The op must not enable both.
+#error "MASK_SYNTHESIZE is incompatible with PAD_CORRECTION (non-tile-aligned H*W)"
+#endif
+
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
@@ -125,7 +134,15 @@ void kernel_main() {
 
     constexpr auto negative_mask_args = TensorAccessorArgs<input_mask_args.next_compile_time_args_offset()>();
     const auto negative_mask_tensor_accessor = TensorAccessor(negative_mask_args, input_negative_mask_addr);
+#endif
 
+#if defined(MASK_SYNTHESIZE) || defined(NEGATIVE_MASK_SYNTHESIZE)
+    // Full group size (num_channels / num_groups, e.g. 10 for SDXL C=320,
+    // num_groups=32). The row_offset wrapping recurrence mirrors
+    // groupnorm_input_mask.cpp:60-72.
+    constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
+    constexpr uint32_t MASK_TILE_W = tt::constants::TILE_WIDTH;
+    constexpr uint32_t MASK_GROUP_SIZE_MOD_TILE_W = num_channels_per_group % MASK_TILE_W;
 #endif
 
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
@@ -136,9 +153,27 @@ void kernel_main() {
 #if defined(FUSE_NEGATIVE_MASK)
         uint32_t input_negative_mask_tile_id = input_mask_tile_start_id;
 #endif
+#if defined(MASK_SYNTHESIZE) || defined(NEGATIVE_MASK_SYNTHESIZE)
+        // start_stride for the first group on this core is 0. Subsequent
+        // groups advance row_offset by group_size_mod_tile_w with wrapping.
+        uint32_t mask_row_offset = 0;
+#endif
         for (uint32_t i = 0; i < num_groups_per_core; ++i) {
             dfb_input_mask.reserve_back(mask_tiles_per_group);
             uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
+#if defined(MASK_SYNTHESIZE)
+            // Write face 0 row 0 + face 1 row 0 of each of the block_w mask
+            // tiles directly, no DRAM read.
+            tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+                l1_write_addr_input_mask,
+                mask_row_offset,
+                num_channels_per_group,
+                block_w,
+                input_mask_single_tile_size_bytes,
+                MASK_TILE_W,
+                tt::tt_metal::groupnorm::BF16_ONE,
+                tt::tt_metal::groupnorm::BF16_ZERO);
+#else
             for (uint32_t j = 0; j < block_w; ++j) {
                 noc.async_read(
                     mask,
@@ -162,11 +197,28 @@ void kernel_main() {
             }
 #endif
             noc.async_read_barrier();
+#endif  // MASK_SYNTHESIZE
+            // Must match reserve_back(mask_tiles_per_group) above, or the compute kernel's
+            // wait_front(mask_tiles_per_group) starves. Equals block_w under MASK_SYNTHESIZE,
+            // which is mutually exclusive with the row mask (see static_assert above).
             dfb_input_mask.push_back(mask_tiles_per_group);
 
 #if defined(FUSE_NEGATIVE_MASK)
             dfb_input_negative_mask.reserve_back(block_w);
             uint32_t l1_write_addr_input_negative_mask = dfb_input_negative_mask.get_write_ptr();
+#if defined(NEGATIVE_MASK_SYNTHESIZE)
+            // Negative mask: same start_stride as positive mask but inverted
+            // fill values (1s outside the group, 0s inside).
+            tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+                l1_write_addr_input_negative_mask,
+                mask_row_offset,
+                num_channels_per_group,
+                block_w,
+                input_negative_mask_single_tile_size_bytes,
+                MASK_TILE_W,
+                tt::tt_metal::groupnorm::BF16_ZERO,
+                tt::tt_metal::groupnorm::BF16_ONE);
+#else
             for (uint32_t j = 0; j < block_w; ++j) {
                 noc.async_read(
                     negative_mask_tensor_accessor,
@@ -178,7 +230,15 @@ void kernel_main() {
                 input_negative_mask_tile_id += 1;
             }
             noc.async_read_barrier();
+#endif  // NEGATIVE_MASK_SYNTHESIZE
             dfb_input_negative_mask.push_back(block_w);
+#endif
+
+#if defined(MASK_SYNTHESIZE) || defined(NEGATIVE_MASK_SYNTHESIZE)
+            // Advance row_offset for the next group (same recurrence as
+            // groupnorm_input_mask.cpp:64-70).
+            mask_row_offset =
+                tt::tt_metal::groupnorm::advance_row_offset(mask_row_offset, MASK_GROUP_SIZE_MOD_TILE_W, MASK_TILE_W);
 #endif
 
             if (i == 0 and b == 0) {
