@@ -143,6 +143,22 @@ def test_ops_missing_flags_a_fused_looking_unregistered_op():
     assert "blocker 18" in out
 
 
+def test_t5_encoder_layer_from_source_and_batched_matmul_taint():
+    """A T5 encoder layer (SD3.5-large) — a fourth real stage from source, and the
+    first to use raw ttnn.matmul for attention (q@kᵀ). Its batched activation
+    matmul breaks the weight-matmul K assumption, so the analyzer must flag
+    K_COVERAGE and *demote* the downstream finding to suspicious, not emit it as a
+    confident (provable) wrong finding."""
+    proc = _dryrun("dryrun", "t5_encoder_layer", "--preset", "bh_1x4", "--analyze")
+    if proc.returncode != 0 and "ModuleNotFoundError" in (proc.stdout + proc.stderr):
+        return  # a model dep (e.g. transformers) is absent in this env
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "unregistered ops: none" in proc.stdout, proc.stdout
+    assert "K_COVERAGE" in proc.stdout, proc.stdout  # attention matmul flagged
+    # any finding is honestly suspicious, never provable, once K-coverage is unclear
+    assert "/provable]" not in proc.stdout, proc.stdout
+
+
 def test_ops_missing_stub_generator_emits_both_halves():
     import io
     from contextlib import redirect_stdout

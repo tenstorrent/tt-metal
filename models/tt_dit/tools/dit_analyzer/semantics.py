@@ -408,6 +408,7 @@ def _matmul_apply(c: ApplyCtx) -> None:
             dist = dist.with_partial(m, True)
 
     regions = {}
+    k_mismatch = False
     for dev in c.mesh.devices():
         rows = x.regions[dev].bounds(_rows_axis(xs))
         cols = w.regions[dev].bounds(n_axis_w)
@@ -420,7 +421,19 @@ def _matmul_apply(c: ApplyCtx) -> None:
                 "K_COVERAGE",
                 "device %d holds K%s of the activation but K%s of the weight" % (dev, list(kx), list(kw)),
             )
-    c.define(0, dist, regions, derive_value_id("matmul", c.value_of_inputs(), c.node.attrs), c.tainted_inputs())
+            k_mismatch = True
+    # A K-coverage mismatch means the spec cannot line up the contraction -- e.g. a
+    # batched activation×activation attention matmul (q@kᵀ) whose K assumption
+    # (K = rows of a 2D weight) does not hold. Taint the result so no finding
+    # downstream of it is emitted as provable; better honestly-suspicious than
+    # confidently wrong (the phase-7 failure mode).
+    c.define(
+        0,
+        dist,
+        regions,
+        derive_value_id("matmul", c.value_of_inputs(), c.node.attrs),
+        c.tainted_inputs() or k_mismatch,
+    )
 
 
 def _matmul_demand(c: DemandCtx) -> None:

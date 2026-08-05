@@ -30,6 +30,11 @@ models/tt_dit/tools/ditcheck dryrun sd35_block --preset bh_2x4 --check-oracle
 # a VAE block from source: SD3.5 VAE ResnetBlock (conv2d / group_norm), runs clean
 models/tt_dit/tools/ditcheck dryrun sd35_vae_resnet --preset bh_2x4 --analyze
 
+# a T5 text-encoder layer, then link encoder->DiT into a multi-stage pipeline graph
+models/tt_dit/tools/ditcheck dryrun t5_encoder_layer --preset bh_1x4 --out t5.json
+models/tt_dit/tools/ditcheck dryrun sd35_block --preset bh_2x4 --out dit.json
+models/tt_dit/tools/ditcheck link enc=t5.json dit=dit.json --analyze
+
 # LTX-2.3 A+V block on BH 4x8 (Ring): 6 provably duplicate TP gathers per block
 models/tt_dit/tools/ditcheck analyze example:ltx_block_bh_4x8 --top 1
 

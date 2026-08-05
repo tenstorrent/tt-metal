@@ -136,8 +136,11 @@ def get_device_tensors(x, **k) -> List[Tensor]:
 # -----------------------------------------------------------------------------
 # views and elementwise
 # -----------------------------------------------------------------------------
-def reshape(x: Tensor, shape, **k) -> Tensor:
+def reshape(x: Tensor, shape, *a, **k) -> Tensor:
     """Model code reshapes the *local* view; lift the result back to logical extents.
+
+    ttnn.reshape accepts an optional second shape (the padded/original shape) as a
+    positional arg; it does not change the logical result, so it is ignored here.
 
     A rank change that only moves the non-unit axes around (``[1,N,D] ->
     [1,1,N,D]``) keeps the distribution, remapped onto the new axis positions.
@@ -531,6 +534,17 @@ def conv2d(input_tensor=None, weight_tensor=None, bias_tensor=None, **k):
     return out, (out_h, out_w), (w, bias)
 
 
+def softmax(input_tensor=None, dim=-1, **k) -> Tensor:
+    """Softmax over one axis (default the last): shape/layout preserved, value changed.
+
+    Reduces the ``dim`` axis, so the analyzer's ``softmax`` spec needs that axis in
+    full on each device -- fine when it is not sharded (attention scores over the
+    full key sequence). Records the reduction axis for the analyzer.
+    """
+    x = _t(input_tensor, "input_tensor", kwargs=k, index=0)
+    return recorder.emit("softmax", [x], x.logical, x.dist, attrs={"needs_full_axes": [dim]}, base="softmax")
+
+
 def group_norm(input_tensor=None, **k) -> Tensor:
     """VAE group norm over NHWC channels (blocker 14).
 
@@ -710,6 +724,7 @@ TENSOR_OPS = {
     "linear": matmul,
     "conv2d": conv2d,
     "group_norm": group_norm,
+    "softmax": softmax,
     "copy": copy,
     "add_": _inplace("add"),
     "multiply_": _inplace("mul"),

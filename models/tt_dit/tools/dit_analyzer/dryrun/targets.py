@@ -343,6 +343,38 @@ def ttnn_topology(preset: Preset):
     return ttnn.Topology.Ring if preset.topology == "Ring" else ttnn.Topology.Linear
 
 
+# -----------------------------------------------------------------------------
+# T5 text encoder (SD3.5-large text_encoder_3) -- a pipeline STAGE, tensor-parallel
+# -----------------------------------------------------------------------------
+def _t5_encoder_layer(preset: Preset) -> Graph:
+    """One T5 encoder layer, built and called for real -- an encoder-stage graph
+    that links (via `ditcheck link`) with a DiT block into an encoder->DiT pipeline.
+    `EncoderParallelConfig` is single-axis (tensor parallel), so it maps onto Dist."""
+    mesh_device = install(preset.mesh_shape, preset.arch)
+
+    from models.tt_dit.encoders.t5.model_t5 import T5Config, T5EncoderLayer
+    from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+    from models.tt_dit.parallel.manager import CCLManager
+
+    graph = _start(mesh_device, preset, name="t5_encoder_layer_%s" % preset.name)
+    graph.meta.update({"model": "T5 (SD3.5-large text encoder) single layer, dry run from source"})
+
+    tp = preset.mesh_shape[preset.tp_axis]
+    parallel_config = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp, mesh_axis=preset.tp_axis))
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn_topology(preset))
+    config = T5Config(max_prompt_length=256)  # SD3.5-large T5 defaults (embed 4096, 64 heads, ff 10240)
+    layer = T5EncoderLayer(config, mesh_device, ccl, parallel_config)
+    graph.meta["parameters"] = load_meta_weights(layer)
+
+    L = config.max_prompt_length
+    hidden = recorder.entry([1, L, config.embed_dim], Dist.replicated(CTX.mesh), base="hidden")
+    # position bias adds onto the per-head attention scores, so heads are tp-sharded
+    pos_bias = recorder.entry([1, config.num_heads, L, L], Dist.make(CTX.mesh, {preset.tp_axis: 1}), base="pos_bias")
+    out = layer(hidden, pos_bias)
+    graph.outputs = [out.sym]
+    return graph
+
+
 def _start(mesh_device, preset: Preset, name: str, calls: int = 1, steps: int = 1) -> Graph:
     from . import start
 
@@ -410,6 +442,21 @@ TARGETS: Dict[str, Target] = {
                 sp_axis=0,
                 tp_axis=1,
                 description="Blackhole 2x4: channel TP=4 on axis1",
+            ),
+        },
+    ),
+    "t5_encoder_layer": Target(
+        name="t5_encoder_layer",
+        description="T5 text-encoder layer (SD3.5-large), a tensor-parallel encoder stage, from source",
+        build=_t5_encoder_layer,
+        presets={
+            "bh_1x4": Preset(
+                name="bh_1x4",
+                mesh_shape=(1, 4),
+                topology="Linear",
+                sp_axis=0,
+                tp_axis=1,
+                description="Blackhole 1x4: tensor parallel TP=4 on axis1 (encoder submesh)",
             ),
         },
     ),
