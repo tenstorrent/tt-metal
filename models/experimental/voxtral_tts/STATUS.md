@@ -1833,6 +1833,54 @@ finding as scope-limited rather than wrong: that was measured on **wq**, already
 Sweeping an op with no headroom finds none — which is why §6.24's floor table is the right way to pick
 what to sweep.
 
+### 6.26 — device tracing re-measured a third time: same answer, +0.35 ms/frame, still not taken
+
+Re-run against the shipped config, because §6.6's numbers predate everything from §6.17-§6.25 and this
+port's own rule is to re-measure rather than quote. Both probes are unchanged from the scratchpad; only
+the build under them moved.
+
+| | untraced (ships) | traced | delta | correct? |
+|---|---|---|---|---|
+| Block 1, 26-layer decode step | 24.86 ms | 24.69 ms | **+0.17 ms (1.007x)** | min PCC 0.999883 and worst-sample 1.28% IDENTICAL |
+| Block 2, whole 7-step solve | 21.11 ms | 20.93 ms | **+0.18 ms (1.009x)** | integer codes bit-identical to untraced |
+| **total** | | | **+0.35 ms/frame (~0.7%)** | |
+
+**The verdict is unchanged and the number barely moved** — §6.6 measured +0.36 ms/frame on a build
+10 ms/step slower. The absolute gain held while the base shrank, so as a *fraction* it grew slightly
+(0.58% → 0.68% on Block 1). That makes sense: tracing recovers host command submission, which scales
+with op COUNT, and today's work removed ~24 launches of ~476 — about 5%.
+
+**A correction to my own reasoning for running this.** I suggested re-measuring "now that the launch
+count has dropped", which is backwards: fewer launches means LESS host dispatch for a trace to recover,
+so the expected direction was down. The legitimate reason was only that the recorded numbers described a
+config that no longer exists. They turned out to still hold.
+
+**Why it stays out at a gain comparable to things that shipped today.** 0.35 ms/frame sits right
+alongside the fused cache write (0.405), the Block 2 op wins (0.44 isolated) and wo's program config
+(0.196). On magnitude alone it is shippable. The difference is the FAILURE PROFILE, and it is not a
+matter of taste:
+
+| shipped today | how it fails if wrong |
+|---|---|
+| fused cache write | `paged_fused_update_cache` asserts on overlapping cores — **raises** |
+| wo program config | wrong `per_core_M`/shape — **raises** |
+| move V to core (1,0) | wrong placement — **raises** |
+
+| tracing | how it fails if wrong |
+|---|---|
+| buffers held by POINTER | a fresh upload is silently ignored and the previous frame replays — **silent** |
+| warm-up/capture write the KV cache | corrupts the prompt unless aimed at a scratch row; measured decode PCC 0.9998 → 0.86 with **no error raised** |
+| capture ORDER across the two blocks | all warm-ups must precede either capture, or the second **hangs** |
+| an exception inside a capture | `close_device` hangs and **every later run on the card blocks** — trap #1, cost ~20 min and a kill by PID once |
+| `trace_region_size` | required on every caller of `open_device` |
+
+Three of those are silent and one wedges the board. Everything shipped today fails loudly. **0.7% is
+not worth converting four loud failure modes into three silent ones**, and that is the whole argument —
+not the size of the gain.
+
+**If it is ever wanted anyway**, tracing ONE block avoids the cross-block capture-order constraint for
+about half the gain, and the probes (`probe_trace_b1.py`, `probe_trace_b2.py`) are current and ready.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
