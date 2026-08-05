@@ -181,6 +181,23 @@ def _rope(submesh):
     # axes carry the same position, which is the text-only case. Verified equal here to 7.6e-6, i.e.
     # the documented `theta ** -x` vs `1 / theta ** x` ulp difference and nothing else.
     cos, sin = create_rope_tensors(1, SEQ_LEN, None, HEAD_DIM, ROPE_THETA, MROPE_SECTION)
+
+    # Omitting `position_ids` must stay equivalent to passing the token index on all three axes. This is
+    # the call Ideogram 4.0 makes through the shared encoder, and `test_qwen3vl.py` -- the test that
+    # would otherwise catch a regression -- is pinned to a (2, 4) mesh, so this is the only guard that
+    # currently runs.
+    explicit = create_rope_tensors(
+        1,
+        SEQ_LEN,
+        None,
+        HEAD_DIM,
+        ROPE_THETA,
+        MROPE_SECTION,
+        position_ids=torch.arange(SEQ_LEN).view(1, 1, -1).expand(3, 1, -1),
+    )
+    for a, b, which in zip((cos, sin), explicit, ("cos", "sin")):
+        assert torch.equal(a, b), f"{which}: omitting position_ids no longer matches the shared token index"
+
     return bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)
 
 
@@ -217,7 +234,7 @@ def test_decoder_block_on_device(golden, mesh_device, submesh_shape, tp_axis, nu
 
 
 @_PARAMS
-def test_attention_on_device(golden, mesh_device, submesh_shape, tp_axis, num_links):
+def test_decoder_attention_on_device(golden, mesh_device, submesh_shape, tp_axis, num_links):
     """Attention alone: fused qkv, per-head QK-RMSNorm, RoPE, SDPA, o_proj. Excludes the residual and
     the input norm, so it attributes the `qkv_proj` / `o_proj` half of the layer's time."""
     submesh, ctx = _ctx(mesh_device, submesh_shape, tp_axis, num_links)
@@ -243,7 +260,7 @@ def test_attention_on_device(golden, mesh_device, submesh_shape, tp_axis, num_li
 
 
 @_PARAMS
-def test_mlp_on_device(golden, mesh_device, submesh_shape, tp_axis, num_links):
+def test_decoder_mlp_on_device(golden, mesh_device, submesh_shape, tp_axis, num_links):
     """MLP alone: SwiGLU over `intermediate_size` 25600. Three of the layer's four matmuls by FLOPs,
     so this is where the layer's time is expected to sit."""
     submesh, ctx = _ctx(mesh_device, submesh_shape, tp_axis, num_links)
