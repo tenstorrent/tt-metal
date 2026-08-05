@@ -4,17 +4,14 @@
 
 // Merge-gate sanity coverage for the real-time (RT) profiler, in three layers:
 //
-//   RealtimeProfilerClockModel -- the host-side clock logic, exercised directly with synthetic probes. No device, so
-//       these also run wherever the profiler itself cannot.
+//   RealtimeProfilerClockModel -- host-side clock logic, exercised directly with synthetic probes; no device needed.
 //   RealtimeProfilerSanity -- the record service and its consumer threads, driven through hand-fed rings. A MeshDevice
 //       contributes exactly one ring, so multi-ring and mid-callback behaviour is unreachable from a device test.
 //   RealtimeProfilerDeviceSanity -- the whole pipeline on a unit mesh: mailbox layout, D2H socket init, clock
 //       bring-up, kernel source propagation, timestamp extraction.
 //
-// Lives in the dispatch "basic" test library so it runs as part of `tt-metalium-validation-basic`, which the merge-gate
-// `metalium-basic-tests` job executes on both N150 (WH) and P150b (BH). The device layer skips gracefully via
-// IsProgramRealtimeProfilerActive() where the profiler cannot be enabled (ETH dispatch, non-MMIO chip, kernels
-// nullified, IOMMU-off on BH).
+// Runs as part of `tt-metalium-validation-basic` (merge-gate `metalium-basic-tests` job) on both N150 (WH) and
+// P150b (BH). The device layer skips via IsProgramRealtimeProfilerActive() where the profiler can't be enabled.
 
 #include <algorithm>
 #include <atomic>
@@ -75,15 +72,12 @@ using tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback;
 using tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback;
 
 constexpr uint32_t kNumPrograms = 5;
-// Generous upper bound: the inlined NOP loop kernels below run ~40K
-// unrolled NOPs. Even on slow silicon that stays in the tens-of-microseconds
-// range, so 1s is a sanity cap only intended to catch a broken clock /
-// mis-decoded timestamp.
+// Sanity cap only, to catch a broken clock / mis-decoded timestamp: the 40K-NOP kernels below stay in the
+// tens-of-microseconds range even on slow silicon.
 constexpr double kMaxDurationNs = 1'000'000'000.0;
 
-// What each record self-reports as its accuracy. Asserted as a distribution rather than a per-record ceiling because
-// the two failure modes look different: a degraded read path lifts the median, while a re-anchor policy that stops
-// rejecting wide brackets only fattens the tail.
+// Asserted as a distribution rather than a per-record ceiling: a degraded read path lifts the median, while a
+// re-anchor policy that stops rejecting wide brackets only fattens the tail.
 //
 // Sized for the slower of the two architectures -- Blackhole reads the counter through its own TLB window and reports
 // ~0.4us, Wormhole falls back to UMD's generic register read where it cannot.
@@ -91,21 +85,12 @@ constexpr uint64_t kSyncErrorP50Ns = 6'000;
 constexpr uint64_t kSyncErrorP90Ns = 10'000;
 constexpr uint64_t kSyncErrorP99Ns = 15'000;
 
-// Per-program marker embedded in the kernel source so the source-correlation
-// assertion can verify each record carries the correct source.
 constexpr const char* kSourceMarkerPrefix = "rt_profiler_marker_";
 
-// Inlined kernel source: 200 × 200 = 40K unrolled NOPs. Used for both data
-// movement (BRISC/NCRISC) and compute (TRISC) RISCs. We inline rather than
-// loading from a file under tt_metal/programming_examples/... because those
-// files ship in the `metalium-examples` deb, while this test runs from
-// `tt-metalium-validation` deb in CI (`metalium-basic-tests` job in
-// merge-gate.yaml). Using CreateKernelFromString keeps the test
-// self-contained and decoupled from install-rule changes. The 40K-NOP
-// duration is the load-bearing property: it makes the implausible-duration
-// check meaningful (a corrupted timestamp e.g. with swapped 32-bit halves
-// would still satisfy end > start for ns-scale blank kernels but would
-// surface here as a multi-second duration).
+// Inlined (200x200 unrolled NOPs) rather than loaded from a file under tt_metal/programming_examples/...: those files
+// ship in the `metalium-examples` deb, while this test runs from `tt-metalium-validation` in CI. The NOP count is
+// load-bearing for the implausible-duration check: a corrupted timestamp (e.g. swapped 32-bit halves) would still
+// satisfy end > start for a ns-scale kernel, but surfaces as a multi-second duration here.
 std::string make_sanity_kernel_source(uint32_t runtime_id) {
     return "#include <cstdint>\n"
            "// " +
@@ -121,8 +106,7 @@ std::string make_sanity_kernel_source(uint32_t runtime_id) {
            "}\n";
 }
 
-// The same source on all three RISCs, tagged with `runtime_id` so the record it produces can be attributed
-// (runtime_id == 0 is reserved for infrastructure traffic and filtered host-side).
+// runtime_id == 0 is reserved for infrastructure traffic and filtered host-side.
 Program make_sanity_program(const std::string& kernel_src, const CoreRange& cores, uint32_t runtime_id) {
     Program program = CreateProgram();
     CreateKernelFromString(
@@ -152,9 +136,9 @@ void enqueue_sanity_program(
         mesh_device, make_sanity_program(make_sanity_kernel_source(runtime_id), cores, runtime_id), /*blocking=*/false);
 }
 
-// Linearly interpolated between adjacent ranks; nearest-rank would snap each percentile onto one sample and report
-// the neighbouring order statistic instead. `sorted` must be ascending and non-empty. Prefixed because this file
-// shares a Unity build TU with the rest of the dispatch tests.
+// Linearly interpolated between adjacent ranks; nearest-rank would snap each percentile onto one sample instead.
+// `sorted` must be ascending and non-empty. Prefixed: this file shares a Unity build TU with the rest of the
+// dispatch tests.
 double rt_percentile(const std::vector<double>& sorted, double p) {
     const double rank = p * static_cast<double>(sorted.size() - 1);
     const auto lo = static_cast<size_t>(rank);
@@ -192,7 +176,6 @@ public:
         std::lock_guard lock(mutex_);
         return dropped_;
     }
-    // The subset of 1..count that produced a record, which is what most device tests actually assert on.
     std::set<uint32_t> runtime_ids_in_range(uint32_t count) const {
         std::set<uint32_t> ids;
         for (const auto& record : records()) {
@@ -231,7 +214,6 @@ protected:
 
     void TearDown() override { close_mesh(); }
 
-    // Only TraceReplayResolvesKernelSources needs a trace region; everything else pays nothing for it.
     virtual size_t trace_region_size() const { return DEFAULT_TRACE_REGION_SIZE; }
 
     bool close_mesh() {
@@ -248,17 +230,12 @@ protected:
         return CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1});
     }
 
-    // Runtime IDs start at 1 so every program emits a record; runtime_id == 0 is reserved for infrastructure traffic
-    // and filtered host-side.
     void enqueue_programs(uint32_t count) {
         for (uint32_t i = 1; i <= count; ++i) {
             enqueue_sanity_program(mesh_device_, i, all_cores());
         }
     }
 
-    // Polls for the records the caller is waiting on rather than sleeping a fixed interval, which on a loaded CI
-    // host is either flaky or wasteful. A timeout falls through to the caller's assertions, since what failed to
-    // arrive is what the test is about.
     template <typename Predicate>
     void quiesce_and_wait_for(Predicate delivered) {
         mesh_device_->quiesce_devices();
@@ -268,7 +245,6 @@ protected:
         }
     }
 
-    // The common case: every program enqueued by enqueue_programs() has produced a record.
     void quiesce_and_wait_for_programs(const RecordCollector& collector, uint32_t count) {
         quiesce_and_wait_for([&] { return collector.runtime_ids_in_range(count).size() >= count; });
     }
@@ -287,7 +263,6 @@ constexpr std::chrono::steady_clock::time_point host_instant(int64_t ns) {
     return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(ns));
 }
 
-// Probes lying exactly on device_ticks = frequency * host_ns + ticks_at_start, spaced like the bring-up fit.
 std::vector<ClockProbe> make_fit_probes(
     std::chrono::steady_clock::time_point start, double frequency, uint64_t ticks_at_start, size_t count) {
     std::vector<ClockProbe> probes;
@@ -303,6 +278,105 @@ std::vector<ClockProbe> make_fit_probes(
     return probes;
 }
 
+// A probe at `at` reading a clock that has been running at `rate` ticks/ns since tick zero of the session.
+RealtimeProfilerClockSync::Anchor anchor_at(
+    std::chrono::steady_clock::time_point at, double rate, std::chrono::nanoseconds bracket) {
+    return RealtimeProfilerClockSync::Anchor{
+        .host = at,
+        .ticks = static_cast<uint64_t>(rate * static_cast<double>(at.time_since_epoch().count())),
+        .bracket = bracket};
+}
+
+constexpr auto kProbeBracket = std::chrono::nanoseconds(700);
+constexpr double kNominalRate = 1.35;
+
+TEST(RealtimeProfilerChordMapping, SecantRecoversTheRateAndPlacesTheAnchorOnTheClosingProbe) {
+    const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
+    const auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, kProbeBracket);
+
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, 0.0, 0.0, kNominalRate);
+
+    ASSERT_TRUE(planned.has_value());
+    EXPECT_NEAR(planned->frequency, kNominalRate, 1e-6);
+    // The mapping must reproduce the closing probe exactly: that probe is the one thing here that was measured.
+    const double closing_host_ns =
+        (static_cast<double>(closing.ticks) - static_cast<double>(planned->mapping.device_cycle_offset)) /
+        planned->frequency;
+    EXPECT_NEAR(closing_host_ns, static_cast<double>(closing.host.time_since_epoch().count()), 1.0);
+}
+
+// A slope is only as good as the span it was measured over; below half an interval the previous one is better.
+TEST(RealtimeProfilerChordMapping, ChordTooShortToTakeASlopeFromIsRefused) {
+    const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
+    const auto barely_later =
+        anchor_at(open.host + RealtimeProfilerClockSync::kSyncInterval / 4, kNominalRate, kProbeBracket);
+
+    EXPECT_FALSE(RealtimeProfilerClockSync::plan_chord_mapping(open, barely_later, 0.0, 0.0, kNominalRate).has_value());
+}
+
+// One probe landing somewhere it could not have been is not evidence that the clock changed by 40%.
+TEST(RealtimeProfilerChordMapping, ImplausibleSlopeIsRefused) {
+    const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
+    auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, kProbeBracket);
+    closing.ticks += 50'000;  // a probe that read far more ticks than 100us of this clock can produce
+
+    EXPECT_FALSE(RealtimeProfilerClockSync::plan_chord_mapping(open, closing, 0.0, 0.0, kNominalRate).has_value());
+}
+
+// The published error must cover the two placements the chord is pinned by, whatever the clock did between them.
+TEST(RealtimeProfilerChordMapping, ErrorCoversBothEndpointPlacements) {
+    const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, std::chrono::nanoseconds(400));
+    const auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, std::chrono::nanoseconds(900));
+
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, 0.0, 0.0, kNominalRate);
+
+    ASSERT_TRUE(planned.has_value());
+    EXPECT_GE(planned->mapping.sync_error, std::chrono::nanoseconds(450));
+}
+
+// A clock holding a plateau has nothing to report beyond how well its probes were placed.
+TEST(RealtimeProfilerChordMapping, SteadyClockAddsNoCurvature) {
+    const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
+    const auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, kProbeBracket);
+
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, kNominalRate, 0.0, kNominalRate);
+
+    ASSERT_TRUE(planned.has_value());
+    EXPECT_EQ(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
+}
+
+// A rate that moved between intervals means the clock stepped inside one of them, and the records in it are off the
+// chord by up to rate_change * span / 4. Reporting only the placements would understate exactly the records a DVFS
+// step lands on.
+TEST(RealtimeProfilerChordMapping, RateChangeBeyondMeasurementNoiseIsChargedAsCurvature) {
+    const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
+    const auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, kProbeBracket);
+    // 3% slower over the previous interval: an order of magnitude past what two 700ns brackets over 100us can fake.
+    const double previous_rate = kNominalRate * 0.97;
+
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, previous_rate, 0.0, kNominalRate);
+
+    ASSERT_TRUE(planned.has_value());
+    EXPECT_GT(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
+    // span * (change - noise) / 2, with change ~3.09% and noise 1.4%: about 850ns of curvature on top.
+    const auto curvature = planned->mapping.sync_error - RealtimeProfilerClockSync::interpolation_error(open, closing);
+    EXPECT_NEAR(static_cast<double>(curvature.count()), 850.0, 150.0);
+}
+
+// Two short intervals disagreeing about the rate is what noise looks like, not what a step looks like. Charging it
+// would put microseconds of invented error on every record following a brief interval.
+TEST(RealtimeProfilerChordMapping, RateChangeWithinMeasurementNoiseIsNotChargedAsCurvature) {
+    const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
+    const auto closing = anchor_at(host_instant(1'000'100'000), kNominalRate, kProbeBracket);
+    // 0.5% apart, inside what two 700ns brackets over a 100us span can produce on their own.
+    const double previous_rate = kNominalRate * 0.995;
+
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, previous_rate, 0.0, kNominalRate);
+
+    ASSERT_TRUE(planned.has_value());
+    EXPECT_EQ(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
+}
+
 TEST(RealtimeProfilerClockModel, FitRecoversTheDeviceClockFrequency) {
     RealtimeProfilerClockModel model;
     model.seed_frequency(1.0);
@@ -314,12 +388,12 @@ TEST(RealtimeProfilerClockModel, FitRecoversTheDeviceClockFrequency) {
     ASSERT_TRUE(residual.has_value());
     EXPECT_NEAR(model.frequency(), 1.35, 1e-9);
     EXPECT_TRUE(model.is_anchored());
-    // Probes sit on the line up to the truncation of device_ticks to whole cycles, i.e. under one cycle of residual.
+    // Residual is bounded by truncation of device_ticks to whole cycles, i.e. under one cycle.
     EXPECT_LT(residual->rms_ns, 1.0);
 }
 
+// A slope needs two points, but the offset only needs one, and the seeded frequency is already a usable slope.
 TEST(RealtimeProfilerClockModel, OneProbeAnchorsWithoutFittingAFrequency) {
-    // A slope needs two points, but the offset only needs one, and the seeded frequency is already a usable slope.
     RealtimeProfilerClockModel model;
     model.seed_frequency(1.35);
     const auto start = host_instant(1'000'000'000);
@@ -339,8 +413,8 @@ TEST(RealtimeProfilerClockModel, NoProbesLeaveTheModelUnanchored) {
     EXPECT_FALSE(model.is_anchored()) << "a mapping with no probe behind it must not look anchored";
 }
 
+// Consumers divide by the frequency, so a device whose tick count appears to run backwards must not reach them.
 TEST(RealtimeProfilerClockModel, NonPositiveFittedSlopeKeepsTheSeededFrequency) {
-    // Consumers divide by the frequency, so a device whose tick count appears to run backwards must not reach them.
     RealtimeProfilerClockModel model;
     model.seed_frequency(1.35);
     const auto start = host_instant(1'000'000'000);
@@ -359,7 +433,7 @@ TEST(RealtimeProfilerClockModel, NonPositiveFittedSlopeKeepsTheSeededFrequency) 
 
 TEST(RealtimeProfilerClockModel, AnchorSitsAtTheBracketMidpoint) {
     RealtimeProfilerClockModel model;
-    model.seed_frequency(1.0);  // one tick per nanosecond, so the mapping arithmetic below is exact
+    model.seed_frequency(1.0);  // one tick per ns, so the mapping arithmetic below is exact
     const auto now = host_instant(1'000'000'000);
     constexpr auto kBracket = std::chrono::nanoseconds(1000);
     const ClockProbe probe{.host_time = now, .bracket = kBracket, .device_ticks = 500'000};
@@ -395,21 +469,20 @@ TEST(RealtimeProfilerClockModel, ProbeIsRejectedWhileTheMappingStillPredictsIt) 
     ASSERT_TRUE(model.try_reanchor(
         ClockProbe{.host_time = anchored_at, .bracket = kBracket, .device_ticks = on_line(anchored_at, kBracket)}));
 
-    // Landing exactly where the mapping predicts leaves nothing to correct, so a wider probe is not worth taking.
     const auto later = anchored_at + std::chrono::milliseconds(1);
     constexpr auto kWide = std::chrono::microseconds(30);
     EXPECT_FALSE(
         model.try_reanchor(ClockProbe{.host_time = later, .bracket = kWide, .device_ticks = on_line(later, kWide)}));
     EXPECT_EQ(model.last_drift(), std::chrono::nanoseconds::zero());
 
-    // A tighter one is taken regardless: it strictly improves where the anchor sits.
+    // A tighter probe is taken regardless: it strictly improves where the anchor sits.
     constexpr auto kTight = std::chrono::nanoseconds(600);
     EXPECT_TRUE(
         model.try_reanchor(ClockProbe{.host_time = later, .bracket = kTight, .device_ticks = on_line(later, kTight)}));
 }
 
-// Once the mapping has missed by more than a probe's own resolution, that probe is worth taking even though it is
-// placed worse than the anchor it replaces: a 30us miss corrected to within 30us beats leaving the 30us standing.
+// A probe worse than the anchor it replaces is still worth taking once the miss exceeds its own resolution: a 30us
+// miss corrected to within 30us beats leaving the 30us standing.
 TEST(RealtimeProfilerClockModel, WideProbeIsTakenOnceTheMissExceedsIt) {
     RealtimeProfilerClockModel model;
     model.seed_frequency(1.0);
@@ -425,18 +498,16 @@ TEST(RealtimeProfilerClockModel, WideProbeIsTakenOnceTheMissExceedsIt) {
     const auto later = anchored_at + std::chrono::milliseconds(1);
     constexpr auto kWide = std::chrono::microseconds(60);  // half of it, 30us, is what this probe can resolve
 
-    // Missing by 10us -- less than the probe resolves -- is not worth acting on.
     EXPECT_FALSE(model.try_reanchor(
         ClockProbe{.host_time = later, .bracket = kWide, .device_ticks = on_line(later, kWide) + 10'000}));
-    // Missing by 100us is.
     EXPECT_TRUE(model.try_reanchor(
         ClockProbe{.host_time = later, .bracket = kWide, .device_ticks = on_line(later, kWide) + 100'000}))
         << "a miss larger than the probe's own resolution is real and worth correcting";
 }
 
-// The service tests drive RealtimeProfilerService directly rather than opening a mesh: a MeshDevice contributes
-// exactly one record ring, so multi-ring delivery, drop accounting and mid-callback control changes are all
-// unreachable from a device test. The ring itself is covered by tests/tt_metal/tt_metal/misc/test_broadcast_ring.cpp.
+// Drives RealtimeProfilerService directly rather than opening a mesh: a MeshDevice contributes exactly one record
+// ring, so multi-ring delivery, drop accounting and mid-callback control changes are unreachable from a device test.
+// The ring itself is covered by tests/tt_metal/tt_metal/misc/test_broadcast_ring.cpp.
 experimental::ProgramRealtimeRecord make_service_record(uint32_t runtime_id, uint32_t chip_id) {
     return experimental::ProgramRealtimeRecord{
         .runtime_id = runtime_id,
@@ -449,9 +520,8 @@ experimental::ProgramRealtimeRecord make_service_record(uint32_t runtime_id, uin
     };
 }
 
-// The central claim of the producer/consumer split: each consumer gets one delivery thread, and that single thread
-// services every attached ring. A multi-MeshDevice run depends on this to fan records from all meshes into one
-// callback.
+// Each consumer gets one delivery thread, and that thread services every attached ring -- what a multi-MeshDevice
+// run depends on to fan records from all meshes into one callback.
 TEST(RealtimeProfilerSanity, OneConsumerThreadReadsEveryAttachedRing) {
     RealtimeProfilerService service;
     RealtimeProfilerRecordRing ring_a(16);
@@ -493,8 +563,7 @@ TEST(RealtimeProfilerSanity, OneConsumerThreadReadsEveryAttachedRing) {
     service.unregister_consumer(handle);
 }
 
-// UnregisterProgramRealtimeProfilerCallback documents that it blocks until any in-flight invocation of that callback
-// has returned, so a caller can free state the callback captured as soon as it returns.
+// UnregisterProgramRealtimeProfilerCallback blocks until any in-flight invocation of that callback has returned.
 TEST(RealtimeProfilerSanity, UnregisterWaitsForInFlightCallback) {
     RealtimeProfilerService service;
     RealtimeProfilerRecordRing ring(8);
@@ -537,8 +606,7 @@ TEST(RealtimeProfilerSanity, UnregisterWaitsForInFlightCallback) {
     service.detach_ring(ring);
 }
 
-// A reader starts at the ring's current head, so a consumer registering late sees the stream from that point on rather
-// than replaying whatever backlog happens to still be resident.
+// A reader starts at the ring's current head: a late consumer sees the stream from that point on, not the backlog.
 TEST(RealtimeProfilerSanity, LateConsumerReceivesOnlyFutureRecords) {
     RealtimeProfilerService service;
     RealtimeProfilerRecordRing ring(8);
@@ -573,7 +641,6 @@ TEST(RealtimeProfilerSanity, LateConsumerReceivesOnlyFutureRecords) {
     service.unregister_consumer(handle);
 }
 
-// Consumers are isolated from each other: one that throws every time must not cost a sibling any records.
 TEST(RealtimeProfilerSanity, ThrowingConsumerDoesNotAffectSibling) {
     RealtimeProfilerService service;
     RealtimeProfilerRecordRing ring(8);
@@ -606,8 +673,7 @@ TEST(RealtimeProfilerSanity, ThrowingConsumerDoesNotAffectSibling) {
     service.unregister_consumer(good);
 }
 
-// batch.dropped counts what this consumer lost since its previous batch, not since the session began. A consumer stuck
-// in a callback overruns the ring it is not reading, and the loss has to surface on its next batch from that ring.
+// batch.dropped counts what this consumer lost since its previous batch, not since the session began.
 TEST(RealtimeProfilerSanity, DropsAreReportedSinceThePreviousCallback) {
     RealtimeProfilerService service;
     RealtimeProfilerRecordRing overflowing_ring(4);
@@ -667,8 +733,8 @@ TEST(RealtimeProfilerSanity, DropsAreReportedSinceThePreviousCallback) {
     service.unregister_consumer(handle);
 }
 
-// detach_ring is what MeshDevice close goes through, so everything already published has to be delivered before it
-// returns; otherwise closing a device silently truncates its tail of records.
+// detach_ring is what MeshDevice close goes through: everything already published must be delivered before it
+// returns, or closing a device silently truncates its tail of records.
 TEST(RealtimeProfilerSanity, DetachDrainsPublishedRecordsBeforeReturning) {
     RealtimeProfilerService service;
     RealtimeProfilerRecordRing ring(16);
@@ -765,8 +831,6 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordsAreWellFormedAndCarryTheirProgramsSo
             << ", duration_ns=" << rec.duration().count() << ")";
     }
 
-    // Every program embeds "<prefix><runtime_id>" in its source, so we can verify each record carries the correct
-    // source.
     std::set<uint32_t> programs_with_correct_sources;
     for (const auto& rec : records) {
         if (rec.runtime_id < 1 || rec.runtime_id > kNumPrograms) {
@@ -787,14 +851,11 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordsAreWellFormedAndCarryTheirProgramsSo
         << "Not every program's source was correctly correlated by runtime ID";
 }
 
-// Sync accuracy is what each record self-reports as clock_sync.sync_error. Spread programs across many servo
-// re-anchor intervals so the records sample that value over the session, then assert its distribution stays tight.
-// A degraded handshake (slow/contended PCIe) lifts the median; a servo that stops rejecting bad re-anchors fattens the
-// tail — p50/p90/p99 catch each, unlike a single per-record ceiling.
+// Spreads programs across many servo re-anchor intervals so records sample clock_sync.sync_error over the session,
+// then asserts its distribution (see kSyncErrorP50Ns et al.) stays tight.
 TEST_F(RealtimeProfilerDeviceSanity, SyncAccuracy) {
     RecordCollector collector;
-    // A fixed runtime_id keeps the kernel source (and its JIT compile) shared across iterations. Spaced over several
-    // sync intervals so the records sample the mapping as it is maintained rather than a single instant of it.
+    // A fixed runtime_id keeps the kernel source (and its JIT compile) shared across iterations.
     constexpr uint32_t kIterations = 300;
     for (uint32_t i = 0; i < kIterations; ++i) {
         enqueue_sanity_program(mesh_device_, /*runtime_id=*/1, all_cores());
@@ -803,9 +864,8 @@ TEST_F(RealtimeProfilerDeviceSanity, SyncAccuracy) {
     quiesce_and_wait_for([&] { return collector.records().size() >= kIterations; });
     collector.stop();
 
-    // Per record, not per anchor: the mapping is re-anchored only when a probe finds it has actually drifted, so
-    // anchors are few and their count says nothing about sync quality. What matters is the error every record
-    // carries, which is what a consumer sees and what these bounds are about.
+    // Per record, not per anchor: anchors are few (only taken when a probe finds real drift) and their count says
+    // nothing about sync quality; the error every record carries is what a consumer sees.
     std::vector<double> errors;
     const auto& records = collector.records();
     errors.reserve(records.size());
@@ -848,7 +908,7 @@ TEST_F(RealtimeProfilerDeviceSanity, CloseDrainsRegisteredCallback) {
         << "Mesh close should drain records for callbacks still registered at shutdown";
 }
 
-// Finish, unlike close, leaves the device open, so the final program's record only arrives if the finish-time flush
+// Finish, unlike close, leaves the device open, so the final program's record only arrives if a finish-time flush
 // is emitted rather than waiting for the next program to push it out.
 TEST_F(RealtimeProfilerDeviceSanity, LastProgramRecordDeliveredOnFinish) {
     RecordCollector collector;
@@ -879,7 +939,7 @@ TEST_F(RealtimeProfilerDeviceSanityWithTrace, TraceReplayResolvesKernelSources) 
     workload.add_program(distributed::MeshCoordinateRange(mesh_device_->shape()), std::move(program));
     auto& mesh_cq = mesh_device_->mesh_command_queue(0);
 
-    // Warm up before capture (capture cannot load binaries) under kWarmupRuntimeId, then switch to
+    // Capture cannot load binaries, so warm up (under kWarmupRuntimeId) before capture, then switch to
     // kTraceRuntimeId so the trace-baked id is tied only by create_trace_node, the path under test.
     distributed::EnqueueMeshWorkload(mesh_cq, workload, true);
     for (auto& [_, prog] : workload.get_programs()) {
@@ -918,27 +978,24 @@ TEST_F(RealtimeProfilerDeviceSanityWithTrace, TraceReplayResolvesKernelSources) 
                                  << ")";
 }
 
-// Independent host/device sync-accuracy check. The Tracy SYNC_CHECK markers are a self-consistency check — their host
-// and device endpoints are both derived from the same calibration, so they coincide by construction and cannot reveal
-// a wrong mapping. This test instead brackets each program's on-device execution between two host-clock reads and
-// asserts the record's device->host mapping — reconstructed solely from the record's own device_cycle_offset and
-// frequency — lands inside that independently-measured host window. A mis-signed/mis-scaled offset, a wrong clock
-// domain, or a stale anchor would push the record outside the window. This is only possible because the affine mapping
-// now rides on the record itself.
+// Independent of the Tracy SYNC_CHECK markers, whose host and device endpoints are both derived from the same
+// calibration and so coincide by construction: they cannot reveal a wrong mapping. This test instead brackets each
+// program's on-device execution between two host-clock reads and asserts the record's device->host mapping --
+// reconstructed solely from its own device_cycle_offset and frequency -- lands inside that independently-measured
+// host window.
 TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
     RecordCollector collector;
     const CoreRange cores = all_cores();
 
-    // One fixed kernel source for every program so the JIT ELF is compiled once (during warm-up) and reused; this
-    // keeps each measured dispatch window free of multi-second kernel-compilation time.
+    // One fixed kernel source for every program so the JIT ELF is compiled once (during warm-up) and reused, keeping
+    // each measured dispatch window free of kernel-compilation time.
     const std::string fixed_src = make_sanity_kernel_source(/*runtime_id=*/0);
 
     auto enqueue_blocking = [&](uint32_t runtime_id) {
         enqueue_rt_program(mesh_device_, make_sanity_program(fixed_src, cores, runtime_id), /*blocking=*/true);
     };
 
-    // Warm up the JIT cache; runtime_id 1 is not placed in the window map.
-    enqueue_blocking(/*runtime_id=*/1);
+    enqueue_blocking(/*runtime_id=*/1);  // JIT warm-up; not placed in the window map
 
     struct HostWindow {
         std::chrono::steady_clock::time_point before;
@@ -949,7 +1006,7 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
     constexpr uint32_t kNumMeasured = 8;
     for (uint32_t runtime_id = kFirstMeasured; runtime_id < kFirstMeasured + kNumMeasured; ++runtime_id) {
         const auto before = std::chrono::steady_clock::now();
-        enqueue_blocking(runtime_id);  // blocks until the program completes on device
+        enqueue_blocking(runtime_id);
         const auto after = std::chrono::steady_clock::now();
         windows[runtime_id] = {before, after};
     }
@@ -957,8 +1014,8 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
     quiesce_and_wait_for([&] { return collector.records().size() >= kNumMeasured; });
     collector.stop();
 
-    // Generous bound: it covers host-clock read jitter and the gap between the bracketing reads and the actual
-    // dispatch/completion. The check catches a fundamentally wrong mapping (off by ms and up), not µs-level skew.
+    // Covers host-clock read jitter and the gap between the bracketing reads and actual dispatch/completion. Catches
+    // a fundamentally wrong mapping (off by ms and up), not µs-level skew.
     constexpr auto kSlack = std::chrono::milliseconds(2);
 
     int checked = 0;
@@ -989,7 +1046,6 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
     }
 
     EXPECT_GT(checked, 0) << "No RT records matched a measured dispatch window";
-    // <= 0 means every record mapped strictly inside its window; a small positive value is measurement jitter.
     log_info(
         tt::LogTest,
         "[RT profiler sanity] checked {} record(s); worst excursion outside dispatch window = {}ns (<= 0 means fully "
@@ -1000,39 +1056,29 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordHostTimeFallsInDispatchWindow) {
         max_freq);
 }
 
-// Independent check of the clock mapping the RT profiler publishes on every record. It shares no code and no
-// mechanism with the production sync: production has the host drive a round trip and bracket a device timestamp
-// inside it, while this reads the device's own clock and brackets that read between two host clock reads.
+// Independent check of the clock mapping the RT profiler publishes on every record. Shares no code or mechanism with
+// production sync: production has the host drive a round trip and bracket a device timestamp inside it, while this
+// reads the device's own clock and brackets that read between two host clock reads.
 //
-// Nothing is fitted here. A record already states, through device_cycle_offset and frequency, which host time a
-// device timestamp corresponds to, so there is no line to reconstruct -- only its residual to measure. One read
-// resolves nothing on its own, because the host bracket is wider than the error being looked for; averaging many is
-// what gives the measurement its resolution. The reads are taken back-to-back, so a round spans milliseconds and no
-// clock drifts across it, and the mean residual is good to about one bracket over the square root of the sample
-// count -- tens of nanoseconds, against roughly a microsecond for any single read.
+// Nothing is fitted here -- a record's device_cycle_offset/frequency already states the mapping, so only its
+// residual is measured. A single read can't resolve it (the host bracket is wider than the error sought); averaging
+// many does, to about one bracket over sqrt(sample count).
 //
-// The kernel never waits on the host. It stamps WALL_CLOCK into one L1 slot in a bounded loop and exits, so the host
-// can stop reading whenever it likes -- or fail an assertion and leave -- without stranding a spinning kernel, which
-// would make Finish, and the test, hang rather than fail.
+// The kernel never waits on the host: it stamps WALL_CLOCK into one L1 slot in a bounded loop and exits, so the host
+// can stop reading (or fail an assertion) at any time without stranding a spinning kernel and hanging Finish.
 constexpr uint32_t kClockStampIterations = 200'000'000;  // ~5s of stamping; only reached if the stop flag never lands
 constexpr uint32_t kClockCheckRounds = 3;
-// Taken back-to-back, a couple of microseconds apart, so a round's reads span only milliseconds. Enough of them that
-// the mean residual resolves well below a single bracket.
 constexpr uint32_t kClockReadsPerRound = 500;
 constexpr uint32_t kFirstClockCheckRuntimeId = 9101;
-// What this has to establish: that the published mapping is right to within a few microseconds. Deliberately fixed
-// rather than derived from the record's own sync_error -- a bound computed from the claim cannot test the claim.
-// The measured disagreement is ~210ns, so these leave an order of magnitude of headroom, and they are wide enough to
-// absorb the clock drift between a record's mapping snapshot and the reads it is checked against.
+// Fixed rather than derived from the record's own sync_error -- a bound computed from the claim cannot test the
+// claim. Measured disagreement is ~210ns; this leaves an order of magnitude of headroom.
 constexpr double kMaxMeanMappingErrorNs = 2'000.0;
-// How far a read may put the mapping out *beyond what that read itself could be wrong by*. Measured on Blackhole:
-// zero -- every read sits inside its own resolution, including the stretched ones. Sized well above that so ordinary
-// jitter cannot trip it, while still being a real bound: a DVFS step left uncorrected shows up here as microseconds.
+// How far a read may put the mapping out *beyond what that read itself could be wrong by*. Measured zero on
+// Blackhole; sized well above that so ordinary jitter can't trip it while an uncorrected DVFS step still would.
 constexpr double kMaxMappingErrorBeyondReadResolutionNs = 500.0;
 
-// Runs on every core the stamper is not using, so the reads below are taken while the part is drawing power rather
-// than idle. Blackhole's DVFS throttler only steps AICLK when something is loading the chip, and a step is exactly
-// what this test needs to see the mapping survive -- measured on a quiet part it can only prove the easy case.
+// Runs on every core the stamper is not using, so the reads below are taken while the part is drawing power: on
+// Blackhole, DVFS only steps AICLK under load, and that step is what this test needs to see the mapping survive.
 std::string make_clock_load_kernel_source() {
     return R"(
 #include <cstdint>
@@ -1082,20 +1128,17 @@ void kernel_main() {
 }
 
 // Blackhole exposes a static TLB window onto the core's L1, so the stamp can be read with one load instead of going
-// through UMD's generic path. Only software overhead comes off -- an MMIO read is a non-posted PCIe transaction either
-// way -- but it is the widest part of the bracket that can be removed at all. Null where no such window exists, and
-// the caller falls back to the generic read.
+// through UMD's generic path -- only software overhead comes off, since an MMIO read is a non-posted PCIe
+// transaction either way. Null where no such window exists; the caller falls back to the generic read.
 volatile uint64_t* try_map_l1_word(Cluster& cluster, ChipId chip_id, CoreCoord virtual_core, uint32_t addr) {
     try {
-        // is_tlb_mapped asks the question that actually matters -- are these bytes covered by a mapping that will not
-        // move underneath a raw pointer -- rather than inferring it from the architecture.
         const tt_xy_pair tlb_core(virtual_core.x, virtual_core.y);
         auto* tlb_manager = cluster.get_driver()->get_chip(chip_id)->get_tlb_manager();
         if (tlb_manager == nullptr || !tlb_manager->is_tlb_mapped(tlb_core, addr, sizeof(uint64_t))) {
             return nullptr;
         }
         // A lookup, never an allocation: get_tlb_window throws unless UMD already mapped this core at init, and
-        // is_tlb_mapped has just confirmed the mapping covers these bytes. No TLB is consumed by reading here.
+        // is_tlb_mapped has just confirmed the mapping covers these bytes.
         auto* window = tlb_manager->get_tlb_window(tlb_core);
         if (window == nullptr) {
             return nullptr;
@@ -1107,7 +1150,6 @@ volatile uint64_t* try_map_l1_word(Cluster& cluster, ChipId chip_id, CoreCoord v
     }
 }
 
-// One read of the device clock, bracketed by the host's own clock either side of it.
 struct ClockBracket {
     int64_t host_before_ns = 0;
     int64_t host_after_ns = 0;
@@ -1143,8 +1185,8 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
         return (static_cast<uint64_t>(words[1]) << 32) | words[0];
     };
 
-    // Each round brackets one device clock read, then runs one program so a record is published with the mapping that
-    // was live beside that read. Pairing them keeps every comparison local in time.
+    // Each round brackets one device clock read, then runs one program, pairing the two so the comparison below is
+    // against the mapping that was live beside that read.
     std::vector<ClockBracket> brackets;
     for (uint32_t round = 0; round < kClockCheckRounds; ++round) {
         const std::vector<uint32_t> zeros(8, 0);
@@ -1158,7 +1200,7 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
         SetRuntimeArgs(stamp_program, kernel, core, {stamp_addr, stop_addr, kClockStampIterations});
 
-        // Same program, so the load starts with the stamper and is torn down by the same stop flag.
+        // Same program as the stamper, so the load starts and is torn down by the same stop flag.
         const CoreRange grid = all_cores();
         CoreRangeSet load_cores = CoreRangeSet(grid).subtract(CoreRangeSet(CoreRange(core, core)));
         const std::string load_src = make_clock_load_kernel_source();
@@ -1177,8 +1219,8 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
         stamp_workload.add_program(distributed::MeshCoordinateRange(mesh_device_->shape()), std::move(stamp_program));
         distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), stamp_workload, /*blocking=*/false);
 
-        // Wait for the slot to go non-zero rather than assume a launch latency. A timeout fails the assertion; it
-        // cannot hang, because the kernel ends itself either way.
+        // Wait for the slot to go non-zero rather than assume a launch latency; a timeout fails the assertion
+        // instead of hanging, since the kernel ends itself either way.
         const auto launch_deadline = std::chrono::steady_clock::now() + 10s;
         while (read_device_ticks() == 0 && std::chrono::steady_clock::now() < launch_deadline) {
             std::this_thread::sleep_for(1ms);
@@ -1194,8 +1236,7 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
             brackets.push_back(bracket);
         }
 
-        // Every core, not just the stamper's: the load kernels poll their own L1 for the same flag.
-        const uint32_t stop = 1;
+        const uint32_t stop = 1;  // written to every core: the load kernels poll their own L1 for this flag
         const CoreCoord grid_size = mesh_device_->compute_with_storage_grid_size();
         for (uint32_t y = 0; y < grid_size.y; ++y) {
             for (uint32_t x = 0; x < grid_size.x; ++x) {
@@ -1222,14 +1263,12 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
         }
     }
 
-    // Residual of the published mapping against each independently bracketed read: where the mapping says the device
-    // timestamp happened, minus where the host observed it happening.
     std::vector<double> residuals_ns;
     residuals_ns.reserve(brackets.size());
-    // A read locates the device clock to no better than half its own bracket, so a residual inside that says nothing
-    // about the mapping -- it is this read being slow, not the mapping being wrong. What the mapping can be blamed
-    // for is only the part that exceeds it, which is what these assertions are on. Without this the two are
-    // indistinguishable: a stretched read produces |residual| ~= 0.9x its own half-bracket whatever the mapping does.
+    // excess_ns is what the mapping can be blamed for: a read locates the device clock to no better than half its
+    // own bracket, so a residual inside that reflects a slow read, not a wrong mapping. Without subtracting it out,
+    // the two are indistinguishable -- a stretched read produces |residual| ~= 0.9x its own half-bracket regardless
+    // of the mapping.
     std::vector<double> excess_ns;
     std::vector<double> bracket_widths_ns;
     std::chrono::nanoseconds claimed_error{};
@@ -1269,8 +1308,8 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
     const auto quantile = [&magnitudes](double q) { return rt_percentile(magnitudes, q); };
     std::ranges::sort(excess_ns);
     const auto excess = [&excess_ns](double q) { return rt_percentile(excess_ns, q); };
-    // The median, not the widest: a handful of reads queue behind other PCIe traffic and run tens of microseconds
-    // long, which says nothing about how well a typical read locates the device clock.
+    // Median, not widest: a handful of reads queue behind other PCIe traffic and run tens of microseconds long,
+    // which says nothing about a typical read's resolution.
     std::ranges::sort(bracket_widths_ns);
     const double typical_bracket_ns = bracket_widths_ns[bracket_widths_ns.size() / 2];
 
@@ -1298,16 +1337,10 @@ TEST_F(RealtimeProfilerDeviceSanity, RecordMappingMatchesAnIndependentClockRead)
         std::ranges::count_if(excess_ns, [](double e) { return e > 0.0; }),
         excess_ns.size());
 
-    // Averaging drives the bracket's noise down by the square root of the sample count, so the mean resolves the
-    // disagreement to tens of nanoseconds; a regression in it shows up in the line printed above long before it
-    // reaches the bound. The mean is not expected to be zero -- a read's true sampling instant is not the midpoint of
-    // its bracket, since the two legs of a PCIe access are unequal, and that asymmetry is a constant of the
-    // measurement rather than an error in the mapping.
+    // Mean is not expected to be zero: a read's true sampling instant is not the bracket midpoint, since the two
+    // legs of a PCIe access are unequal -- a constant of the measurement, not an error in the mapping.
     EXPECT_LE(std::abs(mean_residual_ns), kMaxMeanMappingErrorNs)
         << "an independent read of the device clock puts the published mapping further out than a few microseconds";
-    // The tail assertion is on the excess rather than the raw residual, so a slow read cannot fail it and a real
-    // mapping error cannot hide behind one. Every read here is expected to sit inside its own resolution, so the
-    // bound is a small absolute floor rather than a fraction of anything.
     EXPECT_LE(excess(0.99), kMaxMappingErrorBeyondReadResolutionNs)
         << "reads disagree with the published mapping by more than they could be wrong by themselves, so the "
            "disagreement is the mapping's";

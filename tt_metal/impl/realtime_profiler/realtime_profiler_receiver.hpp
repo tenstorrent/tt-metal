@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -42,9 +43,7 @@ struct RealtimeProfilerCoreL1Addrs {
 };
 
 // Owns the RT-profiler producers for one MeshDevice: the per-device sockets, the record ring, and the receiver
-// thread behind them. Bring-up fits a device-cycle<->host-time line per device; the receiver then drains the sockets,
-// stamps every record it publishes with the mapping current at that moment, and between drains probes each device's
-// clock, re-anchoring the ones whose mapping has visibly moved.
+// thread behind them.
 class RealtimeProfilerReceiver {
 public:
     // Null when no local device passed the eligibility gate; a constructed receiver always has devices to drain.
@@ -57,7 +56,7 @@ public:
     RealtimeProfilerReceiver(RealtimeProfilerReceiver&&) = delete;
     RealtimeProfilerReceiver& operator=(RealtimeProfilerReceiver&&) = delete;
 
-    // Idempotent: writes terminate flags, joins the receiver, and drains/detaches the record ring.
+    // Idempotent.
     void shutdown();
 
     uint32_t peak_fifo_pages() const { return peak_fifo_pages_.load(std::memory_order_relaxed); }
@@ -77,17 +76,23 @@ private:
         distributed::MeshCoordinate mesh_coord = distributed::MeshCoordinate(0);
         CoreCoord realtime_profiler_core;
         std::unique_ptr<distributed::D2HSocket> socket;
-        // Owns the BRISC+NCRISC program to keep its kernels (and their metadata for tt-inspector) alive for the
-        // receiver's lifetime.
+        // Keeps the BRISC+NCRISC kernels (and their tt-inspector metadata) alive for the receiver's lifetime.
         std::unique_ptr<Program> realtime_profiler_program;
         RealtimeProfilerCoreL1Addrs core_l1;
         bool fifo_reached_capacity = false;
         uint32_t consecutive_resync_failures = 0;
         std::chrono::steady_clock::time_point next_poll_at{};
-        // Per-device: one chip stepping its AICLK says nothing about what the others are doing.
-        std::chrono::steady_clock::time_point last_excursion_at{};
         // Held by pointer so DeviceState stays movable: the sync object carries atomics and cannot be.
         std::unique_ptr<RealtimeProfilerClockSync> clock_sync;
+
+        // Records decoded but not yet published, waiting for the anchor that closes the interval they ran in. Their
+        // host-facing fields are unset until then.
+        std::vector<ProgramRealtimeRecord> staged;
+        // Secant rate of the last closed interval, and how uncertain that rate was. How much the next interval's rate
+        // differs from it is the only evidence available that the clock moved *within* an interval, which is what the
+        // chord cannot see -- but only the part of the difference neither measurement could have invented.
+        double last_interval_rate = 0.0;
+        double last_interval_rate_noise = 0.0;
 
         DeviceState();
         ~DeviceState();
@@ -99,39 +104,30 @@ private:
 
     RealtimeProfilerReceiver(ContextId context_id, std::vector<DeviceState> devices);
 
-    // Sets up the D2H socket and launches the BRISC/NCRISC kernels on each eligible local device. Devices failing
-    // the eligibility gate or socket creation are skipped, so the result may be empty.
+    // Devices failing the eligibility gate or socket creation are skipped, so the result may be empty.
     static std::vector<DeviceState> initialize_devices(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id);
     void bring_up_device_clocks();
 
-    // Runs on the drain loop, immediately before the device it syncs is drained: one probe, offered straight to that
-    // device's clock model. Interleaved rather than taken for every device at the top of a pass, so a device's probe
-    // interval is bounded by its own drain instead of by every other device's.
+    // Called on the drain loop immediately before draining dev_state, so a device's sync interval is bounded by its
+    // own drain rather than by every other device's.
     void sync_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now);
     void report_stalled_syncs(std::chrono::steady_clock::time_point now);
+    void report_sync_cost(std::chrono::steady_clock::time_point now);
+    void stagger_sync_phases();
+    void stage_pages(
+        DeviceState& dev_state, std::chrono::steady_clock::time_point now, std::span<const uint32_t> pages);
+    // True when records were published, so the caller knows to wake consumers.
+    bool close_staging(DeviceState& dev_state);
 
     // Receiver thread body.
     void run();
-    uint64_t run_loop(std::vector<uint32_t>& page_buf, std::vector<ProgramRealtimeRecord>& record_buf);
-    uint64_t drain_on_shutdown(std::vector<uint32_t>& page_buf, std::vector<ProgramRealtimeRecord>& record_buf);
-    // Syncs each device's clock immediately before draining it. `now` enters as the instant the pass started and is
-    // re-read as devices are drained, so a device late in a long pass is not gated on a stale one.
-    uint32_t drain_all_devices(
-        std::chrono::steady_clock::time_point now,
-        std::vector<uint32_t>& page_buf,
-        std::vector<ProgramRealtimeRecord>& record_buf);
+    uint64_t run_loop(std::vector<uint32_t>& page_buf);
+    uint64_t drain_on_shutdown(std::vector<uint32_t>& page_buf);
+    // `now` is re-read as devices are drained, so a device late in a long pass isn't gated on a stale timestamp.
+    uint32_t drain_all_devices(std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf);
     uint32_t drain_device_pages(
-        DeviceState& dev_state,
-        std::chrono::steady_clock::time_point now,
-        std::vector<uint32_t>& page_buf,
-        std::vector<ProgramRealtimeRecord>& record_buf);
-    // Records that cannot form a valid duration are dropped rather than delivered.
-    void publish_pages(
-        const DeviceState& dev_state,
-        std::chrono::steady_clock::time_point now,
-        std::span<const uint32_t> pages,
-        std::vector<ProgramRealtimeRecord>& records);
+        DeviceState& dev_state, std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf);
 
     // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default
     // context doesn't leak to silicon DEFAULT_CONTEXT_ID. See #38445 / #39849.
@@ -153,6 +149,8 @@ private:
 
     std::chrono::steady_clock::time_point last_malformed_warn_{};
     std::chrono::steady_clock::time_point last_probe_timeout_warn_{};
+    std::chrono::steady_clock::time_point last_sync_cost_report_{};
+    RealtimeProfilerClockSync::Cost sync_cost_at_last_report_;
 };
 
 }  // namespace tt::tt_metal

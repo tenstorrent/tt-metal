@@ -23,8 +23,8 @@ namespace tt::tt_metal {
 
 using RealtimeProfilerRecordRing = BroadcastRing<experimental::ProgramRealtimeRecord>;
 
-// Owner of real-time profiler consumers. Receivers attach independent record rings; every registered
-// consumer gets one thread of its own, which drains every attached ring.
+// Owner of real-time profiler consumers. Receivers attach independent record rings; each registered
+// consumer gets its own thread draining every attached ring.
 class RealtimeProfilerService {
 public:
     RealtimeProfilerService() = default;
@@ -48,8 +48,7 @@ public:
 
     bool is_active() const;
 
-    // Whether any callback is registered. Read on the drain loop, so it is an atomic rather than a look at
-    // consumers_ under the topology lock.
+    // Atomic (not a locked consumers_ lookup) because the drain loop reads this on every iteration.
     bool has_consumers() const { return num_consumers_.load(std::memory_order_relaxed) != 0; }
 
 private:
@@ -83,8 +82,7 @@ private:
         // Set by a callback retiring itself.
         std::atomic<bool> retired{false};
 
-        // Cross-thread inbox. The hot loop reads only control_pending, which stays shared in cache; control_mutex
-        // guards the rest.
+        // Cross-thread inbox: the hot loop only checks control_pending; control_mutex guards the rest.
         std::atomic<bool> control_pending{false};
         std::mutex control_mutex;
         std::vector<RingReader> readers_to_add;
@@ -97,16 +95,15 @@ private:
 
     void run_consumer(std::stop_token stop_token, ConsumerRegistration& registration);
     void destroy_consumer(ConsumerRegistration& registration);
-    // Joins and drops registrations that retired themselves. A callback cannot join its own thread, so it only marks
-    // itself retired; the next caller that is not a consumer thread finishes the job.
+    // A callback cannot join its own thread, so a self-unregistering consumer only marks itself retired here;
+    // this joins and drops it on behalf of the next non-consumer-thread caller.
     void reap_retired_consumers();
 
-    // The registration this consumer thread is serving, so a callback can be recognized as unregistering itself.
+    // Identifies which registration the running consumer thread belongs to.
     inline static thread_local ConsumerRegistration* current_registration_ = nullptr;
 
     mutable std::mutex topology_mutex_;
-    // Attached rings and the batch size limit each was attached with, so a consumer registering after a ring
-    // arrives can build a reader for it.
+    // Batch-size limit per attached ring, so a consumer registering later can build readers for existing rings.
     std::unordered_map<RealtimeProfilerRecordRing*, size_t> attached_rings_;
     ConsumerMap consumers_;
     experimental::ProgramRealtimeProfilerCallbackHandle next_consumer_handle_ = 0;
@@ -115,8 +112,7 @@ private:
     std::atomic<size_t> num_consumers_{0};
 };
 
-// Process-wide: a registration is owned by whoever made it and ends only at Unregister, so it cannot be scoped to
-// anything shorter-lived.
+// Process-wide singleton: a registration lives until an explicit Unregister call.
 RealtimeProfilerService& realtime_profiler_service();
 
 void register_builtin_realtime_profiler_consumers();

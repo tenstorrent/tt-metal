@@ -35,7 +35,6 @@ constexpr uint32_t kWaitSpinIterations = 512;
 }  // namespace
 
 RealtimeProfilerService& realtime_profiler_service() {
-    // Destroyed at exit rather than kept alive indefinitely: the destructor stops and joins every consumer thread.
     static RealtimeProfilerService service;
     return service;
 }
@@ -43,8 +42,7 @@ RealtimeProfilerService& realtime_profiler_service() {
 void register_builtin_realtime_profiler_consumers() {
     [[maybe_unused]] static const bool registered = [] {
 #if defined(TRACY_ENABLE)
-        // Bound to DEFAULT_CONTEXT_ID: slot 0 is reserved for the silicon context and mock contexts start at 1
-        // (find_free_context_id_locked), so that is the only context the profiler can run on.
+        // DEFAULT_CONTEXT_ID is the only silicon context; mock contexts start at 1 (find_free_context_id_locked).
         auto tracy_consumer = std::make_shared<RealtimeProfilerTracyConsumer>(DEFAULT_CONTEXT_ID);
         tracy_consumer->set_handle(experimental::RegisterProgramRealtimeProfilerCallback(
             [tracy_consumer](const experimental::ProgramRealtimeRecordBatch& batch) {
@@ -106,8 +104,7 @@ experimental::ProgramRealtimeProfilerCallbackHandle RealtimeProfilerService::reg
 }
 
 void RealtimeProfilerService::unregister_consumer(experimental::ProgramRealtimeProfilerCallbackHandle handle) {
-    if (current_registration_ != nullptr &&
-        current_registration_->handle == handle) {  // a callback unregistering itself
+    if (current_registration_ != nullptr && current_registration_->handle == handle) {
         current_registration_->retired.store(true, std::memory_order_release);
         current_registration_->control_pending.store(true, std::memory_order_release);
         return;
@@ -188,8 +185,7 @@ void RealtimeProfilerService::run_consumer(
     std::vector<experimental::ProgramRealtimeRecord> records;
     std::vector<RingReader> readers_to_add;
     std::vector<RealtimeProfilerRecordRing*> rings_to_drain;
-    // Losses seen across all readers since the last batch was handed to the callback. Drops can be noticed on a reader
-    // that has nothing to deliver, so they are carried until a batch exists to report them on.
+    // Drops noticed on a reader with nothing to deliver, carried until a batch exists to report them on.
     uint64_t pending_dropped = 0;
 
     auto invoke_callback = [&](std::span<const experimental::ProgramRealtimeRecord> batch, uint64_t dropped) {
@@ -210,7 +206,7 @@ void RealtimeProfilerService::run_consumer(
     };
 
     while (!stop_token.stop_requested()) {
-        // Snapshot before checking any work condition, so a concurrent publication or control change is not missed.
+        // Snapshot before checking work, so a concurrent publication or control change isn't missed.
         const uint32_t wake_token = wake_generation_.load(std::memory_order_acquire);
 
         if (registration.control_pending.load(std::memory_order_acquire)) {

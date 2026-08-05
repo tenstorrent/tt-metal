@@ -42,9 +42,7 @@ tracy::TTDeviceMarker make_marker(
     marker.core_y = 0;
     marker.risc = tracy::RiscType::BRISC;
     marker.timestamp = timestamp;
-    // The runtime id goes in the name because TracyTTContext drops runtime_host_id for any zone not named
-    // BRISC-FW or ERISC-FW, to keep the per-RISC zones from multiplying source locations. One marker per program
-    // is emitted here, so that reasoning does not apply and the id would otherwise be invisible in the trace.
+    // TracyTTContext drops runtime_host_id for zones not named BRISC-FW/ERISC-FW, so encode it in the name instead.
     marker.marker_name = name;
     marker.marker_type = marker_type;
     marker.file = file;
@@ -56,8 +54,7 @@ tracy::TTDeviceMarker make_marker(
 }  // namespace
 
 void RealtimeProfilerTracyConsumer::on_records(const experimental::ProgramRealtimeRecordBatch& batch) {
-    // Past its connect-timeout window Tracy has dropped its backlog and refuses new connections, so nothing emitted
-    // from here can ever be read.
+    // Past its connect-timeout window, Tracy drops its backlog and refuses new connections.
     if (tracy::GetProfiler().IsEmitSuppressed()) {
         experimental::UnregisterProgramRealtimeProfilerCallback(handle_);
         return;
@@ -82,9 +79,6 @@ void RealtimeProfilerTracyConsumer::CalibrateFromRecord(const experimental::Prog
     }
     PerChip& s = chips_[record.chip_id];
 
-    // Per-record fast path: once a chip is calibrated, only a device_cycle_offset change (a host<->device re-anchor,
-    // ~20/s) can warrant recalibration. An unchanged offset — the vast majority of records — bails here on a vector
-    // index + an int compare: no clock read, no hash, no correlation.
     const bool first = s.ctx == nullptr;
     if (!first && s.last_seen_offset == record.clock_sync.device_cycle_offset) {
         return;
@@ -92,14 +86,9 @@ void RealtimeProfilerTracyConsumer::CalibrateFromRecord(const experimental::Prog
 
     s.last_seen_offset = record.clock_sync.device_cycle_offset;
 
-    // Re-steer the Tracy context on every offset change (a resync re-anchor, ~20/s) so its view tracks the mapping
-    // instead of lagging a throttle window behind it.
-    //
-    // Anchored on the present instant in both clocks, not on the record's start: a record reaches this thread ~100us
-    // after its program ran, so anchoring on record.host_start() would hand Tracy a cpuTime that far in the past, and
-    // Tracy places zones relative to that pair -- the back-dating showed up as zones sliding ~7us earlier than they
-    // belong. Projecting the device clock to now through the record's own mapping keeps the pair matched, and it also
-    // leaves HostTimeToTracyCpuTicks a delta of ~0, where its conversion error is smallest.
+    // Anchor on the present instant, not record.host_start(): a record arrives ~100us after its program ran, and
+    // back-dating the anchor that far made zones slide ~7us early. Projecting the device clock to now through the
+    // record's mapping also keeps HostTimeToTracyCpuTicks's delta near zero, where its conversion error is smallest.
     const auto now = std::chrono::steady_clock::now();
     const int64_t host_anchor = HostTimeToTracyCpuTicks(now);
     const uint64_t device_anchor = record.device_timestamp_at(now);
@@ -136,8 +125,7 @@ TracyTTCtx RealtimeProfilerTracyConsumer::GetContext(uint32_t chip_id) {
 }
 
 bool RealtimeProfilerTracyConsumer::ValidateHostClockDomain() {
-    // clock_sync is CLOCK_MONOTONIC; HostTimeToTracyCpuTicks bridges it into Tracy's rdtsc domain, which needs a
-    // usable Tracy CPU timer. Bail out of calibration if Tracy can't report one.
+    // clock_sync is CLOCK_MONOTONIC; HostTimeToTracyCpuTicks bridges it into Tracy's rdtsc domain.
     if (!(TracyGetTimerMul() > 0.0)) {
         log_error(
             tt::LogMetal,
@@ -154,10 +142,9 @@ int64_t RealtimeProfilerTracyConsumer::HostTimeToTracyCpuTicks(std::chrono::stea
     }
     const int64_t host_mono_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(host_time.time_since_epoch()).count();
-    // A side-by-side read pins the CLOCK_MONOTONIC<->rdtsc offset (both are the same TSC oscillator). A hardware
-    // interrupt landing between the two mono reads stretches the bracket and skews the midpoint, so keep the tightest
-    // of several attempts (the NTP/PTP correlation trick) — this drops the rare ~µs excursion to a ~ns floor. The
-    // anchor is recent, so applying Tracy's ns/tick over the small delta adds no long-baseline ppm error.
+    // CLOCK_MONOTONIC and rdtsc share the same TSC oscillator, so a side-by-side read pins their offset. An
+    // interrupt between the two mono reads stretches the bracket and skews the midpoint, so keep the tightest gap
+    // across several attempts.
     const auto mono_ns = [] {
         return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
             .count();
@@ -221,7 +208,6 @@ void RealtimeProfilerTracyConsumer::HandleRecord(const experimental::ProgramReal
         file = "realtime_profiler";
     }
 
-    // Formatted once and shared by both markers; this runs per record on the delivery path.
     const std::string name = fmt::format("Program op_id={}", record.runtime_id);
     TracyTTPushStartMarker(
         ctx, make_marker(record, record.start_timestamp, tracy::TTDeviceMarkerType::ZONE_START, file, name));

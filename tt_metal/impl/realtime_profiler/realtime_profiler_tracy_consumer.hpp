@@ -28,18 +28,15 @@ public:
     void on_records(const experimental::ProgramRealtimeRecordBatch& batch);
 
 private:
-    // Establish a chip's Tracy context on its first record, then recalibrate whenever the record's device_cycle_offset
-    // moves (i.e. a host<->device re-anchor happened).
+    // Creates a chip's Tracy context on its first record; recalibrates when device_cycle_offset changes (a
+    // host<->device re-anchor).
     void CalibrateFromRecord(const experimental::ProgramRealtimeRecord& record);
-    // Create and calibrate a Tracy context for the given device; returns it (caller stores it in chips_).
     TracyTTCtx AddDevice(uint32_t chip_id, int64_t host_anchor, double device_anchor, double frequency);
     void HandleRecord(const experimental::ProgramRealtimeRecord& record);
-    // Send a GpuCalibration event to Tracy, updating the host-device clock mapping.
     void CalibrateDevice(uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency);
     TracyTTCtx GetContext(uint32_t chip_id);
     bool ValidateHostClockDomain();
-    // Convert a steady_clock host time (the domain of clock_sync) into Tracy's rdtsc CPU-tick domain, which the
-    // Tracy context/calibration APIs require. Reads both host clocks side by side to pin the offset.
+    // Converts a steady_clock host time into Tracy's rdtsc CPU-tick domain, required by the Tracy calibration APIs.
     int64_t HostTimeToTracyCpuTicks(std::chrono::steady_clock::time_point host_time);
     void PublishDeviceProfilerSyncAnchor(
         uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency);
@@ -48,12 +45,10 @@ private:
     experimental::ProgramRealtimeProfilerCallbackHandle handle_ = 0;
     bool host_clock_checked_ = false;
     bool host_clock_valid_ = false;
-    // Per-chip Tracy state, indexed by chip_id. chip_ids are small and dense, so a flat vector keeps the per-record
-    // path hash-free (a vector index + an offset compare) — see CalibrateFromRecord / GetContext.
+    // chip_ids are small and dense, so a flat vector (not a map) keeps the per-record lookup hash-free.
     struct PerChip {
         TracyTTCtx ctx = nullptr;
-        int64_t last_seen_offset =
-            0;  // last clock_sync.device_cycle_offset seen; a change signals a host<->device re-anchor
+        int64_t last_seen_offset = 0;  // clock_sync.device_cycle_offset; a change signals a host<->device re-anchor
     };
     std::vector<PerChip> chips_;
 };

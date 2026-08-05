@@ -36,17 +36,10 @@ namespace tt::tt_metal {
 
 namespace {
 
-// Sync policy. A least squares slope over a span T with N probes of placement noise s carries a relative frequency
-// error of s*sqrt(12)/(T*sqrt(N)), and that error only accrues between anchors, contributing error_ppm *
-// kSyncInterval to the mapping. Shortening the fit span is paid for out of that margin.
-
-// Bring-up fit: kFitProbes points spaced kProbeInterval apart, each the tightest of kProbesPerPoint reads, after
-// kSettleDelay of letting AICLK settle. ~0.5s per device at these values.
+// ~0.5s at these values.
 constexpr uint32_t kFitProbes = 100;
 constexpr auto kProbeInterval = std::chrono::milliseconds(5);
 constexpr auto kSettleDelay = std::chrono::milliseconds(50);
-// One preempted read has a bracket wide enough that its midpoint is microseconds out, and at the ends of the span
-// that tilts the slope by tens of ppm.
 constexpr int kProbesPerPoint = 4;
 
 constexpr auto kCalibrationCacheMaxAge = std::chrono::seconds(60);
@@ -54,12 +47,11 @@ constexpr auto kCalibrationCacheMaxAge = std::chrono::seconds(60);
 // The counter could have been read anywhere inside the bracket.
 constexpr std::chrono::nanoseconds placement_error(std::chrono::nanoseconds bracket) { return bracket / 2; }
 
-// How far above the median a bring-up probe's bracket may sit and still be regressed. Loose enough that ordinary
-// spread survives and only the reads serviced late are cut.
+// Loose enough that ordinary spread survives; only reads serviced late are cut.
 constexpr int kFitBracketOutlierFactor = 2;
 
-// Lets a rapid MeshDevice reopen skip the bring-up fit and take one anchor probe instead; device WALL_CLOCK
-// free-runs across close. The offset is not cached, since it is re-anchored every kSyncInterval anyway.
+// Lets a rapid MeshDevice reopen skip the bring-up fit via one anchor probe; device WALL_CLOCK free-runs across
+// close, so only frequency (not offset) is worth caching.
 struct FrequencyCache {
     struct Entry {
         double frequency = 0.0;
@@ -79,11 +71,29 @@ FrequencyCache& frequency_cache() {
 void RealtimeProfilerClockModel::seed_frequency(double frequency) {
     TT_FATAL(frequency > 0.0, "Real-time profiler clock model needs a positive seed frequency, got {}", frequency);
     frequency_ = frequency;
+    seed_frequency_ = frequency;
 }
 
 void RealtimeProfilerClockModel::set_anchor(std::chrono::steady_clock::time_point host_time, uint64_t device_ticks) {
     const double host_ns = static_cast<double>(host_time.time_since_epoch().count());
     device_cycle_offset_ = std::llround(static_cast<double>(device_ticks) - frequency_ * host_ns);
+}
+
+void RealtimeProfilerClockModel::adopt_chord(
+    double rate, std::chrono::steady_clock::time_point host_time, uint64_t device_ticks) {
+    if (rate <= 0.0 ||
+        std::abs(rate - seed_frequency_) > seed_frequency_ * RealtimeProfilerClockSync::kRateClampFraction) {
+        log_debug(
+            tt::LogMetal,
+            "[Real-time profiler] Measured clock rate {} outside the band around the commanded {}; keeping {}",
+            rate,
+            seed_frequency_,
+            frequency_);
+        return;
+    }
+    frequency_ = rate;
+    set_anchor(host_time, device_ticks);
+    last_reanchor_at_ = host_time;
 }
 
 std::optional<RealtimeProfilerClockModel::FitResidual> RealtimeProfilerClockModel::fit(
@@ -96,8 +106,6 @@ std::optional<RealtimeProfilerClockModel::FitResidual> RealtimeProfilerClockMode
         return std::nullopt;
     }
 
-    // A probe serviced late sits further right than its pairing implies, so regressed with equal weight a handful of
-    // them tilt the slope by tens of ppm -- which the servo then spends the session correcting as drift.
     std::vector<std::chrono::nanoseconds> brackets;
     brackets.reserve(probes.size());
     for (const auto& p : probes) {
@@ -114,13 +122,9 @@ std::optional<RealtimeProfilerClockModel::FitResidual> RealtimeProfilerClockMode
             tight.push_back(p);
         }
     }
-    // If filtering leaves too few to regress, the scatter is what the link is doing; fit everything and let the
-    // residual report it rather than inventing a slope from two points.
     const std::span<const ClockProbe> fitted_probes = tight.size() >= 2 ? std::span<const ClockProbe>(tight) : probes;
 
-    // Mean-centered on host_start: regressing at absolute-timestamp magnitudes loses most of the significant digits
-    // of the sums to catastrophic cancellation. Centered at the same instant try_reanchor anchors at, so the initial
-    // anchor is not offset from every later one by half a bracket.
+    // Centered on host_start to avoid catastrophic cancellation from regressing at absolute-timestamp magnitudes.
     const double n = static_cast<double>(fitted_probes.size());
     const auto centered_host = [host_start](const ClockProbe& p) {
         return static_cast<double>((p.host_time + placement_error(p.bracket) - host_start).count());
@@ -156,7 +160,6 @@ std::optional<RealtimeProfilerClockModel::FitResidual> RealtimeProfilerClockMode
         }
     }
 
-    // Intercept via means: the device tick count at centered host time 0, i.e. at host_start.
     set_anchor(host_start, static_cast<uint64_t>(device_mean - frequency_ * host_mean));
 
     FitResidual residual;
@@ -171,10 +174,7 @@ std::optional<RealtimeProfilerClockModel::FitResidual> RealtimeProfilerClockMode
     residual.num_probes_fitted = fitted_probes.size();
     residual.num_probes_offered = probes.size();
 
-    // Without these mapping() would report zero error until the first resync. The median over every offered probe,
-    // not just the regressed ones, keeps it the conservative of the two.
     bracket_ = median_bracket;
-    residual_ = placement_error(median_bracket);
     last_reanchor_at_ = probes.back().host_time;
     return residual;
 }
@@ -192,34 +192,30 @@ std::chrono::nanoseconds RealtimeProfilerClockModel::drift_at(const ClockProbe& 
 
 bool RealtimeProfilerClockModel::try_reanchor(const ClockProbe& probe) {
     if (last_reanchor_at_.has_value()) {
-        // How far the standing mapping actually missed this probe. This is the mapping's real error, measured, and
-        // it is what the decision below is made on -- no assumed drift rate enters anywhere.
         last_drift_ = drift_at(probe);
 
-        // A probe cannot locate the clock better than half its own bracket, so a miss smaller than that says nothing:
-        // re-anchoring on it would trade a good anchor for a noisier one. Take the probe when it would leave the
-        // mapping better placed than the miss it just measured, or than the standing anchor is placed -- the second
-        // clause is free and keeps the published error from being stuck at whatever a dip forced us to accept.
         if (placement_error(probe.bracket) >= last_drift_ &&
             placement_error(probe.bracket) >= placement_error(bracket_)) {
-            // The mapping is no better than where its anchor was placed, however small the miss just measured.
-            residual_ = std::max(placement_error(bracket_), last_drift_);
             return false;
         }
     }
     bracket_ = probe.bracket;
-    residual_ = placement_error(probe.bracket);
     set_anchor(probe.host_time + placement_error(probe.bracket), probe.device_ticks);
     last_reanchor_at_ = probe.host_time;
     return true;
 }
 
+std::chrono::nanoseconds RealtimeProfilerClockModel::sync_error() const {
+    // The only definition of sync error in the profiler: how well the standing anchor is placed, plus the drift the
+    // last probe measured against it. Every path -- bring-up fit, accepted re-anchor, rejected re-anchor -- reports
+    // this same expression off the same state, so a record's error never depends on which path last ran.
+    return placement_error(bracket_) + last_drift_;
+}
+
 experimental::ProgramRealtimeClockSync RealtimeProfilerClockModel::mapping() const {
     return experimental::ProgramRealtimeClockSync{
         .device_cycle_offset = device_cycle_offset_,
-        // What the last probe found, not a modelled rate: after a re-anchor this is where the new anchor was
-        // placed, and otherwise it is the miss the mapping is currently carrying.
-        .sync_error = residual_,
+        .sync_error = sync_error(),
     };
 }
 
@@ -253,7 +249,7 @@ void RealtimeProfilerClockSync::configure_clock_read_path() {
         if (clock_tlb_ == nullptr) {
             return;
         }
-        // Resolved once: TlbWindow's accessors are virtual calls that re-validate the offset on every access.
+        // Resolved once for sync-latency purposes
         const uint64_t local = clock_tlb_->handle_ref().get_config().local_offset;
         auto* base = clock_tlb_->handle_ref().get_base();
         mapped_clock_lo_ = reinterpret_cast<volatile uint32_t*>(base + (wall_clock_addr_lo_ - local));
@@ -267,27 +263,117 @@ void RealtimeProfilerClockSync::configure_clock_read_path() {
     }
 }
 
+void RealtimeProfilerClockSync::retire_probes_before(uint64_t ticks) {
+    // Two probes are kept preceding `ticks`, not one: a near side has to be far enough from the far side to take a
+    // slope from, so retiring down to the single probe before the oldest record leaves pairs that get rejected and
+    // records that strand.
+    while (probes_.size() > 3 && probes_[2].ticks <= ticks) {
+        probes_.pop_front();
+    }
+}
+
+std::optional<std::pair<RealtimeProfilerClockSync::Anchor, RealtimeProfilerClockSync::Anchor>>
+RealtimeProfilerClockSync::probes_bracketing(uint64_t start_ticks, uint64_t end_ticks) const {
+    if (probes_.size() < 2) {
+        return std::nullopt;
+    }
+    // Probes are recorded in order, so both ends are found by bisection: the retained span grows with the backlog, and
+    // scanning it per record is what turns a backlog into a stall.
+    const auto by_ticks = [](const Anchor& a, uint64_t ticks) { return a.ticks < ticks; };
+
+    // Far side: the oldest probe that still reads past the record, which keeps the chord as short as it can be.
+    const auto close_it = std::lower_bound(probes_.begin(), probes_.end(), end_ticks, by_ticks);
+    if (close_it == probes_.end()) {
+        // No probe has read past this record yet. It waits, which is the one thing worth waiting for.
+        return std::nullopt;
+    }
+    size_t close_index = static_cast<size_t>(close_it - probes_.begin());
+    if (close_index == 0) {
+        // The record predates everything retained, so the two oldest are the closest thing to a chord around it.
+        close_index = 1;
+    }
+
+    // Near side: the newest probe at or before the record that is also far enough from the far side to take a slope
+    // from. Selecting a pair the chord logic would reject is what strands records -- they would wait on the history
+    // moving rather than on a probe.
+    const Anchor& close_anchor = probes_[close_index];
+    const auto start_it = std::upper_bound(
+        probes_.begin(), probes_.begin() + close_index, start_ticks, [](uint64_t ticks, const Anchor& a) {
+            return ticks < a.ticks;
+        });
+    size_t open_index = 0;
+    for (size_t i = static_cast<size_t>(start_it - probes_.begin()); i-- > 0;) {
+        if (close_anchor.host - probes_[i].host >= kSyncInterval / 2) {
+            open_index = i;
+            break;
+        }
+    }
+    return std::make_pair(probes_[open_index], close_anchor);
+}
+
+std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync::plan_chord_mapping(
+    const Anchor& open, const Anchor& closing, double previous_rate, double previous_rate_noise, double sanity_rate) {
+    // A chord much shorter than the interval asked for places records inside it just fine, but its slope is uncertain
+    // by (both brackets)/span and that slope is published as `frequency`. A consumer evaluating the mapping away from
+    // the record would then see slope_noise * distance, which is how a few-us chord becomes microseconds of error.
+    if (closing.host <= open.host || closing.ticks <= open.ticks || closing.host - open.host < kSyncInterval / 2) {
+        return std::nullopt;
+    }
+    const double span_ns =
+        static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(closing.host - open.host).count());
+    const double rate = static_cast<double>(closing.ticks - open.ticks) / span_ns;
+    // A chord this far from the last measured rate means one of its two probes is not where it claims.
+    if (sanity_rate > 0.0 && std::abs(rate - sanity_rate) >= sanity_rate * kRateClampFraction) {
+        return std::nullopt;
+    }
+
+    // A step of relative size D at fraction L of the interval puts the true trajectory D*T*L*(1-L) off the chord, up
+    // to D*T/4. D is not observable; how much this interval's rate differs from the last one's is, and for a step at
+    // the midpoint that difference is D/2, hence T/2. Only the part neither measurement could have invented counts, so
+    // both secants' noise comes off first -- a short interval's slope is uncertain enough to fake a whole DVFS step on
+    // its own. Reads zero on a plateau, which is nearly always.
+    const double rate_noise = static_cast<double>((open.bracket + closing.bracket).count()) / span_ns;
+    std::chrono::nanoseconds curvature{};
+    if (previous_rate > 0.0) {
+        const double relative_rate_change = std::abs(rate - previous_rate) / rate;
+        const double attributable = std::max(0.0, relative_rate_change - rate_noise - previous_rate_noise);
+        curvature = std::chrono::nanoseconds(static_cast<int64_t>(span_ns * attributable / 2.0));
+    }
+
+    const double closing_host_ns = static_cast<double>(closing.host.time_since_epoch().count());
+    return ChordMapping{
+        .mapping =
+            experimental::ProgramRealtimeClockSync{
+                .device_cycle_offset = std::llround(static_cast<double>(closing.ticks) - rate * closing_host_ns),
+                .sync_error = interpolation_error(open, closing) + curvature,
+            },
+        .frequency = rate,
+        .rate_noise = rate_noise,
+    };
+}
+
 std::optional<ClockProbe> RealtimeProfilerClockSync::probe() {
-    // Opened before the bracket so its own cost stays outside it. Nothing between the two clock reads may be
-    // instrumented, for the same reason.
     TTZoneScopedDN(RT_PROFILER, "Probe");
     uint32_t lo = 0;
     try {
-        // The low word going backwards only reveals a wrap while at most one has happened, so past that the high
-        // word has to be re-read outright. Halved for margin against a badly seeded frequency.
-        const auto wrap_period =
-            std::chrono::nanoseconds(static_cast<int64_t>((1ull << 32) / std::max(model_.frequency(), 0.1)));
+        if (model_.frequency() != wrap_period_frequency_) {
+            wrap_period_frequency_ = model_.frequency();
+            wrap_period_ =
+                std::chrono::nanoseconds(static_cast<int64_t>((1ull << 32) / std::max(wrap_period_frequency_, 0.1)));
+        }
+        // Halved for a safety margin.
         const bool wrap_could_have_been_missed = last_probe_at_ == std::chrono::steady_clock::time_point{} ||
-                                                 std::chrono::steady_clock::now() - last_probe_at_ > wrap_period / 2;
+                                                 std::chrono::steady_clock::now() - last_probe_at_ > wrap_period_ / 2;
 
         std::chrono::steady_clock::time_point host_before;
         std::chrono::steady_clock::time_point host_after;
         if (mapped_clock_lo_ != nullptr) {
-            host_before = std::chrono::steady_clock::now();
-            lo = *mapped_clock_lo_;
-            host_after = std::chrono::steady_clock::now();
-            // A read of the low word latches the high word, so this yields the half completing the bracket's value
-            // and can sit outside the bracket. Re-reading also recovers from any number of missed wraps.
+            {  // latency-critical
+                host_before = std::chrono::steady_clock::now();
+                lo = *mapped_clock_lo_;
+                host_after = std::chrono::steady_clock::now();
+            }
+
             if (wrap_could_have_been_missed || lo < last_clock_lo_) {
                 cached_clock_hi_ = *mapped_clock_hi_;
             }
@@ -303,6 +389,7 @@ std::optional<ClockProbe> RealtimeProfilerClockSync::probe() {
         }
         last_clock_lo_ = lo;
         last_probe_at_ = host_after;
+        ++cost_.clock_reads;
         const uint32_t hi = cached_clock_hi_;
         const auto bracket = host_after - host_before;
         TTZoneValueD(RT_PROFILER, static_cast<uint64_t>(bracket.count()));
@@ -323,6 +410,18 @@ std::optional<ClockProbe> RealtimeProfilerClockSync::best_of(int probes) {
         if (p.has_value() && (!best.has_value() || p->bracket < best->bracket)) {
             best = p;
         }
+        // Each read blocks the calling thread on PCIe, so the remaining ones are only worth taking while they might
+        // still tighten the bracket. A read already at the recent typical width leaves them nothing to improve; the
+        // full count is spent only when the link is making reads late.
+        if (best.has_value() && typical_bracket_ > std::chrono::nanoseconds::zero() &&
+            best->bracket <= typical_bracket_ + typical_bracket_ / 2) {
+            break;
+        }
+    }
+    if (best.has_value()) {
+        typical_bracket_ = typical_bracket_ == std::chrono::nanoseconds::zero()
+                               ? best->bracket
+                               : (typical_bracket_ * 7 + best->bracket) / 8;
     }
     return best;
 }
@@ -378,8 +477,8 @@ bool RealtimeProfilerClockSync::try_cached_calibration() {
 bool RealtimeProfilerClockSync::calibrate() {
     TTZoneScopedDN(RT_PROFILER, "Calibrate");
     constexpr uint32_t kMaxConsecutiveFailures = 3;
-    // A settled clock fits to ~2ns rms. A fit taken across an AICLK ramp still looks well-conditioned but lands tens
-    // of ppm off, showing up as a residual three orders of magnitude above that.
+    // A settled clock fits to ~2ns rms; a fit across an AICLK ramp still looks well-conditioned but lands tens of
+    // ppm off, giving a residual ~1000x higher.
     constexpr double kMaxFitResidualRmsNs = 200.0;
     const auto host_start_time = std::chrono::steady_clock::now();
 
@@ -387,8 +486,8 @@ bool RealtimeProfilerClockSync::calibrate() {
     probes.reserve(kFitProbes);
     std::this_thread::sleep_for(kSettleDelay);
 
-    // The cold PCIe path would otherwise land at one end of the span, where a badly placed point has the most
-    // leverage over the slope.
+    // Warms the cold PCIe path first; otherwise it lands at one end of the span with outsized leverage over the
+    // slope.
     (void)probe();
 
     uint32_t consecutive_failures = 0;
@@ -411,8 +510,8 @@ bool RealtimeProfilerClockSync::calibrate() {
     }
 
     const std::optional<RealtimeProfilerClockModel::FitResidual> residual = model_.fit(probes, host_start_time);
-    // Unconditional: records can be drained before bring-up finishes, so a mapping has to be readable even when the
-    // fit is judged below not worth keeping.
+    // fit() always sets the anchor, even though the fit may be rejected below: records can drain before bring-up
+    // finishes, so the mapping must stay readable regardless.
     if (!residual.has_value()) {
         log_warning(
             tt::LogMetal,
@@ -421,9 +520,8 @@ bool RealtimeProfilerClockSync::calibrate() {
         return false;
     }
 
-    // Against kFitProbes rather than what was collected, so it catches both a link that could not be read and one
-    // whose probes the model cut. Half still fits a slope well -- the span is unchanged and the count only enters
-    // under a square root -- but below that another pass is likely to beat this one.
+    // Checked against kFitProbes, not what was collected, to catch both an unreadable link and probes the model
+    // discarded.
     if (residual->num_probes_fitted * 2 < kFitProbes) {
         log_warning(
             tt::LogMetal,
@@ -467,11 +565,20 @@ bool RealtimeProfilerClockSync::calibrate() {
 
 bool RealtimeProfilerClockSync::resync() {
     TTZoneScopedDN(RT_PROFILER, "Resync");
+    const auto started_at = std::chrono::steady_clock::now();
     const auto p = best_of(kResyncProbes);
+    ++cost_.resyncs;
     if (!p.has_value()) {
+        cost_.busy += std::chrono::steady_clock::now() - started_at;
         return false;
     }
+    probes_.push_back(Anchor{p->host_time + placement_error(p->bracket), p->device_ticks, p->bracket});
     model_.try_reanchor(*p);
+    cost_.bracket_sum += p->bracket;
+    cost_.bracket_max = std::max(cost_.bracket_max, p->bracket);
+    cost_.drift_sum += model_.last_drift();
+    cost_.drift_max = std::max(cost_.drift_max, model_.last_drift());
+    cost_.busy += std::chrono::steady_clock::now() - started_at;
     return true;
 }
 

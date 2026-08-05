@@ -51,11 +51,9 @@ using tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
 using tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback;
 using tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback;
 
-// Matches RT_PROFILER_RING_CAPACITY in realtime_profiler_ring_buffer.hpp.
-// Picking the trace length equal to the ring capacity is the worst case for
-// the back-pressure path: BRISC can fill the ring in roughly the time it
-// takes NCRISC to push 1–2 entries over PCIe, so by enqueue ~80 of 4096
-// the ring is at capacity and stays there for the rest of the trace.
+// Matches RT_PROFILER_RING_CAPACITY in realtime_profiler_ring_buffer.hpp. Trace length == ring capacity is the worst
+// case for back-pressure: BRISC fills the ring in roughly the time NCRISC takes to push 1-2 entries over PCIe, so by
+// enqueue ~80 of 4096 the ring is at capacity and stays there for the rest of the trace.
 constexpr uint32_t kNumProgramsInTrace = 4096;
 
 constexpr uint32_t kDefaultStressReplaySeconds = 60;
@@ -64,41 +62,29 @@ constexpr uint32_t kDefaultDropAccountingSeconds = 60;
 
 constexpr uint32_t kDefaultClockDriftSeconds = 60;
 
-// Trace stores one EnqueueProgram dispatch packet per program. Blank-kernel
-// programs with no CBs / no runtime args are tiny (~hundreds of bytes), so
-// 64 MB is comfortably more than 4096 of them need; sized generously so a
-// future change to the dispatch packet layout can't silently OOM the trace
-// region and turn this into a flake. Lives in DRAM, not L1, so it doesn't
-// interact with the worker_l1_size eligibility check we just added.
+// Sized generously so a future change to the dispatch packet layout can't silently OOM the trace region: blank-kernel
+// programs are tiny (~hundreds of bytes), so 64 MB comfortably covers 4096 of them.
 constexpr size_t kTraceRegionSize = 64 * 1024 * 1024;
 
-// Programs in the trace use this runtime_id so every record we receive can
-// be attributed to this test (records with runtime_id == 0 are reserved for
-// infrastructure traffic and dropped host-side).
+// runtime_id == 0 is reserved for infrastructure traffic and dropped host-side.
 constexpr uint32_t kStressRuntimeId = 0xBEEFu;
 
-// 1s upper bound per record: even a blank kernel still has dispatch_s'
-// kernel_start/end pulse spread by at least a handful of cycles, but it
-// should never be in the millisecond range. Anything beyond 1s means a
-// timestamp got corrupted (e.g. wraparound, swapped halves) under load.
+// 1s upper bound per record: dispatch_s' kernel_start/end pulse spread should never reach the millisecond range, so
+// anything beyond 1s means a timestamp got corrupted (e.g. wraparound, swapped halves) under load.
 constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 
-// Quiesce + drain window before unregistering the callback.
 constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
 
-// How often the long-running tests emit an in-progress stats line.
 constexpr auto kStressReportInterval = std::chrono::seconds(10);
 
-// One sync-error sample per re-anchor per chip, counted by value. sync_error only changes when the servo
-// re-anchors, so these tests see ~20 samples/s/device -- keeping each one would grow without bound across a soak,
-// while the values themselves span only a handful of nanosecond steps. Counting per value is therefore exact (no
-// bucket edges) at a memory cost set by the spread rather than the runtime. Sampling per anchor also weights each
-// handshake once instead of once per program that happened to dispatch inside its epoch.
+// One sync-error sample per re-anchor per chip, counted by value rather than kept in a list: sync_error only changes
+// on re-anchor (~20/s/device), so a per-record list would grow unbounded across a soak, while the value itself spans
+// only a handful of nanosecond steps, so counting by value stays exact.
 // Named Stress* because this file shares a Unity build TU with test_realtime_profiler_sanity.cpp.
 class StressSyncErrorTally {
 public:
     // Call only from the record callback: the service gives each registration a single consumer thread, so the
-    // unchanged-anchor fast path needs no synchronization. Only an actual re-anchor takes the lock.
+    // unchanged-anchor fast path below needs no lock.
     void observe(const experimental::ProgramRealtimeRecord& record) {
         const int64_t offset = record.clock_sync.device_cycle_offset;
         const auto [it, inserted] = last_offset_.try_emplace(record.chip_id, offset);
@@ -112,7 +98,7 @@ public:
         ++counts_[record.clock_sync.sync_error];
     }
 
-    // Safe to call while the callback is still running, for in-progress reports.
+    // Safe to call while the callback is still running.
     std::map<std::chrono::nanoseconds, uint64_t> counts() const {
         const std::lock_guard lock(mutex_);
         return counts_;
@@ -124,8 +110,8 @@ private:
     std::map<std::chrono::nanoseconds, uint64_t> counts_;
 };
 
-// Linearly interpolated between adjacent ranks. `sorted` must be ascending and non-empty. Named Stress* because this
-// file shares a Unity build TU with test_realtime_profiler_sanity.cpp, which declares its own.
+// `sorted` must be ascending and non-empty. Named Stress* because this file shares a Unity build TU with
+// test_realtime_profiler_sanity.cpp, which declares its own.
 double stress_percentile(const std::vector<double>& sorted, double p) {
     const double rank = p * static_cast<double>(sorted.size() - 1);
     const auto lo = static_cast<size_t>(rank);
@@ -140,8 +126,7 @@ struct StressSyncErrorPercentilesUs {
     double max = 0.0;
 };
 
-// From one snapshot, so an in-progress report cannot mix percentiles taken at different instants. Percentiles
-// interpolate between adjacent ranks; nearest-rank would snap each onto one sample.
+// From one snapshot, so an in-progress report cannot mix percentiles taken at different instants.
 StressSyncErrorPercentilesUs stress_sync_percentiles_us(const StressSyncErrorTally& tally) {
     const std::map<std::chrono::nanoseconds, uint64_t> counts = tally.counts();
     if (counts.empty()) {
@@ -151,7 +136,7 @@ StressSyncErrorPercentilesUs stress_sync_percentiles_us(const StressSyncErrorTal
     for (const auto& [value, count] : counts) {
         total += count;
     }
-    // The value the sample at flattened position `rank` would have, had every sample been kept in a sorted list.
+    // Value the sample at flattened position `rank` would have, without materializing the sorted list.
     const auto value_at_rank = [&counts](uint64_t rank) -> std::chrono::nanoseconds {
         uint64_t cumulative = 0;
         for (const auto& [value, count] : counts) {
@@ -182,11 +167,8 @@ StressSyncErrorPercentilesUs stress_sync_percentiles_us(const StressSyncErrorTal
 distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     Program program = CreateProgram();
 
-    // Blank kernels on BRISC + NCRISC + TRISC on a single core. Single-core
-    // minimizes dispatch payload (one launch_msg per RISC, one core's worth
-    // of kernel-config state) so the dispatch_s -> RT-profiler mailbox
-    // pulse rate is dominated by trace cmd consumption, not program
-    // launch overhead.
+    // Single core minimizes dispatch payload (one launch_msg per RISC, one core's worth of kernel-config state), so
+    // the dispatch_s -> RT-profiler mailbox pulse rate is dominated by trace cmd consumption, not launch overhead.
     const CoreCoord stress_core{0, 0};
     CreateKernel(
         program,
@@ -208,9 +190,7 @@ distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<dist
 }
 
 // Warms the workload up outside the capture so the trace holds only steady-state dispatch packets, then captures
-// kNumProgramsInTrace back-to-back enqueues of it. Reusing one workload keeps compile time near zero; the captured
-// dispatch commands are independent per-enqueue, so dispatch_s still fires that many separate kernel_start pulses on
-// replay.
+// kNumProgramsInTrace back-to-back enqueues of it.
 distributed::MeshTraceId capture_blank_kernel_trace(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::MeshWorkload workload = build_blank_kernel_workload(mesh_device);
     auto& cq = mesh_device->mesh_command_queue(0);
@@ -238,9 +218,7 @@ std::shared_ptr<distributed::MeshDevice> open_full_mesh() {
         DispatchCoreConfig{DispatchCoreType::WORKER});
 }
 
-// The profiler attaches its record ring during mesh open, so this is stable by the time `opener` returns. Null (with
-// the mesh already closed) when the dispatch config leaves the profiler off, which the caller turns into a skip. A
-// fixture would be tidier still, but it would split the one unit-mesh test into its own suite.
+// Null (mesh already closed) when the dispatch config leaves the profiler off, which the caller turns into a skip.
 template <typename Opener>
 std::shared_ptr<distributed::MeshDevice> open_profiler_mesh(Opener opener) {
     auto mesh_device = opener();
@@ -254,17 +232,13 @@ std::shared_ptr<distributed::MeshDevice> open_profiler_mesh(Opener opener) {
     return mesh_device;
 }
 
-// Rate at which each device clock walks away from the frequency fitted at bring-up. Since a published record states
-// device_ticks = frequency * host_ns + device_cycle_offset, an error in the fitted frequency shows up as the offset
-// moving linearly: device_cycle_offset(t) = (f_true - f_fitted) * host_ns + C. The slope of the published offset
-// against an independent host clock is therefore exactly the rate the servo has to keep correcting.
-//
-// That rate is how far the frequency fitted at bring-up is from the one the chip actually runs at over the session,
-// which is what every reported duration is divided by -- durations carry it directly, and no re-anchoring corrects
-// it. Brief AICLK steps are far larger (~5200ppm) but average out over a run; this bounds what is left after they
-// do. Measured under trace replay so the chip is hot, which is when the fit made at cold bring-up is furthest off.
+// The slope of the published device_cycle_offset against an independent host clock is the rate the fitted frequency
+// is off from the chip's actual session-average frequency -- every reported duration is divided by that frequency,
+// and no re-anchoring corrects it. Brief AICLK steps are far larger (~5200ppm) but average out over a run; this
+// bounds what's left after they do. Measured under trace replay so the chip is hot, which is when the fit made at
+// cold bring-up is furthest off.
 TEST(RealtimeProfilerStress, FittedFrequencyTracksTheSessionAverage) {
-    // Well inside what a duration can absorb: 50ppm is 50ns on a 1ms program. Measured on Blackhole: under 10ppm.
+    // 50ppm is 50ns on a 1ms program. Measured on Blackhole: under 10ppm.
     constexpr double kMaxSessionFrequencyErrorPpm = 50.0;
     constexpr size_t kMinAnchorsPerChip = 100;
 
@@ -339,8 +313,7 @@ TEST(RealtimeProfilerStress, FittedFrequencyTracksTheSessionAverage) {
             num += dx * (a.offset - mean_y);
             den += dx * dx;
         }
-        // Slope is device ticks per host ns; as a fraction of the fitted frequency that is the frequency error.
-        const double ppm = (num / den) / frequency_by_chip[chip] * 1e6;
+        const double ppm = (num / den) / frequency_by_chip[chip] * 1e6;  // slope (ticks/host-ns) as ppm of frequency
         min_ppm = chips_measured == 0 ? ppm : std::min(min_ppm, ppm);
         max_ppm = chips_measured == 0 ? ppm : std::max(max_ppm, ppm);
         if (std::abs(ppm) > std::abs(worst_ppm)) {
@@ -384,7 +357,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const uint64_t num_active_devices = rt->num_active_devices();
 
     // Counted rather than asserted on: these run on the consumer's delivery thread, where a gtest assertion would
-    // return from the callback mid-batch and record its failure off the main thread.
+    // record its failure off the main thread.
     std::atomic<uint64_t> stress_records{0};
     std::atomic<uint64_t> inverted_timestamps{0};
     std::atomic<uint64_t> bad_frequency{0};
@@ -501,14 +474,14 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         << "device ring reached capacity; the receiver drained it slower than the device filled it";
 
     // A record whose end precedes its start is a torn timestamp pair: BRISC NOC-reads start and end together out of
-    // dispatch_s's L1, so any of them means that handoff let a read straddle two programs. The pipeline produces none
-    // of these, so the bound is zero rather than a rate.
+    // dispatch_s's L1, so any of them means that handoff let a read straddle two programs.
     EXPECT_EQ(rt->num_malformed_records(), 0u)
         << "the receiver discarded " << rt->num_malformed_records() << " record(s) with end_timestamp < "
         << "start_timestamp across " << stress_records.load()
         << " stress records; the dispatch_s -> BRISC timestamp handoff "
         << "is no longer atomic with respect to program boundaries.";
-    // The receiver drops these before publication, so a delivered one means the filter itself regressed.
+    // Distinct from num_malformed_records: the receiver drops these before publication, so a delivered one means
+    // the filter itself regressed.
     EXPECT_EQ(inverted_timestamps.load(), 0u)
         << inverted_timestamps.load() << " delivered record(s) had end_timestamp < start_timestamp";
     EXPECT_EQ(bad_frequency.load(), 0u) << bad_frequency.load() << " stress record(s) had a non-positive frequency";
@@ -537,8 +510,7 @@ TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
 
     std::vector<std::atomic<std::chrono::steady_clock::time_point>> paced_delivered(total_paced);
     // A record flushes only when the NEXT program dispatches (device double-buffers the timestamps), so record k's
-    // delivery latency is measured against host_start[k+1] — the flush trigger — which isolates the host pipeline
-    // from pacing and from device-side execution queueing when the host out-runs the device.
+    // delivery latency is measured against host_start[k+1], the flush trigger.
     std::vector<std::atomic<std::chrono::steady_clock::time_point>> paced_host_start(total_paced);
     std::atomic<uint64_t> paced_idx{0};
     std::atomic<uint64_t> dropped_total{0};
@@ -576,9 +548,8 @@ TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
     mesh_device->end_mesh_trace(cq.id(), paced_trace);
 
-    // Warm the consumer delivery thread (created at registration above) with a few replays so its first-ever, slow-to-
-    // wake deliveries don't land in the first measured bucket. Short drain, then reset the counters so the warm-up
-    // records don't shift the enqueue<->delivery index pairing.
+    // Warm the consumer delivery thread with a few replays so its first-ever, slow-to-wake deliveries don't land in
+    // the first measured bucket, then reset the counters so warm-up records don't shift the index pairing.
     constexpr uint32_t kWarmupOps = 32;
     for (uint32_t i = 0; i < kWarmupOps; ++i) {
         mesh_device->replay_mesh_trace(cq.id(), paced_trace, false);
@@ -612,8 +583,8 @@ TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
     for (uint32_t gap_idx = 0; gap_idx < num_gaps; ++gap_idx) {
         std::vector<double> latency_us;
         latency_us.reserve(kOpsPerGap);
-        // Record k flushes when program k+1 dispatches, so its latency is delivered[k] - host_start[k+1]. The last op
-        // in each bucket has no same-bucket successor (it flushes on the following quiesce), so it is skipped.
+        // The last op in each bucket has no same-bucket successor (it flushes on the following quiesce), so it's
+        // skipped.
         for (uint32_t i = 0; i + 1 < kOpsPerGap; ++i) {
             const uint32_t idx = gap_idx * kOpsPerGap + i;
             const auto d = paced_delivered[idx].load(std::memory_order_relaxed);
@@ -622,8 +593,6 @@ TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
             if (d == kUnset || next_start == kUnset) {
                 continue;
             }
-            // Host pipeline latency, from the record becoming available (next program's device-start) to callback
-            // receipt.
             latency_us.push_back(std::max(0.0, std::chrono::duration<double, std::micro>{d - next_start}.count()));
         }
         if (latency_us.empty()) {
@@ -696,7 +665,6 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     ASSERT_GT(production_rate, 0.0) << "no records produced during calibration";
     mesh_device->quiesce_devices();
 
-    // fraction of the production rate each consumer can sustain
     constexpr double kBorderlineSustainFraction = 0.95;
     constexpr double kSlowSustainFraction = 0.1;
 
