@@ -21,6 +21,7 @@ collapses it at construction.
 from __future__ import annotations
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -75,6 +76,8 @@ def extract_conv_weights(module: torch.nn.Module) -> tuple[torch.Tensor, torch.T
 
 class TtConv1d:
     """A single Conv1d on device. Input and output are both `[N, L, C]`."""
+
+    _warned = False  # one warning per process, not per convolution
 
     def __init__(
         self,
@@ -170,9 +173,14 @@ class TtConv1d:
                 weight_tensor=self._weight_4d, weights_format="OIHW", has_bias=self.bias is not None, **kw
             )
             b = ttnn.prepare_conv_bias(bias_tensor=self.bias, **kw) if self.bias is not None else None
-        except Exception:  # noqa: BLE001
-            # Fall back to letting the op prepare them itself. Correct, just slower,
-            # and not traceable -- which is why the failure is not silent upstream.
+        except Exception as e:  # noqa: BLE001
+            # Fall back to letting the op prepare them itself: correct, just slower
+            # and not traceable. Logged rather than swallowed -- a silent fallback
+            # here looks exactly like a working fast path from the outside, and the
+            # only symptom is a trace capture that fails somewhere else entirely.
+            if not TtConv1d._warned:
+                TtConv1d._warned = True
+                logger.warning(f"prepare_conv_weights unavailable, convs stay untraceable: {str(e)[:200]}")
             w, b = self.weight, self.bias
         self._prep_cache[key] = (w, b)
         return w, b

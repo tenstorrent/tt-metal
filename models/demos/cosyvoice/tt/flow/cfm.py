@@ -94,7 +94,7 @@ class TtConditionalCFM:
         ttnn.deallocate(zeros)
         return out
 
-    def _capture(self, x, mu2, spks2, cond2, t0):
+    def _capture(self, x, mu2, spks2, cond2, t0, dt0):
         """Trace one estimator evaluation and replay it for every Euler step.
 
         The solver calls the *same graph* ten times -- only `x` and `t` change,
@@ -107,75 +107,129 @@ class TtConditionalCFM:
         traced region is exactly the 16 resnet + 64 transformer blocks that cost
         something.
 
-        **This does not work, and `use_trace` defaults to False because of it.**
-        Capture fails with `!trace_id_.has_value()` -- a host->device write while a
-        trace is open. **`ttnn.conv1d` is not trace-compatible in this build**, and
-        the estimator has ~37 convolutions.
+        **Getting here took removing a host->device write the convolutions were
+        issuing on every call.** Capture originally failed with
+        `!trace_id_.has_value()` at `fd_mesh_command_queue.cpp:762`, and it was
+        tempting to read that as "conv is not trace-compatible on this stack". It is
+        not a silicon limit. `ttnn.conv1d` and `ttnn.conv_transpose2d` prepare their
+        weights -- tilize, pad to the sharding scheme, move to device -- *on every
+        call*, and that is host work a trace cannot contain. A host-resident weight
+        fails on the write; a device-resident one fails on the **read back** at
+        `:809`. Weight residency is therefore not the fix.
 
-        Measured directly (see the probe recorded in the notes): a bare `conv1d`
-        captured on its own fails with a host weight at
-        `fd_mesh_command_queue.cpp:762` and with a **device-resident** weight at
-        `:809` -- a different write, but a write either way. Making the weights
-        device-resident is therefore not the fix; it is accepted and gives
-        bit-identical output (`max|d| 0.000e+00`), but the op writes internally
-        regardless.
+        `ttnn.prepare_conv_weights` / `prepare_conv_transpose2d_weights` hoist the
+        transform out of the op, and both conv wrappers now cache the prepared
+        weights per input geometry (the sharding scheme follows the input length, so
+        geometry is the cache key). Output is bit-identical, `max|d| 0.000e+00`.
 
-        **It is a software limit, not a silicon one, and it is half-fixed.**
-        `ttnn.conv1d` prepares its weights -- tilize, pad to the sharding scheme,
-        move to device -- on *every call*. That is host work, and a trace forbids
-        host traffic either way: a host weight fails on the write, a device weight
-        fails on the **read back** to prepare it. `ttnn.prepare_conv_weights` hoists
-        the transform out, and a bare `conv1d` then captures cleanly with
-        bit-identical output. `TtConv1d` now does that and caches per input
-        geometry.
-
-        What still blocks this particular graph is the rest of the estimator:
-        `TtConvTranspose1d` in the up path has the same lazy preparation and has not
-        been converted, and `pack_input`'s `ttnn.repeat` is a further candidate. So
-        the *class* of problem is understood and demonstrated solvable; this graph
-        needs the remaining writes chased out one at a time.
-
-        Worth carrying into `03_plan.md`: any conv-based model on this stack is
-        untraceable by default, and the fix is per-op weight preparation rather than
-        anything in hardware.
+        One trap on the transpose side: `prepare_conv_transpose2d_weights` asserts
+        `conv_config.weights_dtype.has_value()`, while the bare `conv_transpose2d`
+        call is happy with no config at all. Omitting it makes preparation throw,
+        the wrapper falls back to the unprepared path, and the only symptom is a
+        trace that still fails -- several ops downstream, for no visible reason.
+        That is why the fallback logs.
         """
-        b, t_len, ch = x.shape
-        self._x_buf = ttnn.concat([x, x], dim=0)
+        _, t_len, ch = x.shape
+        # The buffer holds a single row and the CFG doubling happens *inside* the
+        # traced body. That ordering is not cosmetic. The first working version kept
+        # a `[2, T, 80]` buffer and refreshed it with
+        # `ttnn.copy(ttnn.concat([x, x], dim=0), buf)`; capture succeeded and replay
+        # scored **PCC 0.077**. `scripts/probe_cfm_trace.py` pinned it down: with a
+        # plain device tensor as the source, replay is bit-exact (PCC 1.00000000,
+        # for both the `x` and the `t` refresh); with a dim-0 `concat` output as the
+        # source, the same copy lands at **PCC 0.768**. So `ttnn.copy` does not
+        # faithfully transfer out of a dim-0 concat here.
+        #
+        # Moving the concat inside the trace sidesteps it entirely -- it becomes a
+        # device op the trace records -- and the refresh source is then the solver's
+        # own `x`, which is the case the probe proves exact. Both inputs are also
+        # allocated explicitly in DRAM rather than inheriting a memory config from
+        # whatever op produced them, since a trace bakes in addresses.
+        self._x_buf = ttnn.from_torch(
+            torch.zeros(1, t_len, ch),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         self._t_buf = ttnn.from_torch(
             torch.full((2, 1, 1), t0, dtype=torch.float32),
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self._d_buf = ttnn.from_torch(
-            torch.zeros(2, t_len, ch), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+        # `dt` varies per step, so it is a device tensor rather than the Python
+        # float it was when the update lived on the host -- otherwise its value
+        # would be baked into the trace and every step would use the first one.
+        self._dt_buf = ttnn.from_torch(
+            torch.full((1, 1, 1), dt0, dtype=torch.float32),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self._fill_x(x)
 
         def body():
-            d = self.estimator(self._x_buf, mu2, self._t_buf, spks=spks2, cond=cond2, batch=2)
-            ttnn.copy(d, self._d_buf)
+            """One complete Euler step: CFG pair, estimator, guidance, update."""
+            x2 = ttnn.concat([self._x_buf, self._x_buf], dim=0)
+            d = self.estimator(x2, mu2, self._t_buf, spks=spks2, cond=cond2, batch=2)
+            ttnn.deallocate(x2)
+            c = ttnn.slice(d, [0, 0, 0], [1, t_len, ch])
+            u = ttnn.slice(d, [1, 0, 0], [2, t_len, ch])
             ttnn.deallocate(d)
+            guided = ttnn.subtract(ttnn.multiply(c, 1.0 + self.cfg_rate), ttnn.multiply(u, self.cfg_rate))
+            ttnn.deallocate(c)
+            ttnn.deallocate(u)
+            step = ttnn.multiply(guided, self._dt_buf)
+            ttnn.deallocate(guided)
+            nxt = ttnn.add(self._x_buf, step)
+            ttnn.deallocate(step)
+            return nxt
 
-        for _ in range(2):  # warm the program cache before recording
-            body()
+        # Warm the program cache *and* the conv weight-preparation caches. Both have
+        # to be populated before recording: a JIT compile or a weight tilize during
+        # capture is host work, and that is precisely what a trace cannot contain.
+        for _ in range(2):
+            ttnn.deallocate(body())
         ttnn.synchronize_device(self.device)
+
         self._trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         try:
-            body()
+            # The output is allocated *inside* the capture, so its address is baked
+            # into the trace and every replay writes to this exact tensor.
+            #
+            # The first attempt instead pre-allocated a `[2, T, 80]` DRAM buffer and
+            # ended the body with `ttnn.copy(d, buf)`. That captured cleanly and
+            # replayed to **PCC 0.0017**: the copy never landed, so the solver read
+            # back zeros, `x` never advanced, and the "mel" it returned was the
+            # initial noise. Silent because the same copy is in the warm-up, so
+            # nothing failed loudly at capture time -- the only signal was an output
+            # that scored like noise, which is exactly what it was. Letting the trace
+            # own its output removes the copy and the question with it.
+            self._next_x = body()
         finally:
             ttnn.end_trace_capture(self.device, self._trace_id, cq_id=0)
+
+    def _fill_x(self, x):
+        ttnn.copy(x, self._x_buf)
 
     def _release(self):
         if getattr(self, "_trace_id", None) is not None:
             ttnn.release_trace(self.device, self._trace_id)
             self._trace_id = None
-        for name in ("_x_buf", "_t_buf", "_d_buf"):
+        # `_next_x` is allocated inside the capture, so it belongs to the trace
+        # region; `release_trace` reclaims it and deallocating it here would be a
+        # double free. Dropping the reference is all that is wanted.
+        self._next_x = None
+        for name in ("_x_buf", "_t_buf", "_dt_buf"):
             t = getattr(self, name, None)
             if t is not None:
                 ttnn.deallocate(t)
                 setattr(self, name, None)
 
-    def solve_euler(self, x, mu, spks, cond, t_span=None, use_trace=False):
+    def solve_euler(self, x, mu, spks, cond, t_span=None, use_trace=True):
         """x/mu/cond `[1, T, 80]`, spks `[1, 1, 80]` -> `[1, T, 80]`.
 
         `mu`, `spks` and `cond` do not change across steps, so their CFG pairs are
@@ -198,14 +252,26 @@ class TtConditionalCFM:
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             for t, _ in schedule
+        ]
+
+        dts = [
+            ttnn.from_torch(
+                torch.full((1, 1, 1), dt, dtype=torch.float32),
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for _, dt in schedule
         ]
 
         traced = False
         if use_trace:
             try:
-                self._capture(x, mu2, spks2, cond2, schedule[0][0])
+                self._capture(x, mu2, spks2, cond2, schedule[0][0], schedule[0][1])
                 traced = True
             except Exception as e:  # noqa: BLE001
                 # Needs the device opened with a `trace_region_size`. Tracing is an
@@ -213,51 +279,53 @@ class TtConditionalCFM:
                 logger.warning(f"CFM trace capture unavailable, running untraced: {e}")
                 self._release()
 
-        for (t_val, dt), t_dev in zip(schedule, ts):
-            if traced:
-                # Refresh the two inputs that change, then replay. Both CFG rows
-                # evaluate the same `x`, so one concat feeds the buffer.
-                pair = ttnn.concat([x, x], dim=0)
-                ttnn.copy(pair, self._x_buf)
-                ttnn.deallocate(pair)
-                ttnn.copy_host_to_device_tensor(
-                    ttnn.from_torch(
-                        torch.full((2, 1, 1), t_val, dtype=torch.float32),
-                        dtype=self.dtype,
-                        layout=ttnn.TILE_LAYOUT,
-                    ),
-                    self._t_buf,
-                )
-                ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=False)
-                ttnn.synchronize_device(self.device)
-                d = self._d_buf
-            else:
+        if traced:
+            # The traced body is a *whole* Euler step, so the loop allocates
+            # nothing. That is the point, not a tidiness win: the earlier version
+            # kept the guidance and the update on the host, and a dozen allocate /
+            # free pairs per step let the allocator hand back addresses the replay
+            # had already baked in. It scored PCC ~0.07 with a graph the probe
+            # showed to be bit-exact.
+            ttnn.deallocate(x)
+            for t_dev, dt_dev in zip(ts, dts):
+                ttnn.copy(t_dev, self._t_buf)
+                ttnn.copy(dt_dev, self._dt_buf)
+                ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=True)
+                ttnn.copy(self._next_x, self._x_buf)
+            # Hand the buffer to the caller instead of copying out of it, and keep
+            # `_release` from freeing what the caller now owns.
+            x = self._x_buf
+            self._x_buf = None
+        else:
+            for (_t_val, dt), t_dev in zip(schedule, ts):
                 x2 = self._cfg_pair(x, zero_second_row=False)
                 d = self.estimator(x2, mu2, t_dev, spks=spks2, cond=cond2, batch=2)
                 ttnn.deallocate(x2)
 
-            cond_part = ttnn.slice(d, [0, 0, 0], [1, t_len, 80])
-            uncond_part = ttnn.slice(d, [1, 0, 0], [2, t_len, 80])
-            if not traced:
+                cond_part = ttnn.slice(d, [0, 0, 0], [1, t_len, 80])
+                uncond_part = ttnn.slice(d, [1, 0, 0], [2, t_len, 80])
                 ttnn.deallocate(d)
-            guided = ttnn.subtract(
-                ttnn.multiply(cond_part, 1.0 + self.cfg_rate), ttnn.multiply(uncond_part, self.cfg_rate)
-            )
-            ttnn.deallocate(cond_part)
-            ttnn.deallocate(uncond_part)
+                guided = ttnn.subtract(
+                    ttnn.multiply(cond_part, 1.0 + self.cfg_rate),
+                    ttnn.multiply(uncond_part, self.cfg_rate),
+                )
+                ttnn.deallocate(cond_part)
+                ttnn.deallocate(uncond_part)
 
-            step = ttnn.multiply(guided, dt)
-            ttnn.deallocate(guided)
-            nxt = ttnn.add(x, step)
-            ttnn.deallocate(step)
-            ttnn.deallocate(x)
-            x = nxt
+                step = ttnn.multiply(guided, dt)
+                ttnn.deallocate(guided)
+                nxt = ttnn.add(x, step)
+                ttnn.deallocate(step)
+                ttnn.deallocate(x)
+                x = nxt
 
         if traced:
             self._release()
 
         for t_dev in ts:
             ttnn.deallocate(t_dev)
+        for dt_dev in dts:
+            ttnn.deallocate(dt_dev)
         ttnn.deallocate(mu2)
         ttnn.deallocate(spks2)
         ttnn.deallocate(cond2)

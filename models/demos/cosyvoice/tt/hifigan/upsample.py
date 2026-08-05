@@ -21,6 +21,7 @@ Whether the `H=1` path carries large constant overhead is the measurement
 from __future__ import annotations
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -32,6 +33,8 @@ class TtConvTranspose1d:
 
     Input and output are channels-last `[N, L, C]`, matching conv.py.
     """
+
+    _warned = False
 
     def __init__(
         self,
@@ -56,6 +59,12 @@ class TtConvTranspose1d:
         self.dtype = dtype
 
         self.weight = ttnn.from_torch(weight.unsqueeze(2), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self._prep_cache: dict = {}
+        # prepare_conv_transpose2d_weights asserts `conv_config.weights_dtype.has_value()`,
+        # so the config cannot be left to the op's default here the way it can for the
+        # bare conv_transpose2d call -- without it, preparation fails and the layer
+        # silently falls back to the untraceable path.
+        self.conv_config = ttnn.Conv2dConfig(weights_dtype=weights_dtype)
         self.bias = None
         if bias is not None:
             self.bias = ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -78,13 +87,58 @@ class TtConvTranspose1d:
     def out_length(self, length: int) -> int:
         return (length - 1) * self.stride - 2 * self.padding + self.dilation * (self.kernel_size - 1) + 1
 
+    def _prepared(self, nhwc, length: int, batch_size: int):
+        """Pre-tilized device-resident weights, cached per input geometry.
+
+        Same reasoning as `TtConv1d._prepared`: `conv_transpose2d` prepares its
+        weights on every call, and that host-side layout transform is what makes
+        the op untraceable -- a trace forbids host traffic in either direction.
+        Hoisting it with `prepare_conv_transpose2d_weights` removes both the
+        per-call cost and the trace barrier.
+        """
+        key = (length, batch_size)
+        if key in self._prep_cache:
+            return self._prep_cache[key]
+
+        kw = dict(
+            input_memory_config=nhwc.memory_config(),
+            input_layout=nhwc.layout,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=batch_size,
+            input_height=1,
+            input_width=length,
+            kernel_size=(1, self.kernel_size),
+            stride=(1, self.stride),
+            padding=(0, self.padding),
+            dilation=(1, self.dilation),
+            groups=self.groups,
+            device=self.device,
+            input_dtype=self.dtype,
+            conv_config=self.conv_config,
+        )
+        try:
+            w = ttnn.prepare_conv_transpose2d_weights(
+                weight_tensor=self.weight, weights_format="IOHW", has_bias=self.bias is not None, **kw
+            )
+            b = ttnn.prepare_conv_transpose2d_bias(bias_tensor=self.bias, **kw) if self.bias is not None else None
+        except Exception as e:  # noqa: BLE001
+            # Logged, not swallowed -- see the note in TtConv1d._prepared.
+            if not TtConvTranspose1d._warned:
+                TtConvTranspose1d._warned = True
+                logger.warning(f"prepare_conv_transpose2d_weights unavailable, stays untraceable: {str(e)[:200]}")
+            w, b = self.weight, self.bias
+        self._prep_cache[key] = (w, b)
+        return w, b
+
     def __call__(self, x, length: int, batch_size: int = 1):
         """x: ttnn [B, L, C_in] -> (ttnn [B, L_out, C_out], L_out)."""
         nhwc = ttnn.reshape(x, (batch_size, 1, length, self.in_channels))
+        weight, bias = self._prepared(nhwc, length, batch_size)
         out = ttnn.conv_transpose2d(
             input_tensor=nhwc,
-            weight_tensor=self.weight,
-            bias_tensor=self.bias,
+            weight_tensor=weight,
+            bias_tensor=bias,
             device=self.device,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
@@ -96,6 +150,7 @@ class TtConvTranspose1d:
             padding=(0, self.padding),
             dilation=(1, self.dilation),
             groups=self.groups,
+            conv_config=self.conv_config,
             compute_config=self.compute_config,
             dtype=self.dtype,
         )
