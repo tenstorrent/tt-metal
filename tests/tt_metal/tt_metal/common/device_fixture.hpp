@@ -175,7 +175,9 @@ class UnitMeshFixture : public MeshDeviceSingleCardFixture {
 public:
     distributed::MeshDevice& device() { return *device_; }
 
-    void RunProgram(distributed::MeshWorkload& workload, bool skip_finish = false) {
+    void RunProgram(Program program, bool skip_finish = false) {
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0)), std::move(program));
         MeshDispatchFixture::RunProgram(device_, workload, skip_finish);
     }
     void FinishCommands() { MeshDispatchFixture::FinishCommands(device_); }
@@ -186,7 +188,7 @@ public:
         MeshDispatchFixture::ReadBuffer(device_, out_buffer, dst_vec);
     }
 
-protected:
+private:
     void create_devices() override {
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
@@ -194,8 +196,6 @@ protected:
     }
 
     std::shared_ptr<distributed::MeshDevice> device_;
-    distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
-    distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
 
 class BlackholeSingleCardFixture : public MeshDeviceSingleCardFixture {

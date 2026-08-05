@@ -40,7 +40,6 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
     auto l1_dst_noc_xy = this->device().virtual_core_from_logical_core(
         this->device().allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
 
-    distributed::MeshWorkload workload;
     Program program = CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -117,8 +116,7 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
         core,
         {dst_l1_buffer->address(), (std::uint32_t)l1_dst_noc_xy.x, (std::uint32_t)l1_dst_noc_xy.y, num_tiles});
 
-    workload.add_program(device_range_, std::move(program));
-    this->RunProgram(workload);
+    this->RunProgram(std::move(program));
 
     std::vector<uint32_t> result_vec;
     this->ReadBuffer(dst_l1_buffer, result_vec);
