@@ -249,8 +249,14 @@ TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 # directly; see the probe. Even if it obliged, the matmul is indifferent, so the ceiling is ~1 us a
 # layer.) In Block 2 the norm output was neutral for the same reason.
 #
-# The redundant-looking `to_memory_config(o, DRAM)` was also tested for removal: reshape alone
-# measures 19.67 us against 18.37 for the pair, i.e. removing it is not faster. Left in place.
+# THE REDUNDANT `to_memory_config(o, DRAM)` IS NOW GONE. It asked to convert a tensor to the layout
+# it already had, and ttnn does not short-circuit that -- it returned a fresh tensor, so the line read
+# as a no-op and was not one. Removed: output bit-identical (max abs diff 0.0 over 26 layers) and the
+# step measures 23.999 vs 24.000 ms against a 0.025 ms spread, i.e. free.
+#
+# An ISOLATED pass had said the opposite -- reshape alone 19.67 us against 18.37 for the pair, i.e.
+# doing less work costing more -- and that was noise at 8 KB. Same lesson as 6.18 and 6.19: for a
+# memory-config change the smallest valid unit of measurement is the whole step.
 ```
 
 ### [gpt-04] `module level` — RMSNORM, WIDTH-SHARDED, for the DECODE shape. The...
