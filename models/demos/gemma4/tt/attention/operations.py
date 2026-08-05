@@ -19,7 +19,12 @@ import os
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, interleaved_prefill_config, matmul_rows
+from models.demos.gemma4.tt.dram_sharded import (
+    DramShardedLinear,
+    interleaved_o_proj_prefill_config,
+    interleaved_prefill_config,
+    matmul_rows,
+)
 
 from .weights import AttentionWeights
 
@@ -55,8 +60,10 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     """Memory config for short-lived prefill attention activations (Qwen36 #48861).
 
     Keep q/k/v head-split, q/k RMSNorm, and concat_heads temps in L1 when enabled.
-    Long-lived / CCL inputs (o_proj → allreduce) stay DRAM — callers must
-    ``to_memory_config(..., DRAM)`` before o_proj.
+    The allreduce input stays DRAM interleaved. (The o_proj matmul itself may write
+    an L1 block-sharded output under the tuned prefill config, independently of this
+    knob — ``apply_allreduce`` interleaves it back; see
+    ``interleaved_o_proj_prefill_config``.)
 
     ``GEMMA4_PREFILL_L1_ACT=0|1`` (default 0). Measured OOM on 31B / P150x8 /
     chunk4k 128k with L1=1 (``ccl_prefill_ab.tsv``); leave off for long ISL.
@@ -91,6 +98,31 @@ def prefill_tensor_memcfg(numel: int, dtype_bytes: int = 2) -> ttnn.MemoryConfig
 def prefill_tilize_memcfg(seq_len: int, hidden_size: int, dtype_bytes: int = 2) -> ttnn.MemoryConfig:
     """Memory config for the post-embed ``to_layout(TILE)`` activation."""
     return prefill_tensor_memcfg(int(seq_len) * int(hidden_size), dtype_bytes=dtype_bytes)
+
+
+def o_proj_input_memcfg(sdpa_out, hidden_size: int, default_memcfg=None):
+    """Destination for prefill ``concat_heads`` when it feeds the tuned o_proj matmul.
+
+    ``interleaved_o_proj_prefill_config`` pins in0 to L1 interleaved. Writing the
+    head-concat straight into L1 makes the hoist in ``apply_output_projection`` a
+    no-op instead of a DRAM write + copy back on-chip.
+
+    Falls back to ``default_memcfg`` (normally ``prefill_short_lived_memcfg``) when
+    the tuned config does not apply, or when the concat output misses the prefill
+    L1 budget — [ISL, 1024] bf16 fits 4 MiB up to ISL 2048, past the tuned band.
+    """
+    shape = [int(sdpa_out.shape[i]) for i in range(len(sdpa_out.shape))]
+    if len(shape) < 3:
+        return default_memcfg
+    heads, seq, head_dim = shape[-3], shape[-2], shape[-1]
+    rows = seq
+    for d in shape[:-3]:
+        rows *= d
+    k = heads * head_dim
+    program_config, _, _ = interleaved_o_proj_prefill_config(rows, k, int(hidden_size))
+    if program_config is None or prefill_tensor_memcfg(rows * k) != ttnn.L1_MEMORY_CONFIG:
+        return default_memcfg
+    return ttnn.L1_MEMORY_CONFIG
 
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, decode=False):
@@ -596,10 +628,10 @@ def concat_heads(
     resharded first across ``batch`` cores. The old path ran the concat on a
     single core (~30 us/layer) and needed a separate transpose; the decode op
     drops the transpose and spreads work across cores. Output is converted back
-    to DRAM interleaved so the downstream o_proj matmul is unchanged.
+    to DRAM interleaved for the legacy auto o_proj path.
 
     Prefill: ``memory_config`` defaults to DRAM; pass L1 for short-lived concat
-    temps (caller must DRAM-ify before o_proj / allreduce).
+    temps. The tuned o_proj prefill config accepts L1 in0 directly.
     """
     if is_decode_mode:
         if num_heads is None or head_dim is None:
@@ -651,18 +683,64 @@ def concat_heads(
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights):
-    """Apply output projection (no bias for Gemma4)."""
+def apply_output_projection(tensor, weights: AttentionWeights, memory_config=None):
+    """Apply output projection (no bias for Gemma4).
+
+    With ``GEMMA4_OPROJ_TUNED=1`` on the interleaved-weight path (everything off
+    Blackhole), prefill gets a pinned program config from
+    ``interleaved_o_proj_prefill_config``: in0 L1 interleaved, in1 the shipped
+    DRAM-interleaved weight, output L1 *block-sharded*. concat_heads normally lands
+    in0 in L1 already (``o_proj_input_memcfg``); hoist it here when it did not, since
+    the L1 in0 is part of the pinned configuration, not incidental.
+
+    The block-sharded output is not consumable by the CCL allreduce;
+    ``apply_allreduce`` interleaves it back. ``memory_config`` overrides the tuned
+    output layout for callers that want interleaved directly.
+
+    Default (flag off) is shipped ttnn auto, which hits ~65 µs device @ 56 cores in
+    the *full model* — faster than every pinned progcfg measured in isolation
+    (``1d_c28`` 69 µs, ``1d_c14_bw8`` 84 µs). The tuned matmul measures within noise
+    of auto and the interleave-back it forces costs ~55 µs on top, i.e. 0.56x auto
+    end-to-end (``test_o_proj_wired_config_vs_auto``).
+    """
     if isinstance(weights.o_proj, DramShardedLinear):
-        out = weights.o_proj(tensor)
-    else:
-        out = ttnn.linear(tensor, weights.o_proj)
+        out = weights.o_proj(tensor, out_memory_config=memory_config)
+        tensor.deallocate(True)
+        return out
+
+    program_config, tuned_out_memcfg, compute_kernel_config = interleaved_o_proj_prefill_config(
+        matmul_rows(tensor), int(tensor.shape[-1]), int(weights.o_proj.shape[-1])
+    )
+    act = tensor
+    act_l1 = None
+    if program_config is not None and not tensor.is_sharded():
+        if tensor.memory_config().buffer_type != ttnn.BufferType.L1:
+            act_l1 = ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+            act = act_l1
+    out = ttnn.linear(
+        act,
+        weights.o_proj,
+        program_config=program_config,
+        memory_config=memory_config if memory_config is not None else tuned_out_memcfg,
+        compute_kernel_config=compute_kernel_config,
+    )
+    if act_l1 is not None:
+        act_l1.deallocate(True)
     tensor.deallocate(True)
     return out
 
 
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
-    """Apply tensor-parallel allreduce if TP > 1."""
+    """Apply tensor-parallel allreduce if TP > 1.
+
+    The tuned o_proj prefill matmul returns an L1 block-sharded tensor; neither the
+    CCL path nor the TP=1 residual add takes a sharded input, so interleave back to
+    DRAM first (the layout every consumer saw before the matmul was pinned).
+    """
+    if tensor.is_sharded():
+        interleaved = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG)
+        tensor.deallocate(True)
+        tensor = interleaved
     return ccl_allreduce(tensor, mesh_config, ccl_manager)
 
 

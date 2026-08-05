@@ -27,6 +27,12 @@ _L1_MAX_BYTES = 1_572_864
 _L1_HEADROOM_BYTES = 64_000
 # Cap decode in0_block_w: unbounded divisors (e.g. 6) blow L1 on 31B gate_up bf16.
 _DECODE_IN0_BLOCK_W_MAX = 2
+# Tuned attention o_proj prefill matmul: in0 L1 interleaved, in1 DRAM interleaved,
+# output L1 block-sharded. Opt-in (GEMMA4_OPROJ_TUNED=1) — the matmul itself is a
+# wash-to-slight-win but the block-sharded output forces a sharded_to_interleaved
+# before the CCL allreduce that costs more than the matmul gains. Measured numbers
+# in interleaved_o_proj_prefill_config / test_o_proj_wired_config_vs_auto.
+_OPROJ_TUNED = os.environ.get("GEMMA4_OPROJ_TUNED", "0") != "0"
 
 
 def _roundup(a, b):
@@ -535,6 +541,105 @@ def interleaved_down_proj_prefill_config(m, k, n):
         packer_l1_acc=True,
     )
     return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
+
+
+def _progcfg_grid_xy(program_config):
+    """``(x, y)`` of a program config's compute grid (CoreCoord or tuple)."""
+    grid = program_config.compute_with_storage_grid_size
+    if hasattr(grid, "x"):
+        return int(grid.x), int(grid.y)
+    return int(grid[0]), int(grid[1])
+
+
+def _out_shard_matches_progcfg(out_memcfg, program_config) -> bool:
+    """Can the matmul with ``program_config`` write straight into ``out_memcfg``?
+
+    The 2D kernel writes each core's ``per_core_M x per_core_N`` output block into
+    the shard living on that core, so a sharded output is only legal when the
+    shard grid fits inside the compute grid *and* the shard is exactly one block
+    (otherwise: ``TT_FATAL`` in ``matmul_device_operation.cpp``, which is what the
+    sweep records as SKIP for most sharded-out combos). Interleaved outputs always
+    pass.
+    """
+    if out_memcfg is None or not out_memcfg.is_sharded():
+        return True
+    spec = out_memcfg.shard_spec
+    if spec is None:
+        return False
+    box = spec.grid.bounding_box().grid_size()
+    grid_x, grid_y = _progcfg_grid_xy(program_config)
+    if int(box.x) > grid_x or int(box.y) > grid_y:
+        return False
+    shard_h, shard_w = int(spec.shape[0]), int(spec.shape[1])
+    return shard_h == program_config.per_core_M * TILE_SIZE and shard_w == program_config.per_core_N * TILE_SIZE
+
+
+def interleaved_o_proj_prefill_config(m, k, n, grid=None):
+    """``(program_config, out_memory_config, compute_kernel_config)`` for attention
+    ``o_proj`` on a DRAM-*interleaved* weight, or all-``None`` for ttnn auto.
+
+    Layout wired here (requested production shape, 31B TP=8 → M=128 K=1024 N=5376):
+    in0 L1 *interleaved* (``apply_output_projection`` hoists it when concat_heads
+    left it in DRAM), in1 DRAM *interleaved* (the shipped weight — no second copy),
+    output L1 *block-sharded*.
+
+    Program config is the full-width 2D ``prefill_progcfg`` — ``2d_8x8_bw4`` at
+    this shape on WH, matching the ``test_o_proj_sharded_output`` case. The grid is
+    pinned to ``prefill_grid_default()`` rather than left to ``_best_prefill_cols``
+    (which picks 7 columns here) because the block-sharded output needs 8 shard
+    columns for Nt=168, and a shard grid wider than the compute grid is a
+    ``TT_FATAL``; ``_out_shard_matches_progcfg`` re-checks that invariant and
+    returns all-``None`` if a different shape ever breaks it.
+
+    Opt-in via ``GEMMA4_OPROJ_TUNED=1`` (default off), because the measurement does
+    not support making it the default. ``test_o_proj_wired_config_vs_auto`` on WH 1x8
+    (64 iters x 8 repeats, best-of, host micros, PCC 0.99993 on every arm):
+
+    ==========================  ========  ========
+    arm                             µs    vs auto
+    ==========================  ========  ========
+    auto (production)               78.0     1.00x
+    wired matmul, L1 in0            84.3     0.93x
+    wired + interleave_back        139.5     0.56x
+    wired, DRAM in0 + hoist        184.9     0.42x
+    ==========================  ========  ========
+
+    Two separate losses. The matmul itself is a wash at best (a noisier 32x6 run had
+    it at 1.05x; the longer run says 0.93x — treat it as within noise of auto). And
+    the CCL allreduce cannot consume a block-sharded input, so ``apply_allreduce``
+    must add a ``sharded_to_interleaved`` back to DRAM, which costs ~55 µs on top —
+    far more than anything the matmul could win. Hoisting in0 from DRAM instead of
+    landing concat_heads in L1 costs another ~45 µs, which is why
+    ``o_proj_input_memcfg`` exists.
+
+    Earlier data agrees on the ranking: in ``/tmp/o_proj.csv``
+    (``GEMMA4_SWEEP_FULL=1``) this combo measures ~139 µs against ~89 µs for the
+    interleaved-out winner (``1d_c28_bw4`` + L1 in0 + DRAM out). Note the absolute
+    host micros swing ~2x run to run (auto measured 78-146 µs across runs); the
+    *ranking* is what has been stable. The full-model 1x8 profile has auto at
+    ~65-84 µs device / 56 cores, so a profile with the flag on is the only evidence
+    that should flip the default.
+
+    Same ``_PREFILL_CUTOFF`` band as the other tuned prefill configs: decode
+    (``M<=32``) and long context return all-``None`` and keep the prior auto path.
+    """
+    if not _OPROJ_TUNED:
+        return None, None, None
+    if not TILE_SIZE < m <= _PREFILL_CUTOFF:
+        return None, None, None
+    if grid is None:
+        grid = prefill_grid_default()
+    program_config = prefill_progcfg(m, k, n, grid_size=grid)
+    out_memcfg = l1_block_sharded_memcfg(m, n, grid=grid)
+    if not _out_shard_matches_progcfg(out_memcfg, program_config):
+        return None, None, None
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    return program_config, out_memcfg, compute_kernel_config
 
 
 def lm_head_decode_config(mesh_device, m, k, n):

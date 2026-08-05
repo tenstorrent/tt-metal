@@ -142,7 +142,9 @@
       "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_2048-1x4]": 0.99,
       "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_4096-1x4]": 0.99,
       "test_lm_head[blackhole-1x4]": 0.999,
-      "test_lm_head_decode_batch32[blackhole-1x4]": 0.999
+      "test_lm_head_decode_batch32[blackhole-1x4]": 0.999,
+      "test_lm_head_bfp8_weight_decode_batch32[wormhole_b0-1x8]": 0.99,
+      "test_lm_head_bfp8_weight_decode_batch32[blackhole-1x8]": 0.99
     },
     "1x8": {
       "test_attention_prefill[wormhole_b0-seq1024-global-1x8]": 0.98,
@@ -160,6 +162,8 @@
       "test_lm_head[blackhole-1x8]": 0.999,
       "test_lm_head_decode_batch32[wormhole_b0-1x8]": 0.999,
       "test_lm_head_decode_batch32[blackhole-1x8]": 0.999,
+      "test_lm_head_bfp8_weight_decode_batch32[wormhole_b0-1x8]": 0.99,
+      "test_lm_head_bfp8_weight_decode_batch32[blackhole-1x8]": 0.99,
       "test_sampling_log_probs_pcc[wormhole_b0-1x8]": 0.999,
       "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999
     }
