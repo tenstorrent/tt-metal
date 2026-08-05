@@ -105,11 +105,9 @@ def build_and_serialize_kv_chunk_table(
     per-stage layout so rank 0 builds one table spanning every stage. Single-rank defaults (stage_layout
     None) build over this host's KVPE cache alone. Only the single-config (KVPE) path is PP-aware.
 
-    ``tp_axis`` (GLM-5.2 KV dedup): None (default) describes the TP-REPLICATED cache — one device group
-    per SP row. When set, the caches are additionally sharded across TP, so the table addresses each
-    (row, col) device individually (singleton groups, 1/tp-sized per-chunk ranges). It MUST agree with
-    the tp_axis the caches were allocated with and the write op wrote, or every address is wrong.
-    Merged (KVPE + index) table only -- not yet supported with pipeline-parallel stage_layout."""
+    ``tp_axis`` (KV dedup): when set, the table addresses each (row, col) device individually instead of
+    one group per SP row. MUST match the tp_axis the caches were allocated with, or every address is
+    wrong. Merged (KVPE + index) table only, and single-stage only (no PP)."""
     assert chunk_size_global == PREFILL_CHUNK_OUTPUT_TOKENS, (
         f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
         f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but chunk_size_global={chunk_size_global}. "
@@ -137,8 +135,7 @@ def build_and_serialize_kv_chunk_table(
             path=path,
         )
 
-    # Only the sparse (DSA) path TP-shards its KV (ttMLA asserts tp_shard_kv off on the dense path), so a
-    # single-config (dense) table with tp_axis set would be a caller mismatch, not a layout to support.
+    # Only the sparse (DSA) path TP-shards its KV, so tp_axis here is a caller mismatch, not a layout.
     assert tp_axis is None, (
         "tp_axis is only supported on the merged sparse/DSA table (index_kv_cache given); "
         f"got tp_axis={tp_axis} with a single-config dense KVPE cache."
@@ -207,6 +204,8 @@ def _build_and_serialize_merged_kv_chunk_table(
             first_layer_idx=0,
             num_my_layers=cfg.num_layers,
         )
+        # Both caches share tp_axis, so both configs resolve to the same device groups (add_device_group
+        # dedups, so they are registered once and shared).
         populate_kv_chunk_address_table_kimi(
             lookup_table=table,
             config=cfg,
@@ -219,8 +218,6 @@ def _build_and_serialize_merged_kv_chunk_table(
             num_users=num_users,
             config_id=config_id,
             stage_layout=stage_layout,
-            # Both caches are allocated with the same tp_axis, so both configs get the same 32 singleton
-            # device groups (add_device_group dedups, so they are registered once and shared).
             tp_axis=tp_axis,
         )
 

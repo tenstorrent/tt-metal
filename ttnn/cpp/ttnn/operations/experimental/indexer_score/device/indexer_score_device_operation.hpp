@@ -79,11 +79,8 @@ namespace ttnn::experimental {
 // block_cyclic_chunk_local must be q_isl (seq sharded only on the SP axis) or tp*q_isl (tp = mesh/sp). Both
 // set together, or neither = contiguous K (no remap); sp==1 is the identity.
 //
-// block_cyclic_tp_sharded (GLM-5.2 KV dedup): the cache is striped across ALL sp*tp devices instead of being
-// TP-replicated, and the caller gathers it TP-inner then SP-outer (linear chip order). The KEYS are then
-// striped tp-times finer than the queries are sharded, so the remap decodes (sp*tp, chunk_local/tp) while the
-// causal geometry stays on (sp, chunk_local) -- the query sharding is unaffected by KV dedup. Needs
-// chunk_local divisible by tp with a tile-aligned quotient. false = the pre-GLM-5.2 TP-replicated cache.
+// block_cyclic_tp_sharded (KV dedup): the cache is striped across ALL sp*tp devices, gathered TP-inner then
+// SP-outer, so the remap decodes (sp*tp, chunk_local/tp) while the causal geometry stays on (sp, chunk_local).
 //
 // SEQ SHARD AXES: seq_shard_axes names the mesh axes the query seq is sharded over, outermost (SP ring)
 // first: [] = linear device order, [sp] = 1D SP ring, [sp, tp] = 2D SP + TP sub-shard. Seq sharded across

@@ -51,16 +51,11 @@ def gather_cache_tp0(tt_cache, mesh_device) -> torch.Tensor:
 
 
 def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False):
-    """Gather a caller-owned KV/indexer cache to host float32 in shard-major (block-cyclic) order, and
-    return ``(cache [num_slots, seq_len_cache, head_dim], stripe_count)``.
+    """Gather a KV/indexer cache to host float32 in shard-major (block-cyclic) order, returning
+    ``(cache [num_slots, seq_len_cache, head_dim], stripe_count)`` for the caller to un-rotate.
 
-    ``ConcatMesh2dToTensor(dims=(2, 1))`` concats SP on the seq dim (2) and TP on dim 1 (indexed by
-    tp-coord). SP-only (TP-REPLICATED): tp-coord 0 is the whole cache and it is already shard-major over
-    ``sp`` stripes. TP-sharded (GLM-5.2 KV dedup): every tp-coord holds a DISTINCT 1/tp slice, so flatten
-    them into LINEAR CHIP ORDER (L = sp_coord*tp + tp_coord -- the order update_padded_kv_cache(tp_axis=)
-    writes and the TP-inner/SP-outer read gather reconstructs), giving a shard-major buffer over ``sp*tp``
-    stripes. ``blockcyclic_positions`` is generic in the stripe count, so the caller un-rotates with the
-    returned stripe count. Mirrors sparse_mla/test_sparse_mla.py::_cache_natural."""
+    TP-sharded, every tp-coord holds a distinct slice, so flatten into linear chip order (sp_coord*tp +
+    tp_coord) over sp*tp stripes. Mirrors sparse_mla/test_sparse_mla.py::_cache_natural."""
     sp, tp = mesh_device.shape[0], mesh_device.shape[1]
     cache_sr = ttnn.to_torch(
         tt_cache,

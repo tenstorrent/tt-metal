@@ -43,12 +43,8 @@ enum class SparseKVFormat : uint8_t {
 //   block_cyclic_chunk_local: the per-shard chunk length (chunk_size_global / sp). Cross-checked at the entry
 //                             against q's per-chip seq length: must equal q_isl or tp*q_isl (tp = mesh/sp),
 //                             the only two values it can legally take (post-reshard q is sliced by tp).
-//   block_cyclic_tp_sharded : GLM-5.2 KV dedup. When true the cache is striped block-cyclic across ALL
-//                             sp*tp devices (linear chip = sp_coord*tp + tp_coord), not just SP — the caller
-//                             gathered it TP-inner then SP-outer into that linear order. The op then uses an
-//                             effective stripe count sp*tp (= full mesh) and per-stripe chunk
-//                             block_cyclic_chunk_local/tp. The global chunk (stripes*chunk == sp*chunk_local)
-//                             and the q_isl cross-check are unchanged. Default false = SP-only striping.
+//   block_cyclic_tp_sharded : true = the cache is striped across ALL sp*tp devices (linear chip = sp_coord*tp
+//                             + tp_coord), so stripes = sp*tp and per-stripe chunk = chunk_local/tp.
 //
 // Producer preconditions (NOT validated per-element): sentinels are a contiguous tail, every row has >= 1
 // valid key, and all non-sentinel indices are < T.
