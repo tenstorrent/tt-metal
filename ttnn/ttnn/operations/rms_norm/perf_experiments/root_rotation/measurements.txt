@@ -1,0 +1,163 @@
+root_rotation -- ISOLATED bake-off, PERF ROUND 3
+================================================
+Box/arch: blackhole p150b, 1350 MHz (device 0 of a 4-chip host).
+Config, IDENTICAL for every variant and NEVER a lever:
+    bfloat16 / TILE_LAYOUT / MathFidelity.HiFi2 / fp32_dest_acc_en=False /
+    math_approx_mode=False, bf16 TILE gamma, epsilon 1e-6.
+Metric: DEVICE KERNEL DURATION [ns], ONE fresh profiled launch per variant.
+Reproduce:  perf_experiments/root_rotation/run.sh -k focus
+            python3 perf_experiments/root_rotation/read_results.py focus
+
+IDEA
+----
+Rotate the cross-core combine's ROOT DUTY per row-block: round `blk`'s root is the
+group member at slot (blk + phase) % GROUP_SIZE, instead of one fixed root per group
+doing every round's gather + fold + multicast.
+
+VERDICT: REGRESSION everywhere measured.  0.910x on the focus geometry, 0.854x-0.998x
+across the sweep.  Correct (bit-exact) everywhere, L1-neutral to the byte, and slower.
+
+BENCH CALIBRATION (why the numbers can be trusted)
+--------------------------------------------------
+`pure_op` runs the op's OWN descriptor and kernels, untouched, in the same process:
+    focus   pure_op 34362  vs  fixed 34259   (0.3%)   vs the op's own perf test 34372
+Every case's table carries its own `pure_op` row; all within 0.3-2.7%.
+
+TWO BENCH BUGS WERE FOUND AND FIXED BEFORE ANY VERDICT WAS TAKEN:
+ 1. `if constexpr` guarding the rotating branch made variant 0 measure 40251 ns against
+    the op's 34372 -- a 17% STRAWMAN baseline.  Bisected with RMS_ROT_BISECT to the
+    writer copy; the switch is now a preprocessor `#if`, so variant 0's translation unit
+    is byte-identical to the op's writer (mcast RT base included).
+ 2. The gather-zeroing payload was hoisted into a LAMBDA so the rotating variants could
+    place it in two spots.  It was not inlined: `writer_gather_zero` measured 7837 ns
+    inline vs 13664 ns through the lambda (+5827), which is 2/3 of what first looked
+    like "the cost of rotation".  It is now a macro.
+
+FOCUS GEOMETRY -- (1,1,8192,1024) BLOCK_SHARDED shard [1024,128] grid (8,8), 64 cores
+GROUP_SIZE 8, BLOCK_ROWS 10, num_blocks 4 (10+10+10+2 rows)
+------------------------------------------------------------------------------------
+    variant              root cores/grp     ns    vs fixed  pcc       rel-RMS   bit-exact
+    pure_op  (calib)          1          34362     0.997x   0.999961  6.65e-03   yes
+    fixed    (BASELINE)       1          34259     1.000x   0.999961  6.65e-03   yes
+    rot      (CANDIDATE)      4          37633     0.910x   0.999961  6.65e-03   yes
+    rot+zdefer                4          43130     0.794x   0.999961  6.65e-03   yes
+    rot+diag                  4          37739     0.908x   0.999961  6.65e-03   yes
+    rot+still  (attrib)       1          34719     0.987x   0.999961  6.65e-03   yes
+    midroot    (attrib)       1          35050     0.977x   0.999961  6.65e-03   yes
+    nozero     (ABLATION)     1          31860     1.075x   -- not a candidate --
+    rot+nozero (ABLATION)     4          34238     1.001x   -- not a candidate --
+
+Every candidate is BIT-IDENTICAL to `fixed` (rotation moves which core folds, never the
+fold's order, DEST walk, reconfig pair or finalize) and adds ZERO L1 bytes on every core
+(cb_partials_gathered / cb_stat_handoff / cb_row_final are already allocated on
+`all_cores` by the op's own descriptor).
+
+REPRODUCIBILITY -- three independent fresh profiled runs of this menu (the verdict is
+9% off baseline, i.e. far outside the ~2-3% noise band, so one run per variant is the
+discipline; these are the runs that happened while the attribution was being built):
+    fixed  34433 / 34259 / 34299      rot  37598 / 37633 / 37594   -> 0.916x / 0.910x / 0.912x
+The table above is the last of them; measured.json carries it verbatim.
+
+ATTRIBUTION of the -3374 ns
+---------------------------
+ rot+still  = the whole rotating MACHINERY (rotating wire, full-line EXCLUDE-source rect,
+              both pipes on every core, per-round sender-coord indexing) with the
+              placement held at slot 0            -> -460 ns  (~1.3%, near noise)
+ midroot    = one FIXED root moved to an interior slot, i.e. the full-line
+              EXCLUDE-source rect a moving sender forces, baseline kernel otherwise
+                                                  -> -791 ns  (~2.3%)
+ nozero pair= the gather zeroing itself: -2399 ns on the fixed placement,
+              -3395 ns on the rotating one        -> rotation's zeroing fan-out
+                                                     (1 core/group -> 4) costs ~-996 ns
+ rot+nozero vs nozero = the PLACEMENT alone, with zeroing removed  -> -2378 ns
+ So: ~1 us of extra gather zeroing + ~2.4 us of placement.  The machinery is free.
+
+PER-CORE ZONE REBALANCE -- the direct evidence the idea DID what it intended
+---------------------------------------------------------------------------
+focus geometry, TRISC_0 / BRISC totals per core, one profiled run per variant:
+
+  FIXED                                       ROT
+  ROOT core   TRISC_0 KERNEL 33679            ROOTS-ONCE core TRISC_0 KERNEL 37295
+    compute_root_fused 13400  n=4               compute_scale      17543  n=4
+    compute_scale       7856  n=4               compute_root_fused  7476  n=1
+    compute_square      5256  n=4               compute_square      5172  n=4
+    compute_gamma_mul   4379  n=4               compute_gamma_mul   4375  n=4
+    compute_reduce      1781  n=4               compute_reduce      1786  n=4
+  ROOT core   BRISC   KERNEL 33641            ROOTS-ONCE core BRISC   KERNEL 37262
+    writer_mcast_send  18255  n=4               writer_mcast_recv  18977  n=3
+    writer_gather_zero  7856  n=1               writer_gather_zero  8024  n=1
+    writer_gather_wait  4449  n=4               writer_mcast_send   5032  n=1
+    writer_gather_ship  2024  n=4               writer_gather_ship  3269  n=4
+                                                writer_gather_wait   406  n=1
+  MEMBER core TRISC_0 KERNEL 34147            NEVER-ROOT core TRISC_0 KERNEL 37364
+    compute_scale      22123  n=4               compute_scale      25244  n=4
+  MEMBER core BRISC   KERNEL 34097            NEVER-ROOT core BRISC   KERNEL 37327
+    writer_mcast_recv  23980  n=4               writer_mcast_recv  27094  n=4
+    writer_gather_ship  8925  n=4               writer_gather_ship  8747  n=4
+
+The rebalance HAPPENED and it is not subtle: the fold left the fixed root (13400 ns over
+4 rounds) and became one round per rotating root (7476 ns, n=1), the stat multicast went
+18255 n=4 -> 5032 n=1, and the per-core KERNEL times EQUALIZED (33.6/34.1 -> 37.3/37.4).
+The equalized level is ABOVE the fixed root's, which is the whole result.
+
+WHY IT LOSES (mechanism, read off the zones above)
+--------------------------------------------------
+The combine is a strictly SERIAL PER-ROUND CHAIN, not a per-core capacity problem:
+    gather(r) -> fold(r) -> mcast(r) -> passB(r) -> ship(r+1)
+and the writer executes its rounds in order on EVERY core.  The FIXED root is the one
+core that never waits in `writer_mcast_recv`: D24 has it publish its own stat copy to
+cb_row_final BEFORE broadcasting, so it is a full broadcast latency ahead of its group in
+every round -- which is exactly why its 13.4 us of fold is nearly free (it runs in the
+window the group spends on the gather + broadcast).  `writer_gather_wait` 4449 ns on the
+fixed root vs `compute_root_fused` with no wait is that slack being spent.
+
+A ROTATING root is, by construction, one of the cores that DID wait for the broadcast.
+Its BRISC must serially wait out every earlier round's `writer_mcast_recv` (18977 ns,
+n=3) before it can publish its own round's gathered block, and its compute blocks on that
+publish -- its single fold zone is 7476 ns against the fixed root's 3350 ns/round, i.e.
+~4.1 us of pure cb_wait_front the fixed root never pays.  Rotation therefore hands the
+fold to the LATEST core in the round instead of the earliest.  It cannot shorten a serial
+chain by moving a link to a different core; it can only add that core's later entry
+point.  Consistent with this, the penalty GROWS with the number of rounds
+(0.968x at 1 round -> 0.944x at 2 -> 0.910x at 4 -> 0.891x at 8 -> 0.854x at 16).
+
+DOMAIN SWEEP -- fixed vs rot, one profiled launch each
+-----------------------------------------------------
+  case         GS   nb  BR   fixed ns    rot ns   ratio   note
+  smoke         4    4   1       7387      7936   0.931x  16 cores, BLOCK
+  gs4           4    4   4      16868     18434   0.915x  BLOCK (4,8)
+  gs4_nb8       4    8   2      20084     22874   0.878x  nb > GS: rotation WRAPS x2
+  nb1           8    1  10      16487     17027   0.968x  1 round: nothing to rotate
+  nb2           8    2  12      25070     26565   0.944x
+  focus         8    4  10      34259     37633   0.910x  <- the focus geometry
+  nb8           8    8   4      34878     39153   0.891x
+  nb16          8   16   2      40449     47372   0.854x  nb > GS: WRAPS x2
+  gs9_nb1       9    1   1       4434      4445   0.998x  ODD group (pad slot), WIDTH 9c
+  gs16_multi   16   43   3     178073    182612   0.975x  WIDTH, packed Mcast2D
+  gs28_nb1     28    1   1       6222      6667   0.933x  WIDTH 28c decode
+  gs32_nb1     32    1   1       6199      6907   0.897x  WIDTH 32c decode
+  gs32_multi   32   11   6     130769    134350   0.973x  WIDTH, packed Mcast2D
+  ilv_gw8       8    3  11     101707    103824   0.980x  INTERLEAVED width split
+                                                          (reader-fed cb_input_tiles)
+
+Correct (pcc >= 0.99996, rel-RMS <= 7.2e-03, bit-exact vs `fixed`) in ALL 14 cases.
+Zero extra L1 bytes per core in ALL 14 cases.
+NOTHING WINS.  At num_blocks == 1 (the decode / width-shard geometries) rotation is
+INERT by construction -- round 0's root is slot 0, the baseline's root -- so gs9_nb1's
+0.998x is the true "flat" reading; nb1 / gs28_nb1 / gs32_nb1 losing 3-10% at nb == 1 is
+the rotating WIRE's own cost on ops whose whole duration is 4-17 us (the rotating RT
+block is 4 + 2*span words per core instead of 4, which is 68 words/core at span 32).
+
+OPTIONS THAT WERE MEASURED AND REJECTED
+---------------------------------------
+  zdefer  Move a future root's gather zeroing off the front of its round-0 ship into the
+          mcast wait where its BRISC is idle.  MEASURED MUCH WORSE (0.794x vs rot's
+          0.910x): at boot all four future roots zero IN PARALLEL while every core is
+          still in pass A, and deferring serializes the zeroing into the round-0 window
+          where it delays that core's mcast_recv and with it its pass B.  The op's
+          boot placement is already the right one.
+  diag    Phase-shift each grid row's rotation so the groups' roots are never all in one
+          column.  FLAT (0.908x vs 0.910x) -- root-column NoC contention is not a term
+          here.  Inexpressible on the PACKED single-group topology (one group, so a phase
+          that varied within it would make its cores disagree about the round's root -- a
+          hang); the bench degrades it to phase 0 there and records `diag_applied=0`.

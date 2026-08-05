@@ -19,6 +19,7 @@ args = [a for a in sys.argv[1:]]
 PATH = "generated/profiler/.logs/profile_log_device.csv"
 RISC = None
 TOPN = 3
+HAS = None
 rest = []
 i = 0
 while i < len(args):
@@ -27,6 +28,14 @@ while i < len(args):
         i += 2
     elif args[i] == "--top":
         TOPN = int(args[i + 1])
+        i += 2
+    elif args[i] == "--has":
+        # Keep only cores that recorded this zone.  Ranking by KERNEL wall alone
+        # surfaces the MEMBER cores of a cross-core combine (their wall is one
+        # long cb_wait_front on the root's stat), which hides the ROOT -- the
+        # core the critical path actually runs on.  `--has compute_root_fused`
+        # is how you get the root's own closure.
+        HAS = args[i + 1]
         i += 2
     elif args[i].endswith(".csv"):
         PATH = args[i]
@@ -68,6 +77,8 @@ for run in want:
                 per[(risc, core)][zone][0] += cyc - start
                 per[(risc, core)][zone][1] += 1
                 start = None
+    if HAS:
+        per = {k: v for k, v in per.items() if any(HAS in z for z in v)}
     ranked = sorted(per.items(), key=lambda kv: -max((v[0] for z, v in kv[1].items() if "KERNEL" in z), default=0))
     print(f"\n=== run host ID {run}: top {TOPN} cores by KERNEL zone ===")
     for (risc, core), zones in ranked[:TOPN]:

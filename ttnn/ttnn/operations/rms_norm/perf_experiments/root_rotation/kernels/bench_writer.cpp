@@ -1,6 +1,44 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
+// ============================================================================
+// ISOLATED BAKE-OFF COPY -- perf_experiments/root_rotation.  NOT the op.
+// ============================================================================
+// VERBATIM copy of ttnn/ttnn/operations/rms_norm/kernels/rms_norm_writer.cpp plus
+// an `RMS_ROT_VARIANT` bitmask:
+//
+//   variant 0 (ROTATE clear)  the op TODAY -- one FIXED root per group does every
+//                             round's gather + fold + multicast.  The honest baseline.
+//   bit 1 ROTATE              the root duty ROTATES PER ROW-BLOCK: round blk's root is
+//                             the group member at slot (blk + rot_phase) % GROUP_SIZE.
+//                             Every core is therefore sometimes the multicast sender
+//                             and gather destination, and sometimes a receiver + gather
+//                             source.
+//   bit 2 ZDEFER              under ROTATE, a core whose FIRST root round is not round
+//                             0 does the gather zeroing AFTER its round-0 ship (where
+//                             its BRISC would be parked in the mcast wait) instead of
+//                             at boot, where it would delay that ship and with it the
+//                             whole group's round 0.
+//   bit 4 DIAG                under ROTATE, each width group's rotation is phase-shifted
+//                             by its grid row, so the groups' roots are never all in one
+//                             column on the same round.
+//   bit 8 NOZERO              ABLATION ONLY -- strip the gather zeroing payload so its
+//                             cost is separable.  Never a candidate.
+//
+// WHY THE SWITCH IS A PREPROCESSOR `#if` AND NOT `if constexpr`: with `if constexpr`
+// the baseline measured 40.3 us against the op's own 34.4 us on the focus geometry --
+// the discarded rotating branch still inflated the BRISC binary enough to cost 5.9 us
+// of wall.  A `#if` makes variant 0's translation unit BYTE-IDENTICAL to the op's
+// writer (same mcast RT base, same inline zero block, same loop pair), and it
+// re-measured at 34.4 us.  A baseline that is not the op is a strawman, so this
+// spelling is load-bearing, not stylistic.
+//
+// The rotating multicast is NOT hand-rolled: `McastConfig.rotating_sender` /
+// `McastArgs<CT, RT, SPAN>` / `SenderPipe<..., ROTATING_SENDER>` already exist in the
+// helper library for exactly this topology (host/mcast_host.hpp + mcast_pipe.hpp), so
+// the rotating wire is the helper's and the only thing this file spells is the
+// per-round role predicate.
+//
 // Writer for rms_norm (BRISC, NoC1).
 //
 // Mirror image of the reader — same (row-block, width-chunk) loop nest, same
@@ -79,6 +117,54 @@
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
+// ---- the bake-off switch (see the header) ----------------------------------
+#ifndef RMS_ROT_VARIANT
+#define RMS_ROT_VARIANT 0
+#endif
+#define RMS_ROT (RMS_ROT_VARIANT & 1)
+#define RMS_ZDEFER (RMS_ROT_VARIANT & 2)
+#define RMS_NOZERO (RMS_ROT_VARIANT & 8)
+// ATTRIBUTION variant (bit 16, requires ROTATE): the whole ROTATING MACHINERY -- the
+// rotating mcast wire, the full-line EXCLUDE-source rect, both pipes on every core, the
+// per-round sender-coord indexing, the bigger BRISC binary -- with the PLACEMENT held
+// STILL at slot 0.  It answers "how much of rotation's cost is the mechanism and how
+// much is moving the root?", which no fixed/rotating pair can separate.
+#define RMS_STILL (RMS_ROT_VARIANT & 16)
+
+// The op's gather-zeroing payload, VERBATIM, as a MACRO so the rotating variants can
+// place it at two different points in the writer without a function call.
+//
+// IT WAS A LAMBDA FIRST, AND THAT WAS A MEASUREMENT BUG: `auto z = [&](){...}` called
+// from two sites is not inlined, and the by-reference captures turn the 64-page loop's
+// operands into memory reads.  `writer_gather_zero` measured 7837 ns inline vs 13664 ns
+// through the lambda -- +5827 ns, which is 2/3 of what first looked like "the cost of
+// rotation".  Whatever this idea's verdict is, it must not be an artifact of how the
+// bench spells a helper.
+#define RMS_GATHER_ZERO()                                                                                   \
+    do {                                                                                                    \
+        if constexpr (NEEDS_ZERO) {                                                                         \
+            MaybeDeviceZoneScope("writer_gather_zero");                                                     \
+            DataflowBuffer gather_dfb(cb_partials_gathered);                                                \
+            const uint32_t pages = gather_dfb.get_total_size_bytes() / stat_bytes;                          \
+            for (uint32_t p = 0; p < pages; ++p) {                                                          \
+                const uint32_t base = p * stat_bytes;                                                       \
+                if constexpr (ZERO_PAD) {                                                                   \
+                    if (p % GATHER_SLOTS >= GROUP_SIZE) { /* a pad slot: zero it whole */                   \
+                        noc.async_write_zeros(gather_dfb, stat_bytes, {.offset_bytes = base});              \
+                        continue;                                                                           \
+                    }                                                                                       \
+                }                                                                                           \
+                if constexpr (GATHER_FACES == 2) { /* faces 1 and 3 unshipped */                            \
+                    noc.async_write_zeros(gather_dfb, face_bytes, {.offset_bytes = base + face_bytes});     \
+                }                                                                                           \
+                if constexpr (GATHER_FACES < 4) {                                                           \
+                    noc.async_write_zeros(gather_dfb, face_bytes, {.offset_bytes = base + 3 * face_bytes}); \
+                }                                                                                           \
+            }                                                                                               \
+            noc.write_zeros_l1_barrier();                                                                   \
+        }                                                                                                   \
+    } while (0)
+
 namespace {
 constexpr uint32_t cb_output_tiles = 8;
 constexpr uint32_t cb_output_sticks = 9;
@@ -122,7 +208,21 @@ void kernel_main() {
     // the whole tile (Refinement 2/3's behaviour); 2 ships only the two faces that
     // can hold a REDUCE_ROW column vector.  See COMPACT_GATHER below.
     constexpr uint32_t GATHER_FACES = get_compile_time_arg_val(15);
+#if RMS_ROT
+    // BENCH WIRE (rotating variants only): rot_phase takes runtime arg 10, so the mcast
+    // block starts at 11.  SPAN > 0 selects the helper's ROTATING wire (a full-line rect
+    // + one sender coord pair per round) AND the rotating-sender pipe behaviour (send()
+    // resets this core's own data-ready flag after the broadcast, so its next RECEIVER
+    // turn does not return on its own stale VALID).  SPAN is GROUP_SIZE: the rotation
+    // cycle is the group, and on the PACKED single-group topology (Mcast2D over a
+    // bounding box that also holds INACTIVE cores) the host's coord list is
+    // rect-row-major, whose first GROUP_SIZE entries are exactly the active cores in
+    // slot order -- so reading only GROUP_SIZE pairs is correct and the extra trailing
+    // words the host emits are simply unread.
+    constexpr auto mc = dataflow_kernel_lib::McastArgs</*CT=*/16, /*RT=*/11, GROUP_SIZE>();
+#else
     constexpr auto mc = dataflow_kernel_lib::McastArgs</*CT=*/16, /*RT=*/10>();
+#endif
     constexpr auto out_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
     constexpr bool RM = (IS_TILE == 0);
@@ -145,13 +245,22 @@ void kernel_main() {
     const uint32_t row_start = get_arg_val<uint32_t>(1);  // this core's first tile-row
     const uint32_t num_rows = get_arg_val<uint32_t>(2);   // tile-rows owned by this core
     const uint32_t w_start = get_arg_val<uint32_t>(3);    // first width tile this core owns
-    const uint32_t is_root = get_arg_val<uint32_t>(4);    // group root (multicast sender)
-    const uint32_t my_slot = get_arg_val<uint32_t>(5);    // index within the width group
+    // BENCH: unused in the ROTATE build (the role is a per-block predicate there), so
+    // tag it rather than delete it -- the baseline path below must stay the op's text.
+    [[maybe_unused]] const uint32_t is_root = get_arg_val<uint32_t>(4);  // group root (multicast sender)
+    const uint32_t my_slot = get_arg_val<uint32_t>(5);                   // index within the width group
     // The ROW_MAJOR view of the same slice (mirrors the reader's args 6..9).
     const uint32_t stick_base = get_arg_val<uint32_t>(6);
     const uint32_t stick_count = get_arg_val<uint32_t>(7);
     const uint32_t w_off_elems = get_arg_val<uint32_t>(8);
     const uint32_t w_real_elems = get_arg_val<uint32_t>(9);
+#if RMS_ROT
+    // BENCH: rotation phase for THIS core's group.  LINE-UNIFORM by construction (the
+    // host emits the same value to every core of a group) -- if it were not, a group's
+    // cores would disagree about who the round's root is and the gather semaphore would
+    // never reach its arrival count: a HANG, not a slowdown.
+    const uint32_t rot_phase = get_arg_val<uint32_t>(10);
+#endif
 
     // An INACTIVE core (see the reader): it exists only so the stat multicast
     // lands in a cb_row_final this program owns.  No shard, no work.
@@ -318,53 +427,144 @@ void kernel_main() {
                 }
             }
         };
-        // ---- WHY THERE IS NO FACE ZEROING HERE (Perf 3 / D26, MEASURED -- do not restore) ----
-        // Faces 1 and 3 of every gathered page are never written at GATHER_FACES < 4, so they
-        // hold whatever was in the root's L1.  Refinement 4 through Perf 2 zeroed them here; that
-        // work is DELETED, and the safety argument that used to justify it is now a MEASUREMENT
-        // rather than a claim.  (Perf 2's changelog named this stage "the honest next target" and
-        // recorded that its own argument for removing it was "reasoned, not measured".)
-        //
-        // MEASURED (isolated bench perf_experiments/gather_zero_elim, blackhole p150b 1350 MHz, at
-        // the op's pinned config -- bf16 / HiFi2 / fp32_dest_acc_en=False / math_approx_mode=False,
-        // UNCHANGED).  The bench seeds columns 16..31 (== faces 1 and 3) of every gathered page
-        // with NINE catastrophic patterns -- 1e30, -1e30, NaN, +Inf, -Inf, fp32 subnormals, a
-        // per-lane mix that makes the fold evaluate Inf + (-Inf) = NaN, and a stale-L1 lookalike --
-        // then runs the op's REAL D22 fold + D17 finalize + pass B's exact
-        // BinaryFpu<x, stat, Mul, BroadcastDim::Col> consumer.  EVERY seed produced output
-        // BIT-IDENTICAL (torch.equal) to the same run with those lanes zeroed, with a bit-identical
-        // stat column 0, at GROUP_SIZE 4/8/9/28/32 x BLOCK_ROWS 1/8/32 and at two shard widths.
-        // Cost removed: 9900 ns of isolated stage on the root; 2462 ns (7.1%, 1.077x) of the focus
-        // shape's WALL by the op's own cumulative peel.
-        //
-        // THE CONTROL is what makes that a proof and not an accident: the packed stat tile's
-        // columns 16..31 came back 100% NON-FINITE for the NaN/+-Inf seeds and |max| 7.96e30 for the
-        // 1e30 seeds.  The garbage DOES enter DEST (the FPU has no lane scope), DOES survive the
-        // pairwise acc_to_dest fold, and IS packed into cb_stat_handoff and multicast to every
-        // member -- it is CARRIED and never READ.  The only reader of a stat tile in this op is
-        // pass B's column broadcast, which takes column 0 (faces 0 and 2, both shipped).
-        // If a future consumer ever reads a gathered or stat tile WHOLE (a debug dump,
-        // stat-as-output, an SFPU or reduce pass over it), this deletion must be revisited.
-        //
-        // WHAT REMAINS, and why it is a DIFFERENT question: the odd-GROUP_SIZE PAD PAGE.  A pad
-        // slot (D22) is never written by any member -- a sender lands at
-        // `r * GATHER_SLOTS + my_slot` with `my_slot < GROUP_SIZE <= GATHER_SLOTS - 1` -- and it is
-        // folded WHOLE, so its faces 0/2 land in column 0 and must be an exact +0.0.  MEASURED
-        // catastrophic without it: pad = 1e30 gives rel-RMS 1.00 at pcc 0.999672 (the uniform-scale
-        // error pcc alone does not see, which is exactly why this op's nets bound rms and not just
-        // pcc), and pad = NaN gives rel-RMS 1.00.  Poisoning ONLY the pad's columns 16..31 is
-        // bit-identical, so only its faces 0/2 are load-bearing -- but zeroing just those two faces
-        // is a MEASURED 10-11% REGRESSION against the whole-page zero (1959 vs 1781 ns at
-        // GROUP_SIZE 9 / BLOCK_ROWS 8): this stage pays per API CALL, not per byte
-        // (Noc::async_write_zeros sets the read state up once and chunks at MEM_ZEROS_SIZE = 512 B,
-        // so two 1024 B calls lose to one 4096 B call).  Whole page it is.
-        //
-        // Zeroing the whole CB is still WRONG for the reason Refinement 4 measured (pcc 0.87-0.99):
-        // it would wipe members that had already landed.  Only the root reads this CB, so only the
-        // root pays; at even GROUP_SIZE the stage does literally nothing.
+        // Boot: make the faces the gather never writes DEFINED, so no undefined L1
+        // ever reaches the root's elementwise sum / rsqrt.  Zeroing exactly the
+        // UNSHIPPED faces (and nothing else) is what makes this race-free: a member's
+        // partial can land at any time, and it only ever touches faces the root
+        // leaves alone -- which is why zeroing the whole CB here does NOT work (it
+        // wipes members that already arrived; measured as pcc 0.87-0.99 with a large
+        // rms across every combine cell).  Only the root reads this CB, so only the
+        // root pays.
+        // A PAD slot (odd GROUP_SIZE only, D22) is never written by any member, so the
+        // root's fold would otherwise add whatever L1 garbage was there.  Zeroing it WHOLE
+        // is race-free by exactly the argument below: a sender lands at
+        // `r * GATHER_SLOTS + my_slot` with `my_slot < GROUP_SIZE <= GATHER_SLOTS - 1`, so
+        // no member ever touches a pad page, and the pad contributes an exact +0.0.
         constexpr bool ZERO_PAD = (GATHER_SLOTS != GROUP_SIZE);
-        if constexpr (ZERO_PAD) {
-#if defined(RMS_ABLATE_GATHER_ZERO)
+
+#if RMS_ROT
+        // ================= ROOT ROTATION (the candidate) ======================
+        // Round `blk`'s root is the group member at slot (blk + rot_phase) % GROUP_SIZE.
+        // Both faces of the channel are built on every active core: it is the multicast
+        // SENDER and gather destination on its own rounds, a RECEIVER and gather source
+        // on the others.  Both ctors are local and NoC-free, so the cores that never root
+        // pay nothing for holding them.
+        //
+        // The zeroing payload is the op's, verbatim, lifted into a lambda so ZDEFER can
+        // place it somewhere other than boot.  It only has to happen before THIS core's
+        // own fold READS the gather CB, and it is race-free against member landings by
+        // construction (it writes exactly the faces no member ever writes -- see the
+        // COMPACT GATHER comment above), so it may be deferred arbitrarily late.
+        constexpr bool NEEDS_ZERO = (GATHER_FACES < 4 || ZERO_PAD) && !RMS_NOZERO;
+
+        auto sender = mc.sender(noc);
+        auto receiver = mc.receiver(noc);
+
+        // THE FIRST ROUND THIS CORE ROOTS, and whether it ever does.  Roots are the slots
+        // {(blk + rot_phase) mod GROUP_SIZE : blk < num_blocks}, so this core's first turn
+        // is at blk == (my_slot - rot_phase) mod GROUP_SIZE.  When num_blocks < GROUP_SIZE
+        // only the first num_blocks of them ever root; the rest skip the zeroing entirely,
+        // which is why rotation does not simply multiply the boot-zero cost by GROUP_SIZE.
+#if RMS_STILL
+        const uint32_t first_root = 0;
+        const bool will_root = (my_slot == 0);
+#else
+        const uint32_t first_root = (my_slot + GROUP_SIZE - (rot_phase % GROUP_SIZE)) % GROUP_SIZE;
+        const bool will_root = first_root < num_blocks;
+#endif
+        if (will_root && (!RMS_ZDEFER || first_root == 0)) {
+            RMS_GATHER_ZERO();
+        }
+
+        for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+            const uint32_t r0 = blk * BLOCK_ROWS;
+            const uint32_t rows = (num_rows - r0 < BLOCK_ROWS) ? (num_rows - r0) : BLOCK_ROWS;
+            // The round index doubles as the receiver's index into the helper's per-round
+            // sender-coord list (which is in LINE / slot order), so the two can never
+            // disagree about who is broadcasting.
+            const uint32_t round = RMS_STILL ? 0u : ((blk + rot_phase) % GROUP_SIZE);
+
+            if (my_slot == round) {
+                // 1. this round's root puts its own partial in its own slot, LOCALLY.
+                {
+                    MaybeDeviceZoneScope("writer_gather_ship");
+                    cb_wait_front(cb_sum_handoff, rows);
+                    cb_reserve_back(cb_partials_gathered, GATHER_SLOTS * rows);
+                    ship_partial(get_read_ptr(cb_sum_handoff), get_noc_addr(get_write_ptr(cb_partials_gathered)), rows);
+                    noc_async_write_barrier();
+                }
+                // STILL no local self-signal, and the rule matters MORE here, not less:
+                // under rotation every core is sometimes the local writer of this cell and
+                // sometimes a remote incrementer of another core's, so a local
+                // Semaphore::up (a NON-atomic read-modify-write) would race the members'
+                // remote atomic incs and drop one -- a hang.  `arrivals` accumulates only
+                // on the rounds this core roots, which is exactly when its own cell is
+                // incremented.
+                cb_pop_front(cb_sum_handoff, rows);
+                {
+                    MaybeDeviceZoneScope("writer_gather_wait");
+                    arrivals += GROUP_SIZE - 1;
+                    gather_sem.wait_min(arrivals);
+                    cb_push_back(cb_partials_gathered, GATHER_SLOTS * rows);
+                }
+                {
+                    MaybeDeviceZoneScope("writer_mcast_send");
+                    cb_wait_front(cb_stat_handoff, rows);
+                    cb_reserve_back(cb_row_final, rows);
+                    const uint32_t stat_dst = get_write_ptr(cb_row_final);
+                    noc_async_write(get_read_ptr(cb_stat_handoff), get_noc_addr(stat_dst), rows * stat_bytes);
+                    noc_async_write_barrier();
+                    cb_push_back(cb_row_final, rows);  // D24: own copy BEFORE the broadcast
+                    if constexpr (mc.active) {
+                        // src == dst => EXCLUDE-source, and the ROTATING rect is the WHOLE
+                        // line (it must be -- the sender moves), so the sender is always
+                        // interior and always takes that same EXCLUDE path.  The fixed op
+                        // relies on the identical property.
+                        sender.send(stat_dst, stat_dst, rows * stat_bytes);
+                    }
+                    cb_pop_front(cb_stat_handoff, rows);
+                }
+            } else {
+                const uint32_t root_x = mc.sender_x(round);
+                const uint32_t root_y = mc.sender_y(round);
+                {
+                    MaybeDeviceZoneScope("writer_gather_ship");
+                    cb_wait_front(cb_sum_handoff, rows);
+                    // The landing base is THIS core's own gather-CB write pointer, legal for
+                    // exactly the reason the op records: the CB is declared on every core so
+                    // its L1 address is identical, and a whole-block push returns the ring
+                    // to its base.  Under rotation a core pushes it only on its own root
+                    // rounds, so every core's pointer sits at the base when a round starts.
+                    ship_partial(
+                        get_read_ptr(cb_sum_handoff),
+                        get_noc_addr(root_x, root_y, get_write_ptr(cb_partials_gathered)),
+                        rows);
+                    noc_async_write_barrier();  // data before signal
+                    gather_sem.up(noc, root_x, root_y, 1);
+                    cb_pop_front(cb_sum_handoff, rows);
+                }
+                // ZDEFER's landing spot: this core's round-0 ship is done and signalled, so
+                // the group's round 0 is no longer waiting on it, and the zeroing now runs
+                // where this BRISC would have been parked in the mcast wait.
+                if (RMS_ZDEFER && blk == 0 && will_root && first_root != 0) {
+                    RMS_GATHER_ZERO();
+                }
+                {
+                    MaybeDeviceZoneScope("writer_mcast_recv");
+                    cb_reserve_back(cb_row_final, rows);
+                    receiver.receive(round);
+                    cb_push_back(cb_row_final, rows);
+                }
+            }
+            write_block(blk);
+        }
+#else
+        // ================= THE OP TODAY (the baseline) ========================
+        // Everything from here to the matching #endif is the op's writer, unedited
+        // except for the RMS_NOZERO ablation hook replacing the op's own
+        // RMS_ABLATE_GATHER_ZERO one.
+        if constexpr (GATHER_FACES < 4 || ZERO_PAD) {
+#if RMS_NOZERO
             if (false) {
 #else
             if (is_root != 0) {
@@ -373,8 +573,18 @@ void kernel_main() {
                 DataflowBuffer gather_dfb(cb_partials_gathered);
                 const uint32_t pages = gather_dfb.get_total_size_bytes() / stat_bytes;
                 for (uint32_t p = 0; p < pages; ++p) {
-                    if (p % GATHER_SLOTS >= GROUP_SIZE) {  // a pad slot: zero it whole
-                        noc.async_write_zeros(gather_dfb, stat_bytes, {.offset_bytes = p * stat_bytes});
+                    const uint32_t base = p * stat_bytes;
+                    if constexpr (ZERO_PAD) {
+                        if (p % GATHER_SLOTS >= GROUP_SIZE) {  // a pad slot: zero it whole
+                            noc.async_write_zeros(gather_dfb, stat_bytes, {.offset_bytes = base});
+                            continue;
+                        }
+                    }
+                    if constexpr (GATHER_FACES == 2) {  // faces 1 and 3 unshipped
+                        noc.async_write_zeros(gather_dfb, face_bytes, {.offset_bytes = base + face_bytes});
+                    }
+                    if constexpr (GATHER_FACES < 4) {
+                        noc.async_write_zeros(gather_dfb, face_bytes, {.offset_bytes = base + 3 * face_bytes});
                     }
                 }
                 noc.write_zeros_l1_barrier();
@@ -484,6 +694,7 @@ void kernel_main() {
                 write_block(blk);
             }
         }
+#endif  // RMS_ROT
     } else {
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             write_block(blk);

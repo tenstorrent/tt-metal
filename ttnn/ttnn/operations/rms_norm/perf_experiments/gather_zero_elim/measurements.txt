@@ -1,0 +1,239 @@
+gather_zero_elim -- MEASURED DATA (blackhole p150b, 1350 MHz, TT-Metal 73233a0d06)
+Config FIXED for every launch: bf16 act / fp32 partials+stat / TILE / MathFidelity.HiFi2 /
+fp32_dest_acc_en=False / math_approx_mode=False.  ONE fresh-cache profiled run per launch.
+
+############ A. SAFETY (poison_bench) ############
+# csv: generated/profiler/reports/2026_08_05_14_34_54/ops_perf_results_2026_08_05_14_34_54.csv  (43 device ops)
+tag                    face      pad         g   r  wt  bit_eq  col0_eq    pcc_out  rrms_out stat_hi_nf  stat_hi_max
+poison_ref_g8_r8       zero      zero        8   8   4    True        -   0.999992  4.19e-03       0.00     0.00e+00
+poison_faces_focus     zero      zero        8   8   4    True     True   0.999992  4.19e-03       0.00     0.00e+00
+poison_faces_focus     big_pos   zero        8   8   4    True     True   0.999992  4.19e-03       0.00     7.96e+30
+poison_faces_focus     big_neg   zero        8   8   4    True     True   0.999992  4.19e-03       0.00     7.96e+30
+poison_faces_focus     nan       zero        8   8   4    True     True   0.999992  4.19e-03       1.00          inf
+poison_faces_focus     inf       zero        8   8   4    True     True   0.999992  4.19e-03       1.00          inf
+poison_faces_focus     ninf      zero        8   8   4    True     True   0.999992  4.19e-03       1.00          inf
+poison_faces_focus     denorm    zero        8   8   4    True     True   0.999992  4.19e-03       0.00     0.00e+00
+poison_faces_focus     mixed     zero        8   8   4    True     True   0.999992  4.19e-03       0.50     7.96e+30
+poison_faces_focus     l1_like   zero        8   8   4    True     True   0.999992  4.19e-03       0.00     2.58e+21
+poison_ref_g4_r1       zero      zero        4   1   4    True        -   0.999995  3.35e-03       0.00     0.00e+00
+poison_faces_sweep     mixed     zero        4   1   4    True     True   0.999995  3.35e-03       0.50     3.98e+30
+poison_ref_g4_r8       zero      zero        4   8   4    True        -   0.999993  4.10e-03       0.00     0.00e+00
+poison_faces_sweep     mixed     zero        4   8   4    True     True   0.999993  4.10e-03       0.50     3.98e+30
+poison_ref_g4_r32      zero      zero        4  32   4    True        -   0.999992  4.29e-03       0.00     0.00e+00
+poison_faces_sweep     mixed     zero        4  32   4    True     True   0.999992  4.29e-03       0.50     3.98e+30
+poison_ref_g8_r1       zero      zero        8   1   4    True        -   0.999993  3.87e-03       0.00     0.00e+00
+poison_faces_sweep     mixed     zero        8   1   4    True     True   0.999993  3.87e-03       0.50     7.96e+30
+poison_faces_sweep     mixed     zero        8   8   4    True     True   0.999992  4.19e-03       0.50     7.96e+30
+poison_ref_g9_r1       zero      zero        9   1   4    True        -   0.999990  4.57e-03       0.00     0.00e+00
+poison_faces_sweep     mixed     zero        9   1   4    True     True   0.999990  4.57e-03       0.50     8.95e+30
+poison_ref_g9_r8       zero      zero        9   8   4    True        -   0.999991  4.19e-03       0.00     0.00e+00
+poison_faces_sweep     mixed     zero        9   8   4    True     True   0.999991  4.19e-03       0.50     8.95e+30
+poison_ref_g28_r1      zero      zero       28   1   4    True        -   0.999991  4.47e-03       0.00     0.00e+00
+poison_faces_sweep     mixed     zero       28   1   4    True     True   0.999991  4.47e-03       0.50     2.80e+31
+poison_ref_g28_r8      zero      zero       28   8   4    True        -   0.999990  4.56e-03       0.00     0.00e+00
+poison_faces_sweep     mixed     zero       28   8   4    True     True   0.999990  4.56e-03       0.50     2.80e+31
+poison_ref_g32_r1      zero      zero       32   1   4    True        -   0.999993  5.05e-03       0.00     0.00e+00
+poison_faces_sweep     mixed     zero       32   1   4    True     True   0.999993  5.05e-03       0.50     3.22e+31
+poison_ref_g32_r8      zero      zero       32   8   4    True        -   0.999992  4.86e-03       0.00     0.00e+00
+poison_faces_sweep     mixed     zero       32   8   4    True     True   0.999992  4.86e-03       0.50     3.22e+31
+poison_ref_g8_r4       zero      zero        8   4   8    True        -   0.999993  4.05e-03       0.00     0.00e+00
+poison_faces_wt8       nan       zero        8   4   8    True     True   0.999993  4.05e-03       1.00          inf
+poison_faces_wt8       big_pos   zero        8   4   8    True     True   0.999993  4.05e-03       0.00     7.96e+30
+poison_faces_wt8       mixed     zero        8   4   8    True     True   0.999993  4.05e-03       0.50     7.96e+30
+poison_pad             zero      big_pos     9   1   4   False    False   0.999672  1.00e+00       0.00     9.95e+29
+poison_pad             zero      nan         9   1   4   False    False        nan  1.00e+00       1.00          inf
+poison_pad             zero      mixed       9   1   4   False    False        nan  1.00e+00       0.38     3.39e+38
+poison_pad             zero      faces13     9   1   4    True     True   0.999990  4.57e-03       0.38     3.39e+38
+poison_pad             zero      big_pos     9   8   4   False    False   0.999757  1.00e+00       0.00     9.95e+29
+poison_pad             zero      nan         9   8   4   False    False        nan  1.00e+00       1.00          inf
+poison_pad             zero      mixed       9   8   4   False    False        nan  1.00e+00       0.38     3.39e+38
+poison_pad             zero      faces13     9   8   4    True     True   0.999991  4.19e-03       0.38     3.39e+38
+
+############ B. PRICE (zero_bench) ############
+# csv: generated/profiler/reports/2026_08_05_14_42_43/ops_perf_results_2026_08_05_14_42_43.csv  (99 device ops)
+
+=== zero_focus  GROUP_SIZE=8 rows=8 GATHER_FACES=2 pages=64 (none=109 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none              109         0      0       -        0     OK
+faces            9922      9813    256    38.3   131072     OK
+pad_only           64       -45      0       -        0     OK
+scratch          2482      2373    136    17.4   131072     OK
+whole_cb         7325      7216    512    14.1   262144     OK
+faces_r          9741      9632    256    37.6   131072     OK
+scratch_r        2474      2365    136    17.4   131072     OK
+
+=== zero_faces  GROUP_SIZE=8 rows=8 GATHER_FACES=2 pages=64 (none=16 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               16         0      0       -        0     OK
+faces            9917      9901    256    38.7   131072     OK
+scratch          2470      2454    136    18.0   131072     OK
+faces_r          9738      9722    256    38.0   131072     OK
+
+=== zero_faces  GROUP_SIZE=8 rows=8 GATHER_FACES=3 pages=64 (none=14 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               14         0      0       -        0     OK
+faces            3011      2997    128    23.4    65536     OK
+scratch          1390      1376     72    19.1    65536     OK
+faces_r          3002      2988    128    23.3    65536     OK
+
+=== zero_faces  GROUP_SIZE=8 rows=8 GATHER_FACES=4 pages=64 (none=16 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               16         0      0       -        0     OK
+faces              80        64      0       -        0     OK
+scratch           245       229      8    28.6        0     OK
+faces_r            70        54      0       -        0     OK
+
+=== zero_sweep  GROUP_SIZE=4 rows=1 GATHER_FACES=2 pages=4 (none=15 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               15         0      0       -        0     OK
+faces             710       695     16    43.4     8192     OK
+pad_only           81        66      0       -        0     OK
+scratch           436       421     16    26.3     8192     OK
+
+=== zero_sweep  GROUP_SIZE=4 rows=8 GATHER_FACES=2 pages=32 (none=28 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               28         0      0       -        0     OK
+faces            5056      5028    128    39.3    65536     OK
+pad_only           74        46      0       -        0     OK
+scratch          1408      1380     72    19.2    65536     OK
+
+=== zero_sweep  GROUP_SIZE=4 rows=32 GATHER_FACES=2 pages=128 (none=19 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               19         0      0       -        0     OK
+faces           19753     19734    512    38.5   262144     OK
+pad_only           61        42      0       -        0     OK
+scratch          4671      4652    264    17.6   262144     OK
+
+=== zero_sweep  GROUP_SIZE=8 rows=1 GATHER_FACES=2 pages=8 (none=15 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               15         0      0       -        0     OK
+faces            1356      1341     32    41.9    16384     OK
+pad_only           61        46      0       -        0     OK
+scratch           573       558     24    23.2    16384     OK
+
+=== zero_sweep  GROUP_SIZE=8 rows=8 GATHER_FACES=2 pages=64 (none=19 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               19         0      0       -        0     OK
+faces            9915      9896    256    38.7   131072     OK
+pad_only           84        65      0       -        0     OK
+scratch          2487      2468    136    18.1   131072     OK
+
+=== zero_sweep  GROUP_SIZE=8 rows=32 GATHER_FACES=2 pages=256 (none=18 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               18         0      0       -        0     OK
+faces           39380     39362   1024    38.4   524288     OK
+pad_only           65        47      0       -        0     OK
+scratch          9020      9002    520    17.3   524288     OK
+
+=== zero_sweep  GROUP_SIZE=9 rows=1 GATHER_FACES=2 pages=10 (none=19 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               19         0      0       -        0     OK
+faces            1075      1056     44    24.0    22528     OK
+pad_only          245       226      8    28.2     4096     OK
+scratch           704       685     34    20.1    22528     OK
+
+=== zero_sweep  GROUP_SIZE=9 rows=8 GATHER_FACES=2 pages=80 (none=14 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               14         0      0       -        0     OK
+faces            8209      8195    352    23.3   180224     OK
+pad_only         1801      1787     64    27.9    32768     OK
+scratch          3572      3558    216    16.5   180224     OK
+
+=== zero_sweep  GROUP_SIZE=9 rows=32 GATHER_FACES=2 pages=320 (none=20 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               20         0      0       -        0     OK
+faces           32453     32433   1408    23.0   720896     OK
+pad_only         6800      6780    256    26.5   131072     OK
+scratch         13381     13361    840    15.9   720896     OK
+
+=== zero_sweep  GROUP_SIZE=28 rows=1 GATHER_FACES=2 pages=28 (none=14 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               14         0      0       -        0     OK
+faces            4431      4417    112    39.4    57344     OK
+pad_only           67        53      0       -        0     OK
+scratch          1264      1250     64    19.5    57344     OK
+
+=== zero_sweep  GROUP_SIZE=28 rows=8 GATHER_FACES=2 pages=224 (none=17 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               17         0      0       -        0     OK
+faces           34513     34496    896    38.5   458752     OK
+pad_only           73        56      0       -        0     OK
+scratch          7975      7958    456    17.5   458752     OK
+
+=== zero_sweep  GROUP_SIZE=32 rows=1 GATHER_FACES=2 pages=32 (none=18 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               18         0      0       -        0     OK
+faces            5086      5068    128    39.6    65536     OK
+pad_only           63        45      0       -        0     OK
+scratch          1418      1400     72    19.4    65536     OK
+
+=== zero_sweep  GROUP_SIZE=32 rows=8 GATHER_FACES=2 pages=256 (none=16 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               16         0      0       -        0     OK
+faces           39357     39341   1024    38.4   524288     OK
+pad_only           70        54      0       -        0     OK
+scratch          9064      9048    520    17.4   524288     OK
+
+=== zero_live  GROUP_SIZE=8 rows=8 GATHER_FACES=2 pages=64 (none=16 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               16         0      0       -        0     OK
+faces            9916      9900    256    38.7   131072     OK
+pad_only           61        45      0       -        0     OK
+scratch          2486      2470    136    18.2   131072     OK
+whole_cb         7342      7326    512    14.3   262144     OK
+faces_r          9739      9723    256    38.0   131072     OK
+scratch_r        2478      2462    136    18.1   131072     OK
+
+=== zero_live  GROUP_SIZE=32 rows=1 GATHER_FACES=2 pages=32 (none=24 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               24         0      0       -        0     OK
+faces            5044      5020    128    39.2    65536     OK
+pad_only           86        62      0       -        0     OK
+scratch          1389      1365     72    19.0    65536     OK
+whole_cb         3731      3707    256    14.5   131072     OK
+faces_r          4935      4911    128    38.4    65536     OK
+scratch_r        1391      1367     72    19.0    65536     OK
+
+=== zero_live  GROUP_SIZE=28 rows=1 GATHER_FACES=2 pages=28 (none=14 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               14         0      0       -        0     OK
+faces            4399      4385    112    39.2    57344     OK
+pad_only           93        79      0       -        0     OK
+scratch          1270      1256     64    19.6    57344     OK
+whole_cb         3270      3256    224    14.5   114688     OK
+faces_r          4323      4309    112    38.5    57344     OK
+scratch_r        1251      1237     64    19.3    57344     OK
+
+=== zero_live  GROUP_SIZE=9 rows=1 GATHER_FACES=2 pages=10 (none=25 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               25         0      0       -        0     OK
+faces            1074      1049     44    23.8    22528     OK
+pad_only          246       221      8    27.6     4096     OK
+scratch           701       676     34    19.9    22528     OK
+whole_cb         1255      1230     80    15.4    40960     OK
+faces_r          1064      1039     44    23.6    22528     OK
+scratch_r         691       666     34    19.6    22528     OK
+
+############ C. ODD-GROUP_SIZE PAD, priced three ways ############
+# csv: generated/profiler/reports/2026_08_05_14_46_09/ops_perf_results_2026_08_05_14_46_09.csv  (12 device ops)
+
+=== zero_pad  GROUP_SIZE=9 rows=1 GATHER_FACES=2 pages=10 (none=98 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               98         0      0       -        0     OK
+faces            1060       962     44    21.9    22528     OK
+pad_only          241       143      8    17.9     4096     OK
+pad_faces02       257       159      4    39.8     2048     OK
+
+=== zero_pad  GROUP_SIZE=9 rows=8 GATHER_FACES=2 pages=80 (none=17 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               17         0      0       -        0     OK
+faces            8209      8192    352    23.3   180224     OK
+pad_only         1798      1781     64    27.8    32768     OK
+pad_faces02      1976      1959     32    61.2    16384     OK
+
+=== zero_pad  GROUP_SIZE=9 rows=32 GATHER_FACES=2 pages=320 (none=20 ns) ===
+variant      total_ns  stage_ns   txns  ns/txn    bytes  exact
+none               20         0      0       -        0     OK
+faces           32453     32433   1408    23.0   720896     OK
+pad_only         6803      6783    256    26.5   131072     OK
+pad_faces02      7538      7518    128    58.7    65536     OK

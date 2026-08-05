@@ -1,0 +1,112 @@
+{
+ "box": "blackhole p150b, 110-core grid, CHIP_FREQ 1350 MHz",
+ "metric": "DEVICE KERNEL DURATION [ns]; ONE fresh ttnn.generic_op program per (config, variant); no trial loop. Headline cells repeated 3x (run-to-run spread < 1.5%) and reported as the median.",
+ "precision_contract": "FIXED on every variant: fp32 partial/stat CBs, HiFi2, fp32_dest_acc_en=False, math_approx_mode=False, TILE. NEVER a lever.",
+ "baseline": "flat == the op's CURRENT combine, carried verbatim: D16/D22 row-major gather at GATHER_SLOTS (== GROUP_SIZE rounded up to even), the writer's gather_zero boot of the unshipped faces, gather_sem.wait_min(GROUP_SIZE-1), the D22 FUSED root chain (pairwise add_tiles with acc_to_dest over GATHER_HALF + D17 column-scoped raw-sfpi finalize + ONE pack_tile), D24 mcast ordering.",
+ "candidate": "tree_<f0>x<f1>[x<f2>...] == a k-ary tree over the SLOT axis at m == 1 (row split OFF, so it COMPOSES with compact_partial_transpose). stride[0]=1, stride[l+1]=stride[l]*f_l; participant at level l iff slot%stride[l]==0; GATHERER at level l iff slot%stride[l+1]==0. Interior gatherers run the identical pairwise DEST fold but pack the RAW sum (NO finalize) and forward it; only slot 0 (the mcast root, unique last-level gatherer because prod(F) >= GROUP_SIZE is asserted) applies the rsqrt. tree_<G> is the L=1 corner == flat through the generic path: the OVERHEAD CONTROL.",
+ "why_this_dir_and_not_hierarchical_gather_r2": "r2 measured a 2-level (K,m) grid against the PRE-D22 root chain and its winner was the row split (m=BLOCK_ROWS), which is mutually exclusive with compact_partial_transpose. This dir isolates the slot half at m=1 and REBASES the baseline onto D22. The rebase is decisive at small groups: the r2 focus baseline was 46436 ns, the D22 baseline of the same cell is 29933 ns, and the tree win at GROUP_SIZE=8 went from r2's 1.12x (k4_m1) to 1.00x.",
+
+ "headline": {
+  "focus_g8_br8_r32": {
+   "geometry": "(1,1,8192,1024) BLOCK_SHARDED shard [1024,128] grid (8,8) = 64 cores; G=8, num_groups=8, BLOCK_ROWS=8, 32 tile-rows/core -> 4 combine rounds",
+   "median_of_3": {"flat": 29933, "tree_8": 30296, "tree_4x2": 29877, "tree_2x4": 30745, "tree_2x2x2": 33127},
+   "verdict": "NULL. Best tree = 1.00x. Deeper is worse (2x2x2 = 0.90x). The D22 fold of 8 tiles is too cheap to pay for a NoC hop.",
+   "l1_per_core": {"flat": 288, "tree_4x2": 256, "unit": "kB"}
+  },
+  "w5120_g32_br1_r1": {
+   "geometry": "(1,1,32,5120) WIDTH_SHARDED shard [32,160] grid (8,4) = 32 cores; G=32, BLOCK_ROWS=1, 1 round",
+   "median_of_3": {"flat": 5424, "tree_32": 5594, "tree_8x4": 3929, "tree_4x8": 3744, "tree_2x16": 4061,
+                   "tree_6x6": 3940, "tree_4x4x2": 3991, "tree_2x4x4": 3870, "tree_2x2x2x4": 4461},
+   "verdict": "WIN. tree_4x8 = 1.45x. 2 levels optimal; 3 levels 1.36-1.40x; 4 levels 1.22x.",
+   "l1_per_core": {"flat": 132, "tree_4x8": 56, "unit": "kB"}
+  },
+  "w7168_g28_br1_r1": {
+   "geometry": "(1,1,32,7168) WIDTH_SHARDED shard [32,256] grid (7,4) = 28 cores; G=28, BLOCK_ROWS=1, 1 round",
+   "single_run": {"flat": 5007, "tree_28": 5370, "tree_7x4": 3970, "tree_4x7": 3576, "tree_2x14": 3882,
+                  "tree_4x8": 3587, "tree_2x2x7": 4004, "tree_3x3x4": 4636},
+   "verdict": "WIN. tree_4x7 = 1.40x. RAGGED chunks (28 = 4x7 exact, 4x8 pads one level-1 slot) are correct with no guard.",
+   "l1_per_core": {"flat": 116, "tree_4x7": 56, "unit": "kB"}
+  },
+  "focus_compact_g8_br1_r4": {
+   "geometry": "the focus geometry AS compact_partial_transpose would leave it: 1 compact partial tile per sender per round, same 4 rounds (BLOCK_ROWS=1, num_rows=4). Also the cell where the ROW SPLIT is inexpressible.",
+   "median_of_3": {"flat": 7007, "tree_8": 7530, "tree_4x2": 9174, "tree_2x4": 9201, "tree_2x2x2": 10786},
+   "verdict": "REGRESSION 0.76x at GROUP_SIZE=8. Compaction removes the per-round row count that was paying for the hop."
+  },
+  "compact_g32_br1_r4": {
+   "geometry": "the SAME compaction-composed transport at a group wide enough to win: G=32, 1 tile/sender/round, 4 rounds",
+   "single_run": {"flat": 13788, "tree_8x4": 11036, "tree_4x8": 11522, "tree_2x16": 13321, "tree_6x6": 11453,
+                  "tree_4x4x2": 12599, "tree_2x4x4": 12478, "tree_2x2x2x4": 14058},
+   "verdict": "WIN 1.25x. THE COMPOSABILITY ANSWER: the tree survives compaction at wide groups, and it is the ONLY lever left there (m <= BLOCK_ROWS == 1)."
+  }
+ },
+
+ "sweep": {
+  "columns": "config -> {variant: ns}, one run each",
+  "g4_br1_r1": {"flat": 2134, "tree_4": 2189, "tree_2x2": 2727},
+  "g4_br8_r32": {"flat": 22494, "tree_4": 22959, "tree_2x2": 26450},
+  "g4_br32_r32": {"flat": 27815, "tree_4": 27887, "tree_2x2": 27267},
+  "g8_br1_r1": {"flat": 2463, "tree_8": 2670, "tree_4x2": 3116, "tree_2x4": 2961, "tree_2x2x2": 3460},
+  "g8_br8_r32": {"flat": 29933, "tree_8": 30296, "tree_4x2": 29877, "tree_2x4": 30745, "tree_2x2x2": 33127},
+  "g8_br32_r32": {"flat": 42063, "tree_8": 42036, "tree_4x2": 34572, "tree_2x4": 31630, "tree_2x2x2": 32973},
+  "g9_br1_r1": {"flat": 2980, "tree_9": 3167, "tree_3x3": 3545, "tree_2x5": 3324, "tree_2x2x3": 3890},
+  "g9_br8_r32": {"flat": 34164, "tree_9": 34554, "tree_3x3": 33764, "tree_2x5": 34162, "tree_2x2x3": 35660},
+  "g16_br1_r1": {"flat": 3581, "tree_16": 3784, "tree_4x4": 3324, "tree_8x2": 3885, "tree_2x8": 3319,
+                 "tree_2x2x4": 3744, "tree_2x2x2x2": 4270},
+  "g16_br1_r4_compact": {"flat": 9741, "tree_16": 10202, "tree_4x4": 10410, "tree_8x2": 10633, "tree_2x8": 10968,
+                         "tree_2x2x4": 12112, "tree_2x2x2x2": 13553},
+  "g16_br8_r32": {"flat": 45467, "tree_16": 45953, "tree_4x4": 34679, "tree_8x2": 37840, "tree_2x8": 39593,
+                  "tree_2x2x4": 37994, "tree_2x2x2x2": 39872},
+  "g28_br1_r1": {"flat": 5007, "tree_28": 5370, "tree_7x4": 3970, "tree_4x7": 3576, "tree_2x14": 3882,
+                 "tree_4x8": 3587, "tree_2x2x7": 4004, "tree_3x3x4": 4636},
+  "g28_br8_r32": {"flat": 67630, "tree_28": 68916, "tree_7x4": 43257, "tree_4x7": 42281, "tree_2x14": 51601,
+                  "tree_4x8": 42124, "tree_2x2x7": 44906, "tree_3x3x4": 44741},
+  "g32_br1_r1": {"flat": 5424, "tree_32": 5594, "tree_8x4": 3929, "tree_4x8": 3744, "tree_2x16": 4061,
+                 "tree_6x6": 3940, "tree_4x4x2": 3991, "tree_2x4x4": 3870, "tree_2x2x2x4": 4461},
+  "g32_br1_r4_compact": {"flat": 13788, "tree_8x4": 11036, "tree_4x8": 11522, "tree_2x16": 13321, "tree_6x6": 11453,
+                         "tree_4x4x2": 12599, "tree_2x4x4": 12478, "tree_2x2x2x4": 14058},
+  "g32_br8_r32": {"flat": 75029, "tree_32": 75329, "tree_8x4": 42058, "tree_4x8": 42847, "tree_2x16": 55827,
+                  "tree_6x6": 42354, "tree_4x4x2": 40619, "tree_2x4x4": 41104, "tree_2x2x2x4": 44063}
+ },
+
+ "rule": {
+  "statement": [
+   "f0 = 4                                        # measured level-0 fan-in optimum; f0=8 is 1.38x vs f0=4's 1.45x at G=32, f0=7 is 1.26x vs f0=4's 1.40x at G=28",
+   "f1 = ceil(GROUP_SIZE / f0)                    # TWO levels, always -- 3 and 4 levels are measured WORSE at every cell but one",
+   "rows = min(BLOCK_ROWS, tile-rows per round)   # the partial tile-rows a sender ships PER ROUND (== 1 under compact_partial_transpose)",
+   "use the TREE iff f1 >= 2 and rows * (GROUP_SIZE - f0 - f1) >= 17",
+   "otherwise keep the FLAT root (unchanged op)"
+  ],
+  "derivation_of_the_17": "rows*(G - f0 - f1) is the count of root fold-tiles the tree takes off the per-round critical path; the tree pays exactly ONE extra NoC hop per round for them. The threshold is bracketed by two measured cells: 16 deleted tiles (G=8, rows=8 -- the focus shape) is 1.00x, and 17 (G=28, rows=1 -- the w7168 target) is 1.40x. It is not a smooth function of this quantity alone -- above GROUP_SIZE=16 the SECOND mechanism dominates (the flat root's G-1 remote partial writes serialise into ONE core's L1 ingress and its gather_zero boot walks GATHER_SLOTS*BLOCK_ROWS pages; the tree caps both at max(f0,f1))-- so 17 is where the ingress term starts paying, not a fold-cost crossover.",
+  "cells_the_rule_selects_the_tree": {
+   "g32_br1_r1 (w5120)": "1.45x", "g32_br1_r4_compact": "1.20x (best 1.25x)", "g28_br1_r1 (w7168)": "1.40x",
+   "g8_br32_r32": "1.22x (best 1.33x)", "g16_br8_r32": "1.31x", "g28_br8_r32": "1.60x", "g32_br8_r32": "1.75x (best 1.85x)"
+  },
+  "cells_the_rule_keeps_flat": {
+   "g4_*": "f1 == 1, tree deletes ZERO fold tiles (f0+f1 == GROUP_SIZE) -- r2's GROUP_SIZE==4 carve-out RE-DERIVED and it is the tree's, confirmed at 0.78x / 0.85x / 1.02x",
+   "g8_br1, g8_br8 (focus), g9_br1, g9_br8": "2-16 deleted tiles; measured 0.76-1.01x",
+   "g16_br1": "8 deleted tiles; the 1-round 1.08x is a boot-zero FIXED-cost artifact -- the per-round marginal is a LOSS (tree 2362 vs flat 2053 ns/round) and the 4-round cell measures 0.94x"
+  },
+  "accuracy": "the rule's arity is the best measured or within 0.4% at 4 of 7 selected cells, and 5.2% / 8.5% off the best at g32_br8 (picks 4x8 = 1.75x, best 4x4x2 = 1.85x) and g8_br32 (picks 4x2 = 1.22x, best 2x4 = 1.33x). It never selects a cell measured below 1.00x."
+ },
+
+ "precision": {
+  "direction": "the tree is MORE accurate than flat at EVERY cell measured, not less -- same mechanism D22 recorded against D16: a deeper pairwise DEST tree shortens the error chain.",
+  "focus": {"flat_rel_rms": 0.00212, "tree_4x2_rel_rms": 0.00195, "flat_pcc": 0.999987, "tree_pcc": 0.999987},
+  "w5120": {"flat_rel_rms": 0.00250, "tree_4x8_rel_rms": 0.00213, "tree_2x4x4_rel_rms": 0.00156,
+            "flat_pcc": 0.999976, "tree_4x8_pcc": 0.999984, "tree_2x4x4_pcc": 0.999992},
+  "w7168": {"flat_rel_rms": 0.00336, "tree_4x7_rel_rms": 0.00292, "flat_pcc": 0.999969, "tree_4x7_pcc": 0.999976},
+  "g28_br8": {"flat_rel_rms": 0.00272, "tree_3x3x4_rel_rms": 0.00216},
+  "gate": "pcc >= 0.9995 (the focus case's soft threshold) and rel-RMS <= 0.04, both on the lanes the datapath carries (columns 0,2..14). Every variant in every table above PASSED both. No variant traded precision for speed; NO variant needed to.",
+  "identity_check": "tree_<G> (the L=1 generic-path corner) reproduces flat's pcc and rel-RMS to all printed digits at every cell -- the generic path is not a different computation."
+ },
+
+ "integration_facts": {
+  "generic_path_overhead": "tree_<G> vs flat is a reproducible 0.97-1.00x on the big cells and 0.92-0.97x on the small ones (5594 vs 5424 at w5120, 2670 vs 2463 at g8_br1) -- i.e. 3-8% for the tree walk's arithmetic, the per-level parent/pos/cnt resolution and the RT coord-table reads, on a path where L==1. A production spelling that if-constexprs the (L==1) body back to the flat one pays 0; the bench keeps the generic corner precisely so the coordinator can see what it would cost NOT to.",
+  "semaphores": "ONE PER LEVEL, and that is not negotiable: a level-(l+1) sender only has to finish its OWN level-l chunk, which is a DIFFERENT chunk from its parent's, so it can legally arrive before one of the parent's level-l members and a single cumulative counter would let that inc satisfy the parent's level-l wait_min and fold a slot that has not landed. The rule's 2-level tree needs 2 (mcast's 2 + 2 = 4 total, against NUM_SEMAPHORES = 16 per core).",
+  "no_self_signal": "preserved at every level. An interior node is BOTH receiver and sender: it writes its own slot synchronously and waits for exactly cnt-1 REMOTE incs. Semaphore::up(value) is a non-atomic local RMW and is never used on a counter the core itself owns.",
+  "l1": "the flat root's ring is GATHER_SLOTS*BLOCK_ROWS pages; the tree declares f_l-rounded-to-even * BLOCK_ROWS per level on every core plus one node_out page-block. At the rule's cells that is 132 -> 56 kB (w5120), 116 -> 56 kB (w7168), 1056 -> 448 kB (g32_br8), 928 -> 448 kB (g28_br8). At GROUP_SIZE=8 it is 288 -> 256 kB, i.e. nearly nothing -- the tree at m=1 does NOT hand back the L1 the row split does, because it keeps BLOCK_ROWS in every ring.",
+  "flow_control": "unchanged in kind. A remote sender is gated by the PREVIOUS round's stat multicast, which the root sends only after its own last-level fold, which requires every level-(L-1) forward, which requires each level-(L-2) gatherer to have drained its ring -- down to level 0. Same argument the op already relies on for its single root.",
+  "ragged_and_odd_groups": "one code path, no guard. Each level's ring is f_l rounded UP TO EVEN (D22's own trick) and every slot a ragged chunk has no real member for is boot-zeroed WHOLE, pairing against a real contributor as an exact +0.0. Verified correct at GROUP_SIZE=9 (odd) and GROUP_SIZE=28 with both an exact factorisation (4x7) and a padded one (4x8, 3x3x4).",
+  "interior_forward_is_whole_tile": "faces 1/3 of a folded tile are the ring's boot zeros carried through DEST, so a level>=1 forward is exact as ONE whole-tile transaction and needs no second zeroing pass. Level 0 keeps the op's GATHER_FACES=2 (half the bytes, two transactions)."
+ }
+}

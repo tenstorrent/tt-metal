@@ -1,6 +1,37 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
+// ============================================================================
+// ISOLATED PERF BENCH -- perf_experiments/gather_slot_major_coalesce.  NOT THE OP.
+//
+// VERBATIM copy of ttnn/ttnn/operations/rms_norm/kernels/rms_norm_writer.cpp plus
+// ONE compile-time switch, `RMS_GATHER_LAYOUT`:
+//
+//   0  ROW-MAJOR  the op today (D16/D22): a sender's partial for tile-row r lands at
+//                 gather page `r * GATHER_SLOTS + my_slot`, so a row's GROUP_SIZE
+//                 partials are contiguous and a SENDER's `rows` tiles are on a stride
+//                 of GATHER_SLOTS.  Cost: one NoC transaction PER TILE-ROW (two at
+//                 GATHER_FACES == 2) -- at the focus geometry 16 writes of 1024 B per
+//                 member per round carrying 1 kB of information.  THE HONEST BASELINE.
+//
+//   1  SLOT-MAJOR a sender's partial for tile-row r lands at page
+//                 `my_slot * BLOCK_ROWS + r`, so a SENDER's `rows` tiles are a
+//                 CONTIGUOUS RUN and at GATHER_FACES == 4 the whole block ships in
+//                 exactly ONE `noc_async_write` of `rows * stat_bytes`.
+//
+// The recorded objection to slot-major (this file, "a gapped window no chain walk can
+// express") is STALE: it described the PRE-D22 eltwise_chain fold.  D22's raw fold takes
+// EXPLICIT tile indices (`add_tiles(cb, cb, base + p, base + GATHER_HALF + p, 0)`), and
+// an explicit index walks a stride exactly as easily as a run -- see bench_compute.cpp.
+//
+// STRIDE IS BLOCK_ROWS, NOT `rows`.  `rows` shrinks on a short final row-block, so a
+// `my_slot * rows` layout would be ROUND-DEPENDENT (and the pad-slot page set would move
+// with it).  Striding by the compile-time BLOCK_ROWS makes the layout round-invariant, at
+// the price of pushing/popping the WHOLE ring (GATHER_SLOTS * BLOCK_ROWS pages) every
+// round instead of GATHER_SLOTS * rows.  The pages a short block leaves unwritten are
+// never addressed by the fold.
+// ============================================================================
+//
 // Writer for rms_norm (BRISC, NoC1).
 //
 // Mirror image of the reader — same (row-block, width-chunk) loop nest, same
@@ -78,6 +109,11 @@
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+
+// BENCH SWITCH (see the header): 0 = the op's row-major gather, 1 = slot-major.
+#ifndef RMS_GATHER_LAYOUT
+#define RMS_GATHER_LAYOUT 0
+#endif
 
 namespace {
 constexpr uint32_t cb_output_tiles = 8;
@@ -305,6 +341,31 @@ void kernel_main() {
         // its own slot (local) and by every member (remote).  `dst_noc` is the root's
         // gather-CB BASE (slot offset is applied per row here, not by the caller).
         auto ship_partial = [&](uint32_t src, uint64_t dst_noc, uint32_t rows) {
+#if RMS_GATHER_LAYOUT == 1
+            // ---- SLOT-MAJOR (the CANDIDATE) ---------------------------------------
+            // My `rows` tiles are a CONTIGUOUS run starting at page my_slot * BLOCK_ROWS,
+            // so at GATHER_FACES == 4 the whole block ships in ONE transaction (16 -> 1 at
+            // the focus geometry, 16 kB -> 32 kB of bytes).  At GATHER_FACES < 4 the SHIPPED
+            // faces are still per-tile discontiguous, so the transaction count is IDENTICAL
+            // to row-major and only the destination addressing differs -- that point is the
+            // control that separates "coalescing" from "GATHER_FACES == 4" in the menu.
+            const uint32_t d_base = my_slot * BLOCK_ROWS * stat_bytes;
+            if constexpr (GATHER_FACES == 4) {
+                noc_async_write(src, dst_noc + d_base, rows * stat_bytes);
+            } else {
+                for (uint32_t r = 0; r < rows; ++r) {
+                    const uint32_t s_off = r * stat_bytes;
+                    const uint32_t d_off = d_base + r * stat_bytes;
+                    if constexpr (GATHER_FACES == 3) {
+                        noc_async_write(src + s_off, dst_noc + d_off, 3 * face_bytes);
+                    } else {
+                        noc_async_write(src + s_off, dst_noc + d_off, face_bytes);
+                        noc_async_write(src + s_off + 2 * face_bytes, dst_noc + d_off + 2 * face_bytes, face_bytes);
+                    }
+                }
+            }
+#else
+            // ---- ROW-MAJOR (the op today -- the honest BASELINE) -------------------
             for (uint32_t r = 0; r < rows; ++r) {
                 const uint32_t s_off = r * stat_bytes;
                 const uint32_t d_off = (r * GATHER_SLOTS + my_slot) * stat_bytes;
@@ -317,53 +378,105 @@ void kernel_main() {
                     noc_async_write(src + s_off + 2 * face_bytes, dst_noc + d_off + 2 * face_bytes, face_bytes);
                 }
             }
+#endif
         };
-        // ---- WHY THERE IS NO FACE ZEROING HERE (Perf 3 / D26, MEASURED -- do not restore) ----
-        // Faces 1 and 3 of every gathered page are never written at GATHER_FACES < 4, so they
-        // hold whatever was in the root's L1.  Refinement 4 through Perf 2 zeroed them here; that
-        // work is DELETED, and the safety argument that used to justify it is now a MEASUREMENT
-        // rather than a claim.  (Perf 2's changelog named this stage "the honest next target" and
-        // recorded that its own argument for removing it was "reasoned, not measured".)
-        //
-        // MEASURED (isolated bench perf_experiments/gather_zero_elim, blackhole p150b 1350 MHz, at
-        // the op's pinned config -- bf16 / HiFi2 / fp32_dest_acc_en=False / math_approx_mode=False,
-        // UNCHANGED).  The bench seeds columns 16..31 (== faces 1 and 3) of every gathered page
-        // with NINE catastrophic patterns -- 1e30, -1e30, NaN, +Inf, -Inf, fp32 subnormals, a
-        // per-lane mix that makes the fold evaluate Inf + (-Inf) = NaN, and a stale-L1 lookalike --
-        // then runs the op's REAL D22 fold + D17 finalize + pass B's exact
-        // BinaryFpu<x, stat, Mul, BroadcastDim::Col> consumer.  EVERY seed produced output
-        // BIT-IDENTICAL (torch.equal) to the same run with those lanes zeroed, with a bit-identical
-        // stat column 0, at GROUP_SIZE 4/8/9/28/32 x BLOCK_ROWS 1/8/32 and at two shard widths.
-        // Cost removed: 9900 ns of isolated stage on the root; 2462 ns (7.1%, 1.077x) of the focus
-        // shape's WALL by the op's own cumulative peel.
-        //
-        // THE CONTROL is what makes that a proof and not an accident: the packed stat tile's
-        // columns 16..31 came back 100% NON-FINITE for the NaN/+-Inf seeds and |max| 7.96e30 for the
-        // 1e30 seeds.  The garbage DOES enter DEST (the FPU has no lane scope), DOES survive the
-        // pairwise acc_to_dest fold, and IS packed into cb_stat_handoff and multicast to every
-        // member -- it is CARRIED and never READ.  The only reader of a stat tile in this op is
-        // pass B's column broadcast, which takes column 0 (faces 0 and 2, both shipped).
-        // If a future consumer ever reads a gathered or stat tile WHOLE (a debug dump,
-        // stat-as-output, an SFPU or reduce pass over it), this deletion must be revisited.
-        //
-        // WHAT REMAINS, and why it is a DIFFERENT question: the odd-GROUP_SIZE PAD PAGE.  A pad
-        // slot (D22) is never written by any member -- a sender lands at
-        // `r * GATHER_SLOTS + my_slot` with `my_slot < GROUP_SIZE <= GATHER_SLOTS - 1` -- and it is
-        // folded WHOLE, so its faces 0/2 land in column 0 and must be an exact +0.0.  MEASURED
-        // catastrophic without it: pad = 1e30 gives rel-RMS 1.00 at pcc 0.999672 (the uniform-scale
-        // error pcc alone does not see, which is exactly why this op's nets bound rms and not just
-        // pcc), and pad = NaN gives rel-RMS 1.00.  Poisoning ONLY the pad's columns 16..31 is
-        // bit-identical, so only its faces 0/2 are load-bearing -- but zeroing just those two faces
-        // is a MEASURED 10-11% REGRESSION against the whole-page zero (1959 vs 1781 ns at
-        // GROUP_SIZE 9 / BLOCK_ROWS 8): this stage pays per API CALL, not per byte
-        // (Noc::async_write_zeros sets the read state up once and chunks at MEM_ZEROS_SIZE = 512 B,
-        // so two 1024 B calls lose to one 4096 B call).  Whole page it is.
-        //
-        // Zeroing the whole CB is still WRONG for the reason Refinement 4 measured (pcc 0.87-0.99):
-        // it would wipe members that had already landed.  Only the root reads this CB, so only the
-        // root pays; at even GROUP_SIZE the stage does literally nothing.
+        // The gather CB window a round publishes.  ROW-MAJOR strides by GATHER_SLOTS, so the
+        // addressed pages are exactly `GATHER_SLOTS * rows` and the op publishes that.
+        // SLOT-MAJOR strides by the compile-time BLOCK_ROWS (round-invariant, see the
+        // header), so a short final block addresses pages up to
+        // (GATHER_SLOTS-1)*BLOCK_ROWS + rows - 1 and the WHOLE ring must be the unit.
+        auto gather_window = [&](uint32_t rows) -> uint32_t {
+#if RMS_GATHER_LAYOUT == 1
+            (void)rows;
+            return GATHER_SLOTS * BLOCK_ROWS;
+#else
+            return GATHER_SLOTS * rows;
+#endif
+        };
+        // Boot: make the faces the gather never writes DEFINED, so no undefined L1
+        // ever reaches the root's elementwise sum / rsqrt.  Zeroing exactly the
+        // UNSHIPPED faces (and nothing else) is what makes this race-free: a member's
+        // partial can land at any time, and it only ever touches faces the root
+        // leaves alone -- which is why zeroing the whole CB here does NOT work (it
+        // wipes members that already arrived; measured as pcc 0.87-0.99 with a large
+        // rms across every combine cell).  Only the root reads this CB, so only the
+        // root pays.
+        // A PAD slot (odd GROUP_SIZE only, D22) is never written by any member, so the
+        // root's fold would otherwise add whatever L1 garbage was there.  Zeroing it WHOLE
+        // is race-free by exactly the argument below: a sender lands at
+        // `r * GATHER_SLOTS + my_slot` with `my_slot < GROUP_SIZE <= GATHER_SLOTS - 1`, so
+        // no member ever touches a pad page, and the pad contributes an exact +0.0.
         constexpr bool ZERO_PAD = (GATHER_SLOTS != GROUP_SIZE);
-        if constexpr (ZERO_PAD) {
+
+        // ====================================================================
+        // BENCH LEVER 2 -- `RMS_BOOT_MODE == 1`: DISTRIBUTE THE BOOT.
+        //
+        // Measured on this bench, the boot is the single biggest number on the combine's
+        // transport: 2426 ns / 1.076x at the focus geometry, 734 ns / 1.136x at
+        // GROUP_SIZE 32.  It is also already BYTE-bound, not transaction-bound
+        // (163840 B / 2426 ns = 67 GB/s of local L1 zeroing), so no amount of
+        // transaction restructuring can make it cheaper -- which rules out the obvious
+        // "one contiguous whole-CB zero" (that is MORE bytes, and it is the recorded
+        // race) as well as anything the gather layout could do to it.
+        //
+        // What is left is WHO PAYS.  Today ONE core (the root) serially zeroes
+        // GROUP_SIZE * BLOCK_ROWS pages' worth of unshipped faces while the other
+        // GROUP_SIZE - 1 cores of the group sit idle waiting for its first multicast.
+        // Mode 1 has EVERY core zero the unshipped faces OF ITS OWN SLOT: same total
+        // bytes, 1/GROUP_SIZE of them per core, all in parallel, and off the root's
+        // critical path.
+        //
+        // RACE-FREEDOM is the op's own argument, refined per slot.  Core `my_slot`
+        // writes ONLY faces 1/3 of the pages its own slot owns -- disjoint from every
+        // other core's pages (slots partition the ring) and disjoint from the faces it
+        // writes as DATA (0/2).  So no two writers ever touch the same byte, and
+        // nothing wipes a partial that already arrived.  A PAD slot belongs to no core,
+        // so the root keeps that one.  Ordering against the root's fold needs no new
+        // semaphore: a member issues its zeros before its round-0 ship, and the
+        // `noc_async_write_barrier()` it already takes before `gather_sem.up()` waits
+        // for ALL of that core's outstanding writes -- so the root's `wait_min` implies
+        // every member's zeros have landed, exactly as it implies its data has.
+        //
+        // The remote zero needs a SOURCE, because `Noc::async_write_zeros` is local-L1
+        // only.  A non-root's OWN cb_partials_gathered is dead L1 (the CB is declared on
+        // every core purely so its address is identical everywhere), so a face of its
+        // page 0 is free scratch: zero it locally, barrier, then `noc_async_write` it.
+        // ====================================================================
+#ifndef RMS_BOOT_MODE
+#define RMS_BOOT_MODE 0
+#endif
+#if RMS_BOOT_MODE == 1 && !defined(RMS_ABLATE_GATHER_ZERO)
+        if constexpr (GATHER_FACES < 4) {
+            if (is_root == 0) {
+                MaybeDeviceZoneScope("writer_gather_zero_member");
+                DataflowBuffer scratch_dfb(cb_partials_gathered);
+                const uint32_t cb_base = get_write_ptr(cb_partials_gathered);
+                // Local scratch: one face of this core's own (dead) gather CB.
+                noc.async_write_zeros(scratch_dfb, face_bytes, {.offset_bytes = face_bytes});
+                noc.write_zeros_l1_barrier();  // MUST precede any noc_async_write (zero mode)
+                const uint32_t src = cb_base + face_bytes;
+                const uint64_t dst_base = get_noc_addr(mc.sender_x(), mc.sender_y(), cb_base);
+                for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
+#if RMS_GATHER_LAYOUT == 1
+                    const uint32_t d_off = (my_slot * BLOCK_ROWS + r) * stat_bytes;
+#else
+                    const uint32_t d_off = (r * GATHER_SLOTS + my_slot) * stat_bytes;
+#endif
+                    if constexpr (GATHER_FACES == 2) {  // faces 1 and 3 unshipped
+                        noc_async_write(src, dst_base + d_off + face_bytes, face_bytes);
+                    }
+                    noc_async_write(src, dst_base + d_off + 3 * face_bytes, face_bytes);
+                }
+                // NO barrier here: round 0's own `noc_async_write_barrier()` before
+                // `gather_sem.up()` covers these writes too (a barrier drains ALL of this
+                // core's outstanding writes), which is the whole point -- the zeroing costs
+                // the member no extra synchronisation.
+            }
+        }
+#endif
+        // ROOT SIDE.  Mode 0 zeroes every slot (the op today).  Mode 1 zeroes only its OWN
+        // slot's unshipped faces (+ the pad, which belongs to nobody).
+        if constexpr (GATHER_FACES < 4 || ZERO_PAD) {
 #if defined(RMS_ABLATE_GATHER_ZERO)
             if (false) {
 #else
@@ -373,8 +486,45 @@ void kernel_main() {
                 DataflowBuffer gather_dfb(cb_partials_gathered);
                 const uint32_t pages = gather_dfb.get_total_size_bytes() / stat_bytes;
                 for (uint32_t p = 0; p < pages; ++p) {
-                    if (p % GATHER_SLOTS >= GROUP_SIZE) {  // a pad slot: zero it whole
-                        noc.async_write_zeros(gather_dfb, stat_bytes, {.offset_bytes = p * stat_bytes});
+                    const uint32_t base = p * stat_bytes;
+                    if constexpr (ZERO_PAD) {
+                        // WHICH PAGES ARE PAD depends on the layout.  ROW-MAJOR: page
+                        // r * GATHER_SLOTS + slot, so pad iff (p % GATHER_SLOTS) >= GROUP_SIZE
+                        // -- GATHER_SLOTS - GROUP_SIZE pages scattered on a stride.
+                        // SLOT-MAJOR: page slot * BLOCK_ROWS + r, so pad iff
+                        // p >= GROUP_SIZE * BLOCK_ROWS -- ONE CONTIGUOUS TAIL run, which is
+                        // also why the odd-GROUP_SIZE carve-out gets cheaper under the
+                        // candidate rather than more expensive.
+#if RMS_GATHER_LAYOUT == 1
+                        const bool is_pad = (p >= GROUP_SIZE * BLOCK_ROWS);
+#else
+                        const bool is_pad = (p % GATHER_SLOTS >= GROUP_SIZE);
+#endif
+                        if (is_pad) {  // a pad slot: zero it whole
+                            noc.async_write_zeros(gather_dfb, stat_bytes, {.offset_bytes = base});
+                            continue;
+                        }
+                    }
+#if RMS_BOOT_MODE == 1
+                    // DISTRIBUTED boot: every other slot is zeroed by ITS OWN core (above),
+                    // so the root only owns its own slot's faces.  `my_slot` is the root's,
+                    // which the descriptor always assigns 0, but this reads it rather than
+                    // assuming it.
+#if RMS_GATHER_LAYOUT == 1
+                    if (p / BLOCK_ROWS != my_slot) {
+                        continue;
+                    }
+#else
+                    if (p % GATHER_SLOTS != my_slot) {
+                        continue;
+                    }
+#endif
+#endif
+                    if constexpr (GATHER_FACES == 2) {  // faces 1 and 3 unshipped
+                        noc.async_write_zeros(gather_dfb, face_bytes, {.offset_bytes = base + face_bytes});
+                    }
+                    if constexpr (GATHER_FACES < 4) {
+                        noc.async_write_zeros(gather_dfb, face_bytes, {.offset_bytes = base + 3 * face_bytes});
                     }
                 }
                 noc.write_zeros_l1_barrier();
@@ -390,7 +540,7 @@ void kernel_main() {
                 {
                     MaybeDeviceZoneScope("writer_gather_ship");
                     cb_wait_front(cb_sum_handoff, rows);
-                    cb_reserve_back(cb_partials_gathered, GATHER_SLOTS * rows);
+                    cb_reserve_back(cb_partials_gathered, gather_window(rows));
                     ship_partial(get_read_ptr(cb_sum_handoff), get_noc_addr(get_write_ptr(cb_partials_gathered)), rows);
                     noc_async_write_barrier();
                 }
@@ -408,7 +558,7 @@ void kernel_main() {
                     MaybeDeviceZoneScope("writer_gather_wait");
                     arrivals += GROUP_SIZE - 1;
                     gather_sem.wait_min(arrivals);
-                    cb_push_back(cb_partials_gathered, GATHER_SLOTS * rows);
+                    cb_push_back(cb_partials_gathered, gather_window(rows));
                 }
 
                 // 3. multicast the finalized stat back to the whole group.

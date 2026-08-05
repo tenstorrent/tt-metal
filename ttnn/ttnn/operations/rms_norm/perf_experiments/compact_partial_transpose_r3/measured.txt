@@ -1,0 +1,255 @@
+compact_partial_transpose_r3 -- PERF 3 REBASE of Perf 2's deferred WIN #1 onto the CURRENT tree.
+blackhole p150b, 1350 MHz.  Precision contract IDENTICAL in every row and every variant:
+fp32 partial/stat CBs, fp32_dest_acc_en=False, MathFidelity.HiFi2, math_approx_mode=False.
+Correctness is the only pass/fail.  Nothing here tunes a precision knob for speed.
+
+WHY THIS DIR EXISTS.  perf_experiments/compact_partial_transpose_r2 measured this idea at
+6398 -> 1732 ns/block against the PRE-D22 root chain.  Perf 2 then landed D22, which replaced that
+baseline entirely, so r2's ratio was against code that no longer exists.  Both sides are re-measured
+here against the tree as it stands.
+
+TWO BENCHES, because the idea has two halves and the Perf-3 peel says the second is the bigger one:
+  BENCH A  combine_bench.py / test_combine_bench.py -- the root's COMPUTE, single core, everything
+           resident, no NoC.  Amortised: ns = (t_9 - t_1) / 8, which cancels the launch floor.
+  BENCH B  transport_bench.py / test_transport_bench.py -- the WHOLE combine on the real 64-core
+           geometry (gather + semaphore + multicast + fold + the pack/un-pack the layout adds),
+           every core starting with its partials resident and ending with the stat in its output
+           shard.  ns = the program's DEVICE KERNEL DURATION.  THREE independent profiled runs
+           agree within 0.5% on every cell (ops_perf_benchB_run1/2/3.csv; run 3 also carries the
+           two RAGGED configs, added after runs 1-2, and reproduces the focus cell to 0.02%).
+
+CROSS-ROUND CALIBRATION (bench A, MODE 6 `base_d19` == r2's baseline, re-run on this box):
+   rows=1   982 ns   (r2: 986)      rows=8   6401 ns   (r2: 6398, 0.05%)   rows=32  25064 (r2: 25056)
+=> the two rounds' tables are directly comparable; nothing about the box moved.
+
+BASELINE = `base_d22` = kernels/rms_norm_compute.cpp's `is_root != 0` branch as it stands: ONE
+cb_wait_front over the whole GATHER_SLOTS*rows window, the two mandatory reconfigs, then per
+tile-row one DEST window of GATHER_HALF pairwise add_tiles(acc_to_dest) + the raw-sfpi
+stat_finalize_payload at D17's <2,4> VectorMode::C + ONE pack_tile.
+CANDIDATE = the SAME code with ONE window per BLOCK instead of one per ROW, because a sender has
+already permuted its BLOCK_ROWS partials into BLOCK_ROWS COLUMNS of one tile.
+
+=== 1. BENCH A: root-chain COMPUTE, ns per combine round, BLOCK_ROWS x GROUP_SIZE ============
+FIN = the narrowest CORRECT finalize scope (0 = D17 <2,4> C, 1 = <1,8> C, 2 = <1,8> RC).
+
+ rows  G=4              G=8              G=9(odd)         G=28             G=32           FIN
+   1   485 ->  504      557 ->  551      573 ->  581      822 ->  821      871 ->  872     0
+       0.96x FLAT       1.01x FLAT       0.99x FLAT       1.00x FLAT       1.00x FLAT
+   2   803 ->  721      915 ->  771      962 ->  802     1443 -> 1041     1547 -> 1094     1
+       1.11x            1.19x            1.20x            1.39x            1.41x
+   8  2610 ->  722     3024 ->  770     3242 ->  799     5157 -> 1044     5586 -> 1096     1
+       3.61x           *3.93x*           4.06x            4.94x            5.10x
+  16  5012 ->  723     5848 ->  777     6276 ->  796    10114 -> 1042    10970 -> 1094     1
+       6.93x            7.53x            7.88x            9.71x           10.03x
+  32  9802 -> 1165    11487 -> 1215    12342 -> 1242    20021 -> 1481    21724 -> 1533     2
+       8.41x            9.45x            9.94x           13.52x           14.17x
+
+*3.93x = the FOCUS geometry (GROUP_SIZE = 8, BLOCK_ROWS = 8).  The baseline is
+O(BLOCK_ROWS x GROUP_SIZE); the candidate is O(GROUP_SIZE) and essentially FLAT in BLOCK_ROWS
+(770 at 8, 777 at 16; the 1215 at 32 is the RC widening, not the row count).  rows=1 is FLAT by
+construction -- the mechanism is a literal no-op there (one packed column IS column 0) and both
+sides run byte-identical code; the 0.96x at G=4 is a 19 ns difference on 485 ns, inside noise.
+4 rounds x base_d22 3024 = 12096 ns against the whole-op cumulative peel's 11297 ns of WALL for the
+same payload -- the isolated reconstruction is 7% high (no DM overlap), so it is calibrated.
+
+=== 2. BENCH A: the two sides the compact layout ADDS (both paid in PARALLEL on all cores) ====
+Their baseline is ZERO: D18 has pass A's reduce pack straight into cb_sum_handoff, and the mcast
+lands straight in cb_row_final.
+
+ rows   member_pack (sender)   recv_unpack (receiver, DEST_BATCH 4)
+    1            230                   233
+    2            261                   284
+    8            420                   539
+   16            625                   872
+   32           1038                  1548   (1380 at DEST_BATCH 8)
+
+=== 3. BENCH B: THE WHOLE COMBINE on the focus geometry and across the domain =================
+Whole-program device kernel ns; `rounds` = num_blocks.  L1 = the combine's OWN CBs per core
+(+ the one-hot bank on the compact side, counted at fp32 -- bench A measured a bf16 bank as
+perf-flat, which halves it, so this column is pessimistic for the candidate).
+
+ config              rounds  flat        compact     x       flat L1   compact L1   gather/member/round
+ focus g8 br8 r32       4    34772       10994      3.16x     288 kB      88 kB     16 w/16 kB -> 1 w/4 kB
+ g8 br2  r32           16    37716       36656      1.03x      72 kB      64 kB      4 w/ 4 kB -> 1 w/4 kB
+ g8 br4  r32            8    33297       19482      1.71x     144 kB      72 kB      8 w/ 8 kB -> 1 w/4 kB
+ g8 br16 r32            2    42457        6879      6.17x     576 kB     120 kB     32 w/32 kB -> 1 w/4 kB
+ g8 br32 r32            1    L1_OOM       5428        --     1152 kB     184 kB     64 w/64 kB -> 1 w/4 kB
+ g8 br1  r1             1     3093        2554      1.21x      36 kB      60 kB      2 w/ 2 kB -> 1 w/4 kB
+ g4 br8  r32            4    25026        9972      2.51x     160 kB      72 kB
+ g4 br1  r1             1     2315        2279      1.02x FLAT 20 kB      44 kB
+ g9 br8  r8  (odd)      1    14216        3530      4.03x     352 kB      96 kB
+ g9 br1  r1  (odd)      1     2947        2699      1.09x      44 kB      68 kB
+ g28 br8 r8             1    45672        5150      8.87x     928 kB     168 kB
+ g28 br1 r1             1     6950        4301      1.62x     116 kB     140 kB
+ g32 br8 r8             1    51521        5303      9.72x    1056 kB     184 kB
+ g32 br1 r1             1     7885        4636      1.70x     132 kB     156 kB
+ --- RAGGED: num_rows NOT a multiple of BLOCK_ROWS, so the LAST round is short ---------------
+ g8 br8 r20 (8,8,4)     3    25941        8351      3.11x     288 kB      88 kB
+ g8 br3 r8  (3,3,2)     3    11917        7475      1.59x     108 kB      68 kB
+
+ZERO cells below 1.00x across all three runs (minimum 1.01x).  BLOCK_ROWS = 1 is NOT flat here even
+though the fold is: the gather becomes ONE transaction instead of two AND the boot-zeroing
+disappears, which is worth 1.02x-1.70x on its own (the win grows with GROUP_SIZE because that is
+how many pages the boot-zeroing walks).
+
+=== 4. BENCH B ZONE ATTRIBUTION -- where the 3.16x comes from (read_zones.py, focus geometry) ==
+ns per ROUND unless marked; ROOT = the group root, MEMBER = a representative non-root.
+A compute zone's number INCLUDES its cb_wait_front, so `compute_root_fused` here is
+payload + exposed gather latency (bench A says the payload alone is 3024 -> 770).
+
+ stage                             RISC        flat        compact      delta
+ writer_gather_zero  (ONE-SHOT)    ROOT BRISC  10949        13         -10936   <-- the stage DIES
+ writer_mcast_send                 ROOT BRISC   4133      1147          -2986
+ writer_gather_wait                ROOT BRISC   1114       749           -365
+ writer_gather_ship                ROOT BRISC    491       551            +60
+ compute_root_fused (+gather wait) ROOT TRISC0  8092      1242          -6850
+ compute_member_pack               ROOT TRISC0     0       219           +219
+ compute_recv_unpack               ROOT TRISC0     0       940           +940
+ writer_gather_ship                MEM  BRISC   1891      1087           -804   <-- 16 writes -> 1
+ writer_mcast_recv                 MEM  BRISC   6577      1395          -5182
+ compute_member_pack               MEM  TRISC0     0       220           +220
+ compute_recv_unpack               MEM  TRISC0     0      2285          +2285
+
+ ROOT total zone sum, whole run:   BRISC 33899 -> 9801,  TRISC0 32367 -> 9604.
+ MEMBER total zone sum:            BRISC 33871 -> 9928,  TRISC0     0 -> 10019.
+ => the compact layout also BALANCES the group: the root's serial 32-34 us becomes ~10 us and the
+    members go from idle to ~10 us, i.e. the work that was the root's alone is now spread.
+
+ SPLIT OF THE 5945 ns/round SAVING (8696 -> 2748 ns/round at the focus):
+   fold payload      2254 ns/round   (bench A: 3024 -> 770, measured in isolation)
+   everything else   3691 ns/round   NET of the +1159 ns/round the pack + un-pack add on the
+                                     root's timeline, so the GROSS transport + boot-zero + mcast +
+                                     sync saving is ~4850 ns/round.
+ So the TRANSPORT half is BIGGER than the fold half -- which is what the Perf-3 peel predicted
+ (transport+sync residue 16097 ns = 46.7% vs root-chain payload 11297 ns = 32.8%).
+
+=== 5. THE num_blocks QUESTION (compaction makes ONE ROUND affordable; is one round better?) ==
+At the focus geometry (G = 8, 32 tile-rows/core), COMPACT only:
+
+ BLOCK_ROWS   rounds   whole combine   ns/round   compact L1
+     2          16        36656          2291        64 kB
+     4           8        19481          2435        72 kB
+     8           4        10994          2748        88 kB
+    16           2         6879          3440       120 kB
+    32           1         5428          5428       184 kB
+
+ ONE round beats FOUR rounds 10994 -> 5428 = 2.03x, and beats the CURRENT four-round flat combine
+ 34772 -> 5428 = 6.41x.  Each round carries a ~2.1 us fixed sync+launch floor (the BLOCK_ROWS = 1
+ cell is 2554 ns for a single trivial round), so collapsing 4 rounds into 1 removes ~3 x 2.1 us of
+ pure round-trip.
+ FLAT CANNOT GO THERE AT ALL: its landing ring is GATHER_SLOTS * BLOCK_ROWS = 1024 fp32 pages
+ = 1152 kB of combine CBs at BLOCK_ROWS = 32, which does not fit in a core's L1 (measured L1_OOM).
+ Removing the GROUP_SIZE x BLOCK_ROWS term is exactly what unlocks the knob.
+ HONEST CAVEAT, stated because this bench cannot measure it: the op's D25 pipeline exists to hide
+ the per-round gather latency behind block blk+1's pass A, and at num_blocks = 1 that pipeline is
+ VOID.  This bench models NO pass A, so it credits the round collapse with latency D25 already
+ hides in the real op.  The BLOCK_ROWS ladder is therefore a knob for the coordinator to re-decide
+ with pass A present; the compaction win itself (the flat-vs-compact column at every fixed
+ BLOCK_ROWS) does not depend on it.
+
+=== 6. OPTION MENU -- per-option ns AND precision, focus geometry, ONE user config ============
+Every option below runs the SAME contract (fp32 stat CBs / HiFi2 / fp32_dest_acc_en=False /
+math_approx_mode=False).  Soft gate: pcc >= 0.9995, and this op's own rel-RMS bound 0.04.
+
+ option                                    bench-A ns/round  bench-B whole   pcc         rel_rms
+ base_d22 (the tree today)                        3024           34772        0.9999978   0.00227
+ COMPACT, FIN <1,8> C, DEST_BATCH 4                770           10994        0.9999931   0.00383
+ COMPACT, FIN <1,8> RC (needed above BR 16)       1222           12864        0.9999931   0.00383
+ COMPACT, DEST_BATCH 8                             --            11020        0.9999931   0.00383
+ COMPACT, DEST_BATCH 2                             --            11583        0.9999931   0.00383
+ COMPACT, one round (BLOCK_ROWS = 32)             1215            5428        0.9999931   0.00383
+ COMPACT, one round, DEST_BATCH 8                 1215            5259        0.9999931   0.00383
+ --- and the option that is NOT graduatable, priced so the hazard stays visible --------------
+ COMPACT with D17's SHIPPED <2,4> C scope          553              --        0.9972987   1036
+   ^ 1.39x faster than the correct scope and CATASTROPHICALLY WRONG: <2,4> reaches only columns
+     0,2,..,14, so on a compact tile the ODD rows' stats are never scaled and never rsqrt-ed.
+     pcc still reads 0.9973 -- above 0.997 -- while rel-RMS is 1036 against a 0.04 bound.  This is
+     the third bug in this op that pcc alone would have passed.  r2 measured 0.9974/1031 for the
+     same cell; reproduced here to 0.01%.  test_combine_bench.py keeps it as a LIVE assertion
+     (test_finalize_scope_hazard) that FAILS if the narrow scope ever starts passing.
+
+ PRECISION COST, stated plainly: COMPACT is slightly LESS accurate than the current combine --
+ rel-RMS 0.00383 vs 0.00227 at the focus (1.7x), 0.00486 vs 0.00260 at G=32/BR=1 (1.9x), pcc
+ 0.9999900-0.9999950 vs 0.9999965-0.9999982.  Cause, and it is understood rather than mysterious:
+ the permutation matmuls round each value through a 16-bit DEST word twice more (once packing the
+ compact tile, once un-packing it) at fp32_dest_acc_en = False.  Both sides are 4-5 ORDERS OF
+ MAGNITUDE inside the 0.04 rel-RMS bound and 4 nines inside the 0.9995 pcc gate, so no option here
+ trades the precision CONTRACT -- but the candidate is not free on accuracy and that is not hidden.
+ The pack/un-pack spelling that avoids it does not exist: there is no fp32 path through DEST at
+ this config, and CHANGING the config to get one is exactly the forbidden move.
+
+ --- pack-side spellings (bench A, all FLAT in ns -> pick the cheapest L1) --------------------
+ bank EF  (2*BR+1 pages, explicit F_r)   recv_unpack 549 / 1546 (rows 8 / 32)   same pcc & rel_rms
+ bank E_T (BR+1 pages, srcB transpose)   recv_unpack 539 / 1548                 same
+ bank dtype fp32                         member_pack 423 / 1038                 same
+ bank dtype bf16 (one-hot is EXACT)      member_pack 419 / 1033                 same
+ => take E_T + bf16: half the pages, half the bytes per page, ZERO measured ns difference.
+ --- DEST seeding ---
+ SEED 0 (rely on the packer's ZEROACC)   member_pack  423 / 1038   recv_unpack  539 / 1548
+ SEED 1 (explicit zero-tile copy first)  member_pack  479 / 1099   recv_unpack 1175 / 3813
+ => SEED 1 is 1.1x worse on the pack and 2.2-2.5x worse on the un-pack, for a BIT-IDENTICAL
+    result.  Take SEED 0.
+ --- un-pack DEST batching (bench A) ---
+ rows =  8 : batch 1 1130,  2 682,  4 539,  8 599   -> 4 wins
+ rows = 32 : batch 1 4143,  2 2368, 4 1548, 8 1380  -> 8 wins
+ => DEST_BATCH = 4 at BLOCK_ROWS <= 8, 8 above.  Bench B agrees but the gap is small there
+    (11020 batch 8 vs 10994 batch 4 at BR=8; 5259 vs 5428 at BR=32).
+
+=== 7. DOES IT MAKE writer_gather_zero UNNECESSARY?  YES, MEASURED ===========================
+ `writer_gather_zero` exists ONLY because GATHER_FACES < 4 leaves part of every landing page
+ un-written, so it has to pre-define exactly the unshipped faces.  A compact page CANNOT be
+ partially shipped: the receiver's un-permute is a matmul, which sums 32 products across the row,
+ so an inf/NaN bit pattern in ANY column becomes inf*0 = NaN in column 0.  So compact ships WHOLE
+ tiles -- ONE transaction, every byte written by exactly one member per round, defined by
+ construction.  Measured on the root's BRISC at the focus geometry: 10949 ns -> 13 ns.
+ The ONE residue is the odd-GROUP_SIZE pad slot, which is now ONE page instead of
+ GATHER_SLOTS * BLOCK_ROWS (G = 9 measured correct, pcc 0.9999932).  At even GROUP_SIZE (4/8/28/32,
+ including the focus shape) the stage does literally nothing.
+ This is the stage Perf 2's changelog named as "the honest next target" and said the principled
+ route to was "take compact_partial_transpose_r2".  It is taken, and it is measured.
+
+=== 8. WHOLE-OP EXTRAPOLATION -- explicitly EXTRAPOLATED, not measured end-to-end ============
+Focus shape whole op = 34494 ns against a 25640 ns config-matched reference.  Banking ONLY the two
+stages the op's own cumulative peel already priced in WALL ns:
+  root chain payload   11297 ns  ->  11297 x (770 + 940) / 3024  =  6388 ns   saving 4909
+  writer_gather_zero    2462 ns  ->  ~0                                       saving 2462
+  => 34494 -> 27123 ns = 1.27x, and 27123 / 25640 = 1.058x off the reference (from 1.345x).
+NOT banked, deliberately, because this bench cannot say how much of it is wall in the real op:
+the root's mcast payload (4133 -> 1147 ns/round), the members' ship (1891 -> 1087 ns/round), the
+gather wait (1114 -> 749 ns/round), and the entire num_blocks collapse.  Bench B's fully-exposed
+combine ratio is 3.16x at the focus and 6.41x if BLOCK_ROWS goes to 32, so 1.27x is a FLOOR, not an
+estimate.  The whole-op number is the coordinator's to measure after integration.
+
+=== 9. L1 PER CORE (fp32 tile 4096 B) =======================================================
+Focus (GROUP_SIZE 8, BLOCK_ROWS 8), the combine's own CBs as bench B declares them:
+   flat     cb_partials_gathered 64 p = 262144 + cb_stat_handoff 8 p = 32768        = 288 kB
+   compact  cb_partials_gathered  8 p =  32768 + stat_handoff/sum_handoff/mcast_in
+                                                 2+2+2 p = 24576 + bank 8 p = 32768 =  88 kB
+   => -200 kB/core at the focus, -872 kB at GROUP_SIZE 32 / BLOCK_ROWS 8 (1056 -> 184 kB), and the
+   GROUP_SIZE x BLOCK_ROWS term is GONE from the descriptor's L1-bound BLOCK_ROWS solve, which is
+   what makes num_blocks = 1 expressible at all.  With a bf16 bank (measured perf-flat) subtract
+   another 16 kB.
+
+=== 10. INTEGRATION SURFACE (for the coordinator; none of this is measured, it is a checklist) =
+ compute  member: reduce -> cb_sum_handoff (rows pages, D18 unchanged) -> ONE matmul-permute pass
+                  -> a NEW 1-page cb_compact_handoff.  +219 ns/round, parallel on every core.
+          root  : the D22 fused chain with `windows = 1` instead of `rows`, and the finalize scope
+                  widened to <1,8> C (BLOCK_ROWS <= 16) / <1,8> RC (above).  D17's <2,4> stays for
+                  the NON-combine local finalize, which really does own only column 0.
+          all   : after the mcast lands, ONE matmul-permute pass un-packing 1 page -> `rows` pages
+                  of cb_row_final.  Pass B is UNCHANGED (it still reads a column-shaped stat).
+ writer   ship_partial becomes ONE whole-tile write to page `my_slot`; the gather ring becomes
+          GATHER_SLOTS pages; `writer_gather_zero` shrinks to the odd-GROUP_SIZE pad page (a no-op
+          at even GROUP_SIZE); the mcast carries 1 page.  D24's publish-own-copy-first and the
+          no-self-signal rule are unchanged and still load-bearing.
+ host     one host-generated one-hot bank tensor per core (BLOCK_ROWS pages, bf16), plus the
+          cb_partials_gathered page count in the L1-bound BLOCK_ROWS solve.
+ ordering D25's pipeline issues block blk+1's pass A before block blk's combine; the member's
+          permute for block blk must be issued before its ship for blk.  Not measured here.
+ ragged   num_rows % BLOCK_ROWS != 0 leaves the last block with rows < BLOCK_ROWS: the compact tile
+          then uses only columns 0..rows-1, the rest stay exactly 0, and the widened finalize scope
+          is a superset.  MEASURED, not assumed -- bench B carries two ragged configs (rows 20 with
+          BLOCK_ROWS 8 -> 8,8,4 and rows 8 with BLOCK_ROWS 3 -> 3,3,2), both CORRECT on both
+          variants and 3.11x / 1.59x.  Both kernels derive the round's window as
+          `GATHER_SLOTS * rows` (COMPACT: GATHER_SLOTS), identically on every core -- that identity
+          is what keeps a remote sender's locally-computed landing address equal to the root's.
