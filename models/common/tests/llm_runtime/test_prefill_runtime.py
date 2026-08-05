@@ -2005,6 +2005,13 @@ def test_assemble_maps_batched_extract_rows_independently_of_physical_slots(monk
     host[0, 0, 0, :] = 1
     host[0, 0, 1, :] = 2
     released = []
+    concatenated = []
+    original_concat = prefill_module._concat_host_output
+    monkeypatch.setattr(
+        prefill_module,
+        "_concat_host_output",
+        lambda value, shape: concatenated.append((value, shape)) or original_concat(value, shape),
+    )
     monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda value: released.append(value) or [])
 
     output = runtime.assemble(
@@ -2014,6 +2021,7 @@ def test_assemble_maps_batched_extract_rows_independently_of_physical_slots(monk
 
     assert torch.equal(output[0, 0], torch.ones(runtime.config.model.vocab_size))
     assert torch.equal(output[1, 0], torch.full((runtime.config.model.vocab_size,), 2.0))
+    assert concatenated == [(host, runtime.config.cluster_shape)]
     assert released == ["owned"]
 
 

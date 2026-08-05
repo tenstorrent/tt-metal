@@ -454,13 +454,14 @@ class PrefillRuntime:
                                 cluster_shape,
                             )
                     else:
+                        if (
+                            isinstance(host_primary, ttnn.Tensor)
+                            and host_primary.storage_type() != ttnn.StorageType.HOST
+                        ):
+                            raise ValueError("prefill output must be on host")
+                        combined = _concat_host_output(host_primary, cluster_shape)
                         for local_row, source_row in enumerate(request.source_rows):
-                            output_logits[source_row] = _process_output_prefill(
-                                host_primary,
-                                local_row,
-                                vocab_size,
-                                cluster_shape,
-                            )
+                            output_logits[source_row] = combined[0, 0, local_row, :vocab_size].float()
                 else:
                     relative_last = (request.last_token_indices[0] - request.cached_tokens[0]) % _TILE_SIZE
                     if request.kind == "single" and not request.uses_chunked_prefill:
