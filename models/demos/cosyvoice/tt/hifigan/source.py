@@ -7,23 +7,39 @@ CosyVoice-300M runs at 22050 Hz, which selects `SineGen` (type 1) rather than
 `SineGen2` -- the implementation that integrates phase with a cumsum over the
 **audio-rate** signal, 72 192 samples for 3.3 s of speech.
 
-Precision, measured rather than assumed
----------------------------------------
-`02_plan.md` sec.3.4 flags this cumsum as a precision risk, and it is -- in
-bfloat16. With 8 mantissa bits an accumulator reaching ~6000 cannot represent the
-~0.01 increments at all, and the output degenerates to silence or noise.
+Precision, measured on silicon
+------------------------------
+`02_plan.md` sec.3.4 flags this cumsum as a precision risk. It is a larger one
+than the plan expected, and in two independent ways -- both invisible to this
+module's own short PCC tests and both found only end to end.
 
-In float32 it is a non-issue. Measured against a float64 reference on the real f0
-captured from the vocoder (increments up to 0.15, accumulator reaching 6090.6):
+**1. `ttnn.cumsum` is far less accurate than torch's.** Against an fp64 reference
+over the real 72192-sample f0, on Blackhole:
 
-    fp32 cumsum abs error   max 2e-4    mean 4e-5
-    resulting PHASE error   max 0.0015 rad,  mean 0.00023 rad   (period is 2*pi)
-    sin() PCC fp32 vs fp64  0.99999993
+    device cumsum, fp32    max|d| 5.62e-01    (t=1k 2.3e-07, t=36k 0.114)
+    torch  cumsum, fp32    max|d| 2.44e-04
 
-So `ttnn.cumsum(..., dtype=ttnn.float32)` is sufficient outright. The block-wise
-mod-1 scan the plan held in reserve is NOT needed -- and would in fact be worse:
-splitting the scan into per-block carries raises the phase error to ~0.025 rad,
-because torch's cumsum already sums more accurately than a naive sequential loop.
+Two thousand times worse. Since phase is `2*pi * (cumsum mod 1)`, an absolute
+error of 0.56 is more than half a cycle: the harmonic bank is randomised by the
+end of the utterance. At T=1024 and T=8192 the error is ~1e-5 and invisible.
+`phase_mod1()` fixes it by reducing each block total mod 1 before accumulating,
+which keeps every partial sum O(1) instead of O(T) -- measured 0.843 -> 0.99999745
+on the captured f0. (A previous version of this note claimed the blocked scan was
+unnecessary and would be *worse*. That was measured against torch on the host,
+where it is true; on device it is the difference between working and not.)
+
+**2. f0 error integrates, so the excitation cannot be reproduced from scratch.**
+Phase drift is `sum(delta_f0)/sr` over samples, so holding it under 0.1 cycle
+across 72192 samples needs a mean f0 error below **0.03 Hz** -- 1.5e-4 relative at
+200 Hz, about 13 mantissa bits. The device's f0 predictor lands at ~16 Hz max
+error even with fp32 weights and activations, because Tensix HiFi4 is four
+bfloat16 passes rather than true fp32.
+
+That is not a defect to fix; it is a property of the model. **Sample-level
+waveform comparison is only meaningful with the reference source injected**, which
+is what the PCC gates do. For a self-computed source the honest metrics are the
+energy envelope and the spectrum, and those hold up -- the audio is correct, its
+phase is simply a different valid realisation, exactly like the RNG draws below.
 
 One structural fact worth recording even though it is not used here: f0 is
 upsampled by `nn.Upsample(scale_factor=256)`, whose default mode is *nearest*, so
@@ -77,23 +93,80 @@ class TtSineGen:
             harm.reshape(1, 1, -1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
         )
 
+    BLOCK = 256  # T is always mel_frames * 256 here, so this divides exactly
+
+    def phase_mod1(self, F):
+        """`cumsum(F, dim=1) mod 1`, kept accurate over a full utterance.
+
+        A plain `ttnn.cumsum` is not good enough here, and the reason is worth
+        stating precisely because the naive version passes every short test.
+        Measured on Blackhole against an fp64 reference over 72192 samples:
+
+            device cumsum, fp32    max|d| 5.62e-01   (t=1k 2.3e-07, t=36k 0.114)
+            torch  cumsum, fp32    max|d| 2.44e-04
+
+        Two thousand times worse than torch's, and since the phase is
+        `2*pi * (cumsum mod 1)`, an absolute error of 0.56 is **more than half a
+        cycle** -- the harmonic bank is randomised by the end of the utterance. At
+        T=1024 and T=8192 the error is ~1e-5 and invisible, which is exactly why
+        this survived the module's own PCC tests and only surfaced end-to-end.
+
+        The fix is arithmetic, not numerical: **only the value mod 1 is ever used**,
+        so the accumulator never needs to reach 650. Summing within short blocks,
+        reducing each block total mod 1, and accumulating those keeps every partial
+        sum O(1) -- and `(a + b) mod 1 == ((a mod 1) + (b mod 1)) mod 1` makes it
+        exact. Precision then stops depending on the utterance length at all.
+        """
+        b, t, c = F.shape
+        blk = self.BLOCK
+        if t % blk or t <= blk:
+            phase = ttnn.cumsum(F, dim=1, dtype=ttnn.float32)
+            out = ttnn.subtract(phase, ttnn.floor(phase))
+            ttnn.deallocate(phase)
+            return out
+        nb = t // blk
+
+        x = ttnn.reshape(F, (b, nb, blk, c))
+        within = ttnn.cumsum(x, dim=2, dtype=ttnn.float32)  # [b, nb, blk, c]
+        ttnn.deallocate(x)
+
+        totals = ttnn.slice(within, [0, 0, blk - 1, 0], [b, nb, blk, c])  # [b, nb, 1, c]
+        # mod 1 BEFORE accumulating across blocks -- this is the whole trick
+        tmod = ttnn.subtract(totals, ttnn.floor(totals))
+        ttnn.deallocate(totals)
+        incl = ttnn.cumsum(tmod, dim=1, dtype=ttnn.float32)
+        offset = ttnn.subtract(incl, tmod)  # exclusive scan: block i excludes itself
+        ttnn.deallocate(incl)
+        ttnn.deallocate(tmod)
+        omod = ttnn.subtract(offset, ttnn.floor(offset))
+        ttnn.deallocate(offset)
+
+        phase = ttnn.add(within, omod)  # [b, nb, 1, c] broadcasts over the block
+        ttnn.deallocate(within)
+        ttnn.deallocate(omod)
+        frac = ttnn.subtract(phase, ttnn.floor(phase))
+        ttnn.deallocate(phase)
+        out = ttnn.reshape(frac, (b, t, c))
+        ttnn.deallocate(frac)
+        return out
+
     def __call__(self, f0, phase_vec=None, noise=None):
         """f0: ttnn [B, T, 1] -> (sine_waves [B, T, H+1], uv [B, T, 1], noise).
 
         phase_vec / noise are the captured RNG draws; pass them in PCC tests.
+
+        **f0 arrives in fp32 or the output is noise.** Not because the arithmetic
+        here is delicate, but because f0 error integrates: bfloat16 at 200 Hz
+        quantises to 0.78 Hz, and 0.78 Hz over 72192 samples is 2.5 whole cycles of
+        phase. The input is widened rather than trusted.
         """
+        if f0.dtype != ttnn.float32:
+            f0 = ttnn.typecast(f0, ttnn.float32)
         # F[b, t, i] = f0[b, t, 0] * (i+1) / sr
         F = ttnn.multiply(f0, self.harmonics)
 
-        # fp32 accumulate -- the whole point of this module's precision note.
-        # dtype= typecasts BEFORE accumulating (accumulation_common.cpp:20).
-        phase = ttnn.cumsum(F, dim=1, dtype=ttnn.float32)
+        frac = self.phase_mod1(F)
         ttnn.deallocate(F)
-
-        # theta = 2*pi * (phase mod 1). Only the fractional part survives, which is
-        # what makes the accumulator's absolute magnitude tolerable.
-        frac = ttnn.subtract(phase, ttnn.floor(phase))
-        ttnn.deallocate(phase)
         theta = ttnn.multiply(frac, 2.0 * math.pi)
         ttnn.deallocate(frac)
 

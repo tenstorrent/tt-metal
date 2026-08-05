@@ -56,7 +56,7 @@ class TtF0Predictor:
             out, _ = conv(x, length, batch_size)
             if i:
                 ttnn.deallocate(x)
-            x = ttnn.elu(out, 1.0)
+            x = ttnn.elu(out, alpha=1.0)  # alpha is keyword-only in this binding
             ttnn.deallocate(out)
         f0 = ttnn.linear(x, self.weight, bias=self.bias)
         ttnn.deallocate(x)

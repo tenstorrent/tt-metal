@@ -178,15 +178,21 @@ def build_resblock(device, bag: WeightBag, *, dilations=(1, 3, 5), dtype=None):
     return block
 
 
-def build_f0_predictor(device, bag: WeightBag, dtype=None):
+def build_f0_predictor(device, bag: WeightBag, dtype=None, weights_dtype=None):
     """condnet is Sequential(Conv, ELU, Conv, ELU, ...) so the convs sit at even
-    indices; they are found by which entries actually carry a weight."""
+    indices; they are found by which entries actually carry a weight.
+
+    `weights_dtype` is separate from `dtype` and matters here: f0 error integrates
+    into the excitation phase over the whole utterance, so bfloat16 *weights* alone
+    are enough to ruin it even when the activations are fp32. See TtSineGen.
+    """
     import ttnn
 
     from .hifigan.conv import TtConv1d
     from .hifigan.f0 import TtF0Predictor
 
     dtype = dtype or ttnn.bfloat16
+    weights_dtype = weights_dtype or dtype
     cond = bag.sub("condnet")
     idx = sorted(i for i in range(0, 32) if cond.sub(str(i)).has("weight"))
 
@@ -199,6 +205,7 @@ def build_f0_predictor(device, bag: WeightBag, dtype=None):
             cond.sub(str(i)).optional("bias"),
             padding=(cond.sub(str(i)).tensor("weight").shape[-1] - 1) // 2,
             dtype=dtype,
+            weights_dtype=weights_dtype,
         )
         for i in idx
     ]
