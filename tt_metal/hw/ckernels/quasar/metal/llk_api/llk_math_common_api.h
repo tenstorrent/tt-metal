@@ -90,7 +90,9 @@ inline constexpr MathFidelity get_effective_math_fidelity() {
  **/
 template <std::uint8_t SET_DEST_DVALID>
 inline void llk_math_set_dvalid() {
-    _llk_math_set_dvalid_<SET_DEST_DVALID>();
+    // [#48552] _llk_math_set_dvalid_ takes <client, DstSync>; supply the kernel's DST_SYNC_MODE (as
+    // dest_section_done below does). The prior 1-arg form did not compile when instantiated.
+    _llk_math_set_dvalid_<SET_DEST_DVALID, DST_SYNC_MODE>();
 }
 
 /**
