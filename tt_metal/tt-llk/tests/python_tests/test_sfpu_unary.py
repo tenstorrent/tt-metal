@@ -28,9 +28,11 @@ from helpers.param_config import (
 )
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
+    _UNARY_OPS_NOT_SWEPT,
     exclude_undefined,
     for_op,
     narrowest_range_format,
+    sfpu_unary_ops,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -318,10 +320,11 @@ def _assert_sweep_profiles_disjoint():
     positive-only format default. for_op() does raise on a missing entry, but only once
     the sweep reaches that op, so assert here to fail at collection instead.
 
-    Exhaustiveness is deliberately *not* checked: there is no authoritative list of
-    "every unary SFPU op" to check against -- _OP_DOMAIN_REGISTRY also holds the binary
-    and reduce entries -- so an op in neither profile still goes untested silently.
-    Closing that needs the registry to record an op's arity, which is Phase 1 work.
+    Exhaustiveness is checked too, against sfpu_unary_ops(): the registry knows which of
+    its entries have a unary SFPU kernel, so an op added to the registry and to no sweep
+    profile fails here rather than going quietly untested. An op that genuinely should not
+    be swept belongs in _UNARY_OPS_NOT_SWEPT (with a reason) or, if it has no unary SFPU
+    kernel at all, in _NON_SFPU_UNARY_OPS.
     """
     overlap = set(BROAD_SWEEP_OPS) & set(STANDARD_SWEEP_OPS)
     assert not overlap, (
@@ -336,6 +339,19 @@ def _assert_sweep_profiles_disjoint():
     assert not unregistered, (
         "These swept ops have no domain in sfpu_domains._OP_DOMAIN_REGISTRY, so the "
         f"driver cannot build stimuli for them: {sorted(unregistered)}"
+    )
+    swept = set(BROAD_SWEEP_OPS) | set(STANDARD_SWEEP_OPS)
+    expected = sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT)
+    untested = sorted(op.name for op in expected - swept)
+    assert not untested, (
+        "These ops have a unary SFPU kernel and a registered domain but are in neither "
+        "sweep profile, so nothing drives them. Add them to a profile, or to "
+        f"_UNARY_OPS_NOT_SWEPT with a reason: {untested}"
+    )
+    not_unary = sorted(op.name for op in swept - sfpu_unary_ops())
+    assert not not_unary, (
+        "These swept ops are classified as having no unary SFPU kernel "
+        f"(sfpu_domains._NON_SFPU_UNARY_OPS): {not_unary}"
     )
 
 

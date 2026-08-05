@@ -16,7 +16,7 @@ import copy
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
 from .format_config import DataFormat
 from .llk_params import MathOperation
@@ -839,6 +839,70 @@ def _validate_distribution_override(
 # ─────────────────────────────────────────────────────────────────────────────
 # Undefined-region subtraction
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Which family each registered op belongs to
+#
+# _OP_DOMAIN_REGISTRY is keyed by MathOperation and mixes the unary SFPU ops with the
+# binary ones, the FPU eltwise ops and the reduce family. That is fine for for_op(), but it
+# means a suite cannot ask "is my op list complete?" -- the unary sweep can check that no op
+# sits in two of its profiles and that every op it drives has a domain, but not that every
+# unary op is actually driven, so an op added to the registry and to no test goes untested
+# silently.
+#
+# Recording the family closes that. It is a flat set rather than a field on OperandSpecs
+# because several entries are shared with the perf sweeps and the accuracy harness, and
+# those consumers do not want an arity opinion imposed on them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Ops with no unary SFPU kernel, so they must not appear in the unary sweep. Relu is the
+# one that looks like it should: it has a domain entry, but `relu` is not a member of
+# SfpuType at all -- relu is applied by the packer (STACC_RELU), not the SFPU -- so driving
+# it through the unary test fails to compile.
+_NON_SFPU_UNARY_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        # FPU eltwise binary
+        MathOperation.Elwadd,
+        MathOperation.Elwmul,
+        MathOperation.Elwsub,
+        # packer-applied relu
+        MathOperation.Relu,
+        # SFPU binary (test_sfpu_binary.py)
+        MathOperation.SfpuAddTopRow,
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuElwmul,
+        MathOperation.SfpuElwdiv,
+        MathOperation.SfpuElwpow,
+        MathOperation.SfpuElwrsub,
+        MathOperation.SfpuXlogy,
+        MathOperation.SfpuElwLeftShift,
+        MathOperation.SfpuElwRightShift,
+        MathOperation.SfpuElwLogicalRightShift,
+        # reduce family (test_sfpu_reduce*.py)
+        MathOperation.ReduceColumn,
+        MathOperation.ReduceRow,
+        MathOperation.ReduceScalar,
+    }
+)
+
+# Unary SFPU ops that are registered but deliberately not in the correctness sweep.
+_UNARY_OPS_NOT_SWEPT: Dict[MathOperation, str] = {
+    MathOperation.TopKLocalSort: "perf-only; whole-op topk is covered by test_topk.py",
+    MathOperation.TopKMerge: "perf-only; whole-op topk is covered by test_topk.py",
+    MathOperation.TopKRebuild: "perf-only; whole-op topk is covered by test_topk.py",
+}
+
+
+def sfpu_unary_ops() -> FrozenSet[MathOperation]:
+    """Every registered op that has a unary SFPU kernel.
+
+    The unary sweep asserts its profiles cover exactly this set minus
+    _UNARY_OPS_NOT_SWEPT, so adding an op to the registry without adding it to a sweep
+    profile (or to one of the two exemption sets above) fails at collection.
+    """
+    return frozenset(_OP_DOMAIN_REGISTRY) - _NON_SFPU_UNARY_OPS
+
 
 _SFPU_UNDEFINED_RANGES: Dict[
     MathOperation,
