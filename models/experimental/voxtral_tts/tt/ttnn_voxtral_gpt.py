@@ -272,6 +272,9 @@ class TtVoxtralGPT:
             qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
         qh = ttnn.experimental.rotary_embedding_hf(qh, cos, sin, is_decode_mode=True,
                                                    compute_kernel_config=COMPUTE_CONFIG)
+        # Two calls, not ttnn's fused q+k rope: that one implements the INTERLEAVED convention via a
+        # trans_mat, and our wq/wk are permuted to HALF-SPLIT at load. Measured 0.236 ms/frame for
+        # reverting that permute, disjoint q/k cores and losing bit-exactness -- STATUS.md 6.23.
         kh = ttnn.experimental.rotary_embedding_hf(kh, cos, sin, is_decode_mode=True,
                                                    compute_kernel_config=COMPUTE_CONFIG)
         # ONE fused write, not two: 26 launches a frame instead of 52, worth 0.405 ms and
