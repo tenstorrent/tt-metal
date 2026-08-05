@@ -85,7 +85,7 @@
       timeout: 65
     wh_n300_civ2:
       timeout: 65
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U080FKG7KEU # Utku Aydonat
   team: ttnn
   category: experimental
 
@@ -97,7 +97,7 @@
       timeout: 60
     bh_p150b_civ2:
       timeout: 35
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U080FKG7KEU # Utku Aydonat
   team: ttnn
   category: experimental
 
@@ -123,7 +123,7 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-  owner_id: U0A2EGX0Z29 # Ronnie Li
+  owner_id: U07M7QZ0BQA # Camilo Vega
   team: ttnn
   category: experimental
 
@@ -220,7 +220,7 @@
       timeout: 45
     bh_p150b_civ2:
       timeout: 45
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
   category: moreh
 
@@ -235,7 +235,7 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: misc
 
@@ -365,7 +365,7 @@
       timeout: 45
     bh_p150b_civ2_viommu:
       timeout: 45
-  owner_id: U05ACKAJTHS # Naif Tarafdar
+  owner_id: U024A4EFV6U # Brian Liu
   team: ttnn
   category: cpp_accessor
 
