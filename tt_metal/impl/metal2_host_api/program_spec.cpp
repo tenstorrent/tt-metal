@@ -3067,6 +3067,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                 config.compile_args = ta_bindings.cta_words;  // populate positional CTAs from tensor bindings
                 auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
                 kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
@@ -3083,6 +3084,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                 config.compile_args = ta_bindings.cta_words;
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
@@ -3100,6 +3102,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                 auto config = MakeGen1DataMovementConfig(kernel_spec);
                 config.compile_args = ta_bindings.cta_words;
                 kernel = std::make_shared<DataMovementKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
@@ -3114,6 +3117,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot);
                 config.compile_args = ta_bindings.cta_words;
                 kernel = std::make_shared<ComputeKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
