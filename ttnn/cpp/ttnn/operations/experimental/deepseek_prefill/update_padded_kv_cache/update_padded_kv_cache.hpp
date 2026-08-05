@@ -27,9 +27,8 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // expressed in 32-row-aligned page units, identical for both). `cache` and `input` must share
 // layout and dtype: block-float (bfloat8_b/bfloat4_b) is TILE-only; FP8_E4M3 is ROW_MAJOR-only.
 //
-// When `tp_axis` is set, the cache is additionally sharded across that second (TP) axis for GLM-5.2
-// KV dedup: the input is TP-replicated and each chip persists only its own 1/tp seq window. The two
-// axes are linearized into one block-cyclic axis of size sp*tp. nullopt keeps the pure SP-only path.
+// `tp_axis` (KV dedup): also shard the cache across that second axis. The input stays TP-replicated and each
+// chip persists only its own 1/tp seq window; the axes linearize to one block-cyclic axis of size sp*tp.
 //
 // In-place: returns a handle to `cache`. Two call forms (identical results):
 

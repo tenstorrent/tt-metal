@@ -183,9 +183,7 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
         "boundary (one straddle). A coarser indexer SP (Sq > chunk_local) is not yet supported.",
         Sq,
         chunk_local);
-    // Key-stripe split (TP-deduplicated cache): the reader's invP divisors become (sp*split, chunk_local/split),
-    // so the finer per-stripe chunk must itself be tile-aligned. The global chunk is unchanged (sp*chunk_local),
-    // so the T-divisibility check above already covers the split layout.
+    // The split only refines the invP divisors, so the global chunk (and the T check above) is unchanged.
     TT_FATAL(attrs.key_stripe_split >= 1, "key_stripe_split must be >= 1 (got {})", attrs.key_stripe_split);
     TT_FATAL(
         chunk_local % (attrs.key_stripe_split * tt::constants::TILE_WIDTH) == 0,
@@ -287,9 +285,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_topology,
         fused_has_sub_device,
         fused_sub_device,
-        // The key-stripe split scales those divisors (finer KEY striping than the query sharding), so it is
-        // part of the reader binary too -- an unsplit vs tp-split key cache must not share a program.
-        attrs.key_stripe_split,
+        attrs.key_stripe_split,  // bakes the reader's invP divisors: unsplit vs tp-split must not share a program
         tensor_args);
 }
 
@@ -761,13 +757,8 @@ ttnn::Tensor launch_indexer_score(
                 *seq_subshard_axis,
                 *cluster_axis);
         }
-        // Store the QUERY sharding {sp, chunk_local} (matching sparse_sdpa's BlockCyclicLayout); the factory
-        // derives the global chunk (sp*chunk_local) and the causal geometry from these. GLM-5.2 KV dedup: when
-        // the cache is striped across ALL sp*tp devices (block_cyclic_tp_sharded, gathered TP-inner then
-        // SP-outer into linear chip order) the KEYS are striped tp-times finer than the queries are sharded --
-        // record that as key_stripe_split, which ONLY the invP key remap consumes. Do NOT fold it into
-        // block_cyclic: device_causal_geometry indexes with the SP-ring rank (device_index < sp), so an
-        // {sp*tp, chunk_local/tp} layout would place every device's queries at the wrong causal offset.
+        // block_cyclic stores the QUERY sharding {sp, chunk_local} (as in sparse_sdpa); KV dedup stripes the
+        // KEYS tp-times finer, recorded separately as key_stripe_split (see operation_attributes_t).
         if (block_cyclic_tp_sharded) {
             TT_FATAL(
                 chunk_local % (tp * tt::constants::TILE_WIDTH) == 0,
@@ -778,9 +769,8 @@ ttnn::Tensor launch_indexer_score(
                 tt::constants::TILE_WIDTH);
             key_stripe_split = tp;
         }
-        // sp == 1 with unsplit keys is the identity permutation -> leave it contiguous. A tp-split key cache
-        // still needs the remap even at sp == 1 (the gathered buffer is TP-stripe-major), and the sp == 1
-        // geometry is identical either way (chunk_global == chunk_local -> no rotation, no straddle).
+        // sp == 1 unsplit is the identity permutation -> leave K contiguous. A tp-split cache still needs the
+        // remap at sp == 1 (the gathered buffer is TP-stripe-major) and its geometry is unchanged there.
         if (sp > 1 || key_stripe_split > 1) {
             block_cyclic = BlockCyclicLayout{.sp = sp, .chunk_local = chunk_local};
         }

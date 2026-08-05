@@ -42,9 +42,7 @@ class GLM52Adapter(MLAPrefillAdapter):
     # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
     l1_small_size = 1152
     routing_use_l1_small_for_semaphores = True
-    # GLM-5.2 is the one model whose sparse (DSA) write/read ops and allocate_kv_cache below honor
-    # params.tp_shard_kv, so it is the only adapter that may accept PREFILL_TP_SHARD_KV=1.
-    supports_tp_shard_kv = True
+    supports_tp_shard_kv = True  # allocate_kv_cache below honors params.tp_shard_kv
 
     def load_hf_config(self):
         """GLM's ``glm_moe_dsa`` isn't AutoConfig-loadable, so return the hand-built HF-attribute config
@@ -79,9 +77,8 @@ class GLM52Adapter(MLAPrefillAdapter):
             init_mla_kv_cache,
         )
 
-        # GLM-5.2 KV dedup: with tp_shard_kv the caches are sequence-sharded across BOTH axes, so each
-        # device allocates seq_len/(sp*tp) rows instead of seq_len/sp; None keeps the TP-replicated layout.
-        # Both caches must use the same tp_axis as the write op and the migration table.
+        # KV dedup: seq_len/(sp*tp) rows per device instead of seq_len/sp. Both caches must use the same
+        # tp_axis as the write op and the migration table.
         kv_tp_axis = params.tp_axis if params.tp_shard_kv else None
         kvpe_cache = init_mla_kv_cache(
             cache_format=MlaKvCacheFormat.BF16_RM,

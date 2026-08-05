@@ -279,8 +279,8 @@ class TtIndexer:
         mesh_shape = list(mesh_device.shape)
         self.sp_factor = mesh_shape[sp_axis]
         self.tp_factor = mesh_shape[tp_axis]
-        # GLM-5.2 KV dedup: index key cache sharded across SP×TP (not TP-replicated). Adds a TP-inner
-        # all-gather leg in _gather_index_kbuf and passes tp_axis to the write. Single-chunk path only.
+        # KV dedup: index key cache sharded across SP*TP. Adds a TP-inner all-gather leg in
+        # _gather_index_kbuf and passes tp_axis to the write.
         self.tp_shard_kv = tp_shard_kv
         self.default_compute_kernel_config = default_compute_kernel_config
         self.hifi4_fp32_compute_kernel_config = hifi4_fp32_compute_kernel_config
@@ -576,11 +576,8 @@ class TtIndexer:
             )
             ttnn.deallocate(cache_i)
             cache_i = sel
-        # GLM-5.2 KV dedup: an SP×TP-sharded index cache holds only 1/tp of each SP row's slab, so
-        # reconstruct with a TP-inner gather (concat a row's tp sub-shards) BEFORE the SP-outer gather.
-        # The index cache is bfp8 TILE, so this TP all-gather takes the native path (no RM composite
-        # deadlock). TP-inner + SP-outer yields the LINEAR chip-major buffer (any slab count), which
-        # indexer_score_dsa decodes with an sp*tp stripe count (block_cyclic_tp_sharded=True).
+        # KV dedup: each device holds only 1/tp of its SP row's slab, so gather TP-inner BEFORE SP-outer.
+        # That order yields the linear chip-major buffer indexer_score_dsa decodes with sp*tp stripes.
         if self.tp_shard_kv and self.tp_factor > 1:
             tp_full = self._tp_all_gather(cache_i, dim=2)  # [1,1,T/sp,D_idx] per SP row
             ttnn.deallocate(cache_i)
@@ -633,7 +630,7 @@ class TtIndexer:
             num_layers=self._index_cache_layers,
             kv_actual_global=start_pos,
             cluster_axis=self.sp_axis,
-            tp_axis=self.tp_axis if self.tp_shard_kv else None,  # GLM-5.2 KV dedup: write only this chip's 1/tp window
+            tp_axis=self.tp_axis if self.tp_shard_kv else None,  # KV dedup: write only this chip's 1/tp window
         )
         ttnn.deallocate(k)
 
@@ -785,12 +782,7 @@ class TtIndexer:
             cache_batch_idx=cache_batch_idx,
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
-            # GLM-5.2 KV dedup: index cache striped over sp*tp (linear chip), gathered TP-inner+SP-outer by
-            # _gather_index_kbuf into a stripe-major buffer, so the invP key remap must decode sp*tp stripes
-            # of seq_len/tp. The op keeps that DECOUPLED from the causal geometry (which stays on {sp,
-            # seq_len} — the query sharding is untouched by KV dedup); folding the two would offset every
-            # device's causal diagonal by the wrong rank. See key_stripe_split in indexer_score.
-            block_cyclic_tp_sharded=self.tp_shard_kv,
+            block_cyclic_tp_sharded=self.tp_shard_kv,  # KV dedup: key remap decodes sp*tp stripes of seq_len/tp
             kv_len=end_pos,
         )
         if host_start is not None:

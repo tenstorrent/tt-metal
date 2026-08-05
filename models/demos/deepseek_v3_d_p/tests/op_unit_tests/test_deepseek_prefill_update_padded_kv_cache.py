@@ -802,14 +802,8 @@ def test_update_padded_kv_cache_metadata_matches_scalar(mesh_device, dtype, layo
     logger.info(f"program cache stable at {entries_after_first} entries across {len(cases)} metadata-path chunks")
 
 
-# ---------------------------------------------------------------------------------------------------
-# GLM-5.2 KV dedup: SP x TP -sharded cache (Tier 1). The op receives a TP-REPLICATED input and each
-# chip persists only its own 1/tp seq window, so the KV cache is deduplicated across the TP axis.
-# The two mesh axes are linearized into ONE block-cyclic axis of size sp*tp
-# (linear = sp_coord*tp + tp_coord), with per-chip chunk Cl = chunk_local/tp. This is the load-bearing
-# test for the scheme: write a server-rotated ramp through an SP x TP case and assert a TP-inner /
-# SP-outer gather + sp*tp remap round-trips to natural order, bit-exact.
-# ---------------------------------------------------------------------------------------------------
+# KV dedup: the op gets a TP-REPLICATED input and each chip persists only its own 1/tp window, so the two
+# mesh axes linearize into one block-cyclic axis of sp*tp with per-chip chunk Cl = chunk_local/tp.
 @pytest.mark.parametrize(
     "mesh_device", [(1, 2), (1, 4), (2, 2), (2, 4)], ids=["1x2", "1x4", "2x2", "2x4"], indirect=True
 )
@@ -840,23 +834,15 @@ def test_update_padded_kv_cache_tp_sharded(
 
     The cache is sharded across BOTH mesh axes: each of the F = sp*tp chips stores a distinct 1/(sp*tp)
     slice, versus the SP-only path where every TP chip replicates its SP row. The op is fed the same
-    TP-REPLICATED [1,1,chunk_local,D] input on every TP chip and internally slices its own 1/tp window,
-    so the sharding lives entirely in the op (`tp_axis`) -- the caller passes an unsharded-across-TP
-    input.
+    TP-REPLICATED [1,1,chunk_local,D] input on every TP chip and slices its own 1/tp window internally.
 
-    Equivalence to the SP path: order the chips linear = sp_coord*tp + tp_coord and the CACHE is exactly
-    single-axis block-cyclic over F chips with per-chip chunk Cl = chunk_local/tp -- so the readback
-    inversion below uses (F, Cl). The INPUT, however, is rotated coarsely at (sp, chunk_local): the two
-    granularities are the whole subtlety of this op, and they only coincide when kv_actual is
-    stripe-aligned (see the per-iteration comment below).
+    The CACHE is single-axis block-cyclic over F = sp*tp chips with per-chip chunk Cl = chunk_local/tp, so
+    the readback inverts on (F, Cl). The INPUT is rotated coarsely at (sp, chunk_local) -- those two
+    granularities are the whole subtlety here, and they coincide only when kv_actual is stripe-aligned.
 
-    - non_padded: two full-chunk iterations (chunk-aligned, no rotation -> every chip writes at the
-      current slab base).
-    - padded_partial: three iterations with a whole-tile, non-zero boundary offset, so the boundary
-      chip's write straddles a slab -- exercises the linearized update_idxt boundary math.
-
-    The op is a pure copy, so the reference is the input read back (already through the same dtype
-    encode/decode) and the check is bit-EXACT equality, not PCC."""
+    non_padded: two chunk-aligned iterations (no rotation). padded_partial: three iterations with a
+    whole-tile boundary offset, so the boundary chip's write straddles a slab. Bit-EXACT, not PCC (the op
+    is a pure copy, so the reference is the input read back through the same dtype encode/decode)."""
     if dtype == ttnn.fp8_e4m3 and not is_blackhole():
         pytest.skip("FP8_E4M3 is Blackhole-only")
     if (is_ci_env or is_ci_v2_env) and scenario != "padded_partial":
@@ -895,10 +881,8 @@ def test_update_padded_kv_cache_tp_sharded(
         for l in range(num_layers)
     }
 
-    # Per-device cache rows = cache_tokens_per_dev. init_kvpe_cache divides seq_len by sp only and lays
-    # the result out replicated as a container (the block-cyclic content is written by the op), so
-    # passing seq_len = cache_tokens_per_dev * sp gives exactly cache_tokens_per_dev rows per PHYSICAL
-    # device -- which is the 1/(sp*tp) TP-sharded slab we want. No TP-specific allocation needed here.
+    # init_kvpe_cache divides seq_len by sp only, so seq_len = cache_tokens_per_dev * sp lands exactly
+    # cache_tokens_per_dev rows per PHYSICAL device -- the 1/(sp*tp) slab we want, no tp_axis needed.
     kv_cache = init_kvpe_cache(
         kvpe_cache_head_dim=KVPE_HEAD_DIM,
         mesh_device=mesh_device,
@@ -914,9 +898,8 @@ def test_update_padded_kv_cache_tp_sharded(
     input_shard_dims = [None, None]
     input_shard_dims[sp_axis] = 2
 
-    # Gather composer: concat SP shards on the seq dim (SP-outer), KEEP every TP shard on dim 1
-    # (TP-inner) -- distinct per chip now, so we must not collapse to one copy. gathered[b, tp_coord,
-    # sp_coord*cache_tokens_per_dev + local_row, :] is physical device (sp_coord, tp_coord)'s row.
+    # Concat SP on the seq dim but KEEP every TP shard on dim 1 -- they are distinct now, not copies. So
+    # gathered[b, tp_coord, sp_coord*cache_tokens_per_dev + local_row, :] is device (sp_coord, tp_coord)'s.
     concat_dims = [None, None]
     concat_dims[sp_axis] = 2
     concat_dims[tp_axis] = 1
@@ -933,16 +916,9 @@ def test_update_padded_kv_cache_tp_sharded(
 
     kv_actual = 0
     for it, new_actual_isl in enumerate(new_actual_isls):
-        # F-chip block-cyclic rotation (linearized sp*tp). positions[L][r] is the natural global token
-        # Input rotation is COARSE (sp, chunk_local) -- the caller's contract, not the cache's layout.
-        # The hidden states are seq-sharded across SP only (TP shards hidden), so the serving runtime
-        # can only rotate at chunk_local granularity, and the SAME rows are the query rows, whose causal
-        # geometry is defined on that coarse window. The op therefore receives SP chip j's whole coarse
-        # window (TP-replicated) and derives which of those rows belong to its own fine stripe.
-        #
-        # This is deliberately NOT the fine (F, Cl) rotation: that would hand each chip a contiguous
-        # 1/tp slice, but no real caller produces it, and assuming it silently mis-assigns rows whenever
-        # kv_actual is not stripe-aligned (regression: PCC 0.62 on the model-level rotated maxedge case).
+        # Input rotation is COARSE (sp, chunk_local) -- the caller's contract, since hidden states are
+        # seq-sharded across SP only. Deliberately NOT the fine (F, Cl) rotation: no real caller produces
+        # that, and assuming it mis-assigns rows whenever kv_actual is not stripe-aligned (was PCC 0.62).
         positions = _rotated_chip_positions(kv_actual, sp, chunk_local)
         flat = [positions[j][r] for j in range(sp) for r in range(chunk_local)]  # SP-shard order
         valid_end = kv_actual + new_actual_isl
@@ -983,9 +959,8 @@ def test_update_padded_kv_cache_tp_sharded(
 
     ttnn.synchronize_device(mesh_device)
 
-    # One cached program per layer, reused across iterations/users (slot_idx/kv_actual_global are
-    # per-call common args, layer_idx is hashed). tp_axis is structural but constant here. Skip fp8:
-    # its ttnn.typecast inputs add their own cached programs and pollute the global count.
+    # One cached program per layer, reused across iterations/users (layer_idx is hashed, tp_axis is
+    # structural but constant). Skip fp8: its typecast inputs add programs and pollute the count.
     if dtype != ttnn.fp8_e4m3:
         assert mesh_device.num_program_cache_entries() == entries_after_init + num_layers, (
             f"op must reuse one cached program per layer; expected {entries_after_init + num_layers} "
@@ -995,9 +970,8 @@ def test_update_padded_kv_cache_tp_sharded(
     # gathered: [users*layers, tp, sp*cache_tokens_per_dev, KVPE_HEAD_DIM]
     gathered = ttnn.to_torch(kv_cache, mesh_composer=composer).to(torch.bfloat16)
 
-    # Invert the linearized block-cyclic layout: natural global position p lives on logical chip
-    # L = (p % chunk_global)//Cl -> physical (sp_coord=L//tp, tp_coord=L%tp), at local cache row
-    # (p//chunk_global)*Cl + (p%Cl).
+    # Invert the linearized layout: natural position p lives on logical chip L = (p % chunk_global)//Cl,
+    # i.e. physical (L//tp, L%tp), at local cache row (p//chunk_global)*Cl + (p%Cl).
     p = torch.arange(cum_total)
     L = (p % chunk_global) // Cl
     sp_coord = L // tp

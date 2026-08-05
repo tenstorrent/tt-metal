@@ -32,6 +32,9 @@ ttnn::Tensor sparse_sdpa(
     TT_FATAL(
         block_cyclic_sp_axis.has_value() == block_cyclic_chunk_local.has_value(),
         "sparse_sdpa: block_cyclic_sp_axis and block_cyclic_chunk_local must both be set or both unset");
+    TT_FATAL(
+        !block_cyclic_tp_sharded || block_cyclic_sp_axis.has_value(),
+        "sparse_sdpa: block_cyclic_tp_sharded requires block_cyclic_sp_axis / block_cyclic_chunk_local");
     std::optional<ttnn::prim::BlockCyclicLayout> block_cyclic = std::nullopt;
     if (block_cyclic_sp_axis.has_value()) {
         const auto mesh_shape = q.device()->get_view().shape();
@@ -53,10 +56,8 @@ ttnn::Tensor sparse_sdpa(
             chunk_local,
             q_isl,
             q_isl * tp);
-        // GLM-5.2 KV dedup: the cache is striped across all sp*tp devices (linear chip sp*tp+tp), gathered
-        // TP-inner then SP-outer into that linear order. Use an effective stripe count sp*tp and per-stripe
-        // chunk chunk_local/tp. The global chunk (stripes*chunk = sp*chunk_local) is unchanged, so causality
-        // / q_isl are unaffected; only the invP KEY remap now decodes the finer sp*tp striping.
+        // KV dedup: cache striped over all sp*tp devices (linear chip = sp_coord*tp + tp_coord), so stripe it
+        // sp*tp x chunk_local/tp. stripes*chunk is unchanged, so only the invP key remap sees the finer split.
         uint32_t stripes = sp;
         uint32_t stripe_chunk = chunk_local;
         if (block_cyclic_tp_sharded) {

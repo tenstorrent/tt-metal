@@ -384,12 +384,8 @@ def test_sparse_cache_only_without_cache_warns_stays_sparse(mesh_device, device_
     ), f"expected a loud warning about the missing indexer weights/cache; got: {warnings}"
 
 
-# --------------------------------------------------------------------------------------------------
-# Device: GLM-5.2 KV dedup (SP×TP-sharded KVPE + index caches) reproduces the SP-only (TP-replicated)
-# sparse output bit-for-bit-close. TP-dedup is pure STORAGE dedup (each chip persists its own 1/tp
-# window instead of a replicated copy) + a TP-inner all-gather on read, so the attention output must
-# match the SP-only path. Single-chunk (SEQ_LEN == one block-cyclic slab) — the wired scope.
-# --------------------------------------------------------------------------------------------------
+# KV dedup is pure STORAGE dedup + a TP-inner all-gather on read, so the sparse output must match the
+# SP-only path. Single-chunk here (SEQ_LEN == one slab); the multi-slab case is the test below.
 def _build_mla_tp(config, state_dict, mesh_device, *, tp_shard_kv):
     return ttMLA(
         config,
@@ -424,12 +420,8 @@ def _build_mla_tp(config, state_dict, mesh_device, *, tp_shard_kv):
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_tp_sharded_kv_matches_sp(mesh_device, device_params, variant, config_only):
-    """SP×TP-sharded (deduplicated) KVPE + index caches must reproduce the SP-only sparse MLA output.
-
-    Same weights + input run twice: once with TP-replicated caches (tp_shard_kv=False, today's path) and
-    once with SP×TP-sharded caches (tp_shard_kv=True). The writes deduplicate storage (each chip keeps its
-    own 1/tp seq window) and the reads add a TP-inner all-gather that reconstructs the exact SP-only
-    block-cyclic buffer, so the attention output is identical up to bf16 all-gather reassociation."""
+    """Same weights + input run twice, TP-replicated then SP*TP-sharded. The reads reconstruct the exact
+    SP-only block-cyclic buffer, so the outputs match up to bf16 all-gather reassociation."""
     config = config_only
     config.max_seq_len = SEQ_LEN
     mesh_shape = list(mesh_device.shape)
@@ -483,15 +475,11 @@ def test_sparse_tp_sharded_kv_matches_sp(mesh_device, device_params, variant, co
     ttnn.synchronize_device(mesh_device)
 
 
-# --------------------------------------------------------------------------------------------------
-# Device: GLM-5.2 KV dedup, MULTI-CHUNK. A 2-chunk chunked-prefill run leaves the block-cyclic cache
-# with num_slabs=2, so the TP-inner+SP-outer read reconstruction + the sp*tp block-cyclic remap in
-# sparse_sdpa / indexer_score_dsa (block_cyclic_tp_sharded=True) are exercised for >1 slab. Output must
-# still match the SP-only (TP-replicated) chunked run.
-# --------------------------------------------------------------------------------------------------
+# MULTI-CHUNK: a 2-chunk run leaves num_slabs=2, so the read reconstruction and the sp*tp remap in
+# sparse_sdpa / indexer_score_dsa are exercised for >1 slab, where the single-chunk test above cannot.
 def _run_chunked(mla, mesh_device, rope_tensors, kvpe_cache, index_kv_cache, hidden, chunk):
-    """Chunked sparse prefill: feed one `chunk`-token slice per forward (actual_start advances), gather
-    each chunk's output, and concat. Mirrors test_sparse_mla.py's chunked loop."""
+    """One `chunk`-token slice per forward (actual_start advances), gathered and concatenated. Mirrors
+    test_sparse_mla.py's chunked loop."""
     shard_dims = [None, None]
     shard_dims[TP_AXIS], shard_dims[SP_AXIS] = -1, -2
     seq_len = hidden.shape[1]
@@ -535,9 +523,8 @@ def _run_chunked(mla, mesh_device, rope_tensors, kvpe_cache, index_kv_cache, hid
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_tp_sharded_kv_matches_sp_multichunk(mesh_device, device_params, variant, config_only):
-    """MULTI-CHUNK SP×TP-dedup equivalence: a 2-chunk chunked prefill (num_slabs=2) with TP-deduplicated
-    caches must reproduce the SP-only (TP-replicated) output. Exercises the sp*tp block-cyclic remap in
-    sparse_sdpa / indexer_score_dsa for >1 slab (the C++ block_cyclic_tp_sharded path)."""
+    """A 2-chunk prefill (num_slabs=2) with TP-deduplicated caches must reproduce the SP-only output,
+    exercising the C++ block_cyclic_tp_sharded remap for >1 slab."""
     config = config_only
     CHUNK = 256  # per-chunk global tokens; per-device slab = 256/(sp*tp) = 32 = 1 tile on 2x4
     MC_SEQ = 512  # two chunks

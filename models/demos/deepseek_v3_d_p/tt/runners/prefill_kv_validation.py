@@ -165,11 +165,8 @@ def kv_cache_pcc_check(
     from tests.ttnn.utils_for_testing import comp_pcc
 
     cfg = pipeline.config
-    # This validator assumes the cache is TP-REPLICATED twice over: `_to_host` keeps a single TP column
-    # (a full replica only when replicated), and blockcyclic_positions un-rotates with an SP-only period.
-    # Under GLM-5.2 KV dedup (tp_shard_kv) each column holds a distinct 1/tp of its row, so both would be
-    # wrong and the PCC meaningless rather than failing. Fail loudly instead; the TP-sharded read path is
-    # the table-driven producer read-back (mock migration).
+    # Assumes TP-REPLICATED twice over: `_to_host` keeps one TP column, and blockcyclic_positions
+    # un-rotates with an SP-only period. Under KV dedup both are wrong, so the PCC would be meaningless.
     assert not getattr(cfg, "tp_shard_kv", False), (
         "kv_cache_pcc_check has no TP-sharded reconstruction: it keeps one TP column and un-rotates with an "
         "SP-only block-cyclic period. Validate a TP-sharded cache with the mock-migration producer "

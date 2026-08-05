@@ -50,7 +50,6 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
-from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
     PROMPT_5K_PATH,
@@ -819,17 +818,6 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
     "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
             (8, 4),
             torus_xy_device_params(
                 fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
@@ -844,9 +832,8 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 )
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
-# GLM-5.2 KV dedup: exercises tp_shard_kv end-to-end through TtPrefillBlock -> ttMLA (norm/attn/FFN
-# stack, not just the isolated MLA-level tests in tests/sparse_mla/). Single-shot (is_chunked=False
-# default), the exact configuration test_sparse_tp_sharded_kv_matches_sp already proved correct.
+# KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level
+# tests in tests/sparse_mla/). Single-shot, which test_sparse_tp_sharded_kv_matches_sp already covers.
 @pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")

@@ -753,39 +753,25 @@ def run_sparse_mla_rotated_case(
     indirect=["variant", "mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("iters_isl", [[2560, 2592, 5120]], ids=["maxedge"])
+# KV dedup under ROTATION is the interesting case (test_sparse_mla_cache.py only starts slab-aligned):
+# the writer rotates at sp*tp stripes while indexer_score's causal geometry rotates at sp, and the two
+# only coincide for an aligned start. maxedge gives starts 0 / 2560 / 5152 -- aligned, mid-slab, straddle.
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_rotated(
-    mesh_device, seq_len, iters_isl, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+    mesh_device, seq_len, iters_isl, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo, tp_shard_kv
 ):
-    run_sparse_mla_rotated_case(variant, config_only, mesh_device, iters_isl, seq_len, ds_layer, ds_checkpoint, ds_repo)
-
-
-@pytest.mark.parametrize("variant, mesh_device, seq_len", SPARSE_ANCHOR_CASES, indirect=["variant", "mesh_device"])
-@pytest.mark.parametrize("device_params", SPARSE_DEVICE_PARAMS, ids=SPARSE_DEVICE_IDS, indirect=True)
-@pytest.mark.parametrize("iters_isl", [[2560, 2592, 5120]], ids=["maxedge"])
-@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
-@pytest.mark.timeout(0)
-def test_sparse_mla_rotated_tp_sharded(
-    mesh_device, seq_len, iters_isl, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
-):
-    """maxedge rotated prefill with GLM-5.2 SPxTP-DEDUPLICATED KV + index caches (tp_shard_kv=True).
-
-    The plain test_sparse_mla_rotated above only ever runs TP-REPLICATED caches, and the equivalence
-    tests in test_sparse_mla_cache.py only ever start slab-aligned at 0 -- so nothing exercised the
-    TP-dedup layout under ROTATION. That is the gap this closes, and it is the interesting one: the
-    writer rotates at the FINE granularity (sp*tp stripes of chunk_global/(sp*tp)) while indexer_score's
-    causal geometry rotates at the COARSE one (boundary_chip = (chunk_start/chunk_local) % sp). Those
-    two coincide for a slab-aligned start, which is exactly why an aligned-only test passes either way.
-
-    maxedge = [2560, 2592, 5120] on the anchor mesh gives cumulative starts 0 / 2560 / 5152: aligned,
-    then mid-slab with a NON-ZERO coarse boundary_chip, then a start that both crosses a slab and
-    carries a sub-slab offset (straddle). Gates on the same three things as the SP-only case -- per-iter
-    output, the un-rotated KVPE cache, and the un-rotated indexer cache -- so a layout bug is caught in
-    the cache readback (which reconstructs via blockcyclic_positions(sp*tp, ...)) and localized there
-    rather than only surfacing as a degraded output PCC."""
     run_sparse_mla_rotated_case(
-        variant, config_only, mesh_device, iters_isl, seq_len, ds_layer, ds_checkpoint, ds_repo, tp_shard_kv=True
+        variant,
+        config_only,
+        mesh_device,
+        iters_isl,
+        seq_len,
+        ds_layer,
+        ds_checkpoint,
+        ds_repo,
+        tp_shard_kv=tp_shard_kv,
     )
 
 

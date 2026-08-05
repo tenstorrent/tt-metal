@@ -319,9 +319,8 @@ class ttMLA:
         assert (
             self.active_seq_len <= self.max_seq_len
         ), f"active_seq_len ({self.active_seq_len}) exceeds max_seq_len ({self.max_seq_len})"
-        # GLM-5.2 KV dedup: when True the KVPE (and indexer key) caches are sharded across BOTH the SP
-        # and TP axes (not TP-replicated). Writes pass tp_axis to update_padded_kv_cache and reads add a
-        # TP-inner all-gather leg before the SP gather. Only wired for the SPARSE single-chunk path today.
+                # KV dedup: KVPE (and indexer key) caches sharded across SP*TP. Writes pass tp_axis, reads add a
+        # TP-inner all-gather leg before the SP gather. Sparse (DSA) path only; the dense forward asserts.
         self.tp_shard_kv = tp_shard_kv
         self.slot_num = slot_num
         self.layer_num = layer_num
@@ -903,8 +902,7 @@ class ttMLA:
 
         # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
         # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
-        # TP-dedup is only wired for the SPARSE path (_sparse_chunked_attn); the dense ring_mla cache is
-        # still TP-replicated, so fail loud if a dense layer is asked to TP-shard its KV.
+        # The dense ring_mla cache is still TP-replicated; only _sparse_chunked_attn is TP-dedup wired.
         assert not self.tp_shard_kv, "tp_shard_kv is only supported on the sparse (DSA) path, not dense ring_mla"
         # Metadata (trace-safe) path reads slot_idx/kv_actual_global on-device from the metadata tensor.
         self._update_kv_cache(
@@ -1182,6 +1180,12 @@ class ttMLA:
         metadata: Optional[ttnn.Tensor] = None,
         tp_axis: Optional[int] = None,
     ) -> None:
+        # TP-sharded writes need the host kv_actual_global (the reader derives its 1/tp window from it),
+        # which the metadata path cannot supply. The op re-checks; assert here for a readable failure.
+        assert not (metadata is not None and tp_axis is not None), (
+            "tp_shard_kv is not supported on the metadata (traced) write path -- run with PREFILL_USE_TRACE=0, "
+            "or with PREFILL_KV_ONLY_LAST_LAYER=0 so the kv-only layer does not take the metadata path."
+        )
         # Metadata (trace-safe) path: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read
         # on-device, each its own 1-element tensor. Scalar path passes host slot/kv_actual_global.
         if metadata is not None:
@@ -1508,7 +1512,7 @@ class ttMLA:
             cache_user_id=cache_user_id,
             cache_layer_idx=cache_layer_idx,
             kv_actual_isl=kv_actual_isl,
-            tp_axis=self.tp_axis if self.tp_shard_kv else None,  # GLM-5.2 KV dedup: write only this chip's 1/tp window
+            tp_axis=self.tp_axis if self.tp_shard_kv else None,  # KV dedup: write only this chip's 1/tp window
         )
         # After the write above, KV is populated up to [0, kv_actual_isl + chunk_size_global); the gather
         # only needs that populated prefix (top-k indices never address the unwritten suffix).
@@ -1586,9 +1590,6 @@ class ttMLA:
 
         # Write the chunk via the SAME chunked path as _chunked_attn (not a single-shot fill):
         # update_padded_kv_cache writes at the per-chip offset derived from kv_actual_global.
-        # KV-only (last-layer migration fill) is not yet wired for TP-dedup — fail loud rather than
-        # silently write a TP-replicated cache when tp_shard_kv was requested.
-        assert not self.tp_shard_kv, "tp_shard_kv is not yet supported on the KV-only (_forward_kv_only) path"
         self._update_kv_cache(
             kvpe_cache,
             tt_kvpe,
@@ -1596,6 +1597,7 @@ class ttMLA:
             cache_layer_idx=cache_layer_idx,
             kv_actual_isl=kv_actual_isl,
             metadata=metadata,
+            tp_axis=self.tp_axis if self.tp_shard_kv else None,  # KV dedup: write only this chip's 1/tp window
         )
         ttnn.deallocate(tt_kvpe)
 
@@ -1695,8 +1697,7 @@ class ttMLA:
             k_chunk_size=k_chunk,
             block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
-            # GLM-5.2 KV dedup: cache striped over sp*tp (linear chip), gathered TP-inner+SP-outer by
-            # _gather_kvpe_prefix → sparse_sdpa uses an sp*tp stripe count + chunk_local/tp.
+            # KV dedup: _gather_kvpe_prefix returns an sp*tp-striped buffer, so decode chunk_local/tp.
             block_cyclic_tp_sharded=self.tp_shard_kv and block_cyclic_chunk_local is not None,
             cache_batch_idx=cache_batch_idx,
         )
