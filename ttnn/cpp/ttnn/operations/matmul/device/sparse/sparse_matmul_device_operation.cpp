@@ -61,9 +61,19 @@ ttnn::Shape compute_sparse_matmul_output_shape(
 
     return output_shape;
 }
+
+ttnn::Shape compute_sparse_matmul_compact_output_shape(
+    const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b, uint32_t nnz) {
+    return ttnn::Shape{1U, nnz, input_tensor_a.logical_shape()[-2], input_tensor_b.logical_shape()[-1]};
+}
 }  // namespace
 
 namespace ttnn::prim {
+
+void SparseMatmulDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
 
 void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -207,6 +217,36 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     // host -- it is the caller's responsibility to pass an exact nnz, and the contract is validated
     // on-device in reader_bmm_tile_layout_in0_sender_padding.cpp (asserts loudly under watcher instead of
     // hanging).
+
+    const bool is_output_tensor_given =
+        !tensor_args.optional_output_tensors.empty() && tensor_args.optional_output_tensors.at(0).has_value();
+    if (is_output_tensor_given) {
+        const auto& optional_output_shape = tensor_args.optional_output_tensors.at(0)->logical_shape();
+        const auto expanded_output_shape = compute_sparse_matmul_output_shape(
+            input_tensor_a,
+            input_tensor_b,
+            operation_attributes.is_input_a_sparse,
+            operation_attributes.is_input_b_sparse);
+
+        if (operation_attributes.nnz.has_value()) {
+            const auto compact_output_shape = compute_sparse_matmul_compact_output_shape(
+                input_tensor_a, input_tensor_b, operation_attributes.nnz.value());
+            TT_FATAL(
+                optional_output_shape == expanded_output_shape || optional_output_shape == compact_output_shape,
+                "Optional output tensor shape {} must match expanded output shape {} or compact output shape {} "
+                "when nnz={}",
+                optional_output_shape,
+                expanded_output_shape,
+                compact_output_shape,
+                operation_attributes.nnz.value());
+        } else {
+            TT_FATAL(
+                optional_output_shape == expanded_output_shape,
+                "Optional output tensor shape {} must match expanded output shape {} when nnz is not provided",
+                optional_output_shape,
+                expanded_output_shape);
+        }
+    }
 }
 
 SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
@@ -243,7 +283,7 @@ SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::co
         operation_attributes.output_tile,
         /*optional_output_tensor_tile=*/std::nullopt);
 
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             output_dtype,
@@ -261,12 +301,11 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     // therefore writes every element of that output. Pre-zeroing it would be redundant work, so
     // skip it -- but only in that case: every other caller still relies on the zero-fill to leave
     // the skipped blocks at zero.
-    const bool compact_output =
-        !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
-        operation_attributes.nnz.has_value() &&
-        optional_output_tensors[0]->logical_volume() == static_cast<uint64_t>(operation_attributes.nnz.value()) *
-                                                            input_tensors.at(0).logical_shape()[-2] *
-                                                            input_tensors.at(1).logical_shape()[-1];
+    const bool compact_output = !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
+                                operation_attributes.nnz.has_value() &&
+                                optional_output_tensors[0]->logical_shape() ==
+                                    compute_sparse_matmul_compact_output_shape(
+                                        input_tensors.at(0), input_tensors.at(1), operation_attributes.nnz.value());
 
     if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
         output_tensors.reserve(optional_output_tensors.size());

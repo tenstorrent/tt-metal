@@ -847,8 +847,57 @@ def test_sparse_matmul_sparsity_wrong_layout(device, expect_error):
         )
 
 
+def test_sparse_matmul_rejects_same_volume_wrong_compact_shape(device, expect_error):
+    """Compact detection must validate geometry, not only logical volume."""
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    m, _, n, _, tile_h, tile_w = dims
+    wrong_geometry = ttnn.from_torch(
+        torch.zeros((1, nnz // 2, m * 2, n), dtype=torch.bfloat16),
+        tile=ttnn.Tile([tile_h, tile_w]),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "Optional output tensor shape"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=pc,
+            dtype=ttnn.bfloat16,
+            optional_output_tensor=wrong_geometry,
+        )
+
+
+def test_sparse_matmul_rejects_compact_optional_output_without_nnz(device, expect_error):
+    """Without nnz, an optional output must use the expanded sparse layout."""
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    m, _, n, _, tile_h, tile_w = dims
+    compact_output = ttnn.from_torch(
+        torch.zeros((1, nnz, m, n), dtype=torch.bfloat16),
+        tile=ttnn.Tile([tile_h, tile_w]),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "when nnz is not provided"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=pc,
+            dtype=ttnn.bfloat16,
+            optional_output_tensor=compact_output,
+        )
+
+
 def test_sparse_matmul_compact_optional_output(device):
-    """A compact optional output stores only nonzero batch pairs in scan order."""
+    """Compact output packs active pairs; expanded output preserves sparse positions."""
     torch.manual_seed(0)
     num_blocks, num_experts = 4, 8
     m, k, n = 32, 128, 192
@@ -869,6 +918,18 @@ def test_sparse_matmul_compact_optional_output(device):
     )
     compact_output = ttnn.from_torch(
         torch.full((1, num_blocks, m, n), 99.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    compact_output_cached = ttnn.from_torch(
+        torch.full((1, num_blocks, m, n), 98.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    expanded_output = ttnn.from_torch(
+        torch.full((1, num_blocks, 1, num_experts, m, n), 97.0, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -897,11 +958,45 @@ def test_sparse_matmul_compact_optional_output(device):
         dtype=ttnn.bfloat16,
         optional_output_tensor=compact_output,
     )
+    cache_entries_after_first = device.num_program_cache_entries()
+    cached_output = ttnn.sparse_matmul(
+        in0,
+        in1,
+        sparsity=sparsity,
+        nnz=num_blocks,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        program_config=program_config,
+        dtype=ttnn.bfloat16,
+        optional_output_tensor=compact_output_cached,
+    )
+    assert device.num_program_cache_entries() == cache_entries_after_first
+
     output_torch = ttnn.to_torch(output).float()
+    cached_output_torch = ttnn.to_torch(cached_output).float()
     reference = torch.stack(
         [in0_torch[0, block].float() @ in1_torch[0, expert].float() for block, expert in enumerate(expert_for_block)]
     ).unsqueeze(0)
 
+    expanded = ttnn.sparse_matmul(
+        in0,
+        in1,
+        sparsity=sparsity,
+        nnz=num_blocks,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        program_config=program_config,
+        dtype=ttnn.bfloat16,
+        optional_output_tensor=expanded_output,
+    )
+    expanded_torch = ttnn.to_torch(expanded).float()
+    expanded_reference = torch.zeros((1, num_blocks, 1, num_experts, m, n))
+    for block, expert in enumerate(expert_for_block):
+        expanded_reference[0, block, 0, expert] = reference[0, block]
+
     assert tuple(output.shape) == (1, num_blocks, m, n)
     assert not torch.any(output_torch == 99)
+    assert not torch.any(cached_output_torch == 98)
+    assert tuple(expanded.shape) == (1, num_blocks, 1, num_experts, m, n)
+    assert not torch.any(expanded_torch == 97)
     torch.testing.assert_close(output_torch, reference, rtol=0.1, atol=1.5)
+    torch.testing.assert_close(cached_output_torch, reference, rtol=0.1, atol=1.5)
+    torch.testing.assert_close(expanded_torch, expanded_reference, rtol=0.1, atol=1.5)

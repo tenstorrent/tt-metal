@@ -33,9 +33,12 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import run_for_blackhole
 
 TILE = 32
 SEED = 48291
+
+pytestmark = run_for_blackhole("This test targets the Blackhole SFPU PRNG implementation")
 
 
 def _rand_rows(device, height, width, seed=SEED):
@@ -60,7 +63,7 @@ def test_rand_columns_are_distinct(device, width):
     columns = _rand_rows(device, height=2048, width=width)
     seen, duplicates = {}, []
     for index in range(columns.shape[0]):
-        key = hash(columns[index].numpy().tobytes())
+        key = columns[index].numpy().tobytes()
         if key in seen:
             duplicates.append((index, seen[key]))
         else:

@@ -263,12 +263,12 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     uint32_t num_batch_compute = nnz.value_or(sparsity.logical_volume());
     // Compact output packs only the `nnz` active batch pairs in scan order. Detect it exactly as the
-    // device op (device/sparse/sparse_matmul_device_operation.cpp): a caller-supplied nnz AND an output
-    // sized to nnz*M*N. Gating on nnz.has_value() prevents a normal expanded output — whose volume
-    // coincides with sparsity_volume*M*N — from being misclassified as compact when nnz is unset (#H1).
+    // device op (device/sparse/sparse_matmul_device_operation.cpp): [1, nnz, M, N]. Shape matching,
+    // rather than volume matching, prevents a same-volume tensor with incompatible geometry from
+    // selecting compact writer indexing.
     const bool compact_output =
-        nnz.has_value() && output_tensor.logical_volume() ==
-                               static_cast<uint64_t>(nnz.value()) * a.logical_shape()[-2] * b.logical_shape()[-1];
+        nnz.has_value() &&
+        output_tensor.logical_shape() == ttnn::Shape{1U, nnz.value(), a.logical_shape()[-2], b.logical_shape()[-1]};
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
