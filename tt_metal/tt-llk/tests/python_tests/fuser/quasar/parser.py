@@ -5,7 +5,8 @@
 """Quasar fuser config parser.
 
 Supports: eltwise binary (Elwadd/Elwmul/Elwsub), datacopy, matmul, reduce,
-unary SFPU, binary SFPU, eltwise broadcast (COL/ROW/SCALAR).
+unary SFPU, binary SFPU, eltwise broadcast (COL/ROW/SCALAR),
+unary broadcast (COL/ROW/SCALAR).
 Unsupported on Quasar: MatmulNoMop, ReduceBlockMax, ReduceBlockMaxRuntime,
 SubBcastColCustom.
 """
@@ -18,6 +19,7 @@ from fuser.validator import (
     OperationSchemaBase,
     PackSchema,
     UnarySfpuMathSchema,
+    _tile_dims,
 )
 from helpers.llk_params import (
     AccToDest,
@@ -35,13 +37,16 @@ from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
 from .fpu.reduce import ReduceFpu
+from .fpu.unary_broadcast import UnaryBroadcastFpu
 from .packer.matmul import MatmulPacker
 from .packer.packer import Packer
+from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
 from .unpacker.tilize_a import UnpackerTilizeA
+from .unpacker.unary_broadcast import UnaryBroadcastUnpacker
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
 
@@ -53,6 +58,11 @@ _no_broadcast = (
 _no_unpack_to_dest = (
     lambda s, a, b: s.unpack_to_dest == UnpackToDest.Yes,
     "unpack_to_dest is not supported for this kernel",
+)
+
+_broadcast_required = (
+    lambda s, a, b: s.broadcast_type == BroadcastType.None_,
+    "UnaryBroadcast requires a broadcast_type",
 )
 
 _no_transpose_unpack_to_dest = (
@@ -153,6 +163,11 @@ _reduce_params = (
     "Reduce requires both reduce_pool and reduce_dim",
 )
 
+_only_32x32_tile = (
+    lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32),
+    "Only (32, 32) tiles are supported for this operation",
+)
+
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(reuse_dest=s.reuse_dest),
@@ -173,6 +188,10 @@ UNPACKER_MAP = {
     "ReduceUnpacker": (
         lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
         [_no_transpose],
+    ),
+    "UnaryBroadcastUnpacker": (
+        lambda s: UnaryBroadcastUnpacker(),
+        [_broadcast_required, _no_transpose, _no_unpack_to_dest],
     ),
 }
 
@@ -218,6 +237,17 @@ FPU_MAP = {
             _forced_unpacker("ReduceUnpacker"),
         ],
     ),
+    "UnaryBroadcast": (
+        lambda s: UnaryBroadcastFpu(),
+        [
+            _broadcast_required,
+            _no_reuse_dest,
+            _no_broadcast_acc_to_dest,
+            _no_unpack_to_dest,
+            _only_32x32_tile,
+            _forced_unpacker("UnaryBroadcastUnpacker"),
+        ],
+    ),
 }
 
 _l1_acc_format = (
@@ -226,14 +256,26 @@ _l1_acc_format = (
     "Output data format does not support L1 accumulation",
 )
 
+_untilize_full_tile = (
+    lambda s, output: output.tile_shape.total_num_faces() != 4,
+    "PackUntilize supports only 32x32 output tiles, tiny tiles need strided pack",
+)
+
+_untilize_no_l1_acc = (
+    lambda s, output: s.pack_l1_accumulation == L1Accumulation.Yes,
+    "PackUntilize does not support L1 accumulation",
+)
+
 PACKER_MAP = {
     "Packer": (Packer, [_l1_acc_format]),
     "MatmulPacker": (MatmulPacker, [_l1_acc_format]),
+    "PackUntilize": (PackUntilize, [_untilize_full_tile, _untilize_no_l1_acc]),
 }
 
 _eltwise_dims = lambda a, b: (min(a[0], b[0]), min(a[1], b[1]))
 _matmul_dims = lambda a, b: (a[0], b[1])
 _src_a_dims = lambda a, b: a
+_src_b_dims = lambda a, b: b
 
 OUTPUT_DIMS = {
     "Elwadd": _eltwise_dims,
@@ -242,6 +284,7 @@ OUTPUT_DIMS = {
     "Datacopy": _src_a_dims,
     "Matmul": _matmul_dims,
     "Reduce": _src_a_dims,
+    "UnaryBroadcast": _src_b_dims,
 }
 
 

@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from fuser.block_data import BlockData
 from fuser.fused_operand import Operand
 from helpers.format_config import DataFormat
 from helpers.llk_params import L1Accumulation
@@ -43,8 +44,22 @@ def l1_accumulation_config(pack_l1_accumulation: L1Accumulation) -> str:
     return f"_llk_pack_reconfig_l1_acc_({l1_acc});\n"
 
 
-def pack_dest_init(dest_sync: str, dest_acc: str, **kwargs) -> str:
-    return f"_llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
+def untilize_l1_address(output: Operand, block: BlockData) -> str:
+    tile_size_16B = output.tile_size
+    row_stride = output.tile_count_x * tile_size_16B
+    col_stride = tile_size_16B // output.tile_shape.total_row_dim()
+
+    return (
+        f"L1_ADDRESS({output.cpp_name}[0])"
+        f" + {row_stride} * ({block.block_y} + tile_y)"
+        f" + {col_stride} * {block.block_x}"
+    )
+
+
+def pack_dest_init(
+    dest_sync: str, dest_acc: str, pack_mode: str = "PackMode::Default", **kwargs
+) -> str:
+    return f"_llk_pack_dest_init_<{dest_sync}, {dest_acc}, {pack_mode}>();\n"
 
 
 def packer_wait_for_math(**kwargs) -> str:

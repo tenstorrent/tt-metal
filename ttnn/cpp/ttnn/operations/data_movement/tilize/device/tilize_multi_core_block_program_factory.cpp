@@ -274,6 +274,7 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     };
 
     std::vector<KernelDescriptor> compute_kernels;
+    compute_kernels.reserve(4);
     if (!core_range.empty()) {
         compute_kernels.push_back(
             make_compute_kernel(core_range, {single_sub_block_wh, single_sub_block_size, third_dim}));

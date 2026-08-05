@@ -619,6 +619,7 @@ Tensor build_physical_core_lookup_table_tensor(const SortInputs& tensor_args, st
     // on the worker grid, so this is built once when the program is created; the framework keeps the
     // tensor alive and re-binds its address to the reader on every dispatch.
     std::vector<uint32_t> physical_core_lookup_table_data;
+    physical_core_lookup_table_data.reserve(layout.core_range.num_cores() * 2);
     for (const auto& core_range : layout.core_range.ranges()) {
         for (const auto& core_coord : core_range) {
             const auto physical_core = device->worker_core_from_logical_core(core_coord);
