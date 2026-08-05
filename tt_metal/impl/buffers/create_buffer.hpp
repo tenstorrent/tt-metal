@@ -11,6 +11,15 @@
 
 namespace tt::tt_metal {
 
+struct BufferConfig {
+    IDevice* device;
+    DeviceAddr size;       // Size in bytes
+    DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    BufferType buffer_type;
+};
+
+using InterleavedBufferConfig = BufferConfig;
+
 // clang-format off
 /**
 *  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on device
