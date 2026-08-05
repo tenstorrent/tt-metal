@@ -190,13 +190,12 @@ def compare_prefill_hidden_pcc(
     ref_prefill: torch.Tensor,
     tt_prefill: torch.Tensor,
     seq_len: int,
-    *,
-    per_token: bool = True,
 ):
-    """Compare prefill hidden states; returns (passed, overall_pcc, per_position_pcc).
+    """Compare prefill hidden states; returns ``(passed, overall_pcc)``.
 
-    Set ``per_token=False`` for long ISL sweeps — per-position ``comp_pcc`` in a Python loop
-    scales linearly with sequence length and makes 2k+ runs impractically slow.
+    Flattened PCC + shape check only. Per-position stats (median / min / last) come from
+    the vectorized ``per_position_pcc`` helper — a Python ``comp_pcc`` loop over tokens
+    is too slow for long ISL sweeps.
     """
     ref_f = ref_prefill.to(torch.float32)
     tt_f = tt_prefill.to(torch.float32)
@@ -204,20 +203,15 @@ def compare_prefill_hidden_pcc(
         raise AssertionError(
             f"Prefill hidden shape mismatch for seq_len={seq_len}: ref={tuple(ref_f.shape)} tt={tuple(tt_f.shape)}"
         )
-    passed_p, pcc_p = comp_pcc(ref_f, tt_f, pcc=PCC_THRESHOLD)
-    if not per_token:
-        return passed_p, pcc_p, []
-    per_pos = [comp_pcc(ref_f[:, p], tt_f[:, p], pcc=PCC_THRESHOLD)[1] for p in range(seq_len)]
-    return passed_p, pcc_p, per_pos
+    return comp_pcc(ref_f, tt_f, pcc=PCC_THRESHOLD)
 
 
 def per_position_pcc(ref_prefill: torch.Tensor, tt_prefill: torch.Tensor) -> torch.Tensor:
     """Vectorized per-position PCC over the hidden dim; returns a 1-D ``[seq_len]`` tensor.
 
     Equivalent to ``comp_pcc(ref[:, p], tt[:, p])`` for every position but computed with
-    tensor ops (no Python loop), so it stays fast for long ISL sweeps where the per-token
-    loop in ``compare_prefill_hidden_pcc`` is impractical. Non-finite values are zeroed to
-    match ``comp_pcc``.
+    tensor ops (no Python loop), so it stays fast for long ISL sweeps. Non-finite values
+    are zeroed to match ``comp_pcc``.
 
     The per-position median of this is a length-stable accuracy metric: the overall flattened
     PCC is dominated by a few massive-activation positions/channels (|hidden| ~20x typical)
