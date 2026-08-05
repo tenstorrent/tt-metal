@@ -760,7 +760,7 @@ TEST_F(TensorDistribution2x4Test, NdMapperOffsetSubmesh) {
     // 2x4 device; distribute over a 2x2 sub-rectangle anchored at (row=0, col=2) — the right 2x2.
     constexpr int kSubRows = 2;
     constexpr int kSubCols = 2;
-    const ttsl::SmallVector<uint32_t> offset{0, 2};
+    const MeshCoordinate offset(0, 2);
 
     std::vector<float> test_data;
     for (int i = 0; i < kSubRows * kSubCols; i++) {
@@ -801,7 +801,7 @@ TEST_F(TensorDistribution2x4Test, NdMapperOffsetRoundTrip) {
     // sub-rectangle. The aggregated tensor should equal the original input.
     constexpr int kSubRows = 2;
     constexpr int kSubCols = 2;
-    const ttsl::SmallVector<uint32_t> offset{0, 2};
+    const MeshCoordinate offset(0, 2);
 
     std::vector<float> test_data;
     for (int i = 0; i < kSubRows * kSubCols; i++) {
@@ -841,18 +841,18 @@ TEST_F(TensorDistribution2x4Test, NdMapperOffsetOutOfRange) {
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
             .mesh_shape_override = MeshShape(2, 2),
-            .mesh_offset_override = {0, 3},
+            .mesh_offset_override = MeshCoordinate(0, 3),
         }));
 }
 
 TEST_F(TensorDistribution2x4Test, NdMapperOffsetWrongDimensionality) {
-    // Non-zero offsets must match the device dimensionality (2). (Zero offsets of any rank are a no-op.)
+    // Non-zero offsets must match the device dimensionality (2). (All-zero offsets of any rank are a no-op.)
     EXPECT_ANY_THROW(create_mesh_mapper(
         *mesh_device_,
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
             .mesh_shape_override = MeshShape(2, 2),
-            .mesh_offset_override = {1},
+            .mesh_offset_override = MeshCoordinate(1u),
         }));
 }
 
@@ -864,7 +864,7 @@ TEST_F(TensorDistribution2x4Test, NdMapperOffsetRejectedForRowMajor) {
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{3}},
             .mesh_shape_override = MeshShape(1, 8),
-            .mesh_offset_override = {0, 1},
+            .mesh_offset_override = MeshCoordinate(0, 1),
         }));
 }
 

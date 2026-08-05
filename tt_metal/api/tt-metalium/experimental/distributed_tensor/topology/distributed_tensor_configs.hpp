@@ -70,9 +70,11 @@ struct MeshMapperConfig {
     // entirely).
     std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape_override = std::nullopt;
 
-    // Anchors the (sub)mesh at this offset within the mesh device. Empty/all-zero means the origin.
+    // Anchors the (sub)mesh at this coordinate within the mesh device.
+    // Defaults to the origin of the mesh it is applied to (`zero_coordinate(0)` / all-zero).
     // Only supported in SUBMESH mode; must match device dimensionality and fit within the device.
-    ttsl::SmallVector<uint32_t> mesh_offset_override{};
+    tt::tt_metal::distributed::MeshCoordinate mesh_offset_override =
+        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(0);
 };
 
 bool operator==(const MeshMapperConfig::Placement& lhs, const MeshMapperConfig::Placement& rhs);
@@ -88,9 +90,11 @@ struct MeshComposerConfig {
     // entirely).
     std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape_override = std::nullopt;
 
-    // Gathers shards from this offset within the mesh device. Empty/all-zero means the origin.
-    // Symmetric to `MeshMapperConfig::mesh_offset_override`; only supported in SUBMESH mode.
-    ttsl::SmallVector<uint32_t> mesh_offset_override{};
+    // Gathers shards from this coordinate within the mesh device.
+    // Defaults to the origin of the mesh it is applied to. Symmetric to
+    // `MeshMapperConfig::mesh_offset_override`; only supported in SUBMESH mode.
+    tt::tt_metal::distributed::MeshCoordinate mesh_offset_override =
+        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(0);
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config);

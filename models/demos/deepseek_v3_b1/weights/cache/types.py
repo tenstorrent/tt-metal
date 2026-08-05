@@ -27,7 +27,7 @@ class SourceTensorSelection:
 
 
 # Optional mesh_shape_override / mesh_offset_override place the tensor on a SUBMESH
-# region (e.g. shape (4, 2) at offset (0, 2) on a 4x4). Defaults preserve prior behavior.
+# region (e.g. shape (4, 2) at offset (0, 2) on a 4x4). Offset defaults to origin.
 @dataclass(frozen=True)
 class ReplicateMeshMapper:
     """Replicate the tensor on every device in the mesh."""

@@ -122,7 +122,7 @@ def build_mesh_mapper_for_target(target: TensorTarget, device):
         ttnn.MeshMapperConfig(
             placements,
             ttnn.MeshShape(*shape),
-            mapper_config.mesh_offset_override,
+            ttnn.MeshCoordinate(list(mapper_config.mesh_offset_override)),
         ),
     )
 

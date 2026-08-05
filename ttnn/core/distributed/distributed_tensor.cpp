@@ -38,16 +38,14 @@
 namespace ttnn::distributed {
 namespace {
 
-bool is_zero_mesh_offset(const ttsl::SmallVector<uint32_t>& offset) {
-    return std::all_of(offset.begin(), offset.end(), [](uint32_t v) { return v == 0; });
+bool is_zero_mesh_offset(const MeshCoordinate& offset) {
+    return std::all_of(offset.coords().begin(), offset.coords().end(), [](uint32_t v) { return v == 0; });
 }
 
 // Remaps distribution-shape coords onto the device. `global_range` must outlive the returned function.
-// In SUBMESH mode, adds `offset` so (0,...,0) maps to `offset`. Empty/all-zero offsets are a no-op.
+// In SUBMESH mode, adds `offset` so (0,...,0) maps to `offset`. All-zero (incl. default origin) is a no-op.
 auto get_remap_fn(
-    DistributionMode distribution_mode,
-    const MeshCoordinateRange* global_range,
-    const ttsl::SmallVector<uint32_t>& offset) {
+    DistributionMode distribution_mode, const MeshCoordinateRange* global_range, const MeshCoordinate& offset) {
     return [distribution_mode, offset, row_major_dst = global_range->begin()](const MeshCoordinate& src_coord) mutable {
         switch (distribution_mode) {
             case DistributionMode::ROW_MAJOR: return *(row_major_dst++);
@@ -79,16 +77,15 @@ bool increment_indices(const ttsl::SmallVector<int>& limits, ttsl::SmallVector<i
 }
 
 // Validates `mesh_offset_override`: SUBMESH-only; same dims as the device; sub-rectangle must fit.
-// Empty/all-zero offsets are a no-op and skip checks (including ROW_MAJOR), regardless of rank.
+// All-zero offsets (including the default origin) are a no-op and skip checks, regardless of rank.
 void validate_mesh_offset(
-    const ttsl::SmallVector<uint32_t>& mesh_offset_override,
+    const MeshCoordinate& mesh_offset_override,
     DistributionMode distribution_mode,
     const MeshShape& distribution_shape,
     const MeshShape& device_shape) {
     if (is_zero_mesh_offset(mesh_offset_override)) {
         return;
     }
-    const auto offset_coord = MeshCoordinate(ttsl::Span<const uint32_t>(mesh_offset_override));
     TT_FATAL(
         distribution_mode == DistributionMode::SUBMESH,
         "mesh_offset_override is only supported when the distribution fits within the mesh device per-dimension "
@@ -96,9 +93,9 @@ void validate_mesh_offset(
         distribution_shape,
         device_shape);
     TT_FATAL(
-        mesh_offset_override.size() == device_shape.dims(),
+        mesh_offset_override.dims() == device_shape.dims(),
         "The offset {} must have the same dimensionality as the mesh device shape {}",
-        offset_coord,
+        mesh_offset_override,
         device_shape);
     TT_FATAL(
         distribution_shape.dims() == device_shape.dims(),
@@ -111,7 +108,7 @@ void validate_mesh_offset(
             mesh_offset_override[i] <= device_shape[i] - distribution_shape[i],
             "The sub-rectangle anchored at offset {} with shape {} does not fit within the mesh device shape {} "
             "(dimension {})",
-            offset_coord,
+            mesh_offset_override,
             distribution_shape,
             device_shape,
             i);
