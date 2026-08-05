@@ -28,5 +28,5 @@
     "ign_port_PR50968_4chip_2x2_s_per_image": 263.06,
     "roofline_dense64_at_40pct_mfu_s_per_image": "15-20"
   },
-  "source": "PERF.md; UNIFIED_STACK.md; PERF_CONSOLIDATION/HUNYUAN3_PERF_references.csv"
+  "source": "HANDOFF/PERF.md; UNIFIED_STACK.md; PERF_CONSOLIDATION/HUNYUAN3_PERF_references.csv"
 }

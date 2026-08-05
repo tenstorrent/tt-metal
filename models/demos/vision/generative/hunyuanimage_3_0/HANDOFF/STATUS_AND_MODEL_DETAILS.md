@@ -63,4 +63,4 @@ HUNYUAN_VAE_AUTOCAST=bf16 HUNYUAN_CCL_LINKS=2 ./python_env/bin/python -m pytest 
 Key env: `HUNYUAN_EP_FULLMESH` (EP=32, default on) · `HUNYUAN_CCL_LINKS` (default 2) · `HUNYUAN_MM_FULLGRID` (default on) · `HUNYUAN_VAE_AUTOCAST=bf16` · `HUNYUAN_CFG_PARALLEL` (opt-in) · `HUNYUAN_SPARSE_MOE` (opt-in, dead) · `HY3_SINGLE_CHIP`.
 
 ## Deeper detail
-The conventional `PERF.md` (model root) has the perf / roofline / target tables; `OPTIMIZATIONS_BY_DATE.md` (this folder) has the chronological breakdown; in-branch `UNIFIED_STACK.md` has the deepest dated lever ladder.
+`PERF.md` (this folder) has the perf / roofline / target tables; `OPTIMIZATIONS_BY_DATE.md` (this folder) has the chronological breakdown; in-branch `UNIFIED_STACK.md` has the deepest dated lever ladder.

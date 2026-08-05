@@ -34,7 +34,7 @@ Throughput at warm: **~43 images/hr**.
 | + MM_FULLGRID | 5736 |
 | + fused attention all-reduce | 5512 (−29.1% cumulative) |
 
-The largest single win is separate from this ladder: the **on-device head-glue** port removed a ~4600 ms/step host round-trip, cutting the per-step from **5548 → 947 ms/step**. Full dated log: [`HANDOFF/OPTIMIZATIONS_BY_DATE.md`](HANDOFF/OPTIMIZATIONS_BY_DATE.md).
+The largest single win is separate from this ladder: the **on-device head-glue** port removed a ~4600 ms/step host round-trip, cutting the per-step from **5548 → 947 ms/step**. Full dated log: [`OPTIMIZATIONS_BY_DATE.md`](OPTIMIZATIONS_BY_DATE.md).
 
 ## Targets & references
 
@@ -48,7 +48,7 @@ The largest single win is separate from this ladder: the **on-device head-glue**
 | Ref: IGN port (PR #50968) | 263 | same model, BH 4-chip 2×2 SP×TP |
 | Ref: LongCat-Image (TT) | 43.6 | different / smaller 6B dense model |
 
-Machine-readable target: [`tests/perf_targets/t2i_1024_50step.json`](tests/perf_targets/t2i_1024_50step.json).
+Machine-readable target: [`../tests/perf_targets/t2i_1024_50step.json`](../tests/perf_targets/t2i_1024_50step.json).
 
 ## Bottleneck (latest Tracy)
 
