@@ -224,10 +224,33 @@ TWO THINGS THAT ARE NOT LIKE BLOCK 2:
 #     + wo output and residual L1       26.19    1.009x
 #     + MLP intermediates (g, u) L1     25.53    1.035x   <- shipped
 #
-# TWO THINGS THAT DO NOT PAY, so they are not done. sdpa_decode's output stays forced to DRAM:
-# routing it to L1 instead measures 0.999x, i.e. nothing (that `to_memory_config` looks like an
-# obvious round trip to remove, and is not). And in Block 2 the norm output was likewise neutral.
-# The pattern is narrower than "L1 is faster": it is values with a consumer close behind.
+# TWO THINGS THAT DO NOT PAY, so they are not done -- and the MECHANISM, since "L1 is faster than
+# DRAM" makes the opposite prediction and is the obvious thing to believe.
+#
+# A MATMUL DOES NOT CARE WHERE ITS ACTIVATION LIVES, because the weight dominates the bytes. `a` is
+# [1,1,4096] bf16 = 8 KB against a 4096x3072 BFP8 wo weight = 12.8 MB, so the activation is 1/1632 of
+# the read traffic -- 0.061%. Measured, the wo matmul with `a`:
+#     DRAM interleaved (ships)   82.8 us
+#     L1 interleaved             81.7 us    1.013x, i.e. inside the noise
+#     sharded, straight from sdpa 82.2 us   1.006x
+# You cannot win a meaningful fraction of a matmul by relocating 0.06% of its input. Same for w2's
+# `u` (18 KB against 54 MB, 0.033%): 1.003x.
+#
+# AND MOVING A VALUE INTO L1 COSTS MORE THAN THE CONSUMER SAVES. sdpa_decode emits `o` as
+# INTERLEAVED DRAM already, so the choice is not "keep it in L1" but "move it to L1":
+#     to_memory_config(o, DRAM) + reshape   21.0 us
+#     to_memory_config(o, L1)   + reshape   27.3 us    +6.3 us
+# Pay 6.3 to save 1.1. That is the 0.999x, and it is a conversion cost, not a property of L1.
+#
+# SO THE RULE IS: L1 PAYS WHEN THE VALUE IS BORN THERE, never when you move it. `memory_config=_L1`
+# on a producing op costs nothing extra -- it writes somewhere else -- and saves a real write+read
+# round trip. That is what the 1.009x and 1.035x rows above are. `o` is born in DRAM by an op whose
+# output placement we do not set, so there is nothing to win. (sdpa_decode was asked for an L1 output
+# directly; see the probe. Even if it obliged, the matmul is indifferent, so the ceiling is ~1 us a
+# layer.) In Block 2 the norm output was neutral for the same reason.
+#
+# The redundant-looking `to_memory_config(o, DRAM)` was also tested for removal: reshape alone
+# measures 19.67 us against 18.37 for the pair, i.e. removing it is not faster. Left in place.
 ```
 
 ### [gpt-04] `module level` — RMSNORM, WIDTH-SHARDED, for the DECODE shape. The...

@@ -286,7 +286,9 @@ class TtVoxtralGPT:
         o = ttnn.transformer.scaled_dot_product_attention_decode(
             qh, cache[0], cache[1], cur_pos_tensor=pos_t, scale=SCALE,
             compute_kernel_config=COMPUTE_CONFIG)
-        # o -> DRAM and not _L1 on purpose: L1 here measures 0.999x, see _L1.
+        # o -> DRAM and not _L1 on purpose, and NOT because DRAM is better: sdpa_decode already
+        # emits o as interleaved DRAM, so L1 would mean MOVING it (+6.3 us) to save ~1.1 us on a
+        # matmul whose activation is 0.06% of its read traffic. 0.999x. See NOTES.md [gpt-03].
         a = ttnn.reshape(ttnn.to_memory_config(o, ttnn.DRAM_MEMORY_CONFIG), [1, 1, Q_WIDTH])
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
                                     memory_config=_L1), memory_config=_L1)
