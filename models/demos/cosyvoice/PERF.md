@@ -49,9 +49,14 @@ dispatch-bound a stage already is. The AR decoder issues ~14 small ops per token
 almost pure overhead; the flow decoder runs 16 resnet and 64 transformer blocks over 608 frames at
 batch 2 and is close to compute-bound. End-to-end that took RTF from 2.120 to 1.123.
 
-Reaching 0.5 therefore needs less arithmetic, not less overhead. The LLM is 70 % of the remaining
-budget at one token per 15.71 ms, and the lever there is a shorter critical path per token —
-`bfloat8_b` weights, or fusing the per-block projections — not more tracing.
+Reaching 0.5 therefore needs a shorter critical path per token, and one measurement narrows what
+that means. `bfloat8_b` weights for the AR decoder give **1.00×** (13.09 → 13.12 ms/step) at PCC
+`0.9997040033`. The decoder's 176 M linear parameters move 352 MB per token, which at 13.09 ms is
+**27 GB/s effective** — roughly 15× short of the bandwidth floor, so halving the traffic is
+invisible. The step is bound by per-op cost on one-row tensors (~500 ops, ~26 µs each), and tracing
+has already removed the host half of that. **The remaining lever is fewer, larger ops** — fusing the
+per-block q/k/v projections, collapsing the five-op `rel_shift` skew, flash attention — not narrower
+weights. `bfloat8_b` is kept as a memory option: 352 MB of weights become 176 MB.
 
 Tracing the flow decoder took removing a host→device write that **every convolution** was issuing.
 `ttnn.conv1d` and `ttnn.conv_transpose2d` prepare their weights — tilize, pad to the sharding
