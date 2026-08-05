@@ -154,10 +154,14 @@ class TtTransformerLM:
     def logits_for_last(self, ys):
         """`llm_decoder(y[:, -1])` -> `[1, 4097]` on the host, ready for sampling.
 
-        The head is the one place a host round trip is unavoidable in Stage 1:
-        RAS needs the full 4097-way distribution *and* the history of emitted
-        tokens, and its repetition branch rewrites a score before resampling.
-        `03_plan.md` P6 is where this moves on-device via `ttnn.sampling`.
+        The head is the one place a host round trip is unavoidable: RAS needs the
+        full 4097-way distribution *and* the history of emitted tokens, and its
+        repetition branch rewrites a score before resampling.
+
+        Moving it to `ttnn.sampling` was measured and rejected -- the whole
+        per-token tail is 0.352 ms, 2.7 % of a token, and on-device sampling could
+        remove at most 0.217 ms of it while giving up exact agreement with the
+        reference. See the note in `sampling.py` and `scripts/profile_token_tail.py`.
         """
         t = ys.shape[1]
         # A single-row `ys` needs no slice, and taking one anyway is actively
