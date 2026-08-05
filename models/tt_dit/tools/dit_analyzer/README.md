@@ -106,7 +106,7 @@ With torch, loguru, safetensors, numpy and pytest present the list is empty and
 the run uses the real `models.common.utility_functions`. Without them the dry run
 still works: there is a metadata-only torch in [`dryrun/hostfakes.py`](dryrun/hostfakes.py)
 and stubs for the rest, because the point of this design is a redundancy check at
-unit-test cost — a device-free CI job should not need a torch install to run it.
+unit-test cost — a device-free run should not even need a torch install.
 Order matters, and one thing to keep in mind when adding to `hostenv.py`: nothing
 under `models.` may be imported before the shim is installed, or tt_dit's
 module-level `import ttnn` drags in the real one and `install()` then refuses to
@@ -130,7 +130,7 @@ Two honesty properties are worth knowing about before reading a report:
 
 * **Nothing is invisible.** A ttnn call with no shape rule still runs, and still
   appears in the IR as an `unregistered` node with real inputs, outputs, shapes and
-  source location. `ditcheck ops --missing <graph>` lists them; `--check` fails CI.
+  source location. `ditcheck ops --missing <graph>` lists them; `--check` exits nonzero.
 * **Analysis withholds, never guesses.** The output metadata of an `unregistered`
   node is *assumed* to match its first input, so any finding whose proof passes
   through one is not reported and not downgraded. It goes to a `withheld` queue
@@ -372,7 +372,7 @@ Built (plan phases 1–4 and roadmap phase 6, narrowed to the v1 scope in the pl
   split (the per-device `[n_dev][q|k|v]` layout this tree actually uses),
   merge-heads, SDPA (incl. ring-SDPA's internal K/V gathers), host readback
 * forward availability + backward demand, proof objects, ranked text report,
-  JSON output, `--fail-on` for CI, per-device state tables
+  JSON output, `--fail-on` for a manual gate / scripts, per-device state tables
 * the dry-run front end: `ditcheck dryrun` builds a real tt_dit module against the
   metadata-only `ttnn`, loads its weights from torch meta tensors through the real
   `Parameter` path, records a caller stack per node, and diffs against the

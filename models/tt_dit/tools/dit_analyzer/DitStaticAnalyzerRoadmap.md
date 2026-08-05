@@ -27,21 +27,31 @@ and lays out the work to close it.
 here rather than restating it, so there is one place to update and nowhere for a
 stale copy to disagree.
 
+> **Scope (decided 2026-08-05): a hand-run tool, not a CI gate.** ditcheck is meant
+> to be run by an engineer when they want it, not wired into PR CI. That drops the
+> automated CI job and its golden baselines (blocker 35) and demotes stable-ID
+> run-to-run diffing (blocker 27), and it **re-orders the remaining phases**: with
+> no build to keep green, the bottleneck is no longer automation but *trust* — an
+> engineer must believe a finding before spending kernel-engineer time on it. So
+> **on-device conformance (phase 11) becomes the most important remaining phase**,
+> followed by reach (phase 10, whole pipelines) and the readability/scale part of
+> phase 9. See [§ Ordering](#ordering).
+
 | | |
 |---|---|
 | Analysis | works offline, pure Python: forward availability + backward demand + 6 redundancy rules + proofs |
-| Op semantics | 19 analyzer specs, 80 call-name aliases; 65 shim call names + 15 no-ops in `dryrun/ops.py` |
+| Op semantics | 21 analyzer specs, ~100 aliases; the shim's pointwise/passthrough dispatch is generated from one `semantics.GENERIC_OPS` table (one registration per generic op); fused kernels declared in `dryrun/fused.py` |
 | Dry run | **built**: `ditcheck dryrun ltx_block --preset bh_4x8`, real forward under a metadata-only ttnn, weights from torch meta tensors, caller stack per node, `--check-oracle` as the drift test |
 | Capture | 30 monkeypatch hooks written, **never run on hardware**; demoted to the phase 11 conformance path |
 | Graph source | `ditcheck dryrun` from source, or hand-written via `builder.py`; a trace still needs hand-declared placements |
 | Validated on | LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear), the SD3.5-large joint block (0 findings), **and** the SD3.5 VAE ResnetBlock (conv/group_norm, 0 findings) — **all derived from source** by the dry run; the two DiT blocks diffed against a hand-written oracle, the VAE checked for zero unregistered ops + zero diagnostics; asserted in `tests/test_dryrun.py` |
-| Tests | 25 analyzer + 22 dry-run, no device and no pytest required; plus `conform.py` on a device |
+| Tests | 26 analyzer + 25 dry-run, no device and no pytest required; plus `conform.py` on a device |
 | Conformance | `conform.py`: per-device shape diff vs real ttnn, **green on the 2×4 Loudbox** (the LTX block's shapes match; 4×8 Ring needs a Galaxy) |
 
 ### Phases
 
-Plan phases 0–5 built the analyzer; roadmap phases 6–13 are about running it on
-real code. Plan phase 6 and roadmap phase 13 are the same work.
+Plan phases 0–5 built the analyzer; roadmap phases 6–12 are about running it on
+real code by hand (the CI half of the old phase 13 is now out of scope).
 
 | phase | state | what remains |
 |---|---|---|
@@ -51,17 +61,20 @@ real code. Plan phase 6 and roadmap phase 13 are the same work.
 | **roadmap 6 — dry-run front end** | **done** | — |
 | **roadmap 7 — shape and layout fidelity** | **done (7a); 7b on 2×4, Ring blocked** | tiling, exact shard division, block-float bytes, checkpoint keys, and the chunk rule all shipped and corroborated against real ttnn on the 2×4 Loudbox via `conform.py`; the 4×8 Ring corroboration needs a 32-chip Galaxy |
 | roadmap 8 — op coverage | **core done** | LTX, SD3.5-large **and** the SD3.5 VAE ResnetBlock covered from source (0 unregistered); fused-kernel data table + generic-op one-registration merge landed; the remaining tails (LTX-VAE halo/`neighbor_pad`, conv3d, Mochi/Wan tier-2) surface as those targets are added and are partly phase-10-gated |
-| roadmap 9 — scale | not started | 48-layer rollup, quadratic cost, finding rollup, stable IDs |
-| roadmap 10 — multi-mesh / stage / host | not started | submeshes, encoder→DiT→VAE, carried state, readbacks |
-| roadmap 11 — conformance (needs a device) | not started | **gates trusting findings**, not producing them |
-| roadmap 12 — branch and shape matrix | not started | one graph is currently one branch |
-| roadmap 13 / plan 6 — workflow | **partly** | CLI and `ops --check` exist; no CI job, no golden baselines, no time-based ranking |
+| **roadmap 11 — conformance (needs a device)** | **next — the trust bottleneck** | per-op conformance + a whole-block collective log + buffer-liveness/barrier soundness gates; promotes findings from "the shim believes" to "the hardware confirms". 2×4 reachable now; the 4×8 Ring finding stays Galaxy-blocked |
+| roadmap 10 — multi-mesh / stage / host | not started (reach) | submeshes, encoder→DiT→VAE, carried state, readbacks; unblocks the LTX VAE |
+| roadmap 9 — scale | not started (with 10) | loop + finding rollup so a whole-pipeline report is readable, and keep runtime/memory tractable; stable-ID run-to-run diffing **dropped with CI** |
+| roadmap 12 — branch and shape matrix | not started (optional) | one graph is currently one branch; a manual convenience, not on the spine |
+| ~~roadmap 13 — CI job + golden baselines~~ | **out of scope** | dropped by the hand-run decision; only the `--pipeline` entry point and optional cost ranking survive, folded into phase 10 / as an optional aid |
 
-**Blockers: 27 of 44 open** — 7 dissolved by the dry-run design, 4 closed by phase
-6, 6 closed by phase 7 (10, 11, 12, 13, 36, 38). Open counts by phase: 7→0,
-8→6, 9→4, 10→6, 11→5, 12→2, 13→3. (Blocker 36 is closed for *shape math*: the
-2×4 shapes are now diffed against real ttnn by `conform.py`; the 4×8 Ring diff
-still awaits a Galaxy.)
+**Blockers: ~23 open and in scope of 44** — 7 dissolved by the dry-run design, 4
+closed by phase 6, 6 by phase 7 (10, 11, 12, 13, 36, 38), 3 by phase 8 (2, 17, 18;
+14 partly). Open counts by phase: 8→3 (15 `mesh_partition`, 16 p2p, 14 tail),
+9→3, 10→6, 11→5, 12→2. **Out of scope under the hand-run decision:** blocker 35
+(golden baselines) is dropped, 27 (stable IDs for CI diffing) demotes to optional,
+and 34/33 shrink to a `--pipeline` entry point + optional cost ranking. (Blocker 36
+is closed for *shape math*: the 2×4 shapes are diffed against real ttnn by
+`conform.py`; the 4×8 Ring diff still awaits a Galaxy.)
 
 **The plan's v1 bar is met.** It set the go/no-go at "if it can reliably rediscover
 Kevin's finding, and do so early in bring-up, it is already worth the build cost"
@@ -110,7 +123,7 @@ with a permanent hardware dependency on every analysis, one branch and one
 resolution per run, and three separate identity hazards (`Tracer` recycling
 tensor objects, 92 `deallocate` sites, in-place ops) that must all be solved
 before any finding can be trusted. The shim trades that for a *fidelity*
-dependency, which is testable per-op in CI rather than per-model. Two
+dependency, which is testable per-op rather than per-model. Two
 alternatives are non-starters: static AST analysis of the pipelines (too
 config-dynamic to be sound), and the GSPMD-style approach of checking a declared
 sharding plan against the torch reference — that answers "what collectives
@@ -129,7 +142,7 @@ ditcheck dryrun --pipeline models.tt_dit.pipelines.ltx --preset bh_4x8 \
     --frames 121 --height 704 --width 1216 --out ltx_bh4x8.graph.json
 ditcheck analyze ltx_bh4x8.graph.json --top 10
 
-# on a device, in CI, occasionally: keep the shim honest
+# on a device, occasionally, by hand: keep the shim honest (phase 11)
 ditcheck conform --ops all_gather_async,minimal_matmul,...   # per-op shape/layout
 ditcheck conform --block ltx --against ltx_bh4x8.graph.json  # flat collective log
 ```
@@ -233,7 +246,7 @@ call sites), plus 9 introduced by the shim (44 was found by the spike). `P` = ph
 | 24 | Cross-forward state (latents, `StateTensor`, KV caches); `steps` is hand-supplied | 10 |
 | 25 | Host-side gaps (scheduler/guidance between forwards) split the graph | 10 |
 | 26 | Report doesn't scale: 22 TP gathers × 48 layers needs finding rollup | 9 |
-| 27 | Counter-based node IDs are unstable across runs, so CI can't diff findings | 9 |
+| 27 | Counter-based node IDs are unstable across runs, so CI can't diff findings | **optional** — the run-to-run diff motivation went with CI; only matters if a human wants to diff two runs |
 
 ### E. Soundness gaps (wrong answers, not missing ones)
 
@@ -244,14 +257,14 @@ call sites), plus 9 introduced by the shim (44 was found by the spike). `P` = ph
 | 30 | No memory model: removing a gather changes L1/DRAM residency | 11 |
 | 31 | One graph = one branch (`skip_qk`, `has_gate`, `kv_replicated`, `use_ring_cross`, stage 1/2, LoRA mode, `image_conditioning`, `dynamic_load`) | 12 |
 | 32 | Shape-dependent graphs: `video_N`/`audio_N` derive from resolution/duration/fps | 12 |
-| 33 | Cost model can't rank at pipeline scale: no link contention, no comm/compute overlap, no per-op fixed cost | 13 |
+| 33 | Cost model can't rank at pipeline scale: no link contention, no comm/compute overlap, no per-op fixed cost | **optional** — a ranking aid for a human, from a perf CSV; not a latency model |
 
 ### F. Workflow
 
 | # | Blocker | P |
 |---|---|---|
-| 34 | No entry point: pipelines have no dry-run / capture flag | 13 |
-| 35 | No golden baselines for a CI gate | 13 |
+| 34 | No entry point: pipelines have no dry-run / capture flag | 10 — a `--pipeline` entry point is still wanted for hand runs on whole pipelines |
+| 35 | No golden baselines for a CI gate | **out of scope** — hand-run tool, no CI gate to keep green |
 
 ### G. New: shim-specific
 
@@ -453,19 +466,23 @@ generator (phase 8) already emits both halves for a new such op.
   for the whole surface stands, but the tail is VAE/encoder, not the DiT — so this
   phase can ship DiT-complete early and grow into the VAE.
 
-### Phase 9 — Scale (1–2 weeks) · closes 20, 21, 26, 27
+### Phase 9 — Scale (1–2 weeks) · closes 20, 21, 26 · 27 optional
 
-Cheaper than in revision 1: the shim knows the Python call stack and loop index,
-so block boundaries and `calls` come from the run instead of being inferred.
+Runs *with* phase 10: once whole pipelines produce 48-layer graphs, this keeps
+them **readable and tractable for a human** (the CI-diffing motivation for stable
+IDs is dropped). Cheaper than in revision 1: the shim knows the Python call stack
+and loop index, so block boundaries and `calls` come from the run, not inference.
 
-- Deterministic node IDs from `(op, source location, occurrence index in block)`.
 - Roll repeated blocks up to one instance + `calls`, keeping the first and last
-  instances intact so boundary effects aren't hidden.
-- Liveness-pruned, copy-on-write state; snapshot only at collectives.
+  instances intact so boundary effects aren't hidden (readability).
+- Keep runtime/memory tractable: liveness-pruned, copy-on-write state, snapshot
+  only at collectives (a naive 48-layer graph extrapolates to ~20 min / ~20 GB).
 - Roll findings up by `(rule, source location)`, leading with the outermost model
   frame from the caller stack recorded in phase 6 (44).
-- **Acceptance:** a full 48-layer dry run analyzes in <60 s and <2 GB, with
-  findings matching the rolled-up single-block result.
+- Deterministic node IDs from `(op, source location, occurrence index)` — now
+  **optional** (only needed to diff two runs by hand), not a gate.
+- **Acceptance:** a full 48-layer dry run analyzes in a reasonable time/footprint,
+  with findings matching the rolled-up single-block result.
 
 ### Phase 10 — Multi-mesh, multi-stage, multi-host (2–3 weeks) · closes 19, 22, 23, 24, 25, 43
 
@@ -486,8 +503,9 @@ The spike is the argument for the conformance half: two shape bugs invented 15
 findings that read exactly as convincingly as the 6 real ones.
 
 - Per-op conformance harness: for each registered op, build inputs on a real
-  mesh, run real ttnn, and assert the shim's shape/layout/dist match. Runs in
-  device CI; a mismatch is a hard failure naming the op.
+  mesh, run real ttnn, and assert the shim's shape/layout/dist match. Run on a
+  device (by hand, or on a device runner as maintenance); a mismatch is a hard
+  failure naming the op.
 - Whole-block collective log (flat, no tensor identity) diffed against the dry
   run: same collectives, same order, same dims/axes/shapes, same source lines.
 - Buffer liveness: record persistent-buffer identity and semaphore IDs, and
@@ -513,38 +531,55 @@ Nearly free once the dry run works: sweeps are laptop CPU time, not device time.
 - **Acceptance:** an LTX matrix run covers both topologies × both stages × audio
   on/off and lists uncovered branches by name.
 
-### Phase 13 — Workflow integration (1–2 weeks) · closes 33, 34, 35
+### ~~Phase 13 — Workflow / CI~~ · **mostly out of scope** (hand-run tool)
 
-- `ditcheck dryrun --pipeline …` entry point plus one shared helper; no pipeline
-  edits beyond a config hook.
-- Golden findings baselines per config; **a device-free CI job** running
-  `dryrun` + `analyze --fail-on provable` + `ops --check` on every PR. This is the
-  payoff of the shim design: a redundancy check at unit-test cost.
-- Optional time-based ranking by joining measured per-op latency from a perf CSV.
-  A ranking aid, not a latency model — contention and overlap stay out of scope.
-- **Acceptance:** a provable redundancy introduced in a PR fails CI with the
-  source line in the output, on a runner with no Tenstorrent hardware.
+The device-free **CI job and golden baselines are dropped** — ditcheck is run by an
+engineer when they want it, so there is no build to keep green (blocker 35 gone,
+27 optional). Two pieces survive as conveniences for hand runs, and are folded
+elsewhere rather than kept as a phase of their own:
+
+- **`ditcheck dryrun --pipeline …` entry point** (blocker 34) — point it at a real
+  pipeline module instead of a hand-curated block target. Wanted for manual
+  whole-pipeline runs, so it rides with phase 10.
+- **Optional cost-based ranking** (blocker 33) — join a perf CSV to rank findings
+  by measured time, not just bytes. A "look here first" aid, explicitly *not* a
+  latency model (contention and comm/compute overlap stay out of scope). Add if and
+  when a human wants it.
+
+The old acceptance criterion ("a provable redundancy fails CI on a hardware-free
+runner") no longer applies; the equivalent manual check is just
+`ditcheck dryrun <target> | analyze --fail-on provable`, run by hand.
 
 ## Ordering
 
+Phases 6–8 (build the tool, make it run on real blocks) are done. As a **hand-run
+tool**, the remaining order is driven by trust, then reach — not by a critical path
+to CI.
+
 ```
-6 (shim core) ══► 7 (shape fidelity) ══► 8 (op coverage) ──► 9 (scale) ──► 13 (device-free CI)
-    done              7a done; 7b on 2×4     next  │
-                                                   ├──► 10 (multi-mesh / stage)
-                                                   ├──► 11 (conformance + soundness, on device)
-                                                   └──► 12 (coverage matrix)
+6 (shim) ══► 7 (shape fidelity) ══► 8 (op coverage) ══►  11 (conformance, on device)  ← the trust bottleneck
+   done       done; 2×4 conformed     core done      │
+                                                      ├─► 10 (whole pipeline / multi-mesh)  ← reach; unblocks LTX VAE
+                                                      │       └─► 9 (rollup + perf, so pipelines stay readable)
+                                                      └─► 12 (branch/shape matrix)          ← optional convenience
 ```
 
-6 → 7 → 8 is the critical path to "runs on a real pipeline with no hand-written
-model"; with 6 and 7a done and 7b green on the 2×4 box, **next is phase 8**. Phase
-7 came before op coverage because shapes decide branches: the two shim bugs the
-spike found produced 15 spurious findings next to the 6 real ones, and neither
-perturbed the graph. That risk is now materially lower — `conform.py` diffs the
-shim's per-device shapes against real ttnn, and the LTX 2×4 block matches exactly.
-Phase 11 still gates *trusting* findings in full: `conform.py` is a per-tensor
-shape check, not the per-op collective-log diff, and the 4×8 Ring finding remains
-uncorroborated until a Galaxy is available. Until then a Ring finding still reads
-as "the shim believes", now with the shape math it rests on checked on 2×4.
+**Why 11 comes first now.** With no CI gate to keep green, the bottleneck is
+whether an engineer can *believe* a finding enough to spend kernel-engineer time on
+it. Today every dry-run report says "the shim believes"; only the LTX 2×4 *shapes*
+are device-corroborated (phase 7b's `conform.py`, a per-tensor check — not yet the
+per-op collective-log diff). Phase 11 grows that into real per-op conformance plus
+the soundness gates (buffer liveness, barrier intent), which is what converts belief
+into confirmation. It needs device time, and the 2×4 Loudbox is enough to start; the
+one finding with real redundancy — the 6 LTX 4×8 Ring duplicate gathers — stays
+Galaxy-blocked, and until a Galaxy is available that finding reads as "the shim
+believes", corroborated only by an independent hand-written oracle.
+
+**Then 10 for reach** (analyze whole `encoder → DiT → VAE` pipelines, not curated
+blocks; also the only way to see redundancy that spans stage boundaries, and the
+thing that unblocks the LTX VAE), **with 9 alongside it** to roll a 48-layer graph
+up to a readable report and keep runtime/memory tractable. **12** (config sweep,
+naming unexercised branches) is an optional convenience.
 
 Two cheap checks already push against the top risk, and both are free to keep
 running: loading weights through `Parameter.load_torch_tensor` makes tt_dit's own
@@ -555,7 +590,7 @@ diffs the derived graph against the hand-written one on every test run.
 
 | Risk | Mitigation |
 |---|---|
-| Shim shape math diverges from ttnn and flips a branch (36) — the worst failure mode, because it produces confident wrong findings, **observed in the spike: 2 bugs, 15 spurious findings** | Per-op conformance in device CI (11); phase 7 acceptance is a per-device-shape diff against a real run; keep the hand-written `examples/` graphs as regression oracles rather than deleting them |
+| Shim shape math diverges from ttnn and flips a branch (36) — the worst failure mode, because it produces confident wrong findings, **observed in the spike: 2 bugs, 15 spurious findings** | Per-op conformance on a device (11); phase 7 acceptance is a per-device-shape diff against a real run (`conform.py`, green on 2×4); keep the hand-written `examples/` graphs as regression oracles rather than deleting them |
 | The shim rots as ttnn adds or changes ops (42) | `ops --check` makes coverage debt visible; conformance failures name the op; fused-kernel behaviour lives in a data table |
 | A weightless or input-free dry run silently changes the graph (37, 38, 39) | Meta-tensor weights so `_data` is non-None (**done in 6**, through the real `Parameter` load path); checkpoint key lists (7); the coverage matrix reports which branches were never exercised (12) |
 | Import shadowing `ttnn` is fragile or leaks into real runs | **Done in phase 6:** the shim installs only under `ditcheck dryrun`, `install()` refuses to displace an already-imported real `ttnn`, `uninstall()` restores `sys.modules`, `assert_installed()` runs before any graph is emitted, and the oracle tests run each config in a subprocess |
