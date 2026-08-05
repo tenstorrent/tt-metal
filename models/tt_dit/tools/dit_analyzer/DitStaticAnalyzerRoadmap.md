@@ -46,7 +46,7 @@ stale copy to disagree.
 | Graph source | `ditcheck dryrun` from source, or hand-written via `builder.py`; a trace still needs hand-declared placements |
 | Validated on | LTX-2.3 block ×2 topologies (6 provable duplicates on Ring, 0 on Linear), the SD3.5-large joint block (0 findings), **and** the SD3.5 VAE ResnetBlock (conv/group_norm, 0 findings) — **all derived from source** by the dry run; the two DiT blocks diffed against a hand-written oracle, the VAE checked for zero unregistered ops + zero diagnostics; asserted in `tests/test_dryrun.py` |
 | Tests | 26 analyzer + 25 dry-run, no device and no pytest required; plus `conform.py` on a device |
-| Conformance | `conform.py`: **per-op** conformance vs real ttnn, **12/12 green on the 2×4 Loudbox** — distribution/tile-padding for LTX + SD3.5 (incl. 38→40 padded qkv, conv & group-norm weights) *and* the output shapes of matmul, the fused-QKV split, and concatenate-heads. Remaining: collectives/fused/conv kernels (CCL/config setup) and the whole-block collective log; 4×8 Ring needs a Galaxy |
+| Conformance | **11a+11b green on the 2×4 Loudbox.** `conform.py` (12/12): distribution/tile-padding for LTX + SD3.5 + matmul/split-qkv/concat output shapes. `conform_collectives.py` (3/3): all-gather (tp & sp) and reduce-scatter through the real `CCLManager`. `conform_block.py`: the **whole SD3.5 block runs on hardware** and its collective log matches the dry run — all-gather(tp)=6, all-gather(sp)=2 (ring-SDPA K/V), reduce-scatter(tp)=2. Remaining: conv2d/group_norm *compute* kernels, soundness gates (11c), and the 4×8 Ring finding (Galaxy) |
 
 ### Phases
 
@@ -61,7 +61,7 @@ real code by hand (the CI half of the old phase 13 is now out of scope).
 | **roadmap 6 — dry-run front end** | **done** | — |
 | **roadmap 7 — shape and layout fidelity** | **done (7a); 7b on 2×4, Ring blocked** | tiling, exact shard division, block-float bytes, checkpoint keys, and the chunk rule all shipped and corroborated against real ttnn on the 2×4 Loudbox via `conform.py`; the 4×8 Ring corroboration needs a 32-chip Galaxy |
 | roadmap 8 — op coverage | **core done** | LTX, SD3.5-large **and** the SD3.5 VAE ResnetBlock covered from source (0 unregistered); fused-kernel data table + generic-op one-registration merge landed; the remaining tails (LTX-VAE halo/`neighbor_pad`, conv3d, Mochi/Wan tier-2) surface as those targets are added and are partly phase-10-gated |
-| **roadmap 11 — conformance (needs a device)** | **in progress — the trust bottleneck** | **11a done**: per-op conformance green on 2×4 (`conform.py`, 12/12 — distribution + matmul/split-qkv/concat-heads output shapes). Remaining: 11b whole-block collective log on hardware, 11c buffer-liveness/barrier/memory soundness gates. 2×4 reachable; 4×8 Ring stays Galaxy-blocked |
+| **roadmap 11 — conformance (needs a device)** | **11a + 11b done on 2×4** | per-op conformance (`conform.py` 12/12), collective conformance (`conform_collectives.py` 3/3), and the whole SD3.5 block run on hardware with its collective log matching the dry run (`conform_block.py`). Remaining: 11c buffer-liveness/barrier/memory soundness gates; the 4×8 Ring finding stays Galaxy-blocked |
 | roadmap 10 — multi-mesh / stage / host | not started (reach) | submeshes, encoder→DiT→VAE, carried state, readbacks; unblocks the LTX VAE |
 | roadmap 9 — scale | not started (with 10) | loop + finding rollup so a whole-pipeline report is readable, and keep runtime/memory tractable; stable-ID run-to-run diffing **dropped with CI** |
 | roadmap 12 — branch and shape matrix | not started (optional) | one graph is currently one branch; a manual convenience, not on the spine |
@@ -510,10 +510,18 @@ findings that read exactly as convincingly as the 6 real ones.
   (need CCL setup) and conv2d/group_norm compute (program-config setup) — their
   shape math (shard division, tile padding, channel sharding) is already covered
   by the distribution cases, but the kernels themselves aren't run yet.
-- **11b — whole-block collective log (flat, no tensor identity)** diffed against the
-  dry run: same collectives, same order, same dims/axes/shapes, same source lines.
-  Needs the model running on hardware (the `capture.py` path, not yet run on a
-  device); the 4×8 Ring log needs a Galaxy.
+- **11b — collective conformance + whole-block log · done (2×4).**
+  `conform_collectives.py` runs the block's actual collectives through the real
+  `CCLManager` on the fabric — all-gather (tp & sp) and reduce-scatter — and their
+  per-device output shapes match the shim (3/3). `conform_block.py` then runs the
+  **entire SD3.5 block forward on hardware** (random weights, since values don't
+  affect which collectives fire) with a collective logger, and diffs the log
+  against the dry run: all-gather(tp)=6, all-gather(sp)=2 (the ring-SDPA K/V
+  gathers, reconciled via `dryrun/fused.py`), reduce-scatter(tp)=2 — **counts
+  match**, and the ordered log carries real per-device shapes and source lines.
+  The diff is on (op, mesh-axis) counts plus the ordered log for inspection; a
+  strict per-collective shape/source diff (logical↔per-device reconciliation) is a
+  refinement. The 4×8 Ring log needs a Galaxy.
 - Buffer liveness: record persistent-buffer identity and semaphore IDs, and
   suppress a `duplicate_gather` CSE recommendation when the earlier result's slot
   is reused before the candidate site — with the reason stated.
