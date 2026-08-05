@@ -754,10 +754,12 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, Sending131072Pages) {
     }
 }
 
-// Covers the band of page sizes that take more than one NoC packet each but still stream through the prefetcher's
-// scratch buffer, between the single-packet read path and the one for pages too large to buffer. 32 KB clears the
-// largest NOC_MAX_BURST_SIZE (16 KB on Blackhole) while staying under both the scratch buffer and the max prefetch
-// command size. The other page sizes here are all a single packet.
+// Covers the band of page sizes that take more than one NoC burst each but still stream through the prefetcher's
+// scratch buffer, between the single-burst read path and the one for pages too large to buffer. The other page sizes
+// here all fit in one burst. 32 KB clears Blackhole's 16 KB NOC_MAX_BURST_SIZE while staying under the worker
+// prefetcher's scratch buffer and the max prefetch command size. It does not clear Quasar's 64 KB burst, and it
+// exceeds the 19 KB scratch of an eth prefetcher, so on those two it exercises the single-burst and the large-page
+// path respectively rather than the one it is named for.
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiPacketPagesStreamedThroughScratch) {
     for (const auto& mesh_device : devices_) {
         TestBufferConfig config = {.num_pages = 32, .page_size = 32 * 1024, .buftype = BufferType::DRAM};

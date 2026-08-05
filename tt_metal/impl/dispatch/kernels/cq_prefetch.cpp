@@ -1212,6 +1212,12 @@ FORCE_INLINE void assert_walker_matches(
 }
 
 // Issues one page read. flags says which of the address registers this read still has to program.
+//
+// noc_read_with_state counts one read per call, which on tt-1xx is exactly the one response a burst draws. Quasar's
+// overlay instead packetizes a page longer than NOC_V2_MAX_BYTES_IN_PACKET and answers each packet separately, so
+// there the count runs low, where noc_async_read would have counted per packet. Nothing depends on the difference:
+// v2 answers ncrisc_noc_reads_flushed() from the hardware's outstanding-transaction count, so the barrier waits on
+// the responses themselves rather than on noc_reads_num_issued.
 template <enum CQNocFlags flags>
 FORCE_INLINE void issue_page_read(uint32_t coord, uint32_t local_addr, uint32_t dst_addr, uint32_t page_size) {
     // Keep the reads visible to watcher and to noc tracing, both of which noc_async_read would have done. Both
@@ -1227,15 +1233,16 @@ FORCE_INLINE void issue_page_read(uint32_t coord, uint32_t local_addr, uint32_t 
 // number of bytes read.
 //
 // noc_async_read reprograms the transaction length on every read, and ahead of that has to test the length against
-// NOC_MAX_BURST_SIZE to decide whether the transfer needs splitting across packets. A page that fits in a single
-// packet needs neither: every page in the command is the same size, so the caller programs the length once and each
-// read then writes only the addresses. single_packet asserts both halves of that.
+// NOC_MAX_BURST_SIZE to decide whether the transfer needs splitting across bursts. A page that one burst covers needs
+// neither: every page in the command is the same size, so the caller programs the length once and each read then
+// writes only the addresses. single_read asserts both halves of that. It is not a claim about packets: a burst is
+// several of them on Quasar, which issue_page_read covers.
 //
 // folded_offset additionally drops the local address from all but the first read of a row, leaving only the
 // coordinate and the destination. It requires the walker to have been built with fold_offset set. The pages sharing
 // an address are consecutive, and how many of them there are is known before the run starts, so they are read by a
 // loop that counts them rather than one that re-tests every page for the row having changed.
-template <bool single_packet, bool folded_offset, bool is_dram, typename AddrGen>
+template <bool single_read, bool folded_offset, bool is_dram, typename AddrGen>
 FORCE_INLINE uint32_t read_pages_into_scratch(
     [[maybe_unused]] const AddrGen& addr_gen,
     InterleavedBankWalker<is_dram>& walker,
@@ -1291,12 +1298,13 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
     }
 
     // Banks whose base offsets differ put consecutive pages at different addresses, so every read programs one. Same
-    // for the multi-packet case, which has to reprogram the length as well and so goes back through noc_async_read.
+    // for a page too long for one burst, which has to reprogram the length as well and so goes back through
+    // noc_async_read.
     while (amt_to_read >= page_size) {
         assert_walker_matches<false>(walker, addr_gen);
         const uint32_t coord = walker.coord();
         const uint32_t local_addr = walker.template local_addr<false>();
-        if constexpr (single_packet) {
+        if constexpr (single_read) {
             issue_page_read<CQ_NOC_SNDl>(coord, local_addr, scratch_read_addr, page_size);
         } else {
             noc_async_read(get_noc_addr_helper(coord, local_addr), scratch_read_addr, page_size);
@@ -1313,14 +1321,14 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
 // per chunk and each loop body is free of it.
 template <bool is_dram, typename AddrGen>
 FORCE_INLINE uint32_t read_pages_into_scratch(
-    bool single_packet,
+    bool single_read,
     bool folded_offset,
     const AddrGen& addr_gen,
     InterleavedBankWalker<is_dram>& walker,
     uint32_t scratch_read_addr,
     uint32_t amt_to_read,
     uint32_t page_size) {
-    if (!single_packet) {
+    if (!single_read) {
         return read_pages_into_scratch<false, false>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
     }
     if (folded_offset) {
@@ -1390,13 +1398,13 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     uint32_t scratch_read_addr = scratch_db_base;
     uint32_t amt_to_read = (scratch_db_buf_size > read_wlength) ? read_wlength : scratch_db_buf_size;
 
-    // Every page in this command is the same size, so when a page fits in one packet the transaction length is
+    // Every page in this command is the same size, so when a page fits in one burst the transaction length is
     // programmed here and left alone for the rest of the command: the only NoC state the reads below share the
     // command buffer with is their own, since the writes to the dispatcher go out on a different one. Programming it
     // with no send is the same thing paged_read_into_cmddat_q and noc_read_64bit_any_len do, and leaves the address
     // registers to the read loop, which has to write them anyway.
-    const bool single_packet = page_size <= NOC_MAX_BURST_SIZE;
-    if (single_packet) {
+    const bool single_read = page_size <= NOC_MAX_BURST_SIZE;
+    if (single_read) {
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT>(
             noc_index, 0, 0, 0, page_size);
     }
@@ -1404,11 +1412,11 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     // Fold the shared bank offset into the row address whenever the banks have one. No lower bound on the page count:
     // the read loop saves an address write on every page after the first of each contiguous run, and a command too
     // short to finish a row is still one run.
-    const bool folded_offset = single_packet && bank_offsets_uniform<is_dram>();
+    const bool folded_offset = single_read && bank_offsets_uniform<is_dram>();
     InterleavedBankWalker<is_dram> walker(page_id, base_addr, page_size, folded_offset);
 
     uint32_t amt_read = read_pages_into_scratch(
-        single_packet, folded_offset, addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
+        single_read, folded_offset, addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
     // The fences are to prevent any compiler reordering of instructions around the division. The latency of the
     // division is hidden by the latency of the noc_async_read_barrier().
     std::atomic_signal_fence(std::memory_order_acq_rel);
@@ -1457,7 +1465,7 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
             uint32_t amt_to_write = amt_read;
             amt_to_read = (scratch_db_buf_size > read_length) ? read_length : scratch_db_buf_size;
             amt_read = read_pages_into_scratch(
-                single_packet, folded_offset, addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
+                single_read, folded_offset, addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
 
             // Third step - write from DB
             uint32_t npages =
