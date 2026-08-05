@@ -379,6 +379,22 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 endpoint_info.consumers.push_back({&kernel, &dfb_binding});
             }
         }
+
+        for (const std::string& accessor_name : kernel.unbound_dfb_accessor_names) {
+            TT_FATAL(
+                IsValidCppIdentifier(accessor_name),
+                "Kernel '{}' unbound DFB accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                accessor_name);
+            TT_FATAL(
+                !accessor_bindings.contains(accessor_name),
+                "Kernel '{}' lists '{}' as both a DFB binding and an unbound DFB accessor",
+                kernel.unique_id,
+                accessor_name);
+            const auto [_, inserted] = accessor_bindings.try_emplace(accessor_name, AccessorBindingInfo{});
+            TT_FATAL(
+                inserted, "Kernel '{}' has duplicate unbound DFB accessor_name '{}'", kernel.unique_id, accessor_name);
+        }
     }
 
     // Completeness: every DFB must have at least one producer and one consumer.
@@ -2462,11 +2478,13 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     return out;
 }
 
-// Create map of accessor name -> logical DFB id
+// Create map of accessor name -> logical DFB id. Unbound accessor names are emitted with an
+// invalid sentinel solely to make their generated dfb::<name> token available to an if constexpr
+// branch that is discarded for this KernelSpec specialization.
 tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
-    out.reserve(kernel_spec.dfb_bindings.size());
+    out.reserve(kernel_spec.dfb_bindings.size() + kernel_spec.unbound_dfb_accessor_names.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
         const uint32_t id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
         TT_FATAL(
@@ -2475,7 +2493,22 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
             id);
-        out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(id));
+        const auto [it, inserted] = out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(id));
+        TT_FATAL(
+            inserted || it->second == id,
+            "Kernel '{}' uses DFB accessor '{}' for more than one DFB",
+            kernel_spec.unique_id,
+            dfb_binding.accessor_name);
+    }
+
+    constexpr uint16_t unbound_dfb_id = std::numeric_limits<uint16_t>::max();
+    for (const std::string& accessor_name : kernel_spec.unbound_dfb_accessor_names) {
+        const auto [_, inserted] = out.emplace(accessor_name, unbound_dfb_id);
+        TT_FATAL(
+            inserted,
+            "Kernel '{}' lists '{}' as both a DFB binding and an unbound DFB accessor",
+            kernel_spec.unique_id,
+            accessor_name);
     }
     return out;
 }

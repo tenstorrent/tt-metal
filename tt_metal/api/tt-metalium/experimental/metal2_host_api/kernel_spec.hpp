@@ -144,6 +144,14 @@ struct KernelSpec {
     };
     Group<DFBBinding> dfb_bindings;
 
+    // Emits a DFB accessor token without binding it to a ProgramSpec DFB. This supports a single
+    // kernel source with a compile-time-specialized optional DFB: the token must be referenced
+    // only from an `if constexpr` branch discarded when the accessor is unbound. Constructing a
+    // DataflowBuffer from an unbound accessor is invalid at runtime.
+    //
+    // A name in this list must not also appear in dfb_bindings.
+    Group<std::string> unbound_dfb_accessor_names;
+
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
     // The kernel constructs a Semaphore from the emitted id: Semaphore(sem::<accessor_name>)

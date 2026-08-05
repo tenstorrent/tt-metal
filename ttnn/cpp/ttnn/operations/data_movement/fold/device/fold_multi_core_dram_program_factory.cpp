@@ -342,8 +342,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     const bool is_l1_aligned = stick_nbytes == aligned_stick_nbytes;
 
     // src1 is an intermediate L1 scratch, present only when the stick is not L1-aligned.
-    // It is touched by a single kernel (the writer, by raw pointer) -> self-loop DFB, and its
-    // binding is conditional on !is_l1_aligned (matched by a kernel-side #ifdef).
+    // It is touched by a single kernel (the writer, by raw pointer) -> self-loop DFB.
     DataflowBufferSpec src1_dfb = make_dfb(SRC1, stick_nbytes * stride_w * stride_h, 1, dfb_data_format);
 
     TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
@@ -356,14 +355,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         {"stride_w", stride_w},
         {"input_width", input_width},
         {"work_per_core", patches_per_core},
+        {"is_l1_aligned", static_cast<uint32_t>(is_l1_aligned)},
     };
-
-    // Emit the NOT_L1_ALIGNED define to the writer only when the src1 scratch is bound
-    // (the define and the binding share one condition — Pattern: Conditional / optional DFB bindings).
-    KernelSpec::CompilerOptions::Defines writer_defines;
-    if (!is_l1_aligned) {
-        writer_defines.insert({"FOLD_RM_NOT_L1_ALIGNED", "1"});
-    }
 
     KernelSpec reader_spec{
         .unique_id = READER,
@@ -377,6 +370,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     };
 
     // Writer: consumes src0; when !is_l1_aligned it also uses src1 as a self-loop scratch.
+    // The aligned specialization emits an unbound in1 token so the one kernel source can use
+    // if constexpr without allocating src1.
     Group<DFBBinding> writer_dfbs{
         DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
     if (!is_l1_aligned) {
@@ -388,8 +383,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::filesystem::path{WRITER_RM},
-        .compiler_options = {.defines = writer_defines},
         .dfb_bindings = writer_dfbs,
+        .unbound_dfb_accessor_names = is_l1_aligned ? Group<std::string>{"in1"} : Group<std::string>{},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = common_cta,
         .runtime_arg_schema = {.runtime_arg_names = {"dst_index"}},
