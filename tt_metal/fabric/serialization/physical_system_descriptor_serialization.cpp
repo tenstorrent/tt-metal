@@ -96,6 +96,7 @@ AsicTopology proto_to_asic_topology(const tt::fabric::proto::HostAsicConnectivit
         for (const auto& edge : asic_graph.topology().asic_connections()) {
             AsicID dst_asic_id{edge.dst_asic_id()};
             std::vector<EthConnection> eth_connections;
+            eth_connections.reserve(edge.eth_connections().size());
 
             for (const auto& proto_eth_conn : edge.eth_connections()) {
                 eth_connections.push_back(proto_to_eth_connection(proto_eth_conn));
@@ -136,6 +137,7 @@ HostTopology proto_to_host_topology(const tt::fabric::proto::PhysicalConnectivit
         for (const auto& edge : host_conn.host_connections()) {
             std::string dst_host = edge.dst_host_name();
             std::vector<ExitNodeConnection> exit_connections;
+            exit_connections.reserve(edge.exit_node_connections().size());
 
             for (const auto& proto_exit_conn : edge.exit_node_connections()) {
                 exit_connections.push_back(proto_to_exit_node_connection(proto_exit_conn));
@@ -302,6 +304,7 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     auto& exit_node_connection_table = descriptor->get_exit_node_connection_table();
     for (const auto& proto_table : proto_desc.exit_node_connection_table()) {
         std::vector<ExitNodeConnection> exit_connections;
+        exit_connections.reserve(proto_table.exit_connections().size());
 
         for (const auto& proto_exit_conn : proto_table.exit_connections()) {
             exit_connections.push_back(proto_to_exit_node_connection(proto_exit_conn));

@@ -174,7 +174,7 @@ void kernel_main() {
 #else
     constexpr uint32_t pack_target_cb_id = tilize_untilize_cb;
 #endif
-    compute_kernel_hw_startup(in_cb_id_0, in_scalar_cb_id_0, tilize_untilize_cb);
+    compute_kernel_hw_startup(in_cb_id_0, in_scalar_cb_id_0, pack_target_cb_id);
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter);
 
     pack_untilize_dest_init<max_tiles_per_iter>(pack_target_cb_id);

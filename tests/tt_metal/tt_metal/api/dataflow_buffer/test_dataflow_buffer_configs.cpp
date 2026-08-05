@@ -16,6 +16,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -343,6 +344,8 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_EQ(entry0->logical_dfb_id, 0u);
     EXPECT_NE(entry0->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
     EXPECT_EQ(entry0->entry_size, 1024u);
+    EXPECT_EQ(entry0->capacity, 16u);  // STRIDED 1P1C: capacity == num_entries; stored as u16 at bytes 26-27
+    EXPECT_EQ(entry0->_reserved0, 0u);
     EXPECT_EQ(entry0->producer_signal_bit, 0u);  // first producer, bit 0
 
     // DFB 0 init entry for hart 4 (consumer): no IS_PRODUCER flag.
@@ -351,6 +354,7 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
         buf.data() + ghdr->hart_blob_offset[4]);
     EXPECT_EQ(entry4->logical_dfb_id, 0u);
     EXPECT_EQ(entry4->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
+    EXPECT_EQ(entry4->capacity, 0u);  // consumers leave capacity 0; producers program the TC
     EXPECT_EQ(dfb_read_init_entry_producer_signal_bit(reinterpret_cast<const uint8_t*>(entry4), true), 0xFFu);
 
     // participation_mask drives device init entry count; non-participating harts are zero.
@@ -2190,6 +2194,112 @@ TEST_F(MeshDeviceFixture, MaxEightIntraPerNeoConfig) {
     }
 
     EXPECT_THROW(program.impl().finalize_dataflow_buffer_configs(), std::exception);
+}
+
+
+// =====================================================================================
+// Device slot assignment
+// =====================================================================================
+
+namespace {
+
+experimental::dfb::DataflowBufferConfig make_minimal_dfb_config() {
+    return experimental::dfb::DataflowBufferConfig{
+        .entry_size = 1024,
+        .num_entries = 2,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x2,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
+}
+
+// The safety property behind slot reuse: a slot indexes a per-core config table, so two DFBs may
+// share a slot only when no core hosts both of them.
+void expect_no_slot_collision_on_any_core(Program& program, const CoreRange& cores) {
+    for (auto x = cores.start_coord.x; x <= cores.end_coord.x; x++) {
+        for (auto y = cores.start_coord.y; y <= cores.end_coord.y; y++) {
+            const CoreCoord core(x, y);
+            std::set<uint32_t> slots_on_core;
+            for (const auto& dfb : program.impl().dataflow_buffers_on_core(core)) {
+                EXPECT_TRUE(slots_on_core.insert(dfb->device_slot).second)
+                    << "Core (" << x << "," << y << ") has two DFBs at device slot " << dfb->device_slot;
+            }
+        }
+    }
+}
+
+}  // namespace
+
+// A DFB created late (high program-wide id) that shares no core with the earlier DFBs should reuse a
+// low slot instead of extending the per-core config table. This is the shape that overflowed the
+// dispatch payload when the slot was just a creation counter (issue #51409).
+TEST_F(MeshDeviceFixture, DFBDeviceSlotsReusedAcrossDisjointCores) {
+    auto& mesh_device = this->devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    // Coordinator at (0,0) plus workers spanning (1,0)..(4,0).
+    if (grid.x < 5) {
+        GTEST_SKIP() << "Needs at least 5 worker cores in a row (got " << grid.x << "x" << grid.y << ")";
+    }
+    const CoreCoord coordinator(0, 0);
+    const CoreRange workers(CoreCoord(1, 0), CoreCoord(4, 0));
+    const CoreRange all_cores(CoreCoord(0, 0), CoreCoord(4, 0));
+
+    Program program = CreateProgram();
+    const auto config = make_minimal_dfb_config();
+
+    // Spans every core, so it conflicts with everything below.
+    uint32_t wide_id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(all_cores), config);
+
+    // Worker-only DFBs, then a coordinator-only DFB created last.
+    std::vector<uint32_t> worker_ids;
+    worker_ids.reserve(3);
+    for (int i = 0; i < 3; i++) {
+        worker_ids.push_back(experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(workers), config));
+    }
+    uint32_t coordinator_id =
+        experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(coordinator)), config);
+
+    const auto& impl = program.impl();
+    EXPECT_EQ(impl.get_dataflow_buffer(coordinator_id)->id, 4u) << "expected creation order to give this the last id";
+
+    expect_no_slot_collision_on_any_core(program, all_cores);
+
+    EXPECT_EQ(impl.get_dataflow_buffer(wide_id)->device_slot, 0u);
+    for (uint32_t i = 0; i < worker_ids.size(); i++) {
+        EXPECT_EQ(impl.get_dataflow_buffer(worker_ids[i])->device_slot, i + 1)
+            << "worker DFB " << i << " conflicts with the wide DFB and its worker peers";
+    }
+    // Conflicts only with the wide DFB, so it reuses slot 1 rather than taking slot 4.
+    EXPECT_EQ(impl.get_dataflow_buffer(coordinator_id)->device_slot, 1u);
+}
+
+// The per-core slot limit is on how many DFBs share a core, not on how many exist in the program:
+// DFBs on disjoint cores all fit at slot 0.
+TEST_F(MeshDeviceFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
+    auto& mesh_device = this->devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+    const bool is_quasar = device->arch() == ARCH::QUASAR;
+    const uint32_t max_slots =
+        is_quasar ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal::get_arch_num_circular_buffers();
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    const uint32_t num_dfbs = max_slots + 4;
+    if (grid.x * grid.y < num_dfbs) {
+        GTEST_SKIP() << "Needs at least " << num_dfbs << " cores to place one DFB per core";
+    }
+
+    Program program = CreateProgram();
+    const auto config = make_minimal_dfb_config();
+    for (uint32_t i = 0; i < num_dfbs; i++) {
+        const CoreCoord core(i % grid.x, i / grid.x);
+        uint32_t id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(core)), config);
+        EXPECT_EQ(program.impl().get_dataflow_buffer(id)->device_slot, 0u)
+            << "DFB " << i << " is alone on core (" << core.x << "," << core.y << ")";
+    }
 }
 
 }  // end namespace tt::tt_metal
