@@ -209,7 +209,22 @@ def _ledger_dir() -> Path:
     across two files. Redirecting the DIRECTORY survives the delenv, so the isolation cannot be
     switched off by accident.
     """
-    return Path(os.environ.get("PERF_MCP_LEDGER_DIR") or tempfile.gettempdir())
+    # FALL BACK TO THE STATE DIR, not to bare /tmp. Nothing in the run sets PERF_MCP_LEDGER_DIR --
+    # the MCP config carries PERF_MCP_STATE_DIR only -- so every production run resolved its ledger
+    # to tempfile.gettempdir() while every other artifact went to the state dir. The anchors were
+    # therefore written and read in a directory no one else looked at, and the report's "THE LEDGER
+    # WINS" block could never win: anchor_value returned None on every real run and the ceiling fell
+    # through to the throughput snapshot. On gemma-3-12b-it that printed 45.8 tok/s/u (512/11.18 GB,
+    # the reverted-directory vintage) instead of 42.7 (512/12 GB, the operator-confirmed anchor) --
+    # a 7% optimistic ceiling in every report written so far.
+    #
+    # PERF_MCP_LEDGER_DIR still redirects the whole namespace for test isolation; it is only the
+    # DEFAULT that changes, from "somewhere in /tmp" to "beside the rest of this run's state".
+    _explicit = os.environ.get("PERF_MCP_LEDGER_DIR")
+    if _explicit:
+        return Path(_explicit)
+    _state = os.environ.get("PERF_MCP_STATE_DIR")
+    return Path(_state) if _state else Path(tempfile.gettempdir())
 
 
 def ledger_path(model: str = "", task: str = "") -> Path:
