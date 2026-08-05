@@ -207,36 +207,47 @@ RotaryEmbeddingIndexedDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // kv_actual_global is a runtime arg read by the reader kernel and intentionally NOT hashed, so
-    // successive chunks reuse the cached program. cluster_axis stays IN (structural -- governs which mesh
-    // dim is SP and thus the per-device sharding). The mesh adapter
-    // additionally combines the target coordinates into the workload hash, so per-device my_sp_coord
-    // (a compile-time arg baked per coordinate) is covered without being hashed here.
-    // Hash the full padded shapes, not just their volumes: the work split and CB sizing derive from
-    // specific dimensions, so two differently-shaped tensors that happen to share a volume must NOT
-    // collide onto the same cached program.
+    // The cache key must cover every structural spec the program is built from -- in particular every
+    // TensorParameter's declared TensorSpec -- because on a cache hit UpdateProgramRunArgs REJECTS (does
+    // not recompile) a tensor whose spec doesn't match the one baked at creation. So hash the full input,
+    // cos, sin and trans_mat specs, the output spec (via output_mem_config; its dtype/shape follow input),
+    // cluster_axis, compute_kernel_config, and metadata.has_value() + the metadata tensor's spec.
+    //
+    // Only kv_actual_global is excluded: it is a reader runtime arg patched on cache hits, so successive
+    // chunks reuse one cached program. Per-device my_sp_coord is a per-coordinate compile-time arg the
+    // mesh adapter already folds into the workload hash via the target coordinates. Full shapes (not just
+    // volumes) are hashed since the work split and CB sizing derive from specific dimensions.
     const auto& input = tensor_args.input;
     const auto& cos = tensor_args.cos;
-    // The metadata-vs-scalar choice changes the program (compile args + which kernel branch compiles),
-    // so hash metadata.has_value() to keep the two variants distinct; kv_actual_global itself is never
-    // hashed on either path. Also hash the metadata tensor's memory_config: its accessor is baked into
-    // the program at creation and only its address is patched on a cache hit, so two metadata-path calls
-    // that share this structural hash but pass metadata tensors with different memory layouts must not
-    // collide onto one cached program (the baked accessor would be wrong for the second). A default
-    // MemoryConfig stands in on the scalar path (already separated by has_value=false).
+    const auto& sin = tensor_args.sin;
+    const auto& trans_mat = tensor_args.trans_mat;
+    // metadata is an optional TensorParameter; stand in with defaults on the scalar path (already
+    // separated by has_value=false) so its spec still participates in the key when present.
     const MemoryConfig metadata_mem_config =
         tensor_args.metadata.has_value() ? tensor_args.metadata->memory_config() : MemoryConfig{};
+    const Shape metadata_padded_shape =
+        tensor_args.metadata.has_value() ? tensor_args.metadata->padded_shape() : Shape{};
     return tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
         tensor_args.metadata.has_value(),
         metadata_mem_config,
+        metadata_padded_shape,
         args.cluster_axis,
         args.compute_kernel_config,
+        args.output_mem_config,
         input.dtype(),
         input.memory_config(),
+        input.logical_shape(),
         input.padded_shape(),
+        input.layout(),
         cos.dtype(),
         cos.memory_config(),
-        cos.padded_shape());
+        cos.padded_shape(),
+        sin.dtype(),
+        sin.memory_config(),
+        sin.padded_shape(),
+        trans_mat.dtype(),
+        trans_mat.memory_config(),
+        trans_mat.padded_shape());
 }
 
 RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::cached_program_t
