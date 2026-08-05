@@ -108,13 +108,18 @@ Follow these steps precisely:
      as plausible suggestions rather than proven performance wins.
 
    Each agent must return zero or more candidates with this exact information:
-   `path`, right-side changed `line`, `category`, `confidence` (`confirmed` or
-   `plausible`), concise mechanism and consequence, concrete evidence, suggested
-   fix/check, `knowledge_sources` (exact file and rule/section), and whether an
-   existing comment already covers it. A candidate must be actionable and tied to
-   changed code. For a plausible candidate, also return its falsifier. Do not
-   return pre-existing issues, duplicates, explicitly silenced rules, generic
-   lint/compiler findings, or a concern disproved by the code.
+   `path`, right-side changed `line` (the last line of the anchor), `start_line`
+   (the first line for a multi-line anchor, otherwise `null`), `category`,
+   `confidence` (`confirmed` or `plausible`), concise mechanism and consequence,
+   concrete evidence, suggested fix/check, `knowledge_sources` (exact file and
+   rule/section), and whether an existing comment already covers it. Select the
+   smallest useful anchor: keep `start_line: null` when one changed line identifies
+   the issue; use a range only when two or more contiguous right-side diff lines
+   are all necessary to show the implicated block. Never pad every comment to a
+   fixed-size range. A candidate must be actionable and tied to changed code. For
+   a plausible candidate, also return its falsifier. Do not return pre-existing
+   issues, duplicates, explicitly silenced rules, generic lint/compiler findings,
+   or a concern disproved by the code.
 
 5. Merge exact duplicates before validation. For each unique candidate, launch a
    focused validation subagent in parallel. Pass only the PR metadata, that single
@@ -124,7 +129,9 @@ Follow these steps precisely:
    performance candidates; use Sonnet for policy, parity, propagation, style,
    cleanup, and test candidates.
 
-   Each validator must return one verdict:
+   Each validator must verify that `path`, `start_line`, and `line` identify the
+   minimal relevant right-side range in the PR diff, correcting the anchor when
+   needed. It must then return the validated anchor and one verdict:
    - `confirmed`: the evidence establishes the issue;
    - `plausible`: the changed code creates a grounded risk, but one stated fact is
      needed to settle it;
@@ -134,11 +141,12 @@ Follow these steps precisely:
 
 6. Keep `confirmed` and genuinely grounded `plausible` findings. Drop `rejected`,
    `pre_existing`, and `duplicate` findings. Merge findings with the same root
-   cause. Before writing comments, Read `K/conventions.md` exactly once and apply it
-   to every finding. In particular: use terse senior-reviewer language, prefix
-   nits with `nit:`, phrase uncertainty as a question with its confidence and
-   falsifier, and never use GitHub suggestion blocks. Do not expose internal
-   severity labels or validation narration in comments.
+   cause and retain the smallest validated anchor that covers that root cause.
+   Before writing comments, Read `K/conventions.md` exactly once and apply it to
+   every finding. In particular: use terse senior-reviewer language, prefix nits
+   with `nit:`, phrase uncertainty as a question with its confidence and falsifier,
+   and never use GitHub suggestion blocks. Do not expose internal severity labels
+   or validation narration in comments.
 
 7. Return a concise findings summary in your response; do not use Bash or a file
    for the summary. If `--comment` was not provided, stop without writing to
@@ -155,7 +163,11 @@ Follow these steps precisely:
 8. If findings survived, refresh the PR's issue comments and inline review
    comments immediately before posting. Remove any finding another reviewer has
    already covered since step 3. Prepare one self-contained comment per unique
-   issue in context; do not create a file or publish the preparation list.
+   issue in context; do not create a file or publish the preparation list. Check
+   each final `path`, `start_line`, and `line` against the refreshed diff. Use
+   `start_line: null` for a single-line anchor; for a range, require
+   `start_line < line` and keep both endpoints on the right side of the same diff
+   hunk.
 
 9. Post each finding as an inline comment with `gh api`. Do not call
    `mcp__github_inline_comment__create_inline_comment`: claude-code-action does
@@ -170,17 +182,25 @@ Follow these steps precisely:
    Read the SHA from that tool result and place it literally in the separate
    posting call. Do not assign a shell variable or combine the calls.
 
-   Then post using the changed-file path and a valid new-side diff line:
+   For a single-line anchor (`start_line: null`), post using the changed-file path
+   and valid new-side diff line:
 
    ```bash
    gh api --method POST "repos/OWNER/REPOSITORY/pulls/PR_NUMBER/comments" --raw-field body="COMMENT_BODY" --raw-field commit_id="HEAD_SHA" --raw-field path="CHANGED_FILE_PATH" --field line=NEW_SIDE_LINE_NUMBER --raw-field side="RIGHT"
    ```
 
+   For a genuine multi-line anchor, add GitHub's `start_line` and `start_side`;
+   `line` remains the last line of the range:
+
+   ```bash
+   gh api --method POST "repos/OWNER/REPOSITORY/pulls/PR_NUMBER/comments" --raw-field body="COMMENT_BODY" --raw-field commit_id="HEAD_SHA" --raw-field path="CHANGED_FILE_PATH" --field start_line=FIRST_NEW_SIDE_LINE --raw-field start_side="RIGHT" --field line=LAST_NEW_SIDE_LINE --raw-field side="RIGHT"
+   ```
+
    Verify every successful write returns an `html_url`. If an inline anchor is
    rejected, post that finding with `gh pr comment`, prefixing it with
-   `` `path:line` ``, so the location is preserved. A fallback failure is an
-   error. Never finish a `--comment` run without at least one successful GitHub
-   write.
+   `` `path:line` `` for a single line or `` `path:start_line-line` `` for a
+   range, so the location is preserved. A fallback failure is an error. Never
+   finish a `--comment` run without at least one successful GitHub write.
 
 When a comment relies on a documented repository rule, identify that rule and
 link it using the reviewed repository and full head SHA. Do not add redundant
