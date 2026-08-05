@@ -335,7 +335,8 @@
         "test_sort_multi_row_multi_core_no_deadlock: 2 passed (descending false and true)",
         "test_sort_long_tensor: 7 passed",
         "test_mcast_pipe.py: 72 passed, including four control-only Counter cases",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "API v10 Gate 5: handshaked row-start plus no-handshake sub-stage Pipes; build, helper 77/77, Sort long 7/7, deadlock 2/2, and 1.5% performance gate passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
@@ -1230,11 +1231,12 @@
         "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed coordinator/reader/writer JIT paths from a fresh isolated cache",
         "test_sort_multi_row_multi_core_no_deadlock: 2 passed",
         "test_mcast_pipe.py: 72 passed",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "API v10 Gate 5: build, helper 77/77, Sort long 7/7, deadlock 2/2, and 1.5% performance gate passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "MIGRATED API v10: no-handshake Counter SenderPipe::send_signal via host Mcast2D. Reader-ready and writer-done counts remain independent op-owned counters. Factory selection guarantees a dense full-grid rectangle and helper semaphore ID 0 is constexpr.",
+      "census_note": "MIGRATED API v10: handshaked row-start Counter SenderPipe and separate no-handshake sub-stage Counter SenderPipe. Helper owns readiness; writer-done remains an independent operation counter.",
       "flags": [
         "tier:5",
         "atomic-unit:sort-single-row-control",
@@ -1254,11 +1256,12 @@
         "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed coordinator/reader/writer JIT paths from a fresh isolated cache",
         "test_sort_multi_row_multi_core_no_deadlock: 2 passed",
         "test_mcast_pipe.py: 72 passed",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "API v10 Gate 5: build, helper 77/77, Sort long 7/7, deadlock 2/2, and 1.5% performance gate passed on 2026-08-05"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "MIGRATED API v10: no-handshake Counter ReceiverPipe::receive_signal via the coordinator's Mcast2D wire. Per-row readiness up remains explicit op protocol; the old inverted level signal and runtime semaphore IDs are gone.",
+      "census_note": "MIGRATED API v10: handshaked row-start Counter ReceiverPipe acknowledges readiness before waiting; a separate no-handshake Counter ReceiverPipe handles sub-stage events. The raw reader-ready semaphore is gone.",
       "flags": [
         "tier:5",
         "atomic-unit:sort-single-row-control",

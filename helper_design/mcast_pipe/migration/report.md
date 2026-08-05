@@ -17,6 +17,16 @@ bindings remain current; API-002 face metadata and RT compaction remain deferred
 
 The remainder of this report retains the prior v9 rollout history and migration anchors.
 
+### Signal-only handshake and Sort follow-up
+
+API-003 and MIG-002 are implemented under v10. Signal-only methods now honor the existing handshake
+policy. Sort uses separate handshaked row-start and no-handshake sub-stage Counter channels; the raw
+reader-ready semaphore is removed and writer completion remains operation-owned.
+
+The build, cold-cache helper suite (77/77), exact cold-JIT long Sort case, both deadlock regressions
+(2/2), and all long cases (7/7) passed. The median of three performance-run medians was
+`145,201,100.41355687 ns`, +1.195124% versus baseline and within the 1.5% gate.
+
 ## Prior v9 run header
 
 - Helper: `mcast_pipe`, `MCAST_PIPE_API_VERSION=9` (unchanged)

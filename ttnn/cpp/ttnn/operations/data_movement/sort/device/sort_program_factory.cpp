@@ -1691,37 +1691,41 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
         });
     }
 
-    // Semaphores.  The coordinator->workers control channel uses a monotone, no-handshake
-    // Counter wire.  The cores->coordinator channel uses two separate semaphores so a fast
-    // reader's next-row readiness increment can never be miscounted as a sub-stage
-    // confirmation: on one shared counter it could overshoot the coordinator's exact-match
-    // wait and deadlock the op at Ht >= 2.  Readiness -> ready sem; per-pair confirmations
-    // -> done sem.
-    constexpr uint32_t coordinator_to_cores_semaphore_id = 0;
-    constexpr uint32_t cores_to_coordinator_ready_semaphore_id = 1;
-    constexpr uint32_t cores_to_coordinator_done_semaphore_id = 2;
-    // The NoC must target the complete worker bounding box, including any inactive holes in a
-    // partial final row. The helper's num_active remains the exact number of worker kernels so the
-    // coordinator's readiness wait cannot count inactive destinations.
+    // Separate coordinator->workers channels preserve the protocol distinction: row start is
+    // handshaked (the Pipe owns worker readiness), while sub-stage events are intentionally
+    // no-handshake and may accumulate as a monotone Counter. The writer-done counter remains
+    // operation-owned and independent so a next-row acknowledgement cannot satisfy a sub-stage wait.
+    constexpr uint32_t row_start_data_ready_semaphore_id = 0;
+    constexpr uint32_t substage_data_ready_semaphore_id = 2;
+    constexpr uint32_t cores_to_coordinator_done_semaphore_id = 3;
+    // Target the complete worker bounding box, including inactive holes in a partial final row,
+    // while keeping num_active equal to the number of real worker kernels. This separates the NoC
+    // fanout count from the row-start handshake count.
     const CoreRange multicast_bbox = core_range.bounding_box();
-    const ttnn::kernel_lib::host::Mcast2D coordinator_to_workers_mcast(
+    const ttnn::kernel_lib::host::Mcast2D row_start_mcast(
+        device,
+        CoreRangeSet(multicast_bbox),
+        coordinator_core,
+        ttnn::kernel_lib::host::McastConfig{
+            .handshake = true,
+            .data_ready = ttnn::kernel_lib::host::DataReadyMode::Counter,
+            .base_sem_id = row_start_data_ready_semaphore_id},
+        static_cast<uint32_t>(core_range.num_cores()));
+    const ttnn::kernel_lib::host::Mcast2D substage_mcast(
         device,
         CoreRangeSet(multicast_bbox),
         coordinator_core,
         ttnn::kernel_lib::host::McastConfig{
             .handshake = false,
             .data_ready = ttnn::kernel_lib::host::DataReadyMode::Counter,
-            .base_sem_id = coordinator_to_cores_semaphore_id},
+            .base_sem_id = substage_data_ready_semaphore_id},
         static_cast<uint32_t>(core_range.num_cores()));
-    for (const auto& semaphore : coordinator_to_workers_mcast.owned_semaphores()) {
+    for (const auto& semaphore : row_start_mcast.owned_semaphores()) {
         desc.semaphores.push_back(semaphore);
     }
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = cores_to_coordinator_ready_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_core_set,
-        .initial_value = 0,
-    });
+    for (const auto& semaphore : substage_mcast.owned_semaphores()) {
+        desc.semaphores.push_back(semaphore);
+    }
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = cores_to_coordinator_done_semaphore_id,
         .core_type = tt::CoreType::WORKER,
@@ -1753,11 +1757,12 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     coordinator_compile_time_args.push_back(W_tile_bytes);
     coordinator_compile_time_args.push_back(W_index_bytes);
     coordinator_compile_time_args.push_back(tile_width);
-    const auto coordinator_mcast_compile_time_args = coordinator_to_workers_mcast.compile_time_args();
+    const auto row_start_compile_time_args = row_start_mcast.compile_time_args();
     coordinator_compile_time_args.insert(
-        coordinator_compile_time_args.end(),
-        coordinator_mcast_compile_time_args.begin(),
-        coordinator_mcast_compile_time_args.end());
+        coordinator_compile_time_args.end(), row_start_compile_time_args.begin(), row_start_compile_time_args.end());
+    const auto substage_compile_time_args = substage_mcast.compile_time_args();
+    coordinator_compile_time_args.insert(
+        coordinator_compile_time_args.end(), substage_compile_time_args.begin(), substage_compile_time_args.end());
 
     KernelDescriptor coordinator_desc;
     coordinator_desc.kernel_source =
@@ -1770,7 +1775,8 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     coordinator_runtime_args.push_back(input_buffer);
     coordinator_runtime_args.push_back(value_buffer);
     coordinator_runtime_args.push_back(index_buffer);
-    coordinator_runtime_args.append(coordinator_to_workers_mcast.runtime_args(coordinator_core));
+    coordinator_runtime_args.append(row_start_mcast.runtime_args(coordinator_core));
+    coordinator_runtime_args.append(substage_mcast.runtime_args(coordinator_core));
     coordinator_desc.emplace_runtime_args(coordinator_core, coordinator_runtime_args);
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -1795,9 +1801,16 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
     // to Float32 in software (see reader_single_row_multi_core.cpp).
     reader_compile_time_args.push_back(static_cast<uint32_t>(is_uint16_input));
     reader_compile_time_args.push_back(uint16_input_stage_cb_index);
-    const auto reader_mcast_compile_time_args = coordinator_to_workers_mcast.compile_time_args();
+    const auto row_start_reader_compile_time_args = row_start_mcast.compile_time_args();
     reader_compile_time_args.insert(
-        reader_compile_time_args.end(), reader_mcast_compile_time_args.begin(), reader_mcast_compile_time_args.end());
+        reader_compile_time_args.end(),
+        row_start_reader_compile_time_args.begin(),
+        row_start_reader_compile_time_args.end());
+    const auto substage_reader_compile_time_args = substage_mcast.compile_time_args();
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(),
+        substage_reader_compile_time_args.begin(),
+        substage_reader_compile_time_args.end());
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -1843,7 +1856,8 @@ ProgramDescriptor SortProgramFactorySingleRowMultiCore::create_descriptor(
             KernelDescriptor::RTArgList reader_runtime_args;
             reader_runtime_args.push_back(value_buffer);
             reader_runtime_args.push_back(index_buffer);
-            reader_runtime_args.append(coordinator_to_workers_mcast.runtime_args(core));
+            reader_runtime_args.append(row_start_mcast.runtime_args(core));
+            reader_runtime_args.append(substage_mcast.runtime_args(core));
             reader_desc.emplace_runtime_args(core, reader_runtime_args);
             writer_desc.emplace_runtime_args(
                 core,

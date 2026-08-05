@@ -40,7 +40,10 @@ void kernel_main() {
     // Float32 for UINT16 inputs).  Same design as the SingleCore reader.
     constexpr bool is_uint16_fp32_mode = get_compile_time_arg_val(rm_base + 5) == 1;
     constexpr uint32_t uint16_input_stage_cb_index = get_compile_time_arg_val(rm_base + 6);
-    constexpr auto coordinator_mcast_args = dataflow_kernel_lib::McastArgs<rm_base + 7, 2>();
+    constexpr auto row_start_mcast_args = dataflow_kernel_lib::McastArgs<rm_base + 7, 2>();
+    constexpr auto substage_mcast_args = dataflow_kernel_lib::McastArgs<
+        row_start_mcast_args.next_compile_time_args_offset(),
+        row_start_mcast_args.next_runtime_args_offset()>();
 
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t TILE_H = 32;
@@ -50,7 +53,8 @@ void kernel_main() {
     const auto index_tensor_addr_gen = TensorAccessor(index_tensor_args, index_tensor_buffer_addr);
 
     Noc noc;
-    auto coordinator_pipe = coordinator_mcast_args.receiver(noc);
+    auto row_start_pipe = row_start_mcast_args.receiver(noc);
+    auto substage_pipe = substage_mcast_args.receiver(noc);
     DataflowBuffer input_tensor_dfb(input_tensor_cb_index);
     DataflowBuffer index_tensor_dfb(index_tensor_cb_index);
     DataflowBuffer rm_input_value_dfb(rm_input_value_dfb_index);
@@ -58,19 +62,13 @@ void kernel_main() {
     constexpr uint32_t input_tensor_tile_size = get_tile_size(input_tensor_cb_index);
     constexpr uint32_t index_tensor_tile_size = get_tile_size(index_tensor_cb_index);
 
-    // Semaphore setup
-    constexpr uint32_t cores_to_coordinator_ready_semaphore_id = 1;
-    Semaphore<> cores_to_coordinator_ready_sem(cores_to_coordinator_ready_semaphore_id);
-
     for (uint32_t h = 0; h < Ht; h++) {
         // Get core start value
         const uint32_t core_start =
             get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
 
-        // Indicate to the coordinator that the core is ready
-        cores_to_coordinator_ready_sem.up(noc, coordinator_mcast_args.sender_x(), coordinator_mcast_args.sender_y(), 1);
-        noc.async_atomic_barrier();
-        coordinator_pipe.receive_signal();
+        // The handshaked Pipe acknowledges readiness before waiting for row start.
+        row_start_pipe.receive_signal();
 
         // Processing each row
         uint32_t stages = 0;
@@ -83,7 +81,7 @@ void kernel_main() {
                 uint32_t sub_dist = 1 << (sub - 1);
 
                 // Wait for coordinator
-                coordinator_pipe.receive_signal();
+                substage_pipe.receive_signal();
 
                 uint16_t pair_id = 0;
                 uint32_t processing_pair_id = core_start;

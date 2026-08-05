@@ -27,7 +27,7 @@ now fully current at API v10:
 | `conv2d-weights-fixed-line` | 1 | fully end-to-end migrated @ v10 | 2 | `CONV-BLOCK`: 48 passed, 16 expected skips; DRAM-config 1 passed; shared DRAM: 14 passed |
 | `matmul-in1-mcast-padding-host` | 4 | fully end-to-end migrated @ v10 — **re-verified 2026-08-05** | 2 | `MM-IN1-ALL`: 302 passed, 188 expected skips, 490 selected |
 | `groupnorm-sharded-v2-mcast-host` | 4 | fully end-to-end migrated @ v10 | 4 | legacy: 108 passed, 2 expected skips; Welford: 108 passed, 2 expected skips; fixed/default: 19 passed, 6 expected skips |
-| `sort-single-row-control` | 1 | fully end-to-end migrated @ v10 | 2 migrated + 1 helper-neutral | exact fresh-cache JIT path; long tensor 7/7; Ht=2 2/2; helper 73/73 |
+| `sort-single-row-control` | 1 | fully end-to-end migrated @ v10 | 2 migrated + 1 helper-neutral | handshaked row-start + no-handshake sub-stage Pipes; long 7/7; Ht=2 2/2; helper 77/77; perf +1.195124% |
 | `conv2d-activation-width-sharded` | 1 | fully end-to-end migrated @ v10 | 1 hybrid | exact fresh-cache JIT at PCC 0.9999992598; features 48 passed / 16 expected skips; DRAM-config 1 passed; helper 73/73 |
 
 The exact binding/dispatch map is in `test_map.json`; the easier-first atomic
@@ -68,8 +68,8 @@ revert/bisect anchor; "last verified at" is `verified_at_commit`.
 | normalization | sender | `reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v10; legacy inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
 | normalization | receiver | `welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp` | fully end-to-end @ v10; Welford inventory: 108 passed, 2 expected skips; exact JIT evidence |
 | normalization | sender | `welford_reader_mcast_sender_unary_sharded_gn_v2.cpp` | fully end-to-end @ v10; Welford inventory: 108 passed, 2 expected skips; fixed/default nodes: 19 passed, 6 expected skips |
-| sort | sender | `coordinator_single_row_multi_core.cpp` | fully end-to-end @ v10; Counter `send_signal`; exact fresh-cache JIT; long tensor 7/7; Ht=2 2/2 |
-| sort | receiver | `reader_single_row_multi_core.cpp` | fully end-to-end @ v10; Counter `receive_signal`; exact fresh-cache JIT; long tensor 7/7; Ht=2 2/2 |
+| sort | sender | `coordinator_single_row_multi_core.cpp` | fully end-to-end @ v10; handshaked row-start + no-handshake sub-stage Counter `send_signal`; exact fresh-cache JIT; long 7/7; Ht=2 2/2 |
+| sort | receiver | `reader_single_row_multi_core.cpp` | fully end-to-end @ v10; row-start readiness is Pipe-owned; separate no-handshake sub-stage `receive_signal`; long 7/7; Ht=2 2/2 |
 | Conv | hybrid | `activation_reader_width_sharded.cpp` | fully end-to-end @ v10; rotating INCLUDE-source loopback; exact fresh-cache PCC 0.999956503; features 48/16 expected skips; DRAM-config 1/1; helper 72/72 |
 
 The original ten kernel files remain byte-identical to the pre-rebase verified state and retain

@@ -52,6 +52,21 @@ def test_migrated_kernels_do_not_repeat_rotating_span_as_a_template_argument():
     assert not violations, "McastArgs rotating span must come only from the v10 CT wire:\n" + "\n".join(violations)
 
 
+def test_sort_row_start_readiness_is_pipe_owned():
+    kernels, factories = _migrated_sources()
+    sort_kernels = [path for path in kernels if "single_row_multi_core.cpp" in path.name]
+    sort_factories = [path for path in factories if path.name == "sort_program_factory.cpp"]
+
+    assert len(sort_factories) == 1
+    violations = [
+        str(path.relative_to(REPO_ROOT)) for path in sort_kernels if "cores_to_coordinator_ready" in path.read_text()
+    ]
+    factory_source = sort_factories[0].read_text()
+    assert ".handshake = true" in factory_source
+    assert "row_start_mcast" in factory_source and "substage_mcast" in factory_source
+    assert not violations, "Sort row-start readiness must remain inside the handshaked Pipe:\n" + "\n".join(violations)
+
+
 OPAQUE_BOUNDARY_RULES = {
     "reader_bmm_tile_layout_in1_sender_writer_padding.cpp": [
         (r"rt_args_idx\s*\+=\s*4", "manual runtime skip assumes the helper wire width"),

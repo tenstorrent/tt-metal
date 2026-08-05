@@ -39,7 +39,10 @@ void kernel_main() {
     constexpr uint32_t W_tile_bytes = get_compile_time_arg_val(rm_base_offset + 3);
     constexpr uint32_t W_index_bytes = get_compile_time_arg_val(rm_base_offset + 4);
     constexpr uint32_t tile_width = get_compile_time_arg_val(rm_base_offset + 5);
-    constexpr auto coordinator_mcast_args = dataflow_kernel_lib::McastArgs<rm_base_offset + 6, 3>();
+    constexpr auto row_start_mcast_args = dataflow_kernel_lib::McastArgs<rm_base_offset + 6, 3>();
+    constexpr auto substage_mcast_args = dataflow_kernel_lib::McastArgs<
+        row_start_mcast_args.next_compile_time_args_offset(),
+        row_start_mcast_args.next_runtime_args_offset()>();
 
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t TILE_H = 32;
@@ -49,7 +52,8 @@ void kernel_main() {
     const auto output_index_tensor_addr_gen = TensorAccessor(output_index_tensor_args, output_index_tensor_buffer_addr);
 
     Noc noc;
-    auto coordinator_pipe = coordinator_mcast_args.sender(noc);
+    auto row_start_pipe = row_start_mcast_args.sender(noc);
+    auto substage_pipe = substage_mcast_args.sender(noc);
     CircularBuffer input_tensor_cb(input_tensor_cb_index);
     CircularBuffer index_tensor_cb(index_tensor_cb_index);
     CircularBuffer rm_coord_value_row(rm_coord_value_row_cb);
@@ -66,18 +70,11 @@ void kernel_main() {
     const uint32_t index_tensor_tile_size = get_tile_size(index_tensor_cb_index);
 
     // Semaphore setup
-    // Two separate up-channels from the worker cores: the reader's per-row readiness ->
-    // ready sem, the writer's per-pair confirmations -> done sem.  They are kept on
-    // distinct semaphores so each exact-match wait() below has its own monotonic target;
-    // folded onto one shared counter, at a tile-row boundary (Ht >= 2) a fast reader's
-    // next-row readiness could land during the confirmation window and push the counter
-    // past the done target, so the wait would never match and the op would deadlock.
-    constexpr uint32_t cores_to_coordinator_ready_semaphore_id = 1;
-    constexpr uint32_t cores_to_coordinator_done_semaphore_id = 2;
-    Semaphore<> cores_to_coordinator_ready_sem(cores_to_coordinator_ready_semaphore_id);
+    // The handshaked row-start Pipe owns reader readiness. The remaining up-channel is the
+    // writer's per-pair completion counter, which is operation protocol rather than Pipe readiness.
+    constexpr uint32_t cores_to_coordinator_done_semaphore_id = 3;
     Semaphore<> cores_to_coordinator_done_sem(cores_to_coordinator_done_semaphore_id);
 
-    constexpr uint32_t number_of_workers = coordinator_mcast_args.num_active;
     const uint32_t number_of_confirmations = Wt / 2;
 
     // Copy input data to output and generate index tiles
@@ -184,12 +181,9 @@ void kernel_main() {
             }
         }  // Wt loop
 
-        // Wait until all cores are ready to start
-        cores_to_coordinator_ready_sem.wait(number_of_workers);
-        cores_to_coordinator_ready_sem.set(0);  // Reset the semaphore
-
-        // Set signal to start processing
-        coordinator_pipe.send_signal();
+        // The Pipe waits for every reader's readiness acknowledgement, resets that counter, and
+        // then broadcasts the row-start event.
+        row_start_pipe.send_signal();
 
         // Calculate sorting stages
         uint32_t stages = 0;
@@ -200,7 +194,7 @@ void kernel_main() {
         for (uint32_t stage = 1; stage <= stages; stage++) {
             for (uint32_t sub = stage; sub > 0; sub--) {
                 // Set signal to start processing next sub-stage
-                coordinator_pipe.send_signal();
+                substage_pipe.send_signal();
 
                 // Wait until cores will process and save data
                 cores_to_coordinator_done_sem.wait(number_of_confirmations);

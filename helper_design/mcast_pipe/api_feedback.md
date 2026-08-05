@@ -161,7 +161,7 @@ words justify face-specific layouts.
 ## API-003 — Signal-only operations silently ignore handshake configuration
 
 - **Date:** 2026-08-04
-- **Status:** Open
+- **Status:** Implemented
 - **Surface:** `SenderPipe::send_signal()` and
   `ReceiverPipe::receive_signal()`
 - **Migration evidence:** sort's row-start control channel in
@@ -227,15 +227,20 @@ With that behavior, sort can use two host-described channels:
 The writer-to-coordinator done counter remains operation-owned: it counts
 completed compare/write pairs and is not receiver readiness.
 
-### Resolution checklist
+### Resolution
 
-- Inventory every `send_signal()` / `receive_signal()` caller and its configured
-  handshake flag.
-- Make the existing signal-only methods honor the configured handshake policy.
-- Add positive and negative tests proving signal-only behavior for both
-  handshake modes.
-- Re-evaluate the sort migration and its `fully end-to-end` classification.
-- If the API changes, bump `MCAST_PIPE_API_VERSION` and update `changelog.md`.
+Implemented on 2026-08-05. `send_signal()` now waits for and resets the
+configured consumer-ready count when `PRE_HANDSHAKE=true`; `receive_signal()`
+acknowledges the current sender coordinate before waiting. The no-handshake
+specialization is unchanged and emits no readiness traffic.
+
+The control-only Counter matrix now runs both policies over 1x2/1x8 rectangles
+and 2/32 rounds. The complete helper suite passed 77/77 from a cold cache.
+Sort now has a handshaked row-start Counter Pipe and a separate no-handshake
+sub-stage Counter Pipe. Its raw reader-ready semaphore was removed; the
+writer-done counter remains operation-owned. Because no existing handshaked
+signal caller depended on the old exception and no call-site spelling changed,
+the rollout remains `MCAST_PIPE_API_VERSION=10`.
 
 ## API-004 — Support offset grids in `Mcast1D`
 

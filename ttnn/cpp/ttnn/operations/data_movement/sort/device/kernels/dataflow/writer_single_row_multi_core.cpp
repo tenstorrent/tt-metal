@@ -57,7 +57,7 @@ void kernel_main() {
     constexpr uint32_t uint16_tile_size = get_tile_size(uint16_conv_cb_index);
 
     // Semaphore setup
-    constexpr uint32_t cores_to_coordinator_done_semaphore_id = 2;
+    constexpr uint32_t cores_to_coordinator_done_semaphore_id = 3;
     Semaphore<> cores_to_coordinator_done_sem(cores_to_coordinator_done_semaphore_id);
 
     for (uint32_t h = 0; h < Ht; h++) {
