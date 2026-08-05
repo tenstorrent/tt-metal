@@ -34,7 +34,6 @@ TEST_F(QuasarUnitMeshFixture, DmLoopback) {
         std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
     }
 
-    IDevice* dev = this->device().get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
@@ -42,8 +41,8 @@ TEST_F(QuasarUnitMeshFixture, DmLoopback) {
     uint32_t dram_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
     std::vector<uint32_t> value = {0x12345678};
 
-    tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_address, value);
-    MetalContext::instance().get_cluster().dram_barrier(dev->id());
+    this->WriteToDRAMChannel(0, dram_address, value);
+    MetalContext::instance().get_cluster().dram_barrier(this->device().get_devices().at(0)->id());
 
     // Metal 2.0 reserves DM0/DM1; max 6 user DM threads per node.
     // Reduced from 4+4=8 to 3+3=6 loopback stages to fit within the limit.
@@ -150,7 +149,7 @@ TEST_F(QuasarUnitMeshFixture, DmLoopback) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> outputs{0};
-    tt_metal::detail::ReadFromDeviceDRAMChannel(dev, 0, dram_address, sizeof(uint32_t), outputs);
+    this->ReadFromDRAMChannel(0, dram_address, sizeof(uint32_t), outputs);
 
     ASSERT_EQ(outputs[0], value[0]) << "Got the value " << std::hex << outputs[0] << " instead of " << value[0];
 }

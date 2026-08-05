@@ -31,8 +31,6 @@ constexpr uint32_t TOTAL_RESULT_BYTES = NUM_DM_CORES * TLS_CHECK_RESULT_SLOT_BYT
 
 // This test requires simulator environment
 TEST_F(QuasarUnitMeshFixture, GlobalsAndTLS) {
-    IDevice* device = this->device().get_devices()[0];
-
     const uint32_t signal_address = 100 * 1024;
     const uint32_t l1_result_addr = 200 * 1024;
     const uint32_t dram_address = 30000 * 1024;
@@ -122,7 +120,7 @@ TEST_F(QuasarUnitMeshFixture, GlobalsAndTLS) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> dram_data;
-    tt_metal::detail::ReadFromDeviceDRAMChannel(device, dram_channel, dram_address, TOTAL_RESULT_BYTES, dram_data);
+    this->ReadFromDRAMChannel(dram_channel, dram_address, TOTAL_RESULT_BYTES, dram_data);
 
     // Reference global addresses: DM 2-4 share one binary, DM 5-6 share another, DM 7 alone.
     auto slot_global_addr = [&dram_data](uint32_t dm) {
