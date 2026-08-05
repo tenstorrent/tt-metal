@@ -1610,3 +1610,71 @@ is a collision with CCL traffic that is absent there — a green sweep here is N
 fabric safety. It is default ON at the user's direction; `DS_NO_WRITER_MCAST=1` reverts to the
 reader's NoC-0 multicast at a cost of ~6 us/call (~60 us of budget). **Validate against a
 fabric-enabled run with concurrent CCL before trusting it in production.**
+
+## 20. MEASURED AND REJECTED: 8x12 grid (GRID_X 11 -> 12)
+
+### 20a. Getting 12 columns at all
+
+The default COL dispatch gives 11x10 on this harvested p150b, and the non-fabric core
+descriptor (`blackhole_140_arch.yaml`, `2xharvested`) has **only a `col` section**, end
+[10, 9]. The 12-column geometry exists solely in `blackhole_140_arch_fabric_mux.yaml`
+(`2xharvested/row`, end [11, 8] = **12x9 = 108 cores**), where the last row is spent on 8
+fabric-mux + 4 dispatch cores. So 12 columns REQUIRES ROW dispatch, which on Blackhole
+requires fabric tensix MUX (`ttnn/core/device.cpp:43-46` throws otherwise).
+
+Working recipe (four wrong turns before this): config goes through **device_params** on a
+**mesh_device** fixture — the single-`device` fixture does not pop the fabric keys, and
+`tests/scripts/common.py:270` reads `fabric_tensix_config` with `.get()` rather than
+`.pop()`, so it leaks into `CreateDevice` as an unexpected kwarg. Also
+`DispatchCoreConfig` must be built with KEYWORD args.
+
+```python
+@pytest.mark.parametrize("device_params", [{
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+    "fabric_tensix_config": ttnn.FabricTensixConfig.MUX,
+    "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+}], indirect=True)
+def test_x(mesh_device, device_params): ...
+```
+
+### 20b. Measured: ROW dispatch + fabric MUX is free; the 12th column costs 54%
+
+| config | isl-128 | isl-2048 |
+|---|---|---|
+| 11 cols, COL, no fabric (shipping) | 97.5 us | 585.6 us |
+| 11 cols, ROW dispatch + fabric MUX | 98.1 us (+0.6%) | 587.1 us (+0.3%) |
+| **12 cols, ROW + fabric MUX** | **151.4 us (+54%)** | **788.4 us (+34%)** |
+
+The isolation row matters twice: it proves the regression is the column count, not the
+fabric, and it independently shows **enabling fabric MUX + ROW dispatch costs ~0.5%** — so
+the geometry is available cheaply if a future config ever wants it.
+
+### 20c. Why 12 is uniquely bad: it breaks down_k_tail_skip
+
+Predicted -0.4% from tile-MACs alone; measured +54%. The missing term is a compile-time flag:
+
+```
+down_k_tail_skip = (K_down_padded - K_down_tiles) < in0_block_w_d
+K_down_padded = per_core_N_gu * GRID_X,  in0_block_w_d = per_core_N_gu = 6
+```
+
+| GRID_X | K_down_padded | padding | < 6 | tail-skip |
+|---|---|---|---|---|
+| 11 | 66 | 2 | yes | **enabled** |
+| 12 | 72 | **8** | no | **DISABLED** |
+
+With tail-skip off, two paths that 11 columns skips entirely switch on: the down matmul
+reduces over all 8 phantom K-rows, and the reader/writer must ZERO-FILL every OOB tile with
+a scalar byte loop (`for (i = 0; i < tile_bytes/8; ++i) p[i] = 0`) rather than leaving it
+untouched. Neither appears in a tile-MAC count.
+
+**Lesson for this op: padding geometry, not core count, dominates low-ISL time.** Same theme
+as compile-time CBs sized for per_core_M_max=8 while runtime per_core_M is 1, and as the
+phantom M-rows at isl-64.
+
+**Corollary: GRID_X=13 looks BETTER than section 19d suggested.** per_core_N_gu drops to 5,
+so K_down_padded = 65, padding = 1 < 5 -> tail-skip stays ENABLED, on top of -16% tile-MACs.
+12 is specifically the value that breaks tail-skip. 13 needs an unharvested Blackhole (the
+`row` descriptor tops out at 12 columns for 2xharvested).
+
+Reverted: kMaxGridX = 11, FFN_GRID_X = 11.
