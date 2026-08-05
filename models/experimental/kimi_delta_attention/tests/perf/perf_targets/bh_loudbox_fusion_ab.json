@@ -105,10 +105,5 @@
       }
     }
   },
-  "reproduction": {
-    "environment": "KIMI_K3_CKPT=/path/to/pinned/kimi-k3 KDA_FUSION_AB_REPS=10",
-    "current_fusions": "scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/perf/test_fusion_ab.py -q -s",
-    "mmrs": "Historical decision evidence: the removed control implementation is not included in this PR",
-    "tracy": "Historical attribution: the raw Tracy capture is not included in this PR"
-  }
+  "evidence_status": "Historical decision evidence; control implementations and raw Tracy captures are not included."
 }

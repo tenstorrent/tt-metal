@@ -8,9 +8,9 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc, run_for_blackhole
+from models.common.utility_functions import run_for_blackhole
 from models.experimental.kimi_delta_attention.reference.ops import sigmoid_gated_rms_norm_reference
-from models.experimental.kimi_delta_attention.tests.utils import assert_all_finite
+from models.experimental.kimi_delta_attention.tests.utils import assert_accurate, assert_bit_identical
 
 pytestmark = [
     run_for_blackhole(),
@@ -118,11 +118,38 @@ def test_kda_gated_rms_norm_matches_reference_cache_and_trace(
         ("traced", traced_tt),
     ):
         actual = ttnn.to_torch(actual_tt)
-        assert_all_finite(f"{name} CPU reference", expected)
-        assert_all_finite(f"{name} device result", actual)
-        passed, pcc = comp_pcc(expected, actual, pcc=0.999)
-        max_abs = (expected.float() - actual.float()).abs().max().item()
-        print(f"{name}: PCC={pcc:.6f}, max_abs={max_abs:.6e}")
-        assert passed, f"{name} PCC {pcc:.6f} < 0.999"
+        assert_accurate(expected, actual, name=name, pcc_threshold=0.999)
 
     ttnn.release_trace(device, trace_id)
+
+
+def test_kda_gated_rms_norm_determinism(device: ttnn.Device) -> None:
+    batch, sequence, num_heads, value_dim = 1, 64, 12, 128
+    generator = torch.Generator().manual_seed(1319)
+    inputs = torch.randn(batch * num_heads, sequence, value_dim, generator=generator)
+    gate = torch.randn(batch, sequence, num_heads * value_dim, generator=generator, dtype=torch.bfloat16)
+    weight = torch.randn(value_dim, generator=generator, dtype=torch.bfloat16)
+
+    def to_device(tensor: torch.Tensor, dtype: ttnn.DataType) -> ttnn.Tensor:
+        return ttnn.from_torch(
+            tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    input_tt = to_device(inputs, ttnn.float32)
+    gate_tt = to_device(gate, ttnn.bfloat16)
+    weight_tt = to_device(weight, ttnn.bfloat16)
+    results = []
+    for _ in range(3):
+        output_tt = ttnn.transformer.kda_gated_rms_norm(
+            input_tt,
+            gate_tt,
+            weight_tt,
+            num_heads,
+            epsilon=1e-5,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.synchronize_device(device)
+        results.append(ttnn.to_torch(output_tt))
+
+    for iteration, output in enumerate(results[1:], start=1):
+        assert_bit_identical(results[0], output, name=f"gated RMSNorm iteration {iteration}")

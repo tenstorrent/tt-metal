@@ -16,7 +16,7 @@ from models.experimental.kimi_delta_attention.checkpoint import (
 )
 from models.experimental.kimi_delta_attention.config import KDAConfig
 from models.experimental.kimi_delta_attention.weight_schema import normalize_kda_state_dict, validate_kda_weights
-from models.experimental.kimi_delta_attention.tests.utils import random_weights
+from models.experimental.kimi_delta_attention.tests.utils import assert_equal, random_weights
 
 
 def _full_rank_config(*, num_heads: int = 2) -> KDAConfig:
@@ -93,7 +93,7 @@ def test_normalize_state_dict_trims_kimi_k3_padded_a_log() -> None:
     normalized = normalize_kda_state_dict(state_dict, config)
 
     assert normalized["A_log"].shape == (1, 1, config.num_heads, 1)
-    torch.testing.assert_close(normalized["A_log"].reshape(-1), padded[: config.num_heads])
+    assert_equal(padded[: config.num_heads], normalized["A_log"].reshape(-1), name="trimmed A_log")
 
 
 def test_normalize_state_dict_rejects_unsupported_a_log_padding(expect_error) -> None:

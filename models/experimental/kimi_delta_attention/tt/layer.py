@@ -319,7 +319,6 @@ class KimiDeltaAttention:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         # Retained by real-K3 T=5120 component A/B: 74.36-75.76% faster at direct Q/K/V PCC >=0.999989.
-        # Reproduce with tests/perf/test_fusion_ab.py; exact results are in perf_targets/bh_loudbox_fusion_ab.json.
         q, k, v = ttnn.transformer.kda_causal_conv1d_split(
             qkv_row_major,
             state_row_major,
@@ -460,7 +459,6 @@ class KimiDeltaAttention:
         """Apply the KDA gated RMSNorm epilogue."""
         config, weights = self.config, self.weights
         # Retained by real-K3 T=5120 component A/B: 92.72-93.92% faster at output PCC >=0.999990.
-        # Reproduce with tests/perf/test_fusion_ab.py; exact results are in perf_targets/bh_loudbox_fusion_ab.json.
         return ttnn.transformer.kda_gated_rms_norm(
             output,
             output_gate,

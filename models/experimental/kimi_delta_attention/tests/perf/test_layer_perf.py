@@ -22,7 +22,7 @@ from models.experimental.kimi_delta_attention.reference import KDAReferenceState
 from models.experimental.kimi_delta_attention.tt.layer import KimiDeltaAttention
 from models.experimental.kimi_delta_attention.tests.utils import (
     KimiK3TestCase,
-    assert_kimi_k3_device_matches_reference,
+    check_kimi_k3_accuracy,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
 )
@@ -215,7 +215,7 @@ def test_kimi_k3_layer_1_perf(
     mesh_shape = tuple(mesh_device.shape)
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
     try:
-        pcc = assert_kimi_k3_device_matches_reference(
+        pcc = check_kimi_k3_accuracy(
             f"Kimi-K3 layer 1 T={sequence} {layout}",
             case,
             golden_output,

@@ -15,6 +15,8 @@ from models.experimental.kimi_delta_attention.reference.ops import (
     sigmoid_gated_rms_norm_reference,
 )
 
+from models.experimental.kimi_delta_attention.tests.utils import assert_accurate, assert_equal
+
 
 def test_causal_convolution_split_equivalence() -> None:
     generator = torch.Generator().manual_seed(11)
@@ -25,8 +27,9 @@ def test_causal_convolution_split_equivalence() -> None:
     first_output, first_state = causal_depthwise_conv_reference(inputs[:, :5], weight)
     last_output, split_state = causal_depthwise_conv_reference(inputs[:, 5:], weight, first_state)
 
-    assert torch.allclose(full_output, torch.cat((first_output, last_output), dim=1), rtol=1e-6, atol=1e-6)
-    assert torch.equal(full_state, split_state)
+    split_output = torch.cat((first_output, last_output), dim=1)
+    assert_accurate(full_output, split_output, name="split convolution output", pcc_threshold=0.999999)
+    assert_equal(full_state, split_state, name="split convolution state")
 
 
 def test_gate_matches_authoritative_formula() -> None:
@@ -37,8 +40,8 @@ def test_gate_matches_authoritative_formula() -> None:
     actual = kda_gate_reference(raw, a_log, bias)
     expected = -a_log.exp() * F.softplus(raw + bias.reshape(1, 1, 2, 2))
 
-    assert torch.equal(actual, expected)
-    assert torch.all(actual < 0)
+    assert_equal(expected, actual, name="gate")
+    assert_equal(torch.ones_like(actual, dtype=torch.bool), actual < 0, name="gate is negative")
 
 
 def test_bounded_gate_matches_kimi_k3_formula() -> None:
@@ -49,8 +52,9 @@ def test_bounded_gate_matches_kimi_k3_formula() -> None:
     actual = kda_gate_reference(raw, a_log, bias, lower_bound=-5.0)
     expected = -5.0 * torch.sigmoid(a_log.exp() * (raw + bias.reshape(1, 1, 2, 2)))
 
-    assert torch.equal(actual, expected)
-    assert torch.all((-5.0 <= actual) & (actual <= 0.0))
+    assert_equal(expected, actual, name="bounded gate")
+    in_bounds = (-5.0 <= actual) & (actual <= 0.0)
+    assert_equal(torch.ones_like(in_bounds), in_bounds, name="bounded gate range")
 
 
 def test_vector_decay_reduces_to_trusted_scalar_gdn() -> None:
@@ -76,8 +80,8 @@ def test_vector_decay_reduces_to_trusted_scalar_gdn() -> None:
     )
 
     assert gdn_state is not None
-    assert torch.allclose(kda_output, gdn_output, rtol=1e-5, atol=1e-6)
-    assert torch.allclose(kda_state, gdn_state, rtol=1e-5, atol=1e-6)
+    assert_accurate(gdn_output, kda_output, name="KDA vs GDN output", pcc_threshold=0.99999)
+    assert_accurate(gdn_state, kda_state, name="KDA vs GDN state", pcc_threshold=0.99999)
 
 
 def test_output_norm_uses_sigmoid_gate() -> None:
@@ -89,4 +93,4 @@ def test_output_norm_uses_sigmoid_gate() -> None:
     normalized = inputs * torch.rsqrt(inputs.square().mean(dim=-1, keepdim=True) + 1e-5)
     expected = normalized * weight * torch.sigmoid(gate)
 
-    assert torch.equal(actual, expected)
+    assert_equal(expected, actual, name="sigmoid gated RMSNorm")

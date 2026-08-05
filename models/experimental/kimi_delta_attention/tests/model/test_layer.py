@@ -8,10 +8,11 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc, run_for_blackhole
+from models.common.utility_functions import run_for_blackhole
 from models.experimental.kimi_delta_attention.reference import kda_forward_reference
 from models.experimental.kimi_delta_attention.tests.utils import (
-    assert_all_finite,
+    assert_accurate,
+    assert_bit_identical,
     make_config,
     make_program_config,
     random_weights,
@@ -23,16 +24,6 @@ pytestmark = [
     run_for_blackhole(),
     pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True),
 ]
-
-
-def _assert_pcc(name: str, golden: torch.Tensor, actual: torch.Tensor, threshold: float = 0.98) -> float:
-    assert_all_finite(f"{name} CPU reference", golden)
-    assert_all_finite(f"{name} device result", actual)
-    passed, pcc = comp_pcc(golden, actual, pcc=threshold)
-    max_abs = (golden.float() - actual.float()).abs().max().item()
-    print(f"{name}: PCC={pcc:.6f}, max_abs={max_abs:.6e}")
-    assert passed, f"{name} PCC {pcc:.6f} < {threshold}"
-    return pcc
 
 
 def _forward(
@@ -79,9 +70,9 @@ def test_composed_layer_pcc(device: ttnn.Device) -> None:
         ),
         dim=-1,
     )
-    _assert_pcc(f"T={sequence} output", golden_output, actual_output)
-    _assert_pcc(f"T={sequence} recurrent state", golden_state.recurrent, actual_recurrent)
-    _assert_pcc(f"T={sequence} convolution state", golden_convolution, actual_convolution)
+    assert_accurate(golden_output, actual_output, name=f"T={sequence} output", pcc_threshold=0.98)
+    assert_accurate(golden_state.recurrent, actual_recurrent, name=f"T={sequence} recurrent state", pcc_threshold=0.98)
+    assert_accurate(golden_convolution, actual_convolution, name=f"T={sequence} convolution state", pcc_threshold=0.98)
 
 
 def test_offline_cache_and_cache_only_layer_pcc(device: ttnn.Device, tmp_path: Path, expect_error) -> None:
@@ -102,7 +93,7 @@ def test_offline_cache_and_cache_only_layer_pcc(device: ttnn.Device, tmp_path: P
     layer.reset_state(batch_size=1)
 
     actual_output = _forward(layer, hidden)
-    _assert_pcc("cache-only output", golden_output, actual_output)
+    assert_accurate(golden_output, actual_output, name="cache-only output", pcc_threshold=0.98)
 
 
 def test_cache_only_load_rejects_corrupt_tensorbin(device: ttnn.Device, tmp_path: Path, expect_error) -> None:
@@ -167,10 +158,10 @@ def test_segmented_prefill_cache_continuity(device: ttnn.Device) -> None:
         ),
         dim=-1,
     )
-    _assert_pcc("first prefill segment output", golden_first, actual_first)
-    _assert_pcc("second prefill segment output", golden_second, actual_second)
-    _assert_pcc("cache recurrent state", golden_state.recurrent, actual_recurrent)
-    _assert_pcc("cache convolution state", golden_convolution, actual_convolution)
+    assert_accurate(golden_first, actual_first, name="first prefill segment output", pcc_threshold=0.98)
+    assert_accurate(golden_second, actual_second, name="second prefill segment output", pcc_threshold=0.98)
+    assert_accurate(golden_state.recurrent, actual_recurrent, name="cache recurrent state", pcc_threshold=0.98)
+    assert_accurate(golden_convolution, actual_convolution, name="cache convolution state", pcc_threshold=0.98)
 
 
 @pytest.mark.parametrize("recurrent_state_dtype", [ttnn.float32, ttnn.bfloat16])
@@ -224,6 +215,36 @@ def test_external_state_is_updated_in_place(device: ttnn.Device, recurrent_state
         dim=-1,
     )
     dtype_name = str(recurrent_state_dtype)
-    _assert_pcc(f"external {dtype_name} output", golden_output, actual_output)
-    _assert_pcc(f"external {dtype_name} recurrent state", golden_state.recurrent, actual_recurrent)
-    _assert_pcc(f"external {dtype_name} convolution state", golden_convolution, actual_convolution)
+    assert_accurate(golden_output, actual_output, name=f"external {dtype_name} output", pcc_threshold=0.98)
+    assert_accurate(
+        golden_state.recurrent,
+        actual_recurrent,
+        name=f"external {dtype_name} recurrent state",
+        pcc_threshold=0.98,
+    )
+    assert_accurate(
+        golden_convolution,
+        actual_convolution,
+        name=f"external {dtype_name} convolution state",
+        pcc_threshold=0.98,
+    )
+
+
+def test_composed_layer_determinism(device: ttnn.Device) -> None:
+    config = make_config()
+    weights = random_weights(config)
+    hidden = torch.randn(1, 32, config.hidden_size, generator=torch.Generator().manual_seed(1741)).to(torch.bfloat16)
+    layer = KimiDeltaAttention(device, config, weights)
+    results = []
+
+    for _ in range(3):
+        layer.reset_state(batch_size=1)
+        output = _forward(layer, hidden)
+        assert layer.recurrent_state is not None
+        assert layer.convolution_state is not None
+        results.append((output, ttnn.to_torch(layer.recurrent_state), ttnn.to_torch(layer.convolution_state)))
+
+    names = ("output", "recurrent state", "convolution state")
+    for iteration, result in enumerate(results[1:], start=1):
+        for name, expected, actual in zip(names, results[0], result):
+            assert_bit_identical(expected, actual, name=f"layer {name} iteration {iteration}")

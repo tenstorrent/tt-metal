@@ -11,7 +11,7 @@ from models.common.utility_functions import run_for_blackhole
 from models.experimental.kimi_delta_attention.reference import kda_forward_reference
 from models.experimental.kimi_delta_attention.kimi_k3_config import KimiK3Config
 from models.experimental.kimi_delta_attention.tests.utils import (
-    assert_kimi_k3_device_matches_reference,
+    check_kimi_k3_accuracy,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
     run_profiled_forward,
@@ -90,7 +90,7 @@ def test_kimi_k3_layer_1_real_weights_pcc(
 
     mesh_shape = tuple(mesh_device.shape)
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
-    assert_kimi_k3_device_matches_reference(
+    check_kimi_k3_accuracy(
         f"Kimi-K3 layer 1 {layout}",
         case,
         golden_output,

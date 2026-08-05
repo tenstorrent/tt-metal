@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.experimental.kimi_delta_attention.tests.utils import assert_all_finite
+from models.experimental.kimi_delta_attention.tests.utils import assert_bit_identical, assert_equal
 
 pytestmark = [
     run_for_blackhole(),
@@ -90,14 +90,45 @@ def test_convolution_halo_preserves_causal_carries(
     expected_entries_tensor = torch.stack(expected_entries)
     expected_final = qkv[:, -history:]
 
-    assert_all_finite("halo entries CPU reference", expected_entries_tensor)
-    assert_all_finite("halo entries device result", actual_entries)
-    assert_all_finite("halo final CPU reference", expected_final)
-    assert_all_finite("halo final device result", actual_finals)
-    torch.testing.assert_close(actual_entries, expected_entries_tensor, rtol=0, atol=0)
+    assert_equal(expected_entries_tensor, actual_entries, name="halo entries")
     for sp_rank in range(sp_size):
-        torch.testing.assert_close(actual_finals[sp_rank], expected_final, rtol=0, atol=0)
+        assert_equal(expected_final, actual_finals[sp_rank], name=f"halo final rank {sp_rank}")
     print(
         f"tp_axis={tensor_parallel_axis}: rank0 external carry, {sp_size - 1} neighbor carries, "
         "and all replicated final carries are exact"
     )
+
+
+@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+def test_convolution_halo_determinism(
+    mesh_device: ttnn.MeshDevice,
+    tensor_parallel_axis: int,
+) -> None:
+    sp_axis = 1 - tensor_parallel_axis
+    tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]
+    batch, local_sequence, history = 1, 8, 3
+    sequence = tuple(mesh_device.shape)[sp_axis] * local_sequence
+    channels = tp_size * 32
+    qkv = torch.arange(batch * sequence * channels, dtype=torch.float32).reshape(batch, sequence, channels)
+    external = -torch.arange(1, batch * history * channels + 1, dtype=torch.float32).reshape(batch, history, channels)
+    qkv_dims = [None, None]
+    qkv_dims[sp_axis], qkv_dims[tensor_parallel_axis] = 1, 2
+    state_dims = [None, None]
+    state_dims[tensor_parallel_axis] = 2
+    qkv_tt = _to_device(qkv.to(torch.bfloat16), mesh_device, tuple(qkv_dims))
+    state_tt = _to_device(external.to(torch.bfloat16), mesh_device, tuple(state_dims))
+
+    results = []
+    for _ in range(3):
+        entry_tt, final_tt = ttnn.transformer.kda_convolution_halo(qkv_tt, state_tt, sequence_parallel_axis=sp_axis)
+        ttnn.synchronize_device(mesh_device)
+        results.append(
+            (
+                _sp_carries(entry_tt, mesh_device, sp_axis, tensor_parallel_axis),
+                _sp_carries(final_tt, mesh_device, sp_axis, tensor_parallel_axis),
+            )
+        )
+
+    for iteration, (entries, final) in enumerate(results[1:], start=1):
+        assert_bit_identical(results[0][0], entries, name=f"halo entries iteration {iteration}")
+        assert_bit_identical(results[0][1], final, name=f"halo final iteration {iteration}")

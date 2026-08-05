@@ -57,10 +57,63 @@ def report_finiteness(name: str, tensor: torch.Tensor) -> tuple[bool, str]:
     return non_finite_count == 0, summary
 
 
-def assert_all_finite(name: str, tensor: torch.Tensor) -> None:
-    """Report non-finite counts/fractions and require an entirely finite tensor."""
-    passed, summary = report_finiteness(name, tensor)
-    assert passed, summary
+def assert_accurate(
+    golden: torch.Tensor,
+    actual: torch.Tensor,
+    *,
+    name: str = "accuracy",
+    pcc_threshold: float = 0.999,
+) -> float:
+    """Require finite tensors and a passing PCC, and return the measured PCC."""
+    golden_finite, golden_summary = report_finiteness(f"{name} golden", golden)
+    actual_finite, actual_summary = report_finiteness(f"{name} actual", actual)
+    passed, pcc = comp_pcc(golden, actual, pcc=pcc_threshold)
+    max_abs = (golden.float() - actual.float()).abs().max().item()
+    print(f"{name}: PCC={pcc:.6f}, max_abs={max_abs:.6e}")
+    failures = []
+    if not golden_finite:
+        failures.append(golden_summary)
+    if not actual_finite:
+        failures.append(actual_summary)
+    if not passed:
+        failures.append(f"{name} PCC {pcc:.6f} < {pcc_threshold}")
+    assert not failures, "\n".join(failures)
+    return pcc
+
+
+def assert_equal(
+    expected: torch.Tensor,
+    actual: torch.Tensor,
+    *,
+    name: str = "equality",
+) -> None:
+    """Require finite tensors with identical metadata and values."""
+    expected_finite, expected_summary = report_finiteness(f"{name} expected", expected)
+    actual_finite, actual_summary = report_finiteness(f"{name} actual", actual)
+    failures = []
+    if not expected_finite:
+        failures.append(expected_summary)
+    if not actual_finite:
+        failures.append(actual_summary)
+    if expected.shape != actual.shape:
+        failures.append(f"{name} shape {tuple(actual.shape)} != {tuple(expected.shape)}")
+    if expected.dtype != actual.dtype:
+        failures.append(f"{name} dtype {actual.dtype} != {expected.dtype}")
+    if expected.shape == actual.shape and expected.dtype == actual.dtype and not torch.equal(expected, actual):
+        failures.append(f"{name} values differ")
+    assert not failures, "\n".join(failures)
+
+
+def assert_bit_identical(
+    expected: torch.Tensor,
+    actual: torch.Tensor,
+    *,
+    name: str = "determinism",
+) -> None:
+    """Require two implementation results to have identical metadata and values."""
+    assert expected.shape == actual.shape, f"{name} shape {tuple(actual.shape)} != {tuple(expected.shape)}"
+    assert expected.dtype == actual.dtype, f"{name} dtype {actual.dtype} != {expected.dtype}"
+    assert torch.equal(expected, actual), f"{name} is not bit-identical"
 
 
 def _mesh_coordinate(sp_rank: int, tp_rank: int, sp_axis: int) -> tuple[int, int]:
@@ -146,22 +199,15 @@ def compare_cpu_device(
     *,
     pcc_threshold: float,
 ) -> tuple[float, list[str]]:
-    """Report CPU/device finiteness and PCC without hiding later tensor results."""
-    cpu_finite, cpu_summary = report_finiteness(f"{name} CPU reference", expected)
-    device_finite, device_summary = report_finiteness(f"{name} device result", actual)
-    passed, pcc = comp_pcc(expected, actual, pcc=pcc_threshold)
-    print(f"{name}: PCC={pcc:.6f}")
-    failures = []
-    if not cpu_finite:
-        failures.append(cpu_summary)
-    if not device_finite:
-        failures.append(device_summary)
-    if not passed:
-        failures.append(f"{name} PCC {pcc:.6f} < {pcc_threshold}")
-    return pcc, failures
+    """Run the shared accuracy contract without hiding later tensor results."""
+    try:
+        pcc = assert_accurate(expected, actual, name=name, pcc_threshold=pcc_threshold)
+    except AssertionError as error:
+        return float("nan"), [str(error)]
+    return pcc, []
 
 
-def assert_kimi_k3_device_matches_reference(
+def check_kimi_k3_accuracy(
     name: str,
     case: KimiK3TestCase,
     golden_output: torch.Tensor,
@@ -173,7 +219,7 @@ def assert_kimi_k3_device_matches_reference(
     *,
     pcc_threshold: float,
 ) -> dict[str, float]:
-    """Reconstruct an SP/TP K3 result and compare every logical tensor with CPU."""
+    """Reconstruct an SP/TP K3 result and run the shared accuracy contract on every endpoint."""
     sequence_parallel_axis = 1 - tensor_parallel_axis
     mesh_shape = tuple(mesh_device.shape)
     sp_size = mesh_shape[sequence_parallel_axis]

@@ -8,11 +8,12 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc, run_for_blackhole
+from models.common.utility_functions import run_for_blackhole
 from models.experimental.kimi_delta_attention.config import KDAConfig, KDAProgramConfig
 from models.experimental.kimi_delta_attention.reference import kda_forward_reference
 from models.experimental.kimi_delta_attention.tests.utils import (
-    assert_all_finite,
+    assert_accurate,
+    assert_bit_identical,
     random_weights,
     reconstruct_convolution_at_sp_rank,
     reconstruct_sp_tp_tensor,
@@ -30,15 +31,6 @@ pytestmark = [
         indirect=True,
     ),
 ]
-
-
-def _assert_pcc(name: str, expected: torch.Tensor, actual: torch.Tensor, threshold: float = 0.98) -> None:
-    assert_all_finite(f"{name} CPU reference", expected)
-    assert_all_finite(f"{name} device result", actual)
-    passed, pcc = comp_pcc(expected, actual, pcc=threshold)
-    max_abs = (expected.float() - actual.float()).abs().max().item()
-    print(f"{name}: PCC={pcc:.6f}, max_abs={max_abs:.6e}")
-    assert passed, f"{name} PCC {pcc:.6f} < {threshold}"
 
 
 def _to_sp_input(
@@ -118,7 +110,12 @@ def test_sp_layer_matches_serial_reference(
     local_width = local_heads * config.head_k_dim
     sp_size = tuple(mesh_device.shape)[sp_axis]
 
-    _assert_pcc(f"tp_axis={tensor_parallel_axis} output", expected_output, actual_output)
+    assert_accurate(
+        expected_output,
+        actual_output,
+        name=f"tp_axis={tensor_parallel_axis} output",
+        pcc_threshold=0.98,
+    )
     for sp_rank in range(sp_size):
         actual_recurrent = reconstruct_state_at_sp_rank(
             layer.recurrent_state, mesh_device, sp_axis, tensor_parallel_axis, sp_rank
@@ -131,15 +128,17 @@ def test_sp_layer_matches_serial_reference(
             sp_rank,
             local_width,
         )
-        _assert_pcc(
-            f"tp_axis={tensor_parallel_axis} sp_rank={sp_rank} recurrent",
+        assert_accurate(
             expected_state.recurrent,
             actual_recurrent,
+            name=f"tp_axis={tensor_parallel_axis} sp_rank={sp_rank} recurrent",
+            pcc_threshold=0.98,
         )
-        _assert_pcc(
-            f"tp_axis={tensor_parallel_axis} sp_rank={sp_rank} convolution",
+        assert_accurate(
             expected_convolution,
             actual_convolution,
+            name=f"tp_axis={tensor_parallel_axis} sp_rank={sp_rank} convolution",
+            pcc_threshold=0.98,
         )
 
 
@@ -246,6 +245,78 @@ def test_sp_chunked_prefill_matches_one_shot(
         local_width=local_heads * config.head_k_dim,
     )
     label = f"tp_axis={tensor_parallel_axis} group={summary_group_chunks}"
-    _assert_pcc(f"{label} chunked output", one_shot, chunked)
-    _assert_pcc(f"{label} chunked recurrent", one_shot_recurrent, chunked_recurrent)
-    _assert_pcc(f"{label} chunked convolution", one_shot_convolution, chunked_convolution)
+    assert_accurate(one_shot, chunked, name=f"{label} chunked output", pcc_threshold=0.98)
+    assert_accurate(
+        one_shot_recurrent,
+        chunked_recurrent,
+        name=f"{label} chunked recurrent",
+        pcc_threshold=0.98,
+    )
+    assert_accurate(
+        one_shot_convolution,
+        chunked_convolution,
+        name=f"{label} chunked convolution",
+        pcc_threshold=0.98,
+    )
+
+
+@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+def test_sp_layer_determinism(
+    mesh_device: ttnn.MeshDevice,
+    tensor_parallel_axis: int,
+) -> None:
+    config = KDAConfig(
+        hidden_size=128,
+        num_heads=8,
+        head_k_dim=32,
+        head_v_dim=32,
+        conv_kernel_size=4,
+        norm_eps=1e-5,
+    )
+    weights = random_weights(config)
+    sp_axis = 1 - tensor_parallel_axis
+    sp_size = tuple(mesh_device.shape)[sp_axis]
+    sequence = sp_size * ttnn.TILE_SIZE
+    hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(2421)).to(
+        torch.bfloat16
+    )
+    layer = KimiDeltaAttention(
+        mesh_device,
+        config,
+        weights,
+        tt_ccl=TT_CCL(mesh_device),
+        tensor_parallel_axis=tensor_parallel_axis,
+        summary_group_chunks=1,
+    )
+    hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
+    tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]
+    local_width = config.num_heads // tp_size * config.head_k_dim
+    results = []
+
+    for _ in range(3):
+        layer.reset_state(batch_size=1)
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            output_tt = layer.forward(hidden_tt)
+        ttnn.synchronize_device(mesh_device)
+        assert layer.recurrent_state is not None
+        assert layer.convolution_state is not None
+        tensors = [reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tensor_parallel_axis, tp_dim=2, sp_dim=1)]
+        for sp_rank in range(sp_size):
+            tensors.append(
+                reconstruct_state_at_sp_rank(layer.recurrent_state, mesh_device, sp_axis, tensor_parallel_axis, sp_rank)
+            )
+            tensors.append(
+                reconstruct_convolution_at_sp_rank(
+                    layer.convolution_state,
+                    mesh_device,
+                    sp_axis,
+                    tensor_parallel_axis,
+                    sp_rank,
+                    local_width,
+                )
+            )
+        results.append(tuple(tensors))
+
+    for iteration, result in enumerate(results[1:], start=1):
+        for tensor_index, (expected, actual) in enumerate(zip(results[0], result)):
+            assert_bit_identical(expected, actual, name=f"SP layer tensor {tensor_index} iteration {iteration}")

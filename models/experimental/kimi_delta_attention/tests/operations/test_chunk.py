@@ -6,9 +6,13 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc, run_for_blackhole
+from models.common.utility_functions import run_for_blackhole
 from models.experimental.kimi_delta_attention.reference.ops import kda_recurrent_reference, l2_norm_reference
-from models.experimental.kimi_delta_attention.tests.utils import assert_all_finite, compare_cpu_device
+from models.experimental.kimi_delta_attention.tests.utils import (
+    assert_accurate,
+    assert_bit_identical,
+    compare_cpu_device,
+)
 
 pytestmark = [
     run_for_blackhole(),
@@ -24,15 +28,6 @@ def _to_device(tensor: torch.Tensor, device: ttnn.Device, dtype: ttnn.DataType) 
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-
-
-def _assert_pcc(name: str, golden: torch.Tensor, actual: torch.Tensor, threshold: float = 0.999) -> None:
-    assert_all_finite(f"{name} CPU reference", golden)
-    assert_all_finite(f"{name} device result", actual)
-    passed, pcc = comp_pcc(golden, actual, pcc=threshold)
-    max_abs = (golden.float() - actual.float()).abs().max().item()
-    print(f"{name}: PCC={pcc:.6f}, max_abs={max_abs:.6e}")
-    assert passed, f"{name} PCC {pcc:.6f} < {threshold}"
 
 
 @pytest.mark.parametrize(
@@ -203,17 +198,52 @@ def test_grouped_summary_preserves_weak_decay(device: ttnn.Device, production_tu
         )
 
     label = f"weak-decay production_tuning={production_tuning}"
-    _assert_pcc(f"{label} grouped output", golden_output, ttnn.to_torch(output_tt))
-    _assert_pcc(
-        f"{label} group-size output invariance",
+    assert_accurate(golden_output, ttnn.to_torch(output_tt), name=f"{label} grouped output")
+    assert_accurate(
         ttnn.to_torch(output_two_tt),
         ttnn.to_torch(output_tt),
-        threshold=0.9999,
+        name=f"{label} group-size output invariance",
+        pcc_threshold=0.9999,
     )
-    _assert_pcc(
-        f"{label} group-size state invariance",
+    assert_accurate(
         ttnn.to_torch(final_state_two_tt),
         ttnn.to_torch(final_state_tt),
-        threshold=0.9999,
+        name=f"{label} group-size state invariance",
+        pcc_threshold=0.9999,
     )
-    _assert_pcc(f"{label} grouped state", golden_state, ttnn.to_torch(final_state_tt))
+    assert_accurate(golden_state, ttnn.to_torch(final_state_tt), name=f"{label} grouped state")
+
+
+def test_chunk_kda_determinism(device: ttnn.Device) -> None:
+    sequence, heads, dim = 64, 2, 32
+    generator = torch.Generator().manual_seed(1401)
+    shape = (1, sequence, heads)
+    q_tt = _to_device(torch.randn(*shape, dim, generator=generator), device, ttnn.bfloat16)
+    k_tt = _to_device(torch.randn(*shape, dim, generator=generator), device, ttnn.bfloat16)
+    v_tt = _to_device(torch.randn(*shape, dim, generator=generator), device, ttnn.bfloat16)
+    gate_tt = _to_device(-0.02 * torch.rand(*shape, dim, generator=generator), device, ttnn.float32)
+    beta_tt = _to_device(torch.sigmoid(torch.randn(*shape, generator=generator)), device, ttnn.float32)
+    state_tt = _to_device(0.02 * torch.randn(1, heads, dim, dim, generator=generator), device, ttnn.float32)
+
+    results = []
+    for _ in range(3):
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            output_tt, final_state_tt = ttnn.transformer.chunk_kda(
+                q_tt,
+                k_tt,
+                v_tt,
+                gate_tt,
+                beta_tt,
+                initial_state=state_tt,
+                output_final_state=True,
+                chunk_size=32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                summary_group_chunks=2,
+            )
+        ttnn.synchronize_device(device)
+        results.append((ttnn.to_torch(output_tt), ttnn.to_torch(final_state_tt)))
+
+    first_output, first_state = results[0]
+    for iteration, (output, final_state) in enumerate(results[1:], start=1):
+        assert_bit_identical(first_output, output, name=f"chunk_kda output iteration {iteration}")
+        assert_bit_identical(first_state, final_state, name=f"chunk_kda state iteration {iteration}")
