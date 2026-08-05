@@ -48,11 +48,11 @@ on:
         type: boolean
         default: true
         description: "Run TTNN sanity tests"
-      run-t3000-apc-fast-tests:
+      run-t3000-sanity-tests:
         required: false
         type: boolean
         default: true
-        description: "Run T3000 APC fast tests"
+        description: "Run T3000 sanity tests"
       run-ops-sanity-tests:
         required: false
         type: boolean
@@ -147,11 +147,11 @@ on:
         default: true
         type: boolean
         description: "Run TTNN sanity tests"
-      run-t3000-apc-fast-tests:
+      run-t3000-sanity-tests:
         required: false
         default: true
         type: boolean
-        description: "Run T3000 APC fast tests"
+        description: "Run T3000 sanity tests"
       run-ops-sanity-tests:
         required: false
         default: true
@@ -310,7 +310,7 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   t3000-sanity-tests:
-    if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && contains(needs.generate-sku-matrix.outputs.sanity-skus, 'wh_') && toJSON(inputs.run-t3000-apc-fast-tests) != 'false' }}
+    if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && contains(needs.generate-sku-matrix.outputs.sanity-skus, 'wh_') && toJSON(inputs.run-t3000-sanity-tests) != 'false' }}
     needs: [build-artifact, generate-sku-matrix]
     secrets: inherit
     uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
