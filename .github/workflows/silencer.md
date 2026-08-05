@@ -199,6 +199,12 @@ safe-outputs:
   add-comment:
     max: 5
     target: "*"
+    # The phase-A outcome comment (*Scan procedure* step 1) opens with `/codeowners ping` to
+    # trigger `codeowners-group-analysis.yaml`'s Slack routing — but that listener triggers on
+    # `issue_comment`, and GitHub does not let the default token trigger other workflows this
+    # way (a deliberate recursion guard). Posting with the default token would silently never
+    # fire the ping. Same PAT `repo-assist.md` uses for the identical reason.
+    github-token: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
   mark-pull-request-as-ready-for-review:
     # The other half of phase A (*Scan procedure* step 1): having resolved a dispatched run's
     # outcome and commented it onto its own PR, Silencer takes that PR out of draft. A comment
@@ -700,18 +706,26 @@ spends one, plus bookkeeping on a step already spent.
    That is not hypothetical: the run dispatched for tenstorrent/tt-metal#52111 resolved to a real
    run URL, Silencer posted it nowhere, and a human had to comment the link onto the PR by hand.
    Emit exactly one comment on the PR you resolved, in the same JSON style as the
-   `dispatch_workflow` example in *Validating changes via CI*:
+   `dispatch_workflow` example in *Validating changes via CI*, **starting with the literal line
+   `/codeowners ping`** — this is `codeowners-group-analysis.yaml`'s trigger command (matched
+   anchored at the start of the comment), and everything after it is read as author notes, so
+   the rest of the report reads exactly as it would without the command:
    ```json
-   { "type": "add_comment", "item_number": 52111, "body": "**Test status** — dispatched `pr-gate` run <https://github.com/tenstorrent/tt-metal/actions/runs/30612345678>: `completed` / `success`.\n\nA green conclusion alone confirms nothing about this warning: that run's **own logs** must still be re-grepped for `-Wunused-but-set-variable` in the **build/compile step's** logs (categories 1–2/4 — for a runtime or log-spam fix, the **test-execution step's** logs, categories 3/5/6)." }
+   { "type": "add_comment", "item_number": 52111, "body": "/codeowners ping\n\n**Test status** — dispatched `pr-gate` run <https://github.com/tenstorrent/tt-metal/actions/runs/30612345678>: `completed` / `success`.\n\nA green conclusion alone confirms nothing about this warning: that run's **own logs** must still be re-grepped for `-Wunused-but-set-variable` in the **build/compile step's** logs (categories 1–2/4 — for a runtime or log-spam fix, the **test-execution step's** logs, categories 3/5/6)." }
    ```
    - `item_number` is the PR number you just resolved — PRs are issues to this API, so
      `add-comment`'s `target: "*"` reaches them.
+   - `/codeowners ping` must be the **first line, verbatim** — the listener's match is anchored
+     (`^/(codeowners?|ping)(\s|$)`), so it has to lead the comment, not follow other text.
    - Report whatever state exists, not only a finished one: `queued` / `in_progress` /
      `success` / `failure` / `cancelled` are all worth saying, and "still running" is a real
      answer.
    - Always restate **what to grep and where**, naming the step per category exactly as
      *Validating changes via CI* does. The conclusion is never the proof; the pattern's absence
      from that run's own logs is.
+   - This fires **once** per PR, the same moment it comes out of draft — *CI validations in
+     flight* already guards against re-reporting the same outcome (below), so codeowners are
+     never pinged twice for one PR.
    - If `search_pull_requests` returns no open `[silencer]` PR matching the branch you
      recorded — already merged or closed, or the dispatch never happened — **skip silently**:
      post nothing, mark nothing, fabricate no run link, do not treat it as an error, and go
