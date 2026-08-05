@@ -14,11 +14,8 @@ from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import
 HF_ENV = "DFLASH_HF_MODEL"
 
 
-# ---- HF drafter reference (ground truth for the device PCC) ----
-# Build the REAL DFlashDraftModel from the vendored reference modeling code (``reference/dflash_prefill``) +
-# the checkout's config, and run its context-KV forward. ``_load_hf_drafter`` skips (``pytest.skip``) when the
-# checkpoint is missing/incomplete or the built model is not a drafter (a soft/expected condition), and raises
-# ``RuntimeError`` when the model/config genuinely fails to build (a hard error).
+# HF drafter reference (ground truth for the device PCC): build the real DFlashDraftModel from the vendored
+# reference code + checkout config. _load_hf_drafter pytest.skips if the checkpoint is missing, raises on build failure.
 def is_drafter(m) -> bool:
     return all(hasattr(m, a) for a in ("fc", "hidden_norm", "layers", "target_layer_ids"))
 

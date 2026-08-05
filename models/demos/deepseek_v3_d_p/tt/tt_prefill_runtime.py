@@ -59,9 +59,8 @@ class TtPrefillRuntimeConfig:
     # the final RMSNorm, and the LM head. `prefill()` then returns None. The pipeline
     # sets this on the last rank so the final stage is headless.
     kv_only_last_layer: bool = False
-    # Build the DFlash speculative-drafter context KV cache during this prefill (opt-in). Every rank builds
-    # its owned fc slices from $DFLASH_HF_MODEL; the last rank (is_last_rank) builds the drafter KV tail +
-    # cache. The tap reads each chip's SP-sharded seq slice (no gather).
+    # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
+    # slices from $DFLASH_HF_MODEL; only the last rank builds the KV tail + cache.
     dflash_enabled: bool = False
     # Pipeline-parallel rank slicing. first_layer_idx is the global index of this
     # rank's first layer; is_first_rank gates the embedding, is_last_rank marks the
@@ -110,9 +109,8 @@ class TtPrefillRuntime:
         # a fresh per-call closure, so there is no shared mutable chunk-index for the callback
         # to race on (immune even if the threading model changes).
         self._layer_completion_sink = None
-        # DFlash drafter (issue #49586): built in _build_model when config.dflash_enabled. The per-layer
-        # tap closure (_on_layer_hidden) and, on the last rank only, the caller-owned context K/V caches
-        # are set there. All stay None (and prefill_chunk's dflash branches are inert) when dflash is off.
+        # DFlash drafter, built in _build_model when config.dflash_enabled (else all None and prefill_chunk's
+        # dflash branches are inert). Its tap closure + last-rank K/V caches are set there.
         self._on_layer_hidden = None
         self.drafter = None
         self._dflash_k_cache = None
@@ -194,13 +192,8 @@ class TtPrefillRuntime:
     def _build_dflash_drafter(self) -> None:
         """Build this rank's DFlash speculative-drafter (issue #49586) when ``config.dflash_enabled``.
 
-        Each rank taps only the target layers it owns — ``owned`` = the drafter's target layer ids that
-        fall in this rank's ``[first_layer_idx, +num_layers)`` slice — and accumulates the sliced-FC partial
-        (``fc_slice_i @ h_i``) as the verifier streams those layers. Only the last rank builds the drafter
-        KV tail (hidden_norm + per-draft-layer k/v/norm/rope) and allocates the caller-owned context K/V
-        caches that the readback (PCC vs the HF drafter) / migration consumer reads. The drafter checkpoint
-        (config + weights) comes from ``$DFLASH_HF_MODEL`` — the same source the standalone/integration
-        tests use, so the device drafter and the HF reference stay in lockstep."""
+        Each rank taps only the target layers it owns; the last rank also builds the KV tail and allocates
+        the caller-owned context K/V caches. Checkpoint (config + weights) comes from ``$DFLASH_HF_MODEL``."""
         path = os.environ.get("DFLASH_HF_MODEL")
         assert path, (
             "PREFILL_DFLASH=1 requires DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash "
@@ -211,10 +204,8 @@ class TtPrefillRuntime:
         first = self.config.first_layer_idx
         last_excl = first + self.config.num_layers
         owned = tuple(t for t in dcfg.target_layer_ids if first <= t < last_excl)
-        # kv_only interplay: on the last rank the final layer runs kv-only and returns BEFORE the post-FFN
-        # on_layer_hidden tap fires (tt_prefill_block.py) — a target layer at that index would be silently
-        # dropped. Kimi is safe (targets <= 58, kv-only is the last layer 60), but assert so a future
-        # target set / layer layout can't regress it unnoticed.
+        # A kv-only last layer returns before its post-FFN tap fires, so a target layer at that index would
+        # be silently dropped. Kimi is safe (targets <= 58); assert so a future layout can't regress it.
         if self.config.kv_only_last_layer and self.config.is_last_rank and self.config.num_layers > 0:
             kv_only_idx = last_excl - 1
             assert kv_only_idx not in dcfg.target_layer_ids, (
@@ -228,14 +219,8 @@ class TtPrefillRuntime:
             f"checkpoint={path}"
         )
         state_dict = load_drafter_state_dict(path, build_kv_tail=self.config.is_last_rank)
-        # DFlash drafter footprint = ONE chunk, NOT the verifier's full-sequence KV ring buffer
-        # (config.max_seq_len). The drafter is single-shot (write_kv_cache positions_start=0): it processes
-        # the chunk's tokens, contiguously SP-sharded over chunk_size (chip r owns [r*chunk/sp,(r+1)*chunk/sp)),
-        # and BOTH its context cache and its rope table are SP-sharded over this same length. Sizing them to
-        # the verifier's max_seq_len (>> chunk) would (a) fill only chunk/sp of the cache_seq/sp slots per chip
-        # → the [:chunk] readback under-fills, PCC≈√(chunk/max_seq), and (b) misalign each chip's rope window
-        # from its token positions. Must equal chunk_size — matches the integration test (drafter built with
-        # max_seq_len=isl_total=chunk). Multi-chunk (positions_start>0) is issue #50725, out of scope.
+        # The drafter is single-shot: its context cache and rope table are SP-sharded over ONE chunk, so
+        # size them to chunk_size, not the verifier's max_seq_len. Multi-chunk is issue #50725 (out of scope).
         dflash_seq = self.config.chunk_size
         self.drafter = TtDFlashDrafter(
             self.mesh_device,
@@ -250,10 +235,8 @@ class TtPrefillRuntime:
             build_kv_tail=self.config.is_last_rank,
         )
 
-        # The on_layer_hidden hook fires post-FFN with the SP+TP-sharded residual h=[1,1,chunk/sp,H/tp].
-        # Tap only owned target layers (the drafter also guards internally). No clone: the block guarantees
-        # h is read-safe (it flows on to the next layer; the callback must not free/mutate it), and tap only
-        # READS h into the FC matmul — it does not retain h.
+        # on_layer_hidden fires post-FFN with the sharded residual h; tap only owned target layers. No clone:
+        # tap only READS h into the FC matmul (must not free/mutate it) and does not retain it.
         owned_set = set(owned)
 
         def on_layer_hidden(global_idx: int, h: ttnn.Tensor) -> None:
@@ -274,22 +257,18 @@ class TtPrefillRuntime:
             )
 
     def _pack_activation(self, hidden: ttnn.Tensor, partial: ttnn.Tensor) -> ttnn.Tensor:
-        """Transport pack (Part E / Stage 2): fuse this rank's output hidden and finalized drafter FC
-        partial into ONE activation for the D2D handoff to the next rank — both per-chip
-        ``[1,1,chunk/sp,H/tp]`` → ``[1,1,chunk/sp,2H/tp]``. The widened activation rides the existing D2D
-        socket (Part E widens the runner's activation spec to 2H when dflash is on). Consumes both inputs.
-        Single-rank (Stage 1) never packs — is_last_rank is True, so write_kv_cache runs instead — so this
-        per-chip concat is exercised + validated only on the N>1 pipeline bring-up."""
+        """Fuse this rank's output hidden and finalized drafter FC partial into ONE activation for the D2D
+        handoff — per-chip ``[1,1,chunk/sp,H/tp]`` → ``[1,1,chunk/sp,2H/tp]`` (the runner widens the D2D
+        activation spec to 2H when dflash is on). Consumes both inputs; only a non-last rank packs."""
         packed = ttnn.concat([hidden, partial], dim=3)
         ttnn.deallocate(hidden)
         ttnn.deallocate(partial)
         return packed
 
     def _unpack_activation(self, packed: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Inverse of :meth:`_pack_activation` (Part E / Stage 2): split the received per-chip
-        ``[1,1,chunk/sp,2H/tp]`` into the hidden fed to the verifier and the drafter partial imported into
-        the drafter (each ``[1,1,chunk/sp,H/tp]``). Single-rank (Stage 1) never unpacks — is_first_rank is
-        True — so the pack/unpack round-trip is validated together on the N>1 pipeline bring-up."""
+        """Inverse of :meth:`_pack_activation`: split the received per-chip ``[1,1,chunk/sp,2H/tp]`` into the
+        hidden fed to the verifier and the drafter partial imported into the drafter (each
+        ``[1,1,chunk/sp,H/tp]``). Only a non-first rank unpacks."""
         half = packed.shape[-1] // 2
         s0, s1, s2, s3 = packed.shape
         hidden = ttnn.slice(packed, [0, 0, 0, 0], [s0, s1, s2, half])
@@ -299,7 +278,7 @@ class TtPrefillRuntime:
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Allocate a zero hidden-state activation matching what the D2D socket delivers:
         [1, 1, chunk_per_chip, emb_dim/tp] — or 2·emb_dim/tp under DFlash, which packs the drafter
-        partial alongside the hidden (Part E) — TILE_LAYOUT, DRAM, replicated.
+        partial alongside the hidden — TILE_LAYOUT, DRAM, replicated.
 
         Stand-in input for a non-first rank until the upstream D2D-socket sync op
         delivers the real activation. The first block's attn_norm reads from this
@@ -307,9 +286,8 @@ class TtPrefillRuntime:
         delivered tensor is the packed [hidden ‖ partial]; prefill_chunk unpacks it before the model runs.
         """
         chunk_per_chip = self.config.chunk_size // self.config.sp_factor
-        # DFlash packs [hidden ‖ drafter-partial] into the D2D activation (Part E), so a non-first rank
-        # receives — and prefill_chunk unpacks — a 2H-wide tensor; this placeholder/receive buffer must
-        # match. Non-dflash (and every other model) keeps H, byte-identical.
+        # DFlash packs [hidden ‖ drafter-partial] into the D2D activation, so a non-first rank receives a
+        # 2H-wide tensor and this receive buffer must match. Non-dflash keeps H, byte-identical.
         feature_size = self.hf_config.hidden_size * (2 if self.config.dflash_enabled else 1)
         emb_per_tp = feature_size // self.config.tp_factor
         zeros = torch.zeros(1, 1, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
@@ -419,10 +397,8 @@ class TtPrefillRuntime:
         else:
             on_layer_complete = self._on_layer_complete
 
-        # DFlash: clear the per-chunk FC accumulator; on a non-first pipeline rank, unpack the drafter
-        # partial the previous rank packed alongside the hidden and import it (single-rank never hits this
-        # — is_first_rank is True). The forward input is unchanged on the first/single rank (token IDs) and
-        # on any rank when dflash is off; only a non-first rank splits the packed activation.
+        # DFlash: reset the per-chunk FC accumulator; a non-first rank also unpacks the drafter partial the
+        # previous rank packed with the hidden and imports it. First/single rank's input (token IDs) is unchanged.
         model_input = input_tensor
         if self.config.dflash_enabled:
             self.drafter.reset()
@@ -446,8 +422,7 @@ class TtPrefillRuntime:
 
         if self.config.dflash_enabled:
             if self.config.is_last_rank:
-                # Finalize the drafter context-KV into the runtime-owned caches (read back for PCC vs the
-                # HF drafter / consumed by migration). forward returned the ignored last-rank tuple.
+                # Finalize the drafter context-KV into the runtime-owned caches (read back for PCC / migration).
                 self.drafter.write_kv_cache(self._dflash_k_cache, self._dflash_v_cache)
                 return None
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.

@@ -64,15 +64,11 @@ class TtDFlashDrafter:
         self.tp_factor = mesh_device.shape[tp_axis]
         self.sp_factor = mesh_device.shape[sp_axis]
         self.num_links = num_links
-        # `topology` arrives per-axis (a 2-tuple from the runner's per_axis_topology()) in production; all of
-        # this drafter's ccl ops (reduce_scatter/all_gather :306/:384 + the distributed hidden_norm) run along
-        # tp_axis, so collapse it to that axis's scalar Topology here. Standalone/integration tests pass a
-        # scalar directly (isinstance guard). Mirrors tt_prefill_transformer.py / tt_prefill_block.py.
+        # `topology` may arrive per-axis (2-tuple) from the runner; all of this drafter's ccl ops run along
+        # tp_axis, so collapse to that axis's scalar. Tests pass a scalar directly (isinstance guard).
         self.topology = topology[tp_axis] if isinstance(topology, tuple) else topology
-        # Pipeline distribution: each rank taps only the target layers it computes (owned_target_layer_ids,
-        # default = ALL target layers for the single-rank / standalone case), and only the rank that
-        # finalizes the drafter KV cache (build_kv_tail — the last pipeline rank) builds the hidden_norm +
-        # per-draft-layer k/v/norm/rope tail. Non-tail ranks accumulate + forward the FC partial only.
+        # Pipeline distribution: each rank taps only the target layers it owns (default = ALL, for single-rank),
+        # and only the KV-tail rank (build_kv_tail) builds hidden_norm + the per-draft-layer k/v tail.
         self.owned_target_layer_ids = (
             tuple(owned_target_layer_ids) if owned_target_layer_ids is not None else tuple(config.target_layer_ids)
         )
@@ -167,12 +163,8 @@ class TtDFlashDrafter:
                 mesh_mapper=replicate,
             )
 
-        # FC context projection: one [H(out), H(in)] row-parallel block (input H sharded on TP) per target
-        # layer, streamed + accumulated at tap time. fc(concat[h_1..h_n]) == Σ_i fc_slice_i @ h_i, so the
-        # full projection builds incrementally as the verifier streams its target layers — no need to hold
-        # all n raw hiddens, and each slice's partial crosses a pipeline rank as a thin [chunk/sp, H/tp]
-        # tensor. Build ONLY the blocks this rank owns (keyed by global layer idx) — distributes the full
-        # [H, n*H] fc across pipeline ranks (a DRAM win); the fc column blocks are ordered by target_layer_ids.
+        # FC context projection, one row-parallel block per target layer: fc(concat[h_1..h_n]) == Σ_i fc_slice_i
+        # @ h_i, so it accumulates at tap time. Build only this rank's owned blocks (columns keyed by target id).
         all_targets = list(cfg.target_layer_ids)
         fc_full = state_dict["fc.weight"]  # [H, n*H]
         self.fc_slices = {}  # global_layer_idx -> device tensor [H(in), H(out)]
@@ -181,9 +173,8 @@ class TtDFlashDrafter:
             sl = fc_full[:, pos * H : (pos + 1) * H]  # [H(out), H(in)]
             self.fc_slices[global_idx] = _linear_w(sl, mapper_row)
 
-        # The tail (hidden_norm + per-draft-layer k/v/norm/rope) runs ONLY on the rank that finalizes the
-        # cache (build_kv_tail). Non-tail ranks accumulate + forward the FC partial, so they skip
-        # materializing these device tensors entirely.
+        # The tail (hidden_norm + per-draft-layer k/v/norm/rope) runs ONLY on the build_kv_tail rank; non-tail
+        # ranks accumulate + forward the FC partial and skip materializing these tensors.
         if not self.build_kv_tail:
             self.hidden_norm = None
             self.k_proj, self.v_proj, self.k_norm = [], [], []

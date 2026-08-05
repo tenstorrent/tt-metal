@@ -152,10 +152,8 @@ def test_dflash_prefill_integration(
     tapped_hiddens = {}  # global_idx -> device tensor [1,1,seq/sp,H/tp] (test-owned, ON DEVICE, DRAM)
 
     def on_layer_hidden(global_idx, h):
-        # ONLY the 6 target layers are kept, ON DEVICE, in DRAM. h is [1,1,seq/sp,H/tp] (SP-sharded on seq,
-        # TP-sharded on hidden). Leave seq SP-sharded — clone (h is the verifier's live residual) and tap
-        # this chip's own slice, no gather, no host copy. drafter.tap only READS the clone (accumulates
-        # fc_slice_i @ h_i), so the test retains it in tapped_hiddens for the reference comparison.
+        # Keep the 6 target-layer hiddens on device (DRAM). Leave h SP-sharded on seq — clone the verifier's
+        # live residual and tap this chip's slice (no gather); tap only READS it, so the test retains the clone.
         if global_idx not in target_ids:
             return
         tapped.append(global_idx)
