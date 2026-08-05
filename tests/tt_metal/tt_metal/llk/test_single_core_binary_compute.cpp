@@ -158,9 +158,7 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
         s.packed_input2 = generate_packed_uniform_random_vector<uint32_t, float>(-1.0f, 1.0f, num_elements, 2);
 
         TT_FATAL(
-            test_config.precede_dest_reuse_with_col_broadcast &&
-                test_config.l1_output_data_format == tt::DataFormat::Float32,
-            "Float32 stimulus is only supported for the COL-broadcast predecessor regression");
+            test_config.l1_output_data_format == tt::DataFormat::Float32, "Float32 stimulus requires Float32 output");
         std::vector<float> input0(s.packed_input0.size());
         std::vector<float> input1(s.packed_input1.size());
         std::vector<float> input2(s.packed_input2.size());
@@ -174,11 +172,22 @@ static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& tes
             return std::bit_cast<float>(value);
         });
 
-        const auto broadcast_input1 = apply_col_broadcast_to_tiled_input(input1, test_config.num_tiles);
         std::vector<float> golden(input0.size());
-        for (size_t i = 0; i < golden.size(); ++i) {
-            constexpr size_t tile_size = 32 * 32;
-            golden[i] = input2[i % tile_size] * (input0[i] - broadcast_input1[i]);
+        if (test_config.precede_dest_reuse_with_col_broadcast) {
+            const auto broadcast_input1 = apply_col_broadcast_to_tiled_input(input1, test_config.num_tiles);
+            for (size_t i = 0; i < golden.size(); ++i) {
+                constexpr size_t tile_size = 32 * 32;
+                golden[i] = input2[i % tile_size] * (input0[i] - broadcast_input1[i]);
+            }
+        } else {
+            TT_FATAL(
+                test_config.col_broadcast && test_config.binary_op == "mul_with_dest_reuse" &&
+                    test_config.dest_reuse_type == BinaryDestReuseType::SrcA,
+                "Float32 stimulus without a predecessor is only supported for COL-broadcast DEST_TO_SRCA multiply");
+            const auto broadcast_input0 = apply_col_broadcast_to_tiled_input(input0);
+            for (size_t i = 0; i < golden.size(); ++i) {
+                golden[i] = input2[i] * broadcast_input0[i];
+            }
         }
         s.packed_golden = pack_vector<uint32_t, float>(golden);
         return s;
@@ -836,9 +845,9 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreMultiT
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
         .num_tiles = 4,
         .block_size = 4,
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .tile_byte_size = 4 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float32,
+        .l1_output_data_format = tt::DataFormat::Float32,
         .core = CoreCoord(0, 0),
         .binary_op = "mul_with_dest_reuse",
         .math_fidelity = MathFidelity::HiFi4,

@@ -12,6 +12,12 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+#if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK) && defined(ELTWISE_DEST_REUSE_TYPE)
+constexpr std::uint32_t stall_clear_control_mask = 1U << 5;
+static_assert(
+    (llk_unpack_a_detail::dest_reuse_dummy_unpack<ELTWISE_DEST_REUSE_TYPE>() & stall_clear_control_mask) != 0);
+#endif
+
 #ifdef ELTWISE_BROADCAST_TYPE
 template <
     EltwiseBinaryType eltwise_binary_type,
