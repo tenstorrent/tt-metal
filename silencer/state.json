@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-04",
+  "last_scan_date": "2026-08-05",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -65,35 +65,39 @@
       "number": 51870
     },
     {
-      "branch": "silencer/dedupe-matmul-memconfig-mismatch-warning",
+      "branch": "silencer/dedupe-matmul-memconfig-mismatch-warning-77496cdc6bbbe3a9",
       "pattern": "Mismatch between computed/provided mem config warning - 102x repeats, only 2 distinct pairs",
-      "status": "pr-just-opened-dispatch-requested",
-      "note": "PR #51894 open. Cycode security checks passed; awaiting full CI/maintainer review.",
+      "status": "open-pr-no-validation-run-found",
+      "note": "PR #51894 draft, no comments yet. No dedicated single-card-demo-tests run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (1/1 dispatch_workflow budget used elsewhere). Only generic PR Gate Status checks visible. Awaiting maintainer review; re-attempt dispatch next run if still unvalidated.",
       "number": 51894
     },
     {
-      "branch": "silencer/demote-realtime-profiler-sync-log",
+      "branch": "silencer/demote-realtime-profiler-sync-log-e588c4c1564539dd",
       "pattern": "[Real-time profiler] Device {} sync complete - info log firing once per device per periodic resync (352x in one job sample)",
-      "status": "pr-just-opened-dispatch-requested",
-      "note": "Demoted log_info->log_debug in tt_metal/distributed/realtime_profiler_manager.cpp:1390 (run_sync()). Dispatched galaxy-sanity safe-output tool in same turn for validation. Next run: resolve PR number via search_pull_requests and check_runs."
+      "status": "open-pr-no-validation-run-found",
+      "note": "PR #52013 open (title has [skip ci]), mergeable_state clean, codeowners ping posted. No galaxy-sanity run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (budget used elsewhere). Trivial log-level demotion, no behavior change. Awaiting codeowner approval/merge.",
+      "number": 52013
     },
     {
-      "branch": "silencer/unused-var-groupnorm-out-block-hw-actual",
+      "branch": "silencer/unused-var-groupnorm-out-block-hw-actual-f45a844be7c0d8c8",
       "pattern": "-Wunused-but-set-variable: out_block_hw_actual dead-computed in groupnorm dataflow kernels (198x across 3 files in job sample)",
-      "status": "pr-just-opened-dispatch-requested",
-      "note": "Removed unused out_block_hw_actual (only out_block_h_actual/out_block_hw_normal are read) from reader_mcast_receiver_unary_gn.cpp, reader_mcast_sender_unary_gn.cpp, writer_unary_gn_rm_gb.cpp. Dispatched t3000-demo-tests safe-output tool in same turn for compile validation. Next run: resolve PR number via search_pull_requests and check CI status."
+      "status": "ci-dispatched-this-run",
+      "note": "PR #52108 open, mergeable_state blocked (codeowners pending), codeowners ping posted. Dispatched t3000-demo-tests (this run) against correct branch (with hash suffix) since prior dispatch attempt from PR-creation turn did not produce a run. Awaiting run completion + codeowner approval.",
+      "number": 52108
     },
     {
       "branch": "silencer/groupnorm-unused-vars-clean",
       "pattern": "-Wunused-but-set-variable: reset_index / output_tile_index in groupnorm compute kernels (72x across 2 files in job sample)",
-      "status": "pr-just-opened-dispatch-requested",
-      "note": "Removed dead reset_index and output_tile_index vars from groupnorm.cpp and groupnorm_sharded_v2.cpp. Dispatched t3000-demo-tests safe-output tool in same turn for compile validation. Next run: resolve PR number via search_pull_requests and check CI status."
+      "status": "resolved",
+      "note": "PR #52111 fully resolved: validation run 30946210745 (t3000-demo-tests) succeeded, build logs grepped for reset_index/output_tile_index (0 occurrences confirmed). Outcome commented and marked ready for review in prior run (2026-08-05). No further action needed.",
+      "number": 52111
     },
     {
-      "branch": "silencer/demote-watcher-attach-detach-log",
+      "branch": "silencer/demote-watcher-attach-detach-log-546609e8b3fb5e60",
       "pattern": "Watcher attached device {} / Watcher detached device {} - top LLRuntime info-severity lines (130x each in one job sample), fired unconditionally once per device per attach/detach cycle",
-      "status": "pr-just-opened-dispatch-requested",
-      "note": "Demoted log_info->log_debug at 3 call sites (attach_devices, detach_devices, isolated_dump) in tt_metal/impl/debug/watcher_server.cpp, matching existing log_debug for 'Watcher initialized device'. Dispatched models-t3-unit-tests safe-output tool in same turn for validation. Next run: resolve PR number via search_pull_requests and check CI status."
+      "status": "open-pr-no-validation-run-found",
+      "note": "PR #52122 open, mergeable_state behind, 2 codeowner groups pending. No models-t3-unit-tests run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (budget used elsewhere). Awaiting codeowner approval/merge.",
+      "number": 52122
     }
   ],
   "backlog_cursor": {
