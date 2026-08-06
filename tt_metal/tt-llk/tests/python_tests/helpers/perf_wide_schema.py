@@ -89,7 +89,6 @@ DB_SCHEMA = [
     Column("in1_c_dim", "int64", True, "configuration"),
     Column("in1_r_dim", "int64", True, "configuration"),
     Column("input_format", "string", True, "configuration"),
-    Column("input_num_blocks", "int64", True, "configuration"),
     Column("input_num_tiles_in_block", "int64", True, "configuration"),
     Column("iterations", "int64", True, "configuration"),
     Column("k_dimm", "int64", True, "configuration"),
@@ -103,7 +102,6 @@ DB_SCHEMA = [
     Column("num_faces_B", "int64", True, "configuration"),
     Column("num_tiles_in_block", "int64", True, "configuration"),
     Column("output_format", "string", True, "configuration"),
-    Column("output_num_blocks", "int64", True, "configuration"),
     Column("output_num_tiles_in_block", "int64", True, "configuration"),
     Column("partial_a", "bool", True, "configuration"),
     Column("partial_b", "bool", True, "configuration"),
@@ -144,6 +142,13 @@ PROVENANCE = [c for c in DB_SCHEMA if c.origin == "ci"]
 
 MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
 
+# Columns a test emits but the published table intentionally drops: each is
+# provably always equal to a column we keep (verified — no perf test ever sets
+# them apart), so it carries no information. The converter removes these instead
+# of failing on an unknown column.
+#   input_num_blocks, output_num_blocks  ==  num_blocks
+REDUNDANT_COLUMNS = {"input_num_blocks", "output_num_blocks"}
+
 # Row identity: one test config in one run. The sweep-parameter columns (which
 # vary per test) complete the key on top of these fixed columns.
 ROW_KEY = ["test_name", "commit_sha", "arch", "run_id"]
@@ -152,5 +157,4 @@ ROW_KEY = ["test_name", "commit_sha", "arch", "run_id"]
 # differently across tests and are not yet unified, e.g.
 #   - c_dimm / k_dimm / r_dimm  vs  in0_c_dim / ct_dim
 #   - formats.input_A / formats.output  vs  input_format / output_format
-#   - num_blocks  vs  input_num_blocks / output_num_blocks
 # Picking one canonical name per concept needs sign-off, so don't merge them here.
