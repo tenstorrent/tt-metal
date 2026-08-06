@@ -2,7 +2,7 @@
 #
 # Migrates via an explicit `migration.pairs` mapping (0->3, 1->2) instead of the uniform src+offset;
 # equivalent CLI: --migrations "0:3,1:2". src and dst sets must be disjoint (overlaps and duplicate
-# destinations are rejected). The runner validates the migrated KV on-device.
+# destinations are rejected). Nothing reads the destination slots back.
 #
 # Requires (a) a running migration_endpoint (launch_migration_endpoints.sh, prefill_endpoint_id 1) and
 # (b) a single-rank REQUEST-mode runner with migration enabled. Start from
@@ -11,8 +11,6 @@
 #   PREFILL_ENABLE_MIGRATION: "1"     # publish the KV table + reach WORKER_READY
 #   PREFILL_MIGRATION_CMD_QUEUE / _TABLE_QUEUE / _RESP_QUEUE / _TABLE_PATH / _CLIENT_DIR  # match below
 #   PREFILL_MANIFEST + PREFILL_NUM_LAYERS                                    # your model
-#   PREFILL_VALIDATE_MIGRATION: "1"   # optional: on-device PCC of each migrated pair
-#   PREFILL_STANDALONE_CHUNKED_NCHUNKS: "22"  # with VALIDATE_MIGRATION: num_users * chunks
 # Run:
 #   python -m models.demos.common.prefill.runners.prefill_producer \
 #     --manifest models/demos/common/prefill/runners/producer_manifests/producer_manifest_arbitrary_migration.yaml
@@ -36,7 +34,7 @@ workload:
   chunks: "11"
   max_requests: 2         # one resident request per slot (no recycling)
   interleave: round_robin
-  check_pcc: false        # the RUNNER validates the migrated KV on-device (VALIDATE_MIGRATION=1)
+  check_pcc: true         # source-KV read-back — the only accuracy signal; the dst slots are never read
 
 migration:
   issue: true             # attach the Python MigrationLayerClient and migrate
