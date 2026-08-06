@@ -581,8 +581,7 @@ inline void _gmg_merge16_core()
  *         Must be < 2048 (SFPIADD's sign-extended 12-bit immediate); static_asserted.
  * @note Calls @ref _gmg_merge16_core, which resets the Dst RWC counter and enables SFPU index tracking, and
  *       reads the two input runs at columns {0,2} and {4,6}; clobbers LREG0-7 (and LREG14 via the core). When
- *       idx_offset != 0 the id store comes from LREG2/LREG3, where the offset add lands — see the body for
- *       why the add cannot write the LREG4/5 concat. Produces a RUN, not a normalized output — @ref
+ *       idx_offset != 0 the id store comes from LREG2/LREG3. Produces a RUN, not a normalized output — @ref
  *       _generalized_moe_gate_finalize_ungrouped is the normalizing terminal variant.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t store_lo, std::uint32_t store_hi, std::uint32_t idx_offset = 0>
