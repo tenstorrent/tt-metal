@@ -622,7 +622,24 @@ def get_conv3d_config(
                 f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
             )
         else:
-            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
+            # Last resort is `C_in_block = in_channels`, i.e. the whole reduction in one block. That is
+            # fine for narrow convs and catastrophic for wide ones: H3 audio's `conv_pre` is 2048
+            # channels, and in bf16 it overflows L1 outright ("Statically allocated circular buffers
+            # grow to 1981312 B", against a 1572864 limit) before any of the shapes below are reached.
+            #
+            # A tuned fp32 entry, where one exists, is a strictly better default than that: it was
+            # chosen to fit L1 at fp32, and a bf16 tile is half the size, so it cannot fail to fit.
+            # It may not be the *fastest* bf16 blocking -- these were tuned at fp32 -- but it is a
+            # working one, which is what the pathological default is not.
+            tuned = _FP32_BLOCKINGS.get(channel_key)
+            if tuned is not None:
+                C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = tuned
+                logger.warning(
+                    f"conv3d blocking [fp32-tuned reused for {weights_dtype}] {channel_key} -> "
+                    f"Cin={C_in_block} Cout={C_out_block}; the alternative was C_in_block={in_channels}"
+                )
+            else:
+                C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
             logger.warning(
                 f"conv3d blocking [NONE] {blocking_key} -> no match in any table, using hardcoded default: "
                 f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
