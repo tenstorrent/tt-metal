@@ -95,12 +95,12 @@ void LayerAckService::reader_loop() {
         // reserved stays 0: 0xFFFFFFFF is the router's end-of-stream sentinel — never a real completion.
         const internal::LayerCompletionMessage msg{seq, source_rank_, layer, /*request_id=*/chunk, /*reserved=*/0};
 
-        // Full-ring backpressure: spin rather than drop, but stay responsive to stop().
+        // Full-ring backpressure: wait rather than drop, but stay responsive to stop().
         while (!producer_->try_push(msg)) {
             if (!running_.load(std::memory_order_acquire)) {
                 return;
             }
-            std::this_thread::yield();
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     }
 }
