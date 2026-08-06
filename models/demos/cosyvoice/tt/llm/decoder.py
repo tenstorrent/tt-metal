@@ -68,9 +68,11 @@ class TtTransformerLayer:
         self.g1, self.bt1 = _layernorm_weights(device, bag, "norm1", dtype)
         self.g2, self.bt2 = _layernorm_weights(device, bag, "norm2", dtype)
 
-    def __call__(self, x, pos_emb, mask=None, cache=None, return_cache=True):
+    def __call__(self, x, pos_emb, mask=None, cache=None, return_cache=True, cache_free=False):
         h = ttnn.layer_norm(x, weight=self.g1, bias=self.bt1, epsilon=self.eps)
-        a, new_cache = self.attn.forward_cached(h, pos_emb, mask=mask, cache=cache, return_cache=return_cache)
+        a, new_cache = self.attn.forward_cached(
+            h, pos_emb, mask=mask, cache=cache, return_cache=return_cache, cache_free=cache_free
+        )
         ttnn.deallocate(h)
         x1 = ttnn.add(x, a)
         ttnn.deallocate(a)
@@ -300,7 +302,11 @@ class TracedDecodeStep:
         self.mask_buf = ttnn.from_torch(
             right_aligned_bias(max_len, max_len, 1), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev
         )
-        shape = (1, self.h, max_len, self.d_k)
+        # Time-major `[1, T, h, d_k]`, not `[1, h, T, d_k]`. `TILE_LAYOUT` tiles the last
+        # two dims, so this puts the time axis on a *free* one -- appending a token then
+        # costs 19.7 us instead of 207.2, and a 13.9 us permute puts it back in
+        # `[1, h, T, d_k]` for the matmuls. See `TtRelPosAttention.forward_cached`.
+        shape = (1, max_len, self.h, self.d_k)
         self.k_buf = [
             ttnn.from_torch(torch.zeros(shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
             for _ in range(self.n_layers)
@@ -325,8 +331,15 @@ class TracedDecodeStep:
         saving for a second compile.
         """
         for i, (k, v) in enumerate(caches):
-            ttnn.copy(k, self.k_buf[i])
-            ttnn.copy(v, self.v_buf[i])
+            # The prefill runs the ordinary path and hands back `[1, h, T, d_k]`; the
+            # buffers are time-major, so each is permuted once here. Once per utterance,
+            # against 164 appends that the layout makes cheap.
+            kf = ttnn.permute(k, (0, 2, 1, 3))
+            vf = ttnn.permute(v, (0, 2, 1, 3))
+            ttnn.copy(kf, self.k_buf[i])
+            ttnn.copy(vf, self.v_buf[i])
+            ttnn.deallocate(kf)
+            ttnn.deallocate(vf)
 
     def _body(self):
         """The graph that gets traced. Reads the buffers, writes them back."""
@@ -335,10 +348,10 @@ class TracedDecodeStep:
         for i, layer in enumerate(self.dec.layers):
             # Drop the oldest slot so the attention's own concat lands on max_len.
             trimmed = (
-                ttnn.slice(self.k_buf[i], [0, 0, 1, 0], [1, self.h, self.max_len, self.d_k]),
-                ttnn.slice(self.v_buf[i], [0, 0, 1, 0], [1, self.h, self.max_len, self.d_k]),
+                ttnn.slice(self.k_buf[i], [0, 1, 0, 0], [1, self.max_len, self.h, self.d_k]),
+                ttnn.slice(self.v_buf[i], [0, 1, 0, 0], [1, self.max_len, self.h, self.d_k]),
             )
-            h, (k_new, v_new) = layer(h, pos, mask=self.mask_buf, cache=trimmed, return_cache=True)
+            h, (k_new, v_new) = layer(h, pos, mask=self.mask_buf, cache=trimmed, return_cache=True, cache_free=True)
             for t in trimmed:
                 ttnn.deallocate(t)
             ttnn.copy(k_new, self.k_buf[i])
