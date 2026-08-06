@@ -42,6 +42,7 @@ that path is deliberately absent rather than present-and-unverified.
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -50,6 +51,12 @@ import ttnn
 from ..hifigan.conv import TtConv1d, accurate_compute_config
 from ..hifigan.upsample import TtConvTranspose1d
 from .encoder import _linear_fused  # same [out, in] -> [in, out] convention as `_linear` below
+
+# Flash attention for the estimator's self-attention blocks. On by default: measured
+# faster *and* more accurate on every gate (flow stage 0.707 -> 0.600 s, and all four
+# PCCs improved, components included). `COSYVOICE_SDPA=0` restores the explicit
+# matmul/softmax/matmul chain for A/B. See `TtAttention.__call__`.
+COSY_SDPA = os.environ.get("COSYVOICE_SDPA", "1") == "1"
 
 
 # --------------------------------------------------------------------------
@@ -207,18 +214,34 @@ class TtAttention:
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=self.h, transpose_key=False)
         ttnn.deallocate(qkv)
 
-        # `transpose_b` folds the [B, h, T, d] -> [B, h, d, T] permute into the matmul.
-        # `1/sqrt(d)` is already baked into the q half of the fused weight, so the
-        # separate `multiply(scores, scale)` is gone -- see `_linear_fused(scales=)`.
-        scores = ttnn.matmul(q, k, transpose_b=True, compute_kernel_config=self.cc)
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        attn = ttnn.softmax(scores, dim=-1)
-        ttnn.deallocate(scores)
+        if COSY_SDPA:
+            # Flash attention. This block is *plain* self-attention -- no mask, no
+            # relative-position term -- so it is the one place in the model where SDPA
+            # is a drop-in. The score matrix it avoids materialising is
+            # [2, 8, T, T]; at T = 282 that is 2.5 MB written and read back per block,
+            # 64 blocks x 10 Euler steps.
+            #
+            # `scale=1.0` because `1/sqrt(d)` is already folded into the q half of the
+            # fused weight; letting SDPA apply its default would scale twice.
+            ctx = ttnn.transformer.scaled_dot_product_attention(
+                q, k, v, is_causal=False, scale=1.0, compute_kernel_config=self.cc
+            )
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+        else:
+            # `transpose_b` folds the [B, h, T, d] -> [B, h, d, T] permute into the matmul.
+            # `1/sqrt(d)` is already baked into the q half of the fused weight, so the
+            # separate `multiply(scores, scale)` is gone -- see `_linear_fused(scales=)`.
+            scores = ttnn.matmul(q, k, transpose_b=True, compute_kernel_config=self.cc)
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            attn = ttnn.softmax(scores, dim=-1)
+            ttnn.deallocate(scores)
 
-        ctx = ttnn.matmul(attn, v, compute_kernel_config=self.cc)
-        ttnn.deallocate(attn)
-        ttnn.deallocate(v)
+            ctx = ttnn.matmul(attn, v, compute_kernel_config=self.cc)
+            ttnn.deallocate(attn)
+            ttnn.deallocate(v)
         ctx = ttnn.transformer.concatenate_heads(ctx)  # [B, h, T, d] -> [B, T, h*d], one op
         out = ttnn.linear(ctx, self.wo, bias=self.bo, compute_kernel_config=self.cc)
         ttnn.deallocate(ctx)
