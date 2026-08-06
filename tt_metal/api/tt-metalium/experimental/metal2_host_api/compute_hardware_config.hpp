@@ -184,4 +184,70 @@ struct ComputeGen2Config {
 // A compute kernel's hardware config holds exactly one generation's config.
 using ComputeHardwareConfig = std::variant<ComputeGen1Config, ComputeGen2Config>;
 
+// ----------------------------------------------------------------------------
+//  Common-field accessors
+// ----------------------------------------------------------------------------
+//
+// Most compute settings are common to every generation; only bfp_pack_precision_mode (Gen1) and
+// enable_2x_src_register (Gen2) are generation-specific. Reaching a common field through the
+// variant should not require knowing which alternative is held, so each one has an accessor here.
+//
+// Prefer these to std::get<ComputeGen1Config>(config).field. That form is correct only on the
+// generation it names, and throws std::bad_variant_access on any other — a runtime failure on a
+// path that a Gen1 test run cannot reach. These accessors resolve the alternative for you and
+// cannot select the wrong one.
+//
+// Each returns a reference. Bind it once and use it like any other field, which is usually what
+// you want when setting several entries:
+//
+//     auto& modes = unpack_modes(compute_hw);
+//     modes.emplace(dfb, UnpackMode::UnpackToDest);
+//
+// or assign a whole value outright, for a field set once:
+//
+//     enable_32_bit_dest(compute_hw) = true;
+//
+// A generation-specific field has no accessor by design: naming it forces you to be explicit
+// about the generation you mean, which is exactly right when the field exists on only one.
+
+inline MathFidelity& fpu_math_fidelity(ComputeHardwareConfig& config) {
+    return std::visit([](auto& cfg) -> MathFidelity& { return cfg.fpu_math_fidelity; }, config);
+}
+
+inline const MathFidelity& fpu_math_fidelity(const ComputeHardwareConfig& config) {
+    return std::visit([](const auto& cfg) -> const MathFidelity& { return cfg.fpu_math_fidelity; }, config);
+}
+
+inline Precision& sfpu_precision_mode(ComputeHardwareConfig& config) {
+    return std::visit([](auto& cfg) -> Precision& { return cfg.sfpu_precision_mode; }, config);
+}
+
+inline const Precision& sfpu_precision_mode(const ComputeHardwareConfig& config) {
+    return std::visit([](const auto& cfg) -> const Precision& { return cfg.sfpu_precision_mode; }, config);
+}
+
+inline bool& enable_32_bit_dest(ComputeHardwareConfig& config) {
+    return std::visit([](auto& cfg) -> bool& { return cfg.enable_32_bit_dest; }, config);
+}
+
+inline const bool& enable_32_bit_dest(const ComputeHardwareConfig& config) {
+    return std::visit([](const auto& cfg) -> const bool& { return cfg.enable_32_bit_dest; }, config);
+}
+
+inline bool& double_buffer_dest(ComputeHardwareConfig& config) {
+    return std::visit([](auto& cfg) -> bool& { return cfg.double_buffer_dest; }, config);
+}
+
+inline const bool& double_buffer_dest(const ComputeHardwareConfig& config) {
+    return std::visit([](const auto& cfg) -> const bool& { return cfg.double_buffer_dest; }, config);
+}
+
+inline ComputeUnpackModes& unpack_modes(ComputeHardwareConfig& config) {
+    return std::visit([](auto& cfg) -> ComputeUnpackModes& { return cfg.unpack_modes; }, config);
+}
+
+inline const ComputeUnpackModes& unpack_modes(const ComputeHardwareConfig& config) {
+    return std::visit([](const auto& cfg) -> const ComputeUnpackModes& { return cfg.unpack_modes; }, config);
+}
+
 }  // namespace tt::tt_metal::experimental
