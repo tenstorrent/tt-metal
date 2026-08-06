@@ -489,7 +489,7 @@ void kernel_main() {
                         }
                         in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
-                    MMPRE("MMC pack blk={}\n", block);  // [#48552 DIAG] unscoped, enabled for bisect
+                    DPRINT("MMC pack blk={}\n", block);  // [#48552 DIAG] back to no-op for bisect
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
