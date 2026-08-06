@@ -53,17 +53,6 @@
   model-type: DiT
   save-perf-data: true
 
-- name: t3k_DiT_Wan2.2_model_perf_tests
-  cmd: run_t3000_wan22_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 45
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: models
-  model-name: wan22
-  model-type: DiT
-  save-perf-data: true
-
 - name: t3k_DiT_Motif_model_perf_tests
   cmd: run_t3000_motif_tests
   skus:
