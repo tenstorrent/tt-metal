@@ -29,6 +29,7 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     SEMANTIC_CODEBOOK_SIZE,
 )
 
+TILE = 32                    # tile height; matches ttnn_voxtral_gpt.py
 CFG_ALPHA = 1.2
 N_DECODING_STEPS = 7
 SCALE = FM_HEAD_DIM**-0.5
@@ -60,12 +61,12 @@ SEMANTIC_DTYPE = ttnn.float32
 _NORM_GRID_X, _NORM_GRID_Y, _NORM_SUBBLOCK_W = 8, 4, 1
 _NORM_CORES = _NORM_GRID_X * _NORM_GRID_Y
 _NORM_SHARD = ttnn.create_sharded_memory_config(
-    shape=(1, 1, 32, FM_INPUT_DIM), core_grid=ttnn.CoreGrid(y=_NORM_GRID_Y, x=_NORM_GRID_X),
+    shape=(1, 1, TILE, FM_INPUT_DIM), core_grid=ttnn.CoreGrid(y=_NORM_GRID_Y, x=_NORM_GRID_X),
     strategy=ttnn.ShardStrategy.WIDTH)
 _NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
     compute_with_storage_grid_size=(_NORM_GRID_X, _NORM_GRID_Y),
     subblock_w=_NORM_SUBBLOCK_W, block_h=1,
-    block_w=FM_INPUT_DIM // _NORM_CORES // 32, inplace=False)
+    block_w=FM_INPUT_DIM // _NORM_CORES // TILE, inplace=False)
 
 
 class TtVoxtralFlow:
