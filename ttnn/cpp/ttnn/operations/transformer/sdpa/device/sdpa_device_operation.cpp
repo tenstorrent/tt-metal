@@ -478,6 +478,21 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             attrs.windowed_q_token_offset,
             attrs.windowed_q_token_offset + q_rows,
             k.logical_shape()[-2]);
+        if (tensors.windowed_q_token_offset_tensor.has_value()) {
+            const auto& off = tensors.windowed_q_token_offset_tensor.value();
+            TT_FATAL(off.storage_type() == StorageType::DEVICE, "windowed_q_token_offset_tensor must be on device.");
+            TT_FATAL(off.buffer() != nullptr, "windowed_q_token_offset_tensor must be allocated on device.");
+            TT_FATAL(q.device() == off.device(), "windowed_q_token_offset_tensor must be on the same device as Q/K/V.");
+            TT_FATAL(
+                off.dtype() == DataType::INT32 || off.dtype() == DataType::UINT32,
+                "windowed_q_token_offset_tensor must be INT32/UINT32, got {}.",
+                off.dtype());
+            TT_FATAL(off.layout() == Layout::ROW_MAJOR, "windowed_q_token_offset_tensor must be ROW_MAJOR.");
+            TT_FATAL(
+                off.logical_shape().volume() == 1,
+                "windowed_q_token_offset_tensor must hold exactly 1 element, got {}.",
+                off.logical_shape().volume());
+        }
     };
 
     check_conditions();
@@ -617,6 +632,7 @@ Tensor sdpa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
+    const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -645,6 +661,7 @@ Tensor sdpa(
             .chunk_start_idx_tensor = chunk_start_idx_tensor,
             .attention_sink = attention_sink,
             .cu_window_seqlens = cu_window_seqlens,
+            .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
         });
 }
 }  // namespace ttnn::prim

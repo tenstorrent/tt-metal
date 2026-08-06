@@ -627,6 +627,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(is_windowed ? tensor_args.cu_window_seqlens.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
+    // Then the per-device Q-offset accessor. Same chain, same placeholder rule: nullptr when the caller
+    // passed the offset as a scalar (or is not windowed), in which case the writer never reads it.
+    TensorAccessorArgs(
+        tensor_args.windowed_q_token_offset_tensor.has_value()
+            ? tensor_args.windowed_q_token_offset_tensor.value().buffer()
+            : nullptr)
+        .append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -765,12 +772,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // non-template function the discarded branch is still compiled, so get_tile_size/get_dataformat on
     // this id must be well-formed (an inactive id would constexpr-fault on unpack_tile_size[-1]).
     tt::tt_metal::Buffer* cu_window_buffer = nullptr;
+    tt::tt_metal::Buffer* windowed_q_offset_buffer = nullptr;
     uint32_t cu_window_seqlens_eles = 0;
     // Global row index of Q row 0. Non-zero only when Q is a sequence-parallel shard of a longer
     // sequence: Q and the output are addressed locally, while cu_window_seqlens and K/V stay global,
     // so the writer's mask generator needs the shard's origin to find the right windows.
     uint32_t windowed_q_token_offset = 0;
     cb_ids.cu_window_seqlens = cb_ids.q_in;
+    cb_ids.windowed_q_offset = cb_ids.q_in;
     if (is_windowed) {
         const auto& cu = tensor_args.cu_window_seqlens.value();
         tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
@@ -778,6 +787,17 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cu_window_buffer = cu.buffer();
         cu_window_seqlens_eles = cu.logical_shape()[-1];
         windowed_q_token_offset = operation_attributes.windowed_q_token_offset;
+        if (tensor_args.windowed_q_token_offset_tensor.has_value()) {
+            // Per-device form: the writer reads the value at runtime, so the scalar baked into the
+            // program is unused. Kept identical across devices, which is the point -- one program.
+            // The offset gets its own 1-tile CB: every other CB has a producer/consumer contract with
+            // another kernel that a writer-side reserve/push would break (borrowing the reader-produced
+            // chunk_start_idx_writer CB deadlocked).
+            const auto& off = tensor_args.windowed_q_token_offset_tensor.value();
+            tt::DataFormat off_df = tt::tt_metal::datatype_to_dataformat_converter(off.dtype());
+            cb_ids.windowed_q_offset = allocate_tile_cb(1, tt::tile_size(off_df), off_df);
+            windowed_q_offset_buffer = off.buffer();
+        }
     }
 
     cb_ids.identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
@@ -1446,7 +1466,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              global_q_count,                                   // 9
              cu_window_buffer,                                 // 10: windowed mask src (nullptr if unused)
              cu_window_seqlens_eles,                           // 11: window count + 1
-             windowed_q_token_offset});                        // 12: global origin of this Q shard
+             windowed_q_token_offset,                          // 12: global origin of this Q shard (scalar)
+             windowed_q_offset_buffer});                       // 13: same, per-device (nullptr => use 12)
 
         compute_desc.emplace_runtime_args(
             core,

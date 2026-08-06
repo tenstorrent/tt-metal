@@ -46,6 +46,10 @@ struct SDPAInputs {
     // Cumulative window sequence lengths [num_windows + 1], int32/uint32, ROW_MAJOR. Present only in
     // windowed mode; the writer builds the block-diagonal mask from it.
     std::optional<Tensor> cu_window_seqlens;
+    // Windowed mode: 1-element int32/uint32 ROW_MAJOR tensor holding the Q shard's global row origin,
+    // read by the writer at runtime. Present only when the caller wants a per-device offset under one
+    // shared program; otherwise the scalar windowed_q_token_offset is used.
+    std::optional<Tensor> windowed_q_token_offset_tensor;
 };
 
 }  // namespace ttnn::prim

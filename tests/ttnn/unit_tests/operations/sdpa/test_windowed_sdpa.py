@@ -131,7 +131,10 @@ def test_windowed_sdpa_smoke(
     ids=["aligned_4shard", "straddling_4shard", "uneven_2shard"],
 )
 @pytest.mark.parametrize("num_heads", [1, 8])
-def test_windowed_sdpa_q_token_offset(device, seq_len, chunk, cu_window_seqlens, num_shards, num_heads):
+@pytest.mark.parametrize("offset_as_tensor", [False, True], ids=["scalar", "tensor"])
+def test_windowed_sdpa_q_token_offset(
+    device, seq_len, chunk, cu_window_seqlens, num_shards, num_heads, offset_as_tensor
+):
     """Each Q shard attends over the full K/V with GLOBAL window boundaries.
 
     This is the sequence-parallel shape: Q holds `seq_len // num_shards` contiguous rows and is indexed
@@ -184,7 +187,20 @@ def test_windowed_sdpa_q_token_offset(device, seq_len, chunk, cu_window_seqlens,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             cu_window_seqlens=cu_tt,
-            windowed_q_token_offset=offset,
+            # Two ways to supply the same value. The scalar is baked into the program; the tensor is read
+            # on device at dispatch, which is what lets one shared program serve differently-offset
+            # devices when it is sharded on the sequence-parallel axis. They must agree exactly.
+            windowed_q_token_offset=0 if offset_as_tensor else offset,
+            windowed_q_token_offset_tensor=(
+                ttnn.from_torch(
+                    torch.tensor([offset], dtype=torch.int32),
+                    device=device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.uint32,
+                )
+                if offset_as_tensor
+                else None
+            ),
         )
         got = ttnn.to_torch(out_tt).to(torch.float32)
         assert got.shape[-2] == shard_rows, f"shard {shard} returned {got.shape[-2]} rows, expected {shard_rows}"
