@@ -2280,7 +2280,11 @@ void sdpa_ring_v2(
     const bool skip_first_half_q = false,
     const bool use_zigzag_balancing = false,
     const ChunkedContext& chunked = {},
-    const bool is_first_active_iter = true) {
+    const bool is_first_active_iter = true,
+    const uint32_t* joint_valid_lengths = nullptr,
+    const uint32_t per_batch_joint_mask_tile_base = 0,
+    const uint32_t batch_size = 0,
+    const uint32_t num_heads = 0) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2365,9 +2369,9 @@ void sdpa_ring_v2(
     // ---- K-loop helpers ---------------------------------------------------
 
     // Skip KV chunks beyond the logical sequence length (padding tiles).
-    auto try_skip_oob_kv = [&](uint32_t k_chunk, bool kv_chunk_is_joint) -> bool {
+    auto try_skip_oob_kv = [&](uint32_t k_chunk, bool kv_chunk_is_joint, uint32_t valid_joint_tiles) -> bool {
         if (kv_chunk_is_joint) {
-            return false;
+            return joint_valid_lengths != nullptr && (k_chunk - num_local_k_chunks) * Sk_chunk_t >= valid_joint_tiles;
         }
         return !kv_chunk_starts_before_logical_end<
             kv_pad_rotation_enabled,
@@ -2401,7 +2405,20 @@ void sdpa_ring_v2(
         // Compute Q chunk index (with optional zigzag remapping for causal balancing).
         // num_q_chunks is total per-head chunks (local + joint), matching the divisor the
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
-        uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+        const uint32_t remapped_q = remap_q_index(q, num_q_chunks, use_zigzag_balancing);
+        uint32_t q_chunk = remapped_q % num_q_chunks;
+        const uint32_t nb = joint_valid_lengths != nullptr ? remapped_q / (num_heads * num_q_chunks) : 0;
+        const uint32_t valid_joint_tokens =
+            joint_valid_lengths != nullptr && nb < batch_size ? joint_valid_lengths[nb] : 0;
+        const uint32_t valid_joint_tiles =
+            joint_valid_lengths != nullptr ? (valid_joint_tokens + TILE_HEIGHT - 1) / TILE_HEIGHT : 0;
+        const uint32_t row_joint_mask_chunk_id = joint_valid_lengths != nullptr && valid_joint_tiles > 0
+                                                     ? (valid_joint_tiles - 1) / Sk_chunk_t
+                                                     : joint_n_mask_chunk_id;
+        const uint32_t row_joint_active_tiles = joint_valid_lengths != nullptr && valid_joint_tiles > 0
+                                                    ? ((valid_joint_tiles - 1) % Sk_chunk_t) + 1
+                                                    : Sk_chunk_t - lw_mask.joint_n_padded_tiles;
+        const uint32_t row_joint_partial_col = joint_valid_lengths != nullptr ? valid_joint_tokens % TILE_HEIGHT : 0;
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;
@@ -2428,7 +2445,7 @@ void sdpa_ring_v2(
         uint32_t per_q_valid_kv = 0;
         for (uint32_t k = 0; k < num_kv_chunks; ++k) {
             const bool is_joint = k >= num_local_k_chunks;
-            if (try_skip_oob_kv(k, is_joint)) {
+            if (try_skip_oob_kv(k, is_joint, valid_joint_tiles)) {
                 continue;
             }
             if constexpr (is_causal_sdpa) {
@@ -2458,7 +2475,7 @@ void sdpa_ring_v2(
 
         for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
             const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
-            if (try_skip_oob_kv(k_chunk, kv_chunk_is_joint)) {
+            if (try_skip_oob_kv(k_chunk, kv_chunk_is_joint, valid_joint_tiles)) {
                 continue;
             }
             if (try_skip_causal_above_diag(k_chunk, causal_k_limit)) {
@@ -2491,8 +2508,9 @@ void sdpa_ring_v2(
                 is_local_n_mask_chunk = local_n_needs_masking && k_chunk == local_n_mask_chunk_id;
             }
             if constexpr (joint_n_mask_enabled) {
-                is_joint_n_mask_chunk = ring_iter_needs_joint_n_mask && kv_chunk_is_joint &&
-                                        (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id;
+                const bool row_needs_joint_mask = joint_valid_lengths != nullptr ? true : ring_iter_needs_joint_n_mask;
+                is_joint_n_mask_chunk = row_needs_joint_mask && kv_chunk_is_joint &&
+                                        (k_chunk - num_local_k_chunks) == row_joint_mask_chunk_id;
             }
             // Straddle chunk (rix > rid balanced-causal with k_chunk_size ∤ coarse_chunk_size):
             // only the early-half columns attend; late-half columns must be dropped. Narrow
@@ -2508,7 +2526,8 @@ void sdpa_ring_v2(
                 apply_mask = apply_mask || is_global_n_mask_chunk;
             }
             if constexpr (joint_n_mask_enabled) {
-                apply_mask = apply_mask || is_joint_n_mask_chunk;
+                apply_mask = apply_mask ||
+                             (is_joint_n_mask_chunk && (joint_valid_lengths == nullptr || row_joint_partial_col != 0));
             }
 
             // Resolve lightweight mask params for partial tile masking
@@ -2524,7 +2543,8 @@ void sdpa_ring_v2(
                     }
                     if constexpr (joint_n_mask_enabled) {
                         if (!partial_tile_selected && is_joint_n_mask_chunk) {
-                            lw_partial_tile_idx = lw_mask.joint_l_partial_tile_idx;
+                            lw_partial_tile_idx = joint_valid_lengths != nullptr ? per_batch_joint_mask_tile_base + nb
+                                                                                 : lw_mask.joint_l_partial_tile_idx;
                         }
                     }
                 }
@@ -2552,8 +2572,8 @@ void sdpa_ring_v2(
             }
             if constexpr (joint_n_mask_enabled) {
                 if (!narrowed_by_mask && is_joint_n_mask_chunk) {
-                    active_Sk_param = Sk_chunk_t - lw_mask.joint_n_padded_tiles;
-                    chunk_sbw = joint_n_sbw;
+                    active_Sk_param = row_joint_active_tiles;
+                    chunk_sbw = largest_factor_le(active_Sk_param, qkt_subblock_w);
                     narrowed_by_mask = true;
                 }
             }

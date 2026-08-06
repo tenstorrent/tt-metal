@@ -104,18 +104,40 @@ def mesh_device(request, silicon_arch_name, device_params):
     # Stash the VAE submesh on the vae_decoder MODULE (not this conftest): pytest
     # loads conftest under a private name, so a conftest global isn't visible to the
     # test via the package path, but the module below is imported identically by both.
+    from models.demos.hf_eager.hunyuanvideo_1_5.tt import byt5_encoder as _be
     from models.demos.hf_eager.hunyuanvideo_1_5.tt import qwen_encoder as _qe
+    from models.demos.hf_eager.hunyuanvideo_1_5.tt import siglip_encoder as _se
     from models.demos.hf_eager.hunyuanvideo_1_5.tt import vae_decoder as _vd
 
     _vd.HY_VAE_SUBMESH = None
+    _be.HY_BYT5_SUBMESH = None
     _qe.HY_QWEN_SUBMESH = None
+    _se.HY_SIGLIP_SUBMESH = None
     if req_shape != parent_shape:
         # Fabric is live on the FULL parent; the submesh is just a device-subset
         # view over already-trained links.
         submesh_device = parent_device.create_submesh(ttnn.MeshShape(*req_shape))
         want_vae = os.environ.get("HY_TT_VAE", "0") == "1"
+        want_byt5 = os.environ.get("HY_TT_BYT5", "0") == "1"
         want_qwen = os.environ.get("HY_TT_QWEN", "0") == "1"
+        want_siglip = os.environ.get("HY_TT_SIGLIP", "0") == "1"
         rr, rc = req_shape
+        # byT5's tensor parallelism has to divide both num_heads (6) and d_model
+        # (1472), so only 1 and 2 devices are legal. Reserve one genuinely
+        # disjoint 1x2 mesh (or a single chip when the row is only one wide) and
+        # only when no other optional stage claims the spare devices. The adapter
+        # never creates a view of the live DiT mesh itself.
+        if want_byt5 and not want_vae and not want_qwen and not want_siglip and rr < parent_shape[0]:
+            _be.HY_BYT5_SUBMESH = parent_device.create_submesh(
+                ttnn.MeshShape(1, 2 if parent_shape[1] >= 2 else 1), offset=ttnn.MeshCoordinate(rr, 0)
+            )
+        # SigLIP is small but must own a genuinely disjoint mesh context. Reserve
+        # one chip immediately below the DiT only when no VAE/Qwen device stage
+        # also claims the spare rows; otherwise the generation path stays on host.
+        if want_siglip and not want_vae and not want_qwen and rr < parent_shape[0]:
+            _se.HY_SIGLIP_SUBMESH = parent_device.create_submesh(
+                ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(rr, 0)
+            )
         # All-four-modules-on-device 3-way split: pack VAE and Qwen into single ROWS
         # below the DiT so all fit on one board. Qwen is capped at TP=4 (28 attn / 4
         # kv heads) so it takes a (1,4) row; VAE takes a (1,rc) row (tile-sharded).
@@ -152,7 +174,9 @@ def mesh_device(request, silicon_arch_name, device_params):
     yield yielded
 
     _vd.HY_VAE_SUBMESH = None
+    _be.HY_BYT5_SUBMESH = None
     _qe.HY_QWEN_SUBMESH = None
+    _se.HY_SIGLIP_SUBMESH = None
     if submesh_device is not None:
         ttnn.close_mesh_device(submesh_device)
     for sm in parent_device.get_submeshes():

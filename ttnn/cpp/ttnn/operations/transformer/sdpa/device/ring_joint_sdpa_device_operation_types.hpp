@@ -8,6 +8,7 @@
 #include <optional>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -34,6 +35,7 @@ struct RingJointSDPAParams {
     CoreCoord ccl_core_grid_offset;
     std::optional<std::uint32_t> kv_cache_batch_idx = std::nullopt;
     std::optional<std::uint32_t> kv_actual_isl = std::nullopt;
+    std::vector<std::uint32_t> joint_valid_lengths;
     uint32_t latent_v_head_dim = 0;
 
     // We need a constructor, because all_gather_struct is not default initializable.
@@ -53,6 +55,7 @@ struct RingJointSDPAParams {
         CoreCoord ccl_core_grid_offset,
         std::optional<std::uint32_t> kv_cache_batch_idx = std::nullopt,
         std::optional<std::uint32_t> kv_actual_isl = std::nullopt,
+        std::vector<std::uint32_t> joint_valid_lengths = {},
         uint32_t latent_v_head_dim = 0) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
@@ -69,6 +72,7 @@ struct RingJointSDPAParams {
         ccl_core_grid_offset(ccl_core_grid_offset),
         kv_cache_batch_idx(kv_cache_batch_idx),
         kv_actual_isl(kv_actual_isl),
+        joint_valid_lengths(std::move(joint_valid_lengths)),
         latent_v_head_dim(latent_v_head_dim) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
@@ -78,6 +82,8 @@ struct RingJointSDPAParams {
     bool has_indexed_kv_cache() const { return kv_cache_batch_idx.has_value(); }
 
     bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
+
+    bool has_per_batch_joint_mask() const { return !joint_valid_lengths.empty(); }
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "joint_strategy",
@@ -92,6 +98,7 @@ struct RingJointSDPAParams {
         "ccl_core_grid_offset",
         "has_kv_cache_batch_idx",
         "kv_pad_rotation_enabled",
+        "joint_valid_lengths",
         "latent_v_head_dim",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
@@ -109,6 +116,7 @@ struct RingJointSDPAParams {
             std::cref(ccl_core_grid_offset),
             kv_cache_batch_idx.has_value(),
             has_kv_pad_rotation(),
+            std::cref(joint_valid_lengths),
             std::cref(latent_v_head_dim),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));

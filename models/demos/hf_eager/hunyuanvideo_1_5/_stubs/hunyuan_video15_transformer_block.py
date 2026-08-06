@@ -43,9 +43,140 @@ single-device path.
 
 from __future__ import annotations
 
+from collections import namedtuple
+
 import ttnn
 
 HF_MODEL_ID = "tencent/HunyuanVideo-1.5"
+
+# Row-parallel bias in its two prepared forms. ``full`` is the replicated
+# ``(1, C)`` bias added to the all-gathered activation; ``local`` is the same
+# bias fractured over the TP axis, added to the reduce-scatter output instead.
+_RowBias = namedtuple("_RowBias", ["full", "local"])
+
+
+def _enabled(value):
+    """Parse an opt-in/out environment value without silently accepting typos."""
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"expected a boolean value, got {value!r}")
+
+
+def _layer_norm_shard_fits(padded_m, local_width, bytes_per_element):
+    """Conservatively account for LayerNorm's static input/output/reduction CBs."""
+    shard_bytes = padded_m * local_width * bytes_per_element
+    return 6 * shard_bytes <= 1_300_000
+
+
+def _select_sdpa_chunks(*, sequence_parallel, sp, tp, blackhole, environ):
+    """Return validated SDPA chunks while retaining the measured Hunyuan default.
+
+    ``wan_bh_sp8tp4`` exposes Wan2.2's mature Blackhole SP8xTP4 setting for an
+    explicit A/B. It is deliberately not the default: Hunyuan has a different
+    joint-token length and reserves a different CCL core strip.
+    """
+    chunks = (128, 512) if sequence_parallel else (128, 128)
+    preset = environ.get("HY_DIT_SDPA_PRESET", "hunyuan").strip().lower()
+    if preset == "wan_bh_sp8tp4":
+        if not (sequence_parallel and blackhole and sp == 8 and tp == 4):
+            raise ValueError("wan_bh_sp8tp4 requires Blackhole sequence-parallel SP=8, TP=4")
+        chunks = (288, 512)
+    elif preset != "hunyuan":
+        raise ValueError(f"unknown HY_DIT_SDPA_PRESET={preset!r}")
+
+    q_chunk = int(environ.get("HY_DIT_SDPA_Q_CHUNK", chunks[0]))
+    k_chunk = int(environ.get("HY_DIT_SDPA_K_CHUNK", chunks[1]))
+    if q_chunk <= 0 or k_chunk <= 0 or q_chunk % 32 or k_chunk % 32:
+        raise ValueError(f"SDPA chunks must be positive tile multiples, got q={q_chunk}, k={k_chunk}")
+    return q_chunk, k_chunk
+
+
+def _select_collective_overlap(*, sharded, tp, blackhole, bf16, topology, environ):
+    """Validate the Hunyuan latent-stream fused MM+RS opt-in.
+
+    The fused kernel's contract is tensor-parallel only; SP does not alter its
+    local row-linear shapes.  Production targets SP8xTP4, while the TP4-only
+    component test exercises the same local contract on four devices.
+
+    ``ttnn.experimental.minimal_matmul_strided_reduce_scatter_async`` asserts
+    ``topology == Ring`` in its device operation, so the fused kernel cannot
+    run on the Galaxy's physical ``FABRIC_1D`` Linear path.  Reject that here,
+    at build time, rather than letting a device-side TT_FATAL abort a
+    generation part-way through the 54-block stack.
+    """
+    enabled = _enabled(environ.get("HY_DIT_MMRS_OVERLAP", "0"))
+    if not enabled:
+        return False
+    if not sharded or tp != 4 or not blackhole or not bf16:
+        raise ValueError("HY_DIT_MMRS_OVERLAP requires Blackhole TP=4 with HY_DIT_BF16=1")
+    if topology != ttnn.Topology.Ring:
+        raise ValueError(
+            "HY_DIT_MMRS_OVERLAP needs a Ring CCL topology: "
+            "minimal_matmul_strided_reduce_scatter_async only supports Ring, and the "
+            f"Hunyuan Galaxy path builds its CCLManager with {topology!r}. "
+            "Leave HY_DIT_MMRS_OVERLAP=0 on FABRIC_1D."
+        )
+    return True
+
+
+def _row_bias_shard_width(width, tp):
+    """Per-device width of a TP-fractured row-parallel bias.
+
+    The fractured bias is added to a reduce-scatter output, so its width has to
+    divide evenly across the TP axis and stay tile aligned.
+    """
+    if tp <= 1:
+        raise ValueError(f"a fractured row bias needs tp>1, got tp={tp}")
+    if width % tp or (width // tp) % 32:
+        raise ValueError(
+            f"HY_DIT_RS_DOMAIN_BIAS needs a tile-aligned per-device bias width, got width={width}, tp={tp}"
+        )
+    return width // tp
+
+
+def _select_rs_domain_bias(*, sharded, tp, environ):
+    """Validate the opt-in scattered-domain row-parallel bias.
+
+    A row-parallel projection currently evaluates ``all_gather(reduce_scatter(
+    partials)) + bias`` on the full replicated width.  With this enabled the
+    bias is added to the reduce-scatter output instead, so the all-gather
+    replicates an already-biased shard.  Every output element still evaluates
+    ``reduce(partials) + bias`` from the same operands in the same dtype, and
+    an all-gather is a pure copy, so the result is bit-identical -- the bias add
+    just runs on a tensor ``tp`` times narrower.
+    """
+    enabled = _enabled(environ.get("HY_DIT_RS_DOMAIN_BIAS", "0"))
+    if not enabled:
+        return False
+    if not sharded or tp <= 1:
+        raise ValueError("HY_DIT_RS_DOMAIN_BIAS requires a tensor-parallel mesh (tp>1)")
+    return True
+
+
+def _run_dual_stream_projection_schedule(overlap, hidden_start, context_complete, hidden_finish):
+    """Run a dependency-safe dual-stream row-projection schedule.
+
+    In overlap mode ``hidden_start`` emits the reduce-scattered output of fused
+    MMRS and the independent context projection is enqueued before the latent
+    all-gather/bias finish.
+
+    This ordering buys no concurrency on its own.  Every model program is
+    enqueued on command queue 0 (queue 1 carries only host-to-device resident
+    copies), and programs on one queue run to completion in order, so a
+    standalone collective never overlaps a later standalone matmul.  The only
+    overlap here is inside the fused device program, which streams completed
+    matmul blocks into its reduce-scatter.  The schedule is kept because it
+    expresses the dependency structure and keeps the legacy path a single
+    call, not because reordering hides a collective.
+    """
+    hidden = hidden_start()
+    context = context_complete()
+    if overlap:
+        hidden = hidden_finish(hidden)
+    return hidden, context
 
 
 def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis=0):
@@ -66,12 +197,32 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
 
     import torch
 
+    from models.common.utility_functions import is_blackhole
+    from models.tt_dit.utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+
     # bf16 fast path (HY_DIT_BF16=1): load weights bf16 + run the block's matmuls/
     # norms/SDPA in bf16 (HiFi2, fp32 accumulate). The block casts activations to
     # bf16 on entry and back to fp32 on exit, so it stays fp32-in/fp32-out (drop-in
     # for the fp32 glue/sub-stubs). ~2-4x faster matmuls + ~2x less weight/activation
     # DRAM. Default OFF = original fp32 behavior. The joint SDPA is bf16 either way.
     _bf16 = os.environ.get("HY_DIT_BF16", "0") == "1"
+    # Reuse tt_dit's fused projection+split primitive (the same path used by
+    # WanAttention/ColParallelLinear). It emits q/k/v directly and removes the
+    # six post-matmul slices per dual-stream block. Keep the old linear+slices
+    # path available for unsupported runtime/shape combinations.
+    _qkv_split = _enabled(os.environ.get("HY_DIT_QKV_SPLIT", "0"))
+    # Fuse the post-attention head merge. The legacy permute+reshape pair routes
+    # through a (B, L, H, D) intermediate; with TP=4 the LOCAL head count is 4,
+    # which lands in the second-to-last position and tile-pads to 32, so every
+    # element moves with 8x its necessary bytes. A 13f device profile measured
+    # the head-layout reshapes + permutes at 27.6% of total device kernel time,
+    # with ReshapeViewDeviceOperation the single most expensive op in the model.
+    _fused_heads = _enabled(os.environ.get("HY_DIT_FUSED_HEADS", "0"))
+    # Same idea on the attention INPUT side, where the profile put ~18% of device
+    # time (vs ~9% for the output merge). nlp_create_qkv_heads emits (B, H, S, D)
+    # from the fused projection, so heads_split's padded intermediate, the six
+    # permutes, and the RoPE collapse through the padded axis all disappear.
+    _fused_qkv_heads = _enabled(os.environ.get("HY_DIT_FUSED_QKV_HEADS", "0"))
     wdt = ttnn.bfloat16 if _bf16 else ttnn.float32
 
     blk = torch_module
@@ -90,6 +241,15 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
     # Sequence/context parallel (sp>1): 2D mesh, latent seq sharded on sp_axis.
     seq_parallel = sp > 1 and ccl_manager is not None
     mesh_shape = tuple(device.shape) if seq_parallel else None
+    _mmrs_overlap = _select_collective_overlap(
+        sharded=sharded,
+        tp=tp,
+        blackhole=is_blackhole(),
+        bf16=_bf16,
+        topology=ccl_manager.topology if ccl_manager is not None else None,
+        environ=os.environ,
+    )
+    _rs_domain_bias = _select_rs_domain_bias(sharded=sharded, tp=tp, environ=os.environ)
 
     def _mapper(shard_dim):
         """Weight mesh-mapper. 2D (seq-parallel): shard `shard_dim` on tp_axis,
@@ -131,6 +291,13 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
     # shape and never materializes that matrix. Chunk sizes are a starting
     # point, not tuned; adjust if the op rejects them for a given seq length.
     _grid = device.compute_with_storage_grid_size()
+    q_chunk_size, k_chunk_size = _select_sdpa_chunks(
+        sequence_parallel=seq_parallel,
+        sp=sp,
+        tp=tp,
+        blackhole=is_blackhole(),
+        environ=os.environ,
+    )
     if seq_parallel:
         # Ring SDPA needs cores for the K/V all-gather: reserve the last core row
         # for CCL, run SDPA on the rest (matches tt_dit blocks/attention.py).
@@ -138,16 +305,16 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         ccl_core_grid_offset = (0, _grid.y - 1)
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=sdpa_worker_grid,
-            q_chunk_size=128,
-            k_chunk_size=512,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
         )
     else:
         ccl_core_grid_offset = None
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(_grid.x, _grid.y),
-            q_chunk_size=128,
-            k_chunk_size=128,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
         )
 
@@ -202,12 +369,25 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         return w, b
 
     def lin_row(linear):
-        """Row-parallel: shard the INPUT (contraction) dim on tp_axis; bias stays
-        replicated and is added once, by the caller, after the all-reduce."""
+        """Row-parallel: shard the INPUT (contraction) dim on tp_axis; the bias
+        stays out of the reduction and is added once by the caller.
+
+        Exactly one of the two prepared forms is populated. ``full`` is the
+        replicated ``(1, C)`` bias added after the all-gather. ``local`` is the
+        same bias fractured over tp_axis, for the scattered-domain add between
+        reduce-scatter and all-gather; TP chunk ``d`` lands on device ``d`` for
+        both the mesh mapper and the reduce-scatter, which is the convention
+        the existing all-gathered column order already depends on."""
         mapper = _mapper(0)
         w = f32(linear.weight.detach().t(), mesh_mapper=mapper)
-        b = f32(linear.bias.detach().reshape(1, -1)) if linear.bias is not None else None  # replicated
-        return w, b
+        if linear.bias is None:
+            return w, _RowBias(None, None)
+        bias2d = linear.bias.detach().reshape(1, -1)
+        if _rs_domain_bias:
+            _row_bias_shard_width(int(bias2d.shape[-1]), tp)
+            # 4D so it broadcasts against the (1, B, L, C/tp) reduce-scatter output.
+            return w, _RowBias(None, f32(bias2d.reshape(1, 1, 1, -1), mesh_mapper=_mapper(-1)))
+        return w, _RowBias(f32(bias2d), None)
 
     def ada_chunks(adazero):
         """AdaLayerNormZero.linear (C -> 6C): keep it as ONE fused matmul and slice
@@ -299,11 +479,48 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
             return ttnn.linear(x, w, bias=b, compute_kernel_config=compute_config)
         return ttnn.matmul(x, w, compute_kernel_config=compute_config)
 
-    def _all_reduce(x, mesh_axis=None):
+    def _merge_heads(t, B, L):
+        """Joint-SDPA output (B, H, L, D) -> (B, L, H*D).
+
+        ``nlp_concat_heads`` emits (B, 1, L, H*D) directly, skipping the
+        tile-padded (B, L, H, D) intermediate the permute would materialise.
+        The trailing reshape only drops the unit axis -- both sides share the
+        same last two dims, so it is a view, not a re-tile."""
+        if not _fused_heads:
+            t = ttnn.permute(t, (0, 2, 1, 3))  # (B, L, H, D)
+            return ttnn.reshape(t, (B, L, inner))
+        t = ttnn.experimental.nlp_concat_heads(t)  # (B, 1, L, H*D)
+        return ttnn.reshape(t, (B, L, inner))
+
+    def _linear_split3(x, w, b):
+        """Fused matmul + q/k/v split, matching tt_dit ColParallelLinear."""
+        if not _qkv_split:
+            y = _linear(x, w, b)
+            Bx, Lx = int(y.shape[0]), int(y.shape[1])
+            return tuple(ttnn.slice(y, (0, 0, i * inner), (Bx, Lx, (i + 1) * inner)) for i in range(3))
+        M, K, N = x.padded_shape[-2], x.padded_shape[-1], w.padded_shape[-1]
+        config = get_matmul_config(M, K, N, get_matmul_core_grid(device))
+        return tuple(
+            ttnn.experimental.minimal_matmul_split(
+                input_tensor=x,
+                weight_tensor=w,
+                chunks=3,
+                dim=-1,
+                bias_tensor=b,
+                compute_kernel_config=compute_config,
+                config=config,
+            )
+        )
+
+    def _all_reduce(x, mesh_axis=None, bias_local=None):
         """Megatron all-reduce for a row-parallel output: reduce_scatter + all_gather,
         the idiom `models/demos/z_image_turbo` uses for its own flat-TP DiT. Reduces
         across the TENSOR-parallel axis (tp_axis); the sequence-parallel axis is left
-        alone (its shards stay sharded)."""
+        alone (its shards stay sharded).
+
+        ``bias_local`` is a TP-fractured bias applied to the reduce-scatter output.
+        The all-gather then replicates an already-biased shard, which is
+        bit-identical to biasing the gathered tensor but touches 1/tp of the bytes."""
         if mesh_axis is None:
             mesh_axis = tp_axis
         if not sharded:
@@ -317,6 +534,8 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         B, L, Cx = (int(d) for d in x.shape)
         x4 = ttnn.reshape(x, (1, B, L, Cx))
         x4 = ccl_manager.reduce_scatter(x4, dim=3, mesh_axis=mesh_axis, use_persistent_buffer=_bf16)
+        if bias_local is not None:
+            x4 = ttnn.add(x4, bias_local)
         x4 = ccl_manager.all_gather(x4, dim=3, mesh_axis=mesh_axis, use_hyperparams=True, use_persistent_buffer=True)
         return ttnn.reshape(x4, (B, L, Cx))
 
@@ -325,13 +544,61 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         # matmul epilogue (ttnn.linear) instead of a standalone dispatch-bound add.
         # Removes one add launch per to_out / to_add_out / FF-down call (8/forward).
         if not sharded:
-            if b is not None:
-                return ttnn.linear(x, w, bias=b, compute_kernel_config=compute_config)
+            if b.full is not None:
+                return ttnn.linear(x, w, bias=b.full, compute_kernel_config=compute_config)
             return ttnn.matmul(x, w, compute_kernel_config=compute_config)
         y = ttnn.matmul(x, w, compute_kernel_config=compute_config)
+        if b.local is not None:
+            return _all_reduce(y, bias_local=b.local)
         y = _all_reduce(y)
-        if b is not None:
-            y = ttnn.add(y, b)
+        if b.full is not None:
+            y = ttnn.add(y, b.full)
+        return y
+
+    def _row_linear_mmrs_start(x, w):
+        """Fuse latent row-parallel matmul with its TP reduce-scatter.
+
+        Hunyuan keeps activations replicated across TP between projections, so
+        the trailing all-gather remains separate.  Bias is intentionally not
+        passed here: adding the replicated bias on every TP rank before the
+        reduction would multiply it by TP.
+        """
+        M, K, N = x.padded_shape[-2], x.padded_shape[-1], w.padded_shape[-1]
+        full_grid = device.compute_with_storage_grid_size()
+        x4 = ttnn.unsqueeze(x, 0)
+        _mm_out, rs_out = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+            input_tensor=x4,
+            weight_tensor=w,
+            dim=3,
+            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore_fused(tp_axis),
+            **get_fused_mmrs_config(M, K, N, full_grid, ccl_manager.num_links),
+            bias=None,
+            memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+            rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ccl_manager.topology,
+            cluster_axis=tp_axis,
+            compute_kernel_config=compute_config,
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(tp_axis),
+            dtype=wdt,
+        )
+        return ttnn.squeeze(rs_out, 0)
+
+    def _row_linear_mmrs_finish(rs_out, b):
+        """Restore the replicated Hunyuan activation contract after fused MMRS."""
+        B, L, C_local = (int(d) for d in rs_out.shape)
+        rs4 = ttnn.reshape(rs_out, (1, B, L, C_local))
+        if b.local is not None:
+            rs4 = ttnn.add(rs4, b.local)
+        gathered = ccl_manager.all_gather(
+            rs4,
+            dim=3,
+            mesh_axis=tp_axis,
+            use_hyperparams=True,
+            use_persistent_buffer=True,
+        )
+        y = ttnn.reshape(gathered, (B, L, C_local * tp))
+        if b.local is None and b.full is not None:
+            y = ttnn.add(y, b.full)
         return y
 
     def _rms(x, w):
@@ -378,6 +645,39 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
             sin_b = ttnn.typecast(sin_b, dtype)
         return cos_b, sin_b
 
+    def _qkv_heads(x, w, b):
+        """(B, S, C) -> q, k, v each (B, H, S, D), heads-major.
+
+        ``nlp_create_qkv_heads`` consumes the fused [q|k|v] projection -- which is
+        exactly how each Hunyuan TP shard already stores its weight -- and emits
+        the three head-major streams in one op, replacing three slices, three
+        reshapes and three permutes. ``transpose_k_heads=False`` keeps K as
+        (B, H, S, D) like Q and V; the ring joint SDPA wants all three that way."""
+        y = _linear(x, w, b)  # (B, S, 3 * inner)
+        Bx, Sx = int(y.shape[0]), int(y.shape[1])
+        y = ttnn.reshape(y, (Bx, 1, Sx, 3 * inner))
+        return ttnn.experimental.nlp_create_qkv_heads(y, num_heads=heads, transpose_k_heads=False)
+
+    def _rope_bcast_hm(cos, sin, Sx, Dx, dtype):
+        # Heads-major twin of _rope_bcast: broadcast against (B, H, S, D), so the
+        # unit axis moves from position 2 to position 1.
+        cos_b = ttnn.reshape(cos, (1, 1, Sx, Dx))
+        sin_b = ttnn.reshape(sin, (1, 1, Sx, Dx))
+        if cos_b.dtype != dtype:
+            cos_b = ttnn.typecast(cos_b, dtype)
+            sin_b = ttnn.typecast(sin_b, dtype)
+        return cos_b, sin_b
+
+    def _apply_rope_hm(x4, cos_b, sin_b):
+        # x4: (B, H, S, D). Same math as _apply_rope, but the collapse to 2D now
+        # reads a tensor whose last two dims are (S, D) -- both tile-aligned --
+        # instead of the (H=4, D) axis that pads 4 -> 32.
+        Bx, Hx, Sx, Dx = (int(d) for d in x4.shape)
+        x2 = ttnn.reshape(x4, (Bx * Hx * Sx, Dx))
+        rot = ttnn.matmul(x2, rot_M, compute_kernel_config=compute_config)
+        rot4 = ttnn.reshape(rot, (Bx, Hx, Sx, Dx))
+        return ttnn.addcmul(ttnn.multiply(x4, cos_b), rot4, sin_b)
+
     def _apply_rope(x4, cos_b, sin_b):
         # x4: (B, S, H, D); cos_b/sin_b: pre-broadcast (1,S,1,D). out = x*cos + rot(x)*sin.
         Bx, Sx, Hx, Dx = (int(d) for d in x4.shape)
@@ -387,7 +687,7 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         # x*cos + rot*sin fused: mul + addcmul (2 ops) instead of mul + mul + add (3).
         return ttnn.addcmul(ttnn.multiply(x4, cos_b), rot4, sin_b)
 
-    def _joint_attention(nh, ne, freqs_cis=None, attn_bias=None, logical_n=None):
+    def _joint_attention(nh, ne, freqs_cis=None, attn_bias=None, logical_n=None, joint_valid_lengths=None):
         """Joint (dual-stream) attention via the fused flash-attention-style
         ttnn.transformer.joint_scaled_dot_product_attention kernel instead of
         an explicit matmul(q,kT)+softmax+matmul(.,v) sequence. The naive form
@@ -402,13 +702,10 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         output back into the two streams -- the same math the old code did
         by hand via ttnn.concat/ttnn.slice, just fused.
 
-        `attn_bias` is IGNORED: neither joint_scaled_dot_product_attention nor
-        its ring/sequence-parallel sibling accepts any mask/bias parameter
-        (checked against the op's C++ struct definitions, not just the
-        Python docstring). Callers must not rely on per-key masking here --
-        see tt/pipeline.py's `_reorder_concat` (excludes t2v's always-invalid
-        image tokens outright rather than masking them) and the note on
-        dropped per-row text-padding masking there."""
+        The sequence-parallel ring kernel accepts ``joint_valid_lengths`` as a
+        per-batch valid prefix. The pipeline packs image/byT5/Qwen valid tokens
+        into that prefix, so every padded joint key is excluded from softmax
+        without changing the fixed physical shape used by CFG traces."""
         B = int(nh.shape[0])
         Limg = int(nh.shape[1])
         Ltxt = int(ne.shape[1])
@@ -417,32 +714,50 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
             t = ttnn.reshape(t, (B, -1, heads, dim_head))
             return t
 
-        # Fused QKV: one matmul launch, slice the three streams at the LOCAL inner
-        # dim (each device holds [q|k|v] for its local heads).
-        qkv = _linear(nh, w_qkv, b_qkv)  # (B, Limg, 3*inner) local
-        q = _rms(heads_split(ttnn.slice(qkv, (0, 0, 0), (B, Limg, inner))), nq_w)  # (B, Limg, H, D)
-        k = _rms(heads_split(ttnn.slice(qkv, (0, 0, inner), (B, Limg, 2 * inner))), nk_w)
-        v = heads_split(ttnn.slice(qkv, (0, 0, 2 * inner), (B, Limg, 3 * inner)))
+        if _fused_qkv_heads:
+            # Heads-major throughout: nlp_create_qkv_heads emits (B, H, S, D)
+            # straight from the fused projection, so the tile-padded
+            # (B, S, H=4, D) intermediate is never built and the six permutes
+            # below are unnecessary. RMS-norm is over D either way. RoPE runs
+            # in the same layout (see _apply_rope_hm).
+            q, k, v = _qkv_heads(nh, w_qkv, b_qkv)
+            q = _rms(q, nq_w)  # (B, H, Limg, D)
+            k = _rms(k, nk_w)
+            if freqs_cis is not None:
+                _cos, _sin = freqs_cis
+                cos_b, sin_b = _rope_bcast_hm(_cos, _sin, int(q.shape[2]), int(q.shape[3]), q.dtype)
+                q = _apply_rope_hm(q, cos_b, sin_b)
+                k = _apply_rope_hm(k, cos_b, sin_b)
+            eq, ek, ev = _qkv_heads(ne, w_aqkv, b_aqkv)
+            eq = _rms(eq, naq_w)  # (B, H, Ltxt, D)
+            ek = _rms(ek, nak_w)
+        else:
+            # Fused QKV projection+split: one matmul emits the three LOCAL-head
+            # streams directly. HY_DIT_QKV_SPLIT=0 retains linear + three slices.
+            q, k, v = _linear_split3(nh, w_qkv, b_qkv)
+            q = _rms(heads_split(q), nq_w)  # (B, Limg, H, D)
+            k = _rms(heads_split(k), nk_w)
+            v = heads_split(v)
 
-        # RoPE on the latent stream only (encoder q/k are added un-rotated), matching
-        # HunyuanVideo15AttnProcessor2_0 (apply_rotary_emb after norm_q/norm_k).
-        if freqs_cis is not None:
-            _cos, _sin = freqs_cis
-            cos_b, sin_b = _rope_bcast(_cos, _sin, int(q.shape[1]), int(q.shape[3]), q.dtype)
-            q = _apply_rope(q, cos_b, sin_b)
-            k = _apply_rope(k, cos_b, sin_b)
+            # RoPE on the latent stream only (encoder q/k are added un-rotated), matching
+            # HunyuanVideo15AttnProcessor2_0 (apply_rotary_emb after norm_q/norm_k).
+            if freqs_cis is not None:
+                _cos, _sin = freqs_cis
+                cos_b, sin_b = _rope_bcast(_cos, _sin, int(q.shape[1]), int(q.shape[3]), q.dtype)
+                q = _apply_rope(q, cos_b, sin_b)
+                k = _apply_rope(k, cos_b, sin_b)
 
-        eqkv = _linear(ne, w_aqkv, b_aqkv)  # (B, Ltxt, 3*inner) local
-        eq = _rms(heads_split(ttnn.slice(eqkv, (0, 0, 0), (B, Ltxt, inner))), naq_w)  # (B, Ltxt, H, D)
-        ek = _rms(heads_split(ttnn.slice(eqkv, (0, 0, inner), (B, Ltxt, 2 * inner))), nak_w)
-        ev = heads_split(ttnn.slice(eqkv, (0, 0, 2 * inner), (B, Ltxt, 3 * inner)))
+            eq, ek, ev = _linear_split3(ne, w_aqkv, b_aqkv)
+            eq = _rms(heads_split(eq), naq_w)  # (B, Ltxt, H, D)
+            ek = _rms(heads_split(ek), nak_w)
+            ev = heads_split(ev)
 
-        q = ttnn.permute(q, (0, 2, 1, 3))  # (B, H, Limg, D)
-        k = ttnn.permute(k, (0, 2, 1, 3))
-        v = ttnn.permute(v, (0, 2, 1, 3))
-        eq = ttnn.permute(eq, (0, 2, 1, 3))  # (B, H, Ltxt, D)
-        ek = ttnn.permute(ek, (0, 2, 1, 3))
-        ev = ttnn.permute(ev, (0, 2, 1, 3))
+            q = ttnn.permute(q, (0, 2, 1, 3))  # (B, H, Limg, D)
+            k = ttnn.permute(k, (0, 2, 1, 3))
+            v = ttnn.permute(v, (0, 2, 1, 3))
+            eq = ttnn.permute(eq, (0, 2, 1, 3))  # (B, H, Ltxt, D)
+            ek = ttnn.permute(ek, (0, 2, 1, 3))
+            ev = ttnn.permute(ev, (0, 2, 1, 3))
 
         # `scale` is NOT passed: the op binds it as a `.noconvert()` C++ float, so
         # a Python double (every Python float) is rejected with a TypeError -- which
@@ -495,8 +810,11 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
                 topology=ccl_manager.topology,
                 subdevice_id=ccl_manager.ccl_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
+                joint_valid_lengths=joint_valid_lengths or [],
             )
         else:
+            if joint_valid_lengths is not None:
+                raise ValueError("per-batch Hunyuan joint masking currently requires sequence parallelism")
             hid_out, enc_out = ttnn.transformer.joint_scaled_dot_product_attention(
                 q,
                 k,
@@ -511,21 +829,29 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         if attn_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
             hid_out = ttnn.typecast(hid_out, attn_dtype)
             enc_out = ttnn.typecast(enc_out, attn_dtype)
-        hid_out = ttnn.permute(hid_out, (0, 2, 1, 3))  # (B, Limg, H, D)
-        enc_out = ttnn.permute(enc_out, (0, 2, 1, 3))  # (B, Ltxt, H, D)
-        hid_out = ttnn.reshape(hid_out, (B, Limg, inner))
-        enc_out = ttnn.reshape(enc_out, (B, Ltxt, inner))
+        hid_out = _merge_heads(hid_out, B, Limg)
+        enc_out = _merge_heads(enc_out, B, Ltxt)
 
-        hid = _row_linear(hid_out, wo, bo)
-        enc = _row_linear(enc_out, ao_w, ao_b)
+        hid, enc = _run_dual_stream_projection_schedule(
+            _mmrs_overlap,
+            hidden_start=(
+                (lambda: _row_linear_mmrs_start(hid_out, wo))
+                if _mmrs_overlap
+                else (lambda: _row_linear(hid_out, wo, bo))
+            ),
+            context_complete=lambda: _row_linear(enc_out, ao_w, ao_b),
+            hidden_finish=lambda rs: _row_linear_mmrs_finish(rs, bo),
+        )
         return hid, enc
 
-    def _ff(x, parts):
+    def _ff_up(x, parts):
         w1, b1, act, w2, b2 = parts
         y = _linear(x, w1, b1)
-        y = act(y)
-        y = _row_linear(y, w2, b2)
-        return y
+        return act(y)
+
+    def _ff_down(x, parts):
+        _w1, _b1, _act, w2, b2 = parts
+        return _row_linear(x, w2, b2)
 
     def _wln(x, eps):
         # grid knob: LN input is a single ragged tile-row (M_tiles=1). Build a
@@ -547,11 +873,15 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         gx = 8
         while gx > 1 and Nt % gx != 0:
             gx -= 1
-        # L1-fit guard: width-sharding the whole [M, C/gx] block into each core's L1
-        # OOMs at real video frame counts (M~16k tokens @ 121f -> ~16MB/core >> L1).
-        # It's only a win at the tiny profiled M; fall back to the stock interleaved
-        # LN when the per-core shard won't fit L1.
-        if (Mt * 32) * ((Nt // gx) * 32) * 2 > 700_000:
+        # L1-fit guard: the sharded kernel allocates several static circular
+        # buffers in addition to the tensor shard. A 13f SP8 row has a 400 KiB
+        # shard but measured 2.35 MiB of CBs, exceeding Blackhole's 1.5 MiB L1.
+        # Include a conservative six-shard estimate and leave headroom for the
+        # runtime; use interleaved LN when that estimate does not fit.
+        # Keep this optimization to the dispatch-scale shapes it was tuned for.
+        # The kernel's reduction CB also grows with block_h in ways not fully
+        # represented by the tensor-byte estimate.
+        if Mt > 8 or not _layer_norm_shard_fits((Mt * 32), ((Nt // gx) * 32), 2):
             return ttnn.layer_norm(x, epsilon=eps, compute_kernel_config=compute_config)
         shard_shape = [padded_m, (Nt // gx) * 32]
         grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, 0))})
@@ -592,8 +922,18 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         nh, gate_msa, shift_mlp, scale_mlp, gate_mlp = _adazero(h, s_t, ada1_w, ada1_b, ada1_eps)
         ne, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = _adazero(e, s_t, adac_w, adac_b, adac_eps)
 
+        joint_valid_lengths = kwargs.get("joint_valid_lengths")
+        encoder_query_mask = kwargs.get("encoder_query_mask")
+        if encoder_query_mask is not None:
+            e = ttnn.multiply(e, encoder_query_mask)
+            ne = ttnn.multiply(ne, encoder_query_mask)
         attn_out, ctx_out = _joint_attention(
-            nh, ne, freqs_cis=freqs_cis, attn_bias=attn_bias, logical_n=kwargs.get("logical_n")
+            nh,
+            ne,
+            freqs_cis=freqs_cis,
+            attn_bias=attn_bias,
+            logical_n=kwargs.get("logical_n"),
+            joint_valid_lengths=joint_valid_lengths,
         )
 
         # Gated residual in ONE ternary launch: h + attn_out*gate (was mul+add).
@@ -608,8 +948,26 @@ def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis
         ne2 = _wln(e, norm2c_eps)
         ne2 = ttnn.addcmul(c_shift_mlp, ne2, c_scale_mlp)
 
-        h = ttnn.addcmul(h, gate_mlp, _ff(nh2, ff_p))
-        e = ttnn.addcmul(e, c_gate_mlp, _ff(ne2, ffc_p))
+        if _mmrs_overlap:
+            # Both FF-up branches are independent.  Prepare context before the
+            # latent MMRS, then place the complete legacy context row projection
+            # between latent MMRS and its all-gather finish.
+            h_up = _ff_up(nh2, ff_p)
+            e_up = _ff_up(ne2, ffc_p)
+            _w1, _b1, _act, h_w2, h_b2 = ff_p
+            h_ff, e_ff = _run_dual_stream_projection_schedule(
+                True,
+                hidden_start=lambda: _row_linear_mmrs_start(h_up, h_w2),
+                context_complete=lambda: _ff_down(e_up, ffc_p),
+                hidden_finish=lambda rs: _row_linear_mmrs_finish(rs, h_b2),
+            )
+        else:
+            h_ff = _ff_down(_ff_up(nh2, ff_p), ff_p)
+            e_ff = _ff_down(_ff_up(ne2, ffc_p), ffc_p)
+        h = ttnn.addcmul(h, gate_mlp, h_ff)
+        e = ttnn.addcmul(e, c_gate_mlp, e_ff)
+        if encoder_query_mask is not None:
+            e = ttnn.multiply(e, encoder_query_mask)
         if wdt != ttnn.float32:  # keep the block fp32-in/fp32-out for the fp32 glue
             h = ttnn.typecast(h, ttnn.float32)
             e = ttnn.typecast(e, ttnn.float32)

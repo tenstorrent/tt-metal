@@ -194,8 +194,7 @@ void kernel_main() {
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
     constexpr bool indexed_kv_cache = get_compile_time_arg_val(27) == 1;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(28) == 1;
-    // Slot 29 is retained for compile-time arg index stability; live active-ring mask is a runtime arg below.
-    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(29);
+    constexpr bool per_batch_joint_mask = get_compile_time_arg_val(29) == 1;
     constexpr uint32_t NHV = get_compile_time_arg_val(30);
     // Latent-V mode: absent V is materialized from the prefix of K tiles already in L1.
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(31) == 1;
@@ -259,6 +258,12 @@ void kernel_main() {
 
     const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
     const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t joint_valid_lengths[B] = {};
+    if constexpr (per_batch_joint_mask) {
+        for (uint32_t batch = 0; batch < B; ++batch) {
+            joint_valid_lengths[batch] = get_arg_val<uint32_t>(argidx++);
+        }
+    }
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
@@ -596,6 +601,16 @@ void kernel_main() {
                  * If this k chunk is in the spatial input and beyond the logical N, we will skip it.
                  */
                 const bool kv_chunk_is_joint = has_joint_k ? (k_chunk >= num_local_k_chunks) : false;
+                if constexpr (per_batch_joint_mask) {
+                    if (kv_chunk_is_joint && nb < B) {
+                        const uint32_t valid_joint_tiles =
+                            (joint_valid_lengths[nb] + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+                        const uint32_t joint_k_start_tile = (k_chunk - num_local_k_chunks) * Sk_chunk_t;
+                        if (joint_k_start_tile >= valid_joint_tiles) {
+                            continue;
+                        }
+                    }
+                }
                 const bool kv_chunk_is_beyond_logical_n =
                     !kv_chunk_is_joint && !kv_chunk_starts_before_logical_end<
                                               kv_pad_rotation_enabled,

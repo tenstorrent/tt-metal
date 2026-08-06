@@ -328,6 +328,7 @@ def run_ring_joint_sdpa(
     skip_check,
     pcc_threshold,
     max_mse=None,
+    joint_valid_lengths=None,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -490,6 +491,7 @@ def run_ring_joint_sdpa(
                     topology=all_gather_topology,
                     subdevice_id=worker_sub_device_id,
                     ccl_core_grid_offset=ccl_core_grid_offset,
+                    joint_valid_lengths=joint_valid_lengths or [],
                 )
                 tt_out_list.append(tt_out)
                 tt_joint_out_list.append(tt_joint_out)
@@ -515,7 +517,13 @@ def run_ring_joint_sdpa(
         pt_Q = torch.cat([Q, joint_Q], dim=2)
         pt_K = torch.cat([K, joint_K], dim=2)
         pt_V = torch.cat([V, joint_V], dim=2)
-        gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=False)
+        attn_mask = None
+        if joint_valid_lengths is not None:
+            attn_mask = torch.zeros(b, 1, 1, base_seq_len + joint_seq_len, dtype=torch.bool)
+            attn_mask[:, :, :, :base_seq_len] = True
+            for batch_index, valid_length in enumerate(joint_valid_lengths):
+                attn_mask[batch_index, :, :, base_seq_len : base_seq_len + valid_length] = True
+        gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, attn_mask=attn_mask, is_causal=False)
         gt_out = gt[:, :, :base_seq_len, :]
         gt_joint_out = gt[:, :, base_seq_len:, :]
 
@@ -553,8 +561,13 @@ def run_ring_joint_sdpa(
 
             if joint_seq_len > 0:
                 logger.debug("prompt")
-                for joint_replica_id in range(tt_joint_out.shape[0]):
-                    joint_replica_out = tt_joint_out[joint_replica_id, :, :, :]
+                # The composer stacked the rp replicas onto the batch dim, so the
+                # leading axis is rp_factor * b. Split it to compare whole batches;
+                # indexing it directly would only take one row of each replica.
+                rp_factor = tuple(submesh.shape)[rp_axis]
+                joint_replicas = tt_joint_out.reshape(rp_factor, b, *tt_joint_out.shape[1:])
+                for joint_replica_id in range(rp_factor):
+                    joint_replica_out = joint_replicas[joint_replica_id]
                     out_pass, out_pcc = comp_pcc(joint_replica_out, gt_joint_out, pcc_threshold)
                     logger.debug(f"{out_pcc}")
                     mse = ((gt_joint_out - joint_replica_out) ** 2).mean()
@@ -580,6 +593,7 @@ def run_test_ring_joint_sdpa(
     dtype,
     pcc_threshold=0.994,
     max_mse=None,
+    joint_valid_lengths=None,
 ):
     b, nh, base_seq_len, joint_seq_len, d = model_input_shape
     rp_axis, rp_factor, up_axis, up_factor = parallel_config
@@ -623,6 +637,7 @@ def run_test_ring_joint_sdpa(
         skip_check,
         pcc_threshold,
         max_mse=max_mse,
+        joint_valid_lengths=joint_valid_lengths,
     )
 
 
@@ -953,6 +968,45 @@ def test_ring_joint_sdpa_shapes(
         all_gather_topology,
         skip_check,
         0.999,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "worker_l1_size": 1344544,
+            "trace_region_size": 1000000,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
+@pytest.mark.parametrize("trace_enabled", [False, True], ids=["eager", "trace"])
+def test_ring_joint_sdpa_per_batch_joint_key_mask(mesh_device, trace_enabled, reset_seeds):
+    """Unequal CFG rows must match a bool-key-masked torch SDPA golden.
+
+    Both placements carve the same 2x4 (up=2, rp=4) submesh and pad the sequence
+    against axis-1 == 4, so the tested math is identical. The 8x4 entry exists
+    because opening a standalone 2x4 mesh on a 32-chip Galaxy leaves the
+    out-of-mesh ethernet partners without a fabric router, so the FABRIC_1D
+    handshake cannot complete.
+    """
+    run_test_ring_joint_sdpa(
+        mesh_device,
+        model_input_shape=(2, 4, 250, 96, 64),
+        parallel_config=(1, 4, 0, 2),
+        q_chunk_size=32,
+        k_chunk_size=64,
+        n_iters=1,
+        trace_enabled=trace_enabled,
+        num_links=1,
+        all_gather_topology=ttnn.Topology.Linear,
+        skip_check=False,
+        dtype=ttnn.bfloat16,
+        pcc_threshold=0.999,
+        joint_valid_lengths=[96, 37],
     )
 
 

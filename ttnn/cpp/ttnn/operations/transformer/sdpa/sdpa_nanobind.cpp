@@ -52,7 +52,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool is_balanced,
     bool is_cross,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    const std::vector<uint32_t>& joint_valid_lengths) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -83,7 +84,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         compute_kernel_config,
         strategy,
         kv_cache_batch_idx,
-        kv_actual_isl);
+        kv_actual_isl,
+        joint_valid_lengths);
     return outputs;
 }
 
@@ -578,6 +580,8 @@ void bind_sdpa(nb::module_& mod) {
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
                 logical_n - kv_actual_isl.
+            joint_valid_lengths (List[int], optional): Valid joint-token prefix length for each
+                batch row. Invalid joint keys are excluded from softmax. Defaults to an empty list.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -628,7 +632,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("is_cross").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
-        nb::arg("kv_actual_isl").noconvert() = nb::none());
+        nb::arg("kv_actual_isl").noconvert() = nb::none(),
+        nb::arg("joint_valid_lengths").noconvert() = std::vector<uint32_t>{});
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

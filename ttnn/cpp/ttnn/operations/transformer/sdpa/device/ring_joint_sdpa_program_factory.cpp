@@ -839,7 +839,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t compile_time_global_n_partial_col = kv_pad_rotation_enabled ? 0 : global_n_partial_col;
 
     const bool global_n_has_padding = (compile_time_logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
-    const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
+    const bool per_batch_joint_mask = args.has_per_batch_joint_mask();
+    const bool joint_has_padding =
+        per_batch_joint_mask || (L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0);
     const bool needs_lightweight_mask =
         (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
 
@@ -849,7 +851,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         (compile_time_global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
     const uint32_t causal_diag_tiles = diag_tile_enabled ? 1 : 0;
     // Single CB holds: 1 neginf tile + optional causal diagonal + up to 2 partial mask tiles
-    const uint32_t total_lightweight_mask_tiles = 1 + causal_diag_tiles + partial_mask_tiles;
+    const uint32_t total_lightweight_mask_tiles =
+        1 + causal_diag_tiles + partial_mask_tiles + (per_batch_joint_mask ? B : 0);
+    const uint32_t per_batch_joint_mask_tile_base = 1 + causal_diag_tiles + partial_mask_tiles;
 
     const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
     const uint32_t num_joint_q_chunks = tt::div_up(L, q_chunk_size);
@@ -1021,6 +1025,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
         "fp32_dest_acc_en=true is not supported.");
     TT_FATAL(
+        !per_batch_joint_mask || use_streaming_compute,
+        "joint_valid_lengths requires the ring-joint streaming compute path (fp32_dest_acc_en must be false)");
+    TT_FATAL(
         use_streaming_compute || !v_shares_k_buffer,
         "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
     log_debug(
@@ -1128,10 +1135,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // per-iteration sync order described in RingWorkPlan.
     const RingWorkPlan& ring_work_plan = runtime_plan.ring_work_plan;
     const uint32_t active_ring_iter_mask = ring_work_plan.masks.active_ring_iter_mask;
-    const uint32_t last_active_ring_iter = ring_work_plan.last_active_ring_iter;
     const uint32_t single_valid_kv_chunk_mask = ring_work_plan.masks.single_valid_kv_chunk_mask;
-    const uint32_t compile_time_active_ring_iter_mask = kv_pad_rotation_enabled ? 0 : active_ring_iter_mask;
-    const uint32_t compile_time_last_active_ring_iter = kv_pad_rotation_enabled ? 0 : last_active_ring_iter;
     const uint32_t compile_time_single_valid_kv_chunk_mask = kv_pad_rotation_enabled ? 0 : single_valid_kv_chunk_mask;
     const KVPadQMapping compile_time_kv_pad_q_mapping = kv_pad_rotation_enabled ? KVPadQMapping{} : kv_pad_q_mapping;
 
@@ -1172,7 +1176,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         q_chunk_group_tile_count,
         static_cast<uint32_t>(indexed_kv_cache),
         static_cast<uint32_t>(kv_pad_rotation_enabled),
-        compile_time_active_ring_iter_mask,
+        static_cast<uint32_t>(per_batch_joint_mask),
         NHV,
         static_cast<uint32_t>(v_shares_k_buffer),
     };
@@ -1293,8 +1297,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<std::uint32_t>(writer_out_row_group_h),
         static_cast<uint32_t>(kernel_chunked),
         q_chunk_group_tile_count,
-        compile_time_active_ring_iter_mask,
-        compile_time_last_active_ring_iter,
+        static_cast<uint32_t>(per_batch_joint_mask),
+        per_batch_joint_mask_tile_base,
         compile_time_single_valid_kv_chunk_mask,
     };
 
@@ -1349,8 +1353,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compile_time_kv_pad_q_mapping.q_pre_wrap_tile_count,
         compile_time_kv_pad_q_mapping.q_post_wrap_start_tile,
         compile_time_kv_pad_q_mapping.q_valid_tile_count,
-        compile_time_active_ring_iter_mask,
-        compile_time_last_active_ring_iter,
+        static_cast<uint32_t>(per_batch_joint_mask),
+        per_batch_joint_mask_tile_base,
         static_cast<uint32_t>(v_shares_k_buffer)};
 
     std::map<std::string, std::string> defines;
@@ -2322,6 +2326,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_args.push_checked(runtime_arg_layout.reader_logical_nt, logical_nt, "reader.logical_nt");
         reader_args.push_checked(
             runtime_arg_layout.reader_active_ring_iter_mask, active_ring_iter_mask, "reader.active_ring_iter_mask");
+        if (per_batch_joint_mask) {
+            reader_args.append(args.joint_valid_lengths);
+        }
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         std::vector<uint32_t> reader_signaler_args;
@@ -2344,6 +2351,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             runtime_arg_layout.writer_single_valid_kv_chunk_mask,
             single_valid_kv_chunk_mask,
             "writer.single_valid_kv_chunk_mask");
+        if (per_batch_joint_mask) {
+            writer_args.append(args.joint_valid_lengths);
+        }
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
@@ -2376,6 +2386,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
+        if (per_batch_joint_mask) {
+            compute_args.append(args.joint_valid_lengths);
+        }
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 

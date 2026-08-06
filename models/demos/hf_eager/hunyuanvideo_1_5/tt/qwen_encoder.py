@@ -16,6 +16,7 @@ import ttnn
 from models.tt_dit.encoders.qwen25vl.model_qwen25vl import Qwen25VlTextEncoder, _apply_rope
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils import cache
 from models.tt_dit.utils import tensor as _tensor
 
 # Shared holder for the on-device Qwen submesh (set by the test's mesh_device
@@ -96,6 +97,7 @@ def build_tt_qwen_encoder(text_encoder, device) -> Qwen25VlTextEncoder:
             tp, tp_axis, is_fsdp = _kv, 1, True  # fallback (assumes axis-1 >= kv_heads)
     else:
         tp, tp_axis, is_fsdp = device.get_num_devices(), 1, False
+    parallel_config = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp, mesh_axis=tp_axis))
     model = Qwen25VlTextEncoder(
         vocab_size=cfg.vocab_size,
         hidden_size=cfg.hidden_size,
@@ -108,11 +110,22 @@ def build_tt_qwen_encoder(text_encoder, device) -> Qwen25VlTextEncoder:
         rope_theta=rope_theta,
         mrope_section=rope_params["mrope_section"],
         device=device,
-        parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp, mesh_axis=tp_axis)),
+        parallel_config=parallel_config,
         ccl_manager=CCLManager(device, num_links=1, topology=ttnn.Topology.Linear) if tp > 1 else None,
         is_fsdp=is_fsdp,
     )
-    model.load_torch_state_dict(text_encoder.state_dict())
+    # Reuse tt_dit's serialized prepared-weight cache. On a cache hit this avoids
+    # rebuilding/sharding the 7B state dict for every served process; without
+    # TT_DIT_CACHE_DIR this deliberately falls back to the existing direct load.
+    cache.load_model(
+        model,
+        model_name=(f"HunyuanVideo-1.5-Qwen2.5VL-v{cfg.vocab_size}-h{cfg.hidden_size}-l{cfg.num_hidden_layers}"),
+        subfolder="text_encoder",
+        parallel_config=parallel_config,
+        mesh_shape=tuple(device.shape),
+        is_fsdp=is_fsdp,
+        get_torch_state_dict=text_encoder.state_dict,
+    )
     # Fidelity fix: use fp32 eager attention instead of the bf16 flash SDPA. The
     # bf16 attention core blurs HunyuanVideo's conditioning (~0.99 PCC); fp32 eager
     # restores ~0.9998. See _eager_attn_fp32_forward and the note below.
@@ -161,6 +174,13 @@ class TTQwenTextEncoderAdapter:
         # _get_mllm_prompt_embeds reads only hidden_states[-3]; return a 3-list so [-3]==emb.
         return types.SimpleNamespace(hidden_states=[emb, emb, emb])
 
+    def deallocate_weights(self):
+        """Release Qwen weights after pre-encoding, before the full-mesh DiT loads."""
+        tt = self.__dict__["_tt"]
+        if tt.is_loaded():
+            tt.deallocate_weights()
+            ttnn.synchronize_device(self.__dict__["_device"])
+
 
 # ---------------------------------------------------------------------------
 # NOTE / TODO (Qwen text-encode fidelity) — for a proper upstream fix
@@ -196,11 +216,10 @@ class TTQwenTextEncoderAdapter:
 # PCC 0.99984 / rel-L2 1.8% / norm-ratio 0.997 / linear-fit s=1,c=0 vs CPU-fp32
 # (at TP=4, the gen config) -- a genuine correction over bf16 flash (~0.99). BUT a
 # full 13-frame gen with this fix STILL looked soft vs CPU text-encode. So the
-# residual video degradation is NOT the valid-token embed accuracy (now matched).
-# Prime remaining suspect: the ~987 PADDING tokens (post-crop mllm stream is 13
-# valid + ~987 pad) -- the DiT's fused joint-SDPA can't mask padding (see the
-# joint-SDPA commit note), and _trim_to_valid only trims to a tile-multiple, so a
-# few padding embeds leak into DiT attention; tt vs CPU padding embeds can differ.
-# NEXT: compare tt-vs-CPU embeds over the padding region and audit _trim_to_valid /
-# the DiT mllm padding handling. (Diffusion sensitivity to the residual is also
-# possible.) Keep text-encode on CPU for production until this is closed.
+# residual video degradation was NOT the valid-token embed accuracy (now matched).
+# The remaining cause was mixed-length padding: batched CFG trimmed both rows to
+# the longest row, while fused DiT joint attention has no key mask. The shorter
+# row therefore attended to encoder-specific padding values (and zero padding is
+# not neutral after learned projections). TTTransformerAdapter now defaults to
+# running mixed-length condition/batch rows independently at exact valid lengths.
+# Keep TT Qwen opt-in until a matched generated-video A/B validates this correction.

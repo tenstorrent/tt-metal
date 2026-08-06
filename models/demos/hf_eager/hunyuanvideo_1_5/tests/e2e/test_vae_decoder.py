@@ -19,6 +19,7 @@ from models.demos.hf_eager.hunyuanvideo_1_5.tt.vae_decoder import (
     HunyuanVideo15Decoder,
     ResnetBlock,
     RMSNorm,
+    TTVAEDecodeAdapter,
     Upsample,
 )
 
@@ -93,3 +94,25 @@ def test_vae_decoder_full(mesh_device):
     ok, pcc = comp_pcc(dec_ref, out, 0.95)
     print(f"[vae full decode] {tuple(out.shape)} PCC={pcc} -> {'PASS' if ok else 'FAIL'}", flush=True)
     assert ok, f"full decode PCC {pcc} < 0.95"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_vae_sharded_rounds_stay_on_device_until_one_readback(mesh_device):
+    """Numerically verify device-concatenated tile rounds before the final D2H."""
+    torch.manual_seed(0)
+    batch = torch.randn(5, 32, 2, 4, 4)
+
+    adapter = object.__new__(TTVAEDecodeAdapter)
+    adapter.__dict__["_device"] = mesh_device
+    adapter.__dict__["_dtype_tt"] = ttnn.bfloat16
+    adapter.__dict__["_dec"] = lambda tensor: tensor
+
+    out_device, rounds, n_total = adapter._decode_batch_sharded_device(batch)
+    assert ttnn.is_tensor_storage_on_device(out_device)
+    assert rounds == 3
+    assert n_total == batch.shape[0]
+
+    output = adapter._decode_batch_sharded(batch)
+    ok, pcc = comp_pcc(batch, output, 0.999)
+    print(f"[vae single-readback tile order] PCC={pcc} -> {'PASS' if ok else 'FAIL'}", flush=True)
+    assert ok, f"device-concatenated tile output PCC {pcc} < 0.999"

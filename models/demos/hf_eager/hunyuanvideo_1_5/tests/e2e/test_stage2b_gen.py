@@ -31,9 +31,12 @@ it's a real gap that needs either a flash-attention-style kernel (never
 materialize the full seq x seq score matrix) or sequence/context parallelism
 (shard attention along tokens too, not just heads) to close. Out of scope here.
 """
+import contextlib
+import json
 import os
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -43,6 +46,91 @@ from models.demos.hf_eager.hunyuanvideo_1_5.tt import pipeline as P
 
 _COMMUNITY = "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v"
 _I2V_COMMUNITY = "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v"
+
+# Phase attribution. Import time is the earliest point this process can observe,
+# so `t_start_of_run - _T_IMPORT` bounds collection + mesh open + fixture setup,
+# which is otherwise invisible from inside the test body.
+_T_IMPORT = time.perf_counter()
+_PHASES = {}  # sequential top-level phases; these sum to the function total
+_NESTED = {}  # accumulators for work nested INSIDE a phase (subsets, not addends)
+_CALL_LOG = {}  # per-call durations, so first-call JIT can be split from steady state
+
+
+@contextlib.contextmanager
+def _phase(name):
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        _PHASES[name] = _PHASES.get(name, 0.0) + (time.perf_counter() - start)
+
+
+def _record_nested(name, seconds):
+    _NESTED[name] = _NESTED.get(name, 0.0) + seconds
+    _CALL_LOG.setdefault(name, []).append(round(seconds, 4))
+
+
+def _time_module_forward(module, name):
+    """Time an ``nn.Module`` via hooks, without touching its class."""
+    pending = []
+
+    def pre_hook(*_):
+        pending.append(time.perf_counter())
+
+    def post_hook(*_):
+        if pending:
+            _record_nested(name, time.perf_counter() - pending.pop())
+
+    module.register_forward_pre_hook(pre_hook)
+    module.register_forward_hook(post_hook)
+
+
+def _time_call(obj, name):
+    """Accumulate wall seconds for ``obj(...)``.
+
+    ``__call__`` is looked up on the type, so the bespoke-adapter branch patches
+    the class -- safe only because each TT adapter class backs exactly one live
+    instance. It is never valid for an ``nn.Module`` (that shares one ``__call__``
+    with every module in the process), so those go through forward hooks instead.
+    """
+    if obj is None:
+        return
+    import torch
+
+    if isinstance(obj, torch.nn.Module):
+        _time_module_forward(obj, name)
+        return
+    cls = type(obj)
+    original = cls.__call__
+    if getattr(original, "_hy_timed", False):
+        return
+
+    def timed(self, *args, **kwargs):
+        start = time.perf_counter()
+        try:
+            return original(self, *args, **kwargs)
+        finally:
+            _record_nested(name, time.perf_counter() - start)
+
+    timed._hy_timed = True
+    cls.__call__ = timed
+
+
+def _time_method(obj, attr, name):
+    """Shadow one bound method with a timing wrapper via an instance attribute."""
+    if obj is None or not hasattr(obj, attr):
+        return
+    original = getattr(obj, attr)
+
+    def timed(*args, **kwargs):
+        start = time.perf_counter()
+        try:
+            return original(*args, **kwargs)
+        finally:
+            _record_nested(name, time.perf_counter() - start)
+
+    with contextlib.suppress(AttributeError):
+        setattr(obj, attr, timed)
 
 
 def _pipeline_path(repo=_COMMUNITY):
@@ -86,15 +174,17 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
     # 32 noise + 32 image-cond + 1 mask). Loading the i2v checkpoint directly means its
     # scheduler already carries the correct shift (480p_i2v=5.0) -- no override needed (unlike
     # the t2v HY_720P transformer-swap below, which must fix the reused 480p scheduler).
+    _t_fn_start = time.perf_counter()
     _i2v = os.environ.get("HY_I2V") == "1"
-    if _i2v:
-        from diffusers import HunyuanVideo15ImageToVideoPipeline
+    with _phase("host_checkpoint_load_s"):
+        if _i2v:
+            from diffusers import HunyuanVideo15ImageToVideoPipeline
 
-        pipe = HunyuanVideo15ImageToVideoPipeline.from_pretrained(
-            _pipeline_path(_I2V_COMMUNITY), torch_dtype=torch.bfloat16
-        )
-    else:
-        pipe = HunyuanVideo15Pipeline.from_pretrained(_pipeline_path(), torch_dtype=torch.bfloat16)
+            pipe = HunyuanVideo15ImageToVideoPipeline.from_pretrained(
+                _pipeline_path(_I2V_COMMUNITY), torch_dtype=torch.bfloat16
+            )
+        else:
+            pipe = HunyuanVideo15Pipeline.from_pretrained(_pipeline_path(), torch_dtype=torch.bfloat16)
     # HY_720P=1: swap the 480p DiT for the 720p_t2v transformer (same arch, target_size=960).
     # VAE + text encoders are identical across tiers, so we reuse the cached 480p ones and
     # only load the 720p transformer (its shards must already be in the HF cache). Pass
@@ -149,8 +239,76 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
             f"sched shift set to {pipe.scheduler.shift})",
             flush=True,
         )
+
+    # Encode text before constructing the full-mesh TT DiT. This permits a safe
+    # sequential encoder load -> encode -> unload -> DiT load lifecycle on the
+    # same mesh, avoiding overlapping submesh contexts and reducing peak DRAM.
+    qwen_adapter = None
+    if os.environ.get("HY_TT_QWEN", "0") == "1":
+        from models.demos.hf_eager.hunyuanvideo_1_5.tt import qwen_encoder as _qe
+
+        qwen_dev = _qe.HY_QWEN_SUBMESH
+        if qwen_dev is None and os.environ.get("HY_TT_QWEN_SHARED", "0") == "1":
+            qwen_dev = device
+        if qwen_dev is not None:
+            placement = "separate submesh" if _qe.HY_QWEN_SUBMESH is not None else "shared DiT mesh (TP+FSDP)"
+            with _phase("tt_qwen_weight_upload_s"):
+                qwen_adapter = _qe.TTQwenTextEncoderAdapter(pipe.text_encoder, qwen_dev)
+            pipe.text_encoder = qwen_adapter
+            print(f"[{label}] Qwen text-encode: ON DEVICE ({placement})", flush=True)
+        else:
+            print(
+                f"[{label}] no Qwen submesh; using host Qwen "
+                "(HY_TT_QWEN_SHARED=1 enables sequential full-mesh encoding)",
+                flush=True,
+            )
+
+    byt5_adapter = None
+    if os.environ.get("HY_TT_BYT5", "0") == "1":
+        from models.demos.hf_eager.hunyuanvideo_1_5.tt import byt5_encoder as _be
+
+        # `select_byt5_device` prefers the reserved disjoint submesh and falls back
+        # to the current mesh only when that mesh is itself a legal 1/2-device byT5
+        # placement. It never carves a view out of the live DiT mesh.
+        byt5_dev, byt5_support = _be.select_byt5_device(pipe.text_encoder_2.config, device)
+        if byt5_dev is None:
+            print(f"[{label}] byT5 text-encode: HOST ({byt5_support.reason})", flush=True)
+        else:
+            with _phase("tt_byt5_weight_upload_s"):
+                byt5_adapter = _be.TTByT5EncoderAdapter(
+                    pipe.text_encoder_2, byt5_dev, max_prompt_length=int(pipe.tokenizer_2_max_length)
+                )
+            pipe.text_encoder_2 = byt5_adapter
+            print(
+                f"[{label}] byT5 text-encode: ON DEVICE "
+                f"({byt5_support.strategy} on a dedicated {tuple(byt5_dev.shape)} mesh)",
+                flush=True,
+            )
+
+    from models.demos.hf_eager.hunyuanvideo_1_5.tt.text_conditioning import encode_prompt_pair
+
+    _prompt = os.environ.get("HY_PROMPT", "A cat walks on the grass, realistic")
+    _neg = os.environ.get("HY_NEG_PROMPT") or None
+    _cache_prompts = os.environ.get("HY_PROMPT_CACHE", "0") == "1"
+    _time_call(pipe.text_encoder, "qwen_encode_s")
+    _time_call(pipe.text_encoder_2, "byt5_encode_s")
+    with _phase("text_encode_s"):
+        text_kwargs, cache_hit = encode_prompt_pair(pipe, _prompt, _neg, use_cache=_cache_prompts)
+    print(
+        f"[{label}] text conditioning: {'cache hit' if cache_hit else 'encoded'} "
+        f"({'persistent cache enabled' if _cache_prompts else 'cache disabled'})",
+        flush=True,
+    )
+    if qwen_adapter is not None and os.environ.get("HY_TT_QWEN_KEEP_RESIDENT", "0") != "1":
+        qwen_adapter.deallocate_weights()
+        print(f"[{label}] Qwen weights unloaded before DiT construction", flush=True)
+    if byt5_adapter is not None:
+        byt5_adapter.deallocate_weights()
+        print(f"[{label}] byT5 weights unloaded before DiT construction", flush=True)
+
     real_tf = pipe.transformer
-    tt = P.build_pipeline(device, real_tf)
+    with _phase("tt_dit_weight_upload_s"):
+        tt = P.build_pipeline(device, real_tf)
     calls = {"n": 0, "device_runs": 0}
 
     # The reusable adapter owns diffusers' per-condition CFG grouping. The
@@ -186,33 +344,10 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
         # Prefer a SEPARATE submesh (carved by the fixture on different chips) so the
         # VAE decode has its own DRAM and doesn't co-reside with the resident DiT.
         vae_dev = _vd.HY_VAE_SUBMESH or device
-        pipe.vae = _vd.TTVAEDecodeAdapter(pipe.vae, vae_dev)
+        with _phase("tt_vae_weight_upload_s"):
+            pipe.vae = _vd.TTVAEDecodeAdapter(pipe.vae, vae_dev)
         placement = "separate chips" if vae_dev is not device else "shared with DiT"
         print(f"[{label}] VAE decode: ON DEVICE (ttnn) on {list(vae_dev.get_device_ids())} ({placement})", flush=True)
-
-    if os.environ.get("HY_TT_QWEN", "0") == "1":
-        from models.demos.hf_eager.hunyuanvideo_1_5.tt import qwen_encoder as _qe
-
-        # Prefer a dedicated Qwen submesh (carved on spare chips at sp<=3). When none
-        # exists (sp=4 fills every mesh row), text-encode stays on CPU by default --
-        # for a ONE-SHOT video that's actually faster (A/B: host 5:59 vs shared-mesh
-        # device 6:58, the 7B weight-load + first-compile + FSDP-gather outweigh the
-        # one-time CPU encode). Opt in with HY_TT_QWEN_SHARED=1 to run Qwen on the DiT's
-        # OWN full mesh (TP=4 + FSDP across the other axis, weights co-resident, no
-        # overlapping context) -- worthwhile only for a SERVED / multi-prompt setup
-        # where the load+compile amortize.
-        qwen_dev = _qe.HY_QWEN_SUBMESH
-        if qwen_dev is None and os.environ.get("HY_TT_QWEN_SHARED", "0") == "1":
-            qwen_dev = device
-        if qwen_dev is not None:
-            _pl = "separate submesh" if _qe.HY_QWEN_SUBMESH is not None else "shared DiT mesh (TP=4+FSDP)"
-            pipe.text_encoder = _qe.TTQwenTextEncoderAdapter(pipe.text_encoder, qwen_dev)
-            print(f"[{label}] Qwen text-encode: ON DEVICE ({_pl}) on {list(qwen_dev.get_device_ids())}", flush=True)
-        else:
-            print(
-                f"[{label}] no Qwen submesh at this mesh; text-encode on CPU (HY_TT_QWEN_SHARED=1 to reuse the DiT mesh)",
-                flush=True,
-            )
 
     # Optional: run the i2v SigLIP image-encoder on device (HY_TT_SIGLIP=1). The 27-layer
     # vision transformer runs REPLICATED on the full DiT mesh -- shared with the resident DiT,
@@ -223,12 +358,11 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
     if _i2v and os.environ.get("HY_TT_SIGLIP", "0") == "1":
         from models.demos.hf_eager.hunyuanvideo_1_5.tt import siglip_encoder as _se
 
-        pipe.image_encoder = _se.TTSiglipImageEncoderAdapter(pipe.image_encoder, device)
+        with _phase("tt_siglip_weight_upload_s"):
+            pipe.image_encoder = _se.TTSiglipImageEncoderAdapter(pipe.image_encoder, device)
         print(f"[{label}] SigLIP image-encode: ON DEVICE (ttnn, replicated on full mesh)", flush=True)
 
-    _prompt = os.environ.get("HY_PROMPT", "A cat walks on the grass, realistic")
-    _neg = os.environ.get("HY_NEG_PROMPT") or None
-    _pkw = {"negative_prompt": _neg} if _neg is not None else {}
+    _pkw = {}
     if _i2v:
         # i2v derives the output resolution from the input image + the checkpoint's
         # target_size (640->480p, 960->720p), so it takes NO height/width -- it computes
@@ -236,14 +370,29 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
         _pkw["image"] = _load_i2v_image(height, width, label)
     _dims = {} if _i2v else {"height": height, "width": width}
     print(f"[{label}] prompt: {_prompt}\n[{label}] negative: {_neg}", flush=True)
-    out = pipe(
-        prompt=_prompt,
-        num_frames=frames,
-        num_inference_steps=steps,
-        generator=torch.Generator().manual_seed(0),
-        **_dims,
-        **_pkw,
-    ).frames[0]
+    # Attribute the three device-capable stages inside the single pipe() call.
+    _time_call(pipe.transformer, "dit_denoise_s")
+    _time_method(pipe.vae, "decode", "vae_decode_s")
+    _time_method(pipe.vae, "encode", "vae_encode_s")
+    if getattr(pipe, "image_encoder", None) is not None:
+        _time_call(pipe.image_encoder, "siglip_encode_s")
+    try:
+        with _phase("generate_total_s"):
+            generated = pipe(
+                prompt=None,
+                num_frames=frames,
+                num_inference_steps=steps,
+                generator=torch.Generator().manual_seed(0),
+                **_dims,
+                **_pkw,
+                **text_kwargs,
+            )
+    finally:
+        # Multi-shape CFG owns one trace region per exact text shape. Release
+        # every region on both success and generation failure.
+        if use_trace:
+            tt_adapter.release_trace()
+    out = generated.frames[0]
     print(
         f"\n[{label}] generated {len(out)} frames; transformer __call__s={calls['n']}, "
         f"real on-device runs={calls['device_runs']}",
@@ -251,36 +400,38 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
     )
 
     os.makedirs(outdir, exist_ok=True)
-    pil = [
-        f if isinstance(f, Image.Image) else Image.fromarray((np.asarray(f).clip(0, 1) * 255).astype("uint8"))
-        for f in out
-    ]
-    for i, im in enumerate(pil):
-        im.save(f"{outdir}/frame_{i:03d}.png")
-    pil[0].save(f"{outdir}/tt_blackhole.gif", save_all=True, append_images=pil[1:], duration=125, loop=0)
+    with _phase("frame_writeout_s"):
+        pil = [
+            f if isinstance(f, Image.Image) else Image.fromarray((np.asarray(f).clip(0, 1) * 255).astype("uint8"))
+            for f in out
+        ]
+        for i, im in enumerate(pil):
+            im.save(f"{outdir}/frame_{i:03d}.png")
+        pil[0].save(f"{outdir}/tt_blackhole.gif", save_all=True, append_images=pil[1:], duration=125, loop=0)
 
     fps = int(os.environ.get("HY_FPS", "24"))
     mp4_path = f"{outdir}/tt_blackhole.mp4"
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg:
-        subprocess.run(
-            [
-                ffmpeg,
-                "-y",
-                "-framerate",
-                str(fps),
-                "-i",
-                f"{outdir}/frame_%03d.png",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                mp4_path,
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        with _phase("mp4_encode_s"):
+            subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-framerate",
+                    str(fps),
+                    "-i",
+                    f"{outdir}/frame_%03d.png",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    mp4_path,
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         print(
             f"[{label}] SAVED {len(pil)} frames + tt_blackhole.gif + tt_blackhole.mp4 ({fps}fps) -> {outdir}",
             flush=True,
@@ -289,6 +440,43 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
         print(
             f"[{label}] SAVED {len(pil)} frames + tt_blackhole.gif -> {outdir} (ffmpeg not found, no mp4)", flush=True
         )
+
+    in_function = time.perf_counter() - _t_fn_start
+    phase_sum = sum(_PHASES.values())
+    dit_calls = _CALL_LOG.get("dit_denoise_s", [])
+    steady = dit_calls[1:]
+    nested_in_generate = sum(
+        _NESTED.get(k, 0.0) for k in ("dit_denoise_s", "vae_decode_s", "vae_encode_s", "siglip_encode_s")
+    )
+    summary = {
+        "config": {
+            "frames": frames,
+            "steps": steps,
+            "height": height,
+            "width": width,
+            "i2v": _i2v,
+            "trace": bool(use_trace),
+            "tt_qwen": os.environ.get("HY_TT_QWEN", "0") == "1",
+            "tt_siglip": os.environ.get("HY_TT_SIGLIP", "0") == "1",
+            "tt_vae": os.environ.get("HY_TT_VAE", "0") == "1",
+            "tt_byt5": os.environ.get("HY_TT_BYT5", "0") == "1",
+            "resident": _resident,
+            "cfg_policy": os.environ.get("HY_CFG_PADDING_POLICY", "separate"),
+        },
+        # Bounds collection + mesh open + fixture setup, which the test body cannot see.
+        "pretest_setup_and_mesh_open_s": round(_t_fn_start - _T_IMPORT, 3),
+        "phases_s": {k: round(v, 3) for k, v in _PHASES.items()},
+        "phase_sum_s": round(phase_sum, 3),
+        "in_function_total_s": round(in_function, 3),
+        "unattributed_in_function_s": round(in_function - phase_sum, 3),
+        # Subsets of generate_total_s, NOT additional time.
+        "nested_s": {k: round(v, 3) for k, v in _NESTED.items()},
+        "generate_residual_s": round(_PHASES.get("generate_total_s", 0.0) - nested_in_generate, 3),
+        "dit_calls": len(dit_calls),
+        "dit_first_call_s": round(dit_calls[0], 3) if dit_calls else None,
+        "dit_steady_mean_s": round(sum(steady) / len(steady), 4) if steady else None,
+    }
+    print(f"[{label} phase breakdown] " + json.dumps(summary, sort_keys=True), flush=True)
 
 
 # Single-device trace+2CQ defaults OFF: unlike the mesh case (weights sharded
@@ -324,10 +512,12 @@ def test_stage2b_gen(device):
     )
 
 
-# Mesh trace+2CQ is validated but defaults OFF for best one-shot latency. On the
-# compute/CCL-bound real workload, steady-state was unchanged and capture/warmup
-# made a measured 13-frame/50-step run slower overall (166s eager vs 187s traced).
-# Set HY_TRACE=1 to exercise the resident-buffer trace infrastructure.
+# Mesh trace+2CQ is validated but defaults OFF pending a post-fix one-shot A/B.
+# The matched 480p I2V/121f run showed a real ~5% steady-state gain (2.33 ->
+# 2.21 s/step), but the old discarded warmup made crossover ~71 steps. The
+# adapter now captures without that warmup and explicitly executes the first
+# trace; keep this opt-in until 13f then 121f measurements confirm the new
+# 50-step crossover on an idle Galaxy.
 _use_trace_qb2 = os.environ.get("HY_TRACE", "0") == "1"
 _QB2_DEVICE_PARAMS = {"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
 if _use_trace_qb2:

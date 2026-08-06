@@ -282,6 +282,23 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t NVH = tensor_args.v_num_heads();
     const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 
+    if (args.has_per_batch_joint_mask()) {
+        TT_FATAL(has_joint_tensors, "joint_valid_lengths requires joint Q/K/V tensors");
+        TT_FATAL(
+            args.joint_valid_lengths.size() == q_shape[0],
+            "joint_valid_lengths must contain one length per batch row: got {}, expected {}",
+            args.joint_valid_lengths.size(),
+            q_shape[0]);
+        for (std::size_t batch = 0; batch < args.joint_valid_lengths.size(); ++batch) {
+            TT_FATAL(
+                args.joint_valid_lengths[batch] > 0 && args.joint_valid_lengths[batch] <= joint_k_shape[2],
+                "joint_valid_lengths[{}]={} must be in [1, {}]",
+                batch,
+                args.joint_valid_lengths[batch],
+                joint_k_shape[2]);
+        }
+    }
+
     // Chunked-prefill (`tensor_args.is_chunked()`): Q is shorter than the per-device K shard
     // (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
     // is_causal=True path.
@@ -727,6 +744,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const std::optional<uint32_t> kv_cache_batch_idx,
     const std::optional<uint32_t> kv_actual_isl,
+    const std::vector<uint32_t>& joint_valid_lengths,
     const std::optional<uint32_t> latent_v_head_dim) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
@@ -808,6 +826,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         ccl_core_grid_offset,
         kv_cache_batch_idx,
         kv_actual_isl,
+        joint_valid_lengths,
         latent_v_head_dim.value_or(0));
 
     auto tensor_args = OperationType::tensor_args_t{

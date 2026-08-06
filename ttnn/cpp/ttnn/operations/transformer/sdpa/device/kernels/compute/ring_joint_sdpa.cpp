@@ -72,8 +72,8 @@ void kernel_main() {
     constexpr uint32_t kv_pad_q_pre_wrap_tile_count_compile [[maybe_unused]] = get_compile_time_arg_val(43);
     constexpr uint32_t kv_pad_q_post_wrap_start_tile_compile [[maybe_unused]] = get_compile_time_arg_val(44);
     constexpr uint32_t kv_pad_q_valid_tile_count_compile [[maybe_unused]] = get_compile_time_arg_val(45);
-    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(46);
-    constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(47);
+    constexpr bool per_batch_joint_mask = get_compile_time_arg_val(46) == 1;
+    constexpr uint32_t per_batch_joint_mask_tile_base = get_compile_time_arg_val(47);
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(48) == 1;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
@@ -88,7 +88,8 @@ void kernel_main() {
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
     constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n_compile % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool joint_has_padding =
+        per_batch_joint_mask || (L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0);
     constexpr bool needs_lightweight_mask =
         (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
 
@@ -98,8 +99,8 @@ void kernel_main() {
     constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? base_partial_offset : 0;
     constexpr uint32_t joint_l_partial_tile_idx =
         (joint_l_partial_col > 0) ? (base_partial_offset + (global_n_partial_col > 0 ? 1 : 0)) : 0;
-    constexpr uint32_t total_mask_tiles =
-        1 + (diag_tile_enabled ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+    constexpr uint32_t total_mask_tiles = 1 + (diag_tile_enabled ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) +
+                                          (joint_l_partial_col > 0 ? 1 : 0) + (per_batch_joint_mask ? B : 0);
 
     constexpr uint32_t q_start_idx_t =
         chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - q_local_padded_Nt * ring_size : 0;
@@ -119,6 +120,12 @@ void kernel_main() {
     const uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t joint_valid_lengths[B] = {};
+    if constexpr (per_batch_joint_mask) {
+        for (uint32_t batch = 0; batch < B; ++batch) {
+            joint_valid_lengths[batch] = get_arg_val<uint32_t>(argidx++);
+        }
+    }
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -341,7 +348,11 @@ void kernel_main() {
                 skip_first_half_q,
                 use_zigzag_balancing,
                 chunked_context,
-                is_first_active_iter);
+                is_first_active_iter,
+                per_batch_joint_mask ? joint_valid_lengths : nullptr,
+                per_batch_joint_mask_tile_base,
+                B,
+                NH);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<

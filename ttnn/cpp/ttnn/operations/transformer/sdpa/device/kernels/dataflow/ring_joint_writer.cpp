@@ -425,10 +425,8 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
     constexpr bool chunked_enabled = get_compile_time_arg_val(29) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(30);
-    // Slots 31-33 are retained for compile-time arg index stability; live ring-work masks
-    // are runtime args below.
-    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(31);
-    constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(32);
+    constexpr bool per_batch_joint_mask = get_compile_time_arg_val(31) == 1;
+    constexpr uint32_t per_batch_joint_mask_tile_base [[maybe_unused]] = get_compile_time_arg_val(32);
     constexpr uint32_t single_valid_kv_chunk_mask_compile [[maybe_unused]] = get_compile_time_arg_val(33);
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. The program factory masks kernel_is_causal off when chunked is on, so only one of
@@ -453,13 +451,23 @@ void kernel_main() {
     const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
     const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     const uint32_t single_valid_kv_chunk_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t joint_valid_lengths[B] = {};
+    if constexpr (per_batch_joint_mask) {
+        for (uint32_t batch = 0; batch < B; ++batch) {
+            joint_valid_lengths[batch] = get_arg_val<uint32_t>(argidx++);
+        }
+    }
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
         argidx);
 
     // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
     constexpr uint32_t cb_arg_offset = stats_args.next_compile_time_args_offset();
-    constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
+    // The host passes UINT32_MAX when no lightweight-mask CB is allocated. The mask
+    // statements below are discarded by `if constexpr` in that case but are still
+    // compiled, so keep the index inside the CB table for constexpr get_tile_size.
+    constexpr uint32_t cb_mask_in_arg = get_compile_time_arg_val(cb_arg_offset + 3);
+    constexpr uint32_t cb_mask_in = cb_mask_in_arg == 0xFFFFFFFFu ? 0 : cb_mask_in_arg;
     constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
     constexpr uint32_t cb_max_in = get_compile_time_arg_val(cb_arg_offset + 6);  // deferred norm: DRAM -> compute
@@ -512,6 +520,17 @@ void kernel_main() {
         (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
     if constexpr (needs_lightweight_mask) {
         generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in, diag_tile_enabled>(noc);
+        if constexpr (per_batch_joint_mask) {
+            constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
+            CircularBuffer mask_cb(cb_mask_in);
+            mask_cb.reserve_back(B);
+            for (uint32_t batch = 0; batch < B; ++batch) {
+                const uint32_t partial_col = joint_valid_lengths[batch] % tt::constants::TILE_HEIGHT;
+                fill_vertical_tile_bf16<mask_tile_size_bytes>(
+                    noc, cb_mask_in, batch, partial_col == 0 ? tt::constants::TILE_HEIGHT : partial_col);
+            }
+            mask_cb.push_back(B);
+        }
     }
 
     uint32_t ring_index = fused_op_receiver.seq.ring_index;

@@ -34,7 +34,11 @@ class T5Config:
         ff_dim (`int`, *required*, defaults to 10240)
             The dimension of the feedforward layer
         kv_dim (`int`, *required*, defaults to 64)
-            The dimension of the key and value vectors
+            The dimension of the key and value vectors. `num_heads * kv_dim` is the attention
+            inner width and is *independent* of `embed_dim`: q/k/v project `embed_dim ->
+            inner_dim` and the output projection returns `inner_dim -> embed_dim`. The classic
+            T5/UMT5 checkpoints happen to set the two equal; HunyuanVideo-1.5's byT5 does not
+            (`embed_dim=1472` against an inner width of `6*64 = 384`).
         num_heads (`int`, *required*, defaults to 64)
             The number of attention heads
         num_hidden_layers (`int`, *required*, defaults to 24)
@@ -72,6 +76,7 @@ class T5Config:
         self.layer_norm_eps = layer_norm_eps
         self.relative_attention_num_buckets = relative_attention_num_buckets
         self.relative_attention_max_distance = relative_attention_max_distance
+        self.attention_inner_dim = self.num_heads * self.kv_dim
         self.use_relative_position_bias = [True] + [False] * (
             num_hidden_layers - 1
         )  # use bias only for the first layer for original T5
@@ -346,32 +351,47 @@ class T5Attention(Module):
 
         self.num_heads = config.num_heads
         self.embed_dim = config.embed_dim
-        self.head_dim = config.embed_dim // self.num_heads
+        self.head_dim = config.kv_dim
+        self.inner_dim = config.attention_inner_dim
         self.use_relative_position_bias = use_relative_position_bias
+        tp = self.parallel_config.tensor_parallel.factor
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        axis_size = int(self.mesh_device.shape[tp_axis])
+        if axis_size != tp:
+            raise ValueError(f"T5 tensor parallel factor ({tp}) must match mesh axis {tp_axis} size ({axis_size})")
+        if self.num_heads % tp != 0:
+            raise ValueError(f"T5 num_heads ({self.num_heads}) must be divisible by tensor parallel factor ({tp})")
+        if self.inner_dim % tp != 0:
+            raise ValueError(
+                f"T5 attention inner width ({self.inner_dim} = num_heads*kv_dim) must be divisible by "
+                f"tensor parallel factor ({tp})"
+            )
+        if self.embed_dim % tp != 0:
+            raise ValueError(f"T5 d_model ({self.embed_dim}) must be divisible by tensor parallel factor ({tp})")
 
         self.q_proj = ColParallelLinear(
             in_features=self.embed_dim,
-            out_features=self.embed_dim,
+            out_features=self.inner_dim,
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
         )
         self.k_proj = ColParallelLinear(
             in_features=self.embed_dim,
-            out_features=self.embed_dim,
+            out_features=self.inner_dim,
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
         )
         self.v_proj = ColParallelLinear(
             in_features=self.embed_dim,
-            out_features=self.embed_dim,
+            out_features=self.inner_dim,
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
         )
         self.o_proj = ColParallelLinear(
-            in_features=self.embed_dim,
+            in_features=self.inner_dim,
             out_features=self.embed_dim,
             bias=False,
             mesh_device=self.mesh_device,

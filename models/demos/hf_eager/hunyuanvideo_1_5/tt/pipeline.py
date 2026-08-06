@@ -291,6 +291,7 @@ class HunyuanVideo15Pipeline:
         self._resident = None
         self._write_event = None
         self._op_event = None
+        self._resident_denoise = None
 
     # ---- attention weight extraction ---------------------------------------
     def _extract_joint_attn(self, attn):
@@ -464,6 +465,32 @@ class HunyuanVideo15Pipeline:
         h = self._refiner_block1_from_parts(h, temb_tr)
         return h
 
+    def _masked_context_embedder(self, ehs, timestep, granularity, valid_pairs, zero_rows):
+        """Run Qwen token refinement at each row's exact valid length.
+
+        The refiner itself contains self-attention and masked pooling, so merely
+        masking the later DiT joint attention would be too late: padded Qwen
+        tokens could already alter valid embeddings. Exact row slices preserve
+        reference semantics while the expensive DiT block stack stays batched.
+        """
+        if valid_pairs is None:
+            return ttnn.add(self._context_embedder(ehs, timestep, granularity), self.cond[0])
+        rows = []
+        max_length = int(ehs.shape[1])
+        for row, (qwen_len, _) in enumerate(valid_pairs):
+            row_ehs = ttnn.slice(ehs, (row, 0, 0), (row + 1, qwen_len, int(ehs.shape[2])))
+            row_timestep = ttnn.slice(timestep, (row,), (row + 1,))
+            refined = ttnn.add(self._context_embedder(row_ehs, row_timestep, granularity), self.cond[0])
+            if qwen_len < max_length:
+                zero_tail = ttnn.slice(
+                    zero_rows,
+                    (row, 0, 0),
+                    (row + 1, max_length - qwen_len, int(zero_rows.shape[2])),
+                )
+                refined = ttnn.concat([refined, zero_tail], dim=1)
+            rows.append(refined)
+        return rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=0)
+
     # ---- reorder / mask ----------------------------------------------------
     def _reorder_concat(self, enc_i, enc_b, enc_m, task):
         """Static reorder of the condition streams (pure ttnn.concat).
@@ -481,6 +508,44 @@ class HunyuanVideo15Pipeline:
         if task == "i2v":
             return ttnn.concat([enc_i, enc_b, enc_m], dim=1)
         return ttnn.concat([enc_b, enc_m], dim=1)
+
+    def _pack_conditioning(self, enc_i, enc_b, enc_m, task, valid_lengths):
+        """Pack each row's valid image/byT5/Qwen tokens into one prefix.
+
+        Joint attention is permutation-equivariant over its encoder tokens.
+        Keeping each stream's valid-token order while moving all padding to a
+        shared tail therefore preserves latent-output math and lets ring SDPA
+        represent the key mask with one valid-prefix length per batch row.
+        """
+        if valid_lengths is None:
+            return self._reorder_concat(enc_i, enc_b, enc_m, task)
+        batch = int(enc_m.shape[0])
+        image_len = int(enc_i.shape[1]) if task == "i2v" else 0
+        capacity = image_len + int(enc_b.shape[1]) + int(enc_m.shape[1])
+        rows = []
+        for row, (qwen_len, byt5_len) in enumerate(valid_lengths):
+            raw_parts = []
+            valid_parts = []
+            if task == "i2v":
+                image_row = ttnn.slice(enc_i, (row, 0, 0), (row + 1, image_len, int(enc_i.shape[2])))
+                raw_parts.append(image_row)
+                valid_parts.append(image_row)
+            byt5_row = ttnn.slice(enc_b, (row, 0, 0), (row + 1, int(enc_b.shape[1]), int(enc_b.shape[2])))
+            qwen_row = ttnn.slice(enc_m, (row, 0, 0), (row + 1, int(enc_m.shape[1]), int(enc_m.shape[2])))
+            raw_parts.extend((byt5_row, qwen_row))
+            valid_parts.append(ttnn.slice(byt5_row, (0, 0, 0), (1, byt5_len, int(byt5_row.shape[2]))))
+            valid_parts.append(ttnn.slice(qwen_row, (0, 0, 0), (1, qwen_len, int(qwen_row.shape[2]))))
+            valid = image_len + byt5_len + qwen_len
+            if valid < capacity:
+                raw = raw_parts[0] if len(raw_parts) == 1 else ttnn.concat(raw_parts, dim=1)
+                zero_tail = ttnn.slice(
+                    ttnn.multiply(raw, 0.0),
+                    (0, 0, 0),
+                    (1, capacity - valid, int(raw.shape[2])),
+                )
+                valid_parts.append(zero_tail)
+            rows.append(valid_parts[0] if len(valid_parts) == 1 else ttnn.concat(valid_parts, dim=1))
+        return rows[0] if batch == 1 else ttnn.concat(rows, dim=0)
 
     @staticmethod
     def _trim_to_valid(x, mask):
@@ -524,6 +589,35 @@ class HunyuanVideo15Pipeline:
         mask_b = inputs.get("encoder_attention_mask_2")
         ehs, mask_m = self._trim_to_valid(inputs["encoder_hidden_states"], mask_m)
         ehs2, mask_b = self._trim_to_valid(inputs["encoder_hidden_states_2"], mask_b)
+        use_joint_mask = bool(inputs.get("use_joint_mask", False))
+        if use_joint_mask and self.sp <= 1:
+            raise ValueError("masked CFG batching requires Hunyuan sequence parallelism")
+        joint_valid_pairs = None
+        joint_valid_lengths = None
+        encoder_query_mask = None
+        qwen_zero_rows = None
+        if use_joint_mask:
+            import torch
+
+            mask_m_t = torch.as_tensor(mask_m)
+            mask_b_t = torch.as_tensor(mask_b)
+            for name, mask_tensor in (("Qwen", mask_m_t), ("byT5", mask_b_t)):
+                lengths = mask_tensor.sum(dim=-1)
+                expected = torch.arange(mask_tensor.shape[-1], device=mask_tensor.device)[None, :] < lengths[:, None]
+                if not torch.equal(mask_tensor.bool(), expected):
+                    raise ValueError(f"{name} joint masking requires contiguous valid-prefix attention masks")
+            joint_valid_pairs = [
+                (max(1, int(qwen)), max(1, int(byt5)))
+                for qwen, byt5 in zip(mask_m_t.sum(dim=-1).tolist(), mask_b_t.sum(dim=-1).tolist())
+            ]
+            image_len = int(inputs["image_embeds"].shape[1]) if task == "i2v" else 0
+            capacity = image_len + int(ehs2.shape[1]) + int(ehs.shape[1])
+            joint_valid_lengths = [image_len + byt5 + qwen for qwen, byt5 in joint_valid_pairs]
+            query_mask = torch.zeros(B, capacity, 1, dtype=torch.float32)
+            for row, valid in enumerate(joint_valid_lengths):
+                query_mask[row, :valid] = 1.0
+            encoder_query_mask = _f32(d, query_mask)
+            qwen_zero_rows = _f32(d, torch.zeros(B, int(ehs.shape[1]), self.inner))
 
         cos, sin = self.s_rope(hidden)  # rope stub (positional constant)
 
@@ -576,6 +670,10 @@ class HunyuanVideo15Pipeline:
                 cos=cos_sp,
                 sin=sin_sp,
                 attn_bias=None,
+                joint_valid_pairs=joint_valid_pairs,
+                joint_valid_lengths=joint_valid_lengths,
+                encoder_query_mask=encoder_query_mask,
+                qwen_zero_rows=qwen_zero_rows,
                 task=task,
                 out_shape=(B, C, F, H, W),
             )
@@ -591,6 +689,10 @@ class HunyuanVideo15Pipeline:
             cos=cos,
             sin=sin,
             attn_bias=None,
+            joint_valid_pairs=joint_valid_pairs,
+            joint_valid_lengths=joint_valid_lengths,
+            encoder_query_mask=encoder_query_mask,
+            qwen_zero_rows=qwen_zero_rows,
             task=task,
             out_shape=(B, C, F, H, W),
         )
@@ -598,6 +700,8 @@ class HunyuanVideo15Pipeline:
     # ---- full forward (pure ttnn; consumes the on-device encode context) ---
     def _forward_encoded(self, ctx, granularity):
         """Run one full transformer forward on device; return (B, N, out_ch)."""
+        if ctx.get("joint_valid_lengths") is not None and granularity != "composite":
+            raise ValueError("per-row joint masking is currently supported only by composite Hunyuan blocks")
         cc = self.cc
         freqs = (ctx["cos"], ctx["sin"])
         timestep = ctx["timestep"]
@@ -618,19 +722,30 @@ class HunyuanVideo15Pipeline:
             x = self.s_patch(ctx["hidden"])  # (B, N, inner)
             logical_n = None
 
-        enc_m = ttnn.add(self._context_embedder(ctx["ehs"], timestep, granularity), self.cond[0])
+        enc_m = self._masked_context_embedder(
+            ctx["ehs"], timestep, granularity, ctx.get("joint_valid_pairs"), ctx.get("qwen_zero_rows")
+        )
         enc_b = ttnn.add(self.s_byt5(ctx["ehs2"]), self.cond[1])
         enc_i = self.s_image(ctx["image"])
         if task == "t2v":
             enc_i = ttnn.multiply(enc_i, 0.0)  # is_t2v: image contribution zeroed
         enc_i = ttnn.add(enc_i, self.cond[2])
-        enc = self._reorder_concat(enc_i, enc_b, enc_m, task)
+        enc = self._pack_conditioning(enc_i, enc_b, enc_m, task, ctx.get("joint_valid_pairs"))
 
         for i in range(len(self.s_blocks)):
             if granularity == "mid":
                 x, enc = self._transformer_block_from_parts(i, x, enc, temb, freqs, attn_bias)
             else:
-                x, enc = self.s_blocks[i](x, enc, temb, freqs_cis=freqs, attn_bias=attn_bias, logical_n=logical_n)
+                x, enc = self.s_blocks[i](
+                    x,
+                    enc,
+                    temb,
+                    freqs_cis=freqs,
+                    attn_bias=attn_bias,
+                    logical_n=logical_n,
+                    joint_valid_lengths=ctx.get("joint_valid_lengths"),
+                    encoder_query_mask=ctx.get("encoder_query_mask"),
+                )
 
         x = self.s_norm_out(x, temb)  # AdaLayerNormContinuous
         x = _linear(x, self.proj_out_w, self.proj_out_b, cc)  # proj_out (glue)
@@ -680,6 +795,327 @@ class HunyuanVideo15Pipeline:
         dev_out = self._forward_encoded(ctx, granularity)
         return self._unpatchify(dev_out, ctx["out_shape"])
 
+    # ---- device-resident diffusers denoise loop ---------------------------
+    def _setup_resident_denoise(self, ctx, *, num_conditions, torch_dtype, traced):
+        """Keep the scheduler latent in the SP representation between steps.
+
+        ``ctx["hidden_sp"]`` is the complete transformer input: the evolving
+        noise latent followed by the static I2V conditioning channels.  Only
+        the first ``out_channels`` channels participate in the Euler update.
+        CFG conditions share that latent but retain their own text context.
+        """
+        import torch
+
+        if self.sp <= 1:
+            raise ValueError("device-resident denoising currently requires sequence parallelism (HY_DIT_SP=1)")
+        if torch_dtype not in (torch.bfloat16, torch.float32):
+            raise ValueError(f"device-resident denoising supports bfloat16/float32 latents, got {torch_dtype}")
+
+        total_batch, shard_n, in_channels = (int(v) for v in ctx["hidden_sp"].shape)
+        if total_batch % num_conditions:
+            raise ValueError(f"transformer batch {total_batch} is not divisible by num_conditions={num_conditions}")
+        batch = total_batch // num_conditions
+        if in_channels < self.out_channels:
+            raise ValueError(f"transformer input channels {in_channels} < output channels {self.out_channels}")
+
+        latent = ttnn.slice(ctx["hidden_sp"], (0, 0, 0), (batch, shard_n, self.out_channels))
+        latent_dtype = ttnn.bfloat16 if torch_dtype == torch.bfloat16 else ttnn.float32
+        if latent.dtype != latent_dtype:
+            latent = ttnn.typecast(latent, latent_dtype)
+        static_cond = None
+        if in_channels > self.out_channels:
+            static_cond = ttnn.slice(ctx["hidden_sp"], (0, 0, self.out_channels), (total_batch, shard_n, in_channels))
+
+        self._resident_denoise = dict(
+            ctx=ctx,
+            num_conditions=num_conditions,
+            batch=batch,
+            shard_n=shard_n,
+            in_channels=in_channels,
+            latent=latent,
+            latent_dtype=latent_dtype,
+            static_cond=static_cond,
+            traced=traced,
+            out_shape=(batch, self.out_channels, *ctx["out_shape"][2:]),
+        )
+        return self._resident_denoise
+
+    def _setup_separate_resident_denoise(self, slots, *, num_conditions, batch, torch_dtype, traced):
+        """Create one exact-text-shape execution slot per condition/batch row.
+
+        Joint SDPA has no key mask, so differently sized text contexts cannot
+        share a padded transformer batch.  The scheduler latent is still shared
+        here; only transformer execution is sequential.
+        """
+        import torch
+
+        if self.sp <= 1:
+            raise ValueError("device-resident denoising currently requires sequence parallelism (HY_DIT_SP=1)")
+        if torch_dtype not in (torch.bfloat16, torch.float32):
+            raise ValueError(f"device-resident denoising supports bfloat16/float32 latents, got {torch_dtype}")
+        if len(slots) != num_conditions * batch:
+            raise ValueError(f"expected {num_conditions * batch} exact-length execution slots, got {len(slots)}")
+
+        latent_dtype = ttnn.bfloat16 if torch_dtype == torch.bfloat16 else ttnn.float32
+        latent_rows = []
+        shard_n = in_channels = None
+        for row in range(batch):
+            ctx = slots[row]["ctx"]
+            _, row_shard_n, row_in_channels = (int(v) for v in ctx["hidden_sp"].shape)
+            if shard_n is None:
+                shard_n, in_channels = row_shard_n, row_in_channels
+            elif (row_shard_n, row_in_channels) != (shard_n, in_channels):
+                raise ValueError("all resident condition slots must use the same latent shape")
+            latent_rows.append(ttnn.slice(ctx["hidden_sp"], (0, 0, 0), (1, shard_n, self.out_channels)))
+        latent = latent_rows[0] if batch == 1 else ttnn.concat(latent_rows, dim=0)
+        if latent.dtype != latent_dtype:
+            latent = ttnn.typecast(latent, latent_dtype)
+
+        for slot in slots:
+            ctx = slot["ctx"]
+            slot["static_cond"] = (
+                ttnn.slice(ctx["hidden_sp"], (0, 0, self.out_channels), (1, shard_n, in_channels))
+                if in_channels > self.out_channels
+                else None
+            )
+
+        first = slots[0]["ctx"]
+        self._resident_denoise = dict(
+            ctx=first,
+            slots=slots,
+            separate=True,
+            num_conditions=num_conditions,
+            batch=batch,
+            shard_n=shard_n,
+            in_channels=in_channels,
+            latent=latent,
+            latent_dtype=latent_dtype,
+            static_cond=None,
+            traced=traced,
+            out_shape=(batch, self.out_channels, *first["out_shape"][2:]),
+        )
+        return self._resident_denoise
+
+    def _resident_model_input(self, slot_index=None):
+        state = self._resident_denoise
+        latent = state["latent"]
+        if latent.dtype != ttnn.float32:
+            latent = ttnn.typecast(latent, ttnn.float32)
+        if state.get("separate"):
+            if slot_index is None:
+                raise ValueError("separate resident denoise requires a slot index")
+            row = slot_index % state["batch"]
+            latent = ttnn.slice(latent, (row, 0, 0), (row + 1, state["shard_n"], self.out_channels))
+            static_cond = state["slots"][slot_index]["static_cond"]
+            return ttnn.concat([latent, static_cond], dim=2) if static_cond is not None else latent
+        if state["num_conditions"] > 1:
+            latent = ttnn.concat([latent] * state["num_conditions"], dim=0)
+        if state["static_cond"] is not None:
+            latent = ttnn.concat([latent, state["static_cond"]], dim=2)
+        return latent
+
+    def denoise_resident_eager_setup(self, inputs, *, num_conditions, torch_dtype):
+        ctx = self._encode(inputs)
+        self._setup_resident_denoise(ctx, num_conditions=num_conditions, torch_dtype=torch_dtype, traced=False)
+        return self._forward_encoded(ctx, "composite")
+
+    def denoise_resident_eager_step(self, timestep):
+        """Run a later eager step without reading or uploading the host latent."""
+        state = self._resident_denoise
+        if state is None or state["traced"]:
+            raise RuntimeError("call denoise_resident_eager_setup() before eager resident steps")
+        state["ctx"]["timestep"] = _f32(self.device, timestep)
+        return self._forward_encoded(state["ctx"], "composite")
+
+    def denoise_resident_eager_setup_conditions(self, inputs, *, num_conditions, batch, torch_dtype):
+        """Compile/run exact-length condition slots while retaining one latent."""
+        slots = [{"ctx": self._encode(item)} for item in inputs]
+        self._setup_separate_resident_denoise(
+            slots, num_conditions=num_conditions, batch=batch, torch_dtype=torch_dtype, traced=False
+        )
+        return [self._forward_encoded(slot["ctx"], "composite") for slot in slots]
+
+    def denoise_resident_eager_step_conditions(self, timestep):
+        state = self._resident_denoise
+        if state is None or state["traced"] or not state.get("separate"):
+            raise RuntimeError("call denoise_resident_eager_setup_conditions() first")
+        outputs = []
+        for slot in state["slots"]:
+            slot["ctx"]["timestep"] = _f32(self.device, timestep[:1])
+            outputs.append(self._forward_encoded(slot["ctx"], "composite"))
+        return outputs
+
+    def denoise_resident_trace_setup(self, inputs, *, num_conditions, torch_dtype):
+        resident = self.denoise_trace_setup(inputs)
+        ctx = dict(resident)
+        ctx["hidden_sp"] = resident["hidden_sp"]
+        ctx["logical_n"] = resident["logical_n"]
+        self._setup_resident_denoise(ctx, num_conditions=num_conditions, torch_dtype=torch_dtype, traced=True)
+        return resident
+
+    def _activate_resident_trace_slot(self, slot):
+        self._resident = slot["resident"]
+        self._write_event = slot.get("write_event")
+        self._op_event = slot.get("op_event")
+
+    def _save_resident_trace_slot(self, slot):
+        slot["write_event"] = self._write_event
+        slot["op_event"] = self._op_event
+
+    def denoise_resident_trace_setup_conditions(self, inputs, *, num_conditions, batch, torch_dtype):
+        """Set up and capture one reusable trace per exact-length condition slot."""
+        slots = []
+        for item in inputs:
+            resident = self.denoise_trace_setup(item)
+            ctx = dict(resident)
+            ctx["hidden_sp"] = resident["hidden_sp"]
+            ctx["logical_n"] = resident["logical_n"]
+            slots.append(
+                {
+                    "ctx": ctx,
+                    "resident": resident,
+                    "write_event": self._write_event,
+                    "op_event": self._op_event,
+                }
+            )
+        self._setup_separate_resident_denoise(
+            slots, num_conditions=num_conditions, batch=batch, torch_dtype=torch_dtype, traced=True
+        )
+
+        # Compile every distinct text shape before any trace is active.
+        for slot in slots:
+            self._activate_resident_trace_slot(slot)
+            self.denoise_trace_step()
+            self._save_resident_trace_slot(slot)
+
+        # Record all exact-shape condition forwards in ONE sequential trace.
+        # Keeping one trace per shape is not safe on this runtime: capturing
+        # shape 2 while shape 1 owns a trace region causes ordinary allocations
+        # to be corrupted. A trace itself may contain heterogeneous fixed-shape
+        # programs, so one grouped graph preserves exact padding isolation.
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        try:
+            outputs = []
+            for slot in slots:
+                self._activate_resident_trace_slot(slot)
+                outputs.append(self.denoise_trace_step())
+            ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+        except Exception:
+            try:
+                ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            except Exception:
+                pass
+            ttnn.release_trace(self.device, trace_id)
+            raise
+        ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
+        op_event = ttnn.record_event(self.device, 0)
+        for slot in slots:
+            slot["op_event"] = op_event
+        return [trace_id], outputs
+
+    def denoise_resident_trace_step_conditions(self, timestep, trace_ids, outputs):
+        state = self._resident_denoise
+        if state is None or not state["traced"] or not state.get("separate"):
+            raise RuntimeError("call denoise_resident_trace_setup_conditions() first")
+        if len(trace_ids) != 1 or len(outputs) != len(state["slots"]):
+            raise ValueError("grouped trace/output count does not match resident condition slots")
+        for slot in state["slots"]:
+            self._activate_resident_trace_slot(slot)
+            self.denoise_write_timestep(timestep[:1])
+            self._save_resident_trace_slot(slot)
+        # CQ1 is ordered, so waiting for the last slot's write event covers all
+        # per-condition timestep copies before the grouped CQ0 replay.
+        if self._write_event is not None:
+            ttnn.wait_for_event(0, self._write_event)
+        ttnn.execute_trace(self.device, trace_ids[0], cq_id=0, blocking=True)
+        op_event = ttnn.record_event(self.device, 0)
+        for slot in state["slots"]:
+            slot["op_event"] = op_event
+        return outputs
+
+    def denoise_trace_step_conditions(self, inputs, trace_ids, outputs):
+        """Replay exact-length traces with new host latent/timestep inputs."""
+        state = self._resident_denoise
+        if state is None or not state["traced"] or not state.get("separate"):
+            raise RuntimeError("call denoise_resident_trace_setup_conditions() first")
+        if len(trace_ids) != 1:
+            raise ValueError("mixed-length condition execution requires one grouped trace")
+        for item, slot in zip(inputs, state["slots"]):
+            self._activate_resident_trace_slot(slot)
+            self.denoise_write_inputs(item["hidden_states"], item["timestep"])
+            self._save_resident_trace_slot(slot)
+        if self._write_event is not None:
+            ttnn.wait_for_event(0, self._write_event)
+        ttnn.execute_trace(self.device, trace_ids[0], cq_id=0, blocking=True)
+        op_event = ttnn.record_event(self.device, 0)
+        for slot in state["slots"]:
+            slot["op_event"] = op_event
+        return [
+            self._unpatchify(output, slot["resident"]["out_shape"]) for output, slot in zip(outputs, state["slots"])
+        ]
+
+    def denoise_resident_update(
+        self, model_output, *, sigma, sigma_next, guidance_scale, original_cfg=False, delta=None
+    ):
+        """Apply CFG and the exact non-stochastic FlowMatch Euler update on device."""
+        state = self._resident_denoise
+        if state is None:
+            raise RuntimeError("resident denoise state is not initialized")
+        batch = state["batch"]
+        velocity = ttnn.concat(model_output, dim=0) if isinstance(model_output, (list, tuple)) else model_output
+        if velocity.dtype != state["latent_dtype"]:
+            velocity = ttnn.typecast(velocity, state["latent_dtype"])
+        pred_cond = ttnn.slice(velocity, (0, 0, 0), (batch, state["shard_n"], self.out_channels))
+        if state["num_conditions"] == 1:
+            guided = pred_cond
+        else:
+            pred_uncond = ttnn.slice(
+                velocity,
+                (batch, 0, 0),
+                (2 * batch, state["shard_n"], self.out_channels),
+            )
+            shift = ttnn.subtract(pred_cond, pred_uncond)
+            base = pred_cond if original_cfg else pred_uncond
+            guided = ttnn.add(base, ttnn.multiply(shift, float(guidance_scale)))
+
+        latent_f32 = state["latent"]
+        if latent_f32.dtype != ttnn.float32:
+            latent_f32 = ttnn.typecast(latent_f32, ttnn.float32)
+        # ``delta`` has already been rounded to model_output.dtype, matching
+        # PyTorch's scalar-tensor promotion for ``dt * model_output``.
+        dt = float(sigma_next - sigma) if delta is None else float(delta)
+        delta_velocity = ttnn.multiply(guided, dt)
+        if delta_velocity.dtype != ttnn.float32:
+            delta_velocity = ttnn.typecast(delta_velocity, ttnn.float32)
+        updated = ttnn.add(latent_f32, delta_velocity)
+        if updated.dtype != state["latent_dtype"]:
+            updated = ttnn.typecast(updated, state["latent_dtype"])
+        state["latent"] = updated
+
+        if state.get("separate"):
+            for index, slot in enumerate(state["slots"]):
+                next_model_input = self._resident_model_input(index)
+                if state["traced"]:
+                    ttnn.copy(next_model_input, slot["resident"]["hidden_sp"])
+                else:
+                    slot["ctx"]["hidden_sp"] = next_model_input
+        else:
+            next_model_input = self._resident_model_input()
+        if state["traced"] and not state.get("separate"):
+            # Preserve the trace-captured input address while replacing only its
+            # contents. No device->host or host->device latent transfer occurs.
+            ttnn.copy(next_model_input, self._resident["hidden_sp"])
+        elif not state["traced"] and not state.get("separate"):
+            state["ctx"]["hidden_sp"] = next_model_input
+        return updated
+
+    def denoise_resident_to_torch(self):
+        """One final SP gather for VAE handoff/output."""
+        state = self._resident_denoise
+        if state is None:
+            raise RuntimeError("resident denoise state is not initialized")
+        return self._unpatchify(state["latent"], state["out_shape"])
+
     def reset_invoked(self):
         self.invoked = set()
 
@@ -688,10 +1124,10 @@ class HunyuanVideo15Pipeline:
     # ======================================================================= #
     def denoise_trace_setup(self, inputs):
         """Pin the variable (latent-sequence) dim to a fixed capacity and
-        PRE-UPLOAD every shape-dependent constant (RoPE cos/sin, the padded
-        input tensors, the masked-key attention bias) AND the step-INVARIANT
-        prefix (text/image conditioning) into persistent device buffers OUTSIDE
-        the trace. The raw latent (``hidden``) and ``timestep`` are ALSO
+        PRE-UPLOAD every shape-dependent constant (RoPE cos/sin and padded
+        inputs) plus raw text/image conditioning into persistent device buffers.
+        The refined conditioning is timestep-dependent and therefore remains
+        inside the trace. The raw latent (``hidden``) and ``timestep`` are ALSO
         persistent resident buffers, but deliberately left un-embedded here:
         their VALUES change every denoising step (the noisy latent evolves;
         the timestep schedule advances) even though their shape/address don't,
@@ -704,20 +1140,19 @@ class HunyuanVideo15Pipeline:
         ctx = self._encode(inputs)  # upload + rope + bias (host)
         task = ctx["task"]
 
-        enc_m = ttnn.add(self._context_embedder(ctx["ehs"], ctx["timestep"], "composite"), self.cond[0])
-        enc_b = ttnn.add(self.s_byt5(ctx["ehs2"]), self.cond[1])
-        enc_i = self.s_image(ctx["image"])
-        if task == "t2v":
-            enc_i = ttnn.multiply(enc_i, 0.0)
-        enc_i = ttnn.add(enc_i, self.cond[2])
-        enc0 = self._reorder_concat(enc_i, enc_b, enc_m, task)  # conditioning (resident, step-invariant)
-
         self._resident = dict(
             cos=ctx["cos"],
             sin=ctx["sin"],
             timestep=ctx["timestep"],  # resident raw timestep -- re-embedded fresh each step
-            enc=enc0,
+            ehs=ctx["ehs"],
+            ehs2=ctx["ehs2"],
+            image=ctx["image"],
+            task=task,
             attn_bias=ctx["attn_bias"],
+            joint_valid_pairs=ctx.get("joint_valid_pairs"),
+            joint_valid_lengths=ctx.get("joint_valid_lengths"),
+            encoder_query_mask=ctx.get("encoder_query_mask"),
+            qwen_zero_rows=ctx.get("qwen_zero_rows"),
             inputs=inputs,
             out_shape=ctx["out_shape"],
             _hidden_host=inputs["hidden_states"],
@@ -751,12 +1186,59 @@ class HunyuanVideo15Pipeline:
         else:
             x = self.s_patch(r["hidden"])
             logical_n = None
-        enc, freqs, bias = r["enc"], (r["cos"], r["sin"]), r["attn_bias"]
+        # Text refinement is timestep-conditioned, so it must be replayed with
+        # the current resident timestep too. Keeping only step 0's ``enc``
+        # would silently freeze part of the model in trace mode.
+        enc_m = self._masked_context_embedder(
+            r["ehs"], r["timestep"], "composite", r.get("joint_valid_pairs"), r.get("qwen_zero_rows")
+        )
+        enc_b = ttnn.add(self.s_byt5(r["ehs2"]), self.cond[1])
+        enc_i = self.s_image(r["image"])
+        if r["task"] == "t2v":
+            enc_i = ttnn.multiply(enc_i, 0.0)
+        enc_i = ttnn.add(enc_i, self.cond[2])
+        enc = self._pack_conditioning(enc_i, enc_b, enc_m, r["task"], r.get("joint_valid_pairs"))
+        freqs, bias = (r["cos"], r["sin"]), r["attn_bias"]
         for blk in self.s_blocks:
-            x, enc = blk(x, enc, temb, freqs_cis=freqs, attn_bias=bias, logical_n=logical_n)
+            x, enc = blk(
+                x,
+                enc,
+                temb,
+                freqs_cis=freqs,
+                attn_bias=bias,
+                logical_n=logical_n,
+                joint_valid_lengths=r.get("joint_valid_lengths"),
+                encoder_query_mask=r.get("encoder_query_mask"),
+            )
         x = self.s_norm_out(x, temb)
         x = _linear(x, self.proj_out_w, self.proj_out_b, cc)
         return x
+
+    def denoise_trace_capture(self, *, blocking=True, compile_forward=True):
+        """Compile once, then capture and execute the first traced step.
+
+        Mesh trace capture cannot load a program that is not already cached, so
+        the fixed-shape graph needs one compile forward before capture. Capture
+        itself does not execute the graph, so an explicit blocking execution is
+        required before its output can drive the first scheduler update.
+        """
+        if compile_forward:
+            self.denoise_trace_step()
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        try:
+            trace_out = self.denoise_trace_step()
+            ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+        except Exception:
+            # A begun trace owns trace-region memory even if graph construction
+            # fails. End/release best-effort, preserving the original failure.
+            try:
+                ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            except Exception:
+                pass
+            ttnn.release_trace(self.device, trace_id)
+            raise
+        self.denoise_trace_execute(trace_id, blocking=blocking)
+        return trace_id, trace_out, trace_out
 
     def denoise_write_inputs(self, new_hidden_states=None, new_timestep=None):
         """Write the NEXT step's raw latent/timestep into the resident buffers
@@ -817,6 +1299,17 @@ class HunyuanVideo15Pipeline:
         self._write_event = ttnn.record_event(d, 1)
         return self._write_event
 
+    def denoise_write_timestep(self, new_timestep):
+        """Update only the tiny timestep buffer; the latent remains on device."""
+        r = self._resident
+        if r is None:
+            raise RuntimeError("call denoise_trace_setup(inputs) before denoise_write_timestep()")
+        host_timestep = ttnn.from_torch(new_timestep.contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        ttnn.wait_for_event(1, self._op_event)
+        ttnn.copy_host_to_device_tensor(host_timestep, r["timestep"], cq_id=1)
+        self._write_event = ttnn.record_event(self.device, 1)
+        return self._write_event
+
     def denoise_trace_execute(self, trace_id, blocking=False):
         """CQ0 side of the 2CQ pair: wait for the pending write (if any), record
         the "safe to overwrite past here" event the NEXT write waits on, then
@@ -825,8 +1318,362 @@ class HunyuanVideo15Pipeline:
         d = self.device
         if self._write_event is not None:
             ttnn.wait_for_event(0, self._write_event)
-        self._op_event = ttnn.record_event(d, 0)
         ttnn.execute_trace(d, trace_id, cq_id=0, blocking=blocking)
+        self._op_event = ttnn.record_event(d, 0)
+
+
+class TTTransformerAdapter:
+    """Diffusers transformer adapter with CFG batching and optional latent residency.
+
+    In resident mode the adapter returns empty host placeholders to diffusers;
+    :class:`DeviceResidentFlowMatchScheduler` ignores those values and consumes
+    the device prediction directly. This avoids the former mutable-placeholder
+    backfill and every per-step SP gather/latent upload.
+    """
+
+    def __init__(
+        self,
+        real,
+        ttpipe,
+        guider,
+        *,
+        use_trace=False,
+        device_resident=False,
+        task="t2v",
+        trunc=0,
+        counters=None,
+    ):
+        self.__dict__["_real"] = real
+        self.__dict__["_tt"] = ttpipe
+        self.__dict__["_guider"] = guider
+        self.__dict__["_pending"] = []
+        self.__dict__["_use_trace"] = use_trace
+        self.__dict__["_device_resident"] = device_resident
+        self.__dict__["_task"] = task
+        self.__dict__["_trunc"] = trunc
+        self.__dict__["_counters"] = counters
+        self.__dict__["_trace_id"] = None
+        self.__dict__["_trace_ids"] = []
+        self.__dict__["_trace_out"] = None
+        self.__dict__["_trace_outs"] = []
+        self.__dict__["_resident_started"] = False
+        self.__dict__["_resident_conditions"] = None
+        self.__dict__["_device_output"] = None
+        self.__dict__["_padding_policy"] = os.environ.get("HY_CFG_PADDING_POLICY", "separate").lower()
+        if self.__dict__["_padding_policy"] not in {"separate", "masked", "error", "legacy"}:
+            raise ValueError("HY_CFG_PADDING_POLICY must be one of: separate, masked, error, legacy")
+        self.config, self.dtype = real.config, real.dtype
+
+    def __getattr__(self, key):
+        return getattr(self.__dict__["_real"], key)
+
+    def _count(self, key):
+        counters = self.__dict__["_counters"]
+        if counters is not None:
+            counters[key] = counters.get(key, 0) + 1
+
+    def release_trace(self):
+        """Explicitly release trace-region memory and reset generation state."""
+        trace_id = self.__dict__["_trace_id"]
+        trace_ids = self.__dict__["_trace_ids"]
+        ttpipe = self.__dict__["_tt"]
+        if trace_id is not None:
+            ttnn.release_trace(ttpipe.device, trace_id)
+        for condition_trace_id in trace_ids:
+            ttnn.release_trace(ttpipe.device, condition_trace_id)
+        self.__dict__["_trace_id"] = None
+        self.__dict__["_trace_ids"] = []
+        self.__dict__["_trace_out"] = None
+        self.__dict__["_trace_outs"] = []
+        self.__dict__["_resident_started"] = False
+        self.__dict__["_resident_conditions"] = None
+        self.__dict__["_device_output"] = None
+        ttpipe._resident = None
+        ttpipe._resident_denoise = None
+        ttpipe._write_event = None
+        ttpipe._op_event = None
+
+    @staticmethod
+    def _padding_signatures(group):
+        """Return the real Qwen/byT5 lengths for every condition and batch row."""
+        import torch
+
+        signatures = []
+        for inp, _, _ in group:
+            mask_m = torch.as_tensor(inp["encoder_attention_mask"])
+            mask_b = torch.as_tensor(inp["encoder_attention_mask_2"])
+            for lm, lb in zip(mask_m.sum(dim=-1).tolist(), mask_b.sum(dim=-1).tolist()):
+                signatures.append((max(1, int(lm)), max(1, int(lb))))
+        return signatures
+
+    @staticmethod
+    def _separate_group_inputs(group):
+        """Flatten condition-major batches into exact-length one-row inputs."""
+        import torch
+
+        batch = int(group[0][0]["hidden_states"].shape[0])
+        separated = []
+        for inp, _, _ in group:
+            if int(inp["hidden_states"].shape[0]) != batch:
+                raise ValueError("all guider conditions must have the same batch size")
+            for row in range(batch):
+                separated.append(
+                    {
+                        key: value[row : row + 1] if torch.is_tensor(value) and value.shape[:1] == (batch,) else value
+                        for key, value in inp.items()
+                    }
+                )
+        return separated, batch
+
+    def __call__(
+        self,
+        hidden_states,
+        timestep,
+        encoder_hidden_states,
+        encoder_attention_mask,
+        timestep_r=None,
+        encoder_hidden_states_2=None,
+        encoder_attention_mask_2=None,
+        image_embeds=None,
+        attention_kwargs=None,
+        return_dict=True,
+        **kwargs,
+    ):
+        import torch
+        from diffusers.models.modeling_outputs import Transformer2DModelOutput
+
+        self._count("n")
+        trunc = self.__dict__["_trunc"]
+        if trunc:
+            encoder_hidden_states = encoder_hidden_states[:, :trunc]
+            encoder_attention_mask = encoder_attention_mask[:, :trunc]
+            encoder_hidden_states_2 = encoder_hidden_states_2[:, : max(1, trunc // 4)]
+            encoder_attention_mask_2 = encoder_attention_mask_2[:, : max(1, trunc // 4)]
+        inp = dict(
+            hidden_states=hidden_states,
+            timestep=timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            encoder_hidden_states_2=encoder_hidden_states_2,
+            encoder_attention_mask_2=encoder_attention_mask_2,
+            image_embeds=image_embeds,
+            task=self.__dict__["_task"],
+        )
+        dtype = hidden_states.dtype
+        guider = self.__dict__["_guider"]
+        n = int(guider.num_conditions) if guider is not None else 1
+        pending = self.__dict__["_pending"]
+        placeholder = torch.empty(0, dtype=dtype)
+        pending.append((inp, dtype, placeholder))
+        if len(pending) < n:
+            return Transformer2DModelOutput(sample=placeholder) if return_dict else (placeholder,)
+        if len(pending) != n:
+            raise RuntimeError(f"received {len(pending)} transformer calls for a {n}-condition guider group")
+
+        group, self.__dict__["_pending"] = pending, []
+        signatures = self._padding_signatures(group)
+        mixed_lengths = len(set(signatures)) > 1
+        padding_policy = self.__dict__["_padding_policy"]
+        if mixed_lengths and padding_policy == "error":
+            raise ValueError(
+                f"mixed Qwen/byT5 condition lengths {signatures} cannot be masked by Hunyuan joint attention"
+            )
+        if mixed_lengths and padding_policy == "separate":
+            # The fused joint-attention kernel accepts no key mask. Padding a
+            # shorter CFG row to the longest row therefore changes its denoiser
+            # prediction even when the padded encoder embeddings are zero (the
+            # projection has learned biases). Run each row at its exact valid
+            # lengths instead. This also makes host-Qwen and TT-Qwen feed the
+            # same valid-token sequence into the DiT.
+            if self.__dict__["_use_trace"]:
+                raise ValueError(
+                    "mixed-length exact padding isolation is disabled in trace mode: TT trace-region allocation "
+                    "cannot safely coexist with the device-resident CFG/Euler buffers and produced incorrect "
+                    "hardware output; use HY_TRACE=0 to preserve exact conditioning"
+                )
+            ttpipe = self.__dict__["_tt"]
+            separate_inputs, batch = self._separate_group_inputs(group)
+            for _ in separate_inputs:
+                self._count("device_runs")
+
+            if self.__dict__["_device_resident"]:
+                expected_n = self.__dict__["_resident_conditions"]
+                if expected_n is not None and n != expected_n:
+                    raise RuntimeError(
+                        "device-resident denoising requires stable guider.num_conditions; "
+                        "CFG start/stop transitions are unsupported"
+                    )
+                self.__dict__["_resident_conditions"] = n
+                if not self.__dict__["_resident_started"]:
+                    if self.__dict__["_use_trace"]:
+                        trace_ids, trace_outs = ttpipe.denoise_resident_trace_setup_conditions(
+                            separate_inputs, num_conditions=n, batch=batch, torch_dtype=dtype
+                        )
+                        self.__dict__["_trace_ids"] = trace_ids
+                        self.__dict__["_trace_outs"] = trace_outs
+                        dev_out = trace_outs
+                    else:
+                        dev_out = ttpipe.denoise_resident_eager_setup_conditions(
+                            separate_inputs, num_conditions=n, batch=batch, torch_dtype=dtype
+                        )
+                    self.__dict__["_resident_started"] = True
+                elif self.__dict__["_use_trace"]:
+                    dev_out = ttpipe.denoise_resident_trace_step_conditions(
+                        separate_inputs[0]["timestep"],
+                        self.__dict__["_trace_ids"],
+                        self.__dict__["_trace_outs"],
+                    )
+                else:
+                    dev_out = ttpipe.denoise_resident_eager_step_conditions(separate_inputs[0]["timestep"])
+                self.__dict__["_device_output"] = dev_out
+                return Transformer2DModelOutput(sample=placeholder) if return_dict else (placeholder,)
+
+            if self.__dict__["_use_trace"]:
+                if not self.__dict__["_trace_ids"]:
+                    trace_ids, trace_outs = ttpipe.denoise_resident_trace_setup_conditions(
+                        separate_inputs, num_conditions=n, batch=batch, torch_dtype=dtype
+                    )
+                    self.__dict__["_trace_ids"] = trace_ids
+                    self.__dict__["_trace_outs"] = trace_outs
+                    flat_outputs = [
+                        ttpipe._unpatchify(output, slot["resident"]["out_shape"])
+                        for output, slot in zip(trace_outs, ttpipe._resident_denoise["slots"])
+                    ]
+                else:
+                    flat_outputs = ttpipe.denoise_trace_step_conditions(
+                        separate_inputs, self.__dict__["_trace_ids"], self.__dict__["_trace_outs"]
+                    )
+            else:
+                flat_outputs = [ttpipe.run(item, granularity="composite") for item in separate_inputs]
+            condition_outputs = [
+                torch.cat(flat_outputs[condition * batch : (condition + 1) * batch], dim=0) for condition in range(n)
+            ]
+            for (_, item_dtype, item_placeholder), item_output in zip(group[:-1], condition_outputs[:-1]):
+                item_placeholder.set_(item_output.to(item_dtype).clone())
+            out = condition_outputs[-1].to(dtype)
+            return Transformer2DModelOutput(sample=out) if return_dict else (out,)
+
+        keys = group[0][0]
+        batched_inp = {
+            key: (torch.cat([item[0][key] for item in group], dim=0) if torch.is_tensor(keys[key]) else keys[key])
+            for key in keys
+        }
+        batched_inp["use_joint_mask"] = padding_policy == "masked"
+        self._count("device_runs")
+        ttpipe = self.__dict__["_tt"]
+
+        if self.__dict__["_device_resident"]:
+            expected_n = self.__dict__["_resident_conditions"]
+            if expected_n is not None and n != expected_n:
+                raise RuntimeError(
+                    "device-resident denoising requires stable guider.num_conditions; "
+                    "CFG start/stop transitions are unsupported"
+                )
+            self.__dict__["_resident_conditions"] = n
+            if not self.__dict__["_resident_started"]:
+                if self.__dict__["_use_trace"]:
+                    ttpipe.denoise_resident_trace_setup(batched_inp, num_conditions=n, torch_dtype=dtype)
+                    trace_id, trace_out, first_out = ttpipe.denoise_trace_capture(blocking=True)
+                    self.__dict__["_trace_id"] = trace_id
+                    self.__dict__["_trace_out"] = trace_out
+                    dev_out = first_out
+                else:
+                    dev_out = ttpipe.denoise_resident_eager_setup(batched_inp, num_conditions=n, torch_dtype=dtype)
+                self.__dict__["_resident_started"] = True
+            elif self.__dict__["_use_trace"]:
+                ttpipe.denoise_write_timestep(batched_inp["timestep"])
+                ttpipe.denoise_trace_execute(self.__dict__["_trace_id"], blocking=True)
+                dev_out = self.__dict__["_trace_out"]
+            else:
+                dev_out = ttpipe.denoise_resident_eager_step(batched_inp["timestep"])
+            self.__dict__["_device_output"] = dev_out
+            return Transformer2DModelOutput(sample=placeholder) if return_dict else (placeholder,)
+
+        if not self.__dict__["_use_trace"]:
+            batched_out = ttpipe.run(batched_inp, granularity="composite")
+        elif self.__dict__["_trace_id"] is None:
+            ttpipe.denoise_trace_setup(batched_inp)
+            trace_id, trace_out, first_out = ttpipe.denoise_trace_capture(blocking=True)
+            self.__dict__["_trace_id"], self.__dict__["_trace_out"] = trace_id, trace_out
+            batched_out = ttpipe._unpatchify(first_out, ttpipe._resident["out_shape"])
+        else:
+            ttpipe.denoise_write_inputs(batched_inp["hidden_states"], batched_inp["timestep"])
+            ttpipe.denoise_trace_execute(self.__dict__["_trace_id"], blocking=True)
+            batched_out = ttpipe._unpatchify(self.__dict__["_trace_out"], ttpipe._resident["out_shape"])
+        for (_, item_dtype, item_placeholder), row in zip(group[:-1], batched_out[:-1]):
+            item_placeholder.set_(row.unsqueeze(0).to(item_dtype).clone())
+        out = batched_out[-1].unsqueeze(0).to(dtype)
+        return Transformer2DModelOutput(sample=out) if return_dict else (out,)
+
+
+class DeviceResidentFlowMatchScheduler:
+    """Coordinate stock scheduler indexing with an on-device Euler update."""
+
+    def __init__(self, scheduler, transformer_adapter, guider):
+        if bool(getattr(scheduler.config, "stochastic_sampling", False)):
+            raise ValueError("device-resident FlowMatch supports only stochastic_sampling=False")
+        if float(getattr(guider, "guidance_rescale", 0.0)) != 0.0:
+            raise ValueError("device-resident CFG does not support guidance_rescale")
+        start = float(getattr(guider, "_start", getattr(guider, "start", 0.0)))
+        stop = float(getattr(guider, "_stop", getattr(guider, "stop", 1.0)))
+        if bool(getattr(guider, "_enabled", True)) and (start != 0.0 or stop != 1.0):
+            raise ValueError("device-resident CFG requires start=0 and stop=1 (stable batching)")
+        self.__dict__["_scheduler"] = scheduler
+        self.__dict__["_adapter"] = transformer_adapter
+        self.__dict__["_guider"] = guider
+
+    def __getattr__(self, key):
+        return getattr(self.__dict__["_scheduler"], key)
+
+    def step(
+        self,
+        model_output,
+        timestep,
+        sample,
+        s_churn=0.0,
+        s_tmin=0.0,
+        s_tmax=float("inf"),
+        s_noise=1.0,
+        generator=None,
+        per_token_timesteps=None,
+        return_dict=True,
+    ):
+        import torch
+        from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteSchedulerOutput
+
+        if isinstance(timestep, int) or isinstance(timestep, (torch.IntTensor, torch.LongTensor)):
+            raise ValueError("device-resident FlowMatch requires a scheduler timestep, not an integer index")
+        if per_token_timesteps is not None:
+            raise ValueError("device-resident FlowMatch does not support per_token_timesteps")
+        scheduler = self.__dict__["_scheduler"]
+        if scheduler.step_index is None:
+            scheduler._init_step_index(timestep)
+        step_index = scheduler.step_index
+        sigma = float(scheduler.sigmas[step_index])
+        sigma_next = float(scheduler.sigmas[step_index + 1])
+        delta_tensor = scheduler.sigmas[step_index + 1] - scheduler.sigmas[step_index]
+        delta = float(delta_tensor.to(model_output.dtype).item())
+        adapter = self.__dict__["_adapter"]
+        dev_out = adapter.__dict__["_device_output"]
+        if dev_out is None:
+            raise RuntimeError("scheduler.step called without a device transformer prediction")
+        guider = self.__dict__["_guider"]
+        adapter.__dict__["_tt"].denoise_resident_update(
+            dev_out,
+            sigma=sigma,
+            sigma_next=sigma_next,
+            guidance_scale=float(getattr(guider, "guidance_scale", 1.0)),
+            original_cfg=bool(getattr(guider, "use_original_formulation", False)),
+            delta=delta,
+        )
+        adapter.__dict__["_device_output"] = None
+        scheduler._step_index += 1
+
+        is_final = step_index == len(scheduler.sigmas) - 2
+        prev_sample = adapter.__dict__["_tt"].denoise_resident_to_torch().to(sample.dtype) if is_final else sample
+        if not return_dict:
+            return (prev_sample,)
+        return FlowMatchEulerDiscreteSchedulerOutput(prev_sample=prev_sample)
 
 
 # --------------------------------------------------------------------------- #
@@ -962,25 +1809,34 @@ def trace_capture_selftest(device=None):
         ok = True
         for stage in PIPELINE_STAGES:
             setup = getattr(pipe, f"{stage}_trace_setup")
-            step = getattr(pipe, f"{stage}_trace_step")
             write = getattr(pipe, f"{stage}_write_inputs")
 
             inputs = build_inputs(model.config, task="i2v")
             golden = hf_reference(model, inputs)
             setup(inputs)  # pre-upload resident buffers
             write()  # exercise the 2CQ CQ1 write hook
-            step()  # warmup / compile (not traced)
+            tid, out, first_out = pipe.denoise_trace_capture(blocking=True)
+            res = pipe._unpatchify(first_out, pipe._resident["out_shape"])
 
-            tid = ttnn.begin_trace_capture(device, cq_id=0)
-            out = step()  # host-op-free forward (recorded)
-            ttnn.end_trace_capture(device, tid, cq_id=0)
-            ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-            res = pipe._unpatchify(out, pipe._resident["out_shape"])
+            # Replay with both changing inputs. In particular, the second
+            # timestep must reach the timestep-conditioned text refiner; this
+            # guards the prior bug that baked step 0 conditioning into replay.
+            replay_inputs = dict(inputs)
+            replay_inputs["hidden_states"] = inputs["hidden_states"] * 0.75
+            replay_inputs["timestep"] = inputs["timestep"] * 0.5
+            replay_golden = hf_reference(model, replay_inputs)
+            write(replay_inputs["hidden_states"], replay_inputs["timestep"])
+            pipe.denoise_trace_execute(tid, blocking=True)
+            replay_res = pipe._unpatchify(out, pipe._resident["out_shape"])
             ttnn.release_trace(device, tid)
 
             achieved = pcc(golden, res)
-            ok = ok and (achieved >= 0.95)
-            print(f"[trace_capture_selftest] stage={stage}: captured host-free, trace PCC={achieved:.6f}")
+            replay_achieved = pcc(replay_golden, replay_res)
+            ok = ok and (achieved >= 0.95) and (replay_achieved >= 0.95)
+            print(
+                f"[trace_capture_selftest] stage={stage}: captured host-free, "
+                f"first/replay PCC={achieved:.6f}/{replay_achieved:.6f}"
+            )
         return ok
     finally:
         if own:

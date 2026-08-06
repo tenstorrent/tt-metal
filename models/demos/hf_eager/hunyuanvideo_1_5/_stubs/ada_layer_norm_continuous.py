@@ -106,10 +106,12 @@ def build(device, torch_module):
         gx = 8
         while gx > 1 and Nt % gx != 0:
             gx -= 1
-        # L1-fit guard: width-sharding the whole [M, C/gx] block into each core's L1
-        # OOMs at real video frame counts (M~16k tokens @ 121f). Only a win at the tiny
-        # profiled M; fall back to the stock interleaved LN when it won't fit L1.
-        if (Mt * 32) * ((Nt // gx) * 32) * 2 > 700_000:
+        # The sharded LayerNorm kernel allocates multiple static circular
+        # buffers beyond the tensor shard. At 13f, block_h=25 measured 2.35 MiB
+        # of CBs and exceeded Blackhole's 1.5 MiB L1 despite a 400 KiB shard.
+        # Retain this dispatch optimization only for its tuned tiny shapes.
+        shard_bytes = (Mt * 32) * ((Nt // gx) * 32) * 2
+        if Mt > 8 or 6 * shard_bytes > 1_300_000:
             return ttnn.layer_norm(x, epsilon=eps, compute_kernel_config=compute_config)
         shard_shape = [Mt * 32, (Nt // gx) * 32]
         grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, 0))})
