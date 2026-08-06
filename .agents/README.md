@@ -10,8 +10,16 @@ It has three parts:
 .agents/
   prompts/model_bringup_multigoal/   # the eleven stage goals, one prompt file each
   skills/                            # the knowledge the agent works from
-  scripts/multigoal                  # the runner that chains the stages together
+  scripts/multigoal                  # runner (Codex app-server backend)
+  scripts/multigoal-claude           # runner (Claude Code backend) — same CLI/flags
 ```
+
+Two interchangeable runners drive the same prompts/skills: `scripts/multigoal`
+(the original Codex app-server backend) and `scripts/multigoal-claude` (the
+Claude Code port). They share the runner-side logic (manifest, stage checks,
+resume, gate policy); pick whichever agent backend you have. The Claude runner
+adds `--model`/`--effort`/`--permission-mode`/`--claude-bin` and has no
+objective length cap. Everything below applies to both unless noted.
 
 ## Quick Start
 
@@ -30,6 +38,16 @@ That runs all eleven stages back to back. Expect a full bringup to take several
 hours of unattended work. Results land in `models/autoports/<model>/`, where
 `<model>` is the HF model id lowercased with non-alphanumerics replaced by
 underscores.
+
+To use the Claude Code backend instead, swap the runner (no extra Python
+packages — just the `claude` CLI on `PATH`, authenticated):
+
+```bash
+python .agents/scripts/multigoal-claude \
+  --replace HF_MODEL=org/Your-Model-Here \
+  --replace MODEL_DIR=models/autoports/org_your_model_here \
+  .agents/prompts/model_bringup_multigoal/*.txt
+```
 
 ## How It Works
 
