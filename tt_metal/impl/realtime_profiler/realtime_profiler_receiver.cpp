@@ -496,6 +496,7 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
         return;
     }
 
+    report_stalled_syncs(now);
     log_info(
         tt::LogMetal,
         "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.2f} per resync), "
@@ -909,7 +910,6 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
         }
         last_pass = now;
         const uint32_t num_pages = drain_all_devices(now, page_buf);
-        report_stalled_syncs(now);
         num_pages_received += num_pages;
 
         if (now - last_fifo_plot >= kFifoPlotInterval) {

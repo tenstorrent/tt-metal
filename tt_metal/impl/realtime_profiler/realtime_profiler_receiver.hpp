@@ -109,6 +109,8 @@ private:
     // Called on the drain loop immediately before draining dev_state, so a device's sync interval is bounded by its
     // own drain rather than by every other device's.
     void sync_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now);
+    // Called from report_sync_cost, not from the drain loop: a device that has stopped answering is reported at
+    // most once per warning interval, so scanning every device for it on every pass is work the drain never needs.
     void report_stalled_syncs(std::chrono::steady_clock::time_point now);
     void report_sync_cost(std::chrono::steady_clock::time_point now);
     void stagger_sync_phases();
