@@ -1630,3 +1630,40 @@ its own process with its own device open either way. The honest statement is tha
 **Never conclude anything about a cell from a sweep that visits other cells.** Every hang result in this file
 before §N+9 came from a ladder, and ladders confound the swept axis with the act of sweeping. Fixed-config
 repetition from a fresh card is the only sound form for this measurement, and it is cheap (50 runs ~ 3 min).
+
+## §N+10 — The Tensix-vs-DRISC comparison was confounded with DISPATCH MODE all along
+
+The matched control, finally run. Same churn cycle (repeat 1,2,4,6,8,12,16 @ delay 500), same 2 trials x 49
+runs, each from a fresh `tt-smi -r`:
+
+| arm | dispatch | grid | runs | hangs |
+|---|---|---|---|---|
+| DRISC | **fast** | 120 | ~118 (churn A+B, ladders §N+8) | **3** (run 4, 31, ~34) |
+| DRISC | **slow** | 110 | 98 | **0** |
+| Tensix BRISC | slow | 110 | 98 | **0** |
+
+**Every hang ever recorded on this box is a FAST-DISPATCH DRISC run.** The same DRISC, churned identically
+under slow dispatch, is clean for 98 runs -- as is the Tensix.
+
+### Why the whole Tensix control was never a control for core type
+
+A Tensix drainer is a resident program on a worker, which **fast dispatch will not allow**, so the Tensix arm
+can ONLY run slow dispatch. Every "Tensix survives where the DRISC hangs" result therefore compared
+`DRISC + fast dispatch` against `Tensix + slow dispatch` and varied two things at once. The one-line summary
+this file has carried for two sessions -- "it is the DRISC path, not the load" -- silently included the dispatch
+environment in "the path". With the DRISC now working under slow dispatch (§N+6), the within-core-type
+comparison is possible for the first time, and it splits on dispatch mode, not on core type.
+
+Statistically this is still weak: 3/118 vs 0/196 is Fisher p ~ 0.055. Direction is consistent, significance is
+borderline, and the honest claim is **"dispatch mode is now the leading candidate and core type is not
+supported"** -- not that the DRAM core is exonerated.
+
+### The experiment that settles it, and it is within ONE core type
+
+Fast-dispatch DRISC churn vs slow-dispatch DRISC churn, many trials, alternating order. No Tensix needed, so
+nothing is confounded with the resident-program restriction. If fast dispatch keeps hanging and slow dispatch
+keeps not, the trigger is the dispatch environment -- dispatch cores contending on the same NoC, which was on
+the original candidate list in §N+4 and got dropped when the Tensix comparison looked decisive.
+
+**The 2x2 can never be completed on the Tensix side** (fast dispatch + resident worker program is illegal), so
+core type can only ever be tested by holding dispatch mode fixed at SLOW -- where, so far, neither core hangs.
