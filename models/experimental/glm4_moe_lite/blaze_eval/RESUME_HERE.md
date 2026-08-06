@@ -376,3 +376,27 @@ round-trip is worth 1.22x. Mechanism 2 works; at these cluster sizes it is small
   (`num_total_experts`, `zero_tail`) work — **validated on hardware this session**: F3 33/33;
   F11's hang fixed (17.8 s vs >700 s), GLM-5 dims pass, GLM-4.7's 64 experts run but PCC 0.0235.
   Do not clobber: syncs must only replace `tt-metal/models/experimental/glm4_moe_lite`.
+
+## SIZING UPDATE: the widening is ~5 lines of kernel, not a page-walk redesign
+
+Read the reader to size the "one unknown" step properly. `kernels/op.hpp:140` derives the entire
+weight stream from a single base:
+
+    weights_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, weights_tensor_addr)
+
+The DRAM shard is **column-major tile-shuffled**, so a column sub-range is a *contiguous byte
+range*. Two workers on one bank therefore differ by a constant byte offset into the same shard —
+there is no page-index arithmetic to restructure. Add a per-core `weights_byte_offset` CtRtArg
+(same mechanism `bank_id` already uses at op.hpp:65/135) and add it to the base:
+
+    get_noc_addr_from_bank_id<true>(dram_bank_id, weights_tensor_addr + w_off)
+    w_off = (idx // num_banks) * (shard_bytes // W)
+
+**Make it opt-in: `workers_per_bank=1` by default.** At W=1 the core list, `num_banks`,
+`per_core_N` and `w_off` are all unchanged, so the change is a provable no-op until W>1 is asked
+for. That is what makes it safe to land incrementally in a kernel every blaze op shares — it can
+absorb that, but not a breaking edit. This removes the main reason the widening kept being
+deferred.
+
+Steps 1-4 of the recipe above are mechanical; step 5 is ~5 lines plus a per-core map. Roughly an
+hour of work with the hardware gate already built, not the redesign it was previously scoped as.
