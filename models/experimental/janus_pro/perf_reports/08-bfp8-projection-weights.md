@@ -45,6 +45,12 @@ of weight.
 | aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 470.2 | -18.4 | 0.470 | 48 | 41.7 | 31.7 | HiFi2 |
 | patch embed | 576 x 768 x 1024 | 1 | +0 | 43.2 | -0.9 | 0.043 | 48 | 21.2 | 29.2 | HiFi2 |
 
+**The first row is two projections, not one.** `c_fc` runs 24 times per pass and the aligner's
+`fc1` once, and at this stage they share both the shape (576 x 1024 x 4096) and the math fidelity.
+Rows are grouped by exactly those two, so nothing in this profile separates them: `us each` is the
+average over all 25 instances and belongs to neither. They appear apart wherever their fidelities
+differ — changes 1-6 and 25 onward.
+
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why
 `cores` and `fidelity` are next to it. See PROFILER_NOTES.md for a worked case where the number moved

@@ -44,6 +44,13 @@ optimal for `c_fc` in isolation. Together they are the fastest configuration mea
 | aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 313.9 | +1.1 | 0.314 | 48 | 62.4 | 29.0 | HiFi2 |
 | patch embed | 576 x 768 x 1024 | 1 | +0 | 44.2 | +2.1 | 0.044 | 48 | 20.8 | 28.6 | HiFi2 |
 
+**The first row is two projections, not one, and here they are separable.** `c_fc` runs 24 times
+per pass at LoFi and the aligner's `fc1` once at HiFi2; only the shape (576 x 1024 x 4096) is
+shared. This report predates grouping by shape *and* fidelity, so the row averages all 25 instances
+and its `fidelity` cell shows only the first one seen. It cannot be regenerated — the 12 MB profile
+it came from is no longer on disk. Stage 26 shows the same two rows apart: 24 x 72.4 us LoFi and
+1 x 236.4 us HiFi2.
+
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why
 `cores` and `fidelity` are next to it. See PROFILER_NOTES.md for a worked case where the number moved

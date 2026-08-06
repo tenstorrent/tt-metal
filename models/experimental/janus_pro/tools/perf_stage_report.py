@@ -326,6 +326,15 @@ def _render(csv_path, stage, sha, note, single_pass):
             str(row.fidelity),
         ]
         lines.append("| " + " | ".join(cells) + " |")
+    if any(label.startswith("mlp c_fc + ") for _, _, label, _, _ in rows):
+        lines += [
+            "",
+            "**The first row is two projections, not one.** `c_fc` runs 24 times per pass and the aligner's",
+            "`fc1` once, and at this stage they share both the shape (576 x 1024 x 4096) and the math fidelity.",
+            "Rows are grouped by exactly those two, so nothing in this profile separates them: `us each` is the",
+            "average over all 25 instances and belongs to neither. They appear apart wherever their fidelities",
+            "differ — changes 1-6 and 25 onward.",
+        ]
     lines += [
         "",
         "`FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how",
