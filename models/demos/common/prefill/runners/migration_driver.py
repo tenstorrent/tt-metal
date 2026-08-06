@@ -22,8 +22,8 @@ free — exactly the handoff the C++ PrefillScheduler relies on.
 
 Two topologies, selected by whether the destination endpoint id differs from our own:
   * LOOPBACK (dest == src, the default): src and dst slots live in ONE table, routed to the endpoint's
-    internal B worker. The prefill RUNNER validates the migrated KV on-device (PREFILL_VALIDATE_MIGRATION=1
-    + validate_after_prefill) once it sees the DONE sentinel — the producer never PCCs migrated KV itself.
+    internal B worker. Neither side PCCs the migrated KV; the DONE sentinel only reports which pairs the
+    worker copied.
   * CROSS-ENDPOINT P->D (dest != src): dst lives in the remote DECODE galaxy's table, an independent
     address space. Requires the pairing/connect handshake below, and the decode side has no way to know
     each slot's prompt length / last token, so we write a JSON handoff sidecar for it.
@@ -70,8 +70,8 @@ so ``migration.issue`` is redundant here and a ``false`` is warned about rather 
   PREFILL_MIGRATION_HANDOFF_PATH    path of the JSON handoff for a cross-endpoint decode consumer;
                                     unset (default) => not written at all.
   PREFILL_MIGRATION_TIMEOUT_MS      per-migration wait_complete timeout (default 3600000).
-  MIGRATION_DONE_FILE               path of the DONE sentinel the runner polls (default
-                                    /tmp/migration_done.sentinel).
+  MIGRATION_DONE_FILE               path of the DONE sentinel written once every pair has migrated, for
+                                    an external consumer to poll (default /tmp/migration_done.sentinel).
   Queues + client come from the runner's migration env, resolved via ``runners.migration``:
   PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE and PREFILL_MIGRATION_CLIENT_DIR.
 """
@@ -228,8 +228,7 @@ class MigrationDriver:
         only to bounds-check loopback destinations. ``slot_traces`` / ``pools_by_trace`` are the producer's
         per-slot prompt maps, needed only to write the cross-endpoint handoff.
 
-        The producer does NOT validate migrated KV — the RUNNER does, on-device, once it sees the DONE
-        sentinel (PREFILL_VALIDATE_MIGRATION=1).
+        Nothing here validates the migrated KV — the copy is reported complete via the DONE sentinel.
         """
         if self.client is None:
             raise RuntimeError("[migration_driver] run() called before attach()")
@@ -384,14 +383,14 @@ class MigrationDriver:
         per migrated pair as ``{"slots": [{dst_slot, prompt_len, last_prompt_token}, ...]}``. ``first_token``
         is intentionally omitted -- the decode side derives it from the migrated KV.
 
-        This exists for CROSS-ENDPOINT P->D: unlike loopback (where the prefill-side runner validates the KV
-        on-device and needs no prompt metadata), the destination galaxy has no way to know each slot's prompt
+        This exists for CROSS-ENDPOINT P->D: unlike loopback (where the destination is never consumed and
+        needs no prompt metadata), the destination galaxy has no way to know each slot's prompt
         length / last token, so it cannot pick the decode start position without this sidecar. ``real_len``
         (element 2 of each triple) is exactly the resident prompt length that was migrated, and the src slot's
         last prompt token is ``pool[real_len - 1]`` of the trace the producer already loaded.
 
         Gated on ``PREFILL_MIGRATION_HANDOFF_PATH``: unset => write nothing, which is what a loopback run
-        wants since the runner validates on-device and needs no sidecar. Written atomically (tmp +
+        wants since nothing consumes its destination slots. Written atomically (tmp +
         os.replace) so the decode side never reads a partial file."""
         if not self.handoff_path:
             return
@@ -427,16 +426,14 @@ class MigrationDriver:
         logger.success(f"[migration_driver] wrote handoff {handoff_path} ({len(slots)} slot(s)): {slots}")
 
     def _write_done_sentinel(self, triples: list) -> list:
-        """Write the migration DONE sentinel — one ``src dst`` line per migrated pair — that the runner's
-        validate_after_prefill (PREFILL_VALIDATE_MIGRATION=1) polls for. This is the SAME handshake the
-        llm-engine scheduler/driver used (prefill_scheduler_driver wrote this file after migrating). Once it
-        appears, the runner PCC-validates each pair ON-DEVICE: src vs golden + dst vs golden (burst), and/or
-        dst==src (PREFILL_MIGRATE_PAIRWISE=1). Takes the SAME triples list ``_issue`` consumed, so the
-        sentinel matches exactly what was migrated. Returns the (src, dst) pairs written."""
+        """Write the migration DONE sentinel — one ``src dst`` line per migrated pair — for an external
+        consumer to poll. This is the SAME handshake the llm-engine scheduler/driver used
+        (prefill_scheduler_driver wrote this file after migrating). Takes the SAME triples list ``_issue``
+        consumed, so the sentinel matches exactly what was migrated. Returns the (src, dst) pairs written."""
         if not triples:
             raise ValueError(
                 "migration is enabled but the mapping resolved to zero pairs, so there is no DONE sentinel "
-                "to publish (an empty one would make the runner validate nothing and report success). "
+                "to publish (an empty one would report success while nothing moved). "
                 "Prefill itself succeeded — this is a CONFIG problem: either no slot ended up resident, or "
                 "every PREFILL_MIGRATION_PAIRS src was skipped for holding no data. Check that the producer "
                 "actually prefilled the src slots you asked to migrate, or turn migration off "

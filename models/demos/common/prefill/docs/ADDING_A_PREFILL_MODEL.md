@@ -132,22 +132,9 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         hidden state on a non-last pipeline rank, or None on the last/single rank (the
         populated cache is the output)."""
 
-    # --- OPTIONAL hooks — implement only if your model supports golden-trace bring-up / cache migration;
-    #     production serving never calls them. Keep the heavy PCC / table logic in your model's own
-    #     validation module (a thin forwarder on the runtime), not inline here — see
-    #     deepseek_v3_d_p/tt/runners/prefill_kv_validation.py. ---
-    def kv_cache_pcc_check(self, kv_cache, *, slot_id, n_chunks, trace_dir=None,
-                           first_layer_idx=0, real_len=None, pt_path_override=None) -> float:
-        """PCC slot `slot_id`'s `kv_cache` against the golden trace; return the min per-layer PCC (asserting
-        on failure). The single place your model's KV layout + golden format live. `real_len` caps the
-        compared extent to real (non-pad) tokens; `pt_path_override` selects a per-slot .pt golden (raise if
-        your model has no such path)."""
-
-    def read_slot_kv(self, kv_cache, slot) -> "list[torch.Tensor]":
-        """Read one slot's KV cache from device to host: one host tensor per cache tensor, each
-        `[num_layers, heads(or 1), seq_cache, head_dim]` (replicas collapsed to 1), in the raw on-device
-        (block-cyclic) layout — NOT un-rotated to natural token order."""
-
+    # --- OPTIONAL hooks — implement only if your model supports cache migration; the serving loop
+    #     never calls them. Keep the heavy table logic in your model's own module (a thin forwarder on
+    #     the runtime), not inline here. ---
     def build_kv_chunk_table(self, kv_cache, path: str) -> str:
         """Build + serialize the KV-chunk address table for `kv_cache` (your model's block-cyclic layout)
         to `path` and return it; issue no comms (the engine publishes it). Use the shared
