@@ -207,6 +207,15 @@ def _golden_function_gelu(input_tensor, *args, variant=None, fast_and_approximat
 ttnn.attach_golden_function(ttnn.gelu, golden_function=_golden_function_gelu)
 
 
+def _golden_function_softplus(input_tensor_a, *args, beta=1.0, threshold=20.0, **kwargs):
+    import torch
+
+    return torch.nn.functional.softplus(input_tensor_a, beta=beta, threshold=threshold)
+
+
+ttnn.attach_golden_function(ttnn.softplus, golden_function=_golden_function_softplus)
+
+
 def _golden_function_asin(input_tensor_a, *args, device, **kwargs):
     import torch
 

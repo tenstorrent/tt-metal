@@ -211,6 +211,13 @@ def run_activation_softplus_test(device, h, w, beta, threshold, ttnn_function, p
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor_a, beta=beta, threshold=threshold)
 
+    # The golden must honour beta/threshold -- same reference the non-sharded
+    # sweep builds by hand (sweeps/eltwise/unary/softplus/softplus.py:72).
+    assert torch.equal(
+        torch_output_tensor,
+        torch.nn.functional.softplus(torch_input_tensor_a, beta=beta, threshold=threshold),
+    )
+
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
