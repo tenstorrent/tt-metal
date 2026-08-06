@@ -19,10 +19,15 @@ side-by-side has its own section.
 | tt-metal | `b5e9cba196` | `b5e9cba196` | `b5e9cba196` |
 | Date | `2026-08-06` | `2026-08-06` | `2026-08-06` |
 
-The two Blackhole boards report the same architecture and the same compute grid, and `p150b`
-measures **~5 % slower per token** on identical work (`7.07` vs `6.73 ms` explicit; `5.87` vs
-`5.58` fused). `p150a` is the headline part; `p150b` is a second, independent Blackhole
-measurement rather than a replacement for it.
+The two Blackhole boards are the **same silicon and differ in cooling** — `p150a` is actively
+cooled, `p150b` passively. Both report `Arch.BLACKHOLE` with the same 13×10 grid, and the passive
+board measures **~5 % slower per token** on identical work (`7.07` vs `6.73 ms` explicit; `5.87` vs
+`5.58` fused): the active cooler sustains a higher clock. Accuracy is unaffected — PCC matches to
+ten digits across both.
+
+That 5 % is the same order as several real optimisations in this document, so **`p150a` and `p150b`
+are separate columns and neither backfills the other's missing cells.** `p150a` is the headline
+part.
 
 ## Benchmark commands
 ```bash
