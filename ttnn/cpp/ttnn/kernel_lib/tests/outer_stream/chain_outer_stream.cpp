@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Functional validation for InputLifecycle::OuterStream — streamed outer-axis broadcast.
+// Functional validation for WaitPolicy::PerOuter, PopPolicy::PerOuter — streamed outer-axis broadcast.
 //
 // BinaryFpu(cb_a, cb_b) -> PackTile(cb_out) over grid(Ht, Wt):
 //   cb_a: Streaming + Scalar — full Ht*Wt walk, one tile per (ht, wt), popped per tile.
@@ -29,15 +29,9 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::grid(Ht, Wt),
         ckl::BinaryFpu<
-            cb_a,
-            cb_b,
+            ckl::input(cb_a, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_b, ckl::WaitPolicy::PerOuter, ckl::PopPolicy::PerOuter, ckl::DataFormatReconfig::Disabled),
             ckl::BinaryFpuOp::Add,
-            ckl::BroadcastDim::None,
-            ckl::InputLifecycle::Streaming,    // cb_a: one tile per (ht, wt)
-            ckl::InputLifecycle::OuterStream,  // cb_b: one tile per row
-            ckl::BinaryDataFormatReconfig::None,
-            ckl::Dst::D0,
-            ckl::OperandKind::Scalar,     // cb_a reads the front
-            ckl::OperandKind::Scalar>{},  // cb_b reads the front (advances per row)
-        ckl::PackTile<cb_out>{});
+            ckl::BroadcastDim::None>{},
+        ckl::PackTile<ckl::output(cb_out)>{});
 }

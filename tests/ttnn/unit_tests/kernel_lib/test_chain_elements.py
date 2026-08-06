@@ -8,8 +8,10 @@ Coverage for chain element types that the other suites don't exercise.
   - DestReuseBinary: feeds the DEST result back as an FPU operand (DEST->srcA/srcB) instead of a
     second CB read. out = (A + B) * C.
 
-Fill / Rand (no-CB-input elements with special init) and ternary/quaternary SFPU are tracked as
-follow-up.
+  - Ternary Where: selects between two DEST tiles.
+  - Pack ReLU: applies activation on one output while a second pack remains linear.
+
+Fill / Rand (no-CB-input elements with special init) and quaternary SFPU are tracked as follow-up.
 """
 
 import torch
@@ -19,47 +21,24 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-DEST_REUSE = "ttnn/cpp/ttnn/kernel_lib/tests/axes/dest_reuse.cpp"
 DEST_REUSE_PARAM = "ttnn/cpp/ttnn/kernel_lib/tests/axes/dest_reuse_param.cpp"
-TERNARY_WHERE = "ttnn/cpp/ttnn/kernel_lib/tests/axes/ternary_where.cpp"
+MISC_ELEMENTS = "ttnn/cpp/ttnn/kernel_lib/tests/axes/misc_elements.cpp"
+UNARY_BCAST = "ttnn/cpp/ttnn/kernel_lib/tests/axes/unary_bcast.cpp"
 
 # reuse selector -> name; op selector -> (name, torch fn applied as `lhs op rhs`)
 _REUSE = {0: "DEST_TO_SRCA", 1: "DEST_TO_SRCB"}
 _OP = {0: ("add", lambda x, y: x + y), 1: ("sub", lambda x, y: x - y), 2: ("mul", lambda x, y: x * y)}
 
 
-def test_dest_reuse_binary(device):
-    """DestReuseBinary: out = (A + B) * C, with (A+B) threaded through DEST into the multiply."""
-    n = 4
-    dt = ttnn.bfloat16
-    shape = [1, 1, 32, 32 * n]
-    core_grid = lib.single_core_grid()
-
-    ta, tt_a = lib.make_input(shape, dt, device, seed=1101)
-    tb, tt_b = lib.make_input(shape, dt, device, seed=1102)
-    tc, tt_c = lib.make_input(shape, dt, device, seed=1103)
-    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
-    cbs = [lib.cb_descriptor(i, dt, 2, core_grid) for i in (0, 1, 2)] + [lib.cb_descriptor(16, dt, 2, core_grid)]
-    reader = lib.build_reader_kernel([tt_a, tt_b, tt_c], n, core_grid)
-    writer = lib.build_writer_1out_kernel(tt_out, n, core_grid)
-    compute = lib.build_compute_kernel(DEST_REUSE, [n], core_grid)
-
-    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
-    output = ttnn.generic_op([tt_a, tt_b, tt_c, tt_out], program)
-
-    golden = ((ta + tb) * tc).to(torch.float32)
-    out = ttnn.to_torch(output).to(torch.float32)
-    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"DestReuseBinary (A+B)*C | {msg}")
-    assert pcc_ok, msg
-
-
-@pytest.mark.parametrize("reuse", [0, 1], ids=["SRCA", "SRCB"])
-@pytest.mark.parametrize("op", [0, 1, 2], ids=["add", "sub", "mul"])
+@pytest.mark.parametrize(
+    "reuse,op",
+    [(0, 0), (0, 1), (1, 1), (0, 2)],
+    ids=["add-SRCA", "sub-SRCA", "sub-SRCB", "mul-SRCA"],
+)
 def test_dest_reuse_matrix(device, reuse, op):
     """DestReuseBinary reuse-direction x op. Stage1 D0=A+B; stage2 routes DEST per ReuseType:
-    SRCA -> (A+B) op C, SRCB -> C op (A+B). The Sub rows differ between directions, proving DEST
-    is routed to the correct unpack lane."""
+    SRCA -> (A+B) op C, SRCB -> C op (A+B). Sub covers both directions because it distinguishes
+    operand order; commutative Add/Mul need only one direction to cover their op emission."""
     n = 4
     dt = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]
@@ -110,7 +89,7 @@ def test_ternary_where(device):
     cbs = [lib.cb_descriptor(i, dt, 2, core_grid) for i in (0, 1, 2)] + [lib.cb_descriptor(16, dt, 2, core_grid)]
     reader = lib.build_reader_kernel([tt_cond, tt_a, tt_b], n, core_grid)
     writer = lib.build_writer_1out_kernel(tt_out, n, core_grid)
-    compute = lib.build_compute_kernel(TERNARY_WHERE, [n], core_grid)
+    compute = lib.build_compute_kernel(MISC_ELEMENTS, [n, 0], core_grid)
 
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     output = ttnn.generic_op([tt_cond, tt_a, tt_b, tt_out], program)
@@ -119,4 +98,78 @@ def test_ternary_where(device):
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
     logger.info(f"Where ternary | {msg}")
+    assert pcc_ok, msg
+
+
+def test_pack_relu(device):
+    """One pack applies ReLU while a fan-out pack preserves the original tile."""
+    n = 8
+    dt = ttnn.bfloat16
+    shape = [1, 1, 32, 32 * n]
+    core_grid = lib.single_core_grid()
+
+    torch_in, tt_in = lib.make_input(shape, dt, device, seed=1801, scale=2.0, bias=-1.0)
+    tt_relu = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    tt_linear = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            lib.build_reader_kernel([tt_in], n, core_grid),
+            lib.build_writer_2out_kernel([tt_relu, tt_linear], n, core_grid),
+            lib.build_compute_kernel(MISC_ELEMENTS, [n, 1], core_grid),
+        ],
+        semaphores=[],
+        cbs=[
+            lib.cb_descriptor(0, dt, 2, core_grid),
+            lib.cb_descriptor(16, dt, 2, core_grid),
+            lib.cb_descriptor(17, dt, 2, core_grid),
+        ],
+    )
+    ttnn.generic_op([tt_in, tt_relu, tt_linear], program)
+
+    for output, golden in (
+        (tt_relu, torch.clamp_min(torch_in.to(torch.float32), 0)),
+        (tt_linear, torch_in.to(torch.float32)),
+    ):
+        pcc_ok, message = comp_pcc(golden, ttnn.to_torch(output).to(torch.float32), lib.pcc_threshold([dt]))
+        assert pcc_ok, message
+
+
+@pytest.mark.parametrize("dim", [1, 2, 3], ids=["col", "row", "scalar"])
+def test_unary_bcast(device, dim):
+    """UnaryBcast replicates one column, row, or scalar within each tile."""
+    n = 4
+    dt = ttnn.bfloat16
+    shape = [1, 1, 32, 32 * n]
+    core_grid = lib.single_core_grid()
+
+    torch.manual_seed(1401)
+    host = torch.randn(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        host,
+        dtype=dt,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    cbs = [lib.cb_descriptor(0, dt, 2, core_grid), lib.cb_descriptor(16, dt, 2, core_grid)]
+    reader = lib.build_reader_kernel([tt_in], n, core_grid)
+    writer = lib.build_writer_1out_kernel(tt_out, n, core_grid)
+    compute = lib.build_compute_kernel(UNARY_BCAST, [n, dim], core_grid)
+
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    output = ttnn.generic_op([tt_in, tt_out], program)
+
+    tiles = host.to(torch.float32).reshape(1, 1, 32, n, 32).permute(0, 1, 3, 2, 4)
+    if dim == 1:
+        golden_tiles = tiles[..., :1].expand_as(tiles)
+    elif dim == 2:
+        golden_tiles = tiles[..., :1, :].expand_as(tiles)
+    else:
+        golden_tiles = tiles[..., :1, :1].expand_as(tiles)
+    golden = golden_tiles.permute(0, 1, 3, 2, 4).reshape(shape)
+
+    out = ttnn.to_torch(output).to(torch.float32)
+    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
+    logger.info(f"UnaryBcast dim={dim} | {msg}")
     assert pcc_ok, msg
