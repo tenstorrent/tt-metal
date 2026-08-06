@@ -214,28 +214,21 @@ void RealtimeProfilerClockSync::configure_clock_read_path() {
     }
 }
 
-void RealtimeProfilerClockSync::retire_probes_before(uint64_t ticks) {
-    if (probes_begin_ == probes_end_) {
-        return;
-    }
-    // Retained for whichever of the two reasons still holds: a record may need the probe as a near side, or the
-    // published rate is still measured across it. Without the second condition the baseline collapses back to a single
-    // chord the moment records drain, which is most of the time.
-    const auto baseline_starts_after = probe_at(probes_end_ - 1).host - kRateBaseline;
-    // Two probes are kept preceding `ticks`, not one: a near side has to be far enough from the far side to take a
-    // slope from, and a single retained probe cannot span anything.
-    while (probes_end_ - probes_begin_ > 3 && probe_at(probes_begin_ + 2).ticks <= ticks &&
-           probe_at(probes_begin_).host < baseline_starts_after) {
-        ++probes_begin_;
-    }
-}
-
 std::optional<RealtimeProfilerClockSync::BaselineRate> RealtimeProfilerClockSync::baseline_rate() const {
-    if (probes_end_ - probes_begin_ < 2) {
+    const uint64_t begin = oldest_probe();
+    if (probes_end_ - begin < 2) {
         return std::nullopt;
     }
-    const Anchor& oldest = probe_at(probes_begin_);
     const Anchor& newest = probe_at(probes_end_ - 1);
+    // Walk back to the newest probe that is still at least kRateBaseline older than the newest one. That, not the
+    // ring's oldest entry, is the near end of the baseline: how far back the rate is measured has to be a property of
+    // the rate, not of how much history the ring happens to be holding.
+    const auto cutoff = newest.host - kRateBaseline;
+    uint64_t near = probes_end_ - 1;
+    while (near > begin && probe_at(near).host > cutoff) {
+        --near;
+    }
+    const Anchor& oldest = probe_at(near);
     if (newest.ticks <= oldest.ticks || newest.host <= oldest.host) {
         return std::nullopt;
     }
@@ -253,6 +246,7 @@ std::optional<RealtimeProfilerClockSync::BaselineRate> RealtimeProfilerClockSync
 
 std::optional<std::pair<RealtimeProfilerClockSync::Anchor, RealtimeProfilerClockSync::Anchor>>
 RealtimeProfilerClockSync::probes_bracketing(uint64_t start_ticks, uint64_t end_ticks) const {
+    const uint64_t probes_begin_ = oldest_probe();
     if (probes_end_ - probes_begin_ < 2) {
         return std::nullopt;
     }
@@ -586,12 +580,6 @@ bool RealtimeProfilerClockSync::resync() {
     if (!p.has_value()) {
         cost_.busy += std::chrono::steady_clock::now() - started_at;
         return false;
-    }
-    if (probes_end_ - probes_begin_ == kProbeHistoryCapacity) {
-        // Anything still waiting on the oldest probe has waited a whole history's worth of intervals, far past any
-        // latency this is useful at, and the newest probe is the one that closes intervals -- so the oldest goes.
-        ++probes_begin_;
-        ++cost_.dropped_probes;
     }
     probe_history_[probes_end_ % kProbeHistoryCapacity] =
         Anchor{p->host_time + placement_error(p->bracket), p->device_ticks, p->bracket};

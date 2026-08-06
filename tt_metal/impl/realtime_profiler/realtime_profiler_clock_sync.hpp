@@ -104,9 +104,6 @@ public:
     struct Cost {
         uint64_t resyncs = 0;
         uint64_t clock_reads = 0;
-        // Probes discarded because the history was full, i.e. records had been waiting on its oldest entry for the
-        // whole history.
-        uint64_t dropped_probes = 0;
         std::chrono::nanoseconds busy{};
     };
 
@@ -134,10 +131,6 @@ public:
     // record.
     [[nodiscard]] std::optional<std::pair<Anchor, Anchor>> probes_bracketing(
         uint64_t start_ticks, uint64_t end_ticks) const;
-
-    // Drops probes older than `ticks`, the oldest timestamp its owner still holds. This is what bounds the history:
-    // a probe is kept only while some record might still need it as a near side.
-    void retire_probes_before(uint64_t ticks);
 
     // A rate measured across the whole retained history rather than across one chord.
     struct BaselineRate {
@@ -234,16 +227,22 @@ private:
     std::chrono::steady_clock::time_point last_probe_at_;
     Cost cost_;
 
-    // Retention is already bounded -- a probe is kept only while a staged record might still need it as a near side, or
-    // while the published rate is measured across it -- so the history is a preallocated ring, not a deque. A deque
-    // puts a block malloc/free on the drain thread every few probes, and this thread must never touch the allocator:
-    // glibc hands large blocks back with munmap, which takes mmap_lock for write and stalls every other thread in the
-    // process, so an allocation here couples the drain loop to whatever every consumer thread is doing.
+    // Preallocated, and overwrites its oldest entry when full, so nothing has to be retired: the live range is always
+    // the newest kProbeHistoryCapacity probes and its start is derived. Not a deque, because a deque puts a block
+    // malloc/free on the drain thread every few probes and this thread must never touch the allocator -- glibc hands
+    // large blocks back with munmap, which takes mmap_lock for write and stalls every other thread in the process, so
+    // an allocation here couples the drain loop to whatever every consumer thread is doing.
+    //
+    // Sized far past what is needed: a probe within one interval closes a record, and the published rate spans
+    // kRateBaseline, so at any interval this is configurable to the entries either could still want are present many
+    // times over.
     static constexpr size_t kProbeHistoryCapacity = 4096;
     std::array<Anchor, kProbeHistoryCapacity> probe_history_{};
-    uint64_t probes_begin_ = 0;
     uint64_t probes_end_ = 0;
 
+    [[nodiscard]] uint64_t oldest_probe() const {
+        return probes_end_ > kProbeHistoryCapacity ? probes_end_ - kProbeHistoryCapacity : 0;
+    }
     [[nodiscard]] const Anchor& probe_at(uint64_t index) const { return probe_history_[index % kProbeHistoryCapacity]; }
 
     // The interval this last closed. Only the difference between consecutive intervals' slopes says the clock moved

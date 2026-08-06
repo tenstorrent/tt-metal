@@ -111,16 +111,6 @@ constexpr uint32_t kResyncFailuresBeforeStalled = 16;
 // delay in publication stall the device itself.
 constexpr size_t kStagedCapacityRecords = RealtimeProfilerRuntimeSizes::fifo_pages + kMaxSocketPagesPerRead;
 
-// How long the record at the head of a device's staging buffer may fail to close before it is treated as unmappable.
-// Staging as deep as the FIFO keeps headroom from ever being the reason a drain stops, but it cannot help a record that
-// will never close: that one still fills staging, just later. This is what bounds it.
-// A real record waits at most one sync interval for the probe that closes it; anything still stuck three orders of
-// magnitude past that has a timestamp no probe will ever reach -- a torn 64-bit read of the device counter decodes as a
-// plausible start/end pair, so the malformed check in stage_pages does not catch it. Dropping it is the only way
-// forward, because records publish in order: the alternative is that it blocks this device's staging, then its drain,
-// then its FIFO, then its probe retirement, permanently.
-constexpr auto kStagedHeadStallLimit = std::chrono::milliseconds(500);
-
 constexpr size_t kMaxConsumerBatchPerDevice =
     1u << 15;                                      // records one callback may be handed at a time, per attached device
 constexpr size_t kMaxConsumerBatchCap = 1u << 20;  // hard ceiling on the above
@@ -481,7 +471,6 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
             const auto cost = dev_state.clock_sync->cost();
             sync_cost_at_last_report_.resyncs += cost.resyncs;
             sync_cost_at_last_report_.clock_reads += cost.clock_reads;
-            sync_cost_at_last_report_.dropped_probes += cost.dropped_probes;
             sync_cost_at_last_report_.busy += cost.busy;
         }
         return;
@@ -495,12 +484,10 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
         const auto cost = dev_state.clock_sync->cost();
         total.resyncs += cost.resyncs;
         total.clock_reads += cost.clock_reads;
-        total.dropped_probes += cost.dropped_probes;
         total.busy += cost.busy;
     }
     const uint64_t resyncs = total.resyncs - sync_cost_at_last_report_.resyncs;
     const uint64_t reads = total.clock_reads - sync_cost_at_last_report_.clock_reads;
-    const uint64_t dropped_probes = total.dropped_probes - sync_cost_at_last_report_.dropped_probes;
     const auto busy = total.busy - sync_cost_at_last_report_.busy;
     const auto window = now - last_sync_cost_report_;
     sync_cost_at_last_report_ = total;
@@ -512,13 +499,12 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
     log_info(
         tt::LogMetal,
         "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.2f} per resync), "
-        "{} probe(s) dropped, {:.2f}us mean per resync, {:.2f}% of the receiver thread",
+        "{:.2f}us mean per resync, {:.2f}% of the receiver thread",
         std::chrono::duration<double>{window}.count(),
         devices_.size(),
         resyncs,
         reads,
         static_cast<double>(reads) / static_cast<double>(resyncs),
-        dropped_probes,
         std::chrono::duration<double, std::micro>{busy}.count() / static_cast<double>(resyncs),
         100.0 * std::chrono::duration<double>{busy}.count() / std::chrono::duration<double>{window}.count());
 }
@@ -600,9 +586,6 @@ void RealtimeProfilerReceiver::stage_pages(
 // has yet read past stays staged until one does.
 bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
     if (dev_state.staged.empty()) {
-        // Nothing is waiting on a near side, so nothing has to be kept. Skipping this is what lets the history grow
-        // without bound on a device with no records in flight.
-        dev_state.clock_sync->retire_probes_before(std::numeric_limits<uint64_t>::max());
         return false;
     }
 
@@ -629,39 +612,6 @@ bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
         }
     }
 
-    // A head that has not moved for kStagedHeadStallLimit is not waiting for a probe any more; drop it so the records
-    // behind it, and this device's drain, can proceed.
-    if (ready == 0 && !dev_state.staged.empty()) {
-        const auto now = std::chrono::steady_clock::now();
-        const uint64_t head_end = dev_state.staged.front().end_timestamp;
-        if (head_end != dev_state.staged_head_end_timestamp) {
-            dev_state.staged_head_end_timestamp = head_end;
-            dev_state.staged_head_since = now;
-        } else if (now - dev_state.staged_head_since > kStagedHeadStallLimit) {
-            dev_state.staged.erase(dev_state.staged.begin());
-            dev_state.staged_head_end_timestamp = 0;
-            num_unmappable_records_.fetch_add(1, std::memory_order_relaxed);
-            TT_LOG_WARNING_THROTTLED(
-                last_unmappable_warn_,
-                now,
-                kWarnInterval,
-                "[Real-time profiler] Device {} dropped a record whose end timestamp ({}) no probe reached within "
-                "{}ms; "
-                "its timestamps cannot be mapped and it was blocking every record behind it ({} in total)",
-                dev_state.chip_id,
-                head_end,
-                kStagedHeadStallLimit.count(),
-                num_unmappable_records_.load(std::memory_order_relaxed));
-        }
-    } else if (!dev_state.staged.empty()) {
-        dev_state.staged_head_end_timestamp = dev_state.staged.front().end_timestamp;
-        dev_state.staged_head_since = std::chrono::steady_clock::now();
-    }
-
-    // Retired even when nothing published: probes accrue whether or not records drain.
-    dev_state.clock_sync->retire_probes_before(
-        ready < dev_state.staged.size() ? dev_state.staged[ready].start_timestamp
-                                        : std::numeric_limits<uint64_t>::max());
     if (ready == 0) {
         return false;
     }
