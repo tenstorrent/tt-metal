@@ -64,8 +64,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
             num_faces_B, // In1
             num_faces_A, // In0
-            TILE_SIZE_UNPACK_A,
-            TILE_SIZE_UNPACK_B);
+            // in1 first, then in0, matching every other paired argument in this same call
+            // (unpack_B_src, unpack_A_dst/unpack_B_dst, in1/in0 tile_r_dim, num_faces_B/num_faces_A)
+            // and matching math_matmul_test.cpp. These two were the only pair reversed: operand B goes
+            // to SEC0, whose base address llk_unpack_AB_matmul advances by TILE_SIZE_A per MOP
+            // iteration, so swapping them made TILE_LOOP re-read one tile CT_DIM times.
+            TILE_SIZE_UNPACK_B,
+            TILE_SIZE_UNPACK_A);
         _llk_unpack_AB_matmul_init_<>(
             UNPACK_TRANSPOSE_FACES,
             CT_DIM,
