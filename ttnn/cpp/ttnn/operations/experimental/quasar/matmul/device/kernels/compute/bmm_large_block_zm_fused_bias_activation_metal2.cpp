@@ -50,15 +50,7 @@
 // the TEN-4746 trap point. All other DPRINTs (pre-existing MMC* + got_in/acq/reload/mmpost) become no-ops.
 #undef DPRINT
 #define DPRINT(...) ((void)0)
-// [#48552 DIAG] CONFIRMATION: ALL prints off (MMPRE no-op). Instead insert a REAL RISC nop-burst
-// (MMSTALL) at the two bare mm_partials_cb DFB-adjacency points (~419 push_back->reserve_back on PACK,
-// ~492 push_back->wait_front). If this PASSES with all DPRINT off, the root cause is confirmed to be
-// back-to-back DFB API calls on mm_partials_cb with no instruction between (TEN-4746 class), NOT a print.
-#define MMPRE(...) ((void)0)
-// [#48552] MMSTALL neutralized: the RISC nop-burst did NOT mask the race (backend reorders
-// independently of RISC issue). The real fix is now a backend STALLWAIT drain in llk_io_pack.h /
-// llk_io_unpack.h. Kept as no-op so the two call sites still compile while we validate the LLK fix.
-#define MMSTALL() ((void)0)
+#define MMPRE(...) DEVICE_PRINT(__VA_ARGS__)
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
@@ -303,7 +295,7 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                MMPRE("MMC bhbw {} {}\n", bh, bw);  // [#48552 DIAG] unscoped, enabled for bisect
+                DPRINT("MMC bhbw {} {}\n", bh, bw);  // [#48552 DIAG] trimmed off (two-DPRINT experiment)
                 bool enable_reload = false;
 
 #ifdef PACK_RELU
@@ -353,7 +345,8 @@ void kernel_main() {
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles));
                     in1_cb.wait_front(in1_block_num_tiles);
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u));
-                    UNPACK(MMPRE("U got_in blk={}\n", (uint32_t)block));  // [#48552 DIAG] enabled for bisect
+                    UNPACK(DPRINT(
+                        "U got_in blk={}\n", (uint32_t)block));  // [#48552 DIAG] trimmed off (two-DPRINT experiment)
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -369,12 +362,14 @@ void kernel_main() {
                             const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
-                            MMPRE("MMC sb{} preacq\n", in0_subblock);  // [#48552 DIAG] unscoped, enabled for bisect
+                            DPRINT(
+                                "MMC sb{} preacq\n",
+                                in0_subblock);  // [#48552 DIAG] trimmed off (two-DPRINT experiment)
                             tile_regs_acquire();
-                            UNPACK(MMPRE(
+                            UNPACK(DPRINT(
                                 "U acq sb={},{}\n",
                                 (uint32_t)in0_subblock,
-                                (uint32_t)in1_subblock));  // [#48552 DIAG] enabled for bisect
+                                (uint32_t)in1_subblock));  // [#48552 DIAG] trimmed off (two-DPRINT experiment)
                             if (enable_reload) {
                                 UNPACK(DPRINT("U reload sb={}\n", (uint32_t)in0_subblock));  // [#48552 DIAG]
                                 reload_from_cb_to_dst(
@@ -400,7 +395,7 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
-                                UNPACK(MMPRE(  // [#48552 DIAG] ONLY active marker: matmul-unpack boundary
+                                UNPACK(DPRINT(  // [#48552 DIAG] trimmed off (two-DPRINT experiment)
                                     "U mmpre sb={},{} k={} in0i={} in1i={}\n",
                                     (uint32_t)in0_subblock,
                                     (uint32_t)in1_subblock,
@@ -424,7 +419,7 @@ void kernel_main() {
                             }
 
 #endif  // SKIP_COMPUTE
-                            MMSTALL();  // [#48552 DIAG] real RISC nop-burst at push_back->reserve_back adjacency
+                            MMPRE("MMC sb{} mmdone\n", in0_subblock);  // [#48552 DIAG] unscoped, enabled for bisect
 
                             if (last_out) {
                                 tile_regs_commit();
@@ -497,7 +492,7 @@ void kernel_main() {
                         }
                         in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
-                    MMSTALL();  // [#48552 DIAG] real RISC nop-burst at push_back->wait_front adjacency
+                    MMPRE("MMC pack blk={}\n", block);  // [#48552 DIAG] unscoped, enabled for bisect
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
@@ -533,7 +528,7 @@ void kernel_main() {
 
                     in0_cb.pop_front(in0_block_num_tiles);
                     in1_cb.pop_front(in1_block_num_tiles);
-                    MMPRE("MMC blk_done blk={}\n", block);  // [#48552 DIAG] unscoped, enabled for bisect
+                    DPRINT("MMC blk_done blk={}\n", block);  // DEBUG: in0/in1 popped, inner-dim block complete
                 }
 
 #ifdef FUSE_BIAS
