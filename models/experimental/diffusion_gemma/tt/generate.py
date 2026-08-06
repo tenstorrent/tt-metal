@@ -356,7 +356,11 @@ def prefill_prompt_tokens(
     cache_tokens = _pad_prompt_tokens_for_prefill(prompt_tokens)
     cache_len = cache_tokens.shape[1]
     chunk_size = int(os.environ.get("DG_PREFILL_CHUNK_SIZE", "4096"))
-    use_bounded_chunks = execution_len is not None and int(execution_len) > 32768
+    # A 32K monolithic prefill materializes a 352 MiB all-reduce output. After
+    # the 32K denoise trace is captured, that temporary no longer fits beside
+    # the resident trace on QB2, so the next request kills EngineCore. Keep the
+    # boundary itself in the same bounded-memory regime as larger prefills.
+    use_bounded_chunks = execution_len is not None and int(execution_len) >= 32768
     if execution_len is None:
         prefill_tokens = cache_tokens
     else:
