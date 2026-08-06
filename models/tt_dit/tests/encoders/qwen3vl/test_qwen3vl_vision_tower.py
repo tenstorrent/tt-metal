@@ -111,6 +111,18 @@ _MULTI = {
 
 GRIDS = {**_CANVAS, **_REFERENCE, **_MULTI}
 
+# The largest grids cannot finish `check` mode inside the global 300 s budget: the CPU reference
+# dominates, growing linearly in rows (27 layers of linears) plus quadratically per attention block.
+# Measured at tp8_sp4 on an idle box: 492 s for the 65k single-block references, 778 s for `max_load`
+# (168k rows, but block-diagonal attention keeps its quadratic term BELOW the 65k dense blocks').
+# Roughly 2x headroom for machine load, and extra for `max_load` because the smaller mesh configs pay
+# more device time on its dense-plus-mask windowed attention. The marker rides on the grid name, so it
+# covers every mesh config -- the golden's cost is identical across them.
+_TIMEOUTS = {"ref_4to1": 900, "ref_1to4": 900, "max_load": 1800}
+_GRID_PARAMS = [
+    pytest.param(name, marks=pytest.mark.timeout(_TIMEOUTS[name])) if name in _TIMEOUTS else name for name in GRIDS
+]
+
 
 def _config():
     return transformers.Qwen3VLVisionConfig(
@@ -228,7 +240,7 @@ def _shard(x, submesh, sp_axis):
 
 
 @_PARAMS
-@pytest.mark.parametrize("name", list(GRIDS))
+@pytest.mark.parametrize("name", _GRID_PARAMS)
 @_MODE
 def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links, name, check_pcc):
     """The full tower: patch embed, position embeddings, every block, all four mergers.
