@@ -36,6 +36,11 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=False,
 )
 
+# bfloat8_b for the SwiGLU FFN weights (gate/up 1536x8960, down 8960x1536) — the large,
+# DRAM-bound decode matmuls, where bf8b halves the weight read. Attention (wq/wkv/wo) stays bf16
+# (small, latency-bound weights). Not bit-exact vs bf16.
+_FFN_WEIGHT_DTYPE = ttnn.bfloat8_b
+
 # Without program_config, SDPA decode uses the full device grid; on Blackhole that
 # can exceed the 64-core/head tree-reduction cap (MAX_TREE_REDUCTION_ROUNDS=6).
 _SDPA_DECODE_CFG = ttnn.SDPAProgramConfig(
@@ -310,8 +315,10 @@ def preprocess_lm_weights(
         prefix = f"layers.{i}"
         lk = f"layers.{i}"  # cache-key prefix (thunks below evaluate immediately, so `prefix` is bound correctly)
 
-        def _w(key: str, ckey: str) -> ttnn.Tensor:
-            return _tile(lambda: _rope_perm(key, state_dict[f"{prefix}.{key}.weight"]), device, wc, f"{lk}.{ckey}")
+        def _w(key: str, ckey: str, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+            return _tile(
+                lambda: _rope_perm(key, state_dict[f"{prefix}.{key}.weight"]), device, wc, f"{lk}.{ckey}", dtype=dtype
+            )
 
         def _bias_host(key: str) -> torch.Tensor:
             return _rope_perm(key, state_dict[f"{prefix}.{key}.bias"]).to(torch.bfloat16).view(1, 1, 1, -1)
@@ -361,9 +368,9 @@ def preprocess_lm_weights(
             wq=_w("attention.wq", "wq"),
             wkv=wkv_tt,
             wo=_w("attention.wo", "wo"),
-            w1=_w("feed_forward.w1", "w1"),
-            w2=_w("feed_forward.w2", "w2"),
-            w3=_w("feed_forward.w3", "w3"),
+            w1=_w("feed_forward.w1", "w1", dtype=_FFN_WEIGHT_DTYPE),
+            w2=_w("feed_forward.w2", "w2", dtype=_FFN_WEIGHT_DTYPE),
+            w3=_w("feed_forward.w3", "w3", dtype=_FFN_WEIGHT_DTYPE),
             attn_norm_w=_norm_weight(
                 lambda: state_dict[f"{prefix}.attention_norm.weight"], device, wc, f"{lk}.attn_norm"
             ),
