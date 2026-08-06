@@ -93,9 +93,6 @@ public:
 
     bool is_active() const;
 
-    // Atomic (not a locked consumers_ lookup) because the drain loop reads this on every iteration.
-    bool has_consumers() const { return num_consumers_.load(std::memory_order_relaxed) != 0; }
-
 private:
     struct ProducerReader {
         ProducerReader(ProgramRecordProducer* producer, RealtimeProfilerRecordRing::Reader reader, size_t max_batch) :
@@ -155,7 +152,6 @@ private:
     experimental::ProgramRealtimeProfilerCallbackHandle next_consumer_handle_ = 0;
 
     std::atomic<uint32_t> wake_generation_{0};
-    std::atomic<size_t> num_consumers_{0};
 };
 
 // Process-wide singleton: a registration lives until an explicit Unregister call.
