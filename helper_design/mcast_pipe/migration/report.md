@@ -31,8 +31,8 @@ operation.
 
 The current ledger state is 17 migrated kernels and 14 current host bindings
 across eight atomic units. Two kernel rows and five bindings remain pending in
-the Matmul in0 unit. Code and ledger are paired in one atomic commit,
-represented as `HEAD` in the ledger's self-referential commit field.
+the Matmul in0 unit. The production migration is `4acd98259b6`, after the
+separate builder-split prerequisite `4ef7e9a57a6`.
 
 ## Tier 2 TopK final-readiness migration — PASS
 
@@ -324,7 +324,7 @@ confirmed by patch-id).
 | GroupNorm v2 | `bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0` | `49e559dcb55` | `0a796a025c9` |
 | Sort single-row control | `7337302b5649b7cd169764cd95c0b0343e88950d` | `8479210e61e` | n/a |
 | Conv2D width-sharded activation | `fe866a1d0c4c32b78aae8a76e875c0da109f51c8` | `30927931918` | historical v8 only |
-| TopK final readiness | `HEAD` (same atomic code+ledger commit) | same commit | historical v8 only |
+| TopK final readiness | `b5c99d43fd5` | same commit | historical v8 only |
 
 Two on-branch commit *messages* still cite pre-rebase hashes (`baa86dc7116` "…for 75b977e1a04",
 `5320c2d69bd` "…for 261e322ed22") — history is immutable; this table is the key.

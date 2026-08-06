@@ -26,9 +26,8 @@ reader/NCRISC envelope also contains `reader_create_index_local_topk`; therefore
 per-kernel delta is explicitly N/A rather than compared to the non-equivalent
 F2 helper microbenchmark.
 
-Production diff: kernel **+13 / -23**; atomic unit **+77 / -75**. The
-`ledger.json` commit field is `HEAD` because code and ledger write-back are in
-the same commit.
+Production diff: kernel **+13 / -23**; atomic unit **+77 / -75**.
+`ledger.json` records production migration commit `b5c99d43fd5`.
 
 ## Historical v8 record
 

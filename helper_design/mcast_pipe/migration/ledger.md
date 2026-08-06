@@ -51,8 +51,8 @@ end-to-end current. The completed Conv2d units use code commits
 `bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0`; sort uses
 `7337302b5649b7cd169764cd95c0b0343e88950d`; width-sharded Conv uses
 `fe866a1d0c4c32b78aae8a76e875c0da109f51c8`; TopK uses `b5c99d43fd5`;
-pre-allgather LayerNorm is paired atomically with this ledger write-back
-(`HEAD` in `ledger.json`) after prerequisite `4ef7e9a57a6`.
+pre-allgather LayerNorm uses production migration commit `4acd98259b6` after
+prerequisite `4ef7e9a57a6`.
 
 ## `needs_recheck` — CLOSED 2026-08-03 (0 open)
 

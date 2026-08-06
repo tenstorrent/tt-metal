@@ -25,9 +25,8 @@ There is no operation-matched pre-migration TopK bakeoff, and the 238,280 ns
 writer/BRISC envelope also contains `writer_final_topk`; therefore the
 per-kernel delta is explicitly N/A.
 
-Production diff: kernel **+18 / -19**; atomic unit **+77 / -75**. The
-`ledger.json` commit field is `HEAD` because code and ledger write-back are in
-the same commit.
+Production diff: kernel **+18 / -19**; atomic unit **+77 / -75**.
+`ledger.json` records production migration commit `b5c99d43fd5`.
 
 ## Historical v8 record
 

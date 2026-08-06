@@ -1,7 +1,7 @@
 # reader_mcast_sender_unary_sharded_ln_pre_allgather — API v10 migration
 
 **Tier:** 3, `layernorm-sharded-pre-allgather`
-**Status:** fully end-to-end migrated at API v10
+**Status:** fully end-to-end migrated at API v10, commit `4acd98259b6`
 **Prerequisite:** shared reader-builder split in `4ef7e9a57a6`
 
 ## Transform
