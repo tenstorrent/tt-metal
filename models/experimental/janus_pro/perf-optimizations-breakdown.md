@@ -71,25 +71,6 @@ per-op and per-matmul breakdown.
 | 25 | aligner | [Aligner activation fused into its matmul](perf_reports/25-aligner-activation-fused.md) | -0.040 ms | 9.983 |
 | 26 | MLP `c_fc` | [c_fc output block-sharded in L1](perf_reports/26-cfc-output-block-sharded.md) | -0.142 ms | **9.841** |
 
-## One number not to use as a target
-
-`FLOPs %` from `tt-perf-report` is **not** a measure of how well a matmul runs. Its denominator is
-`peak_per_core(fidelity) x cores`, so it rises when an op uses fewer cores and when fidelity goes
-up — the opposite of optimizing.
-
-Here every body matmul got 2-3x faster and **every one reports a lower percentage**, because
-dropping HiFi4 to LoFi tripled peak-per-core while achieved FLOPs only doubled:
-
-| shape | us before | us after | FLOPs % before | FLOPs % after |
-|---|---:|---:|---:|---:|
-| 576 x 1024 x 4096 | 179.2 | 81.6 | 54.7 | 35.2 |
-| 576 x 1024 x 3072 | 138.5 | 48.8 | 53.0 | 42.6 |
-| 576 x 4096 x 1024 | 130.3 | 55.1 | 75.1 | 50.2 |
-
-Read as a score, this table says the work made every matmul worse. Read correctly, it says
-fidelity fell. The stage reports carry `cores` and `fidelity` next to the percentage for this
-reason.
-
 ## Where to look next
 
 | for | see |
