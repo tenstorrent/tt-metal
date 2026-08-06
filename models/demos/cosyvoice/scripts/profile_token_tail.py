@@ -3,16 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 """Where a generated token's time goes, outside the traced decode step.
 
-The traced decode step measures 12.52 ms; a token through `generate()` costs
-15.19 ms. The ~2.7 ms difference is the per-token tail -- output head, the
-device-to-host transfer of the distribution, RAS sampling on the host, and the
-embedding lookup back onto the device -- and at 18 % of the token it is worth
-more than a guess.
+The tail is the output head, the device-to-host transfer of the distribution, RAS
+sampling on the host, and the embedding lookup back onto the device. This script
+times those four directly, which is the point of it: subtracting the traced-step
+microbenchmark from the `generate()` per-token figure suggested ~2.7 ms of tail,
+and the measurement came back at **0.352 ms**. The two benchmarks differed in
+cache warmth, not only in scope. Subtracting two benchmarks is not a profile.
 
 The question it answers is whether moving RAS onto `ttnn.sampling` is worth
 building. That trade only pays if the transfer and the host sampling are a real
 share of the tail; if the output head dominates, on-device sampling is
-rearranging a rounding error.
+rearranging a rounding error. Measured, it is the latter: `ttnn.sampling` could
+remove at most 0.217 ms, 1.7 % of a token, so RAS stays on the host.
 
     python models/demos/cosyvoice/scripts/profile_token_tail.py
 """
