@@ -20,6 +20,8 @@ from models.common.models.llama32_1b import executor as llama32_executor
 from models.common.models.llama32_1b import generator as llama32_generator
 from models.common.models.llama32_3b import executor as llama32_3b_executor
 from models.common.models.llama32_3b import generator as llama32_3b_generator
+from models.common.models.mistral_7b import executor as mistral_executor
+from models.common.models.mistral_7b import generator as mistral_generator
 from models.common.models.qwen2_7b import executor as qwen2_executor
 from models.common.models.qwen2_7b import generator as qwen2_generator
 from models.common.models.qwen25_7b import executor as qwen25_executor
@@ -114,6 +116,25 @@ EXECUTOR_BINDINGS = {
         ),
         make_lane=lambda llm, config: _FakeLane(llm, config),
         hf_model="deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    ),
+    "mistral_7b": SimpleNamespace(
+        executor_module=mistral_executor,
+        executor_class=mistral_executor.Mistral7BExecutor,
+        executor_config_class=mistral_executor.Mistral7BExecutorConfig,
+        generator_module=mistral_generator,
+        generator_class=mistral_generator.Mistral7BGenerator,
+        generator_config_class=mistral_generator.Mistral7BGeneratorConfig,
+        build_generator_name="build_mistral_7b_generator",
+        build_executor_name="build_mistral_7b_executor",
+        make_model=lambda **kwargs: _make_qwen2_model(**kwargs),
+        make_runtime_config=lambda: _make_qwen2_runtime_config(max_prefill_batch_size=8),
+        make_executor_config=lambda mode="none": _make_qwen2_executor_config(mode, module=mistral_executor),
+        make_recording_target=lambda **kwargs: _RecordingTarget(_make_qwen2_model(), **kwargs),
+        make_product=lambda mesh_device, max_batch_size: _make_qwen2_product(
+            mesh_device, max_batch_size, max_prefill_batch_size=8
+        ),
+        make_lane=lambda llm, config: _FakeLane(llm, config),
+        hf_model="mistralai/Mistral-7B-Instruct-v0.3",
     ),
 }
 
@@ -229,7 +250,8 @@ def _make_qwen2_executor_config(mode="none", *, module=qwen2_executor):
     config_class = (
         getattr(module, "Qwen2ExecutorConfig", None)
         or getattr(module, "Qwen25ExecutorConfig", None)
-        or module.DeepSeekR1Qwen14BExecutorConfig
+        or getattr(module, "DeepSeekR1Qwen14BExecutorConfig", None)
+        or module.Mistral7BExecutorConfig
     )
     return config_class(
         trace=TraceConfig(mode),

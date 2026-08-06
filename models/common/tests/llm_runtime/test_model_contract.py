@@ -13,6 +13,7 @@ import pytest
 from models.common.models.deepseek_r1_distill_qwen_14b import model as deepseek_model
 from models.common.models.llama32_1b import model as llama32_model
 from models.common.models.llama32_3b import model as llama32_3b_model
+from models.common.models.mistral_7b import model as mistral_model
 from models.common.models.qwen2_7b import model as qwen2_model
 from models.common.models.qwen25_7b import model as qwen25_model
 
@@ -114,6 +115,28 @@ MODEL_CONTRACTS = {
         make_config=lambda **kwargs: _make_qwen2_config(module=deepseek_model, **kwargs),
         make_layer=lambda attention_config=None: _make_llama32_layer(attention_config),
         construct_model=lambda monkeypatch: _construct_qwen2_model(monkeypatch, module=deepseek_model),
+        expected_module_names=(
+            "layer[0].attn_norm",
+            "layer[0].attention",
+            "layer[0].ff_norm",
+            "layer[0].mlp",
+            "layer[1].attn_norm",
+            "layer[1].attention",
+            "layer[1].ff_norm",
+            "layer[1].mlp",
+            "final_norm",
+            "lm_head",
+        ),
+    ),
+    "mistral_7b": SimpleNamespace(
+        module=mistral_model,
+        model_class=mistral_model.Mistral7B,
+        config_class=mistral_model.Mistral7BTransformerConfig,
+        attention_config_class=mistral_model.Attention1DConfig,
+        make_attention_config=lambda **kwargs: _make_llama32_attention_config(**kwargs),
+        make_config=lambda **kwargs: _make_mistral_config(**kwargs),
+        make_layer=lambda attention_config=None: _make_llama32_layer(attention_config),
+        construct_model=lambda monkeypatch: _construct_mistral_model(monkeypatch),
         expected_module_names=(
             "layer[0].attn_norm",
             "layer[0].attention",
@@ -266,6 +289,54 @@ def _construct_qwen2_model(monkeypatch, *, module=qwen2_model):
     config = _make_qwen2_config(module=module, sampling_config=object())
     model_class = getattr(module, "Qwen2_7B", None) or getattr(module, "Qwen25_7B", None) or module.DeepSeekR1Qwen14B
     return model_class(config), config, sentinels
+
+
+def _make_mistral_config(*, n_layers=1, num_devices=2, n_kv_heads=8, sampling_config=None):
+    block_configs = [
+        SimpleNamespace(attention_config=_make_llama32_attention_config(n_kv_heads=n_kv_heads)) for _ in range(n_layers)
+    ]
+    return mistral_model.Mistral7BTransformerConfig(
+        n_layers=n_layers,
+        vocab_size=32768,
+        max_batch_size=4,
+        max_seq_len=4096,
+        dim=4096,
+        num_devices=num_devices,
+        mesh_device=object(),
+        embedding_config=object(),
+        rope_config=object(),
+        block_configs=block_configs,
+        norm_config=object(),
+        lm_head_config=object(),
+        sampling_config=sampling_config,
+        tt_ccl=object(),
+    )
+
+
+def _construct_mistral_model(monkeypatch):
+    sentinels = {
+        "embedding": object(),
+        "rope_setup": object(),
+        "layer": _make_llama32_layer(),
+        "norm": object(),
+        "lm_head": object(),
+        "sampling": object(),
+    }
+    for owner_name, sentinel_name in (
+        ("Embedding1D", "embedding"),
+        ("RotarySetup1D", "rope_setup"),
+        ("Mistral7BDecoderLayer", "layer"),
+        ("RMSNorm1D", "norm"),
+        ("LMHead1D", "lm_head"),
+        ("Sampling1D", "sampling"),
+    ):
+        monkeypatch.setattr(
+            getattr(mistral_model, owner_name),
+            "from_config",
+            MagicMock(return_value=sentinels[sentinel_name]),
+        )
+    config = _make_mistral_config(sampling_config=object())
+    return mistral_model.Mistral7B(config), config, sentinels
 
 
 def test_config_exposes_complete_runtime_metadata(contract):
