@@ -20,6 +20,18 @@ image tokens out via a per-key additive attention bias, so it matches the refere
   | **i2v** | 480p | 480×848 | 1:58 (2.37 s/it) | **5:19** |
   | **i2v** | 720p | 720×1280 | 5:07 (5.91 s/it) | **9:27** |
 
+  **With the heads-major layout flags** (`HY_DIT_FUSED_HEADS=1
+  HY_DIT_FUSED_QKV_HEADS=1`) and `HY_CFG_PADDING_POLICY=masked`, measured on a
+  freshly reset Galaxy at the same 121 frames / 50 steps. Output is
+  bit-identical to the rows above (frame PCC 1.00000000, max abs pixel diff 0.0):
+  | task | tier | denoise | **e2e** | vs baseline |
+  |---|---|---|---|---|
+  | **i2v** | 480p | 1:20 (1.60 s/it) | **4:50** | −32.2% denoise |
+  | **i2v** | 720p | 3:56 (4.72 s/it) | **8:11** | −23.1% denoise |
+
+  t2v was not re-measured: only the two i2v checkpoints are in the local HF
+  cache, so the t2v rows above remain at their original measurement.
+
   720p is opt-in (`HY_720P=1`); i2v via `HY_I2V=1` (+ `HY_IMAGE=<path>` for the conditioning
   frame). i2v conditioning (SigLIP `image_embeds` + a VAE-encoded first frame concatenated
   into the DiT's 65 input channels) is PCC-verified by the e2e gate (0.999979, both regimes)
