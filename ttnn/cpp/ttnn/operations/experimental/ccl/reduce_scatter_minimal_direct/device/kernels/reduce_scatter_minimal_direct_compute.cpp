@@ -40,8 +40,7 @@ void kernel_main() {
     constexpr uint32_t block_stride = tile_granularity;
     constexpr uint32_t group_pages = num_devices * tile_granularity;
 
-    // Bring the compute hardware up first: everything it needs is compile-time, so there is no reason for
-    // any runtime-state access (arg reads, the L1 generation counter, CB objects) to precede it.
+    // Up first: its args are all compile-time, so no runtime-state access need precede it.
     compute_kernel_hw_startup(cb_reduce_id, cb_reduce_id, cb_out_id);
 
     uint32_t arg_idx = 0;
