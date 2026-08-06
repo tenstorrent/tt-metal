@@ -1,4 +1,38 @@
-# mcast_pipe rollout report — API v10, TopK verified 2026-08-06
+# mcast_pipe rollout report — API v10, LayerNorm verified 2026-08-06
+
+## Tier 3 sharded LayerNorm pre-allgather migration — PASS
+
+`layernorm-sharded-pre-allgather` is fully end-to-end migrated at v10. The
+shared compile-time reader builder was first split into variant-specific
+builders and landed independently as `4ef7e9a57a6`; its rebuild and all three
+guard inventories passed before the production wire changed.
+
+The host now describes the reduce-ready channel with a handshaked Flag
+`Mcast2D` for whole-grid reduction or fixed-sender `Mcast1D` lines for
+two-stage reduction. Both kernels decode a complete opaque CT/RT block. The
+global sender and additional two-stage line coordinators call `send_signal()`;
+the other participants call `receive_signal()`. Gather reads, CB ownership,
+the second-stage semaphore, and final write/atomic barriers remain
+operation-owned.
+
+- `./build_metal.sh`: passed.
+- Exact 8x4 BFLOAT8_B RMSNorm case under `--dev` from a fresh isolated cache:
+  passed with sender and both receiver-variant JIT artifacts confirmed.
+- `LN-PRE-ALLGATHER`: 126 passed; `LN-POST-ALLGATHER`: 136 passed;
+  `LN-SHARDED`: 208 passed.
+- `McastHostFixture.*`: 28/28, including three new offset and two-stage
+  geometry cases; `test_mcast_pipe.py`: 77/77.
+
+The profiled exact node contains four pre-allgather calls with device-kernel
+durations 2,583, 2,564, 2,563, and 2,656 ns (median 2,563.5 ns). A per-kernel
+delta is **N/A**: there is no operation-matched pre-migration LayerNorm
+bakeoff, and the reported data-movement envelopes include other kernels in the
+operation.
+
+The current ledger state is 17 migrated kernels and 14 current host bindings
+across eight atomic units. Two kernel rows and five bindings remain pending in
+the Matmul in0 unit. Code and ledger are paired in one atomic commit,
+represented as `HEAD` in the ledger's self-referential commit field.
 
 ## Tier 2 TopK final-readiness migration — PASS
 
@@ -24,10 +58,9 @@ exists, and each processor envelope includes another TopK data-movement kernel.
 The raw F2 helper bakeoff has different work and geometry and is not presented
 as a comparable baseline.
 
-The current ledger state is 15 migrated kernels and 13 current host bindings
-across seven atomic units, with four kernel rows and six bindings pending in
-the two remaining approved units. Code and ledger are paired in one atomic
-commit, represented as `HEAD` in the ledger's self-referential commit field.
+At completion of this tier, the ledger held 15 migrated kernels and 13 current
+host bindings across seven atomic units. The LayerNorm tier above supersedes
+those interim totals.
 
 ## Final release gate — 2026-08-05
 

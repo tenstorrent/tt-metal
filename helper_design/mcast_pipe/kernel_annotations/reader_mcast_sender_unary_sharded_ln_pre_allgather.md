@@ -1,32 +1,41 @@
 # reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp (SEND side)
 
-> Current v9 status: **blocked and exactly at `llk_helper_library`**. The
-> helper lacks the acknowledged signal-only protocol required by this pair.
+Status: **fully end-to-end migrated at API v10** as part of
+`layernorm-sharded-pre-allgather`.
 
-Path: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp
+Path: `ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp`
 
-API spelling: experimental OO wrapper. Uses raw `RemoteCoord` struct (not df:: helpers).
-Role: sender for the PRE-allgather stage (computes partials only, NO data mcast). Block in `global_reduce_sender` lambda L85-180; called once L181.
+Role: global sender for the pre-allgather partial-statistics reduction. This
+kernel sends only the readiness signal; the gathered partials use operation-owned
+unicast reads.
 
-## Block map
+## Helper-owned wire
 
-### Phase-1 handshake ONLY (flag + counter), EXCLUDE_SRC — NO DATA MCAST
-- L99 `cb_partial_obj.wait_front(...)` — local partial ready.
-- L102-113 `if num_blocks>1`:
-  - L103 `reduce_sender_sem.set(VALID)`
-  - L104 `reduce_receiver_sem.wait(num_blocks-1)` — COUNTER wait.
-  - L105 `reduce_receiver_sem.set(0)` — counter reset (reused slot).
-  - L106-112 `reduce_sender_sem.set_multicast(... num_blocks-1)` — mcast level flag VALID. **This is a flag-only multicast; no data is multicast in this kernel.**
-- L116-179 gather reads only (`noc.async_read` + `async_read_barrier`, HOLE). No `async_write_multicast` anywhere.
-- L182 `noc.async_write_barrier()` at top level — **F1 = barrier** (drains the sem mcast writes).
+- Host binding: `PreAllGatherMcast` in `sharded_layernorm_factory_helpers.*`.
+- Whole-grid reduce: handshaked Flag `Mcast2D`, sender inside the dense rectangle,
+  fan-out `grid area - 1`.
+- Two-stage reduce: handshaked Flag `Mcast1D`, one fixed sender per row or column,
+  fan-out `num_blocks_first_stage - 1`.
+- Existing `reduce_sender_semaphore_id` and `reduce_receiver_semaphore_id` are
+  adopted as data-ready and consumer-ready descriptors.
+- The complete six-word CT and four-word RT ranges are prepended as an opaque
+  block. Operation arguments start at `McastArgs::next_*_args_offset()`.
+- `send_signal()` owns ready-wait, counter reset, and multicast of `VALID`.
 
-## Variant signature
-- **F2 = phase-1 flag+counter hybrid** (no phase-2 in this half — data mcast is deferred to post_allgather kernel).
-- **F3 = EXCLUDE_SRC**.
-- **pre_handshake / no-data-mcast case**: this is the **"sem-flag-only multicast" sub-pattern** — `set_multicast` of a VALID flag with NO accompanying `async_write_multicast` of data. The Pipe `send()` must support a **flag-only mode** (mcast a 4-byte sem set with no payload).
-- **F1 = barrier** (L182).
+## Operation-owned behavior
 
-## Hazards / invariants
-- INV: counter reset L105 after wait L104. Reused slot.
-- HOLE: gather reads (L128-179) are the bulk of the kernel; only the L102-113 sem block + L182 barrier are Pipe-relevant.
-- NEW SPELLING / FORK demand: flag-only mcast (no payload) must be a first-class Pipe.send() mode.
+- Local partial CB readiness and all gather reads.
+- `reduce_second_stage_semaphore_id` and the two-stage completion protocol.
+- The final write barrier.
+
+## Validation and performance
+
+- Exact 8x4 BFLOAT8_B RMSNorm node passed under `--dev` from a fresh isolated
+  cache; the sender ELF was confirmed.
+- `LN-PRE-ALLGATHER`: 126 passed; `LN-POST-ALLGATHER`: 136 passed;
+  `LN-SHARDED`: 208 passed.
+- Host/helper suites: 28/28 and 77/77.
+- Exact-node LayerNorm device-kernel durations were 2,583, 2,564, 2,563, and
+  2,656 ns (median 2,563.5 ns). Per-kernel delta is N/A because no
+  operation-matched pre-migration profile exists and the DM envelope includes
+  other data-movement kernels.

@@ -37,7 +37,17 @@ First split the shared reader compile-time argument builder and validate
 `LN-PRE-ALLGATHER`, `LN-POST-ALLGATHER`, and `LN-SHARDED` with no behavior
 change. Then migrate the one-stage `Mcast2D` and two-stage `Mcast1D` control
 geometries using v10 handshaked Flag signal operations. The shared-builder
-split is the load-bearing prerequisite and remains inside this tier.
+split is the load-bearing prerequisite and was landed separately as
+`4ef7e9a57a6`.
+
+Outcome: **PASS — migrated at API v10** in the current atomic commit. The
+production build passed; the exact 8x4 BFLOAT8_B RMSNorm node passed under
+`--dev` from a fresh isolated cache with sender and both receiver-variant JIT
+artifacts; the mapped inventories passed 126 pre-allgather, 136
+post-allgather, and 208 plain sharded cases. Host/helper suites passed 28/28
+and 77/77. The exact-node device-kernel median was 2,563.5 ns across four
+calls. Per-kernel delta is N/A because no operation-matched pre-migration
+profile exists and the DM envelope contains other LayerNorm kernels.
 
 ### Tier 0 re-entry, then Tier 4 — Matmul in0 interleaved
 

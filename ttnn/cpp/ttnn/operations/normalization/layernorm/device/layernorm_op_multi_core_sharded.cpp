@@ -269,6 +269,26 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         writer_noc = NOC::NOC_1;
     }
 
+    std::optional<PreAllGatherMcast> pre_allgather_mcast;
+    if (is_pre_all_gather) {
+        pre_allgather_mcast.emplace(
+            device,
+            grid.shard_spec.grid,
+            core_ranges.start_core,
+            grid.row_wise,
+            grid.use_two_stage_reduce,
+            reader_noc,
+            reduce_sender_semaphore_id,
+            reduce_receiver_semaphore_id);
+        const uint32_t expected_active =
+            (grid.use_two_stage_reduce ? workers.num_blocks_first_stage : grid.num_blocks) - 1;
+        TT_FATAL(
+            pre_allgather_mcast->num_active() == expected_active,
+            "Pre-allgather LayerNorm multicast fan-out mismatch: helper={}, expected={}",
+            pre_allgather_mcast->num_active(),
+            expected_active);
+    }
+
     // Build compile-time args using helper
     CompileTimeArgsContext ct_ctx{
         .reduce_receiver_semaphore_id = reduce_receiver_semaphore_id,
@@ -277,6 +297,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .grid = &grid,
         .workers = &workers,
         .core_ranges = &core_ranges,
+        .pre_allgather_mcast = pre_allgather_mcast ? &*pre_allgather_mcast : nullptr,
         .block_ht = block_ht,
         .block_wt = block_wt,
         .subblock_wt = subblock_wt,
@@ -380,6 +401,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .grid = grid,
         .workers = workers,
         .core_ranges = core_ranges,
+        .pre_allgather_mcast = pre_allgather_mcast ? &*pre_allgather_mcast : nullptr,
         .mcast_noc_x = std::move(mcast_noc_x),
         .mcast_noc_y = std::move(mcast_noc_y),
         .packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv, bfloat_cinv}),

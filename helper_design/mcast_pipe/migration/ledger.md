@@ -1,4 +1,4 @@
-# mcast_pipe migration ledger — API v10, Gate 0 verified 2026-08-06
+# mcast_pipe migration ledger — API v10, LayerNorm verified 2026-08-06
 
 Source of truth: `ledger.json`. Test inventories are in `test_map.json`;
 failure isolation and JIT evidence are in the per-kernel migration logs.
@@ -14,15 +14,15 @@ its 19 production migrations was re-audited against the current v10 helper.
 Remediation also added the previously raw Conv 1D sender and both GroupNorm v2
 senders; the subsequent sort and width-sharded Conv re-entries produce the
 24-row production set. On 2026-08-06, six previously blocked rows moved to
-pending for the three approved units; the completed TopK unit now leaves 15
-migrated, 4 pending, and 5 still concretely blocked.
+pending for three approved units. TopK and pre-allgather LayerNorm are now
+complete, leaving 17 migrated, 2 pending, and 5 still concretely blocked.
 
 ## Host-helper re-entry state
 
 The paired `mcast_host` helper and `McastArgs` decoder are materialized and
-their 2026-08-06 intake tests are green: `McastHostFixture.*` passed 25/25 and
-the complete device/wire helper suite passed 77/77 under `--dev`. Thirteen
-required bindings across seven units are fully current at API v10:
+their 2026-08-06 tests are green: `McastHostFixture.*` passed 28/28 and the
+complete device/wire helper suite passed 77/77. Fourteen required bindings
+across eight units are fully current at API v10:
 
 | Unit | Required bindings | Status | Kernel rows | Validation |
 |---|---:|---|---:|---|
@@ -33,12 +33,12 @@ required bindings across seven units are fully current at API v10:
 | `sort-single-row-control` | 1 | fully end-to-end migrated @ v10 | 2 migrated + 1 helper-neutral | handshaked row-start + no-handshake sub-stage Pipes; long 7/7; Ht=2 2/2; helper 77/77; perf +1.195124% |
 | `conv2d-activation-width-sharded` | 1 | fully end-to-end migrated @ v10 | 1 hybrid | exact fresh-cache JIT at PCC 0.9999992598; features 48 passed / 16 expected skips; DRAM-config 1 passed; helper 73/73 |
 | `topk-multicore-final-readiness` | 1 | fully end-to-end migrated @ v10 | 2 | exact fresh-cache JIT for both faces; `TOPK-MULTICORE`: 14 passed / 12 expected BFLOAT8_B pad xfails; helper 77/77 |
+| `layernorm-sharded-pre-allgather` | 1 | fully end-to-end migrated @ v10 | 2 | builder split `4ef7e9a57a6`; exact fresh-cache JIT for sender and receiver variants; pre 126, post 136, sharded 208; helper 77/77 |
 
-Six bindings across the remaining two approved units are pending:
+Five bindings across the remaining approved unit are pending:
 
 | Unit | Required bindings | Kernel rows | Gate-A state |
 |---|---:|---:|---|
-| `layernorm-sharded-pre-allgather` | 1 | 2 | API-003 implemented; shared reader-argument builder split required before migration |
 | `matmul-in0-mcast-interleaved` | 5 | 2 | API-007 materialization required; sparse binding device-verified from an empty cache with exact sender/receiver JIT artifacts |
 
 The exact binding/dispatch map is in `test_map.json`; the easier-first atomic
@@ -50,8 +50,9 @@ end-to-end current. The completed Conv2d units use code commits
 `aeeb28ff007807c71b1f60842cca85e5c41efa7f`; GroupNorm v2 uses
 `bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0`; sort uses
 `7337302b5649b7cd169764cd95c0b0343e88950d`; width-sharded Conv uses
-`fe866a1d0c4c32b78aae8a76e875c0da109f51c8`; TopK is paired atomically with
-this ledger write-back (`HEAD` in `ledger.json`).
+`fe866a1d0c4c32b78aae8a76e875c0da109f51c8`; TopK uses `b5c99d43fd5`;
+pre-allgather LayerNorm is paired atomically with this ledger write-back
+(`HEAD` in `ledger.json`) after prerequisite `4ef7e9a57a6`.
 
 ## `needs_recheck` — CLOSED 2026-08-03 (0 open)
 
@@ -66,7 +67,7 @@ The 6 rows raised by `reconcile_2026-08-03.md` were cleared by an
 Each row's `commit` still points at its migration commit (`aeeb28ff007`) — that field's role is the
 revert/bisect anchor; "last verified at" is `verified_at_commit`.
 
-## Current migrations under API v10 (15)
+## Current migrations under API v10 (17)
 
 | Area | Role | Kernel | Validation |
 |---|---|---|---|
@@ -85,27 +86,29 @@ revert/bisect anchor; "last verified at" is `verified_at_commit`.
 | Conv | hybrid | `activation_reader_width_sharded.cpp` | fully end-to-end @ v10; rotating INCLUDE-source loopback; exact fresh-cache PCC 0.999956503; features 48/16 expected skips; DRAM-config 1/1; helper 72/72 |
 | TopK | sender | `reader_final_topk.cpp` | fully end-to-end @ v10; no-handshake Counter readiness signal; exact fresh-cache JIT; `TOPK-MULTICORE` 14/12 expected xfails; helper 77/77 |
 | TopK | receiver | `writer_local_topk.cpp` | fully end-to-end @ v10; helper-owned readiness receive; value/index unicast and arrival counter preserved; exact fresh-cache JIT; `TOPK-MULTICORE` 14/12 expected xfails |
+| normalization | sender | `reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp` | fully end-to-end @ v10; whole-grid `Mcast2D` and per-line `Mcast1D` handshaked Flag signal; exact fresh-cache JIT; pre 126, post 136, sharded 208 |
+| normalization | receiver/hybrid | `reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp` | fully end-to-end @ v10; receiver face plus two-stage line-coordinator sender face; exact fresh-cache JIT; host geometry 28/28; helper 77/77 |
 
 The original ten kernel files remain byte-identical to the pre-rebase verified state and retain
 `mcast_pipe.hpp` + `McastArgs`. The two sort faces were added atomically in `7337302b564`; the
-width-sharded Conv hybrid followed atomically in `fe866a1d0c4`, and the two
-TopK faces followed in the current atomic commit.
+width-sharded Conv hybrid followed atomically in `fe866a1d0c4`, the two TopK
+faces followed in `b5c99d43fd5`, and the pre-allgather LayerNorm faces follow
+in the current atomic commit after prerequisite `4ef7e9a57a6`.
 
 The paired `writer_single_row_multi_core.cpp` is deliberately not in this table: it has no Pipe
 face. It remains a deferred/helper-neutral ledger row after coupled runtime-ABI cleanup.
 
 ## Historical deferred or rolled-back state before the 2026-08-06 re-entry
 
-This table records the prior state. The TopK pair is now migrated; the four
-pre-allgather LayerNorm and interleaved Matmul in0 rows are pending as described
-above. The other rows remain deferred. No row is a partial migration.
+This table records the prior state. The TopK and pre-allgather LayerNorm pairs
+are now migrated; the two interleaved Matmul in0 rows remain pending as
+described above. The other rows remain deferred. No row is a partial migration.
 
 | Area | Kernel(s) | Blocker |
 |---|---|---|
 | matmul | `reader_bmm_tile_layout_in0_sender_padding.cpp`, `reader_bmm_tile_layout_in0_receiver.cpp` | typed/custom `VALID` / `IGNORE_BATCH` control values |
 | matmul | `reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp` | independent data/signal loopback modes and sender-side ready participation |
 | normalization | post-allgather LayerNorm sender/receiver | explicit INCLUDE-source loopback when the sender is outside the receiver rectangle, plus host fan-out that may differ from rectangle area; pair restored together |
-| normalization | pre-allgather LayerNorm sender/receiver | acknowledged signal-only channel |
 | normalization | plain sharded LayerNorm sender/receiver | acknowledged signal-only plus one-gate/multi-block mixed-mode streaming |
 
 ## Fleet totals
@@ -114,13 +117,13 @@ The census now contains 91 entries (92 before the 2026-08-03 reconcile; the
 deepseek_prefill `reader_dispatch.cpp` row was deleted after the kernel was
 removed upstream by `af00262e51d`):
 
-- 15 current production migrations at API v10, **0 carrying `needs_recheck`**;
-- all 13 required host bindings current across 7 atomic units, **0 carrying
+- 17 current production migrations at API v10, **0 carrying `needs_recheck`**;
+- all 14 required host bindings current across 8 atomic units, **0 carrying
   `needs_recheck`**;
 - 5 production candidates deferred with `v9-port-blocked` and a concrete
   design-gap flag;
 - 67 other deferred candidates, including the helper-neutral sort writer;
-- 4 kernel rows pending and 0 quarantined.
+- 2 kernel rows pending and 0 quarantined.
 
 The dated v8 reconcile reports and per-kernel logs are retained as historical
 evidence. `reconcile_2026-08-03-conv-width.md`, this ledger, and `ledger.json` are

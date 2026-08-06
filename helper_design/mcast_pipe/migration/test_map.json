@@ -194,7 +194,7 @@
       "dispatch": "is_pre_all_gather=true; kernel paths and reader arguments supplied by sharded_layernorm_factory_helpers.cpp",
       "migration_unit": "layernorm-sharded-pre-allgather",
       "inventory": ["LN-PRE-ALLGATHER", "LN-POST-ALLGATHER", "LN-SHARDED"],
-      "coverage": "high; post/plain inventories guard the builder split"
+      "coverage": "high; exact fresh-cache sender/receiver JIT evidence on 2026-08-06; LN-PRE-ALLGATHER 126 passed, LN-POST-ALLGATHER 136 passed, LN-SHARDED 208 passed; post/plain inventories guard the builder split"
     },
     {
       "id": "matmul-in0-mcast:reuse-1d:legacy",
@@ -594,17 +594,17 @@
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
-      "status": "blocked",
-      "inventory": "LN-PRE-ALLGATHER",
-      "coverage": "audited",
-      "result": "API-003 implemented at v10; builder-split prerequisite remains"
+      "status": "migrated",
+      "inventory": "LN-PRE-ALLGATHER plus LN-POST-ALLGATHER and LN-SHARDED guards",
+      "coverage": "high; exact fresh-cache JIT artifact and complete mapped inventories",
+      "result": "v10 migrated after separate builder-split prerequisite; 126 pre, 136 post, and 208 plain sharded cases passed"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp",
-      "status": "pending",
-      "inventory": "LN-PRE-ALLGATHER",
-      "coverage": "audited",
-      "result": "API-003 implemented at v10; builder-split prerequisite remains"
+      "status": "migrated",
+      "inventory": "LN-PRE-ALLGATHER plus LN-POST-ALLGATHER and LN-SHARDED guards",
+      "coverage": "high; exact fresh-cache JIT artifacts and complete mapped inventories",
+      "result": "v10 migrated after separate builder-split prerequisite; whole-grid and two-stage row/column geometries passed"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp",
