@@ -346,8 +346,6 @@ class WanPipelineI2V(WanPipeline):
         # Assembling by concat instead would hold the pieces and the assembled result live at
         # once, so it cannot cost less than twice the video. slice_write takes rank 4 and
         # batch size is 1, so the buffer carries no batch axis and the write offset lands on T.
-        # T is not one of the mesh-sharded axes (H and W are), so the same offset is correct on
-        # every device, and the buffer is replicated because every shard of a zero frame is equal.
         _, _, h_pad, w_pad, c_pad = next(iter(cond_by_pos.values())).shape
         tt_video_THWC = ttnn.zeros(
             (encode_frames, h_pad, w_pad, c_pad),

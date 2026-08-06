@@ -422,7 +422,7 @@ class WanPipeline(PipelineAPIMixin):
 
         self._solver = solver_for_scheduler(
             scheduler
-            or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=5)
+            or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=12.0)
         )
 
         # persistent latent buffers to enable safe tracing.

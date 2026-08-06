@@ -302,11 +302,6 @@ class WanPipelineI2VLora(WanPipelineI2V):
     guidance scales at 1.0, which ``__call__`` enforces.
     """
 
-    # Distilled few-step LoRAs are trained against a shorter flow shift than the base
-    # schedule, which WanPipeline pins at 12.0. Used to build the default scheduler, so a
-    # caller that passes its own scheduler (or a per-call flow_shift) still overrides it.
-    DEFAULT_FLOW_SHIFT: float = 5.0
-
     def __init__(
         self,
         *,
@@ -340,8 +335,10 @@ class WanPipelineI2VLora(WanPipelineI2V):
 
         if scheduler is None:
             scheduler = CustomSigmaScheduler()
-            self.custom_sigmas = [1.0, 0.9375, 0.8333333, 0.625, 0.0]
-            logger.info(f"WanPipelineI2VLora: default Euler scheduler with custom sigmas {self.custom_sigmas}")
+            self.custom_sigmas = [1.0, 0.9375, 0.8333333, 0.625, 0.0]  # default for Wan 2.2 I2V Lightning
+            logger.info(
+                f"WanPipelineI2VLora: default Euler scheduler with custom sigmas {self.custom_sigmas} -- (Wan 2.2 I2V Lightning)"
+            )
 
         super().__init__(
             device=device, config=config, scheduler=scheduler, run_warmup=run_warmup, lora_enabled=lora_enabled
