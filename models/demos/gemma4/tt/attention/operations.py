@@ -139,11 +139,10 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
       ``dram_sharded.decode_1d_matmul_config``). auto spreads this shape one
       N-tile per core and collapses the output subblock to 1x1, running at 33% of
       DRAM peak; fewer cores with a larger ``per_core_N`` fixes it.
-    * **prefill** (everything else): ``interleaved_prefill_config``. Adds no ops --
-      the config and the output memory config are arguments to the same single
-      ``ttnn.linear``, and in0 is already L1-interleaved, so nothing is resharded.
-      Prefill output defaults to L1 *block-sharded* (QKV sweep winner); callers
-      that reshape / split heads should run ``interleave_qkv_if_sharded`` first.
+    * **prefill** (everything else): ``interleaved_prefill_config``. Prefill output
+      defaults to L1 *interleaved* so ``nlp_create_qkv_heads`` consumes it with no
+      ``sharded_to_interleaved`` (block-sharded out + S2I was a net loss vs L1
+      interleaved out).
 
     NOTE the decode config is NOT bit-exact against auto (maxabs ~7 on the
     [32,2048] output), though it IS closer to an fp32 reference than auto is

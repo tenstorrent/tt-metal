@@ -328,6 +328,7 @@ def test_prefill_l1_gather_memcfg_matches_norm_layout(monkeypatch):
     from models.demos.gemma4.tt.rms_norm import RMSNorm, width_shard_input_memcfg
 
     monkeypatch.delenv("GEMMA4_CCL_L1_GATHER", raising=False)
+    monkeypatch.delenv("GEMMA4_SHARDED_NORM", raising=False)
     mesh = _FakeMeshDevice()
     mgr = _FakeCclManager(mesh)
     tensor = _FakeTensor([1, 1, 128, 5376])
@@ -341,10 +342,53 @@ def test_prefill_l1_gather_memcfg_matches_norm_layout(monkeypatch):
     monkeypatch.delenv("GEMMA4_CCL_L1_GATHER", raising=False)
     assert _decode_l1_gather_memcfg(_FakeTensor([1, 1, 2048, 5376]), mgr) is None
 
+    # Interleaved-LN experiment: AG→width_shard would be wasted
+    monkeypatch.setenv("GEMMA4_SHARDED_NORM", "0")
+    assert _decode_l1_gather_memcfg(tensor, mgr) is None
+    monkeypatch.delenv("GEMMA4_SHARDED_NORM", raising=False)
+
     # RMSNorm builder agrees at the same (dim, height)
     norm = RMSNorm.__new__(RMSNorm)
     norm.mesh_device = mesh
     assert norm._build_sharded_cfg(5376, 128)[0] == norm_cfg
+
+
+def test_gate_up_1d_progcfg_matches_ln_width_shard():
+    """LN width-shard grid (max cores) must be usable as gate_up 1D mcast_in0 grid."""
+    from models.demos.gemma4.tt.dram_sharded import (
+        prefill_progcfg_1d_for_width_sharded_in0,
+        width_shard_core_count,
+        width_shard_matches_1d_progcfg,
+    )
+    from models.demos.gemma4.tt.rms_norm import width_shard_spec
+
+    mesh = _FakeMeshDevice()
+    spec = width_shard_spec(mesh, 5376, 128)
+    assert spec is not None
+    memcfg, _ = spec
+    assert width_shard_core_count(memcfg) == 56  # max divisor of 168 tiles on 8x8
+    pc = prefill_progcfg_1d_for_width_sharded_in0(128, 5376, 5376, memcfg)
+    assert pc is not None, "1D gate_up must accept LN's 56-core width shard (no S2I)"
+    assert width_shard_matches_1d_progcfg(memcfg, pc)
+    assert pc.fuse_batch, "ttnn requires fuse_batch when in0 is sharded"
+    # 5376/56=96 → 3 K-tiles/core; in0_block_w must divide 3
+    assert pc.in0_block_w in (1, 3)
+    assert (3 % pc.in0_block_w) == 0
+
+
+def test_sharded_norm_env_kill_switches(monkeypatch):
+    """GEMMA4_SHARDED_NORM / GEMMA4_NORM_KEEP_SHARDED gate the AR→LN island."""
+    from models.demos.gemma4.tt.rms_norm import norm_keep_sharded_enabled, sharded_norm_enabled
+
+    monkeypatch.delenv("GEMMA4_SHARDED_NORM", raising=False)
+    monkeypatch.delenv("GEMMA4_NORM_KEEP_SHARDED", raising=False)
+    assert sharded_norm_enabled()
+    assert norm_keep_sharded_enabled()
+
+    monkeypatch.setenv("GEMMA4_SHARDED_NORM", "0")
+    assert not sharded_norm_enabled()
+    monkeypatch.setenv("GEMMA4_NORM_KEEP_SHARDED", "false")
+    assert not norm_keep_sharded_enabled()
 
 
 def test_weight_cache_path_qualified_by_mesh(tmp_path, monkeypatch):

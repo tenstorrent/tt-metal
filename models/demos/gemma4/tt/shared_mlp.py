@@ -27,6 +27,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     interleaved_down_proj_prefill_config,
     interleaved_gate_up_prefill_config,
     matmul_rows,
+    prefill_progcfg_1d_for_width_sharded_in0,
 )
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -206,25 +207,52 @@ class SharedMLP:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
+    def _prepare_prefill_act(self, hidden_states, program_config):
+        """Move ``hidden_states`` onto the layout the tuned prefill matmul wants.
+
+        Prefer keeping a width-sharded LN output in place (caller matched a 1D
+        progcfg to that shard grid). Only S2I when the auto path has no progcfg.
+        Returns ``(act, owned)``.
+        """
+        if program_config is None:
+            if hidden_states.is_sharded():
+                return ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG), True
+            return hidden_states, False
+        if hidden_states.is_sharded():
+            return hidden_states, False
+        if hidden_states.memory_config().buffer_type != ttnn.BufferType.L1:
+            return ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG), True
+        return hidden_states, False
+
     def _gate_up_linear(self, hidden_states):
         """Fused gate+up matmul — DramShardedLinear on BH, tuned 1D prefill off BH."""
         if isinstance(self.gate_up_proj, DramShardedLinear):
             return self.gate_up_proj(hidden_states)
 
-        # Interleaved-weight prefill: pin 1d_c42_bw4-class program config + L1
-        # interleaved out + HiFi2 (test_gate_up_matmul_sweep overall winner).
-        # Also hoist in0 to L1 interleaved when it is still in DRAM — rms_norm
-        # leaves the activation there by default, and L1 in0 is part of the win.
+        # Interleaved-weight prefill: pin 1D progcfg + L1 interleaved out + HiFi2.
+        # When upstream LN kept width-sharded L1 out, rebuild the 1D config on that
+        # core grid (typically 56 on WH / hidden=5376) and skip S2I entirely —
+        # the AR→LN→MLP island's main remaining conversion.
         m = matmul_rows(hidden_states)
         k = int(hidden_states.shape[-1])
         n = int(self.gate_up_proj.shape[-1])
         program_config, out_memcfg, compute_kernel_config = interleaved_gate_up_prefill_config(m, k, n)
-        act = hidden_states
-        act_l1 = None
-        if program_config is not None and not hidden_states.is_sharded():
-            if hidden_states.memory_config().buffer_type != ttnn.BufferType.L1:
-                act_l1 = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-                act = act_l1
+        if program_config is not None and hidden_states.is_sharded():
+            matched = prefill_progcfg_1d_for_width_sharded_in0(m, k, n, hidden_states.memory_config())
+            if matched is not None:
+                program_config = matched
+            else:
+                act = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+                gate_up = ttnn.linear(
+                    act,
+                    self.gate_up_proj,
+                    program_config=program_config,
+                    memory_config=out_memcfg,
+                    compute_kernel_config=compute_kernel_config,
+                )
+                act.deallocate(True)
+                return gate_up
+        act, owned = self._prepare_prefill_act(hidden_states, program_config)
         gate_up = ttnn.linear(
             act,
             self.gate_up_proj,
@@ -232,8 +260,8 @@ class SharedMLP:
             memory_config=out_memcfg,
             compute_kernel_config=compute_kernel_config,
         )
-        if act_l1 is not None:
-            act_l1.deallocate(True)
+        if owned:
+            act.deallocate(True)
         return gate_up
 
     def _down_proj_linear(self, hidden):
@@ -241,18 +269,12 @@ class SharedMLP:
         if isinstance(self.down_proj, DramShardedLinear):
             return self.down_proj(hidden)
 
-        # Interleaved-weight prefill: 1d_c42_bw4 + L1 in0/out + HiFi2
-        # (test_down_proj_matmul_sweep overall winner at TP=8).
+        # GeGLU leaves interleaved after gate_up L1-out + slice; keep interleaved path.
         m = matmul_rows(hidden)
         k = int(hidden.shape[-1])
         n = int(self.down_proj.shape[-1])
         program_config, out_memcfg, compute_kernel_config = interleaved_down_proj_prefill_config(m, k, n)
-        act = hidden
-        act_l1 = None
-        if program_config is not None and not hidden.is_sharded():
-            if hidden.memory_config().buffer_type != ttnn.BufferType.L1:
-                act_l1 = ttnn.to_memory_config(hidden, ttnn.L1_MEMORY_CONFIG)
-                act = act_l1
+        act, owned = self._prepare_prefill_act(hidden, program_config)
         output = ttnn.linear(
             act,
             self.down_proj,
@@ -260,8 +282,8 @@ class SharedMLP:
             memory_config=out_memcfg,
             compute_kernel_config=compute_kernel_config,
         )
-        if act_l1 is not None:
-            act_l1.deallocate(True)
+        if owned:
+            act.deallocate(True)
         return output
 
     def __call__(self, hidden_states):

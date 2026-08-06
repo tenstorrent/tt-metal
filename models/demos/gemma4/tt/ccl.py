@@ -335,6 +335,8 @@ def _decode_l1_gather_memcfg(tensor, ccl_manager):
     Extended to short prefill (tile-aligned height <= ``_SHARDED_NORM_MAX_HEIGHT``,
     typically ISL <= 1024): same layout as ``RMSNorm._build_sharded_cfg`` so
     ``post_feedforward_layernorm`` skips I2S after the MLP all-reduce (~6 us/layer).
+    Disabled automatically when ``GEMMA4_SHARDED_NORM=0`` (interleaved-LN A/B),
+    since an AG→width_shard that the norm immediately abandons is wasted.
 
     The layout comes from ``rms_norm.width_shard_input_memcfg``, the same function
     the norm uses, so the two provably agree; ``RMSNorm.forward`` compares
@@ -348,8 +350,17 @@ def _decode_l1_gather_memcfg(tensor, ccl_manager):
         if len(shape) != 4:
             return None
         padded_height = ((int(shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        from models.demos.gemma4.tt.rms_norm import _SHARDED_NORM_MAX_HEIGHT, width_shard_input_memcfg
+        from models.demos.gemma4.tt.rms_norm import (
+            _SHARDED_NORM_MAX_HEIGHT,
+            sharded_norm_enabled,
+            width_shard_input_memcfg,
+        )
 
+        # AG→width_shard only helps when the following LN keeps (or at least
+        # consumes) that layout. With ``GEMMA4_SHARDED_NORM=0`` the norm is
+        # interleaved and would immediately S2I the gather — skip it.
+        if not sharded_norm_enabled():
+            return None
         if not (1 <= padded_height <= _SHARDED_NORM_MAX_HEIGHT):
             return None
         return width_shard_input_memcfg(ccl_manager.mesh_device, shape[-1], padded_height)

@@ -86,3 +86,38 @@ def test_rms_norm_without_scale(batch_size, seq_len, mesh_device, reset_seeds, r
 
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"RMSNorm without_scale PCC too low: {pcc_msg}"
+
+
+@parametrize_mesh_with_fabric()
+def test_rms_norm_keep_sharded_matches_interleaved(mesh_device, reset_seeds, request):
+    """keep_sharded L1 output must match the historical S2I→DRAM path numerically."""
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt.rms_norm import _SHARDED_NORM_MAX_HEIGHT
+
+    hidden_size = 2048  # tile-aligned; divides cleanly for width-shard grids
+    seq_len = min(128, _SHARDED_NORM_MAX_HEIGHT)
+    hf_config = SimpleNamespace(rms_norm_eps=1e-6, hidden_size=hidden_size)
+    weight = torch.randn(hidden_size, dtype=torch.bfloat16)
+    state_dict = {"weight": weight}
+
+    tt_norm = RMSNorm(mesh_device=mesh_device, hf_config=hf_config, state_dict=state_dict, with_scale=True)
+
+    x_torch = torch.randn(1, 1, seq_len, hidden_size, dtype=torch.bfloat16)
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+    x_tt = ttnn.from_torch(
+        x_torch, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper
+    )
+    out_dram = tt_norm.forward(x_tt, keep_sharded=False)
+    x_tt2 = ttnn.from_torch(
+        x_torch, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper
+    )
+    out_sh = tt_norm.forward(x_tt2, keep_sharded=True)
+    assert out_sh.is_sharded(), "keep_sharded must leave width-sharded L1 output"
+    out_sh_as_dram = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
+
+    t_dram = ttnn.to_torch(ttnn.get_device_tensors(out_dram)[0]) if is_mesh else ttnn.to_torch(out_dram)
+    t_sh = ttnn.to_torch(ttnn.get_device_tensors(out_sh_as_dram)[0]) if is_mesh else ttnn.to_torch(out_sh_as_dram)
+    passing, pcc_msg = compare_tensors(t_sh, t_dram, pcc_threshold=0.999)
+    assert passing, f"keep_sharded vs S2I path diverged: {pcc_msg}"
