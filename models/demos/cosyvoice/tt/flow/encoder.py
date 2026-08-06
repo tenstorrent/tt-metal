@@ -219,14 +219,29 @@ class TtRelPosAttention:
     def _sdpa_program(self, key_w: int):
         """`SDPAProgramConfig` for a key axis `key_w` wide, cached per width.
 
-        **`k_chunk_size` is the parameter to get right, and getting it wrong is
-        silent.** `sdpa_decode` validates only `mask_width % k_chunk_size == 0`, so
-        32 passes for every width this model uses -- and then returns a wrong
-        answer: PCC 0.016 at width 384 and 0.737 at 448, against 0.99998 at the
-        right value. Nothing raises. The op's own tests
-        (`sdpa_test_utils.py:get_chunk_size`) take the largest power of two dividing
-        the key length, capped at 128, and that is reproduced here: 384 -> 128,
-        448 -> 64, 256 -> 128.
+        **`k_chunk_size` has a value it accepts and computes wrongly, and the rule is
+        narrower than it first looks.** Swept over every value the op admits
+        (`scripts/probe_sdpa_chunk_sweep.py`), scored against a torch golden:
+
+            width  k_chunk 32   64      128     non-power-of-2
+            256    0.396 BAD    0.9999  0.9999  raises
+            384    0.293 BAD    0.9999  0.9999  raises
+            448    0.700 BAD    0.9999  --      raises
+            512    0.9999 ok    0.9999  0.9999  raises
+
+        Non-powers-of-two `TT_FATAL` properly. **32 is the whole problem**, and only
+        at widths under 512 -- at 512 it is fine, so "32 is broken" would be as wrong
+        as "32 is fine". Forcing `max_cores_per_head_batch` down to 1 or 2 makes 32
+        correct at width 384 (0.9999) while 4 gives 0.502 and 8+ gives 0.293, so the
+        fault is in the multi-core split of the key axis when chunks are one tile
+        deep, not in the chunk size as such.
+
+        **Anything >= 64 is correct at every width tested**, which is what this picks:
+        the largest power of two dividing the key width, capped at 128, giving
+        384 -> 128, 448 -> 64, 256 -> 128, 512 -> 128. The op's own tests
+        (`sdpa_test_utils.py:get_chunk_size`) arrive at the same values by the same
+        route -- which is where the real constraint lives, since the op itself
+        validates only `mask_width % k_chunk_size == 0` and power-of-two-ness.
         """
         prog = self._sdpa_prog.get(key_w)
         if prog is None:
