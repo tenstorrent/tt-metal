@@ -1162,9 +1162,9 @@
   team: shield
 
 - name: vLLM decode reload contract host tests
-  # Pure host tests: no device, no vLLM package. They pin the decode input-update
-  # contract that every vLLM-facing generator implements, so they belong to no single
-  # model and must run wherever a model adapter can be edited.
+  # No device and no vLLM package, but ttnn must import: the generator modules under
+  # test pull it in at module scope. They pin the decode input-update contract that
+  # every vLLM-facing generator implements, so they belong to no single model.
   cmd: pytest --timeout 300 models/common/tests/test_decode_update_contract.py
   model: decode-reload-contract
   skus:

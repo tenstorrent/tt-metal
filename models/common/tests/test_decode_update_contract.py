@@ -29,7 +29,13 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.common.decode_contract import per_layer_page_tables_need_upload, require_full_input_reload
+from models.common.decode_contract import (
+    DecodeInputStaging,
+    decode_input_staging,
+    per_layer_page_tables_need_upload,
+    rank_local_slot_remap,
+    require_full_input_reload,
+)
 from models.common.sampling.generator import SamplingGenerator, SeedManager
 from models.tt_transformers.tt.common import Mode
 
@@ -58,6 +64,26 @@ def test_sampling_state_can_reset_without_reloading_params():
     )
 
     assert calls == [("prompt", "prompt"), ("output", "output")]
+
+
+def test_a_state_reset_without_prompt_history_keeps_the_prompt_mask():
+    """Penalties cannot rebuild the mask without the real tokens, so it is left alone.
+
+    Warmup and some demos request a state reset with no prompt history. Clearing the
+    output counters is still unconditional; only the prompt half is caller-owned.
+    """
+    fake, calls = _fake_sampling_generator()
+
+    SamplingGenerator.apply_decode_state(
+        fake,
+        [object()],
+        reload_sampling_params=False,
+        reset_sampling_state=True,
+        prompt_tokens=None,
+        output_tokens=None,
+    )
+
+    assert calls == [("output", None)]
 
 
 def test_no_sampling_updates_is_a_true_noop():
@@ -182,8 +208,8 @@ def test_seed_advance_can_be_deferred_to_the_sampling_call():
     ],
 )
 def test_every_generator_routes_its_seed_state_through_the_shared_protocol(module_path, class_name, method):
-    # Three families used to carry three different alignment policies. Requiring the
-    # single implementation is what keeps them from drifting apart again.
+    # Seed alignment must have exactly one implementation: a per-family copy changes
+    # reproducibility silently, with no crash and no wrong shape to notice.
     import importlib
 
     owner = getattr(importlib.import_module(module_path), class_name)
@@ -305,16 +331,24 @@ _SAFE_COMMAND_DEFAULTS = {
 }
 
 
+def _repo_root() -> pathlib.Path:
+    return pathlib.Path(__file__).resolve().parents[3]
+
+
 def _adapter_decode_forwards():
-    """Every ``decode_forward`` defined in a vLLM adapter module, read not imported.
+    """Every ``decode_forward`` defined in a serving-adapter module, read not imported.
 
     Most of these modules import vLLM at module scope, which a tt-metal deployment
     does not have, so importing them would skip this check exactly where adapters are
     written. Parsing the source keeps it running everywhere, and the property being
     checked is a property of the source.
+
+    Covers the sglang bridge too: its wrappers call the same strict
+    ``Generator.decode_forward`` and are equally able to drop a command.
     """
-    repo_root = pathlib.Path(__file__).resolve().parents[3]
-    for path in sorted((repo_root / "models").rglob("*_vllm.py")):
+    repo_root = _repo_root()
+    paths = sorted(set((repo_root / "models").rglob("*_vllm.py")) | set((repo_root / "models").rglob("*_sglang.py")))
+    for path in paths:
         if path.name.startswith("test_"):
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
@@ -323,7 +357,41 @@ def _adapter_decode_forwards():
                 continue
             for item in node.body:
                 if isinstance(item, ast.FunctionDef) and item.name == "decode_forward":
+                    if _is_abstract_stub(item):
+                        continue
                     yield f"{path.relative_to(repo_root)}::{node.name}", item
+
+
+def _is_abstract_stub(func: ast.FunctionDef) -> bool:
+    """Whether ``func`` only tells a subclass to override it.
+
+    A ``NotImplementedError`` placeholder declares an interface rather than executing
+    commands, so requiring it to accept them would say nothing about conformance.
+    """
+    body = [node for node in func.body if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Constant)]
+    return len(body) == 1 and isinstance(body[0], ast.Raise)
+
+
+def _delegates_kwargs_to_decode_forward(func: ast.FunctionDef) -> bool:
+    """Whether ``func`` forwards its ``**kwargs`` into another ``decode_forward``.
+
+    A bare ``**kwargs`` proves nothing on its own: an adapter can accept the commands
+    and drop them on the floor. What makes absorbing them safe is passing them on to a
+    base that declares them, so look for that call rather than for the parameter.
+    """
+    kwarg = func.args.kwarg
+    if kwarg is None:
+        return False
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Call):
+            continue
+        target = node.func
+        if not (isinstance(target, ast.Attribute) and target.attr == "decode_forward"):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg is None and isinstance(keyword.value, ast.Name) and keyword.value.id == kwarg.arg:
+                return True
+    return False
 
 
 def _argument_defaults(func: ast.FunctionDef) -> dict:
@@ -338,25 +406,114 @@ def _argument_defaults(func: ast.FunctionDef) -> dict:
     return defaults
 
 
+# Every adapter definition the sweep is expected to find. An exact set, not a floor:
+# a new adapter has to be added here deliberately, and a definition that disappears
+# because a glob or a layout moved cannot pass unnoticed.
+_EXPECTED_ADAPTER_DECODE_FORWARDS = {
+    "models/demos/blackhole/qwen36/tt/qwen36_vllm.py::Qwen36ForCausalLM",
+    "models/demos/deepseek_v3/tt/generator_vllm.py::DeepseekV3ForCausalLM",
+    "models/demos/gemma4/tt/generator_vllm.py::Gemma4ForCausalLM",
+    "models/demos/llama3_70b_galaxy/tt/generator_vllm.py::LlamaForCausalLM",
+    "models/demos/llama3_70b_galaxy/tt/generator_vllm.py::QwenForCausalLM",
+    "models/demos/qwen25_vl/tt/generator_vllm.py::Qwen2_5_VLForConditionalGeneration",
+    "models/demos/qwen3_vl/tt/generator_vllm.py::Qwen3VLForConditionalGeneration",
+    "models/demos/t3000/llama2_70b/tt/generator_vllm.py::TtLlamaForCausalLM",
+    "models/tt_transformers/tt/generator_sglang.py::LlamaForCausalLM",
+    "models/tt_transformers/tt/generator_sglang.py::QwenForCausalLM",
+    "models/tt_transformers/tt/generator_sglang.py::MistralForCausalLM",
+    "models/tt_transformers/tt/generator_sglang.py::GptOssForCausalLM",
+    "models/tt_transformers/tt/generator_vllm.py::Gemma3ForConditionalGeneration",
+    "models/tt_transformers/tt/generator_vllm.py::GptOssForCausalLM",
+    # ``HybridAttentionForCausalLM.decode_forward`` is absent on purpose: it only raises
+    # NotImplementedError to force its subclasses to route per-layer page tables.
+    "models/tt_transformers/tt/generator_vllm.py::LlamaForCausalLM",
+    "models/tt_transformers/tt/generator_vllm.py::Mistral3ForConditionalGeneration",
+    "models/tt_transformers/tt/generator_vllm.py::MistralForCausalLM",
+    "models/tt_transformers/tt/generator_vllm.py::MllamaForConditionalGeneration",
+    "models/tt_transformers/tt/generator_vllm.py::QwenForCausalLM",
+}
+
+
+def test_the_adapter_sweep_covers_every_definition():
+    assert {label for label, _ in _adapter_decode_forwards()} == _EXPECTED_ADAPTER_DECODE_FORWARDS
+
+
 def test_every_adapter_decode_forward_accepts_the_four_commands():
     # An adapter that advertises the contract but drops a command fails at the first
     # decode with a bare TypeError, and one that defaults a command the wrong way is
     # worse: it silently ignores the scheduler. Sweep the sources instead of trusting
     # a manual audit.
-    checked = 0
     for label, func in _adapter_decode_forwards():
-        accepts_kwargs = func.args.kwarg is not None
         defaults = _argument_defaults(func)
+        delegates = _delegates_kwargs_to_decode_forward(func)
         assert "reset_batch" not in defaults, f"{label} still takes reset_batch"
         for command, safe in _SAFE_COMMAND_DEFAULTS.items():
-            assert command in defaults or accepts_kwargs, f"{label} drops {command}"
+            # Declared here, or handed to a base that declares it. Merely having
+            # ``**kwargs`` is not enough: the commands have to reach an implementation.
+            assert (
+                command in defaults or delegates
+            ), f"{label} neither declares {command} nor forwards **kwargs to a base decode_forward"
             default = defaults.get(command, ...)
             if isinstance(default, ast.Constant):
                 assert default.value is safe, f"{label} defaults {command} unsafely"
+
+
+def test_version_zero_executor_adapters_stay_unmarked():
+    """The executor-backed adapters are holdouts, and nothing may mark them converted.
+
+    ``models/common/models/*/generator.py`` forward ``**kwargs`` straight into
+    ``EagerLLMExecutor``/``TracedLLMExecutor.decode_forward``, which accept none of the
+    four commands. They survive only because they never advertise the contract, so the
+    day one of them does, its first vLLM decode is a bare ``TypeError``. That is the
+    pairing this checks, since the sweep above cannot see these modules.
+    """
+    repo_root = _repo_root()
+    family_root = repo_root / "models" / "common" / "models"
+    # The shared base is what makes this family vLLM-reachable; the leaves subclass it.
+    assert "initialize_vllm_model" in (family_root / "generator.py").read_text()
+    generators = sorted(family_root.rglob("generator.py"))
+    assert len(generators) >= 8, f"expected the executor-backed generator family, found {len(generators)}"
+    for path in generators:
+        assert "decode_input_update_contract" not in path.read_text(), (
+            f"{path.relative_to(repo_root)} advertises the contract, but its executor "
+            "accepts none of the four commands; convert the executor first"
+        )
+
+    executor = ast.parse((repo_root / "models" / "common" / "models" / "executor.py").read_text())
+    for node in ast.walk(executor):
+        if not (isinstance(node, ast.ClassDef) and node.name.endswith("LLMExecutor")):
+            continue
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef) and item.name == "decode_forward":
+                declared = set(_argument_defaults(item))
+                assert not declared & set(_SAFE_COMMAND_DEFAULTS), (
+                    f"{node.name}.decode_forward now takes contract commands; the "
+                    "holdout note and this test need updating together"
+                )
+
+
+def test_models_without_token_feedback_have_no_async_decode_adapter():
+    """A model that cannot feed its sampled token back must not be async-decode capable.
+
+    ``decode_forward`` rejects ``reload_inputs=False`` for these models, so the only
+    thing keeping vLLM from planning it is the adapter leaving the capability off. That
+    pairing spans two files per model and had nothing enforcing it.
+    """
+    repo_root = _repo_root()
+    checked = 0
+    for model_path in sorted((repo_root / "models").rglob("model.py")):
+        source = model_path.read_text()
+        if "_tt_supports_decode_token_feedback = False" not in source:
+            continue
         checked += 1
-    # A floor, not a census: it only has to catch the sweep finding nothing because the
-    # glob or the layout moved.
-    assert checked >= 8, f"only found {checked} adapter decode_forward definitions"
+        adapters = [p for p in model_path.parent.glob("*_vllm.py") if not p.name.startswith("test_")]
+        assert adapters, f"{model_path.relative_to(repo_root)} has no adapter beside it"
+        for adapter in adapters:
+            assert '"supports_async_decode": True' not in adapter.read_text(), (
+                f"{adapter.relative_to(repo_root)} advertises supports_async_decode while "
+                f"{model_path.name} has no decode token feedback"
+            )
+    assert checked >= 4, f"expected the known no-feedback models, found {checked}"
 
 
 def test_the_base_generators_advertise_the_contract():
@@ -373,20 +530,45 @@ def test_the_base_generators_advertise_the_contract():
             assert params[command].default is safe
 
 
-def test_the_legacy_reset_batch_signal_is_rejected(expect_error):
-    from models.tt_transformers.tt.generator import Generator
+@pytest.mark.parametrize(
+    "module_path", ["models.tt_transformers.tt.generator", "models.demos.llama3_70b_galaxy.tt.generator"]
+)
+def test_the_legacy_reset_batch_signal_is_rejected(module_path, expect_error):
+    import importlib
 
-    fake = SimpleNamespace(mode=Mode.DECODE, model=[SimpleNamespace(switch_mode=lambda mode: None)], data_parallel=1)
+    generator_cls = importlib.import_module(module_path).Generator
+    # Both base generators, not just the shared one: the same mistake against Galaxy
+    # used to surface as a bare TypeError from an unexpected keyword.
+    fake = SimpleNamespace(
+        mode=Mode.DECODE,
+        model=[SimpleNamespace(switch_mode=lambda mode: None)],
+        data_parallel=1,
+        _disable_decode_tracing=False,
+    )
 
     # The commands carry defaults, so a pre-contract vLLM would otherwise be accepted
     # with its layout changes silently reinterpreted as the default full reload.
-    with expect_error(ValueError, "predates the contract"):
-        Generator.decode_forward(
+    with expect_error(ValueError, "predates it"):
+        generator_cls.decode_forward(
             fake,
             torch.zeros((1, 1), dtype=torch.int64),
             torch.zeros((1,), dtype=torch.int64),
             reset_batch=True,
         )
+
+
+def test_the_two_input_commands_collapse_to_one_decision(expect_error):
+    """Reading them as independent switches is the misread that loses a page table.
+
+    An adapter whose page-table copy hangs off ``reload_page_table`` alone never
+    refreshes it on vLLM's every-transition shape, and the device then addresses the
+    previous batch's KV blocks with nothing to show for it.
+    """
+    assert decode_input_staging(True, False) is DecodeInputStaging.ALL
+    assert decode_input_staging(False, True) is DecodeInputStaging.PAGE_TABLE_ONLY
+    assert decode_input_staging(False, False) is DecodeInputStaging.NONE
+    with expect_error(ValueError, "meaningless with"):
+        decode_input_staging(True, True)
 
 
 @pytest.mark.parametrize(
@@ -442,10 +624,36 @@ def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():
     ],
 )
 def test_hybrid_per_layer_page_tables_follow_the_input_commands(kwargs, expected):
-    assert (
-        per_layer_page_tables_need_upload(kwargs.get("reload_inputs", True), kwargs.get("reload_page_table", False))
-        is expected
-    )
+    assert per_layer_page_tables_need_upload(kwargs) is expected
+
+
+def test_every_per_layer_page_table_upload_is_gated_by_the_commands():
+    """The behavioural half: no adapter may upload per-layer tables unconditionally.
+
+    On a ``reload_inputs=False, reload_page_table=False`` step the device holds the
+    tables it needs, and re-uploading them mid-trace is exactly the model-local refresh
+    the contract removes. The adapters that do this import vLLM at module scope, which
+    this test image has no copy of, so read the sources: what matters is that the guard
+    is present at every call site, which is a property of the source.
+    """
+    repo_root = _repo_root()
+    guarded = 0
+    for path in sorted((repo_root / "models").rglob("*_vllm.py")):
+        if path.name.startswith("test_"):
+            continue
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.FunctionDef) and node.name == "decode_forward"):
+                continue
+            body = ast.unparse(node)
+            if "update_persistent_per_layer_page_tables" not in body:
+                continue
+            assert "per_layer_page_tables_need_upload" in body, (
+                f"{path.relative_to(repo_root)}::{node.name} uploads per-layer page tables "
+                "without asking whether the commands request it"
+            )
+            guarded += 1
+    assert guarded == 3, f"expected the three hybrid adapters, found {guarded}"
 
 
 def test_partial_reload_is_refused_without_decode_token_feedback(expect_error):
@@ -455,8 +663,10 @@ def test_partial_reload_is_refused_without_decode_token_feedback(expect_error):
     fake = SimpleNamespace(mode=Mode.DECODE, model=[model], data_parallel=1)
 
     # Nothing would write the sampled token into the traced input, so a steady-state step
-    # would replay the previous token instead of the new one.
-    with expect_error(ValueError, "requires reload_inputs=True"):
+    # would replay the previous token instead of the new one. Match on the model-naming
+    # half of the message: "requires reload_inputs=True" also appears in the untraced
+    # raise below, so a looser match would pass on the wrong path.
+    with expect_error(ValueError, "no on-device decode token feedback"):
         Generator.decode_forward(
             fake,
             torch.zeros((1, 1), dtype=torch.int64),
@@ -464,6 +674,26 @@ def test_partial_reload_is_refused_without_decode_token_feedback(expect_error):
             sampling_params=object(),
             reload_inputs=False,
             reload_page_table=True,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+
+
+def test_untraced_decode_refuses_a_partial_reload(expect_error):
+    from models.tt_transformers.tt.generator import Generator
+
+    fake = SimpleNamespace(mode=Mode.DECODE, model=[SimpleNamespace(switch_mode=lambda mode: None)], data_parallel=1)
+
+    # Without a trace there are no persistent device inputs to preserve, so the whole
+    # forward is rebuilt from host and a partial reload cannot mean anything.
+    with expect_error(ValueError, "Non-traced decode rebuilds"):
+        Generator.decode_forward(
+            fake,
+            torch.zeros((1, 1), dtype=torch.int64),
+            torch.zeros((1,), dtype=torch.int64),
+            enable_trace=False,
+            reload_inputs=False,
+            reload_page_table=False,
             reload_sampling_params=False,
             reset_sampling_state=False,
         )
@@ -593,3 +823,140 @@ def test_unseeded_decode_reset_loads_fresh_device_seed(monkeypatch):
     assert uploads == [(host_seed_tensor, seed_buffer)]
     assert manager._needs_skip
     assert not manager._reseted
+
+
+# ---------------------------------------------------------------------------
+# Slot-remap index spaces
+# ---------------------------------------------------------------------------
+
+
+def test_rank_local_slot_remap_rebases_each_rank_onto_its_own_slots():
+    # vLLM offsets each rank's local mapping by rank*slots_per_rank; per-rank state
+    # indexes its own slots, so rank 1's values must come back down into [0, 4).
+    global_remap = [1, 0, 2, 3, 5, 4, 6, 7]
+
+    assert rank_local_slot_remap(global_remap, rank=0, slots_per_rank=4, data_parallel=2) == [1, 0, 2, 3]
+    assert rank_local_slot_remap(global_remap, rank=1, slots_per_rank=4, data_parallel=2) == [1, 0, 2, 3]
+
+
+def test_rank_local_slot_remap_rejects_a_stride_the_plugin_did_not_use(expect_error):
+    """The length check is the real cross-rank guard; a range check is not.
+
+    The plugin strides by ``max_num_seqs`` while a sampler's ``max_batch_size`` can be
+    larger. With the wider stride assumed, rank 0's slice swallows rank 1's entries,
+    every value still lands inside range so no per-value check fires, and rank 1 gets an
+    empty slice: its seed state silently stays attached to the previous request.
+    """
+    # world=2 at max_num_seqs=16 gives 32 entries; a sampler with max_batch_size=32
+    # across 2 ranks would expect 64.
+    two_ranks_of_sixteen = list(range(16)) + [16 + i for i in range(16)]
+
+    with expect_error(ValueError, "per-rank slot stride"):
+        rank_local_slot_remap(two_ranks_of_sixteen, rank=0, slots_per_rank=32, data_parallel=2)
+
+
+def test_rank_local_slot_remap_rejects_a_cross_rank_move(expect_error):
+    # Moving a request between ranks would index another rank's state.
+    with expect_error(ValueError, "across DP rank 1"):
+        rank_local_slot_remap([0, 1, 0, 3], rank=1, slots_per_rank=2, data_parallel=2)
+
+
+def test_shared_generator_rebases_the_remap_for_every_dp_rank():
+    from models.tt_transformers.tt.generator import Generator
+
+    managers = [_RecordingSeedManager(max_batch_size=2) for _ in range(2)]
+    fake = SimpleNamespace(
+        data_parallel=2,
+        model=[SimpleNamespace(sampling=SimpleNamespace(seed_manager=m)) for m in managers],
+    )
+
+    # Rank 1's half is offset by 2 in the global namespace.
+    Generator._apply_sampling_slot_remap(fake, [1, 0, 3, 2])
+
+    assert managers[0].events == [("remap", [1, 0])]
+    assert managers[1].events == [("remap", [1, 0])]
+
+
+def test_galaxy_generator_validates_the_remap_it_slices(expect_error):
+    from models.demos.llama3_70b_galaxy.tt.generator import Generator as GalaxyGenerator
+
+    manager = _RecordingSeedManager(max_batch_size=2)
+    fake = SimpleNamespace(model=SimpleNamespace(sampling=SimpleNamespace(seed_manager=manager)))
+
+    GalaxyGenerator._apply_sampling_slot_remap(fake, [1, 0])
+    assert manager.events == [("remap", [1, 0])]
+
+    # A bare slice would have taken the first two entries of a wider mapping as its own.
+    with expect_error(ValueError, "per-rank slot stride"):
+        GalaxyGenerator._apply_sampling_slot_remap(fake, [1, 0, 3, 2])
+
+
+# ---------------------------------------------------------------------------
+# sglang bridge
+# ---------------------------------------------------------------------------
+
+
+def _sglang_commands(*args, **kwargs):
+    """Load the sglang command table without importing the bridge module.
+
+    ``generator_sglang.py`` imports ttnn and the model, so read the two functions out
+    of the source and bind them to the real ``Generator.decode_forward`` signature.
+    """
+    import importlib
+
+    source = pathlib.Path(_repo_root() / "models/tt_transformers/tt/generator_sglang.py").read_text()
+    tree = ast.parse(source)
+    wanted = {"_decode_forward_sampling_params", "sglang_decode_forward_commands"}
+    body = [n for n in tree.body if getattr(n, "name", None) in wanted]
+    namespace = {
+        "inspect": inspect,
+        "Generator": importlib.import_module("models.tt_transformers.tt.generator").Generator,
+    }
+    exec(compile(ast.Module(body=body, type_ignores=[]), "<sglang>", "exec"), namespace)
+    return namespace["sglang_decode_forward_commands"](args, kwargs)
+
+
+def test_sglang_commands_are_host_authoritative_on_every_step():
+    commands = _sglang_commands(torch.zeros((1, 1)), torch.zeros((1,)))
+
+    assert commands == {
+        "reload_inputs": True,
+        "reload_page_table": False,
+        "reload_sampling_params": False,
+        "reset_sampling_state": False,
+    }
+
+
+def test_sglang_finds_sampling_params_passed_positionally():
+    """The bridge forwards ``*args`` verbatim, so a positional call must be seen.
+
+    Missing it reports "no sampling params", skips the parameter upload while device
+    sampling is active, and yields wrong token distributions rather than an error.
+    """
+    by_keyword = _sglang_commands(torch.zeros((1, 1)), sampling_params=object())
+    # tokens, start_pos, page_table, kv_cache, enable_trace, read_from_device, sampling_params
+    positional = _sglang_commands(torch.zeros((1, 1)), torch.zeros((1,)), None, None, True, True, object())
+
+    assert by_keyword["reload_sampling_params"] is True
+    assert positional["reload_sampling_params"] is True
+
+
+def test_mllama_rejects_partial_reloads_and_stays_synchronous():
+    """A shipped multimodal adapter: both halves of its contract stance pinned.
+
+    It rebuilds all host inputs per decode, so it rejects the partial combinations, and
+    it must keep ``supports_async_decode`` off, which is what stops vLLM from planning
+    one. Read from source: the module imports vLLM.
+    """
+    source = pathlib.Path(_repo_root() / "models/tt_transformers/tt/generator_vllm.py").read_text()
+    tree = ast.parse(source)
+    mllama = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "MllamaForConditionalGeneration"
+    )
+    body = ast.unparse(mllama)
+
+    assert '"supports_async_decode": False' in body
+    decode = next(n for n in mllama.body if isinstance(n, ast.FunctionDef) and n.name == "decode_forward")
+    assert "require_full_input_reload" in ast.unparse(decode)
+    # The helper names the offending command; check it is handed the adapter's own name.
+    assert "'Mllama'" in ast.unparse(decode) or '"Mllama"' in ast.unparse(decode)

@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import random
 from types import SimpleNamespace
 
@@ -89,10 +90,34 @@ class _FakeSeedManager:
         self.new_value_calls.append(user_slots)
 
 
+def test_the_fake_seed_manager_still_matches_the_real_one():
+    """The fake stands in for ``SeedManager`` across this file's assertions.
+
+    A hand-rolled stand-in rots the moment the real interface grows or renames a
+    method: the fake keeps recording, the assertions keep passing, and they stop
+    describing production. Pin the shape rather than trusting review to notice.
+    """
+    fake = _FakeSeedManager(32)
+    for name in (
+        "reset_seed_from_slots",
+        "reset_seed_from_slots_if_needed",
+        "align_seed_counters_to_positions",
+        "apply_slot_remap",
+        "get_new_values",
+    ):
+        real = inspect.signature(getattr(SeedManager, name))
+        stand_in = inspect.signature(getattr(type(fake), name))
+        assert list(real.parameters) == list(stand_in.parameters), f"{name} drifted from SeedManager"
+
+
 class _FakeSamplingGenerator:
     # apply_decode_update is the real ordered protocol, so these tests pin the shared
     # implementation rather than a copy of its decisions.
     apply_decode_update = SamplingGenerator.apply_decode_update
+
+    # ``_params_uploaded`` is what makes ``apply_decode_update`` refuse a first decode
+    # that never uploads parameters. These tests drive it directly, past the upload.
+    _params_uploaded = True
 
     def __init__(self, *, padded_batch_size=32, sampling_dp=2):
         self.tt_sampling = SimpleNamespace(max_batch_size=padded_batch_size, _sampling_dp=sampling_dp)
