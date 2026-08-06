@@ -4,6 +4,7 @@
 
 #include "groupnorm_device_operation.hpp"
 #include "groupnorm_program_utils.hpp"
+#include "kernels/groupnorm_constants.hpp"
 
 #include <bit>
 #include <map>
@@ -1341,11 +1342,22 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         });
     }
 
-    // Welford does not use cb_ex_external.
+    // Welford does not use cb_ex_external. Same sizing as the mcast factory: reader/compute
+    // reserve ceil(num_out_blocks_padded * num_mcast_cores * slot_pitch / tile_size) tiles.
     if (!use_welford) {
         constexpr uint32_t ex_cb_external_index = tt::CBIndex::c_10;
+        uint32_t num_out_blocks_padded = num_out_blocks;
+        uint32_t out_block_h_normal = block_ht_group_1 / num_out_blocks;
+        if (block_ht_group_1 % num_out_blocks != 0) {
+            uint32_t residual = block_ht_group_1 - (num_out_blocks * out_block_h_normal);
+            num_out_blocks_padded += (residual / out_block_h_normal + 1);
+        }
+        uint32_t cb_ex_external_tiles =
+            (num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes + single_tile_size -
+             1) /
+            single_tile_size;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * single_tile_size * num_cores_per_mcast_group,
+            .total_size = cb_ex_external_tiles * single_tile_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(ex_cb_external_index),
