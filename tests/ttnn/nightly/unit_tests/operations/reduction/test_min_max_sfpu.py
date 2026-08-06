@@ -120,3 +120,36 @@ def test_int32_reduce_with_extreme_value_in_input(device, input_shape, dim, inje
     output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim))
 
     assert_equal(output_tensor, torch_output)
+
+
+# Validates the pad value the reduce op uses when it tilizes ROW_MAJOR input: padding must not change
+# the result. Shapes are tile-unaligned so padding is added, and the data is single-signed (all-positive
+# MIN, all-negative MAX) so padding that wins the comparison is visible in the output.
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 1, 30, 30),
+        (1, 1, 17, 19),
+        (2, 3, 60, 30),
+    ],
+)
+@pytest.mark.parametrize("dim", [-1, -2, (-1, -2)])
+@pytest.mark.parametrize(
+    "op, base_range",
+    [("min", (10, 1000)), ("max", (-1000, -10))],
+    ids=["min_all_positive", "max_all_negative"],
+)
+def test_int32_reduce_row_major_pad_value(device, input_shape, dim, op, base_range):
+    torch.manual_seed(0)
+    torch_input = torch.randint(base_range[0], base_range[1], input_shape, dtype=torch.int32)
+
+    torch_op = torch.amax if op == "max" else torch.amin
+    ttnn_op = ttnn.max if op == "max" else ttnn.min
+
+    torch_output = torch_op(torch_input, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.int32)
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim))
+
+    assert output_tensor.dtype == torch_input.dtype
+    assert_equal(output_tensor, torch_output)
