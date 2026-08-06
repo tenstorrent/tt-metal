@@ -26,7 +26,7 @@ start_server(){
     exec $VBIN/python -u -m models.common.readiness_check.run_vllm_server \
       --model-dir $BASE --hf-model poolside/Laguna-XS-2.1 --mesh-device P150x4 --stages serve \
       --max-num-seqs 8 --block-size 64 --max-model-len 131072 \
-      --tt-config '{\"trace_region_size\":1500000000,\"fabric_config\":\"FABRIC_1D_RING\"}' \
+      --tt-config '{\"trace_region_size\":1500000000,\"fabric_config\":\"FABRIC_1D_RING\",\"env_passthrough\":[\"VLLM_*\",\"MESH_DEVICE\",\"TT_LAGUNA_*\",\"TT_METAL_*\",\"PYTHONPATH\"]}' \
       --additional-server-args='--trust-remote-code --max-num-batched-tokens 131072 --no-enable-prefix-caching'
   " >> "$LOG" 2>&1 &
   echo $! > /tmp/laguna_srv_c1c8
