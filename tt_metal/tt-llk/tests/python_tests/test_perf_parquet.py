@@ -245,7 +245,7 @@ def test_convert_stringifies_bool_valued_string_column(tmp_path):
 
 
 def test_convert_drops_redundant_columns_strict_safe(tmp_path):
-    # input_/output_num_blocks are provably == num_blocks (REDUNDANT_COLUMNS): the
+    # input_/output_num_blocks are provably == num_blocks (DROPPED_COLUMNS): the
     # converter drops them and does NOT trip the strict unknown-column guard.
     df = pd.DataFrame(
         {
