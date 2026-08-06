@@ -331,6 +331,91 @@ def _select_next_on_device(last, gen_ids, base_mask, eye_v, penalty):
     return ttnn.to_layout(nxt, ttnn.ROW_MAJOR_LAYOUT)
 
 
+class _TracedStage:
+    """Wrap a fixed-shape device stage with trace capture/replay.
+
+    The first call runs eagerly (compiling every program), captures one execution on
+    persistent input buffers, and replays it for the result; later calls copy the new
+    inputs into those buffers and replay — the stage's host dispatch collapses to one
+    trace execution. Replay runs the identical op sequence on the identical weights,
+    so outputs are bit-identical to the eager path. Falls back to eager permanently
+    when the device has no trace region or the stage is not trace-safe, and per call
+    when input shapes/dtypes/layouts differ from the captured ones.
+    """
+
+    def __init__(self, device, fwd):
+        self._device = device
+        self._fwd = fwd
+        self._trace_id = None
+        self._disabled = False
+        self._in_bufs = None
+        self._out = None
+
+    @staticmethod
+    def _tensors(args, kwargs):
+        return [a for a in args if isinstance(a, ttnn.Tensor)] + [
+            v for v in kwargs.values() if isinstance(v, ttnn.Tensor)
+        ]
+
+    def _with_bufs(self, args, kwargs):
+        it = iter(self._in_bufs)
+        new_args = tuple(next(it) if isinstance(a, ttnn.Tensor) else a for a in args)
+        new_kwargs = {k: (next(it) if isinstance(v, ttnn.Tensor) else v) for k, v in kwargs.items()}
+        return new_args, new_kwargs
+
+    def _capture(self, args, kwargs):
+        tensors = self._tensors(args, kwargs)
+        self._in_bufs = [ttnn.clone(t) for t in tensors]
+        b_args, b_kwargs = self._with_bufs(args, kwargs)
+        self._fwd(*b_args, **b_kwargs)  # warm: compile every program in the stage
+        ttnn.synchronize_device(self._device)
+        tid = ttnn.begin_trace_capture(self._device, cq_id=0)
+        try:
+            out = self._fwd(*b_args, **b_kwargs)
+        except Exception:
+            # An op inside the stage is not trace-safe (e.g. conv2d weight
+            # re-preparation does a device->host pull-back). The capture is still
+            # open: end and release it so the device leaves capture mode, then let
+            # the caller fall back to eager.
+            try:
+                ttnn.end_trace_capture(self._device, tid, cq_id=0)
+            finally:
+                ttnn.release_trace(self._device, tid)
+            raise
+        ttnn.end_trace_capture(self._device, tid, cq_id=0)
+        if not isinstance(out, ttnn.Tensor):
+            raise RuntimeError("traced stage must return a single tensor")
+        self._out = out
+        self._trace_id = tid
+        ttnn.execute_trace(self._device, tid, cq_id=0, blocking=True)  # capture records; replay executes
+
+    def __call__(self, *args, **kwargs):
+        if not self._disabled:
+            try:
+                if self._trace_id is None:
+                    self._capture(args, kwargs)
+                else:
+                    for buf, t in zip(self._in_bufs, self._tensors(args, kwargs)):
+                        if (
+                            list(buf.shape) != list(t.shape)
+                            or buf.get_dtype() != t.get_dtype()
+                            or buf.get_layout() != t.get_layout()
+                        ):
+                            raise RuntimeError("traced stage input signature changed")
+                        ttnn.copy(t, buf)
+                    ttnn.execute_trace(self._device, self._trace_id, cq_id=0, blocking=True)
+                return ttnn.clone(self._out)
+            except Exception:
+                self._disabled = True
+                if self._trace_id is not None:
+                    try:
+                        ttnn.release_trace(self._device, self._trace_id)
+                    except Exception:
+                        pass
+                    self._trace_id = None
+        return self._fwd(*args, **kwargs)
+
+
 class BuiltPipeline:
     """Weight-resident XTTS-v2 pipeline: the graduated stubs are built ONCE, then
     reused for any number of utterances.
@@ -356,6 +441,14 @@ class BuiltPipeline:
             self.infer_fwd = _build("g_p_t2_inference_model")(device, gpt.gpt_inference)
             self.gpt_fwd = _build("g_p_t")(device, gpt)
             self.hifi_fwd = _build("hifi_decoder")(device, _resolve(model, "hifigan_decoder"))
+            # Opt-in (XTTS_TRACE_STAGES=1): trace the two large fixed-shape non-AR
+            # stages to collapse their host dispatch to one replay each. Currently
+            # always falls back to eager: conv2d re-prepares its weights (device->
+            # host pull-back) on every call, which is not trace-safe — needs
+            # ttnn.prepare_conv_weights at build time first. Default path unchanged.
+            if os.environ.get("XTTS_TRACE_STAGES") == "1":
+                self.se_fwd = _TracedStage(device, self.se_fwd)
+                self.hifi_fwd = _TracedStage(device, self.hifi_fwd)
 
             # on-device penalty constants (bf16 identity table for one-hot via ttnn.embedding)
             V = int(gpt.gpt_inference.lm_head[1].weight.shape[0])
