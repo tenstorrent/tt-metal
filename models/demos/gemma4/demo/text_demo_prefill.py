@@ -1640,36 +1640,21 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
     input, the ring metadata, and the pinned RoPE slice. A trace records addresses, not
     values, so each of those had to be given a fixed address first.
 
-    XFAIL pending a ttnn change. ring_joint's ``logical_n`` is a host scalar that a trace
-    freezes at capture, and it controls two separate things. Measured at 32k, 8 chunks:
+    Two ttnn fixes were needed to make one capture valid for every chunk, both found by
+    this test's PCC check rather than by its timings, which were happy throughout:
+    compute_gather_valid_Ht capped the gather at the creating chunk's prefix, and the
+    compact sliding halo's source group (linear in chunk index) was baked into the
+    all-gather descriptor. Both are now derived on-device from kv_actual_isl.
 
-      per-chunk logical_n: 0.946 0.989 0.947 0.932 0.917 0.913 0.910 0.884  (decays)
-      logical_n = max:     0.946 0.913 0.945 0.948 0.951 0.945 0.938 0.977  (inverted)
-
-    Per-chunk freezes the gather extent (compute_gather_valid_Ht = ceil(logical_n /
-    chunk_global) slabs, set at create time and re-patched per dispatch — a replay does
-    neither), so later chunks attend a truncated prefix and decay with depth. Sizing to
-    max fixes the gather but marks the not-yet-written tail valid: worst on chunk 1,
-    whose true logical_n is furthest below the override, and near-right on the last
-    chunk, where the two coincide. The two profiles bracket one root cause.
-
-    logical_n is redundant with metadata already on device — it is
-    kv_actual_isl + chunk_global, and chunk_global is fixed by the Q shape. Deriving it
-    on-device the way slot_id and kv_actual_isl already are makes one capture valid for
-    every chunk. That is a ring_joint program-factory/kernel change.
-
+    Traced output matches eager to five decimals at 32k:
+      eager  0.94585 0.98890 0.98901 0.99042 0.99024 0.98987 0.98965 0.98899
+      traced 0.94585 0.98890 0.98901 0.99042 0.99024 0.98987 0.98965 0.98899
     The perf half stands regardless: ~206 ms per replayed ring chunk vs ~1016 ms eager.
     """
     from models.demos.gemma4.tests import cpu_prefill_reference as cpu_ref
     from models.demos.gemma4.tt.attention import ring_prefill
     from models.demos.gemma4.tt.ccl import cp_degree
 
-    request.node.add_marker(
-        pytest.mark.xfail(
-            reason="ring_joint logical_n is a host scalar frozen by trace capture; see docstring",
-            strict=False,
-        )
-    )
     chunk = LONG_CONTEXT_CHUNK
     _guard_chunk(request, chunk)
     mesh_config = _mesh_config(mesh_device)
