@@ -20,6 +20,8 @@ collapses it at construction.
 """
 from __future__ import annotations
 
+import os
+
 import torch
 from loguru import logger
 
@@ -37,12 +39,21 @@ def accurate_compute_config(device):
 
     HiFi4 plus fp32 destination accumulation is the standard lever for exactly
     this -- depth-accumulated bfloat16 drift, not a wrong computation.
+
+    `COSYVOICE_FIDELITY` overrides it (`LoFi`/`HiFi2`/`HiFi3`/`HiFi4`) and
+    `COSYVOICE_FP32_ACC=0` drops fp32 accumulation, so the accuracy/throughput trade can
+    be measured rather than assumed. Fidelity is a *compute* lever: HiFi4 runs four
+    passes where LoFi runs one, so it should matter on a compute-bound stage and not on
+    a dispatch-bound one. Those two live in the same model here, which makes it a clean
+    test -- see PERF.md for what it measured.
     """
+    name = os.environ.get("COSYVOICE_FIDELITY", "HiFi4")
+    fidelity = getattr(ttnn.MathFidelity, name, ttnn.MathFidelity.HiFi4)
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=fidelity,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=os.environ.get("COSYVOICE_FP32_ACC", "1") != "0",
         packer_l1_acc=True,
     )
 
