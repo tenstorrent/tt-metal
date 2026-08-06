@@ -33,8 +33,10 @@ attn/dense/shared/KV/LM-head, BFP4 routed experts, fp32/HiFi4 SDPA.
   until an OOM check at that context is done.
 - **Batched-decode corruption fix** — plugin `reset_batch=True` full per-step refresh (22–29/100 → 0/100).
   Lives on an **uncommitted plugin diff**.
-- **Tooling/serving** — thinking-mode split via `--reasoning-parser deepseek_r1`; native tool-calling via the
-  `glm47` parser (both required for agent evals).
+- **Tooling/serving** — Laguna's **published `poolside_v1`** parsers (`--tool-call-parser poolside_v1
+  --reasoning-parser poolside_v1`), vendored into `vllm_tt_plugin` (our pinned vLLM fork predates them) and
+  registered lazily in `entrypoints.py`. Handles the native `<tool_call>…<arg_key>…<arg_value>…` protocol +
+  scopes the `</think>` search to the current `<assistant>` turn. Supersedes the interim `glm47`+`deepseek_r1`.
 - **Spec-decode (opt-in, `tt/spec_decode.py`)** — generator-level ngram, token-exact vs greedy. See Caveats
   for what actually ships.
 
@@ -167,8 +169,8 @@ attn/dense/shared/KV/LM-head, BFP4 routed experts, fp32/HiFi4 SDPA.
   '{"trace_region_size":1500000000,"fabric_config":"FABRIC_1D_RING","env_passthrough":["VLLM_*","MESH_DEVICE","TT_LAGUNA_*","TT_METAL_*","PYTHONPATH"]}'`
   (**`env_passthrough` is required** — without it the worker allowlist is only `VLLM_*`/`MESH_DEVICE`, so
   the `TT_LAGUNA_*` exports above are silently dropped in the worker, `launcher.py:262`). For agents add
-  `--reasoning-parser deepseek_r1 --enable-auto-tool-choice --tool-call-parser glm47`. Full commands in
-  `smoke_test.md`.
+  `--reasoning-parser poolside_v1 --enable-auto-tool-choice --tool-call-parser poolside_v1` (Laguna's published
+  parsers, vendored into `vllm_tt_plugin`; see `pool_agent_plan.md`). Full commands in `smoke_test.md`.
 - **Bench:** ONLY `vllm bench serve` from `.venv_benchmarks_vllm`; report **ISL/OSL/E2EL + t/s/u + agg tok/s
   (never ms/tok)**. Latency numbers should state cold (APC off) vs warm (APC on).
 - **Agents run batch-1** (`--workers 1` SWE, `--n-concurrent 1` TB). Board recovery: `tt-smi -r all` after any

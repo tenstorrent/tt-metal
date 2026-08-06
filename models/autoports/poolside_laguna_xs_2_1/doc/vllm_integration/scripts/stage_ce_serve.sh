@@ -1,6 +1,6 @@
 #!/bin/bash
 # Stage C+E — boot the TOOL-CALLING server (stays up; agents + concurrency probe run against it).
-# Canonical smoke_test.md §0 launch + native tool-calling (glm47) + reasoning split (deepseek_r1) + APC on
+# Canonical smoke_test.md §0 launch + Laguna published parsers (poolside_v1 tool + reasoning) + APC on
 # (agentic loops get ~95% prefix-cache hit). Detached so a reaped shell can't kill it.
 set +e
 LOCAL=/home/ttuser/.local/lib/model-bringup/tt-metal
@@ -22,7 +22,7 @@ nohup env \
      --model-dir $BASE --hf-model poolside/Laguna-XS-2.1 --mesh-device P150x4 --stages serve \
      --max-num-seqs 32 --block-size 64 --max-model-len 262144 \
      --tt-config '{\"trace_region_size\": 1500000000, \"fabric_config\": \"FABRIC_1D_RING\", \"env_passthrough\": [\"VLLM_*\", \"MESH_DEVICE\", \"TT_LAGUNA_*\", \"TT_METAL_*\", \"PYTHONPATH\"]}' \
-     --additional-server-args='--trust-remote-code --max-num-batched-tokens 131072 --enable-prefix-caching --reasoning-parser deepseek_r1 --enable-auto-tool-choice --tool-call-parser glm47'" \
+     --additional-server-args='--trust-remote-code --max-num-batched-tokens 131072 --enable-prefix-caching --reasoning-parser poolside_v1 --enable-auto-tool-choice --tool-call-parser poolside_v1'" \
   > "$SLOG" 2>&1 &
 echo $! > /tmp/laguna_srv_pgid_ce
 echo "server launching (pgid $(cat /tmp/laguna_srv_pgid_ce)); tail: $SLOG and $BASE/readiness_vllm/server.log"

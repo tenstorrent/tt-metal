@@ -32,7 +32,7 @@ nohup env \
      --hf-model poolside/Laguna-XS-2.1 --mesh-device P150x4 --stages serve \
      --max-num-seqs 32 --block-size 64 --max-model-len 262144 \
      --tt-config "{\"trace_region_size\": 1500000000, \"fabric_config\": \"FABRIC_1D_RING\"}" \
-     --additional-server-args="--trust-remote-code --max-num-batched-tokens 131072 --enable-prefix-caching --reasoning-parser deepseek_r1"' \
+     --additional-server-args="--trust-remote-code --max-num-batched-tokens 131072 --enable-prefix-caching --enable-auto-tool-choice --tool-call-parser poolside_v1 --reasoning-parser poolside_v1"' \
   > /home/ttuser/dev/tt-metal/models/autoports/poolside_laguna_xs_2_1/doc/vllm_integration/serve.log 2>&1 &
 disown
 ```
@@ -49,7 +49,7 @@ curl -s http://localhost:8000/v1/models | python3 -c 'import sys,json;print(json
 curl -s -o /dev/null -w 'health=%{http_code}\n' http://localhost:8000/health           # -> 200
 SLOG=/home/ttuser/dev/tt-metal/models/autoports/poolside_laguna_xs_2_1/readiness_vllm/server.log
 grep -oE "enable_prefix_caching=(True|False)" "$SLOG" | tail -1                         # -> True
-grep -oE "reasoning_parser='[^']*'" "$SLOG" | tail -1                                   # -> 'deepseek_r1'
+grep -oE "reasoning_parser='[^']*'" "$SLOG" | tail -1                                   # -> 'poolside_v1'
 grep -oE "Maximum concurrency for 262,144 tokens per request: [0-9.]+x" "$SLOG" | tail -1  # -> 1.51x (Phase A)
 ```
 
