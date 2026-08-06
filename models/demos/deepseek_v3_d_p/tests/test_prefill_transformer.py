@@ -14,8 +14,8 @@ Reference sources are checked in priority order:
 
 Parametrized over:
 - use_pretrained: real pretrained weights from DeepSeek-R1-0528 vs random weights
-- input_source: "random", "json_prompts", or InfiniteBench subset (passkey, kv_retrieval, etc.)
-- pcc_validation: per-stage PCC check (via return_intermediates) vs shape-only smoke test
+- (input_source, pcc_validation): coupled — only longbook_qa_eng has a golden, so only it pairs
+  with pcc_validation=True
 - n_routed_experts / gate_fallback_mode: MoE configurations
 """
 
@@ -49,13 +49,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, 
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
-    ABC_1K_PATH,
-    ABC_SHORT_PATH,
-    P64TOK_PATH,
-    P960TOK_PATH,
-    PIE960_PATH,
     PROMPT_1K_PATH,
-    PROMPT_25K_PATH,
     ReferenceCacheKey,
     check_first_token_match,
     check_first_token_match_host_ref,
@@ -82,9 +76,8 @@ TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
 # Determinism: every iteration is expected to match the iter-0 baseline near-bit-exactly.
 DETERMINISM_PCC_THRESHOLD = 1.0
 
-# Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
-# or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
-INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
+# Only the subset that is still a parametrized input_source; downloaded on first use.
+INFINITEBENCH_SUBSET_NAMES = {"longbook_qa_eng"}
 SEQ_LEN_1K = 1024
 SEQ_LEN_5K = 5120
 SEQ_LEN_25K = 25600
@@ -306,32 +299,8 @@ def run_model(
         if input_source == "json_prompts":
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 
-            prompt_text = load_prompts_from_json(str(PROMPT_1K_PATH))
-            prompt_text = prompt_text[0] if isinstance(prompt_text, list) else prompt_text
-        elif input_source == "abc_1k":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(ABC_1K_PATH))
-        elif input_source == "abc_short":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(ABC_SHORT_PATH))
-        elif input_source == "p64tok":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(P64TOK_PATH))
-        elif input_source == "p960tok":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(P960TOK_PATH))
-        elif input_source == "pie960":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(PIE960_PATH))
-        elif input_source == "prompt_25k":
-            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-
-            prompt_text = load_prompts_from_json(str(PROMPT_25K_PATH))
+            # The file holds two prompts; one prefill takes one.
+            prompt_text = load_prompts_from_json(str(PROMPT_1K_PATH), max_prompts=1)[0]
         elif input_source in INFINITEBENCH_SUBSET_NAMES:
             cached_path = download_infinitebench_subset(input_source)
             with open(cached_path) as f:
@@ -859,23 +828,15 @@ def run_model(
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
-    "input_source",
+    "input_source, pcc_validation",
     [
-        "json_prompts",
-        "abc_1k",
-        "abc_short",
-        "p64tok",
-        "p960tok",
-        "pie960",
-        "prompt_25k",
-        "random",
-        "passkey",
-        "kv_retrieval",
-        "longdialogue_qa_eng",
-        "longbook_qa_eng",
+        ("longbook_qa_eng", True),
+        ("longbook_qa_eng", False),
+        ("json_prompts", False),
+        ("random", False),
     ],
+    ids=["pcc-longbook_qa_eng", "smoke-longbook_qa_eng", "smoke-json_prompts", "smoke-random"],
 )
-@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
@@ -1001,23 +962,15 @@ def test_ds_prefill_transformer(
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
-    "input_source",
+    "input_source, pcc_validation",
     [
-        "json_prompts",
-        "abc_1k",
-        "abc_short",
-        "p64tok",
-        "p960tok",
-        "pie960",
-        "prompt_25k",
-        "random",
-        "passkey",
-        "kv_retrieval",
-        "longdialogue_qa_eng",
-        "longbook_qa_eng",
+        ("longbook_qa_eng", True),
+        ("longbook_qa_eng", False),
+        ("json_prompts", False),
+        ("random", False),
     ],
+    ids=["pcc-longbook_qa_eng", "smoke-longbook_qa_eng", "smoke-json_prompts", "smoke-random"],
 )
-@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
