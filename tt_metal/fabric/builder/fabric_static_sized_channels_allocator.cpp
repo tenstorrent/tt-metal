@@ -751,7 +751,7 @@ void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
     // allocated but unused). When emitting the kernel-side SENDER_TO_ENTRY_IDX mapping we
     // must skip past the *per-VC* unused slots, not the total unused slots — the kernel
     // compacts its sender channels in (VC0, VC1, VC2) order using the ACTUAL_* counts
-    // (see VC1_SENDER_CHANNEL_START / VC2_SENDER_CHANNEL_START in
+    // (see VC1_LOCAL_CHANNEL_START / VC2_LOCAL_CHANNEL_START in
     // fabric_erisc_router_ct_args.hpp), so each VC's used channels must point into its
     // own allocator-entry region.
     //

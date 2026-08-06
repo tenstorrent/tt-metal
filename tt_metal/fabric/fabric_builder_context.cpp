@@ -40,6 +40,40 @@ bool fabric_has_intermesh_z_edge(const MeshGraph& mesh_graph) {
 
 }  // namespace
 
+StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id) const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const bool express_enabled = control_plane.express_routing_enabled(mesh_id);
+    // The credit plan follows express enablement (per mesh) and multi-TXQ (device-wide, from the
+    // shared router config) -- the same facts the per-router derivation used, lifted to the scope
+    // they actually vary at.
+    const auto& base_config = get_fabric_router_config();
+    const bool multi_txq_enabled = base_config.sender_txq_id != base_config.receiver_txq_id;
+    const CreditTransportPlan plan{
+        .vc0_uses_counters = multi_txq_enabled, .vc1_uses_counters = multi_txq_enabled || express_enabled};
+
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> max_senders{};
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> max_receivers{};
+    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        max_senders[vc] = static_cast<uint32_t>(max_sender_channels_per_vc_[vc]);
+        max_receivers[vc] = static_cast<uint32_t>(max_receiver_channels_per_vc_[vc]);
+    }
+    const StreamPlacementInputs placement{
+        .max_sender_counts = max_senders,
+        .max_receiver_counts = max_receivers,
+        .vc2_present = intermesh_vc_config_.requires_vc2,
+        .tensix_relay_present = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
+                                tt::tt_fabric::FabricTensixConfig::UDM};
+    return make_stream_assignment(stream_requirements(placement, plan));
+}
+
+const StreamAssignment& FabricBuilderContext::get_stream_assignment(MeshId mesh_id) const {
+    const auto it = stream_assignments_.find(mesh_id);
+    if (it != stream_assignments_.end()) {
+        return it->second;
+    }
+    return stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id)).first->second;
+}
+
 void FabricBuilderContext::compute_max_channel_counts() {
     // Derive the shape of every router family present in this fabric. These are archetype
     // queries -- "what shape would a router with these facts have" -- so no router or layout

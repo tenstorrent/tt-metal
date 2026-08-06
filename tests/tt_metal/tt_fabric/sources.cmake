@@ -25,6 +25,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_router_wiring_rules.cpp
     fabric_router/test_router_turn_set.cpp
     fabric_router/test_injection_policies.cpp
+    fabric_router/test_stream_assignment.cpp
     fabric_router/test_fabric_topology_helpers.cpp
     fabric_router/test_fabric_opt_level.cpp
     fabric_router/test_channel_trimming_capture.cpp

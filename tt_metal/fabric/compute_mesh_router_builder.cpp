@@ -13,6 +13,7 @@
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/builder/injection_policy.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "impl/context/metal_context.hpp"
@@ -451,7 +452,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     };
     maybe_finalize_vc0_fast_path_pair();
 
-    // NOW create erisc builder with computed injection flags and actual channel counts
+    // The stream-register assignment is fabric-scoped (shared per mesh) and lives in
+    // FabricBuilderContext; the erisc and tensix builders read it from there, so every router in
+    // the mesh agrees on the flat-channel -> register-id map by construction.
     auto edm_builder = std::make_unique<FabricEriscDatamoverBuilder>(FabricEriscDatamoverBuilder::build(
         device,
         program,

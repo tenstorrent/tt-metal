@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
@@ -601,9 +602,10 @@ void append_worker_to_fabric_edm_sender_rt_args(
     connection_info.buffer_size_bytes = connection.buffer_size_bytes;
     connection_info.buffer_index_semaphore_id = connection.buffer_index_semaphore_id;
     // This non-device-init path is the local worker-style VC0 contract, so preserve
-    // the standard sender-channel-0 free-slots stream id when rewriting the entry.
-    connection_info.worker_free_slots_stream_id =
-        StreamRegAssignments::IncrementOnWrite::sender_channel_0_free_slots_stream_id;
+    // the sender-channel-0 free-slots stream id when rewriting the entry. The constant in
+    // connection_interface is the single authority every side reads: the router's stream
+    // assignment pins the VC0 free-slots base to it, so the contracts agree by construction.
+    connection_info.worker_free_slots_stream_id = connection_interface::sender_channel_0_free_slots_stream_id;
     // NOTE: valid_connections_mask is not copied to L1 from performance reason
     //       because this callstack will be deprecated and not used in WorkerToFabricEdmSenderImpl yet
     //       we want to reduce the number of write_core calls
@@ -1132,87 +1134,36 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     std::unordered_map<std::string, uint32_t> named_args;
 
     // --- Stream IDs (increment-on-write registers) ---
-    named_args["TO_RECEIVER_0_PKTS_SENT_ID"] = StreamRegAssignments::IncrementOnWrite::to_receiver_0_pkts_sent_id;
-    named_args["TO_RECEIVER_1_PKTS_SENT_ID"] = StreamRegAssignments::IncrementOnWrite::to_receiver_1_pkts_sent_id;
-    // --- Credit transport plan: which VCs carry credits in L1 counters ---
     //
-    // Two independent things: this plan, and the stream-register map it frees up. Kept apart on
-    // purpose, so switching a VC's transport is one decision here rather than an edit spread across
-    // the map.
-    //
-    // Multi-TXQ requires the counter form on every VC. Express routing is a second, narrower reason:
-    // it widens VC0 to five senders, which needs one more ack register than an ethernet core has, and
-    // moving VC1's credits to counters releases its completion registers to cover that.
-    //
-    // Only VC1 moves. VC0 carries the completed bubble-flow-control argument, whose premises are
-    // written against the credit path it uses today, so leaving it untouched means none of them need
-    // revisiting. VC1's flow-control treatment is an open question regardless, which makes it the
-    // cheaper place to change mechanism.
-    //
-    // If the per-VC device paths turn out to be a problem, setting both VCs to counters here collapses
-    // the device containers to a single element type and reproduces today's whole-router behaviour --
-    // no second code path to maintain.
-    const bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
-    const bool express_enabled = control_plane.express_routing_enabled(local_fabric_node_id.mesh_id);
+    // The assignment is computed once upstream (in the router build, from the family's shape) and
+    // shared with every builder that must agree on a register across a link; the credit plan it
+    // carries is the same derivation the two flags below read, from the same edm_config. The plan
+    // itself is unchanged: Multi-TXQ puts every VC on counters; express puts VC1 on counters
+    // because widening VC0 to five senders needs one more ack register than an ethernet core has,
+    // and VC1's completion registers are what covers it -- VC0 deliberately untouched.
+    // The stream-register assignment is fabric-scoped (shared per mesh) and lives in
+    // FabricBuilderContext; every router in the mesh reads the same one, so the flat-channel ->
+    // register-id map agrees by construction -- the kernel resolves a downstream router's register
+    // through its own table, and that lookup is only correct if the maps agree.
+    const StreamAssignment& stream_assignment =
+        control_plane.get_fabric_context().get_builder_context().get_stream_assignment(local_fabric_node_id.mesh_id);
+    const CreditTransportPlan& credit_plan = stream_assignment.plan();
 
-    const bool vc0_uses_counter_credits = multi_txq_enabled;
-    const bool vc1_uses_counter_credits = multi_txq_enabled || express_enabled;
+    named_args["VC0_USES_COUNTER_CREDITS"] = credit_plan.vc0_uses_counters ? 1 : 0;
+    named_args["VC1_USES_COUNTER_CREDITS"] = credit_plan.vc1_uses_counters ? 1 : 0;
 
-    named_args["VC0_USES_COUNTER_CREDITS"] = vc0_uses_counter_credits ? 1 : 0;
-    named_args["VC1_USES_COUNTER_CREDITS"] = vc1_uses_counter_credits ? 1 : 0;
+    // The fabric-scoped flat bases: the shared free-slots table's positions follow the fabric's
+    // family maxima, so a VC's boundary is the same on every router in the mesh.
+    named_args["VC1_FABRIC_POSITION_START"] = stream_assignment.sender_flat_base(1);
+    named_args["VC2_FABRIC_POSITION_START"] = stream_assignment.sender_flat_base(2);
 
-    // --- Sender-side stream ids, from the declared assignment ---
-    //
-    // These three tables are the ones a credit-transport plan can change, so they come from one place
-    // that records which registers a configuration released and what took them, rather than from a
-    // conditional at each assignment.
-    const CreditTransportPlan credit_plan{
-        .vc0_uses_counters = vc0_uses_counter_credits, .vc1_uses_counters = vc1_uses_counter_credits};
-    const StreamAssignment stream_assignment = make_stream_assignment(
-        credit_plan,
-        StreamAssignmentInputs{
-            .num_vc0_senders = static_cast<uint32_t>(actual_sender_channels_vc0),
-            .num_vc1_senders = static_cast<uint32_t>(actual_sender_channels_vc1),
-            .num_vc2_senders = static_cast<uint32_t>(actual_sender_channels_vc2)});
-
-    // A zero here means the consumer is inactive for this configuration; the device skips initialising
-    // such an entry so it cannot be mistaken for register 0.
-    for (uint32_t ch = 0; ch < 5; ++ch) {
-        named_args[fmt::format("TO_SENDER_{}_PKTS_ACKED_ID", ch)] = stream_assignment.to_sender_acked[ch];
+    // The full declared stream-register name set, filled from the assignment or the sentinel (the
+    // sentinel marks an inactive consumer, which the device skips initialising). Each entry is
+    // emplaced with a duplicate check rather than blind-inserted, so a collision fails here
+    // instead of being absorbed.
+    for (const auto& [name, value] : stream_assignment.named_args()) {
+        TT_FATAL(named_args.emplace(name, value).second, "Duplicate compile-time arg {}", name);
     }
-    for (uint32_t ch = 0; ch < 8; ++ch) {
-        named_args[fmt::format("TO_SENDER_{}_PKTS_COMPLETED_ID", ch)] = stream_assignment.to_sender_completed[ch];
-    }
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_1;
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_2;
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_3;
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_4;
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_1;
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_2;
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_3;
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_4;
-    // Sender free-slot counters come from the same assignment. It already places VC2's sender on its
-    // dedicated register and takes a released one for any sender the baseline map does not reach.
-    for (uint32_t ch = 0; ch < 10; ++ch) {
-        named_args[fmt::format("SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID", ch)] =
-            stream_assignment.sender_free_slots[ch];
-    }
-    named_args["VC2_RECEIVER_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc2_receiver_free_slots_stream_id;
-    named_args["TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::tensix_relay_local_free_slots_stream_id;
-    // --- Stream IDs (scratch registers) ---
-    named_args["MULTI_RISC_TEARDOWN_SYNC_STREAM_ID"] =
-        StreamRegAssignments::Scratch::multi_risc_teardown_sync_stream_id;
-    named_args["ETH_RETRAIN_LINK_SYNC_STREAM_ID"] = StreamRegAssignments::Scratch::eth_retrain_link_sync_stream_id;
 
     // --- Max channel counts (always global max — instance counts use NUM_SENDER/RECEIVER_CHANNELS) ---
     named_args["MAX_NUM_SENDER_CHANNELS"] = static_cast<uint32_t>(builder_config::num_max_sender_channels);
