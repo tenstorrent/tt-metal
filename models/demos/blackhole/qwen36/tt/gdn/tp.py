@@ -12,6 +12,9 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.gdn.conv_fir_wh import (
+    causal_conv1d_fir_dispatch as _causal_conv1d_fir,  # Upstream _causal_conv1d_fir on Blackhole; on Wormhole a local fork that builds the padded; input in ROW_MAJOR so the K shifted taps stop untilizing the whole tensor each; (UntilizeWithUnpadding 1,033us -> 15us at seq 2048). See conv_fir_wh.py.
+)
 from models.demos.blackhole.qwen36.tt.wh_compat import apply as _apply_wh_compat
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
@@ -20,7 +23,6 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
     chunk_gated_delta_rule_seq_adapter,
     create_chunk_masks_seq,
 )
-from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 
 _apply_wh_compat()  # Wormhole GDN L1 adjustments (see tt/wh_compat.py)
 from models.tt_transformers.tt.ccl import tt_all_reduce
@@ -250,9 +252,12 @@ class TPGatedDeltaNet:
         self.conv_carry = None  # cross-chunk prefill conv carry [1, K-1, qkv_dim_tp]
         # Native ttnn.conv1d depthwise prefill; L1_FULL slice keeps it trace-safe.
         # Only used when valid_len is None (masked buckets keep the MAC FIR).
-        # Native conv1d is pinned to L1 (Conv2dL1FullSliceConfig); on Wormhole those CBs clash with
-        # the resident L1 tensors. The MAC FIR runs from DRAM and clears all 11/11 on N300.
-        self._gdn_conv1d = tpc.is_blackhole()
+        # Native conv1d is pinned to L1 (Conv2dL1FullSliceConfig). On Wormhole it is faster where it
+        # runs (MAC FIR 4,464us -> 1,897us at seq 2048) but cannot be the default: per-user prefill
+        # retains state across iterations and the accumulated L1 residency clashes its CBs at B=8/32.
+        # QWEN35_GDN_CONV1D=1 opts in for measurement.
+        _conv1d_env = os.environ.get("QWEN35_GDN_CONV1D")
+        self._gdn_conv1d = tpc.is_blackhole() if _conv1d_env is None else (_conv1d_env == "1")
         # Split the depthwise conv over channel chunks so each native L1_FULL conv fits L1: the
         # per-channel-independent depthwise CB is channel-dominated (not reducible by act-block or
         # DRAM width/height slicing), and the 35B-A3B GDN qkv_dim_tp overflows a single call on BH.
@@ -355,6 +360,16 @@ class TPGatedDeltaNet:
             self.cfg,
             decode_progcfg,
             self.args.act_shard_hidden,
+            # NOTE: this matmul is the layer's worst FPU utilization (2,151us at 36.6% of peak, output
+            # subblock 1x1) because the folded [qkv|z|a|b] width is 6176 = 193 tiles and 193 is PRIME:
+            # _get_out_subblock_w needs per_core_N % w == 0 for some w in 2..4, and 8 columns give
+            # per_core_N=25, so both out_subblock_w AND (via _safe_half_out_block_w) out_block_w
+            # collapse to 1. MEASURED: routing this through the subblock-maximizing
+            # create_prefill_mlp_matmul_program_config picks 7 columns -> per_core_N=28 -> subblock 1x4,
+            # out_block_w=4, and is SLOWER (2,263us): losing 8 of 64 cores costs more than the wider
+            # subblock wins. Keeping the full-grid config. The remaining lead is to make the width a
+            # non-prime tile count (e.g. pad to 224 tiles => per_core_N=28 with all 64 cores), which
+            # trades ~16% more matmul FLOPs and weight bytes for the wider subblock — unmeasured.
             self.args.prefill_progcfg,
             self.args.dim,
             decode_out_memory_config=out_memory_config,
@@ -369,18 +384,46 @@ class TPGatedDeltaNet:
         dev, K, C = self.mesh, self.K, self.qkv_dim_tp
         _dram = ttnn.DRAM_MEMORY_CONFIG
         Lin = (K - 1) + T
-        # new_state: last K-1 real input tokens (for the next chunk's carry), TILE/DRAM.
-        new_state = ttnn.slice(qkv, (0, T - (K - 1), 0), (1, T, C))
-        new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
-        if conv_state is None:
-            pad = ttnn.zeros(
-                [1, K - 1, C], device=dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=_dram
-            )
-            xin = ttnn.concat([pad, qkv], dim=1, memory_config=_dram)
-            ttnn.deallocate(pad)
+        if tpc.is_blackhole():
+            # ---- Blackhole: the validated TILE prologue, byte-for-byte unchanged. ----
+            # new_state: last K-1 real input tokens (for the next chunk's carry), TILE/DRAM.
+            new_state = ttnn.slice(qkv, (0, T - (K - 1), 0), (1, T, C))
+            new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
+            if conv_state is None:
+                pad = ttnn.zeros(
+                    [1, K - 1, C], device=dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=_dram
+                )
+                xin = ttnn.concat([pad, qkv], dim=1, memory_config=_dram)
+                ttnn.deallocate(pad)
+            else:
+                xin = ttnn.concat([conv_state, qkv], dim=1, memory_config=_dram)
+            xin = ttnn.to_layout(xin, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
         else:
-            xin = ttnn.concat([conv_state, qkv], dim=1, memory_config=_dram)
-        xin = ttnn.to_layout(xin, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+            # ---- Wormhole: same three tensors, built off ONE untilize of qkv. ----
+            # ttnn.conv1d consumes ROW_MAJOR and the [carry|qkv] concat starts at row K-1=3 (off-tile,
+            # so a TILE concat relayouts internally regardless), which made the BH prologue above pay,
+            # at T=2048 on N300: a full-tensor tilize in the concat immediately undone by the
+            # to_layout(ROW_MAJOR) untilize (246us + 261us), plus a THIRD full-tensor untilize (213us)
+            # for a new_state slice that reads 3 rows. Doing it all in ROW_MAJOR is ~720us/layer
+            # cheaper for identical output. Kept off Blackhole: that arch's larger L1 was tuned around
+            # the TILE prologue and this is a WH-measured change only.
+            _rm = ttnn.ROW_MAJOR_LAYOUT
+            qkv_rm = ttnn.to_layout(qkv, _rm, memory_config=_dram)
+            # Only K-1 rows, so tilizing the carry back is ~12us, not a full-tensor relayout.
+            new_state = ttnn.slice(qkv_rm, (0, T - (K - 1), 0), (1, T, C))
+            new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
+            if conv_state is None:
+                pad = ttnn.zeros([1, K - 1, C], device=dev, dtype=ttnn.bfloat16, layout=_rm, memory_config=_dram)
+                xin = ttnn.concat([pad, qkv_rm], dim=1, memory_config=_dram)
+                ttnn.deallocate(pad)
+            else:
+                # conv_state arrives TILE (previous chunk's new_state); K-1 rows, cheap to convert.
+                cs_rm = ttnn.to_layout(conv_state, _rm, memory_config=_dram)
+                xin = ttnn.concat([cs_rm, qkv_rm], dim=1, memory_config=_dram)
+                if cs_rm is not conv_state:
+                    ttnn.deallocate(cs_rm)
+            if qkv_rm is not qkv:
+                ttnn.deallocate(qkv_rm)
         xin = ttnn.reshape(xin, (1, Lin, 1, C))
         cc = ttnn.init_device_compute_kernel_config(
             dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
@@ -565,6 +608,32 @@ class TPGatedDeltaNet:
         # ("Writes are not supported during trace capture") inside the captured chunk-outer trace.
         # Masked buckets still pass a real valid_len (< T) so their exact masking is unchanged, and
         # for a full chunk the None slice and the valid_len==T one-hot select the identical rows.
+        #
+        # ... and because those rows ARE identical, normalize the *unpadded* case to None here.
+        # valid_len >= T means "no padding in this chunk", which is what callers like model.py's
+        # prefill_tp (`valid_len = valid_len or T`) and the single-layer perf test pass. Taking the
+        # masked path for it is pure overhead with no effect on the result:
+        #   * conv FIR new_state: the one-hot picks x_padded rows [valid_len, valid_len+K-1) =
+        #     [T, T+K-1); the None path statically slices [total_len-(K-1), total_len) with
+        #     total_len = (K-1)+T — the same rows. Costs a [K-1,total_len]x[total_len,C] one-hot
+        #     matmul (95us of 21.7ms at T=2048) plus a host from_torch that blocks trace capture.
+        #     VERIFIED bit-identical (conv output AND new_state) at T=128/256/2048 on N300.
+        #   * fused chunk adapter: its mask is gated on `valid_len < T`, so it was already a no-op.
+        # Net effect is the cheaper, trace-safe, better-tested path (every test_gdn_tp prefill test
+        # exercises valid_len=None) for byte-identical output.
+        #
+        # WORMHOLE ONLY, deliberately. On Blackhole `_gdn_conv1d` is True, so the gate below
+        # (`self._gdn_conv1d and valid_len is None`) would additionally switch the conv from the MAC
+        # FIR to the native ttnn.conv1d — a different kernel with different rounding. That may well be
+        # the better path there, but it is a Blackhole retune and needs Blackhole measurement, so this
+        # normalization stays off BH until then.
+        if (
+            not tpc.is_blackhole()
+            and valid_len is not None
+            and not isinstance(valid_len, (list, tuple))
+            and valid_len >= T
+        ):
+            valid_len = None
 
         # Cross-chunk carry (chunk-outer prefill): when _stable_state, the recurrent + conv
         # state continue from the persistent buffers (zeroed at sequence start by
