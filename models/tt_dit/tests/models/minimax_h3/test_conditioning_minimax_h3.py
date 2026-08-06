@@ -318,7 +318,8 @@ def test_keyframe_rows_per_anchor_match_the_layout():
 # --- fl2va presentation ---------------------------------------------------------------------------
 # Relocated here from `test_text_encoder_minimax_h3.py`, whose other five tests were redundant once
 # jonathansu's consolidated conditioner test landed (it covers both the tap comparison and the
-# post-norm assertion) and the nine dedicated mrope tests live in `test_qwen3vl_mrope.py`. This one
+# post-norm assertion) and three duplicated the dedicated mrope suite, since removed -- the surviving
+# mrope gate is the `get_rope_index` comparison in `test_vision_conditioner_minimax_h3.py`. This one
 # had no equivalent anywhere, and it is host-only, so it belongs in the fast suite rather than behind
 # a device fixture.
 

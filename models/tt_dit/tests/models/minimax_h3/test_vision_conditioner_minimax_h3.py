@@ -398,6 +398,11 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
     position_ids = mrope_position_ids(
         type_ids, image_grid_thw=grid, spatial_merge_size=reference.visual.config.spatial_merge_size
     )
+    # Bitwise against the reference's own index builder. The PCC bar below gates the consequences of a
+    # wrong layout; this pins the rule itself, which is the only mrope gate left in the suite.
+    # `grid.clone()` because `get_rope_index` mutates the grid it is handed.
+    expected_position_ids, _ = reference.get_rope_index(ids, mm_token_type_ids=type_ids, image_grid_thw=grid.clone())
+    assert torch.equal(position_ids, expected_position_ids), "mrope_position_ids no longer matches get_rope_index"
     cos, sin = create_rope_tensors(
         1,
         seq_len,
