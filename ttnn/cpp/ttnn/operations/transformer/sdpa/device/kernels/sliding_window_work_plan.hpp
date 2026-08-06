@@ -45,6 +45,12 @@ constexpr uint32_t chunked_sliding_halo_source_start_tile(
         return 0;
     }
     const uint32_t current_group = logical_k_tile_rows / q_group_tile_rows - 1;
+    // The wrap source (last device feeding device 0) lives in the PREVIOUS group, which does not
+    // exist in the first group. Device 0's window clips at token 0 there and never requests it, so
+    // this is defensive: return 0 rather than underflow to ~4e9 and read far out of bounds.
+    if (current_group == 0 && source_device + 1 == ring_size) {
+        return 0;
+    }
     const uint32_t source_group = source_device + 1 == ring_size ? current_group - 1 : current_group;
     return source_group * q_local_tile_rows + q_local_tile_rows - halo_tile_rows;
 }
@@ -97,7 +103,12 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
     }
 
     const uint32_t q_group_tile_rows = ring_size * q_local_tile_rows;
-    if (logical_k_tile_rows < 2 * q_group_tile_rows || q_local_start_tile + q_chunk_tile_rows > q_local_tile_rows) {
+    // One complete group is enough. The first chunk (logical == one group) is a valid case: every
+    // device's window clips at token 0, device 0 reads only its own slab, and devices 1..n-1 read
+    // their predecessor's slab WITHIN this group, so no previous-group source is ever referenced.
+    // Requiring two groups here made the first chunk return an empty plan, and an empty plan means
+    // total_k_chunk_count == 0, so the reader never pushes Q and compute waits on it forever.
+    if (logical_k_tile_rows < q_group_tile_rows || q_local_start_tile + q_chunk_tile_rows > q_local_tile_rows) {
         return plan;
     }
 
