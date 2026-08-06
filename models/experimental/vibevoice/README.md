@@ -332,7 +332,7 @@ stated.
 |----------|---------|---------|
 | `VIBEVOICE_MODEL_PATH` | unset | Checkpoint directory override (skips auto-download) |
 | `VV_TRACE_SEGMENT` | `0` in the generator; `1` in the ISL-sweep test | Whole-segment fused decode trace. The demo always sets it explicitly from `--trace` (default on) / `--no-trace`, so the generator's `0` default only applies to callers that set neither |
-| `VV_FUSED_ROPE` | `0` (off) | Fused bf16 `rotary_embedding_llama` decode RoPE + on-device cos/sin tables, replacing the default per-position fp32 RoPE rows. Off by default: a 100-min acceptance run showed the speaking rate accelerating (median 208 wpm vs 153) even though every energy/spectral gate passed |
+| `VV_FUSED_ROPE` | `1` (on) | Fused bf16 `rotary_embedding_llama` decode RoPE + on-device cos/sin tables, replacing the per-position fp32 RoPE rows (3.97 ms → 0.31 ms per frame). Was off after a 100-min run showed the speaking rate accelerating (median 208 wpm vs 153) with every energy/spectral gate passing; re-validated on the current frame — 42,498 AR tokens (same as the pacing-safe reference), 93.04 min, whisper pacing 169/173/195 wpm early/mid/late (median 173, natural 150-190). Permutes `wq`/`wk` at load, so its default must match `resolve_weight_cache`'s `rope{0,1}` key |
 | `VV_TTNN_RANDN` | `0` (off) | Draw diffusion init noise and the acoustic fix-std jitter with `ttnn.randn` on device instead of torch. Off by default: it is a different generator, so renders stop matching the torch reference and PCC comparison against it is no longer meaningful |
 | `VV_PREFILL_ISL_SWEEP` | full sweep | Comma list to shorten `test_prefill.py`'s ISL sweep |
 | `VV_ISL_SWEEP`, `VV_ISL_SWEEP_MAX_ISL`, `VV_ISL_WARMUP_TOKENS` | see perf section | ISL-sweep perf overrides |
@@ -515,7 +515,8 @@ at long ISL; see the `test_prefill.py` docstrings).
 ### End-to-end ISL sweep (`4p_climate_100min`, Blackhole P150)
 
 `tests/perf/test_e2e_isl_sweep_perf.py` on Blackhole P150 with fused-frame trace
-(`VV_TRACE_SEGMENT=1`, fp32 RoPE / `VV_FUSED_ROPE=0`). Prompt cropped to each ISL after
+(`VV_TRACE_SEGMENT=1`, fp32 RoPE / `VV_FUSED_ROPE=0` — these numbers predate fused RoPE becoming
+the default, so they do not include its ~4%). Prompt cropped to each ISL after
 tokenization; untimed warmup (`VV_ISL_WARMUP_TOKENS=32`) then timed `max_new_tokens=None`
 (EOS / `max_length_times×ISL`). **Decode tok/s** is steady fused-frame *replay* only
 (`decode_mode=steady_trace`) — capture / first-time compile frames are excluded.
@@ -619,7 +620,7 @@ single transfer.
 | fused audio+token readback | D2H ×1 | one `to_torch` returns `[audio …, token_idx]`; the token half is what the AR loop blocks on, since a trace cannot branch |
 | `_emit_audio` (append) | hostCPU | accumulate frame audio into the waveform |
 | `_gen_tokens.append` / `valid_ids[idx]` | hostCPU | token record; map the constrained-argmax **local** index to the global id (kept local so it survives the bf16 cast into the fused tensor) |
-| host pos/neg mirror `+=1`, RoPE write ×4 | hostCPU + H2D ×4 | **only when `VV_FUSED_ROPE=0`** (the default): the mirrors exist solely to index the fp32 cos/sin tables. On the fused path the rows are gathered on device and none of this runs |
+| host pos/neg mirror `+=1`, RoPE write ×4 | hostCPU + H2D ×4 | **only when `VV_FUSED_ROPE=0`**: the mirrors exist solely to index the fp32 cos/sin tables. On the fused path (the default) the rows are gathered on device and none of this runs |
 
 **2. Segment boundary — runs only when a new speaker segment starts.**
 
@@ -683,8 +684,6 @@ repeated here — see [Model description](#model-description) and [Upstream refe
 
 **Unvalidated optimizations (off by default)**
 
-- `VV_FUSED_ROPE=1` — faster bf16 fused decode RoPE, but a 100-min acceptance run showed the speaking
-  rate accelerating (median 208 wpm vs 153) despite every energy/spectral gate passing.
 - `VV_TTNN_RANDN=1` — on-device noise generation is a *different* RNG, so renders stop matching the
   torch reference and PCC comparison against it becomes meaningless.
 
