@@ -43,6 +43,13 @@ import ttnn
 from models.experimental.vibevoice.common.weight_cache import WeightCache
 from models.experimental.vibevoice.tt.vibevoice_config import SemanticTokenizerConfig
 
+# Store the DEEP tokenizer FFN weights (dim 2048/1024 -> 4x) as bfloat8_b: 32 calls/frame at
+# 395-428 GB/s (~85% of DRAM peak), so halving the weight read is worth ~2 ms/frame.  Kept as its
+# own flag rather than folded into the LM / diffusion-head bf8b because these weights sit INSIDE
+# the audio decode path.  NOT bit-exact; ``VV_BF8B_FFN=0`` restores bf16 (the cache filename
+# carries the dtype, so both settings keep their own cached weights).
+_FFN_W_DTYPE = ttnn.bfloat8_b if os.environ.get("VV_BF8B_FFN", "1") == "1" else ttnn.bfloat16
+
 
 _HIFI4 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -389,6 +396,23 @@ class TTConv1d:
         else:
             self.bias = None
 
+        # For a DEPTHWISE conv whose streaming output is a single column
+        # (out_w == 1, i.e. the window is exactly K wide), the whole convolution is a K-tap weighted
+        # sum per channel:  out[c] = sum_k w[c,0,0,k] * x[0,0,k,c] + b[c].
+        # ttnn.conv2d ignores `groups`, so it runs this as a DENSE in_ch x out_ch conv and pays a
+        # full im2col: the 2048-channel/K=7 stage is 'Conv2d 32 x 14336 x 2048' at ~189 us, 16 calls
+        # per frame = 3.0 ms (~8% of the whole frame) for 1/in_ch of the useful MACs.  mul + reduce
+        # over the K axis does only the real work.  NOT bit-exact (a 7-term reduction in a different
+        # order, and no summing of the 2047 zero cross-terms), so ``VV_DW1_MULREDUCE=0`` restores the
+        # dense conv2d.
+        # Lazily built device weight [1, 1, K, in_ch] (transpose of the OIHW host weight).
+        self._dw_mr = os.environ.get("VV_DW1_MULREDUCE", "1") == "1" and cw.groups == self.in_ch == self.out_ch
+        self._dw_w_kc = None
+        self._dw_b_c = None
+        self._dw_host_w = cw.weight if self._dw_mr else None
+        self._dw_host_b = cw.bias if self._dw_mr else None
+        self._dw_tdtype = tdtype
+
         # Streaming context cache: last `causal_pad` input columns [B, 1, causal_pad, in_ch].
         # context_size == causal_pad == (K-1)*dilation - (stride-1) (reference SConv1d).
         self._cache = None
@@ -529,6 +553,36 @@ class TTConv1d:
                     f"Tpad={T_padded} outw={out_w} abh={abh} pinned={_conv_cfg is not None}",
                     flush=True,
                 )
+        # Depthwise single-column output → mul + reduce instead of a dense conv2d (see _dw_mr).
+        if self._dw_mr and self.stride == 1 and T_padded == self.K:
+            if self._dw_w_kc is None:
+                _w = _materialize(self._dw_host_w).to(self._dw_tdtype).reshape(self.out_ch, self.K)
+                self._dw_w_kc = ttnn.from_torch(
+                    _w.t().contiguous().view(1, 1, self.K, self.out_ch),
+                    dtype=self.compute_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if self._dw_host_b is not None:
+                    self._dw_b_c = ttnn.from_torch(
+                        _materialize(self._dw_host_b).to(self._dw_tdtype).view(1, 1, 1, self.out_ch),
+                        dtype=self.compute_dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+            xt = x if x.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            out = ttnn.sum(
+                ttnn.mul(xt, self._dw_w_kc, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                dim=2,
+                keepdim=True,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # [B, 1, 1, out_ch]
+            if self._dw_b_c is not None:
+                out = ttnn.add(out, self._dw_b_c, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            return out
+
         # Reuse the weight prepared for this exact geometry if we've seen it; otherwise prepare from
         # the host original.  The prepared layout depends on T_padded and on whether the single-block
         # override is applied (act_block_h), so both go in the key.
@@ -616,8 +670,10 @@ class TTBlock1DDevice:
         self.norm_w = _norm_w_tt(bw.norm_w, device, dtype=compute_dtype, wc=wc, key=f"{cache_key}.norm")
         self.ffn_norm_w = _norm_w_tt(bw.ffn_norm_w, device, dtype=compute_dtype, wc=wc, key=f"{cache_key}.ffn_norm")
         # linear1_w is [ffn_dim, C] in PyTorch → _tile_linear transposes to [C, ffn_dim]
-        self.linear1_w = _tile_linear(bw.linear1_w, device, dtype=compute_dtype, wc=wc, key=f"{cache_key}.l1")
-        self.linear2_w = _tile_linear(l2_w_host, device, dtype=compute_dtype, wc=wc, key=f"{cache_key}.l2")
+        # Shallow stages gain nothing from bf8b, so they keep bf16 and their accuracy.
+        _ffn_dtype = _FFN_W_DTYPE if bw.linear1_w.numel() >= 2_000_000 else compute_dtype
+        self.linear1_w = _tile_linear(bw.linear1_w, device, dtype=_ffn_dtype, wc=wc, key=f"{cache_key}.l1")
+        self.linear2_w = _tile_linear(l2_w_host, device, dtype=_ffn_dtype, wc=wc, key=f"{cache_key}.l2")
         # Tuned down-proj config for the deep (dim 2048/1024) stages; auto otherwise.
         self._l2_progcfg = _FFN_DOWN_PROGCFG.get(self.dim) if os.environ.get("VV_POST_L2_PROGCFG", "1") == "1" else None
 
