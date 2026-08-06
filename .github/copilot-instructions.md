@@ -49,6 +49,24 @@ When the same logic appears in more than one place, it will inevitably drift. Fl
 ### Magic numbers require a derivation
 Bare numeric literals in code are invisible assumptions. Every hardcoded offset, size, or threshold should either be derived from a named constant or accompanied by a comment explaining where the value comes from and under what conditions it might change.
 
+### Comments explain the present, not the diff
+
+A comment must say why the code is the way it is, not what it replaced. `// reduced by 1 KB from 8 KB` gives a later reader nothing to judge the current value against, and describing the change in more detail does not rescue it — only the constraint that pins the value does: what the region has to hold, which hardware limit it derives from, what breaks if it grows. This applies to prose comments but matters most on numeric constants: memory region sizes, thresholds, buffer counts. The diff and the git history already record the old value; the file has to record the reason.
+
+Comparing against a simpler or earlier implementation is still worth writing down when the current approach's advantage is non-obvious, or when benchmark numbers back the comparison up.
+
+```cpp
+// Says nothing about whether 7 KB is right — more detail about the change doesn't help
+constexpr uint32_t k_scratch_size = 7 * 1024;  // reduced by 1 KB from 8 KB
+
+// States the constraint that fixes the value
+constexpr uint32_t k_scratch_size = 7 * 1024;  // largest local-init scratch use is 6.5 KB;
+                                               // the rest of the window goes to the prefetcher
+
+// Fair comparison: non-obvious win, backed by a measurement
+// One batched 4 KB read rather than eight 512 B reads — ~20% higher relay throughput.
+```
+
 ### Complex conditions belong in named variables
 When an `if` condition involves multiple conjuncts or non-obvious logic, hoist it into a descriptively named `bool`. The variable name serves as the comment the reader would otherwise have to reconstruct mentally.
 
