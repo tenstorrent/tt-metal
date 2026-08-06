@@ -17,7 +17,7 @@ Branch: `lserbedzija/voxtral-tts-ttnn` (pushed). All work is under
 | Block 3 — codec decoder on TTNN | **CLOSED**, 242x real-time, see §4 |
 | Block 1 — 3.4B AR backbone on TTNN | **done — OURS** (`tt/ttnn_voxtral_gpt.py`), the default |
 | Block 2 — flow-matching transformer on TTNN | **done** — velocity PCC 0.9999989 |
-| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works**, 0 long-form WER errors of 298 words, long-form RTF 0.61-0.65 |
+| **End-to-end on device** (text ids + voice → 24 kHz wav) | **works**, 0 long-form WER errors of 298 words, long-form RTF 0.57-0.64 |
 | Codec **encoder** | **impossible** — weights absent from the public release |
 
 **Block 1 now runs on our own implementation, not `tt_transformers`.** The wrapper is DELETED, not
@@ -33,8 +33,8 @@ on the 15-case fixture:
 | decode ms/frame | 34.9 | 48 |
 | natural-text WER | 0.88% | 1.17% |
 
-**Performance: 83.7 → ~50 ms/frame, long-form RTF 0.61-0.65** (15 cases, all terminating on `[END_AUDIO]`; see §6.21 for why long-form is the number to quote). It touched 47.5 ms / RTF 0.60-0.65 with w2 in BFP8, and 2.5 ms of that was handed back deliberately: w2 cost 77% of the precision stack's accuracy for 15% of its speed (§6.16). Accuracy: Block 1 mean/p90 worst-sample **0.92% / 1.28%**, min PCC 0.999040 (the 8x4 norm grid, §6.18); long-form WER **0 wrong words of 298**.
-Per frame: Block 1 ~23 ms, Block 2 ~23 ms, host 0.2 ms. w2 is in BFP8 as of §6.13 — the hang that
+**Performance: 83.7 → ~48 ms/frame, long-form RTF 0.57-0.64** (15 cases, all terminating on `[END_AUDIO]`; see §6.21 for why long-form is the number to quote; §6.31 for the Block 2 sweep that took it there). It touched 47.5 ms / RTF 0.60-0.65 with w2 in BFP8, and 2.5 ms of that was handed back deliberately: w2 cost 77% of the precision stack's accuracy for 15% of its speed (§6.16). Accuracy: Block 1 mean/p90 worst-sample **0.92% / 1.28%**, min PCC 0.999040 (the 8x4 norm grid, §6.18); long-form WER **0 wrong words of 298**.
+Per frame: Block 1 ~23 ms, Block 2 **~20.8 ms** (§6.31), host 0.2 ms. w2 is in BFP8 as of §6.13 — the hang that
 blocked it is fixed, by not calling `ttnn.conv1d` in the codec.
 goes" map at the top with the ceiling for each line item. Two sweeps got here — §6.6 (GQA row fold,
 width-sharded RMSNorm in Block 2, qkv fusion) and §6.8 (BFP8 on wqkv/wo, semantic head on device) —
@@ -2227,6 +2227,61 @@ once today.
 | codes: semantic / acoustic | 1, 97/288, unchanged | 1, 97/288, unchanged |
 | codes: per-frame code table | **byte-identical** | **byte-identical** |
 | test_flow_pcc | 13 passed | 13 passed |
+
+### 6.32 — the end-to-end gate for §6.31, and a stale-file error of mine that nearly went in the record
+
+**Long-form RTF 0.61-0.65 -> 0.57-0.64, ~50.9 -> ~48.1 ms/frame.** Full 15-prompt quality set,
+`resultsb2sweep.json`:
+
+| case | frames | RTF | ms/frame |
+|---|---|---|---|
+| 2 | 461 | 0.644 | 51.5 |
+| 3 | 487 | 0.573 | 45.8 |
+| 10 | 220 | 0.589 | 47.1 |
+
+Case 0's 1.855 is the compile case and is excluded, per §6.21's convention: quote long-form (>=100
+frames) only.
+
+**Quality, unchanged and at the bar:**
+
+    long-form WER          0.00% over 298 words = 0 WRONG      (reference scores 0.0%)
+    short                  0.00% over  42 words
+    [END_AUDIO] natural    15/15 cases
+    voice identity         PASS -- same-voice pair most similar, F0 spread 103-201 Hz
+
+**AND THE STRONGEST NUMERICAL GATE THIS PROJECT HAS RUN.** A paired A/B against the pre-sweep commit
+`6dc2dc2d460`, generating the three natural-text cases free-running on each build:
+
+| case | pre frames | post frames | pre RTF | post RTF |
+|---|---|---|---|---|
+| 0 | 66 | 66 | 1.577 | 1.652 |
+| 2 | 461 | **461** | 0.637 | 0.620 |
+| 3 | 487 | **487** | 0.592 | 0.572 |
+
+**Frame counts identical on every case.** That is much stronger than the 8-12 frame `--gate codes`
+comparison: free-running generation is autoregressive, so ANY divergence compounds and moves the
+termination frame. Reproducing 461 and 487 exactly means the whole generation is bit-identical, which is
+what "byte-identical codes" was claiming on 8 frames. Use this as the gate for anything claiming
+exactness in future -- it is cheap (two cases, ~90 s) and it cannot be fooled by a short window.
+
+**THE ERROR, because it is a new failure mode for the list.** I first scored the run with
+
+    score_quality_set.py generated/results_b2sweep.json || score_quality_set.py generated/results.json
+
+`generate_quality_set.py` writes `results{tag}.json` with **no underscore**, so the first path did not
+exist and the `||` silently scored `results.json` -- an unrelated file from 08-04. I reported "1 wrong
+word of 274" from it. The tell was already printed in my own output: the scorer said case 0 = 71 frames,
+case 2 = 449, case 3 = 495, while the generation log said 66, 461, 487. Correctly scored, the run gives
+**0 wrong of 298**, matching the recorded baseline.
+
+Two lessons, both cheap:
+- **never write a `||` fallback into a gate.** A gate that silently substitutes a different input is
+  worse than one that fails, because it returns a plausible number.
+- **the results file carries the frame counts; check them against the generation log.** That single
+  cross-check catches a stale file instantly, and it was sitting in the output I had already printed.
+
+`generated/` holds 39 `results*.json` files from this project's sweeps. Any of them will score cleanly
+and none of them will tell you it is the wrong one.
 
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
