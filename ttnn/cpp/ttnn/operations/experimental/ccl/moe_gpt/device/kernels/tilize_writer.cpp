@@ -6,6 +6,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
 using namespace ttnn::operations::ccl::common;
@@ -559,14 +562,12 @@ void kernel_main() {
                 // == 3b ==
                 // send to proper offset on global mmcast gather core (the drain-sync core)
                 uint32_t gather_addr = l1_read_addr + global_tile_offset * tilize_output_page_size;
-                // Device 2.0 migration: legacy primitive retained: drain_gather_noc_addr is a
-                // precomposed uint64_t NoC unicast address. Noc::async_write takes a typed Dst
-                // (UnicastEndpoint with .noc_x/.noc_y/.addr args, or TensorAccessor) — there is no
-                // wrapper for a raw uint64_t address today
-                uint64_t drain_gather_noc_addr =
-                    get_noc_addr(drain_core_noc_x, drain_core_noc_y, gather_addr, noc_index);
-                noc_async_write(
-                    l1_read_addr, drain_gather_noc_addr, tiles_per_local_chunk * tilize_output_page_size, noc_index);
+                noc_obj.async_write(
+                    CoreLocalMem<uint32_t>(l1_read_addr),
+                    UnicastEndpoint{},
+                    tiles_per_local_chunk * tilize_output_page_size,
+                    {},
+                    {.noc_x = drain_core_noc_x, .noc_y = drain_core_noc_y, .addr = gather_addr});
                 noc_obj.async_write_barrier();
 
                 // == 4b ==
