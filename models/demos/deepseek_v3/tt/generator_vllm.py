@@ -307,6 +307,8 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 decode_step_output,
                 enable_trace=enable_trace,
                 user_slots=active_user_slots,
+                # The sampling state for this step was already applied above, before the
+                # forward; repeating it here would upload it twice.
                 reload_sampling_params=False,
                 reset_sampling_state=False,
             )
