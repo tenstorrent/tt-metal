@@ -102,13 +102,9 @@ def _exp_spec(fmt: DataFormat) -> OperandSpecs:
         # sanitization boundary near x ≈ -88.5 (where InputClamping::ClampToNegative saturates inputs
         # in the fast/approx exp path).
         #
-        # The positive side stops at 16 for accuracy, not range: exp's relative
-        # condition number equals its argument, so the shared approximation's error
-        # grows linearly with x. Measured on Wormhole at the old high of 80, the
-        # largest outputs land 11-13% off the golden — well past the default 5% rtol
-        # — and the error is only visible on the fp32 (dest_acc=Yes) path, where a
-        # 16-bit dst is not there to round both sides back together. 16 is the same
-        # argument ceiling _exp_with_base_spec settles on for the same reason.
+        # The positive side stops at 16 for accuracy, not range: the approximation's
+        # relative error grows with x, exceeding the default 5% rtol on the fp32
+        # (dest_acc=Yes) path well before x=80.
         spec = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-100.0, high=16.0)
     return OperandSpecs(spec_A=spec)
 
@@ -156,13 +152,8 @@ _BLOCK_FLOAT_FORMATS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
 def _reciprocal_spec(fmt: DataFormat) -> OperandSpecs:
     """Safe input range for 1/x, tightened for block-float inputs.
 
-    1/x carries input relative error straight through to the output, and in a
-    block-float input an element far below its block maximum has very little
-    relative precision left. Spanning [0.1, 100] puts a 1000:1 ratio inside a
-    16-element block, so the smallest elements quantize to zero and the golden
-    goes to inf. Measured on Bfp8_b stimuli: the wide interval leaves 13/1024
-    elements outside tolerance (max difference inf), while holding the ratio to
-    10:1 leaves none.
+    A 1000:1 ratio inside a 16-element block quantizes the smallest elements to
+    zero, sending the golden to inf. Hold the ratio to 10:1 for block floats.
     """
     if fmt in _BLOCK_FLOAT_FORMATS:
         spec = StimuliSpec.uniform(intervals=[(-100.0, -10.0), (10.0, 100.0)])
@@ -652,25 +643,15 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.SfpuElwrsub: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
-    # pow: srcA is the base (must be non-negative for non-integer exponents);
-    # srcB is the exponent (non-negative to keep output finite).
+    # pow: srcA is the base (non-negative for non-integer exponents); srcB is the
+    # exponent (non-negative to keep output finite).
     #
-    # Both bounds are set by accuracy, not by representable range, and had never been
-    # executed before the binary suite started reading this registry (the suite did not
-    # import sfpu_domains at all). a**b is evaluated as exp(b * ln a), so the quantity that
-    # decides the error is the *product* b * ln(a) -- the argument handed to the shared exp
-    # approximation, whose relative error grows with its argument (see the exp entry). The
-    # registry cannot express a joint constraint, so cap each operand such that the worst
-    # case product stays in the accurate region: 3 * ln 3 = 3.30.
-    #
-    # Measured on Wormhole and Blackhole at Float16_b, against the default 5% rtol:
-    #   b*ln(a) = 3.30 (A<=3, B<=3)   clean
-    #   b*ln(a) = 3.47 (A<=2, B<=5)   clean
-    #   b*ln(a) = 4.61 (A<=10, B<=2)  13/32768 outside, peak 5.02%
-    #   b*ln(a) = 4.83 (A<=5, B<=3)    3/32768 outside, peak 4.93%
-    #   b*ln(a) = 8.05 (A<=5, B<=5)   45/32768 outside, peak 6.11%
-    # The error is one-directional and tracks the product rather than either operand alone,
-    # which is the same shape as the approximate-exp limit recorded for the unary sweep.
+    # Both bounds are set by accuracy, not representable range. a**b is evaluated as
+    # exp(b * ln a), so the error tracks the product b * ln(a) -- the argument to the
+    # shared exp approximation (see the exp entry). The registry cannot express a joint
+    # constraint, so cap each operand so the worst-case product stays accurate:
+    # 3 * ln 3 = 3.30. Measured at Float16_b against the default 5% rtol, 3.30 is clean
+    # while 4.61 (A<=10, B<=2) and above go outside.
     MathOperation.SfpuElwpow: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=3.0),
         spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=3.0),
@@ -679,17 +660,11 @@ _OP_DOMAIN_REGISTRY: Dict[
     # srcA (x): x >= 0 so xlogy(0, y) = 0 is well-defined
     # srcB (y): y > 0 so log(y) is finite; log-uniform spans several decades
     #
-    # x's ceiling is an accuracy bound, and it is the *absolute* error that binds here
-    # rather than the relative one. The kernel's error is dominated by x * abs_err(ln y),
-    # so it scales with x while passed_test's atol for the 16-bit floats stays at 0.05:
-    #   x <= 10  ->  23/32768 outside, peak absolute error 0.121
-    #   x <=  8  ->  16/32768 outside, peak 0.094
-    #   x <=  5  ->  clean, and 5 * 0.012 = 0.06 sits right on the atol
-    #   x <=  4  ->  clean with margin (4 * 0.012 = 0.048 < 0.05)
-    # 4.0 is chosen over 5.0 so the bound does not sit exactly on the tolerance, where a
-    # different draw or arch would flake. y keeps its full log-uniform span: the failures
-    # were insensitive to it (narrowing y to 1e-2 or 0.1 made the count worse, not better,
-    # because it raises x's weight rather than lowering |log y|).
+    # x's ceiling is an absolute-accuracy bound: the error is dominated by
+    # x * abs_err(ln y), so it grows with x while the 16-bit-float atol stays at 0.05.
+    # x <= 4 keeps margin (4 * 0.012 = 0.048); x <= 5 sits on the tolerance and x <= 8
+    # goes outside. y keeps its full log-uniform span -- narrowing it made the failures
+    # worse, not better.
     MathOperation.SfpuXlogy: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=4.0),
         spec_B=StimuliSpec(

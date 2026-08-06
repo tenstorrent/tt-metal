@@ -68,15 +68,6 @@ SUPPORTED_FAST_MODE_OPS = [
 #   STANDARD_SWEEP_OPS - Float16_b + Float32, approximation mode off, one tile shape.
 #                        Enough to validate the op's own math, and ~8x cheaper.
 #
-# These were ALL_MATHOPS and DOMAIN_MATHOPS, driven by two separate tests
-# (test_eltwise_unary_sfpu_float and test_eltwise_unary_sfpu_domain). They existed
-# apart for a reason that no longer holds: only the _domain test consumed the per-op
-# domain registry, so every ALL_MATHOPS op ran a positive-only uniform(0.1, 1.1)
-# default and never saw its x<0 branch. Both now take their domain from the same
-# place, which leaves the sweep envelope as the only difference -- and an envelope is
-# a parameter, not a reason for a second test. Keeping them apart also meant a new op
-# silently inherited whichever envelope its author happened to pick a list from.
-#
 # Adding an op: put it in exactly one list, and register a domain for it in
 # sfpu_domains.py. _assert_sweep_profiles_disjoint() below enforces both.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -209,9 +200,8 @@ STANDARD_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float3
 BROAD_DIMENSIONS = [[64, 64], [128, 256]]
 STANDARD_DIMENSIONS = [[64, 64]]
 
-# Bfp4_b is only exercised as an input format. The original sweep built the full 4x4
-# matrix and skipped every combo whose input was not Bfp4_b, so pin the input to Bfp4_b
-# directly here: same coverage, without generating (and skipping) the other 12 combos.
+# Bfp4_b is only exercised as an input format, so the input is pinned to Bfp4_b here
+# rather than building the full matrix and skipping the 12 non-Bfp4_b-input combos.
 FORMATS_BFP4_B = [
     InputOutputFormat(DataFormat.Bfp4_b, output_format)
     for output_format in [
@@ -255,8 +245,7 @@ MATHOPS_INCLUDE_BFP4_B = [
 # instrumentation, so they are skipped only when WITH_COVERAGE is set:
 #   https://github.com/tenstorrent/tt-metal/issues/33268
 #   https://github.com/tenstorrent/tt-llk/issues/883
-# The gelu/log-family entries at the end came from the standard profile's own copy of
-# this list; the two lists had the same cause and are now one.
+# Covers ops from both sweep profiles.
 COVERAGE_COMPILE_SKIP_OPS = [
     MathOperation.Acosh,
     MathOperation.Log,
@@ -316,10 +305,9 @@ def _sweep_params(formats, mathops, approx_modes, input_dimensions):
 def _assert_sweep_profiles_disjoint():
     """No op sits in both profiles, and every swept op has a registered domain.
 
-    Both were previously implicit and both failed quietly: an op in both lists ran its
-    whole matrix twice, and an op with no registry entry used to fall back to the
-    positive-only format default. for_op() does raise on a missing entry, but only once
-    the sweep reaches that op, so assert here to fail at collection instead.
+    An op in both lists would run its whole matrix twice. An op with no registry entry
+    does raise in for_op(), but only once the sweep reaches it, so assert here to fail at
+    collection instead.
 
     Exhaustiveness is checked too, against sfpu_unary_ops(): the registry knows which of
     its entries have a unary SFPU kernel, so an op added to the registry and to no sweep
@@ -358,7 +346,7 @@ def _assert_sweep_profiles_disjoint():
 
 # The broad profile sweeps the full float matrix, plus the Bfp4_b input formats for the
 # subset of ops validated against them. The standard profile is bf16/fp32 only, approx
-# mode off, one tile shape. One driver, one skip path, one test below.
+# mode off, one tile shape.
 UNARY_SWEEP_PARAMS = (
     _sweep_params(
         BROAD_FORMATS,
@@ -409,10 +397,8 @@ def _skip_bh_unless_fp32(formats, dest_acc):
 
 # Approximate exp overshoots the golden by a systematic ~5.7% (peak 6.75%) once its
 # argument passes ~8 -- measured on Wormhole, the smallest output that breaches the
-# default 5% rtol is exactly exp(8.00) = 2976, and 0.6% of elements in an affected
-# tile breach it. That is a property of the approximation itself, not of the stimuli:
-# it went unmeasured until this sweep stopped feeding exp uniform(0.1, 1.1), which
-# never produced an argument above 1.1.
+# default 5% rtol is exactly exp(8.00) = 2976, and 0.6% of elements in an affected tile
+# breach it. This is a property of the approximation, not of the stimuli.
 #
 # Whether a given combination trips the 5% bar is marginal, and two things decide it:
 # the domain its output format selects (high=16, or 10 when a Float16 output narrows
@@ -443,9 +429,8 @@ def test_eltwise_unary_sfpu(
 ):
     """Every float unary SFPU op, over its registered domain.
 
-    Merged from test_eltwise_unary_sfpu_float and test_eltwise_unary_sfpu_domain: both
-    now derive stimuli from the same per-op registry, so the sweep envelope (which
-    profile the op is in) is the only thing that differed. See BROAD_SWEEP_OPS.
+    Stimuli come from the per-op registry for every op; the sweep envelope (which profile
+    the op is in) is the only thing that varies. See BROAD_SWEEP_OPS.
     """
     broad = mathop in BROAD_SWEEP_OPS
 
@@ -466,9 +451,7 @@ def test_eltwise_unary_sfpu(
         )
 
     if TestConfig.WITH_COVERAGE:
-        # The broad profile was previously an entire test carrying @skip_for_coverage, so
-        # under coverage it is skipped wholesale; only the standard profile runs. Keep
-        # both behaviours rather than widening or narrowing coverage runs here.
+        # Coverage runs skip the broad profile wholesale; only the standard profile runs.
         if broad:
             pytest.skip(
                 reason="Broad-profile ops are not run under coverage: "
@@ -488,11 +471,9 @@ def test_eltwise_unary_sfpu(
     if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
         pytest.skip(reason="Metal tanh does not support approximation mode")
 
-    # The two profiles disagree about Blackhole at dest_acc=No, and the disagreement is
-    # load-bearing rather than cosmetic: the broad profile runs everything except a
-    # Float16 input or Float32->Float16, while the standard profile allows only
-    # Float32->Float32. Both are measured-correct for their own format sets, so keep
-    # each profile's own guard rather than picking one and silently changing coverage.
+    # Each profile has its own Blackhole dest_acc=No guard, measured against its own
+    # format set: the broad profile runs everything except a Float16 input or
+    # Float32->Float16, while the standard profile allows only Float32->Float32.
     if broad:
         _skip_bh_unsupported_float_combo(formats, dest_acc)
     else:
@@ -750,19 +731,17 @@ def eltwise_unary_sfpu(
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
-    # Fall back to the op's own (signed) domain rather than generate_stimuli's
-    # positive-only format default. Without this the float sweep feeds every op
-    # uniform(0.1, 1.1), so the x<0 branch, the piecewise knees and the saturation
-    # tails are never reached (https://github.com/tenstorrent/tt-metal/issues/49739).
-    # Every op reaching this driver is
-    # registered in _OP_DOMAIN_REGISTRY, so a KeyError here means a new op was
-    # added without a domain: register it rather than silently falling back to the
-    # positive-only default.
-    # The domain has to satisfy the whole input->output pipeline, not just one end
-    # of it: this sweep pairs every input format with every output format, so
-    # Float32->Float16 has to stay inside Float16's range while Bfp8_b->Float16
-    # keeps the tighter interval Bfp8_b's block precision demands. for_op_pipeline
-    # resolves both and takes the tighter — see its docstring.
+    # Default to the op's own (signed) domain rather than generate_stimuli's positive-only
+    # format default, which would leave the x<0 branch, the piecewise knees and the
+    # saturation tails unreached. Every op reaching this driver is registered in
+    # _OP_DOMAIN_REGISTRY, so a KeyError here means a new op was added without a domain:
+    # register it rather than falling back to the positive-only default.
+    #
+    # The domain has to satisfy the whole input->output pipeline, not just one end of it:
+    # this sweep pairs every input format with every output format, so Float32->Float16
+    # has to stay inside Float16's range while Bfp8_b->Float16 keeps the tighter interval
+    # Bfp8_b's block precision demands. for_op_pipeline resolves both and takes the
+    # tighter — see its docstring.
     if spec_A is None:
         spec_A = exclude_undefined(
             mathop,
