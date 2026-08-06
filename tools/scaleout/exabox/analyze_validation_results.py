@@ -452,8 +452,14 @@ def parse_missing_connections(content: str) -> list[tuple[str, tuple, tuple]]:
 
 def _format_port_endpoint(ep: tuple) -> str:
     """Format a port endpoint for human-readable missing-link output."""
-    host, tray, port_type, port_id = ep
-    return f"{host} tray {tray} {port_type} port {port_id}"
+    host, tray, _port_type, port_id = ep
+    return f"{host} tray {tray} port {port_id}"
+
+
+def _format_port_connection(ep1: tuple, ep2: tuple) -> str:
+    """Format a port connection with type once as the leading field."""
+    port_type = ep1[2] if ep1[2] == ep2[2] else f"{ep1[2]}/{ep2[2]}"
+    return f"{port_type} | {_format_port_endpoint(ep1)}  <->  {_format_port_endpoint(ep2)}"
 
 
 def _format_channel_endpoint(ep: tuple) -> str:
@@ -476,7 +482,14 @@ def unique_missing_connections(analyses: list[LogAnalysis]) -> list[tuple[str, t
             seen.add(key)
             unique.append((conn_type, canonical[0], canonical[1]))
 
-    unique.sort(key=lambda c: (0 if c[0] == "port" else 1, c[1], c[2]))
+    unique.sort(
+        key=lambda c: (
+            0 if c[0] == "port" else 1,
+            c[1][2] if c[0] == "port" else "",  # port_type first for readability
+            c[1],
+            c[2],
+        )
+    )
     return unique
 
 
@@ -494,7 +507,7 @@ def print_missing_links_summary(analyses: list[LogAnalysis]) -> None:
     if ports:
         print(f"Port/cable ({len(ports)} unique):")
         for _, ep1, ep2 in ports:
-            print(f"  {_format_port_endpoint(ep1)}  <->  {_format_port_endpoint(ep2)}")
+            print(f"  {_format_port_connection(ep1, ep2)}")
         print()
 
     if channels:

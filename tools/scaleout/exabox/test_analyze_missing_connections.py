@@ -101,7 +101,7 @@ class TestParseMissingConnections(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn("Missing Links", out)
         self.assertIn("Port/cable (2 unique):", out)
-        self.assertIn("QSFP_DD port 8", out)
+        self.assertIn("QSFP_DD | bh-glx-110-a09u08 tray 3 port 8  <->  bh-glx-110-a09u14 tray 1 port 8", out)
         self.assertIn("Channel (2 unique):", out)
         self.assertIn("bh-glx-110-a09u08 <-> bh-glx-110-a09u14", out)
 
