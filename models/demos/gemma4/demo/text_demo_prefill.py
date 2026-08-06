@@ -1686,9 +1686,12 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
     # depends on it on the metadata path (compute_gather_valid_Ht bounds to full capacity
     # there and the all-gather reader narrows per dispatch from kv_actual_isl).
 
+    stage_breakdown = {"tokens": 0.0, "metadata": 0.0, "rope": 0.0}
+
     def _stage(chunk_idx):
         """Host-side refresh of everything that varies per chunk. Never inside a trace."""
         chunk_start = chunk_idx * chunk
+        _t = time.time()
         staged = _host_tensor(
             mesh_device,
             tokens_all[:, chunk_start : chunk_start + chunk].contiguous(),
@@ -1698,7 +1701,11 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
             seq_dim=-1,
         )
         ttnn.copy_host_to_device_tensor(staged, device_input)
+        stage_breakdown["tokens"] += time.time() - _t
+        _t = time.time()
         model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
+        stage_breakdown["metadata"] += time.time() - _t
+        _t = time.time()
         # Probe: ring attention's CCL semaphores persist across replays. Eager dispatch
         # may leave them in a state each call re-establishes; a replay re-runs identical
         # commands against whatever the previous replay left behind.
@@ -1708,6 +1715,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
         # Under CP the prefill RoPE cache is chunk-major per rank, so the local slice
         # advances by the per-rank slab, matching _get_rope_mats' start_pos // cp.
         model._refresh_rope_prefill(rope_local_seq, (chunk_start // cp))
+        stage_breakdown["rope"] += time.time() - _t
         return chunk_start
 
     def _forward(chunk_start):
@@ -1823,6 +1831,10 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
         f"[traced_perf] DEVICE {context_len} tokens in {device_s:.1f}s "
         f"({context_len / device_s:.0f} tok/s) | staging {stage_s:.1f}s | "
         f"readback {readback_s:.1f}s (test-only) | wall {total_s:.1f}s"
+    )
+    logger.info(
+        f"[traced_perf] staging breakdown: "
+        + ", ".join(f"{k}={v:.1f}s ({1000 * v / n_chunks:.0f}ms/chunk)" for k, v in stage_breakdown.items())
     )
     logger.info(
         f"[traced_perf] TOTAL {context_len} tokens in {total_s:.1f}s ({context_len / total_s:.0f} tok/s) "
