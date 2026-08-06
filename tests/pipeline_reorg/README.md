@@ -32,6 +32,13 @@ tests/pipeline_reorg/<name>_tests.yaml # test registry (this folder, dev-owned)
 Workflow YAML is infra-owned plumbing; test yaml is dev-owned content — if your PR is "just
 adding a test" and it touches `.github/workflows/`, something's off.
 
+This is the standard shape, not a rule to follow to the letter for every file — reuse is fine
+where it avoids near-duplicate workflows. The most common exception is a **shared impl workflow**:
+[`tt-train-tests.yaml`](https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/tt-train-tests.yaml)
+is one impl workflow covering `merge_gate`/`unit`/`perf` (via a `test-category` input) instead of
+three nearly-identical ones. Only duplicate an impl workflow when the matrix/SKU logic actually
+diverges enough that sharing would add more branching than it saves.
+
 ## Add or change a test (common case)
 
 1. Edit the relevant `tests/pipeline_reorg/<name>_tests.yaml` — schema below.
