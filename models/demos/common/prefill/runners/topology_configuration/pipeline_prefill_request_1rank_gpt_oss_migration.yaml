@@ -11,7 +11,7 @@ global_env:
   PREFILL_NUM_LAYERS: "36"
   PREFILL_SP: "4"
   PREFILL_TP: "8"
-  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_FABRIC_MODE: "2d_torus_x"
   PREFILL_MAX_SEQ_LEN: "56320"
   PREFILL_CHUNK_SIZE: "5120"
   PREFILL_H2D_SERVICE_ID: "gpt_oss_prefill"
@@ -26,7 +26,7 @@ global_env:
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
-  # Set PREFILL_MIGRATION_CLIENT_DIR in the shell to your tt-llm-engine build:
+  # Set PREFILL_MIGRATION_CLIENT_DIR in the shell / gate script (tt-run does not forward PREFILL_*):
   #   export PREFILL_MIGRATION_CLIENT_DIR=<tt-llm-engine>/disaggregation/migration/build_RelWithDebInfo/python
 
   PREFILL_VALIDATE_MIGRATION: "1"

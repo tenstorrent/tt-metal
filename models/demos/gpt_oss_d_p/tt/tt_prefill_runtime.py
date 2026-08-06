@@ -61,9 +61,11 @@ class TtPrefillRuntimeConfig:
     # harness path. The adapter/engine path sets this False and passes the engine-owned KvCaches in.
     owns_kv_cache: bool = True
     # Pipeline-parallel rank flags the common prefill runner reads off runtime.config
-    # (single-rank standalone/harness => both True).
+    # (single-rank standalone/harness => both True). first_layer_idx is the GLOBAL index of this
+    # rank's first layer (0 on single-rank); used by PREFILL_STANDALONE_PCC golden offset.
     is_first_rank: bool = True
     is_last_rank: bool = True
+    first_layer_idx: int = 0
 
     @property
     def sp_factor(self) -> int:
@@ -453,7 +455,8 @@ class TtPrefillRuntime:
         V), each [1, num_kv_heads, seq_len, head_dim]. GQA => NO index_k. The device K is Meta-RoPE
         swizzled over the full head_dim, so the golden K's rotary slice is permuted HF->Meta first.
 
-        ``real_len`` caps the compared extent (non-pad tokens). ``pt_path_override`` is unsupported
+        ``n_chunks`` caps the compare to what this run actually wrote (``n_chunks * chunk_size``).
+        ``real_len`` further caps to non-pad tokens. ``pt_path_override`` is unsupported
         (trace-dir goldens only) and rejected if set — required keyword for Gate 2b / validation.py.
         """
         from safetensors import safe_open
@@ -470,7 +473,13 @@ class TtPrefillRuntime:
         assert raw_trace, "kv_cache_pcc_check needs PREFILL_TRACE_DIR or trace_dir="
         trace_dir = resolve_trace_dir(raw_trace)
         token_ids = list(json.load(open(Path(trace_dir) / "metadata.json"))["token_ids"])
-        n_tokens = len(token_ids) if real_len is None else min(int(real_len), len(token_ids))
+        # Only score tokens this run filled (matches MiniMax / avoids comparing past NCHUNKS*chunk_size).
+        n_tokens = min(len(token_ids), n_chunks * self.config.chunk_size)
+        if real_len is not None:
+            n_tokens = min(n_tokens, int(real_len))
+        assert (
+            n_tokens > 0
+        ), f"kv_cache_pcc_check: n_tokens=0 (n_chunks={n_chunks}, chunk_size={self.config.chunk_size})"
 
         head_dim = self.hf_config.head_dim
         rotary_dim = getattr(self.hf_config, "rotary_dim", head_dim)
@@ -488,7 +497,9 @@ class TtPrefillRuntime:
             _dump_set = {int(x) for x in _dump_env.split(",") if x.strip()} if _dump_env else set()
         # Per-layer tensor dumps land next to the golden trace by default; GPT_OSS_KV_DUMP_DIR overrides.
         _dump_dir = os.environ.get("GPT_OSS_KV_DUMP_DIR") or (Path(trace_dir) / "kv_dump")
-        logger.info(f"[kv-pcc] per-layer K / V vs golden ({trace_dir}) over [0,{n_tokens}):")
+        logger.info(
+            f"[kv-pcc] per-layer K / V vs golden ({trace_dir}) over [0,{n_tokens}) ({self.config.num_layers} layers):"
+        )
         min_k, min_v = 1.0, 1.0
         for L in range(self.config.num_layers):
             gL = first_layer_idx + L

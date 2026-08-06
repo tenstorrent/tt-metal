@@ -1201,6 +1201,13 @@ def main() -> None:
     # If we're not performing golden trace PCC-validation, then don't consume these and allow loopback
     # migration test in prefill_runner.py to consume acks and perform the testing of loopback migration
     ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
+    if cfg.verify and ack_channel is None:
+        logger.error(
+            "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
+            "prefill (H2D push return ≠ layers done). Set PREFILL_ENABLE_LAYER_ACK=1 on the runner "
+            "(Gate 1 mock defaults this on via run_prefill_migration_gate.sh)."
+        )
+        sys.exit(1)
     if not cfg.verify:
         logger.info(
             "[producer] CHECK_PCC off — not consuming the LayerAck channel (pure token feeder; "

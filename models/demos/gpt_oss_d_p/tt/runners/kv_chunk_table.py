@@ -16,6 +16,11 @@ Config layout (id order is the src↔dst migration contract)::
     config N..2N-1  -> v head 0..N-1   (single-member device group)
 
 ``N == num_kv_heads == TP columns`` (1 head per column).
+
+Protobuf note: ``import_from_protobuf`` rebuilds configs via ``std::map`` (lexicographic name
+order). The list constructor auto-names configs ``"0".."N-1"``, which reorders for ``N>10``
+(``"10"`` before ``"2"``) and breaks producer/H2D lookups by integer ``config_id``. We therefore
+build with zero-padded names so map order == intended config_id order across export/import.
 """
 
 from __future__ import annotations
@@ -50,6 +55,12 @@ def _make_config(*, num_layers, max_seq_len, num_users, chunk_size_bytes):
     cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     cfg.chunk_size_bytes = chunk_size_bytes
     return cfg
+
+
+def _stable_config_name(config_id: int, num_configs: int) -> str:
+    """Zero-padded decimal name so std::map lexicographic order matches numeric config_id."""
+    width = max(2, len(str(max(num_configs - 1, 0))))
+    return f"{config_id:0{width}d}"
 
 
 def build_kv_chunk_address_table(
@@ -100,16 +111,25 @@ def build_kv_chunk_address_table(
     for h in range(num_kv_heads):
         specs.append((f"v_h{h}", kv_cache.v, [h], kv_cache.v.dtype))
 
-    configs = [
-        _make_config(
+    # Dict ctor + zero-padded names: protobuf import uses std::map; unpadded "0".."15" would
+    # reorder config_ids (see module docstring). Map iteration order == padded numeric order.
+    num_configs = len(specs)
+    configs_by_name = {
+        _stable_config_name(i, num_configs): _make_config(
             num_layers=num_layers,
             max_seq_len=seq_len,
             num_users=num_users,
             chunk_size_bytes=_chunk_size_bytes(dtype, head_dim),
         )
-        for (_, _, _, dtype) in specs
-    ]
-    table = ttnn.experimental.disaggregation.KvChunkAddressTable(configs)
+        for i, (_, _, _, dtype) in enumerate(specs)
+    }
+    table = ttnn.experimental.disaggregation.KvChunkAddressTable(configs_by_name)
+    assert table.num_configs() == num_configs
+    for i in range(num_configs):
+        assert table.config_name(i) == _stable_config_name(i, num_configs), (
+            f"config_id {i} name {table.config_name(i)!r} != {_stable_config_name(i, num_configs)!r} "
+            "(protobuf-safe naming broken)"
+        )
 
     host_name = socket.gethostname()
     hosts_set = set()
@@ -151,7 +171,7 @@ def build_kv_chunk_address_table(
     logger.info(
         f"[gpt-oss-d-p-kv-table] multi-config table built "
         f"(configs={len(specs)} [{', '.join(s[0] for s in specs)}], entries={table.total_entries()}, "
-        f"banks={num_dram_banks}, chunk_bytes={configs[0].chunk_size_bytes})"
+        f"banks={num_dram_banks}, chunk_bytes={configs_by_name[_stable_config_name(0, num_configs)].chunk_size_bytes})"
     )
     return table
 
