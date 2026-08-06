@@ -122,15 +122,125 @@ class TtGroupNorm:
 
     It is also the only one of the three that needs no `core_grid` negotiation and
     does not have to be rebuilt when T changes -- and T changes between the down,
-    mid and up stages of this very UNet.
+    mid and up stages of this very UNet. (The native op is not merely less accurate
+    here, it is unavailable: it rejects `[2, 141, 256]` at group 8 on both parts.)
+
+    **The reshape-permute route to that statistic is the estimator's single largest
+    cost**, and it took a traced measurement to see it. Per call, on Blackhole:
+
+        conv1d k3 256->256 @141    0.0320 ms
+        this, permute + layer_norm 0.2190 ms      <- 6.8x the convolution it follows
+        mish @141                  0.0076 ms
+
+    33 of these run per Euler step, ~36% of the whole estimator. Untraced it looks
+    ordinary (0.44 ms against the conv's 0.43) because dispatch dominates both -- the
+    same trap PERF.md records for the decode step.
+
+    The cost is the two `permute`s. Under `TILE_LAYOUT` they swap the tiled row axis,
+    which is a genuine re-tiling shuffle rather than a view, and the intermediate's
+    tiled face is `G x C/G` = `8 x 32` -- one tile carrying 8 useful rows out of 32.
+
+    So take the same statistic without changing shape at all. Each group's sum over
+    channels is a **matmul against a `[C, G]` indicator**; what remains is a reduction
+    over T, an axis that needs no re-tiling. The statistics come back as `[B, 1, G]`,
+    return to `[B, 1, C]` through the same indicator transposed, and normalise-plus-affine
+    folds into one multiply and one add:
+
+        out = x * (inv*w) + (b - mean*inv*w)
+
+    Measured traced, against the permute form and a torch reference:
+
+        [2, 141, 256]   0.2190 -> 0.0940 ms  (2.33x)   PCC 0.999988854
+        [2, 282, 256]   0.3975 -> 0.0978 ms  (4.06x)   PCC 0.999992251
+
+    Wormhole gives 2.07x and 3.33x. Note the matmul form is nearly **independent of T**
+    where the permute form doubles with it, which is the re-tiling cost showing itself.
+
+    `COSYVOICE_GN_PERMUTE=1` restores the permute form for A/B.
     """
+
+    PERMUTE = os.environ.get("COSYVOICE_GN_PERMUTE") == "1"
 
     def __init__(self, device, bag, name, num_groups: int = 8, eps: float = 1e-5, dtype=ttnn.bfloat16):
         self.device, self.g, self.eps = device, num_groups, eps
         self.w, self.b = _norm_affine(device, bag, name, dtype)
+        self._ind = self._indt = None
+        self._dtype = dtype
+
+    def _indicators(self, c: int):
+        """`[1, C, G]` and `[1, G, C]` group-membership matrices, built once.
+
+        Built lazily rather than in `__init__` because C is only known from the affine
+        weight, and reading a shape off a device tensor at construction time is a host
+        round trip this class otherwise never makes.
+        """
+        if self._ind is None:
+            m = torch.zeros(c, self.g)
+            m[torch.arange(c), torch.arange(c) // (c // self.g)] = 1.0
+            self._ind = ttnn.from_torch(
+                m.reshape(1, c, self.g), dtype=self._dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+            self._indt = ttnn.from_torch(
+                m.t().contiguous().reshape(1, self.g, c), dtype=self._dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        return self._ind, self._indt
 
     def __call__(self, x):
         b, t, c = x.shape
+        if self.PERMUTE:
+            return self._permute_form(x, b, t, c)
+
+        ind, indt = self._indicators(c)
+        inv_n = 1.0 / float(t * (c // self.g))
+
+        # Every intermediate is named and freed. Inside a captured trace an allocation is
+        # part of the graph and lives for the trace's lifetime, so a leak here is
+        # multiplied by 33 GroupNorms and never collected -- and the largest of these is
+        # the full [B, T, C] product, not one of the [B, 1, G] statistics.
+        sq = ttnn.multiply(x, x)
+        s1 = ttnn.matmul(x, ind)  # [B, T, G] -- per-group channel sums
+        s2 = ttnn.matmul(sq, ind)
+        ttnn.deallocate(sq)
+
+        # Reducing over T finishes the statistic. T is the tiled row axis, but a
+        # reduction along it is a reduction, not a re-layout -- which is the whole point.
+        t1 = ttnn.sum(s1, dim=1, keepdim=True)  # [B, 1, G]
+        t2 = ttnn.sum(s2, dim=1, keepdim=True)
+        ttnn.deallocate(s1)
+        ttnn.deallocate(s2)
+        mean = ttnn.multiply(t1, inv_n)
+        ex2 = ttnn.multiply(t2, inv_n)
+        ttnn.deallocate(t1)
+        ttnn.deallocate(t2)
+
+        m2 = ttnn.multiply(mean, mean)
+        var = ttnn.subtract(ex2, m2)
+        ttnn.deallocate(ex2)
+        ttnn.deallocate(m2)
+        veps = ttnn.add(var, self.eps)
+        inv = ttnn.rsqrt(veps)
+        ttnn.deallocate(var)
+        ttnn.deallocate(veps)
+
+        mean_c = ttnn.matmul(mean, indt)  # [B, 1, C]
+        inv_c = ttnn.matmul(inv, indt)
+        ttnn.deallocate(mean)
+        ttnn.deallocate(inv)
+        scale = ttnn.multiply(inv_c, self.w)
+        ms = ttnn.multiply(mean_c, scale)
+        shift = ttnn.subtract(self.b, ms)
+        ttnn.deallocate(ms)
+        ttnn.deallocate(mean_c)
+        ttnn.deallocate(inv_c)
+        xs = ttnn.multiply(x, scale)
+        out = ttnn.add(xs, shift)
+        ttnn.deallocate(xs)
+        ttnn.deallocate(scale)
+        ttnn.deallocate(shift)
+        return out
+
+    def _permute_form(self, x, b, t, c):
+        """The original route, kept for A/B under `COSYVOICE_GN_PERMUTE=1`."""
         g = self.g
         cg = c // g
         h = ttnn.reshape(x, (b, t, g, cg))
