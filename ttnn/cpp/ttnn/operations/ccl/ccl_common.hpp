@@ -106,6 +106,16 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
     CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
 
+// Fabric-mux-aware core placement: returns one (mux core, worker cores) entry per mux, giving every
+// mux a row of its own. See the implementation for the measurement this encodes. Returns nullopt when
+// the grid cannot accommodate that, so the caller falls back to choose_worker_cores().
+std::optional<std::vector<std::pair<CoreCoord, std::vector<CoreCoord>>>> choose_worker_cores_alternate(
+    size_t num_fabric_muxes,
+    size_t num_workers_per_mux,
+    const MeshDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+
 class EriscDatamoverBuilder;
 
 std::vector<ttnn::Tensor> unpad_output_tensor(

@@ -4,6 +4,7 @@
 
 #include "all_gather_unicast_factory.hpp"
 
+#include <tt-metalium/kernel_types.hpp>  // for tt::tt_metal::NOC
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -135,6 +136,13 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const bool ring_even_split = is_ring && (num_devices % 2 == 0);
     const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
 
+    // Comes from the fabric router config, so it is the caller's to set, not ours. For best
+    // throughput configure FabricRouterConfig::max_packet_payload_size_bytes = 4 * page_size on a
+    // ring (the writer scatter-writes at most 4 chunks per packet, so 4 * page is the smallest
+    // payload that saturates it) -- worth ~6% at small pages. A line prefers the fabric maximum.
+    // Clamping this value here instead does NOT reproduce that win: measured 589 us (clamped in the
+    // factory) vs 556 us (configured on the router) for the same effective packet, because the gain
+    // comes from the ERISC channel buffer sizing that the router config drives.
     const uint32_t packet_size = operation_attributes.packet_size;
 
     ////////////////////////////////////////////////////////////////
@@ -151,37 +159,19 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic.
-    // This is a major perf knob, below heuristic was determined from extensive test sweeps.
-    // TODO(perf): every constant below was calibrated against Mux V1, whose throughput degrades with fan-in;
-    // V2 stays flat from 8 to 64 senders. Re-sweep: the ceiling of 12 is likely too low now, and re-check
-    // whether the {3,4,5} pessimum survives V2's stream-register credit path.
+    //
+    // Two is the optimum, flatly. Measured over ~1600 configs on Blackhole (8-device ring *and* line,
+    // 2 links, 2 MB - 200 MB gathered, tile and row-major, page sizes 64 B - 8 KB): 2 won at every single
+    // point. One worker is much worse (no mux at all: 1.8-2.3x), and it degrades monotonically above 2.
+    // An earlier size-based ramp to 8/12 workers was calibrated against fabric mux V1 and against the
+    // default row-major core placement; with V2 and the mux-per-row placement below, the extra workers
+    // only add NOC contention. This also frees ~40 cores for the rest of the model.
     uint32_t num_links = operation_attributes.axis_num_links[axis];
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
     uint32_t workers_per_dir = 1;
-    if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
+    const auto arch = input_tensor.device()->arch();
+    if (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) {
         workers_per_dir = 2;
-    } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
-        // workers_per_dir (dominant knob): the optimum tracks fabric-link demand (per_link_bytes)
-        // gated by NOC txn size. Big page + enough bytes/link -> more workers raise aggregate NOC
-        // bandwidth (saturates ~8-12); a small page is per-transaction-bound and a tiny tensor is
-        // op-overhead-bound, so both want few workers.
-        // workers_per_dir in {3,4,5} is a reproducible NOC/core-placement pessimum -- worse than
-        // 2 and than >=6 -- so the ramp jumps 2->8->12 and must never emit them.
-        const uint32_t txn_bytes = std::min(input_page_size, output_page_size);  // NOC transaction size
-        const uint64_t total_output_bytes = output_tensor.buffer()->num_pages() * output_page_size;
-        const uint64_t per_link_bytes = total_output_bytes / std::max(1u, num_links);
-        constexpr uint32_t bw_bound_txn_bytes = 1536;              // NOC txn size needed to benefit from >2 workers
-        constexpr uint64_t bw_bound_link_bytes = 4000000ULL;       // bytes/link where fabric link starts saturating
-        constexpr uint64_t link_saturated_bytes = 20000000ULL;     // bytes/link where 12 workers beat 8
-        constexpr uint64_t overhead_bound_link_bytes = 750000ULL;  // below this the op is fixed-overhead-bound
-        if (txn_bytes >= bw_bound_txn_bytes && per_link_bytes >= bw_bound_link_bytes) {
-            workers_per_dir = (per_link_bytes >= link_saturated_bytes) ? 12 : 8;
-        } else if (per_link_bytes < overhead_bound_link_bytes) {
-            workers_per_dir = 1;
-        } else {
-            workers_per_dir = 2;
-        }
     }
 
     // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
@@ -218,14 +208,33 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const uint32_t cores_per_dir = workers_per_dir + mux_per_dir;
     const uint32_t num_cores_per_link = num_directions * cores_per_dir;
 
-    // all_cores contains workers + mux
-    [[maybe_unused]] auto [all_core_range, all_cores] = ttnn::ccl::choose_worker_cores(
-        num_links,
-        num_cores_per_link,
-        mesh_device,
-        operation_attributes.subdevice_id,
-        /*core_grid_offset=*/CoreCoord{0, 0},
-        operation_attributes.sub_core_grid);
+    // all_cores contains workers + mux, flat: per link [dir 0: (mux?) w0..wW-1][dir 1: (mux?) w0..wW-1]
+    std::vector<CoreCoord> all_cores;
+    // Mux-aware placement gives each mux its own NOC row, which is worth up to 2.3x over the plain
+    // row-major fill (see choose_worker_cores_alternate). Only applies when there are muxes at all;
+    // falls back to choose_worker_cores() when the grid cannot give every mux its own row.
+    auto mux_groups = use_mux ? ttnn::ccl::choose_worker_cores_alternate(
+                                    num_links * num_directions,
+                                    workers_per_dir,
+                                    mesh_device,
+                                    operation_attributes.subdevice_id,
+                                    operation_attributes.sub_core_grid)
+                              : std::nullopt;
+    if (mux_groups.has_value()) {
+        all_cores.reserve(static_cast<size_t>(num_links) * num_cores_per_link);
+        for (const auto& [mux, workers] : *mux_groups) {
+            all_cores.push_back(mux);
+            all_cores.insert(all_cores.end(), workers.begin(), workers.end());
+        }
+    } else {
+        std::tie(std::ignore, all_cores) = ttnn::ccl::choose_worker_cores(
+            num_links,
+            num_cores_per_link,
+            mesh_device,
+            operation_attributes.subdevice_id,
+            /*core_grid_offset=*/CoreCoord{0, 0},
+            operation_attributes.sub_core_grid);
+    }
     TT_FATAL(
         all_cores.size() == static_cast<size_t>(num_links) * num_cores_per_link,
         "all_gather needs {} worker cores ({} links x {} cores/link) but only {} are available; provide a larger "
@@ -326,14 +335,19 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const uint32_t pages_per_packet = std::max(1u, packet_size / input_page_size);
     uint32_t cb_page_size = input_page_size * pages_per_packet;
     uint32_t cb_depth = 3;
-    // Perf hack: for tile layout, pack multiple pages into a single CB page to reduce CB sync
-    // frequency between reader and writer. Note this increases effective CB depth.
-    // Don't do this for row-major layout because of all the careful handling of page sizes.
-    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+    // Perf hack: pack multiple pages into a single CB page to reduce CB sync frequency between
+    // reader and writer. Note this increases effective CB depth. Applies to row-major too: an
+    // unbounded row-major page is already handled by the clamp below, which bounds
+    // cb_depth * cb_page_size * multiplier by the available L1 (and bottoms out at multiplier 1),
+    // and scaling by an integer keeps cb_page_size a multiple of input_page_size.
+    {
         // Empirically determined heuristic, works well for all tensor sizes
         const uint32_t ideal_multiplier = (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) ? 4 : 3;
         // Find the largest multiplier in [1, ideal] that fits in available L1
         const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
+        // Measured 2026-08-05: capping the multiplier so a worker's slice keeps at least cb_depth CB
+        // pages is NOT worth it -- +4% on one shape, -1..-4% on several others. Bigger is simply
+        // better here, so the only cap is available L1.
         const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
         if (multiplier < ideal_multiplier) {
             log_warning(
@@ -444,16 +458,23 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     // Fabric mux
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-    // TODO(perf): num_buffers_per_channel. Carried over from V1, where it measured as no-impact. That no longer
-    // applies: V2 publishes the read counter from a separate RISC, so slot depth now sets how far a worker can
-    // run ahead of the forwarder. The V2 test suite clusters on 4 and goes up to 8.
+    // num_buffers_per_channel: only the floor matters. One slot stalls the worker on every credit
+    // round-trip to the forwarder (V2 publishes the read counter from the other RISC), which costs
+    // 1.3-1.6x; anything >= 2 measures flat, and very deep rings regress again (50 MB ring: 2 -> 365 us,
+    // 8 -> 365, 32 -> 381, 64 -> 406). Two is the smallest value on the plateau.
     constexpr uint8_t num_buffers_per_channel = 2;
-    // TODO(perf): channel_buffer_size_bytes. The max fabric channel size over-allocates -- a slot holds one
-    // packet. The V2 throughput benchmark uses packet_header_size + payload; ours would be
-    //   use_scatter_write ? min(packet_size / output_chunk_size, NOC_SCATTER_WRITE_MAX_CHUNKS) * output_chunk_size
-    //                     : packet_size
-    // (needs NOC_SCATTER_WRITE_MAX_CHUNKS host-side). Frees mux L1, buying more num_buffers at equal cost.
+    // channel_buffer_size_bytes: leave at the fabric maximum. It is capped at
+    // packet_header + max_payload, and our payload already is max_payload, so the default is
+    // simultaneously the largest legal and the smallest safe value -- an undersized slot silently
+    // overruns the next one (the worker-side write is unchecked and device ASSERTs are compiled out;
+    // measured: 32 B under hangs the device). Shrinking it where it *is* legal (packet size above
+    // 4 * page) measured as a no-op, so there is nothing to gain here either way.
     const size_t channel_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    // forwarder_noc: must stay NOC 0. The writer kernel is NCRISC and so pushes into the mux on NOC 1;
+    // putting the mux->ERISC forwarding on NOC 1 as well makes them contend head-on and costs up to 2x
+    // (ring 50 MB: 363 -> 795 us). Note this is the opposite of the fabric mux V2 microbenchmark golden,
+    // whose senders do not share NOC 1 with the forwarder the way a real CCL writer does.
+    constexpr tt::tt_metal::NOC mux_forwarder_noc = tt::tt_metal::NOC::RISCV_0_default;
     tt::tt_fabric::FabricMuxV2Config mux_config(
         /*num_channels=*/static_cast<uint8_t>(workers_per_dir),
         /*num_buffers_per_channel=*/num_buffers_per_channel,
@@ -469,11 +490,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     continue;
                 }
                 const auto dst_node = mesh_device->get_fabric_node_id(*dir_neighbor(dir));
-                // TODO(perf): forwarder_noc (defaulted) picks the forwarder's NOC; the manager gets the other. Flipping
-                // to NOC::RISCV_1_default changes which NOC mux->ERISC traffic shares with our workers' writes into the
-                // mux.
                 tt::tt_fabric::add_fabric_mux_v2_to_program(
-                    program, mux_config, mux_core(link, dir), sender_fabric_node_id, dst_node, link);
+                    program, mux_config, mux_core(link, dir), sender_fabric_node_id, dst_node, link, mux_forwarder_noc);
             }
         }
     }

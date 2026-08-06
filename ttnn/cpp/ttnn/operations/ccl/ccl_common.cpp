@@ -403,6 +403,68 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
     return devices;
 }
 
+// Returns a list of (mux core, list of worker cores), one entry per fabric mux.
+//
+// Placement rule (measured on Blackhole, 8-device ring, unicast all_gather): the dominant effect is
+// that **every mux must sit on its own NOC row**. Each mux forwards its channel's traffic to an
+// ethernet core, and with X-first dimension-ordered routing two muxes on the same row funnel those
+// streams through the same horizontal links; the further apart in x, the more segments overlap.
+// Putting four muxes on one row (what a plain row-major fill of a wide grid does) costs up to 2.3x.
+// Mux-to-worker distance, by contrast, barely matters -- tightly clustered groups that share a mux
+// row are as slow as spread ones.
+//
+// So: give group g its own row, and lay its (mux + workers) out along that row.
+// Falls back to nullopt if the groups cannot be given distinct rows, so the caller can use the
+// plain row-major allocator instead.
+std::optional<std::vector<std::pair<CoreCoord, std::vector<CoreCoord>>>> choose_worker_cores_alternate(
+    size_t num_fabric_muxes,
+    size_t num_workers_per_mux,
+    const MeshDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    auto available_cores = device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    if (sub_core_grid.has_value()) {
+        available_cores = available_cores.intersection(sub_core_grid.value());
+    }
+    if (num_fabric_muxes == 0 || available_cores.num_cores() == 0) {
+        return std::nullopt;
+    }
+
+    const auto bbox = available_cores.bounding_box();
+    const size_t width = bbox.end_coord.x - bbox.start_coord.x + 1;
+    const size_t height = bbox.end_coord.y - bbox.start_coord.y + 1;
+    const size_t group_size = 1 + num_workers_per_mux;
+
+    // Rows needed per group, and hence whether every group can get rows of its own.
+    const size_t rows_per_group = (group_size + width - 1) / width;
+    if (rows_per_group * num_fabric_muxes > height) {
+        return std::nullopt;
+    }
+    // Spread the groups over the available rows rather than packing them at the top, so that
+    // neighbouring muxes are not on adjacent rows either.
+    const size_t row_stride = std::max(rows_per_group, height / num_fabric_muxes);
+
+    std::vector<std::pair<CoreCoord, std::vector<CoreCoord>>> groups;
+    groups.reserve(num_fabric_muxes);
+    for (size_t g = 0; g < num_fabric_muxes; ++g) {
+        std::vector<CoreCoord> cores;
+        cores.reserve(group_size);
+        for (size_t i = 0; i < group_size; ++i) {
+            const size_t y = bbox.start_coord.y + (g * row_stride) + (i / width);
+            const size_t x = bbox.start_coord.x + (i % width);
+            const CoreCoord core(x, y);
+            if (!available_cores.contains(core)) {
+                return std::nullopt;  // harvested / non-rectangular grid: let the caller fall back
+            }
+            cores.push_back(core);
+        }
+        groups.emplace_back(cores.front(), std::vector<CoreCoord>(cores.begin() + 1, cores.end()));
+    }
+    return groups;
+}
+
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
