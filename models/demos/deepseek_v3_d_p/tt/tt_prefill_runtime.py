@@ -394,7 +394,7 @@ class TtPrefillRuntime:
         actual_end: int,
         request_id: int = 0,
         d2h_service=None,
-        record_dev: Optional[ttnn.Tensor] = None,
+        metadata_msg: Optional[ttnn.Tensor] = None,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
@@ -410,7 +410,7 @@ class TtPrefillRuntime:
         may be pad, so actual_end < actual_start + chunk_size). actual_end is the migration pad-zero
         boundary, passed straight through to MLA. The caller drives chunked prefill by
         calling this once per chunk, in order; a chunk's KV must be populated before the next reads
-        it. If d2h_service + record_dev are passed, the model sends one per-layer ack completion signal back
+        it. If d2h_service + metadata_msg are passed, the model sends one per-layer ack completion signal back
         to host (via the outbound_socket_service_sync device op) once each layer's KV cache is populated.
         Alternatively, if a host-side per-layer callback is registered (set_layer_ack_channel /
         set_layer_completion_sink), the model fires that once per layer instead.
@@ -435,7 +435,7 @@ class TtPrefillRuntime:
                 each layer's KV cache has been populated on device. When set, each block zeros the cache
                 pad window and enqueues the ack via the outbound_socket_service_sync device op on the same
                 CQ (no host sync). When None, no ack or zeroing.
-            record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
+            metadata_msg: the chunk's PrefillMetadata device tensor sent as each ack record; required when
                 d2h_service is set.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
@@ -462,12 +462,12 @@ class TtPrefillRuntime:
                 "use_trace: capture_trace() must run before the first prefill_chunk(); capturing here "
                 "would stall the first request by a warm pass + capture"
             )
-            # The D2H layer-ack is not on the traced path: record_dev is the per-chunk socket metadata
+            # The D2H layer-ack is not on the traced path: metadata_msg is the per-chunk socket metadata
             # tensor, whose address changes every chunk, so the capture would bake in a stale address.
             # Fail loudly rather than silently replaying a trace that emits no acks. (Wiring it up needs
-            # record_dev to become a persistent, in-place-updated buffer like _trace_metadata.)
+            # metadata_msg to become a persistent, in-place-updated buffer like _trace_metadata.)
             assert d2h_service is None, (
-                "use_trace does not support the D2H layer-ack path yet (record_dev is a per-chunk socket "
+                "use_trace does not support the D2H layer-ack path yet (metadata_msg is a per-chunk socket "
                 "tensor, so its address cannot be captured); run with PREFILL_USE_TRACE=0 or use the "
                 "host-callback ack (set_layer_ack_channel / set_layer_completion_sink)"
             )
@@ -504,7 +504,7 @@ class TtPrefillRuntime:
             kv_caches.kvpe,
             actual_isl=actual_end - actual_start,
             d2h_service=d2h_service,
-            record_dev=record_dev,
+            metadata_msg=metadata_msg,
             on_layer_complete=on_layer_complete,
             actual_start=actual_start,
             actual_end=actual_end,
