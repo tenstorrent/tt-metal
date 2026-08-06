@@ -163,7 +163,13 @@ class Tensor:
             return Tensor(other._shape, self.dtype)
         return Tensor(self._shape, self.dtype)
 
-    __add__ = __radd__ = __sub__ = __rsub__ = __mul__ = __rmul__ = __truediv__ = _binary
+    # elementwise ops broadcast to the larger operand's shape; `theta ** arange(...)`
+    # (rope inverse-frequencies) needs the reflected forms too.
+    __add__ = __radd__ = __sub__ = __rsub__ = __mul__ = __rmul__ = _binary
+    __truediv__ = __rtruediv__ = __pow__ = __rpow__ = __floordiv__ = __rfloordiv__ = __mod__ = _binary
+
+    def __neg__(self) -> "Tensor":
+        return Tensor(self._shape, self.dtype)
 
     def sum(self, dim: int = None, **k) -> "Tensor":
         if dim is None:
@@ -219,12 +225,36 @@ def full(shape, value, **k) -> Tensor:
 
 
 def arange(*a, **k) -> Tensor:
-    start, stop, step = 0, a[0], 1
-    if len(a) >= 2:
+    # torch.arange accepts positional (stop) / (start, stop) / (start, stop, step)
+    # *and* keyword start=/end=/step= (the H3 time-embedding uses arange(start=0, end=half_dim)).
+    start, stop, step = 0, None, 1
+    if len(a) == 1:
+        stop = a[0]
+    elif len(a) >= 2:
         start, stop = a[0], a[1]
-    if len(a) >= 3:
-        step = a[2]
-    return Tensor([max(0, (stop - start) // step)], k.get("dtype") or int64)
+        if len(a) >= 3:
+            step = a[2]
+    start = k.get("start", start)
+    stop = k.get("end", k.get("stop", stop))
+    step = k.get("step", step)
+    if stop is None:
+        raise TypeError("arange: missing stop/end")
+    n = -(-(stop - start) // step) if step > 0 else 0  # ceil division, matching torch's length
+    return Tensor([max(0, n)], k.get("dtype") or int64)
+
+
+def _unary(x, *a, **k) -> Tensor:
+    """Shape-preserving elementwise op (torch.exp/log/sin/... on a host constant)."""
+    return Tensor(list(x.shape), x.dtype) if isinstance(x, Tensor) else Tensor([])
+
+
+# host-constant elementwise ops used while building time / rope embeddings (Timesteps,
+# rope factors). All preserve shape; only the shape matters to the dry run.
+exp = exp2 = log = log2 = log10 = sin = cos = tan = sqrt = rsqrt = sigmoid = tanh = erf = reciprocal = _unary
+
+
+def outer(a: Tensor, b: Tensor, *r, **k) -> Tensor:
+    return Tensor([a.numel(), b.numel()], a.dtype)
 
 
 def cat(tensors: Sequence[Tensor], dim: int = 0) -> Tensor:
@@ -283,6 +313,9 @@ def install() -> types.ModuleType:
     mod.inference_mode = lambda *a, **k: _NullCtx()
     mod.manual_seed = _noop
     mod.set_grad_enabled = _noop
+    mod.pow = _unary  # torch.pow(x, y) — shape of x; not the builtin pow
+    mod.clamp = mod.clip = _unary
+    mod.maximum = mod.minimum = lambda a, b, *r, **k: _unary(a)
     nn = types.ModuleType("torch.nn")
     nn.functional = types.ModuleType("torch.nn.functional")
     nn.functional.pad = lambda x, *a, **k: x
