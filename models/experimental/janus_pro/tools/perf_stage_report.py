@@ -57,6 +57,94 @@ def _delta_against_previous(stage, kernel_ms):
     return kernel_ms - float(match.group(1)) if match else None
 
 
+def previous_report(stage):
+    """The report one stage below this one, or None for the baseline."""
+    number = int(stage[:2])
+    if number == 0:
+        return None
+    return next(REPORTS_DIR.glob(f"{number - 1:02d}-*.md"), None)
+
+
+def op_code_table(text):
+    """`{op: (instances, us_each)}` parsed out of a report's op-code table.
+
+    Read from the rendered markdown rather than the source CSV, so a stage can be compared with its
+    predecessor without both runs' 12 MB profiles being on hand.
+    """
+    section = re.search(r"## Kernel time by op code[^\n]*\n\n(\|[^\n]*\n)\|[^\n]*\n((?:\|[^\n]*\n)+)", text)
+    if not section:
+        return {}
+    # Column positions come from the header: a report may predate the delta columns or carry them.
+    header = [c.strip() for c in section.group(1).strip().strip("|").split("|")]
+    try:
+        i_n, i_us = header.index("inst"), header.index("us each")
+    except ValueError:
+        return {}
+    rows = {}
+    for line in section.group(2).strip().splitlines():
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) <= max(i_n, i_us) or cells[0].startswith("**"):
+            continue
+        try:
+            rows[cells[0]] = (int(cells[i_n]), float(cells[i_us]))
+        except ValueError:
+            continue
+    return rows
+
+
+def _delta_cells(op, instances, us_each, before):
+    """`(Δ inst, Δ us each)` against the previous stage, as display strings."""
+    if before is None:
+        return "", ""
+    if op not in before:
+        return "new", "new"
+    prev_n, prev_us = before[op]
+    return f"{instances - prev_n:+d}", f"{us_each - prev_us:+.2f}"
+
+
+def matmul_table(text):
+    """`{shape: [(fidelity, instances, us_each), ...]}` from a report's matmul table."""
+    section = re.search(r"## Matmul instances by shape\n\n(\|[^\n]*\n)\|[^\n]*\n((?:\|[^\n]*\n)+)", text)
+    if not section:
+        return {}
+    header = [c.strip() for c in section.group(1).strip().strip("|").split("|")]
+    try:
+        i_n, i_us, i_fid = header.index("inst"), header.index("us each"), header.index("fidelity")
+    except ValueError:
+        return {}
+    rows = {}
+    for line in section.group(2).strip().splitlines():
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) <= max(i_n, i_us, i_fid):
+            continue
+        try:
+            rows.setdefault(cells[0], []).append((cells[i_fid], int(cells[i_n]), float(cells[i_us])))
+        except ValueError:
+            continue
+    return rows
+
+
+def matmul_deltas(shape, fidelity, instances, us_each, before):
+    """`(Δ inst, Δ us each)` for one matmul row against the previous stage.
+
+    Matched on fidelity first, then on instance count: a stage that only changes fidelity should
+    still compare against the same op, and a shape the tower runs at two fidelities (c_fc and the
+    aligner's fc1 both at 576x1024x4096) needs the fidelity to tell its rows apart.
+    """
+    if before is None:
+        return "", ""
+    candidates = before.get(shape, [])
+    match = next((c for c in candidates if c[0] == fidelity), None)
+    if match is None:
+        match = next((c for c in candidates if c[1] == instances), None)
+    if match is None and len(candidates) == 1:
+        match = candidates[0]
+    if match is None:
+        return "new", "new"
+    _, prev_n, prev_us = match
+    return f"{instances - prev_n:+d}", f"{us_each - prev_us:+.1f}"
+
+
 def _existing_prose(path):
     """The hand-written explanation, if this report already has one."""
     if not path.exists():
@@ -150,24 +238,60 @@ def _render(csv_path, stage, sha, note, single_pass):
         "",
         f"## Kernel time by op code, {scope}",
         "",
-        "| Op | inst | us each | ms | % |",
-        "|---|---:|---:|---:|---:|",
     ]
+    prev = previous_report(stage)
+    before = op_code_table(prev.read_text()) if prev else None
+    if before:
+        lines += ["| Op | inst | Δ inst | us each | Δ us each | ms | % |", "|---|---:|---:|---:|---:|---:|---:|"]
+    else:
+        lines += ["| Op | inst | us each | ms | % |", "|---|---:|---:|---:|---:|"]
     for family, row in by_family.iterrows():
-        lines.append(f"| {family} | {int(row.n)} | {row.us_each:.2f} | {row.ms:.3f} | {row.pct:.1f} |")
+        d_n, d_us = _delta_cells(family, int(row.n), row.us_each, before)
+        cells = [family, f"{int(row.n)}"]
+        if before:
+            cells += [d_n]
+        cells += [f"{row.us_each:.2f}"]
+        if before:
+            cells += [d_us]
+        cells += [f"{row.ms:.3f}", f"{row.pct:.1f}"]
+        lines.append("| " + " | ".join(cells) + " |")
+    if before:
+        gone = [op for op in before if op not in by_family.index]
+        for op in gone:
+            n, us = before[op]
+            lines.append(f"| {op} | 0 | {-n:+d} | — | gone | 0.000 | 0.0 |")
     lines += [
         "",
         "## Matmul instances by shape",
         "",
-        "| shape | inst | us each | ms | cores | FLOPs % | DRAM % | fidelity |",
-        "|---|---:|---:|---:|---:|---:|---:|---|",
     ]
+    mm_before = matmul_table(prev.read_text()) if prev else None
+    if mm_before:
+        lines += [
+            "| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        ]
+    else:
+        lines += [
+            "| shape | inst | us each | ms | cores | FLOPs % | DRAM % | fidelity |",
+            "|---|---:|---:|---:|---:|---:|---:|---|",
+        ]
     for _, row in by_shape.iterrows():
-        shape = row["shape"]
-        lines.append(
-            f"| {shape.replace('MatmulDeviceOperation ', '')} | {int(row.n)} | {row.us_each:.1f} | "
-            f"{row.ms:.3f} | {int(row.cores)} | {row.flops_pct:.1f} | {row.dram_pct:.1f} | {row.fidelity} |"
-        )
+        shape = row["shape"].replace("MatmulDeviceOperation ", "")
+        cells = [shape, f"{int(row.n)}"]
+        if mm_before:
+            d_n, d_us = matmul_deltas(shape, row.fidelity, int(row.n), row.us_each, mm_before)
+            cells += [d_n, f"{row.us_each:.1f}", d_us]
+        else:
+            cells += [f"{row.us_each:.1f}"]
+        cells += [
+            f"{row.ms:.3f}",
+            f"{int(row.cores)}",
+            f"{row.flops_pct:.1f}",
+            f"{row.dram_pct:.1f}",
+            str(row.fidelity),
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
     lines += [
         "",
         "`FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how",

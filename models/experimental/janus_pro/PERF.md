@@ -108,11 +108,6 @@ went from **29.517 ms to 9.841 ms, −66.7%**, and device ops from 393 to 295. E
 was measured on an N150; none is estimated. Accuracy held: the strictest gate
 (`test_vision_transformer`, 0.99) ended at 0.998811, *higher* than the 0.998631 it started at.
 
-The change log below was measured over a campaign, then re-checked on the base this branch sits
-on: 469 upstream commits and 1760 changed C++ files later, all thirteen tests still pass with
-**every PCC identical to the last digit**, and kernel time re-measured at the same 9.841 ms over
-295 ops. Nothing in the tower's numbers depends on the older base.
-
 **Where the 19.5 ms came from.** Four op families account for 96% of it. If you read nothing
 else, read this table:
 

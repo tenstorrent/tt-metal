@@ -12,28 +12,28 @@
 
 ## Kernel time by op code, one replay
 
-| Op | inst | us each | ms | % |
-|---|---:|---:|---:|---:|
-| MatmulDeviceOperation | 99 | 59.55 | 5.896 | 50.2 |
-| SDPAOperation | 24 | 94.99 | 2.280 | 19.4 |
-| NlpCreateHeadsDeviceOperation | 24 | 50.87 | 1.221 | 10.4 |
-| LayerNormDeviceOperation | 49 | 19.52 | 0.957 | 8.1 |
-| ShardedToInterleavedDeviceOperation | 72 | 8.83 | 0.636 | 5.4 |
-| NLPConcatHeadsDeviceOperation | 24 | 17.90 | 0.430 | 3.7 |
-| BinaryNgDeviceOperation | 50 | 3.87 | 0.193 | 1.6 |
-| UnaryDeviceOperation | 1 | 123.61 | 0.124 | 1.1 |
-| InterleavedToShardedDeviceOperation | 1 | 7.62 | 0.008 | 0.1 |
+| Op | inst | Δ inst | us each | Δ us each | ms | % |
+|---|---:|---:|---:|---:|---:|---:|
+| MatmulDeviceOperation | 99 | +0 | 59.55 | -6.05 | 5.896 | 50.2 |
+| SDPAOperation | 24 | +0 | 94.99 | -0.03 | 2.280 | 19.4 |
+| NlpCreateHeadsDeviceOperation | 24 | +0 | 50.87 | -0.44 | 1.221 | 10.4 |
+| LayerNormDeviceOperation | 49 | +0 | 19.52 | +0.12 | 0.957 | 8.1 |
+| ShardedToInterleavedDeviceOperation | 72 | +24 | 8.83 | +2.44 | 0.636 | 5.4 |
+| NLPConcatHeadsDeviceOperation | 24 | +0 | 17.90 | -0.24 | 0.430 | 3.7 |
+| BinaryNgDeviceOperation | 50 | +0 | 3.87 | -0.06 | 0.193 | 1.6 |
+| UnaryDeviceOperation | 1 | +0 | 123.61 | +0.38 | 0.124 | 1.1 |
+| InterleavedToShardedDeviceOperation | 1 | +0 | 7.62 | -0.10 | 0.008 | 0.1 |
 
 ## Matmul instances by shape
 
-| shape | inst | us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | 83.9 | 2.098 | 64 | 44.9 | 20.5 | HiFi2 |
-| 576 x 4096 x 1024 | 24 | 66.3 | 1.591 | 48 | 73.9 | 22.0 | HiFi2 |
-| 576 x 1024 x 3072 | 24 | 55.4 | 1.330 | 48 | 66.3 | 23.4 | HiFi2 |
-| 576 x 1024 x 1024 | 24 | 21.7 | 0.521 | 48 | 56.4 | 26.2 | HiFi2 |
-| 576 x 4096 x 4096 | 1 | 312.5 | 0.313 | 48 | 62.7 | 29.1 | HiFi2 |
-| 576 x 768 x 1024 | 1 | 43.7 | 0.044 | 48 | 21.0 | 28.9 | HiFi2 |
+| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 576 x 1024 x 4096 | 25 | +0 | 83.9 | -0.1 | 2.098 | 64 | 44.9 | 20.5 | HiFi2 |
+| 576 x 4096 x 1024 | 24 | +0 | 66.3 | +0.2 | 1.591 | 48 | 73.9 | 22.0 | HiFi2 |
+| 576 x 1024 x 3072 | 24 | +0 | 55.4 | -25.1 | 1.330 | 48 | 66.3 | 23.4 | HiFi2 |
+| 576 x 1024 x 1024 | 24 | +0 | 21.7 | +0.1 | 0.521 | 48 | 56.4 | 26.2 | HiFi2 |
+| 576 x 4096 x 4096 | 1 | +0 | 312.5 | -0.7 | 0.313 | 48 | 62.7 | 29.1 | HiFi2 |
+| 576 x 768 x 1024 | 1 | +0 | 43.7 | +0.5 | 0.044 | 48 | 21.0 | 28.9 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why
