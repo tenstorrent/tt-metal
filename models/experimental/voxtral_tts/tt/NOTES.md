@@ -967,6 +967,12 @@ the scare measures divergence from the shipped config, not error — §6.25's tr
 ### [flow-10] `_block` — the FUSED head split ships on Blackhole; §6.31 reverses
 
 **REVERSED. STATUS.md §6.45.** `nlp_create_qkv_heads` replaces the 9-op hand-rolled split, worth
+> **READ THE DENOMINATOR (STATUS.md §6.54).** Every `n/288` in this file is **8 real prompts ×
+> 36 codes**. `--gate codes` prints an identically-shaped `n/288` from **synthetic** embeddings
+> and reads ~6× worse (85/288 vs ~11/288) — different measurement, same units. Do not compare one
+> to the other; that mismatch cost a session's worth of doubt. Real prompts are 100% off-by-one on
+> a 21-level FSQ axis; only synthetic input ever produces |delta| > 1.
+
 **+3.836 ms/frame** at **identical accuracy** (10/288 acoustic codes vs the fp32 reference, 0/8
 semantic, velocity maxabs 2.569e-02 and PCC 0.99998504 — the same numbers, not merely close).
 

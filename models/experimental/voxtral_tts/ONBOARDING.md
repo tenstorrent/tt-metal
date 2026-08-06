@@ -130,6 +130,9 @@ python $G --gate decode      # Block 1 decode vs fp32, 15 prompts × 22 frames  
 python $G --gate flow        # Block 2 velocity + codes vs fp32
 python $G --gate codec       # codec vs fp32
 python $G --gate codes       # blocks 1+2 end to end, INTEGER codes  ← the one that predicts audio
+#   ^ prints TWO blocks: synthetic (a pessimistic proxy, reads ~30%) and REAL PROMPTS
+#     (~4%, and 100% of those off by one FSQ level of 21). Quote the real-prompt one.
+#     Both print n/288 and they are NOT comparable -- STATUS.md 6.54.
 python $G --gate decode --cases 0,2 --verbose    # quick subset while iterating
 ```
 
