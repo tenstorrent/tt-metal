@@ -662,7 +662,12 @@ class SeedManager:
         return int(seed)
 
     def reset_seed_from_slots(self, seeds, user_ids):
-        """Reset decode seed state from slot-indexed sampling params."""
+        """Reset decode seed state from slot-indexed sampling params.
+
+        ``seeds`` is indexed by device slot, not by request order: ``seeds[slot]``
+        belongs to ``slot``, and the params must already be padded to
+        ``max_batch_size``. See ``reset_seed`` for the request-ordered prefill variant.
+        """
         if user_ids is None:
             user_ids = range(self.max_batch_size)
         for user in user_ids:
@@ -774,9 +779,14 @@ class SeedManager:
         """Update RNG state for the given user slots after a prefill.
 
         Args:
-            seeds: Seed values in request order. Accepts a list, tensor, scalar,
-                or None (treated as all unseeded).
+            seeds: Seed values in **request order** — ``seeds[k]`` belongs to
+                ``user_ids[k]``. Accepts a list, tensor, scalar, or None (treated as
+                all unseeded).
             user_ids: Batch slot indices being prefilled.
+
+        See ``reset_seed_from_slots`` for the decode-side variant, whose ``seeds`` is
+        indexed by device slot instead. Picking the wrong one misassigns per-request
+        seeds silently.
         """
         user_ids = [int(user) for user in user_ids]
         for i, user in enumerate(user_ids):
