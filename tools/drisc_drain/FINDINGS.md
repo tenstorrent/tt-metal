@@ -1160,3 +1160,28 @@ job running the sweep, tearing down its ssh and terminating a 200-iteration run 
 degradation appeared immediately after. That is a hypothesis, not a proof (single occurrence), but it matches
 the earlier finding that a killed run leaves resident device state behind — and note this is not exotic bad
 luck, it is what happens every time a sweep is cancelled or times out. Let a run finish, or expect to reboot.
+
+### `tt-smi -r` does not recover a degraded card (measured, 2026-08-06)
+
+Tested directly on bh-05 while degraded, ack-write probe as the instrument, nothing else changed:
+
+| | ack write (STATIC) | 4 B device read | sock-read |
+|---|---|---|---|
+| pre-reset | 2303 ns | 2997 ns | 10.1 GB/s |
+| **post `tt-smi -r`**, 3 runs | **2301–2306 ns** | 2940–2994 ns | 7.9–9.9 GB/s |
+| after a host `sudo reboot` | **386 ns** | ~770 ns | 17.2 GB/s |
+
+Identical to three significant figures. **Only the host reboot recovers.** The reset itself was clean —
+exit 0, "Re-initializing boards after reset", box still up — so the old warning that `tt-smi -r` takes the box
+down applies to a **PCIe-HUNG** card (both ports refused, watchdog reboot), not to a degraded-but-responsive
+one. Keep the two states distinct: reset is safe here and simply useless.
+
+**Both drainers degrade identically**, which is how we know the state is card-wide and not a property of the
+new static window: the Tensix drainer writes through the worker window metal configures at device init, and it
+reads 2303–2308 ns — the same as the DRISC's freshly configured one. Device *reads* degrade too (3.8×) and
+never touch that window at all.
+
+**The degraded state costs capture completeness, not just time.** 50-iteration runs land at 550,152–550,908
+markers where a healthy card returns exactly 551,100 every single time — the host cannot ack fast enough, so
+the drainer drops frames rather than block the producers. Treat a short marker total as a reason to check card
+state, not automatically as a capture bug.
