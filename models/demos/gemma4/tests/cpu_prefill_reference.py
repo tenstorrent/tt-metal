@@ -40,12 +40,14 @@ import torch
 
 REFERENCE_CHUNK = 4096
 
-# Long-context references. A full 256k reference is not reachable on CPU: the
-# forward is ~51 h by extrapolation from the measured 4k run, and eager attention
-# would need an ~8.8 TB score matrix per layer. 32768 is the largest of the device
-# targets that fits (~1 h, ~137 GB transient), so that is where the numerical
-# evidence for the ring path tops out.
-LONG_REFERENCE_CONTEXTS = [8192, 16384, 32768]
+# Long-context references, one per device target. Every one of these is reachable
+# on CPU; an earlier note here claimed 256k was not, on a pure-quadratic
+# extrapolation. That was wrong twice over. 50 of the 60 layers are sliding-window
+# and therefore linear in n, so the true cost fits a*n + b*n^2 and lands at ~1.5 h
+# for 64k, ~4.8 h for 128k and ~17 h for 256k. And the ~8.8 TB score matrix is an
+# artifact of eager attention, not of the model: sdpa computes the same values in
+# O(n) memory, verified bit-identical to eager at 8k (max abs diff 0.0).
+LONG_REFERENCE_CONTEXTS = [8192, 16384, 32768, 65536, 131072, 262144]
 FILLER_SEED = 1234
 
 # Bumped when the dump's contents or semantics change, so an old file on disk is
@@ -57,18 +59,51 @@ def _model_path() -> str:
     return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "google/gemma-4-31B-it")
 
 
+def _cached_prompt_chunk(model_path, chunk):
+    """Chunk 0's tokens from any reference already on disk, or None.
+
+    Exists to keep the generator off the ttnn import path. ``_prompt_tokens`` lives in
+    the demo module, and importing that opens the UMD cluster and takes the PCIe chip
+    lock — for the entire run, which is pure CPU work. At 30 minutes that was merely
+    untidy; at ~17 h for 256k it would block every device test on the machine for the
+    better part of a day.
+
+    Chunk 0 is the same real prompt at every context length, and every dump stores its
+    tokens, so once any reference exists the tokenizer is no longer needed. Callers
+    still fall back to ``_prompt_tokens`` when nothing is cached.
+    """
+    for ctx in sorted(LONG_REFERENCE_CONTEXTS):
+        path = long_reference_path(model_path, ctx)
+        if not path.exists():
+            continue
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        if int(payload.get("chunk", 0)) == chunk and payload["tokens"].shape[-1] >= chunk:
+            return payload["tokens"][:, :chunk].clone(), int(payload["prompt_len"])
+    return None
+
+
 def build_token_sequence(model_path, chunk, context_len, vocab_size):
     """The exact token sequence a chunked prefill run consumes.
 
     Chunk 0 carries the real prompt; later chunks are deterministic filler. Shared
     by the reference generator and the device test so the two cannot drift — a PCC
     comparison against a differently-tokenized reference would be worse than none.
+
+    The filler comes off one seeded stream in fixed-size chunks, which makes the
+    sequences prefix-consistent: the first N tokens of a 256k sequence are the whole
+    of an N-token sequence. ``test_prefill_long_context_prefix_pcc`` depends on that
+    and verifies it by hash rather than trusting this comment.
     """
     import torch as _torch
 
-    from models.demos.gemma4.demo.text_demo_prefill import _prompt_tokens
+    cached = _cached_prompt_chunk(model_path, chunk)
+    if cached is not None:
+        tokens_first, prompt_len, tokenizer = cached[0], cached[1], None
+    else:
+        from models.demos.gemma4.demo.text_demo_prefill import _prompt_tokens
 
-    tokens_first, tokenizer, prompt_len = _prompt_tokens(model_path, chunk)
+        tokens_first, tokenizer, prompt_len = _prompt_tokens(model_path, chunk)
+
     parts = [tokens_first]
     _torch.manual_seed(FILLER_SEED)
     for _ in range(context_len // chunk - 1):
@@ -225,9 +260,17 @@ def generate_long(model_path: str | None = None, context_len: int = 8192, chunk:
     history read — a chunk that ignored the prefix would diverge here while still
     looking finite and stable.
 
-    Cost grows quadratically in the full-attention layers: ~6 min at 8k, ~18 min at
-    16k, ~1 h at 32k, and out of reach beyond that (256k extrapolates to ~51 h with
-    an ~8.8 TB eager attention matrix per layer).
+    Cost: measured 308 s at 8k, 710 s at 16k, 1837 s at 32k. Fitting those to
+    ``a*n + b*n^2`` (50 of the 60 layers are sliding-window and therefore linear in n;
+    only the 10 full-attention layers are quadratic) gives ~1.5 h at 64k, ~4.8 h at
+    128k and ~17 h at 256k. A pure-quadratic extrapolation overstates this badly —
+    the linear half of the model dominates until well past 32k.
+
+    Attention implementation matters more than the arithmetic. Eager materializes a
+    ``[heads, n, n]`` score matrix — 8.8 TB per layer at 256k, which is what puts
+    eager out of reach there rather than the runtime. ``sdpa`` computes the same thing
+    in O(n) memory, so it is the default; ``GEMMA4_CPU_REF_ATTN=eager`` forces the
+    original path, which is how the two were checked against each other.
     """
     from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -235,10 +278,12 @@ def generate_long(model_path: str | None = None, context_len: int = 8192, chunk:
     out_path = long_reference_path(model_path, context_len)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    attn = os.environ.get("GEMMA4_CPU_REF_ATTN", "sdpa")
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     text_config = getattr(config, "text_config", config)
-    text_config._attn_implementation = "eager"
-    config._attn_implementation = "eager"
+    text_config._attn_implementation = attn
+    config._attn_implementation = attn
+    print(f"[cpu-ref] attn_implementation={attn}", flush=True)
 
     tokens, _tokenizer, prompt_len = build_token_sequence(model_path, chunk, context_len, text_config.vocab_size)
     assert tokens.shape[-1] == context_len, f"token sequence is {tokens.shape[-1]}, expected {context_len}"
@@ -269,6 +314,7 @@ def generate_long(model_path: str | None = None, context_len: int = 8192, chunk:
         "prompt_len": int(prompt_len),
         "hidden": hidden.cpu(),
         "forward_seconds": forward_s,
+        "attn_implementation": attn,
     }
     torch.save(payload, out_path)
     print(f"[cpu-ref] wrote {out_path} ({out_path.stat().st_size / 1e9:.2f} GB)", flush=True)
