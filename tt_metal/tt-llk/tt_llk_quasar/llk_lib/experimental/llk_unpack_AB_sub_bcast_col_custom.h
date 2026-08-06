@@ -13,8 +13,8 @@ using namespace ckernel;
 
 // SDPA-specific custom blocked sub+bcast(col) unpack flow (Quasar).
 //
-// SrcB is unpacked ONCE for the whole block row as a single whole-tile UNPACR1 (one dvalid, faces laid
-// out linearly in the SrcB register) and then held while ct_dim SrcA tiles stream past it. The COL
+// SrcB is unpacked ONCE for the whole block row as a whole tile (one dvalid, faces laid out linearly
+// in the SrcB register) and then held while ct_dim SrcA tiles stream past it. The COL
 // face pattern F0,F0,F2,F2 is NOT produced here: the math thread walks it with SrcB read-counter
 // arithmetic (see @ref _llk_math_sub_bcast_cols_reuse_custom_). This mirrors the Blackhole flow.
 //
@@ -28,20 +28,20 @@ using namespace ckernel;
  * is issued as a runtime instruction stream in @ref _llk_unpack_AB_sub_bcast_col_custom_ (no MOP),
  * so neither ct_dim nor the buffer descriptors are needed at init time.
  *
- * @param tensor_shape: Operand tile shape. Full 32x32 tiles only.
+ * @param tensor_shape: Operand tile shape. 32x32 (2x2 faces) or 16x32 (1x2 faces).
  * @note On the math thread, pair with @ref _llk_math_eltwise_binary_init_custom_ (T1); on pack, with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_unpack_AB_sub_bcast_col_custom_ is the matching execute call on this thread.
  */
 inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    // Stricter than validate_tensor_shape_tile_dependent_ops_ on purpose: unlike Blackhole, this path
-    // is full-tile only. The math-side srcB face walk hardcodes the 16-row face stride and the +24 jump
-    // from face 0 to face 2, and dest slots are allocated as Tile32x32, so a smaller tile (e.g. 16x32,
-    // which the generic validator accepts) does not just give wrong data, it hangs the device.
+    // Stricter than validate_tensor_shape_tile_dependent_ops_ on purpose: the COL face pattern needs
+    // two full-width faces per face-row (the math walk covers a face-row with four 8-row ops and reads
+    // the face-row's first SrcB face twice), so only a full 16-row face grid of 2 face columns works.
+    // Kept in sync with the same check in @ref _llk_math_eltwise_binary_init_custom_.
     LLK_ASSERT(
-        tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
-            tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
-        "custom sub bcast-col path supports full 32x32 tiles only");
+        tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
+            (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1),
+        "custom sub bcast-col path supports 32x32 and 16x32 tiles only");
 
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
@@ -57,12 +57,18 @@ inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape
  * (UNPACR0 stalls when both SrcA banks are full), so it stays at most one tile ahead of the math
  * thread.
  *
+ * A 16x32 tiny tile is registered as one tile per face (buffer-descriptor z_dim = 1, see
+ * @ref ckernel::trisc::construct_tdma_desc), so it takes one UNPACR per face and its L1 tile indices
+ * count faces, not tiles. A full 32x32 tile is a single HW tile (z_dim = 4) unpacked by one UNPACR.
+ * Either way exactly one dvalid is raised per tile, which is what the math thread's per-tile CLR_A
+ * (and single CLR_B for the held SrcB) consumes.
+ *
  * @param buf_desc_id_0: Buffer-descriptor id feeding UNPACKER0 -> SrcA (operandA id).
  * @param buf_desc_id_1: Buffer-descriptor id feeding UNPACKER1 -> SrcB (operandB id).
  * @param start_l1_tile_idx_0: SrcA base tile index in L1 (first of the ct_dim tiles).
  * @param start_l1_tile_idx_1: SrcB tile index in L1 (the single held tile).
  * @param ct_dim: Number of SrcA column tiles unpacked (SrcB is unpacked once regardless).
- * @param tensor_shape: Operand tile shape (face count comes from the buffer descriptor; kept for API parity).
+ * @param tensor_shape: Operand tile shape (drives the per-tile UNPACR count and L1 tile index scale).
  * @note Call @ref _llk_unpack_AB_sub_bcast_col_init_custom_ first.
  */
 inline void _llk_unpack_AB_sub_bcast_col_custom_(
@@ -70,21 +76,47 @@ inline void _llk_unpack_AB_sub_bcast_col_custom_(
     const std::uint32_t buf_desc_id_1,
     const std::uint32_t start_l1_tile_idx_0,
     const std::uint32_t start_l1_tile_idx_1,
-    const std::uint32_t ct_dim                                = 1,
-    [[maybe_unused]] const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+    const std::uint32_t ct_dim               = 1,
+    const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    const bool tiny_tile          = num_faces != ckernel::MAX_NUM_FACES;
+    // One UNPACR per tile: a face for a tiny tile, the whole tile otherwise.
+    const std::uint32_t unpacrs_per_tile = tiny_tile ? num_faces : 1;
+    // Tiny-tile L1 indices are in faces (face_r_dim is 16 here, so one face per tile step).
+    const std::uint32_t l1_tile_idx_scale = unpacrs_per_tile;
+    // Advance the SrcA/SrcB register tile counter per face so a tiny tile's faces land at
+    // consecutive register rows; a full tile arrives in one UNPACR and needs no advance.
+    const std::uint32_t dst_tile_idx_inc = tiny_tile ? 1 : 0;
+
     // Position SrcA/SrcB read counters at their L1 tile bases; reset the SrcA/SrcB dest tile counters.
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, start_l1_tile_idx_0);
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1);
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, start_l1_tile_idx_0 * l1_tile_idx_scale);
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1 * l1_tile_idx_scale);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
 
-    // SrcB: unpack the whole tile ONCE, set dvalid, hold (do not advance the SrcB tile pointer).
-    TT_UNPACR1_TILE_INC(0 /*Dst Tile Idx Inc*/, 0 /*Src Tile Idx Inc: pinned*/, buf_desc_id_1, 1 /*Set Dvalid*/);
+    // SrcB: unpack the whole tile ONCE, dvalid on its last face, hold (never advance past this tile;
+    // the L1 read counter is re-set on every call, so it stays pinned across block rows).
+    for (std::uint32_t face = 0; face < unpacrs_per_tile; face++)
+    {
+        // TODO: check maybe we can only unpack f0 for tiny tile 16x32 case?
+        const bool last_face = (face + 1 == unpacrs_per_tile); // set dvalid on last unpacked face
+        TT_UNPACR1_TILE_INC(dst_tile_idx_inc, last_face ? 0 : 1 /*Src Tile Idx Inc*/, buf_desc_id_1, last_face ? 1 : 0 /*Set Dvalid*/);
+    }
 
-    // SrcA: ct_dim tiles, each sets dvalid and advances the SrcA tile pointer by one.
+    // SrcA: ct_dim tiles, each raising one dvalid on its last face and advancing the L1 tile pointer.
     for (std::uint32_t i = 0; i < ct_dim; i++)
     {
-        TT_UNPACR0_TILE_INC(0 /*Dst Tile Idx Inc*/, 1 /*Src Tile Idx Inc*/, buf_desc_id_0, 1 /*Set Dvalid*/);
+        for (std::uint32_t face = 0; face < unpacrs_per_tile; face++)
+        {
+            const bool last_face = (face + 1 == unpacrs_per_tile); // set dvalid on last unpacked face
+            TT_UNPACR0_TILE_INC(dst_tile_idx_inc, 1 /*Src Tile Idx Inc*/, buf_desc_id_0, last_face ? 1 : 0 /*Set Dvalid*/);
+        }
+
+        if (tiny_tile)
+        {
+            // Rewind the SrcA register tile counter so the next tile's faces start at row 0 again.
+            TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
+        }
     }
 }
