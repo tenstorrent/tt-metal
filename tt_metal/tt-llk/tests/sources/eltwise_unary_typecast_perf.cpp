@@ -201,6 +201,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
+        // Free-running: no math<->pack dest handshake here, so unpack and pack contend for L1
+        // instead of taking turns. The dest-half wait and release stay in the L1_TO_L1 branch,
+        // which is where a pipelined measurement belongs.
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
@@ -208,8 +211,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
                 {
                     std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
-
-                    _llk_math_wait_for_dest_available_<DST_SYNC_MODE>();
 
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
@@ -231,8 +232,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 /* iterations*/ num_faces);
                         }
                     }
-
-                    _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -350,7 +349,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        // L1_CONGESTION packs free-running, exactly as PACK_ISOLATE does. It used to share the
+        // L1_TO_L1 branch below and so kept the math<->pack dest handshake, which made the
+        // reported window a pipeline period rather than pack-under-contention: CONG[PACK] read
+        // 1.79x to 1.97x PACK_ISOLATE here against 1.00x to 1.12x on the ten kernels that
+        // already run it free. Ten kernels and this one now measure the same thing.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -369,7 +373,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
