@@ -118,18 +118,28 @@ Design, in the order to build it:
 2. **Shape them like the output tiles.** Replicate each value down all 32 rows of a tile, so the
    kernel can use plain `mul_binary_tile` with no broadcast. For C > 32 that is `ceil(C/32)` tiles per
    vector, ordered to match how the output tiles walk the channel axis.
-3. **Carrying them: prefer extending the weights CB over adding a new one.** The weights CB is already
+3. **Two cheaper routes are ruled out; do not retry them.**
+   * *Reuse the `bias` tensor.* It is already optional, already reaches the program factory, already
+     has a CB the reader fills, and is per-output-channel -- exactly alpha's shape. It still fails:
+     bias is `C_out` wide and snake needs `2 * C_out` values (alpha **and** inv_beta), and the CB is
+     sized to `C_out`. inv_beta cannot be folded into the weights either, because it scales
+     `sin(alpha*x)^2` rather than `x`, so the conv cannot absorb it.
+   * *A brand-new optional input tensor.* Correct, but it touches `Conv2dInputs`, validate,
+     compute_output_specs, the conv2d and conv1d invoke chains, pybind, the program factory and the
+     reader -- six-plus files before anything can be compiled once.
+
+4. **Carrying them: extend the weights CB.** The weights CB is already
    indexed per channel-tile in exactly the pattern needed, and the reader already fills it. Appending
    the two parameter tiles per channel-tile to the prepared weight avoids a new CB, a new reader
    stream, and a second indexing scheme that could disagree with the first. Note the non-coalesced
    path consumes in1 with `wait_front(1)` / `pop_front(1)` per tap (kernel lines 59/100, 141/179) while
    the coalesced path takes the whole block (216/258), so the two consume differently and the append
    must respect that. A separate CB is the fallback if that proves awkward.
-4. **Kernel, on the last tap only**, with the accumulator in DST_ACC:
+5. **Kernel, on the last tap only**, with the accumulator in DST_ACC:
    `copy alpha -> DST_A; mul_binary_tile(ACC, A, A); sin_tile(A); mul_binary_tile(A, A, A);
     copy inv_beta -> DST_B; mul_binary_tile(A, B, A); add_binary_tile(ACC, A, ACC)`.
    That is 4 DST slots; check against the fp32 DST budget in half-sync before assuming it fits.
-5. **Gate it** the way the existing activation is, so nothing changes unless requested.
+6. **Gate it** the way the existing activation is, so nothing changes unless requested.
 
 Verify with `fused_activation.py` extended to snake: the bar is rel_rmse ~1e-07 against a float64
 golden, matching what GELU achieved, and cost within a few percent of the unfused conv.
