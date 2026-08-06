@@ -56,6 +56,9 @@ class SFTConfig:
         gradient_checkpointing: Enable activation recomputation to reduce
             memory usage at the cost of ~30 % extra compute.  Sets the
             model's ``runner_type`` to ``MemoryEfficient``.
+        sequence_parallel: Sum the gradients of tp-replicated params (RMSNorm gammas)
+            over the ``tp`` axis each step, since each tp rank saw only its slice of
+            the sequence.  Requires a model built with ``sequence_parallel=True``.
     """
 
     # ---- loop ----
@@ -76,6 +79,7 @@ class SFTConfig:
     gradient_checkpointing: bool = False
     # If True, tqdm progress bar (and its loss/lr postfix) is suppressed.
     disable_progress_bar: bool = False
+    sequence_parallel: bool = False
 
 
 class SFTTrainer:
@@ -173,6 +177,15 @@ class SFTTrainer:
         if config.seed is not None:
             ttml.autograd.AutoContext.get_instance().set_seed(config.seed)
 
+        # Read the strategy before any wrapping: LoraModel holds the real model at .model and
+        # forwards no attributes, so this has to happen while `model` is still the model itself.
+        # Models that expose no tp_strategy (every non-Llama one) leave the check inactive.
+        strategy = getattr(getattr(model, "config", None), "tp_strategy", None)
+        if strategy is not None and config.sequence_parallel != strategy.sequence_parallel:
+            raise ValueError(
+                f"SFTConfig.sequence_parallel={config.sequence_parallel} disagrees with the model's {strategy}."
+            )
+
         if peft_config is not None:
             from ttml.modules.lora import LoraModel
 
@@ -263,6 +276,9 @@ class SFTTrainer:
 
             if self._grad_sync_axes:
                 ttml.sync_gradients(self.model.parameters(), axis_names=self._grad_sync_axes)
+
+            if cfg.sequence_parallel:
+                ttml.sync_sequence_parallel_gradients(self.model.parameters(), "tp")
 
             for cb in list(self._callbacks):
                 cb.on_before_optimizer_step(self)
@@ -505,7 +521,7 @@ class SFTTrainer:
         """Pick the cross-entropy variant matching the LM head's logit sharding.
 
         When the active mesh has a TP axis with size > 1 the conventional
-        SFTTrainer model shape (Llama with ``use_tp=True`` or
+        SFTTrainer model shape (a tensor-parallel Llama, or
         ``models.distributed.{llama,gpt2}``) emits vocab-sharded logits via
         ``ColumnParallelLinear(gather_output=False)``.  Plain
         ``cross_entropy_loss`` would compute its softmax denominator over each

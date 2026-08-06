@@ -30,6 +30,10 @@ class DeviceConfig:
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
         self.enable_fsdp = device_config.get("enable_fsdp", False)
+        # Megatron sequence parallelism rides the "tp" axis (it is not a separate mesh
+        # dimension), so it does not affect mesh construction -- it only toggles the
+        # model's sequence-sharded residual path. Requires enable_tp.
+        self.enable_sp = device_config.get("enable_sp", False)
         # Defaults to True: build as deferred metadata -> fully_shard -> materialize already-sharded,
         # so large models (e.g. 32B) never materialize a full replicated copy on one chip.
         # Set to false to opt into the eager (full-replicated, then shard) path.

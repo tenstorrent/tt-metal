@@ -12,6 +12,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
 
 from .gqattn import GroupedQueryAttention
+from ttml.parallel import TPStrategy
 
 
 def compute_swiglu_intermediate_size(hidden_size: int, multiple_of: int = 256) -> int:
@@ -67,33 +68,45 @@ class LlamaMLP(AbstractModuleBase):
         embedding_size: int,
         intermediate_size: Optional[int] = None,
         dropout: float = 0.0,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
     ) -> None:
         super().__init__()
 
+        use_tp = tp_strategy.tensor_parallel
+        sequence_parallel = tp_strategy.sequence_parallel
+
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
-        self.use_tp = use_tp
+        # Distinct mask per device only when each holds distinct data. Too coarse under DP+TP:
+        # ttnn offsets the seed by flat device id, so sharing within TP also shares across DP.
+        self.dropout_per_device_seed = sequence_parallel or not use_tp
 
         if intermediate_size is None:
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
 
-        if use_tp:
-            # Gate (w1) and up (w3) projections are column-parallel (output sharded);
-            # down projection (w2) is row-parallel (input sharded).  The pair
-            # eliminates a gather/scatter round-trip between w1/w3 and w2.
-            self.w1 = ColumnParallelLinear(
-                embedding_size,
-                intermediate_size,
-                has_bias=False,
-                gather_output=False,
-                axis_name="tp",
+        # Fused gate+up: one [2*I, E] weight, rows [0:I) = gate, [I:2*I) = up.
+        gate_up_size = 2 * intermediate_size
+
+        # Each device's gate|up half is I/tp wide and must stay tile-aligned, or the packed
+        # SwiGLU op's two halves straddle a tile boundary.
+        tp_size = ttml.mesh().axis_size("tp") if use_tp else 1
+        if intermediate_size % tp_size != 0:
+            raise ValueError(
+                f"intermediate_size ({intermediate_size}) must be divisible by the tensor-parallel size ({tp_size})"
             )
-            self.w3 = ColumnParallelLinear(
+        if (intermediate_size // tp_size) % 32 != 0:
+            raise ValueError(
+                f"intermediate_size per device ({intermediate_size // tp_size}) must be a "
+                f"multiple of 32 so the packed gate|up halves stay tile-aligned"
+            )
+
+        if use_tp:
+            self.w_gate_up = ColumnParallelLinear(
                 embedding_size,
-                intermediate_size,
+                gate_up_size,
                 has_bias=False,
                 gather_output=False,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
             self.w2 = RowParallelLinear(
@@ -101,17 +114,13 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 has_bias=False,
                 input_is_parallel=True,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
         else:
-            self.w1 = LinearLayer(
+            self.w_gate_up = LinearLayer(
                 embedding_size,
-                intermediate_size,
-                False,
-            )
-            self.w3 = LinearLayer(
-                embedding_size,
-                intermediate_size,
+                gate_up_size,
                 False,
             )
             self.w2 = LinearLayer(
@@ -129,25 +138,12 @@ class LlamaMLP(AbstractModuleBase):
         Returns:
             Output tensor after MLP
         """
-        if not self.use_tp:
-            dropout_prob = 0.0 if self.get_run_mode() == RunMode.EVAL else self.dropout_prob
-            return ttml.ops.swiglu.swiglu(
-                input,
-                self.w1.weight.tensor,
-                self.w2.weight.tensor,
-                self.w3.weight.tensor,
-                dropout_prob,
-            )
-
-        # TP path: ColumnParallelLinear / RowParallelLinear inject collectives
-        # between matmuls, which the fused op cannot express.
-        swished = ttml.ops.unary.silu(self.w1(input))
-        gate = self.w3(input)
-        gated = ttml.ops.binary.mul(swished, gate)
-        x = self.w2(gated)
+        gu = self.w_gate_up(input)
+        h = ttml.ops.swiglu_packed.swiglu_packed(gu)
+        x = self.w2(h)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            x = ttml.ops.dropout.dropout(x, self.dropout_prob)
+            x = ttml.ops.dropout.dropout(x, self.dropout_prob, use_per_device_seed=self.dropout_per_device_seed)
 
         return x
 
@@ -165,15 +161,19 @@ class LlamaBlock(AbstractModuleBase):
         mlp_dropout: float = 0.0,
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
     ) -> None:
         super().__init__()
 
+        # Under sequence parallelism the residual stream (and hence the two RMSNorm
+        # inputs) is sequence-sharded across the TP axis; the norms are per-token so
+        # they need no change. The attention/MLP linears gather to full sequence for
+        # their matmuls and reduce-scatter back, so the block wiring is unchanged.
         self.mlp = LlamaMLP(
             hidden_size,
             intermediate_size,
             mlp_dropout,
-            use_tp=use_tp,
+            tp_strategy=tp_strategy,
         )
         self.attention_norm = RMSNormLayer(hidden_size)
         self.mlp_norm = RMSNormLayer(hidden_size)
@@ -184,7 +184,7 @@ class LlamaBlock(AbstractModuleBase):
             dropout=attention_dropout,
             rope_params=rope_params,
             bias_linears=attention_bias,
-            use_tp=use_tp,
+            tp_strategy=tp_strategy,
         )
 
     def forward(

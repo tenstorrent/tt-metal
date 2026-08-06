@@ -12,14 +12,16 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, ColumnParallelLinear, RowParallelLinear, RunMode
 
+from ttml.parallel import TPStrategy
+
 
 class GroupedQueryAttention(AbstractModuleBase):
     """Grouped-query attention (GQA) with optional tensor-parallel linear layers.
 
-    When ``use_tp=True`` the Q and KV projections use ``ColumnParallelLinear``
-    (output features sharded) with ``gather_output=False``, and the output
-    projection uses ``RowParallelLinear`` with ``input_is_parallel=True``.
-    This avoids redundant communication between the two matmuls.
+    Under tensor parallelism the fused QKV projection uses ``ColumnParallelLinear``
+    (output features sharded) with ``gather_output=False``, and the output projection
+    uses ``RowParallelLinear`` with ``input_is_parallel=True``. This avoids redundant
+    communication between the two matmuls.
     """
 
     def __init__(
@@ -30,7 +32,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         dropout: float,
         rope_params: ttml.ops.rope.RotaryEmbeddingParams,
         bias_linears: bool = False,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
     ) -> None:
         super().__init__()
 
@@ -40,18 +42,26 @@ class GroupedQueryAttention(AbstractModuleBase):
                 f"Provided embedding_size={embedding_size}, num_heads={num_heads}"
             )
 
+        use_tp = tp_strategy.tensor_parallel
+        sequence_parallel = tp_strategy.sequence_parallel
+
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
         self.rope_params = rope_params
+        self.sequence_parallel = sequence_parallel
+        # Distinct mask per device only when each holds distinct data. Too coarse under DP+TP:
+        # ttnn offsets the seed by flat device id, so sharing within TP also shares across DP.
+        self.dropout_per_device_seed = sequence_parallel or not use_tp
 
-        # concat_kv_dim uses GLOBAL head counts because the weight matrices are
-        # created at full size and then sharded by ColumnParallelLinear.
-        concat_kv_dim = 2 * num_groups * (embedding_size // num_heads)
+        head_dim = embedding_size // num_heads
+        qkv_dim = (num_heads + 2 * num_groups) * head_dim  # == embedding_size + 2 * num_groups * head_dim
 
-        # Head/group counts stored here are LOCAL (per-device) so that reshaping
-        # in grouped_heads_creation matches the sharded activation width.
         if use_tp:
             tp_size = ttml.mesh().axis_size("tp")
+            if num_heads % tp_size != 0:
+                raise ValueError(f"num_heads ({num_heads}) must be divisible by the tensor-parallel size ({tp_size})")
+            if num_groups % tp_size != 0:
+                raise ValueError(f"num_groups ({num_groups}) must be divisible by the tensor-parallel size ({tp_size})")
             self.num_heads = num_heads // tp_size
             self.num_groups = num_groups // tp_size
         else:
@@ -59,20 +69,13 @@ class GroupedQueryAttention(AbstractModuleBase):
             self.num_groups = num_groups
 
         if use_tp:
-            self.q_linear = ColumnParallelLinear(
+            self.qkv_linear = ColumnParallelLinear(
                 embedding_size,
-                embedding_size,
+                qkv_dim,
                 has_bias=bias_linears,
                 bias_init=ttml.init.zeros(),
                 gather_output=False,
-                axis_name="tp",
-            )
-            self.kv_linear = ColumnParallelLinear(
-                embedding_size,
-                concat_kv_dim,
-                has_bias=bias_linears,
-                bias_init=ttml.init.zeros(),
-                gather_output=False,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
             self.out_linear = RowParallelLinear(
@@ -81,18 +84,13 @@ class GroupedQueryAttention(AbstractModuleBase):
                 has_bias=bias_linears,
                 bias_init=ttml.init.zeros(),
                 input_is_parallel=True,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
         else:
-            self.q_linear = LinearLayer(
+            self.qkv_linear = LinearLayer(
                 embedding_size,
-                embedding_size,
-                bias_linears,
-                bias_init=ttml.init.zeros(),
-            )
-            self.kv_linear = LinearLayer(
-                embedding_size,
-                concat_kv_dim,
+                qkv_dim,
                 bias_linears,
                 bias_init=ttml.init.zeros(),
             )
@@ -103,25 +101,32 @@ class GroupedQueryAttention(AbstractModuleBase):
                 bias_init=ttml.init.zeros(),
             )
 
-    def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        q = self.q_linear(input)
-        kv = self.kv_linear(input)
+    def sdpa(
+        self,
+        q_heads: ttml.autograd.Tensor,
+        k_heads: ttml.autograd.Tensor,
+        v_heads: ttml.autograd.Tensor,
+        mask: ttml.autograd.Tensor,
+    ) -> ttml.autograd.Tensor:
+        """The attention kernel; assign per instance or override to swap it."""
+        return ttml.ops.attention.scaled_dot_product_attention(q_heads, k_heads, v_heads, mask)
 
-        q_heads, k_heads, v_heads = ttml.ops.multi_head_utils.grouped_heads_creation(
-            q, kv, self.num_heads, self.num_groups
-        )
+    def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        qkv = self.qkv_linear(input)
+
+        q_heads, k_heads, v_heads = ttml.ops.multi_head_utils.heads_creation(qkv, self.num_heads, self.num_groups)
 
         q_heads = ttml.ops.rope.rope(q_heads, self.rope_params)
         k_heads = ttml.ops.rope.rope(k_heads, self.rope_params)
 
-        attention = ttml.ops.attention.scaled_dot_product_attention(q_heads, k_heads, v_heads, mask)
+        attention = self.sdpa(q_heads, k_heads, v_heads, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)
 
         # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self.dropout_per_device_seed)
 
         return out
 
@@ -133,12 +138,9 @@ class GroupedQueryAttention(AbstractModuleBase):
         layer_idx: int,
         new_tokens: int,
     ) -> ttml.autograd.Tensor:
-        q = self.q_linear(input)
-        kv = self.kv_linear(input)
+        qkv = self.qkv_linear(input)
 
-        q_heads, k_heads, v_heads = ttml.ops.multi_head_utils.grouped_heads_creation(
-            q, kv, self.num_heads, self.num_groups
-        )
+        q_heads, k_heads, v_heads = ttml.ops.multi_head_utils.heads_creation(qkv, self.num_heads, self.num_groups)
 
         token_pos = kv_cache.get_cache_position()
 
@@ -164,16 +166,14 @@ class GroupedQueryAttention(AbstractModuleBase):
         k_cache_to_process = ttml.autograd.create_tensor(k_cache_slice)
         v_cache_to_process = ttml.autograd.create_tensor(v_cache_slice)
 
-        attention = ttml.ops.attention.scaled_dot_product_attention(
-            q_heads, k_cache_to_process, v_cache_to_process, mask
-        )
+        attention = self.sdpa(q_heads, k_cache_to_process, v_cache_to_process, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)
 
         # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self.dropout_per_device_seed)
 
         return out
 
@@ -187,6 +187,11 @@ class GroupedQueryAttention(AbstractModuleBase):
     ) -> ttml.autograd.Tensor:
         if kv_cache is None:
             return self.forward_no_kv(input, mask)
+        if self.sequence_parallel:
+            # SP shards the residual stream along the sequence; single-token decode
+            # (seq=1, not divisible by tp) has nothing to shard. Decode runs with the
+            # classic-TP model instead.
+            raise NotImplementedError("sequence_parallel does not support the KV-cache decode path")
         if layer_idx is None or new_tokens is None:
             raise ValueError("forward with kv_cache requires layer_idx and new_tokens to be set")
         return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens)
