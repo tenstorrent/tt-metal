@@ -998,6 +998,7 @@
     bh_sc1:
       timeout: 60
       tier: 1
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1018,6 +1019,7 @@
     bh_sc1:
       timeout: 60
       tier: 1
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1039,6 +1041,7 @@
     bh_sc1:
       timeout: 55
       tier: 1
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1063,5 +1066,6 @@
     bh_sc1:
       timeout: 55
       tier: 1
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
