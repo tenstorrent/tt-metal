@@ -519,8 +519,9 @@ class OptimizedDecoder(LightweightModule):
         # k_chunk_size=64 instead of 128. Root cause of the k128 lossiness (teacher 0.95->0.58, layer PCC
         # -0.016): k128's last-partial-chunk masking at low non-128-aligned cur_pos, NOT precision. The
         # long-context SPEED comes from the (unset -> default 16) max_cores_per_head_batch parallel KV
-        # scan, which k64 keeps. _sdpa_pc (k128) is retained for from-scratch prefill + the spec-decode
-        # verify, which REQUIRE k128 (consecutive verify positions must share the chunk path).
+        # scan, which k64 keeps. _sdpa_pc (k128) is retained for from-scratch prefill; the spec-decode
+        # verify now uses _sdpa_pc_verify (k64 default, TT_LAGUNA_VERIFY_K) — the old "verify REQUIRES k128"
+        # claim was DISPROVEN on device (k64 verify runs correctly; k128 is only kept as an A/B option).
         # Sweep knobs (Stage A): defaults reproduce the shipped config (k64, exp off, max_cores unset ->
         # ttnn default 16). TT_LAGUNA_DECODE_K / _EXP / _MAXCORES let a config sweep pick the fastest
         # PCC-safe decode config without a per-run source edit. Leave unset in production.
@@ -579,7 +580,7 @@ class OptimizedDecoder(LightweightModule):
         # (2026-08-03, full_model_checks teacher, weight-cache off): k64 teacher top1 = 0.95 (top5/100 = 1.00)
         # vs k128's 0.58 — see doc/vllm_integration/decode_config_sweep/.
         # Set TT_LAGUNA_DECODE_SDPA_PC=0 to fall back to the ttnn default decode (k32+exp_approx, max_cores=1,
-        # accurate but slow @long-ctx). See doc/vllm_integration/decode_sdpa_pc_finding.md.
+        # accurate but slow @long-ctx). See STATUS.md (decode SDPA program config) + decode_config_sweep/.
         self._decode_use_sdpa_pc = os.environ.get("TT_LAGUNA_DECODE_SDPA_PC", "1") == "1"
         # DEFAULT ON (validated bit-identical greedy tokens vs baseline @B=1 AND @B=32, @4k+128k): fuse MoE
         # expert-combine reduction (ttnn.sum(dim=1) → deepseek_moe_fast_reduce_nc). TT_LAGUNA_FUSED_REDUCE=0 reverts.

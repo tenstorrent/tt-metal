@@ -53,12 +53,14 @@ export TT_METAL_HOME=/home/ttuser/.local/lib/model-bringup/tt-metal
 export PYTHONPATH=/home/ttuser/dev/tt-metal:$TT_METAL_HOME/vllm:$TT_METAL_HOME/vllm/plugins/vllm-tt-plugin/src
 export TT_LAGUNA_PIPE_CHUNK=2048            # route prefill > 2048 onto the bounded-footprint pipelined path
 export TT_LAGUNA_PREFIX_CACHE=1             # default; set 0 for bit-reproducible runs (see contract above)
+# NOTE: TT_LAGUNA_* only reach the worker via the "env_passthrough" list in --tt-config below; the worker's
+# default allowlist is VLLM_*/MESH_DEVICE only (launcher.py:262), so these exports are otherwise silently dropped.
 
 python -m models.common.readiness_check.run_vllm_server \
   --model-dir models/autoports/poolside_laguna_xs_2_1 --hf-model poolside/Laguna-XS-2.1 \
   --mesh-device P150x4 --stages serve \
   --max-num-seqs 8 --block-size 64 --max-model-len 131072 \
-  --tt-config '{"trace_region_size":1500000000,"fabric_config":"FABRIC_1D_RING"}' \
+  --tt-config '{"trace_region_size":1500000000,"fabric_config":"FABRIC_1D_RING","env_passthrough":["VLLM_*","MESH_DEVICE","TT_LAGUNA_*","TT_METAL_*","PYTHONPATH"]}' \
   --additional-server-args='--trust-remote-code --max-num-batched-tokens 131072 --enable-prefix-caching'
 ```
 

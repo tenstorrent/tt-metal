@@ -1173,6 +1173,19 @@ class LagunaForCausalLM:
                 page_tables_per_layer=page_tables_per_layer,
             )
             return torch.argmax(logits, dim=-1).to(torch.int32)
+        # HARD GUARD (audit item 4): traced spec-verify has NO hybrid grouped-PT path. The traced page-table
+        # refresh below only fires when `page_tables_per_layer is None`; a hybrid per-layer PT would replay the
+        # FROZEN warmup identity table and silently emit wrong greedy ids. Hybrid KV is dead at serving today
+        # (the plugin never calls get_kv_cache_spec), so this is dormant — but enabling hybrid KV (the wanted
+        # capacity win) MUST fail loudly here, not corrupt. Fix: eager verify (traced=False), or extend the
+        # trace refresh to grouped PTs before combining hybrid KV with traced spec-decode.
+        if page_tables_per_layer is not None:
+            raise NotImplementedError(
+                "traced spec-decode verify does not support hybrid per-layer page tables "
+                "(page_tables_per_layer): the traced page-table refresh is uniform-only, so a hybrid PT would "
+                "replay a stale identity table and produce silently-wrong tokens. Run eager verify "
+                "(traced=False), or add a grouped-PT trace-refresh path before enabling hybrid KV + spec-decode."
+            )
         pt_row = torch.as_tensor(page_table, dtype=torch.int32)
         if pt_row.dim() == 1:
             pt_row = pt_row.unsqueeze(0)

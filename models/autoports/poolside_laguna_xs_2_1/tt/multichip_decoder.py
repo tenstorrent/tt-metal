@@ -539,14 +539,20 @@ class MultichipDecoder(OptimizedDecoder):
         }
         if cfg.is_sliding:
             sdpa_kwargs["sliding_window_size"] = cfg.sliding_window
-        if sequential_kv_write:  # spec-decode verify REQUIRES k_chunk=128 (consecutive positions share chunk path)
-            sdpa_kwargs["program_config"] = self._sdpa_pc
+        if sequential_kv_write:  # spec-decode verify. k_chunk via TT_LAGUNA_VERIFY_K (default 64 = accurate SDPA)
+            # ACCURACY FIX (2026-08-06): this is the LIVE served decode_forward (overrides OptimizedDecoder's);
+            # it previously ran _sdpa_pc (k128) — the SAME config proven LOSSY on normal decode (teacher top1
+            # 0.95→0.58). Committed spec tokens ARE this verify's argmax, so k128 made spec-decode inherit the
+            # lossy trajectory. _sdpa_pc_verify (TT_LAGUNA_VERIFY_K, default 64) aligns it with the accurate
+            # normal-decode SDPA. The disproven "verify REQUIRES k128" claim is dropped (k64 verify runs
+            # correctly on device — standalone driver + served HumanEval). See tt/optimized_decoder.py.
+            sdpa_kwargs["program_config"] = self._sdpa_pc_verify
             sdpa_kwargs["num_kv_heads"] = cfg.num_kv_heads
         elif self._decode_use_sdpa_pc:
             # Stage 2 fix: accuracy-safe fast NORMAL-decode config — k_chunk=64 (not 128) keeps the
             # max_cores=16 parallel-KV-scan long-context speed but drops the k128 last-partial-chunk masking
-            # that was LOSSY (teacher top1 0.95→0.58, layer PCC -0.016 at low non-aligned cur_pos). k128 is
-            # kept above for the verify path. See tt/optimized_decoder.py + doc/.../decode_sdpa_pc_finding.md.
+            # that was LOSSY (teacher top1 0.95→0.58, layer PCC -0.016 at low non-aligned cur_pos).
+            # See tt/optimized_decoder.py + STATUS.md (decode SDPA program config).
             sdpa_kwargs["program_config"] = self._sdpa_pc_decode
             sdpa_kwargs["num_kv_heads"] = cfg.num_kv_heads
         attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(

@@ -1,6 +1,9 @@
 # Laguna-XS-2.1 on Tenstorrent — STATUS (single record)
 
-**Last updated 2026-08-03.** This is the one canonical status record; it supersedes the per-topic
+**Last updated 2026-08-06.** (2026-08-06 refresh: HumanEval chat 92.7%; spec-verify SDPA aligned to accurate
+k64 on the LIVE served path; W1 stall did not reproduce in targeted tests; traced spec-serve ~3.3× on high-copy
+work — see spec-decode caveat. Supersedes the 2026-08-03 record's 48.2% and the SESSION_STATE_specserve BLOCKED
+verdict.) This is the one canonical status record; it supersedes the per-topic
 status/finding docs (listed at the bottom). Keep alongside: `README.md`, `doc/context_contract.json`,
 `smoke_test.md` (runbook), `resource_utilization_plan.md` (optimization backlog), `scripts/` (tooling),
 `sweep_vllm.tsv` (cited data), and the cited `smoke/` result inputs.
@@ -62,13 +65,18 @@ attn/dense/shared/KV/LM-head, BFP4 routed experts, fp32/HiFi4 SDPA.
   module — right shape, tests failed; 13236 hit step-limit). Terminal-Bench 2.0 **0/1** (make-mips-interpreter:
   agent timed out at the terminus-2 30-min limit after 68 episodes / 2.0M input tokens). poolside self-reported
   reference: SWE-bench Verified 70.9%, TB2.0 37.5% (private agent, multi-attempt).
-- **Accuracy:** HumanEval pass@1 ~48.2% (completion mode); prefill top1 0.94 / top5·100 1.00 vs AIME24.
+- **Accuracy:** HumanEval pass@1 — **chat mode (thinking-off, how agents call the model): 92.7% (152/164)**;
+  raw completion mode ~54.3% (spec-off) / 50.6% (spec-on) is a *measurement artifact* — the deepseek_r1
+  reasoning parser runs only on the chat endpoint, so /v1/completions returns chain-of-thought prose that the
+  harness mis-scores as SyntaxErrors (see commit 463153ba683). prefill top1 0.94 / top5·100 1.00 vs AIME24.
 - **Idle silicon (resource_utilization_plan.md):** FLOPs ~1.6–1.9%, DRAM BW ~2.2–2.9%, ~48–60/120 cores,
   power flat vs batch (~324 W).
 
 ## Caveats
-- **Decode SDPA k128 is LOSSY** (teacher top1 0.58, not bit-identical) — it is **spec-verify-only**; the serving
-  default is the accurate k64. Prefill is unaffected by k128. (Corrects the old `decode_sdpa_pc_finding.md`.)
+- **Decode SDPA k128 is LOSSY** (teacher top1 0.58, not bit-identical). Both the serving decode default AND the
+  **spec-verify** now use the accurate **k64** (`TT_LAGUNA_VERIFY_K`, default 64; commit b3b5a742293 + the live
+  `multichip_decoder.decode_forward` fix — the base-class edit alone was inert on the served path). k128 is
+  retained only for from-scratch prefill and as an A/B option. Prefill is unaffected by k128.
 - **Spec-decode — VIABLE ~2× via traced decode-verify (2026-08-03 re-eval; corrects the earlier NO-GO).**
   A clean re-run at K=4 shows the **traced batched decode-verify captures fine and runs at ~63.8 t/s/u @4k**
   (mean committed 2.68/verify) ≈ **~2× the production traced decode (~30 t/s/u)**. The earlier
@@ -153,7 +161,9 @@ attn/dense/shared/KV/LM-head, BFP4 routed experts, fp32/HiFi4 SDPA.
   `TT_METAL_HOME`=installed tree + server `PYTHONPATH`, `TT_LAGUNA_PIPE_CHUNK=2048 TT_LAGUNA_PREFIX_CACHE=1`,
   `python -m models.common.readiness_check.run_vllm_server --model-dir <M> --hf-model poolside/Laguna-XS-2.1
   --mesh-device P150x4 --stages serve --max-num-seqs 8 --block-size 64 --max-model-len 131072 --tt-config
-  '{"trace_region_size":1500000000,"fabric_config":"FABRIC_1D_RING"}'`. For agents add
+  '{"trace_region_size":1500000000,"fabric_config":"FABRIC_1D_RING","env_passthrough":["VLLM_*","MESH_DEVICE","TT_LAGUNA_*","TT_METAL_*","PYTHONPATH"]}'`
+  (**`env_passthrough` is required** — without it the worker allowlist is only `VLLM_*`/`MESH_DEVICE`, so
+  the `TT_LAGUNA_*` exports above are silently dropped in the worker, `launcher.py:262`). For agents add
   `--reasoning-parser deepseek_r1 --enable-auto-tool-choice --tool-call-parser glm47`. Full commands in
   `smoke_test.md`.
 - **Bench:** ONLY `vllm bench serve` from `.venv_benchmarks_vllm`; report **ISL/OSL/E2EL + t/s/u + agg tok/s
@@ -165,7 +175,7 @@ attn/dense/shared/KV/LM-head, BFP4 routed experts, fp32/HiFi4 SDPA.
 ---
 
 ### Superseded docs folded into this record (safe to delete)
-`decode_config_sweep/results.md`, `decode_sdpa_pc_finding.md`, `spec_decode_accept/results.md`,
+`decode_config_sweep/results.md`, `spec_decode_accept/results.md`,
 `spec_decode_plan.md`, `hybrid_kv_status.md`, `prefix_cache_status.md`, `batched_decode_corruption.md`,
 `concurrency_envelope.md`, `performance_plan.md`, `dispatch_gap_analysis.md`, `fused_moe_analysis.md`,
 `precision_accuracy_analysis.md`, `long_context_prefill_plan.md`, `tier3_status.md`, `TODO.md`,

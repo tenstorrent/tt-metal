@@ -218,7 +218,17 @@ layer (reproduce with a standalone K1>=2 traced-verify vs eager-verify loop over
 diagnostic is the repro). Eager spec-serve is correct but ~123ms/verify vs ~35ms native decode → net SLOWER,
 not shippable. **Serve the spec-off baseline** (no TT_LAGUNA_SPEC_DECODE). Other throughput levers for
 "agents work well" remain: cap per-step max_output_tokens (already helps), the shipped decode-perf wins
-(k_chunk128 SDPA + fused rope/reduce), and trimming reasoning on tool turns.
+(k_chunk=**64** SDPA — NOT k128, which is lossy and unshipped — + fused rope/reduce), and trimming reasoning
+on tool turns.
+
+> **SUPERSEDED (2026-08-06).** The BLOCKED verdict above (written 14:58) was resolved the same day:
+> commit `593942d378a` (17:49) fixed the traced batched-verify fault — the intermittent per-row error was the
+> on-device Sampling1D; forcing argmax (k/p/temp=None) + pad-to-32 makes traced verify bit-correct. Commit
+> `fa8d3c5a9b9` (18:26) then measured **~3.3× on a high-copy reproduce-block workload** (spec-off ~30–31 vs
+> spec-on ~100–104 t/s/u, mean 4.94 committed/round; workload-dependent — unique text ≈1.0× = no speedup and
+> no regression). Traced spec-serve is therefore VIABLE (opt-in, batch-1 greedy), not blocked. Caveat that
+> remains: spec-decode + **hybrid KV** is incompatible with the traced path (uniform-only page-table refresh)
+> and now fails loudly via a hard guard in `verify_greedy_decode` (audit item 4).
 
 Repro/diagnostic env (all in tt/generator_vllm.py, committed 1d350285d30):
 `TT_LAGUNA_SPEC_DECODE=1` (on), `TT_LAGUNA_SPEC_K=<k_max>`, `TT_LAGUNA_SPEC_TRACED=0|1`,

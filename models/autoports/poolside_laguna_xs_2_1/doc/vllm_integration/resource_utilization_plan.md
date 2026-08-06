@@ -90,7 +90,7 @@ Ordered for single-user decode first. Each step is gated by a fast probe before 
    `Cores` column, and the device-time/gap split.
 2. Record the batch-1 decode baseline with `vllm bench` from `.venv_benchmarks_vllm`.
 3. Capture the accuracy baseline with `TT_LAGUNA_DECODE_SDPA_PC=0` to neutralise the known
-   confound (`doc/vllm_integration/decode_sdpa_pc_finding.md`).
+   confound (see STATUS.md — decode SDPA program config; teacher top1, not layer PCC).
 
 **Gate:** if re-captured core counts are already high, W2 is void — say so and move to W3.
 
