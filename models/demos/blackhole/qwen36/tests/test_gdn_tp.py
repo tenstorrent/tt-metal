@@ -45,8 +45,12 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops i
 
 
 def _pf_in(mesh_device, args, t):
-    """Prefill input placement: K-sharded only when the fused AGMM in-proj is active (Blackhole
-    only — see gdn/tp.py's _fuse_agmm); on WH the model's ff_norm gathers before GDN instead."""
+    """Prefill input placement: K-sharded when the fused AGMM in-proj is active (it gathers K itself),
+    replicated otherwise (the model's norm gathers before GDN instead).
+
+    Must mirror gdn/tp.py's _fuse_agmm exactly — a mismatch trips the op's `K == K_w` assert, since
+    the fused weight's height is full K while a K-sharded activation is K/tp wide. So if the AGMM
+    fusion is ever enabled beyond Blackhole, this predicate has to move with it."""
     fused = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None and is_blackhole()
     return shard_to_device(mesh_device, t, dim=-1) if fused else replicate_to_device(mesh_device, t)
 

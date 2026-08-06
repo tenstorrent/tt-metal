@@ -444,7 +444,16 @@ def mlp_gateup_agmm_enabled(num_devices):
     """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather).
 
     BH-only: all_gather_swiglu_prefill's grid assumes BH's taller (9-10 row) compute grid; WH tops
-    out at 8 rows, so this fusion is unvalidated there. Falls back to the unfused AG + matmul path on WH."""
+    out at 8 rows, so this fusion is unvalidated there. Falls back to the unfused AG + matmul path on WH.
+
+    MEASURED on N300 (2026-08): the row count is NOT the only blocker, so do not just clamp the grid.
+    With grid height forced to 8, all_gather_minimal_matmul_async's program factory builds its in0/in1
+    sender+receiver core ranges from grid_size.y-1/-2/-3; at y=8 those overlap so two data-movement
+    kernels land on one core needing both NOCs, and program creation dies with
+    "TT_FATAL ... local_noc0_in_use and local_noc1_in_use" (tt_metal.cpp:152). Reproduced at num_links
+    1 AND 2, so it is not a link-count artifact — enabling WH needs a C++ change to that op's core/NOC
+    assignment for 8-row grids. Worth doing: the two all-gathers this would hide are 1,239us + 1,242us
+    of a 21,669us single-layer GDN prefill at seq 2048 (5 cores each, fully exposed)."""
     return num_devices > 1 and is_blackhole()
 
 
