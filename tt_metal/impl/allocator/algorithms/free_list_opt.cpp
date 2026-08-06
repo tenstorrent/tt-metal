@@ -12,7 +12,6 @@
 #include <functional>
 #include <optional>
 #include <string>
-#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -30,11 +29,11 @@ inline size_t intlg2(size_t n) {
 
 inline size_t num_segerated_classes(size_t max_size_bytes, size_t size_segregated_base) {
     size_t n = max_size_bytes / size_segregated_base;
-    ssize_t count = intlg2(n);
+    size_t count = intlg2(n);
     // 128MB as the last seggregated class size should be enough
     // avoid having too many classes as iterating them is not free
-    ssize_t max_count = intlg2(128 * 1024 * 1024 / size_segregated_base);
-    return std::clamp(count, ssize_t{2}, max_count);
+    size_t max_count = intlg2(128 * 1024 * 1024 / size_segregated_base);
+    return std::clamp(count, size_t{2}, max_count);
 }
 
 namespace tt::tt_metal::allocator {
@@ -104,7 +103,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     // we can be confident that it's the best block to allocate from. Else, look at the next size class. However the
     // blocks within a size class are not sorted by size, so we may not always find the best block.
 
-    ssize_t target_block_index = no_block;
+    std::optional<size_t> target_block_index;
     size_t size_segregated_index = get_size_segregated_index(alloc_size);
     TT_ASSERT(size_segregated_index < size_segregated_count, "Size segregated index out of bounds");
     std::vector<size_t>* segregated_list = nullptr;
@@ -113,9 +112,11 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
 
     for (size_t i = size_segregated_index; i < free_blocks_segregated_by_size_.size(); i++) {
         auto& free_blocks = free_blocks_segregated_by_size_[i];
-        ssize_t increment = bottom_up ? 1 : -1;
-        for (ssize_t j = bottom_up ? 0 : free_blocks.size() - 1; j >= 0 && j < free_blocks.size(); j += increment) {
-            size_t block_index = free_blocks[j];
+        for (size_t n = 0; n < free_blocks.size(); n++) {
+            // Bottom-up walks front to back, top-down back to front. Deriving j from an unsigned
+            // counter avoids an empty list underflowing the start index.
+            const size_t j = bottom_up ? n : free_blocks.size() - 1 - n;
+            const size_t block_index = free_blocks[j];
             if (policy_ == SearchPolicy::BEST) {
                 if (block_size_[block_index] == alloc_size) {
                     target_block_index = block_index;
@@ -124,12 +125,12 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
                     break;
                 }
                 if (block_size_[block_index] >= alloc_size &&
-                    (target_block_index == no_block || block_size_[block_index] < block_size_[target_block_index])) {
+                    (!target_block_index.has_value() || block_size_[block_index] < block_size_[*target_block_index])) {
                     target_block_index = block_index;
                     segregated_list = &free_blocks;
                     segregated_item_index = j;
                 }
-                if (target_block_index != no_block) {
+                if (target_block_index.has_value()) {
                     break;
                 }
             } else {
@@ -139,7 +140,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
 
                 bool address_better =
                     bottom_up ? block_address_[block_index] < best_address : block_address_[block_index] > best_address;
-                if (target_block_index == no_block || address_better) {
+                if (!target_block_index.has_value() || address_better) {
                     target_block_index = block_index;
                     segregated_list = &free_blocks;
                     segregated_item_index = j;
@@ -150,21 +151,21 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
         }
     }
 
-    if (target_block_index == no_block) {
+    if (!target_block_index.has_value()) {
         return std::nullopt;
     }
     TT_ASSERT(segregated_list != nullptr, "Segregated list is null");
     TT_ASSERT(segregated_item_index < segregated_list->size(), "Segregated item index out of bounds");
     TT_ASSERT(
-        block_is_allocated_[target_block_index] == false, "Block we are trying allocate from is already allocated");
-    segregated_list->erase(segregated_list->begin() + segregated_item_index);
+        block_is_allocated_[*target_block_index] == false, "Block we are trying allocate from is already allocated");
+    segregated_list->erase(segregated_list->begin() + static_cast<std::ptrdiff_t>(segregated_item_index));
 
     // Allocate the block
     size_t offset = 0;
     if (!bottom_up) {
-        offset = block_size_[target_block_index] - alloc_size;
+        offset = block_size_[*target_block_index] - alloc_size;
     }
-    size_t allocated_block_index = allocate_in_block(target_block_index, alloc_size, offset);
+    size_t allocated_block_index = allocate_in_block(*target_block_index, alloc_size, offset);
     DeviceAddr start_address = block_address_[allocated_block_index];
     if (start_address + offset_bytes_ < address_limit) {
         TT_THROW(
@@ -179,7 +180,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
 std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_start_address, DeviceAddr size_bytes) {
     // Nothing we can do but scan the free list
     size_t alloc_size = align(std::max(size_bytes, min_allocation_size_));
-    ssize_t target_block_index = no_block;
+    std::optional<size_t> target_block_index;
     DeviceAddr start_address = absolute_start_address - offset_bytes_;
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (meta_block_is_allocated_[i]) {
@@ -192,12 +193,12 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
         }
     }
 
-    if (target_block_index == no_block || block_is_allocated_[target_block_index]) {
+    if (!target_block_index.has_value() || block_is_allocated_[*target_block_index]) {
         return std::nullopt;
     }
 
     // Find the relevant size segregated list
-    size_t size_segregated_index = get_size_segregated_index(block_size_[target_block_index]);
+    size_t size_segregated_index = get_size_segregated_index(block_size_[*target_block_index]);
     std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
     // Precondition: insert_block_to_segregated_list() keeps each list sorted ascending by block
     // address, which the lower_bound below relies on. Assert it (debug-only) instead of silently
@@ -206,15 +207,15 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
     TT_ASSERT(
         std::is_sorted(segregated_list.begin(), segregated_list.end(), by_address),
         "Size segregated list must be sorted by block address");
-    auto it = std::lower_bound(segregated_list.begin(), segregated_list.end(), target_block_index, by_address);
-    TT_ASSERT(it != segregated_list.end() && *it == target_block_index, "Block not found in size segregated list");
-    if (it != segregated_list.end() && *it == target_block_index) {
+    auto it = std::lower_bound(segregated_list.begin(), segregated_list.end(), *target_block_index, by_address);
+    TT_ASSERT(it != segregated_list.end() && *it == *target_block_index, "Block not found in size segregated list");
+    if (it != segregated_list.end() && *it == *target_block_index) {
         segregated_list.erase(it);
     }
 
-    size_t offset = start_address - block_address_[target_block_index];
+    size_t offset = start_address - block_address_[*target_block_index];
     // Allocated addresses cache is invalidated by allocate_in_block
-    allocate_in_block(target_block_index, alloc_size, offset);
+    allocate_in_block(*target_block_index, alloc_size, offset);
     update_lowest_occupied_address(start_address);
     return absolute_start_address;
 }
@@ -233,7 +234,7 @@ size_t FreeListOpt::allocate_in_block(size_t block_index, DeviceAddr alloc_size,
     if (!left_aligned) {
         size_t free_block_size = offset;
         DeviceAddr free_block_address = block_address_[block_index];
-        ssize_t prev_block = block_prev_block_[block_index];
+        size_t prev_block = block_prev_block_[block_index];
         block_size_[block_index] -= offset;
         block_address_[block_index] += offset;
         size_t new_block_index = alloc_meta_block(free_block_address, free_block_size, prev_block, block_index, false);
@@ -248,8 +249,8 @@ size_t FreeListOpt::allocate_in_block(size_t block_index, DeviceAddr alloc_size,
     if (!right_aligned) {
         size_t free_block_size = block_size_[block_index] - alloc_size;
         DeviceAddr free_block_address = block_address_[block_index] + alloc_size;
-        ssize_t prev_block = block_index;
-        ssize_t next_block = block_next_block_[block_index];
+        size_t prev_block = block_index;
+        size_t next_block = block_next_block_[block_index];
         block_size_[block_index] -= free_block_size;
         size_t new_block_index = alloc_meta_block(free_block_address, free_block_size, prev_block, next_block, false);
         if (next_block != no_block) {
@@ -276,8 +277,8 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
     }
     size_t block_index = *block_index_opt;
     block_is_allocated_[block_index] = false;
-    ssize_t prev_block = block_prev_block_[block_index];
-    ssize_t next_block = block_next_block_[block_index];
+    size_t prev_block = block_prev_block_[block_index];
+    size_t next_block = block_next_block_[block_index];
 
     // Merge with previous block if it's free
     if (prev_block != no_block && !block_is_allocated_[prev_block]) {
@@ -321,7 +322,7 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
     TT_ASSERT(lowest_occupied_address_.has_value(), "Lowest occupied address should have a value");
     if (addr <= *lowest_occupied_address_) {
         lowest_occupied_address_ = std::nullopt;
-        ssize_t curr_block_index = block_next_block_[block_index];
+        size_t curr_block_index = block_next_block_[block_index];
         while (curr_block_index != no_block) {
             if (block_is_allocated_[curr_block_index]) {
                 lowest_occupied_address_ = block_address_[curr_block_index];
@@ -381,7 +382,7 @@ std::optional<DeviceAddr> FreeListOpt::get_allocation_size(DeviceAddr absolute_a
 }
 
 size_t FreeListOpt::alloc_meta_block(
-    DeviceAddr address, DeviceAddr size, ssize_t prev_block, ssize_t next_block, bool is_allocated) {
+    DeviceAddr address, DeviceAddr size, size_t prev_block, size_t next_block, bool is_allocated) {
     size_t idx;
     if (free_meta_block_indices_.empty()) {
         idx = block_address_.size();
@@ -405,8 +406,8 @@ size_t FreeListOpt::alloc_meta_block(
 }
 
 void FreeListOpt::unlink_block(size_t block_index) {
-    const ssize_t prev_block = block_prev_block_[block_index];
-    const ssize_t next_block = block_next_block_[block_index];
+    const size_t prev_block = block_prev_block_[block_index];
+    const size_t next_block = block_next_block_[block_index];
     if (prev_block != no_block) {
         block_next_block_[prev_block] = next_block;
     }
@@ -484,15 +485,10 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
         }
         return std::string(width - str.size(), ' ') + str;
     };
-    auto leftpad_num = [leftpad](auto num, size_t width) {
-        // Only the prev/next link columns carry the sentinel; the unsigned columns must not be compared
-        // against it, or an address of SIZE_MAX would print as "none"
-        if constexpr (std::is_signed_v<decltype(num)>) {
-            if (num == no_block) {
-                return leftpad("none", width);
-            }
-        }
-        return leftpad(std::to_string(num), width);
+    auto leftpad_num = [leftpad](auto num, size_t width) { return leftpad(std::to_string(num), width); };
+    // Only the link columns can hold the sentinel; a size or address equal to no_block is a real value
+    auto leftpad_link = [leftpad](size_t link, size_t width) {
+        return leftpad(link == no_block ? "none" : std::to_string(link), width);
     };
     const size_t pad = 12;
     std::array<std::string, 6> headers = {"Block", "Address", "Size", "PrevID", "NextID", "Allocated"};
@@ -505,8 +501,8 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
             continue;
         }
         out << leftpad_num(i, pad) << " " << leftpad_num(block_address_[i], pad) << " "
-            << leftpad_num(block_size_[i], pad) << " " << leftpad_num(block_prev_block_[i], pad) << " "
-            << leftpad_num(block_next_block_[i], pad) << " " << leftpad(block_is_allocated_[i] ? "yes" : "no", pad)
+            << leftpad_num(block_size_[i], pad) << " " << leftpad_link(block_prev_block_[i], pad) << " "
+            << leftpad_link(block_next_block_[i], pad) << " " << leftpad(block_is_allocated_[i] ? "yes" : "no", pad)
             << std::endl;
     }
 }
@@ -542,7 +538,7 @@ size_t FreeListOpt::find_block_to_shrink(DeviceAddr shrink_size, bool bottom_up)
         max_size_bytes_);
 
     // loop and scan the block list to find if the shrink cut into any allocated block
-    ssize_t found_block = no_block;
+    std::optional<size_t> found_block;
     const DeviceAddr shrunk_address = shrink_size_ + shrink_size;
     // TODO: There must be a way to force the beginning of all blocks be at index 0
     for (size_t i = 0; i < block_address_.size(); i++) {
@@ -561,9 +557,8 @@ size_t FreeListOpt::find_block_to_shrink(DeviceAddr shrink_size, bool bottom_up)
     }
 
     TT_FATAL(
-        found_block != no_block, "Shrink size {} does not align with any block. This must be a bug", shrunk_address);
-    // Validated above, so it is safe to narrow to an index for the rest of the function
-    return static_cast<size_t>(found_block);
+        found_block.has_value(), "Shrink size {} does not align with any block. This must be a bug", shrunk_address);
+    return *found_block;
 }
 
 void FreeListOpt::validate_shrink_size(DeviceAddr shrink_size, bool bottom_up) const {
@@ -612,7 +607,7 @@ void FreeListOpt::reset_size() {
     }
 
     // Create a new block, mark it as allocated and deallocate the old block so coalescing can happen
-    ssize_t lowest_block_index = no_block;
+    std::optional<size_t> lowest_block_index;
     bool has_live_block = false;
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (!meta_block_is_allocated_[i]) {
@@ -625,32 +620,32 @@ void FreeListOpt::reset_size() {
         }
     }
 
-    TT_FATAL(!has_live_block || lowest_block_index != no_block, "Lowest block not found during reset size");
+    TT_FATAL(!has_live_block || lowest_block_index.has_value(), "Lowest block not found during reset size");
 
-    // There 3 cases to consider:
+    // There are 3 cases to consider:
     // 1. Every block was consumed by the shrink, which means there is nothing to grow back into and the
     //    restored range has to be rebuilt the way init() does it
-    // 2. The lowest block is is free, which means we can just modify it's attributes
+    // 2. The lowest block is free, which means we can just modify its attributes
     // 3. The lowest block is allocated, which means we need to create a new block and deallocate the old one
-    if (lowest_block_index == no_block) {
+    if (!lowest_block_index.has_value()) {
         size_t new_block_index = alloc_meta_block(0, shrink_size_, no_block, no_block, false);
         insert_block_to_segregated_list(new_block_index);
-    } else if (!block_is_allocated_[lowest_block_index]) {
+    } else if (!block_is_allocated_[*lowest_block_index]) {
         auto* segregated_list =
-            &free_blocks_segregated_by_size_[get_size_segregated_index(block_size_[lowest_block_index])];
+            &free_blocks_segregated_by_size_[get_size_segregated_index(block_size_[*lowest_block_index])];
         for (size_t i = 0; i < segregated_list->size(); i++) {
-            if ((*segregated_list)[i] == lowest_block_index) {
-                segregated_list->erase(segregated_list->begin() + i);
+            if ((*segregated_list)[i] == *lowest_block_index) {
+                segregated_list->erase(segregated_list->begin() + static_cast<std::ptrdiff_t>(i));
                 break;
             }
         }
-        block_size_[lowest_block_index] += shrink_size_;
-        block_address_[lowest_block_index] = 0;
-        insert_block_to_segregated_list(lowest_block_index);
+        block_size_[*lowest_block_index] += shrink_size_;
+        block_address_[*lowest_block_index] = 0;
+        insert_block_to_segregated_list(*lowest_block_index);
     } else {
-        size_t new_block_index = alloc_meta_block(0, shrink_size_, no_block, lowest_block_index, false);
-        TT_ASSERT(!has_prev_block(lowest_block_index), "Lowest block should not have a previous block");
-        block_prev_block_[lowest_block_index] = new_block_index;
+        size_t new_block_index = alloc_meta_block(0, shrink_size_, no_block, *lowest_block_index, false);
+        TT_ASSERT(!has_prev_block(*lowest_block_index), "Lowest block should not have a previous block");
+        block_prev_block_[*lowest_block_index] = new_block_index;
         insert_block_to_segregated_list(new_block_index);
     }
 
@@ -711,10 +706,11 @@ std::optional<size_t> FreeListOpt::get_block_index_from_alloc_table(DeviceAddr a
 std::optional<size_t> FreeListOpt::get_and_remove_from_alloc_table(DeviceAddr address) {
     size_t bucket = hash_device_address(address);
     // It's common to deallocate the last allocated block, so search from the back
-    for (ssize_t i = allocated_block_table_[bucket].size() - 1; i >= 0; i--) {
+    for (size_t i = allocated_block_table_[bucket].size(); i-- > 0;) {
         if (allocated_block_table_[bucket][i].first == address) {
             auto res = allocated_block_table_[bucket][i].second;
-            allocated_block_table_[bucket].erase(allocated_block_table_[bucket].begin() + i);
+            allocated_block_table_[bucket].erase(
+                allocated_block_table_[bucket].begin() + static_cast<std::ptrdiff_t>(i));
             return res;
         }
     }
