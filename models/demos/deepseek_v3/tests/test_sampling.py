@@ -90,6 +90,10 @@ class _FakeSeedManager:
 
 
 class _FakeSamplingGenerator:
+    # apply_decode_update is the real ordered protocol, so these tests pin the shared
+    # implementation rather than a copy of its decisions.
+    apply_decode_update = SamplingGenerator.apply_decode_update
+
     def __init__(self, *, padded_batch_size=32, sampling_dp=2):
         self.tt_sampling = SimpleNamespace(max_batch_size=padded_batch_size, _sampling_dp=sampling_dp)
         self.seed_manager = _FakeSeedManager(padded_batch_size * sampling_dp)

@@ -994,29 +994,23 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
         )
         output_tokens_device = self._sampling_device_history(output_tokens) if output_tokens is not None else None
-        self.sampling_generator.apply_decode_state(
+        active_seed_slots = self._sampling_device_slots(user_slots)
+        if active_seed_slots is None:
+            active_seed_slots = list(range(self.sampling_generator.seed_manager.max_batch_size))
+        # advance_seeds=False: this generator applies state and samples in separate
+        # calls, and the advance belongs to the sampling call so it happens exactly
+        # once per sampled token.
+        self.sampling_generator.apply_decode_update(
             sampling_param_chunks,
             reload_sampling_params=reload_sampling_params,
             reset_sampling_state=reset_sampling_state,
+            seeds=seed_slots,
+            active_slots=active_seed_slots,
+            positions=self._sampling_device_positions(positions) if positions is not None else None,
             prompt_tokens=prompt_tokens_device,
             output_tokens=output_tokens_device,
+            advance_seeds=False,
         )
-        seed_manager = self.sampling_generator.seed_manager
-        active_seed_slots = self._sampling_device_slots(user_slots)
-        if active_seed_slots is None:
-            active_seed_slots = list(range(seed_manager.max_batch_size))
-        if reset_sampling_state:
-            # This must be unconditional: when both requested and cached seeds
-            # are None, a conditional reset would skip the fresh device upload.
-            seed_manager.reset_seed_from_slots(seed_slots, active_seed_slots)
-            if positions is not None:
-                seed_manager.align_seed_counters_to_positions(
-                    seed_slots,
-                    active_seed_slots,
-                    self._sampling_device_positions(positions),
-                )
-        elif reload_sampling_params:
-            seed_manager.reset_seed_from_slots_if_needed(seed_slots, active_seed_slots)
 
     def _sampling_device_slot(self, user_id: int) -> int:
         row = int(user_id) // self.batch_size_per_row

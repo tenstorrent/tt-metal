@@ -232,6 +232,75 @@ class SamplingGenerator:
             # per-slot output counters, which a state reset must always do.
             self.reset_output_state(output_tokens)
 
+    def apply_decode_update(
+        self,
+        sampling_params_chunks: list | None,
+        *,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        seeds=None,
+        active_slots: list[int] | None = None,
+        positions: list[int] | None = None,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
+        advance_seeds: bool = True,
+    ):
+        """Execute one decode sampling update in the order the contract requires.
+
+        Owning the order here is the point: parameter upload, then penalty state, then
+        the seed reset, then at most one seed advance. Per-family code supplies the
+        slot layout and nothing else.
+
+        The caller must have applied any slot remap before calling: remaps are not
+        idempotent, so which layer applies one stays with the generator that owns the
+        device-slot mapping.
+
+        Args:
+            sampling_params_chunks: Raw, unformatted chunks for this instance, or None
+                when the caller uploaded parameters itself. Already-formatted params
+                must not be passed: formatting inverts temperature, so a second pass
+                would invert it back.
+            seeds: Slot-indexed seed values, padded to the sampler's batch size.
+                Required whenever either command is set and ``active_slots`` is
+                non-empty.
+            active_slots: Device slots sampling this step. None means every slot; an
+                empty list means none, which skips the reset entirely because
+                ``reset_seed_from_slots`` marks the manager reset even when it moves
+                nothing, sending the next step back through a full-batch upload.
+            positions: Slot-indexed absolute decode positions, consulted only on a
+                state reset. Host positions are authoritative only on a reloading
+                step, and a state reset only ever accompanies one, so aligning here
+                cannot tie the RNG stream to a lagging position (decode reload
+                contract, "host input authority").
+            advance_seeds: Whether to advance the seed counters now. False for
+                generators that advance inside their sampling call instead, which is
+                the only way to keep exactly one advance per sampled token when state
+                application and sampling are separate calls.
+        """
+        if sampling_params_chunks is not None:
+            self.apply_decode_state(
+                sampling_params_chunks,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+            )
+
+        slots_to_reset = active_slots is None or len(active_slots) > 0
+        if slots_to_reset and (reload_sampling_params or reset_sampling_state):
+            assert seeds is not None, "decode sampling updates require slot-indexed seed values"
+            if reset_sampling_state:
+                # Unconditional even for seed=None: the conditional helper sees no
+                # change and skips, leaving decode-only sampling with no device seed.
+                self.seed_manager.reset_seed_from_slots(seeds, active_slots)
+                if positions is not None:
+                    self.seed_manager.align_seed_counters_to_positions(seeds, active_slots, positions)
+            else:
+                self.seed_manager.reset_seed_from_slots_if_needed(seeds, active_slots)
+
+        if advance_seeds:
+            self.seed_manager.get_new_values(active_slots)
+
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------

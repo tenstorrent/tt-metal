@@ -79,6 +79,119 @@ def test_sampling_update_commands_are_required_and_have_no_legacy_alias():
     assert "reset_batch" not in params
 
 
+class _RecordingSeedManager:
+    def __init__(self, max_batch_size=4):
+        self.max_batch_size = max_batch_size
+        self.events = []
+
+    def apply_slot_remap(self, remap):
+        self.events.append(("remap", list(remap)))
+
+    def reset_seed_from_slots(self, seeds, user_ids):
+        self.events.append(("reset", seeds, user_ids))
+
+    def reset_seed_from_slots_if_needed(self, seeds, user_ids):
+        self.events.append(("conditional-reset", seeds, user_ids))
+
+    def align_seed_counters_to_positions(self, seeds, user_ids, positions):
+        self.events.append(("align", positions))
+
+    def get_new_values(self, user_slots):
+        self.events.append(("advance", user_slots))
+
+
+def _recording_sampling_generator():
+    fake = SimpleNamespace(
+        tt_sampling=SimpleNamespace(max_batch_size=4),
+        seed_manager=_RecordingSeedManager(),
+        apply_decode_state=lambda chunks, **kwargs: None,
+    )
+    return fake, fake.seed_manager.events
+
+
+@pytest.mark.parametrize(
+    "reload_sampling_params, reset_sampling_state, expected",
+    [
+        # A state reset rebuilds the stream, and only a reloading step ever carries
+        # one, so this is the one case where host positions may be consulted.
+        (True, True, [("reset", [7], [0]), ("align", [3]), ("advance", [0])]),
+        (False, True, [("reset", [7], [0]), ("align", [3]), ("advance", [0])]),
+        # A params-only update keeps the resident counter: aligning here would tie the
+        # RNG stream to a host position that lags the device under async decode.
+        (True, False, [("conditional-reset", [7], [0]), ("advance", [0])]),
+        (False, False, [("advance", [0])]),
+    ],
+)
+def test_seed_alignment_happens_only_on_a_state_reset(reload_sampling_params, reset_sampling_state, expected):
+    fake, events = _recording_sampling_generator()
+
+    SamplingGenerator.apply_decode_update(
+        fake,
+        None,
+        reload_sampling_params=reload_sampling_params,
+        reset_sampling_state=reset_sampling_state,
+        seeds=[7],
+        active_slots=[0],
+        positions=[3],
+    )
+
+    assert events == expected
+
+
+def test_seed_state_is_untouched_when_no_slot_samples():
+    fake, events = _recording_sampling_generator()
+
+    SamplingGenerator.apply_decode_update(
+        fake,
+        None,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+        seeds=[7],
+        active_slots=[],
+        positions=[3],
+    )
+
+    assert events == [("advance", [])]
+
+
+def test_seed_advance_can_be_deferred_to_the_sampling_call():
+    fake, events = _recording_sampling_generator()
+
+    SamplingGenerator.apply_decode_update(
+        fake,
+        None,
+        reload_sampling_params=False,
+        reset_sampling_state=True,
+        seeds=[7],
+        active_slots=[0],
+        positions=[3],
+        advance_seeds=False,
+    )
+
+    assert events == [("reset", [7], [0]), ("align", [3])]
+
+
+@pytest.mark.parametrize(
+    "module_path, class_name, method",
+    [
+        ("models.tt_transformers.tt.generator", "Generator", "sample_decode_on_device"),
+        ("models.demos.llama3_70b_galaxy.tt.generator", "Generator", "sample_decode_on_device"),
+        ("models.demos.deepseek_v3.tt.generator", "DeepseekGenerator", "_apply_sampling_state"),
+    ],
+)
+def test_every_generator_routes_its_seed_state_through_the_shared_protocol(module_path, class_name, method):
+    # Three families used to carry three different alignment policies. Requiring the
+    # single implementation is what keeps them from drifting apart again.
+    import importlib
+
+    owner = getattr(importlib.import_module(module_path), class_name)
+    source = inspect.getsource(getattr(owner, method))
+
+    assert "apply_decode_update(" in source
+    for direct_call in ("align_seed_counters_to_positions", "reset_seed_from_slots"):
+        assert direct_call not in source, f"{class_name}.{method} still drives {direct_call} itself"
+
+
 def _staging_events(monkeypatch, module):
     """Record which decode trace inputs the commands actually copy to device."""
     events = []

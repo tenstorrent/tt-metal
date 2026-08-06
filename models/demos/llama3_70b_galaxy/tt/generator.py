@@ -1541,7 +1541,12 @@ class Generator(WarmupForwardMixin):
     ):
         tt_out_tok = self.trace_inputs_decode[True][0] if enable_trace and self.trace_inputs_decode[True] else None
         sampling_module = self.model.sampling
-        seed_manager = sampling_module.seed_manager
+        if sampling_params is None and (reload_sampling_params or reset_sampling_state):
+            raise ValueError(
+                "Galaxy sampling update commands require sampling_params "
+                f"(reload_sampling_params={reload_sampling_params}, "
+                f"reset_sampling_state={reset_sampling_state})"
+            )
 
         # Keep separated sampling independently usable.
         self._apply_sampling_slot_remap(slot_remap)
@@ -1576,19 +1581,18 @@ class Generator(WarmupForwardMixin):
                 sampling_module.reset_prompt_tokens(prompt_tokens)
             sampling_module.reset_output_state(output_tokens)
 
-        if sampling_params is not None and (active_seed_slots is None or active_seed_slots):
-            seed_values = getattr(sampling_params, "seed", None)
-            if reset_sampling_state:
-                # Reset unconditionally, including seed=None, so decode-only
-                # sampling uploads fresh device seeds for the new state.
-                seed_manager.reset_seed_from_slots(seed_values, active_seed_slots)
-                seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots, start_pos)
-            elif reload_sampling_params:
-                seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
-
-        # Advance seeds after parameter copies so seeded sampling observes
-        # one ordered params/seed state for this token.
-        seed_manager.get_new_values(active_seed_slots)
+        # Params and penalty state are uploaded above rather than by the shared
+        # helper: the inactive-slot fill needs params already padded to
+        # max_batch_size, and formatting them a second time would invert
+        # temperature back. Everything after that is the shared ordered protocol.
+        sampling_module.apply_decode_update(
+            None,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+            seeds=getattr(sampling_params, "seed", None) if sampling_params is not None else None,
+            active_slots=active_seed_slots,
+            positions=start_pos,
+        )
         return self.model.sampling.sample(
             logits=tt_logits,
             tt_out_tok=tt_out_tok,

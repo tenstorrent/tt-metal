@@ -1626,31 +1626,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 else None
             )
 
-            sampling_module.apply_decode_state(
-                model_chunks,
-                reload_sampling_params=reload_sampling_params,
-                reset_sampling_state=reset_sampling_state,
-                prompt_tokens=model_prompt,
-                output_tokens=model_output,
-            )
             active_seed_slots = None
+            start_values = None
             if start_pos is not None and start_pos[i] is not None:
                 max_seed_slots = sampling_module.seed_manager.max_batch_size
                 start_values = torch.as_tensor(start_pos[i]).reshape(-1).tolist()
                 active_seed_slots = [idx for idx, pos in enumerate(start_values[:max_seed_slots]) if int(pos) >= 0]
-            # Register each request's explicit seed into the seed manager and
-            # tie its RNG counter to the absolute decode position before
-            # advancing. Without registration the per-request seed never reaches
-            # the device (the seed manager stays unseeded), so sampling falls
-            # back to per-slot boot RNG and two requests sharing a seed diverge
-            # (this regressed when #45166 dropped these calls from the decode
-            # flow). Position alignment then keeps the stream reproducible even
-            # when vLLM evicts a running request and re-admits it in a different
-            # slot under async scheduling. Mirrors the llama3_70b_galaxy decode path.
-            # An empty slot list is skipped, not passed through: reset_seed_from_slots
-            # marks the manager reset even when it moves nothing, which sends the next
-            # step back through the full-batch seed upload and SKIP copy.
-            if active_seed_slots and (reload_sampling_params or reset_sampling_state):
+            # Registering each request's explicit seed is what puts it on the device:
+            # without it the seed manager stays unseeded and two requests sharing a
+            # seed diverge (regressed once when #45166 dropped these calls). Position
+            # alignment then keeps the stream reproducible when vLLM re-admits a
+            # running request in a different slot. Computed only when a command asks
+            # for it so a steady step pays no formatting.
+            seed_values = None
+            if reload_sampling_params or reset_sampling_state:
                 seed_bs = sampling_module.tt_sampling.max_batch_size
                 if len(model_chunks) == 1:
                     seed_values = format_sampling_params(model_chunks[0], seed_bs).seed
@@ -1659,17 +1648,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     for chunk in model_chunks:
                         s = format_sampling_params(chunk, seed_bs).seed
                         seed_values += s if isinstance(s, list) else [s] * seed_bs
-                if reset_sampling_state:
-                    # A state reset is unconditional even for seed=None:
-                    # reset_if_needed would see None == None and skip the
-                    # fresh device-seed upload in decode-only sampling mode.
-                    sampling_module.seed_manager.reset_seed_from_slots(seed_values, active_seed_slots)
-                    sampling_module.seed_manager.align_seed_counters_to_positions(
-                        seed_values, active_seed_slots, start_values
-                    )
-                else:
-                    sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
-            sampling_module.seed_manager.get_new_values(active_seed_slots)
+
+            sampling_module.apply_decode_update(
+                model_chunks,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+                seeds=seed_values,
+                active_slots=active_seed_slots,
+                positions=start_values,
+                prompt_tokens=model_prompt,
+                output_tokens=model_output,
+            )
 
         sampled_outputs = []
         for i in range(self.data_parallel):
