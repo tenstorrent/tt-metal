@@ -180,6 +180,32 @@ void kernel_main() {
         in1_mcast_dest_noc_end_y);
     DataflowBuffer cb_in1(dfb::cb_in1);
     DataflowBuffer cb_out(dfb::cb_out);
+#if defined(ARCH_QUASAR)
+    // [#48552 DIAG - remove after] Pin the TILE_COUNTERS index-0x10000 fault: print the Neo id + tc id that each
+    // cb_in1 / cb_out tile-counter slot targets. If ANY slot prints neo!=0 -> the bad Neo index is programmed
+    // host-side (fixable at the dataflow_buffer.cpp %4 / AccessPattern::ALL sites). If neo==0 on every slot yet the
+    // emulator still faults at 0x10000 -> the neo!=0 target is injected below the host (UNPACR overlay routing or
+    // the off-disk tt-emule counter map), i.e. an LLK/sim-team fix. Reader-side so it flushes before the fault.
+    {
+        DFBInterface& _tc1 = cb_in1.local_dfb_interface_;
+        DPRINT("[tc] cb_in1 ntc={} idx={}\n", (uint32_t)_tc1.num_tcs_to_rr, (uint32_t)_tc1.tc_idx);
+        for (uint8_t _i = 0; _i < _tc1.num_tcs_to_rr; _i++) {
+            DPRINT(
+                "[tc] cb_in1 slot={} neo={} tc={}\n",
+                (uint32_t)_i,
+                (uint32_t)dfb::get_tensix_id(_tc1.tc_slots[_i].packed_tile_counter),
+                (uint32_t)dfb::get_counter_id(_tc1.tc_slots[_i].packed_tile_counter));
+        }
+        DFBInterface& _tco = cb_out.local_dfb_interface_;
+        for (uint8_t _i = 0; _i < _tco.num_tcs_to_rr; _i++) {
+            DPRINT(
+                "[tc] cb_out slot={} neo={} tc={}\n",
+                (uint32_t)_i,
+                (uint32_t)dfb::get_tensix_id(_tco.tc_slots[_i].packed_tile_counter),
+                (uint32_t)dfb::get_counter_id(_tco.tc_slots[_i].packed_tile_counter));
+        }
+    }
+#endif
     Semaphore sender_sem(sem::in1_sender);
     Semaphore receiver_sem(sem::in1_receiver);
 #ifdef FUSE_BIAS
