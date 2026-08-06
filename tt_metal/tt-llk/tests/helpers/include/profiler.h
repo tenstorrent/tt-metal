@@ -107,8 +107,21 @@ __attribute__((always_inline)) inline void sync_threads()
 {
     auto& barrier = *barrier_ptr;
 
-    // wait for all the threads to set the barrier
-    barrier[TRISC_ID] = 1;
+    // Relative generation, the same scheme sync_point uses below. This used to write an absolute
+    // sentinel (store 1, wait for every peer to read 1), which is only a barrier on the very first
+    // launch: reset() clears the profiler buffer and the epoch but not this array, and the array lives
+    // at a raw L1 address inside no linker-cleared section with no host-side writer, so its contents
+    // survive from one kernel launch to the next within a device session. Once every slot holds the
+    // sentinel, a later launch stores 1 over 1, reads its peers as already 1, and walks straight
+    // through without synchronising anything. Every launch leaves the array in exactly that state, so
+    // from the second launch onward the barrier was vacuous for any kernel whose only cross-thread
+    // rendezvous is this one.
+    //
+    // Waiting on "< gen" rather than "!= gen" also keeps a peer that has already run ahead into a
+    // later barrier from parking us forever, which the absolute form could do once sync_point started
+    // writing 2 into the slot this function treated as a constant 1.
+    const std::uint32_t gen = barrier[TRISC_ID] + 1;
+    barrier[TRISC_ID]       = gen;
     ckernel::invalidate_data_cache();
     for (std::uint32_t i = 0; i < NUM_CORES; ++i)
     {
@@ -116,7 +129,7 @@ __attribute__((always_inline)) inline void sync_threads()
         {
             continue;
         }
-        while (barrier[i] != 1)
+        while (barrier[i] < gen)
         {
             ckernel::invalidate_data_cache();
         }
