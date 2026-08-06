@@ -188,27 +188,24 @@ using ComputeHardwareConfig = std::variant<ComputeGen1Config, ComputeGen2Config>
 //  Common-field accessors
 // ----------------------------------------------------------------------------
 //
-// Most compute settings are common to every generation; only bfp_pack_precision_mode (Gen1) and
-// enable_2x_src_register (Gen2) are generation-specific. Reaching a common field through the
-// variant should not require knowing which alternative is held, so each one has an accessor here.
+// Many compute settings are common to Gen1 and Gen2 archictures.
 //
-// Prefer these to std::get<ComputeGen1Config>(config).field. That form is correct only on the
-// generation it names, and throws std::bad_variant_access on any other — a runtime failure on a
-// path that a Gen1 test run cannot reach. These accessors resolve the alternative for you and
-// cannot select the wrong one.
+// Reaching a common field through the variant is syntactically awkward; you should not need
+// to know which alternative is held. For convenience, each common field is given an accessor
+// helper function here. (Generation-specific fields are not given accessors.)
 //
-// Each returns a reference. Bind it once and use it like any other field, which is usually what
-// you want when setting several entries:
+// The accessor returns a reference. You can bind it and use it multiple times, e.g.:
 //
-//     auto& modes = unpack_modes(compute_hw);
-//     modes.emplace(dfb, UnpackMode::UnpackToDest);
+//     auto& dfb_unpack_modes = unpack_modes(compute_hw);
+//     dfb_unpack_modes.emplace(dfb1, UnpackMode::UnpackToDest);
+//     dfb_unpack_modes.emplace(dfb2, UnpackMode::UnpackToSrc);
 //
-// or assign a whole value outright, for a field set once:
+// or assign a whole value outright, e.g.:
 //
 //     enable_32_bit_dest(compute_hw) = true;
 //
-// A generation-specific field has no accessor by design: naming it forces you to be explicit
-// about the generation you mean, which is exactly right when the field exists on only one.
+// For common fields, prefer this syntax over e.g. std::get<ComputeGen1Config>(config).field,
+// which throws if the wrong architecture is targeted.
 
 inline MathFidelity& fpu_math_fidelity(ComputeHardwareConfig& config) {
     return std::visit([](auto& cfg) -> MathFidelity& { return cfg.fpu_math_fidelity; }, config);
