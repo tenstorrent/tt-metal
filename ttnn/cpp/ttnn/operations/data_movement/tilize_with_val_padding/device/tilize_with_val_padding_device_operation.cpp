@@ -43,21 +43,16 @@ bool can_use_sharded_optimized_factory(
 
 TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    py_log_here();
     if (input_tensor.memory_config().is_sharded()) {
         if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
-            py_log_here();
             return TilizeWithValPaddingMultiCoreShardedFactory{};
         }
-        py_log_here();
         return TilizeWithValPaddingMultiCoreDefaultFactory{};
     }
     if (!operation_attributes.enough_space_height) {
-        py_log_here();
         return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
     }
     if (!operation_attributes.use_multicore) {
-        py_log_here();
         return TilizeWithValPaddingSingleCoreFactory{};
     }
     auto* device = input_tensor.device();

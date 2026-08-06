@@ -444,23 +444,19 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    py_log_here();
     std::vector<std::reference_wrapper<const Tensor>> input_tensors;
     ttsl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
     const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
-    py_log_here();
     tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, operation_attributes, input_tensors);
 
-    py_log_here();
     for (const auto& input_tensor_ref : input_tensors) {
         const auto& input_tensor = input_tensor_ref.get();
         TT_FATAL(is_device_tensor(input_tensor), "Device Operations expect device tensors as inputs");
         TT_FATAL(input_tensor.is_allocated(), "Input Tensor is not allocated");
     }
 
-    py_log_here();
     // Whether the op accepts per-core allocation is a property of the op, not of any one tensor,
     // so ask it once rather than inside the loop above.
     if constexpr (!SupportsPerCoreAllocation<device_operation_t>) {
@@ -469,16 +465,13 @@ typename device_operation_t::tensor_return_value_t launch(
         }
     }
 
-    py_log_here();
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
 
-    py_log_here();
     ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
 
     // TODO: #37267 - Remove this short-circuit once we have a better way to handle inactive MeshDevices.
     // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
     // perform, as most of the MeshDevice calls will fail for inactive MeshDevices.
-    py_log_here();
     if (mesh_device->get_view().get_devices().empty()) {
         tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
         return tensor_return_value;

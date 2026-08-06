@@ -463,7 +463,6 @@ void GraphProcessor::track_function_start(
 }
 
 void GraphProcessor::track_function_end_impl() {
-    py_log_here();
     // Calculate duration - get end time first for accuracy
     uint64_t duration_ns = 0;
     if (!function_start_times.empty()) {
@@ -473,14 +472,12 @@ void GraphProcessor::track_function_end_impl() {
         duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count();
     }
 
-    py_log_here();
     auto name = graph[current_op_id.top()].params[kName];
     log_debug(tt::LogAlways, "End op: {} (duration: {} ns)", name, duration_ns);
 
     node_id function_start_id = current_op_id.top();
     int stacking_level = graph[function_start_id].stacking_level;
 
-    py_log_here();
     node_id counter = graph.size();
     {
         graph.push_back(Vertex{
@@ -494,14 +491,12 @@ void GraphProcessor::track_function_end_impl() {
     }
     last_finished_op_id = counter;
 
-    py_log_here();
     // Snapshot live buffer state after each top-level operation completes.
     // Only collected when detailed buffer tracing is enabled (report/visualization path)
     // to avoid the overhead of iterating all allocated buffers on every operation.
     if (stacking_level == 1 && capture_detailed_buffer_tracing_ && !captured_mesh_devices.empty()) {
         per_op_buffers_[function_start_id] = ttnn::reports::get_buffers(captured_mesh_devices);
     }
-    py_log_here();
 }
 
 void GraphProcessor::track_function_end() {
@@ -512,7 +507,6 @@ void GraphProcessor::track_function_end() {
 }
 
 void GraphProcessor::track_function_end(const std::any& output_tensors) {
-    py_log_here();
     static constexpr std::array end_function_any_map{
         make_process<std::vector<Tensor>, &GraphProcessor::end_function_process>(),
         make_process<std::vector<std::optional<Tensor>>, &GraphProcessor::end_function_process>(),
