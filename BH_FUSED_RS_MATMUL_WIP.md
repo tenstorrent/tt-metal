@@ -142,27 +142,72 @@ Hypotheses RULED OUT:
 - Global-CB *release* path in the matmul reader (non-streaming `ENABLE_GLOBAL_CB && !STREAMING_IN1`
   branch) is unchanged by the edits; only the signaling branch was added.
 
-Prime remaining suspect:
-- The co-designed 1D gathered matmul reader's **remote/global circular-buffer pointer accounting**
-  (`experimental::remote_cb_pop_front` / `update_remote_cb_config_in_l1(remote_cb_id)` at the end of
-  `reader_bmm_tile_layout_in1_ring_all_gather.cpp`). A small per-iteration drift in the remote-CB
-  ring would desync after 2–3 prefetcher refills and strand a downstream op's NOC read — matches the
-  token-2, timing-sensitive signature and the fact that the prefetcher senders are also parked.
-- Secondary suspect: L1 semaphore-id / CB-config aliasing between the fused program and the
-  downstream slice/all_gather programs on the shared cores (cols 1–3).
+Prime remaining suspect (SUPERSEDED — see BREAKTHROUGH section below):
+- ~~The co-designed 1D gathered matmul reader's remote/global circular-buffer pointer accounting~~
+- ~~L1 semaphore-id / CB-config aliasing between the fused program and downstream programs~~
+- Actual mechanism: dispatch-level worker done-signal deficit; see next section.
+
+## BREAKTHROUGH (2026-08-06): live tt-triage post-mortem — it is a DISPATCH-LEVEL go/done deficit
+
+The watcher-based localization above is superseded. The watcher itself is an artifact: the
+baseline (prefetcher, no fused op) also hangs at token 0 under `TT_METAL_WATCHER=10`, so all
+watcher-derived conclusions (slice reader / all_gather multicast_reader) were observer effects.
+
+New method that works (use this next time):
+- Reproduce WITHOUT watcher; while pytest is HUNG (do not kill it — the inspector RPC must stay
+  alive), run `python tools/tt-triage.py --llm-output --llm-output-path=...` in parallel.
+  Needs `tt-exalens==0.3.27` (upgraded in python_env). On the shared broker, emit heartbeat
+  output every ~25 s or the 300 s no-output kill fires before triage runs.
+
+Findings from the frozen mesh (all 32 devices identical):
+- Op window: token 1 completed fully (both fused ops included; PCC 0.9979). Token 2's
+  `DramPrefetcherOperation` (op id 56) is the only RUNNING op; ops 57+ (first worker op of
+  token 2, a Reshard) were **never dispatched**.
+- Prefetcher `reader_dram` NCRISC is parked in `cb_pop_front` with a clean callstack — starved,
+  not corrupted, waiting for consumers that never launch.
+- `cq_dispatch` BRISC is stuck in `process_wait` (wait_stream loop, cq_dispatch.cpp:1059).
+  Reading its locals via ttexalens (`last_wait_stream`@0xffb00d14, `last_wait_count`@0xffb00d18,
+  BRISC private mem, dispatch core logical (12,1)) and the live stream counters
+  (`0xFFB40000 + stream*0x1000 + 297*4`; stream 48 = sub-device 0/prefetcher,
+  49 = sub-device 1/worker; base 48 from `dispatch_stream_base_`):
+  **wait is on stream 49 (WORKER sub-device), target 10700, counter stuck at 10600.**
+- The worker sub-device has exactly 100 cores and every mesh program on a sub-device produces one
+  done-increment per sub-device core, so the counts are multiples of 100:
+  **exactly ONE worker program slot's entire done cycle (100 signals) is missing.**
+- `cq_dispatch_subordinate` (go-signal sender) is likewise parked in `wait_for_workers`.
+  (Its `last_wait_count` is in NCRISC private mem, unreadable on BH — "ncrisc does not have
+  debug hardware" — so whether the missing slot's GO was ever multicast is still unconfirmed.)
+- `check_binary_integrity` reported ~6k `.text` mismatches, but the same per-RISC offsets repeat
+  across unrelated kernels and the RUNNING kernels backtrace cleanly — treat as a stale-slot
+  checker artifact, not real corruption, unless later evidence says otherwise.
+
+Interpretation: everything previously suspected (OpSignaler semaphores, global-CB pointer
+accounting, L1 CB aliasing) is off the table as the primary cause. The fused program breaks the
+mesh dispatch go/done accounting such that, ~107 worker-program slots in (early token 2), one
+program's 100 done-signals never arrive and the dispatcher deadlocks waiting for them. This also
+explains why `QWEN_DBG_FUSED_SYNC=1` (worker-sub-device sync after each fused op) passed at
+tokens 0/1: the counter was still consistent at those wait points.
+
+Probe script: `/home/mgiermak/probe_dispatch_wait.py` (run under the broker while hung).
+Artifacts: `/home/mgiermak/triage_fused_hang.txt` (4 MB), `/home/mgiermak/qwen_fused_hang3.log`.
 
 ## Suggested next steps
 
-1. Add device-side `DPRINT` in `reader_bmm_tile_layout_in1_ring_all_gather.cpp` to trace the
-   remote-CB read pointer / `remote_cb_pop_front` counts per batch across iterations; run 3 tokens
-   and diff iteration 0 vs 2. (DPRINT perturbs timing, so also compare against the watcher dumps.)
-2. Narrow the repro: fuse only FF1 (leave FF3 unfused) to confirm whether a single fused call per
-   layer still deadlocks — isolates per-call vs per-layer accumulation.
-3. If it is remote-CB drift: ensure the fused reader restores the exact remote-CB config the plain
-   prefetcher matmul (`ttnn.linear` with `global_cb`) leaves, i.e. compare
-   `update_remote_cb_config_in_l1` behavior between the two on the non-streaming path.
-4. Otherwise escalate to the CCL/matmul op team with this doc + the watcher dumps; this is
-   fused-op remote-CB lifecycle co-design.
+1. Identify the missing program slot. Only ~3 worker programs run between token-1's PCC readback
+   (which waited successfully) and the stuck op 57 (two Embeddings + possibly a reshard) — but if
+   the wait targets launch-ring-slot reuse (wait for slot N-ring_size), 10700 may map to an
+   earlier slot, i.e. the fused op itself. Read a worker core's mailbox launch ring / go-message
+   state (dev_msgs.h `mailboxes_t`) on the frozen mesh to see whether the missing slot's GO was
+   delivered.
+2. Audit mesh `EnqueueProgram`/dispatch_s expected-worker accounting for the fused program: it has
+   kernel groups on disjoint, non-rectangular core sets (ring matmul cols 1–3 incl. hop cores + RS
+   sub-grid cols 4–10) inside a 100-core sub-device. Compare `num_active_cores` /
+   go-mcast rectangles vs the plain (non-fused) matmul and RS programs.
+3. Narrow the repro: fuse only FF1 (one fused call per layer) — if the hang moves to token 4-ish,
+   it is a per-fused-call accounting leak; if still token 2, it is per-program-structure.
+4. Escalate to the runtime/dispatch team with this doc: "one worker-sub-device program slot loses
+   all 100 done-signals after N dispatches of a multi-kernel-group fused program under sub-devices
+   + program cache on BH" is their domain.
 
 ## Files changed on this branch (relative to `mgiermakowski/bh-qwen-prefetcher`)
 
