@@ -236,7 +236,9 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
     h_ref = ref_dec.prefill(embeds)
     h_dev = pipe.backbone.prefill_last(embeds)
 
+    from collections import Counter
     sem_bad = ac_bad = total_ac = 0
+    deltas = Counter()
     print(f"  {'frame':>6} {'sem ref/dev':>14} {'acoustic diffs':>15} {'max |delta|':>12}")
     for i in range(n_frames):
         torch.manual_seed(1000 + i)          # same noise draw for both, so only the model differs
@@ -247,6 +249,9 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
         d = (c_ref[0, 1:] != c_dev[0, 1:])
         n_d = int(d.sum())
         mx = int((c_ref[0, 1:] - c_dev[0, 1:]).abs().max())
+        for _v in (c_ref[0, 1:] - c_dev[0, 1:]).abs().tolist():
+            if _v:
+                deltas[int(_v)] += 1
         sem_bad += s_ref != s_dev
         ac_bad += n_d
         total_ac += 36
@@ -261,6 +266,15 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
         h_dev = pipe.backbone.step(emb).reshape(1, 1, -1)
     print(f"  => semantic mismatches {sem_bad}, acoustic {ac_bad}/{total_ac} "
           f"({ac_bad/max(total_ac,1)*100:.1f}%)")
+    # STATUS.md 6.54 -- the COUNT alone reads as alarming and has repeatedly been misread as one.
+    # An FSQ axis has 21 levels, so |delta|=1 is the smallest difference representable: it means
+    # the device landed within one quantisation step, i.e. a bin-boundary flip rather than an
+    # error. On real prompts every single differing code is off by one. Print the distribution so
+    # nobody has to take that on faith.
+    if deltas:
+        off1 = deltas.get(1, 0)
+        print(f"     |delta| histogram { {k: deltas[k] for k in sorted(deltas)} }   "
+              f"off-by-one {off1}/{ac_bad} ({off1/max(ac_bad,1)*100:.0f}%)")
     return sem_bad, ac_bad, total_ac
 
 def gate_codes():
@@ -272,8 +286,22 @@ def gate_codes():
         # on host; swapping in build_inputs_embeds() is a one-liner once this is trusted.
         torch.manual_seed(0)
         embeds = torch.randn(1, 128, 3072) * 0.02
-        print("=== device vs reference, INTEGER codes (the test that predicts audio) ===")
+        print("=== device vs reference, INTEGER codes -- SYNTHETIC embeddings ===")
+        print("  NOTE (STATUS.md 6.54): random embeddings are a PESSIMISTIC proxy, the same trap")
+        print("  gate_wiring warns about. This reads ~6x worse than real text and is the only")
+        print("  place |delta| > 1 appears at all. Judge accuracy on the real-prompt block below.")
         compare_codes(pipe, embeds, n_frames=8)
+
+        print()
+        print("=== the same comparison on REAL prompts -- THIS is the accuracy number ===")
+        tot_b = tot_n = 0
+        for _ci in (0, 2, 3):
+            _e, _c = fixture_embeds(_ci, pipe.wb)
+            print(f"  -- case {_ci} ({_c['voice']}, P={_e.shape[1]})")
+            _s, _b, _n = compare_codes(pipe, _e, n_frames=8)
+            tot_b += _b
+            tot_n += _n
+        print(f"  ==> REAL-PROMPT TOTAL {tot_b}/{tot_n} ({tot_b/max(tot_n,1)*100:.1f}%)")
         print()
         print("=== end-to-end: generate + decode to waveform ===")
         frames, t_pre, t_gen = pipe.generate(embeds, max_frames=12, verbose=True)

@@ -3496,6 +3496,60 @@ utterances at roughly the current per-frame time. Weight reads dominate and are 
 batch 32; KV-cache traffic and attention scale linearly, so expect **~20–30× aggregate RTF for
 ~1.1× per-stream latency**, not 32×. Untested — see §7.
 
+### 6.54 — the codes gate's "29.5% of codes differ" is a synthetic-input artefact, and always was
+
+Asked where §6.52's 85/288 comes from, since ~30% disagreement with the reference next to a WER of
+1-in-894 cannot both be true. It is not a regression, it is not new, and the number does not mean
+what it reads as. Three findings, in the order they mattered:
+
+**1. It is NOT trajectory divergence.** `compare_codes` is **teacher-forced** — both loops advance
+on the *reference's* codes — so every frame is an independent "same input, same output?" test and
+errors cannot compound. That was the comfortable explanation and it is wrong.
+
+**2. It is the SYNTHETIC INPUT.** `gate_codes` runs on `torch.randn(1,128,3072)*0.02`. The file's
+own module docstring says *"ALWAYS GATE ON REAL PROMPTS, never random activations… trap #12, and
+the most expensive measurement mistake in this port"* — and `gate_codes` was the one gate
+violating it. Same comparison, same commit, only the input changed:
+
+| input | acoustic diffs | \|delta\| histogram | semantic |
+|---|---|---|---|
+| synthetic `randn*0.02` | 85/288 (**29.5%**) | {1:66, 2:10, 3:6, 4:1, 5:1, 6:1} | 1 of 8 |
+| **real prompts, 3 cases** | 34/864 (**3.9%**) | **{1:34} — 100% off by one** | **0 of 24** |
+| real prompts, 5 cases | 69/1440 (4.8%) | {1:69} | 1 of 40 |
+
+**On real text every single differing code is off by exactly one FSQ level out of 21** — the
+smallest difference representable, meaning the device landed *within one quantisation step* of the
+reference. These are bin-boundary flips, not errors. Every \|delta\| > 1 in this model's history
+comes from synthetic input. Random embeddings are off-manifold, where the semantic head's top
+logits are near-tied and velocities sit near FSQ boundaries.
+
+**3. IT PREDATES EVERY p150 CHANGE.** Bisected across all 11 fork commits in an isolated worktree:
+
+| commit | acoustic |
+|---|---|
+| `a3b4569021` fork point — **unmodified N150 code** | **85/288**, 1 semantic |
+| `66edfba1db` … `c32b27c220` (all p150 work) | 86/288, 1 semantic |
+| `1c91d3de4c` (§6.52) | 85/288, 1 semantic |
+
+The whole range varies by **one code**. Nothing on this fork moved it.
+
+**WHERE THE "10/288" CAME FROM, and why it was confusable.** `[flow-11]` records *"10/288 acoustic
+codes vs the fp32 reference and 0/8 semantic **on 8 real prompts**"*. It says real prompts right
+there. Both populations have denominator 288 — 8 frames × 36 codes — so a real-prompt number and a
+synthetic-gate number are typographically identical and sit in the same file. Today's real-prompt
+measurement is 11–12/288 per case, squarely consistent with that record. **The two numbers were
+never in conflict; they were never the same measurement.**
+
+**FIXED, so this cannot recur.** `gate_codes` now (a) runs the real prompt fixture as well and
+labels that block *"THIS is the accuracy number"*, (b) prints the \|delta\| histogram and
+off-by-one fraction after every run, and (c) warns inline that the synthetic block is a
+pessimistic proxy. A count alone is not readable; a count plus its magnitude distribution is.
+
+**MY HANDLING OF THIS WAS THE ACTUAL FAULT.** §6.52 dismissed the mismatch as "from a different
+state and not comparable" and moved on. That is the shape of an excuse, not a measurement — a
+paired run had shown 86 → 85, which established *my change* was innocent and nothing more. The
+question of why the level was 86 went unasked for one line of prose.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
