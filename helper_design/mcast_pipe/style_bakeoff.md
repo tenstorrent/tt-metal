@@ -1,6 +1,12 @@
-DERIVED FROM: current mcast_pipe API v9, api_feasibility.md, hazards_catalog.md, changelog.md, and the persisted on-device bake-off results below
+DERIVED FROM: current mcast_pipe API v11, api_feasibility.md, hazards_catalog.md, changelog.md, and the persisted on-device bake-off results below
 
 # Step E — Style Bake-off (`mcast_pipe`)
+
+> **Step-E re-entry (2026-08-06) — API-007 typed Flag signals: NO-OP.** The caller-supplied value is
+> protocol payload, not an implementation-style choice. It reuses the already selected Flag
+> `set_multicast` path and its handshake/fence decisions; Counter remains the forced monotone-event
+> alternative and gains no typed-value behavior. No bake-off cell or performance re-measure was
+> warranted. Focused `VALID` and `IGNORE_BATCH` helper coverage belongs to Step G and passed on device.
 
 > **Step-E re-entry (2026-08-03) — width-sharded Conv: NO-OP.** No new style fork is introduced.
 > INCLUDE-source loopback, divergent handshake count, rotating Flag lifecycle, and ACKed loopback

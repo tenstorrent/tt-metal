@@ -1,6 +1,13 @@
-DERIVED FROM: current mcast_pipe API v9, api_feasibility.md, style_bakeoff.md, census.txt, migration_audit/*, and changelog.md
+DERIVED FROM: current mcast_pipe API v11, api_feasibility.md, style_bakeoff.md, census.txt, migration_audit/*, and changelog.md
 
 # Step F — Helper Proposal: `Pipe` (`mcast_pipe`)
+
+> **Step-F re-entry (2026-08-06) — API-007 materialized at API v11.** Flag control signals may carry
+> a caller-supplied non-zero value through `send_signal(value = VALID)`; `receive_signal()` waits for
+> `>= VALID`, returns the observed value, and clears the Flag once. Counter remains monotone `+1` and
+> requires the default argument. The channel's existing handshake policy is unchanged. No new helper
+> face, template knob, or host-wire field was added. Focused default-`VALID` and `IGNORE_BATCH` cells,
+> the complete 79-case helper suite, and the 28-case host fixture passed.
 
 > **Step-F re-entry (2026-08-03) — width-sharded Conv migrated at API v9.** The applied port uses the
 > existing host `Mcast2D` rotating full-rectangle wire with a divergent active ACK count. Kernel
