@@ -104,10 +104,18 @@ public:
      */
     struct ExternalConfigBuffer {
         uint32_t address;  // L1 address on the sender core
-        // Set when the sender core is NOT a Tensix worker (e.g. an X280 L2CPU). The socket
-        // then targets the sender via physical->virtual NoC translation + the full L1 address
-        // (the X280's LIM), instead of worker_core_from_logical_core + worker-L1 semantics,
-        // for both the config write and the bytes_acked (flow-control) write-back.
+        // Set when the sender core is NOT a Tensix worker (e.g. an X280 L2CPU or a Blackhole DRAM
+        // core / DRISC). The socket then targets the sender via physical->virtual NoC translation +
+        // the full L1 address (the X280's LIM), instead of worker_core_from_logical_core +
+        // worker-L1 semantics, for both the config write and the bytes_acked write-back.
+        //
+        // ADDRESSING ONLY -- this says nothing about how the bytes_acked write reaches the device.
+        // The socket picks static vs dynamic TLB by asking UMD whether the sender core has a static
+        // window spanning the config buffer (see init_sender_tlb), so a DRAM/DRISC sender gets the
+        // same fast static write a worker does. On Blackhole only one NoC port per DRAM channel is
+        // statically mapped at device init (ll_api::configure_static_tlbs), so a caller using a
+        // different port should configure a window for its core BEFORE constructing the socket --
+        // otherwise every read() pays a TLB reconfigure (~210 ns measured on bh-05).
         bool sender_is_l2cpu = false;
     };
 
