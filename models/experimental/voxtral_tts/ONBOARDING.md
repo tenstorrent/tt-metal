@@ -8,7 +8,7 @@ will be able to run everything and change something without breaking it.
 | file | what it is | when to read it |
 |---|---|---|
 | **`ONBOARDING.md`** (this) | how to run things, how to prove you didn't break them, the method | first, once |
-| **`STATUS.md`** | the running log, `§1`–`§6.45`. `§1`–`§6.38` are N150; `§6.39+` is this fork. Every experiment with its numbers, **including the rejected ones** | before trying anything, to check it isn't already settled |
+| **`STATUS.md`** | the running log, `§1`–`§6.53`. `§1`–`§6.38` are N150; `§6.39+` is this fork. Every experiment with its numbers, **including the rejected ones** | before trying anything, to check it isn't already settled |
 | **`tt/NOTES.md`** | the prose that used to live in the code. Grep-able IDs `[gpt-04]`, `[flow-10]`, `[codec-12]`, `[pipe-02]` | when a line of code carries a `NOTES.md [id]` pointer |
 
 The `tt/*.py` files are deliberately thin — one-line pointers, no essays. **If you find yourself
@@ -27,15 +27,16 @@ export TT_METAL_HOME=$PWD
 export PYTHONPATH=$PWD/ttnn:$PWD/tools:$PWD          # all three — see §2, $PWD alone is WRONG
 
 V=models/experimental/voxtral_tts
-python -m pytest $V/tests/ -q --noconftest                 # 122 tests, ~50 s   (--noconftest REQUIRED)
+python -m pytest $V/tests/ -q --noconftest                 # 129 tests, ~70 s   (--noconftest REQUIRED)
 python $V/tests/tt_gates.py --gate codes                   # blocks 1+2, integer codes
 python $V/scripts/generate_quality_set.py --tag mychange   # audio; NOTE: writes results{tag}.json
 python $V/scripts/score_quality_set.py $V/generated/resultsmychange.json
 ```
 
-Current on the **p150**: **long-form RTF 0.57, ~45.4 ms/frame** (N150: 0.57–0.64 / ~48) — the
-fork now beats the Wormhole build it forked from. Long-form WER 1 wrong of 894 over 3 seeds.
-Beat that without breaking it.
+Current on the **p150**: **~42.9 ms/frame on the long-form cases, RTF 0.694**, against 47.89 /
+0.759 for the same harness before §6.52 — a paired 15×3 A/B, so those two are comparable to each
+other and not to older figures from `generate_quality_set.py`. Long-form WER **1 wrong of 894**
+over 3 seeds, unchanged by §6.52. Beat that without breaking it.
 
 ---
 
@@ -45,20 +46,22 @@ Text + a voice preset in, 24 kHz audio out. Three stages per utterance:
 
 | block | what it does | size | file | cost/frame |
 |---|---|---|---|---|
-| **Block 1** | autoregressive backbone. Prefills the prompt, then emits one hidden state per audio frame | 3.4B, 26 layers, DIM 3072 | `tt/ttnn_voxtral_gpt.py` | ~21.2 ms |
-| **Block 2** | flow-matching acoustic transformer. Hidden state → 36 acoustic codes, by solving an ODE in 7 Euler steps over 3 layers | 390M | `tt/ttnn_voxtral_flow.py` | ~21.9 ms |
+| **Block 1** | autoregressive backbone. Prefills the prompt, then emits one hidden state per audio frame | 3.4B, 26 layers, DIM 3072 | `tt/ttnn_voxtral_gpt.py` | ~17.9 ms |
+| **Block 2** | flow-matching acoustic transformer. Hidden state → 36 acoustic codes, by solving an ODE in 7 Euler steps over 3 layers | 390M | `tt/ttnn_voxtral_flow.py` | ~19.1 ms |
 | **Codec** | codes → waveform. Once per utterance, not per frame | | `tt/ttnn_voxtral_codec.py` | ~3.5 ms total |
 
-One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~45.4, RTF ~0.57.
+One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~42.9, RTF ~0.69.
 
 `tt/ttnn_voxtral_pipeline.py` wires the three together. `reference/` is a pure-fp32 PyTorch
 implementation — **it is the ground truth, not the device.**
 
 **Hardware: one Blackhole p150b.** 130 Tensix cores (13×10), 8 GDDR6 banks, measured DRAM ceiling
-**~360 GB/s** (§6.41) and a **~68 µs per-op floor** (§6.45). Those two numbers together are the
+**367 GB/s** (§6.41/§6.53) and a **~68 µs per-op floor** (§6.45). Those two numbers together are the
 single most useful fact on this fork, and they invert the N150's: bytes are cheap and launches are
-expensive, so **deleting ops wins where the N150 wanted fewer, bigger kernels**. Six N150 decisions
-have already reversed here — §6.39, §6.40, §6.43, §6.44 and two in §6.45.
+expensive, so **deleting ops wins where the N150 wanted fewer, bigger kernels**. Seven N150 decisions
+have already reversed here — §6.39, §6.40, §6.43, §6.44, two in §6.45, and §6.52.
+**But the chip's real limit is §6.53: this workload uses 0.37% of its compute and ~49% of its
+DRAM, so single-stream latency is nearly done and batching is the only order-of-magnitude lever.**
 
 > **Every tuned constant here has now been re-derived on the p150, and most of the N150's did not
 > survive.** Gone: both width-sharded norms (§6.39/§6.40), `_WO_PRG` (§6.43), `_V_SHARD` and the
@@ -104,7 +107,7 @@ needs torchaudio only to resample 24 kHz to 16 kHz, so scipy's `resample_poly` i
 
 ## 3. How to run things
 
-### Tests — 122 tests, ~45 s
+### Tests — 129 tests, ~70 s
 
 ```bash
 python -m pytest models/experimental/voxtral_tts/tests/ -q --noconftest
@@ -332,11 +335,20 @@ here and are in §8 instead.**
 
 Full numbers in STATUS; this is the index so you don't spend a day on a closed question.
 
-**⚠ FIRST, THE SIX THAT REVERSED.** These were settled on the N150 and are settled the OTHER WAY
+**⚠⚠ READ THIS ONE FIRST — it was never true on either chip.** `[flow-12]` and `§6.8` both record
+that SiLU "rides along on the w1 matmul instead of being its own op" via `activation="silu"`.
+**It does not.** That kwarg measures 98.8 µs against a plain matmul's 85.5 — the same +14.9 as
+writing `ttnn.silu()` yourself, because that is effectively what it does. Only a program config's
+`fused_activation` actually fuses (88.1 µs). Worth **2.42 ms/frame** across the 47 w1 calls, and
+slightly *more* accurate. Both blocks now use `DECODE_PRG` (`§6.52`, `[gpt-26]`). If you write a
+new matmul with an activation, **do not use the kwarg**.
+
+**⚠ THE SEVEN THAT REVERSED.** These were settled on the N150 and are settled the OTHER WAY
 here. The parent branch's verdict is wrong on this chip; do not restore any of them.
 
 | N150 verdict | p150 verdict |
 |---|---|
+| hand-tuned matmul program configs measure SLOWER (`§6.24`) | **shipped, −4.24 ms/frame** — but only because that was measured on `wq`, already at 94% of its floor. `wo` and `w2` sit at 144–147 GB/s of a 367 ceiling (`§6.52`) |
 | width-sharded decode RMSNorm, both blocks (`§6.9`/`§6.18`) | **interleaved** — sharding LOSES 4.4–4.5 ms/frame and is further from fp32 truth (`§6.39`/`§6.40`) |
 | `wo` needs a tuned program config (`§6.25`) | **no config** — inert on the step, and removing it is bit-exact (`§6.43`) |
 | fused KV cache write + `_V_SHARD` (`§6.20`/`§6.22`) | **two plain writes** — the fused one is 0.687 ms/step slower (`§6.44`) |
@@ -344,9 +356,16 @@ here. The parent branch's verdict is wrong on this chip; do not restore any of t
 | hand-rolled 9-op head split in Block 2 (`§6.31`) | **fused op** — +3.836 ms/frame at identical accuracy (`§6.45`) |
 | `sdpa` for Block 2's interior REJECTED (`§6.37`) | **shipped** — +2.555 ms/frame; 1.57× the fp64 error here, not 6.48×, codes unmoved (`§6.45`) |
 
-**The reason all six flipped is one pair of numbers (`§6.41`/`§6.45`): the p150 has ~360 GB/s and
+**The reason they flipped is one pair of numbers (`§6.41`/`§6.45`): the p150 has ~367 GB/s and
 a ~68 µs per-op floor against the N150's 194–202 GB/s and ~20 µs. Bytes are cheap, launches are
 expensive, so deleting ops wins where `§6.6` wanted fewer, bigger kernels.**
+
+**⚠ AND THE MEASUREMENT RULE THAT COSTS THE MOST TIME (`§6.52`).** An isolated microbenchmark in a
+tight loop **understates op cost by ~4×**, because a loop of *identical* ops pipelines and a real
+block of *differing* ops does not. The silu op costs 12.2 µs isolated and ~54 µs in-block. This is
+why `w2` and `wo` posted 2.4× isolated wins and delivered **exactly 0.00 ms** in the block, why
+`§6.47`'s estimate missed by 48×, and why `§6.43` exists. **Isolated sweeps screen candidates;
+only a whole-block A/B with the shipped config entered twice as a noise floor decides.**
 
 **Settled on the p150 (measured here):**
 

@@ -1112,6 +1112,19 @@ Long-form WER over 3 seeds: **1 wrong of 894 with sdpa against 4 without**, 15/1
         # No `multiply(s, SCALE)` here: 1/sqrt(head_dim) is folded into wqkv's q rows at load time.
 ```
 
+### [flow-23] `_block` — shares Block 1's decode matmul program configs
+
+Block 2 imports `DECODE_PRG` from `ttnn_voxtral_gpt` rather than defining its own. This is exact,
+not approximate: the two blocks have **identical** dims (`DIM == FM_DIM == 3072`,
+`HIDDEN_DIM == FM_HIDDEN_DIM == 9216`, 32 heads × 128, GQA 32/8), and Block 2's `B*3` is 3 or 6
+rows — one tile, the same as Block 1's single row. So all five configs apply unchanged.
+
+`ttnn_voxtral_gpt` does not import `ttnn_voxtral_flow`, so the direction cannot cycle.
+
+Of the −4.24 ms/frame in [gpt-26], Block 2 contributes **−1.87** (21.10 → 19.12 ms) against Block
+1's −2.36 (20.23 → 17.87). Block 2 sees 21 of the 47 w1 calls per frame despite having 3 layers to
+Block 1's 26, because the 7 Euler steps re-enter the whole trunk each time.
+
 ### [flow-22] `_block` / `_trunk` — in-place elementwise, and the L1 trap in it
 
 The two residual adds and the SwiGLU multiply run in place: **+0.790 ms/frame, codes unmoved**
@@ -1144,12 +1157,23 @@ a moved code.
 
 ### [flow-12] `_block` — SiLU rides along on the w1 matmul instead of being its...
 
+> **CORRECTED on p150 — the premise was wrong on both chips.** `activation="silu"` is **not
+> fused**: it measures 98.8 µs against a plain matmul's 85.5, the same +14.9 as a separate
+> `ttnn.silu()`. SiLU was its own op the entire time; the 0.16 ms/frame this note claims came from
+> somewhere else. Real fusion needs a program config's `fused_activation` (88.1 µs) and is now
+> how both blocks do it — worth **2.42 ms/frame** across the 47 w1 calls. See **[gpt-26]** and
+> STATUS.md §6.52. The N150 record below is preserved as written.
+
 ```text
         # SiLU rides along on the w1 matmul instead of being its own op -- bit-identical (verified
         # here at 19/576 acoustic codes and velocity PCC unchanged), 0.16 ms/frame, and the same
         # thing Block 1 has always done. NOT the idea rejected in STATUS.md 6.8, which was fusing
         # silu into the MULTIPLY below via input_tensor_a_activations; that one really is worthless.
 ```
+
+The second sentence of that comment still stands and is worth keeping straight: §6.8 rejected
+fusing silu into the **multiply**, which is a different op and really is worthless. What was
+missed is that the fusion into the **matmul** never happened either.
 
 ### [flow-13] `_trunk` — FOLD THE CFG BATCH INTO ROWS -- worth 2.23x,...
 
@@ -1938,6 +1962,56 @@ warns is not a correctness test.
  The earlier "hand-tuned matmul program configs measured SLOWER (169 vs 193 GB/s)" finding stands: it
  was measured on wq, which is already at 94% of its floor. Sweeping an op with no headroom finds none.
 ```
+
+### [gpt-26] decode matmul program configs — and `activation="silu"` is not fused
+
+Every decode matmul in **both** blocks takes a `MatmulMultiCoreReuseMultiCast1DProgramConfig` on
+one 12×6 grid. **−4.24 ms/frame** on the whole-block A/B (three runs: −4.66 / −4.38 / −4.24).
+
+**Two independent findings, one fix.**
+
+**(1) `activation="silu"` is NOT fused on this chip.** On the real w1 shape it measures 98.8 µs
+against a plain matmul's 85.5 — the same **+14.9 µs** as writing `ttnn.silu()` as its own op,
+which is evidently what it does. `UnaryWithParam` and `UnaryOpType` spellings behave identically
+(100.6 / 100.2). **Only** a program config's `fused_activation` folds it in, at 88.1 µs. Across
+the 47 w1 calls per frame that single op is worth **2.42 ms**, and it is *more* accurate besides
+(PCC 0.9999984 vs 0.9999970) because the value never leaves the dest registers.
+
+This invalidates the inherited claim in **[flow-12]**, which said SiLU "rides along on the w1
+matmul instead of being its own op". It was its own op the whole time, on both chips.
+
+**(2) The ttnn heuristic collapses on deep reductions.** Achieved bandwidth by K-tiles:
+
+| matmul | Kt | default | tuned `in0_block_w` |
+|---|---|---|---|
+| `w1`/`w3` | 96 | 352 GB/s | 362 |
+| `wqkv` | 96 | 281 | 346 |
+| `wo` | 128 | **144** | 336 |
+| `w2` | 288 | **147** | 355 |
+
+At Kt=96 the heuristic is already near this chip's measured 367 GB/s ceiling; at Kt=128/288 it
+delivers **under half the memory system**. §6.50 predicted exactly this shape of result — *"it was
+measured on wq, which is already at 94% of its floor; sweeping an op with no headroom finds
+none."* `w2` and `wo` are where the headroom was.
+
+**ONE grid for every shape.** A per-shape set of isolated winners pinning two grids measured
+37.04 ms against uniform 12×6's 36.99, under a 0.070 noise floor, so no shape earns its own grid.
+13×10 (the full 130 cores) was 0.31 ms **worse**.
+
+**THE ISOLATED NUMBERS ABOVE DO NOT PREDICT THE BLOCK, AND THE DIRECTION OF THE ERROR REVERSES.**
+`w2` and `wo`, with 2.4× isolated wins, delivered **0.00 ms** in the block. `w1`, with a 1.03×
+isolated win, delivered **2.42 ms**. The mechanism: a tight loop of *identical* ops pipelines, so
+an isolated microbenchmark understates op cost — the silu op costs 12.2 µs isolated and ~54 µs
+in-block (2.42 ms ÷ 47), near the full ~68 µs floor. This is §6.43's rule with a cause attached:
+**isolated sweeps find pipelining, blocks find dispatch.**
+
+**DECODE ONLY.** `per_core_M=1` and `fuse_batch=True` assume one tile of rows — true for Block 1's
+1 and Block 2's 3-or-6, false for prefill. `_mlp` is shared with prefill, so the configs are
+passed **in** as an argument rather than read from module scope; prefill passes nothing and keeps
+the heuristic. `test_decode_matmul_configs_assume_one_tile_of_rows` guards this.
+
+**Not bit-exact**: a paired `--gate codes` run reads 85/288 acoustic against the baseline's
+86/288 (semantic 1 both). Codes move, so the frame-count A/B applies — see STATUS.md §6.52.
 
 ### [gpt-25] `_mlp` / `_layer_step` — in-place elementwise, worth 0.929 ms/step
 

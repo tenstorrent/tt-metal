@@ -125,13 +125,44 @@ def test_no_width_sharded_norms_anywhere():
     assert not hasattr(gpt.TtVoxtralGPT, "_norm_dec"), "decode norm split back out -- 6.39"
 
 
-def test_wo_has_no_program_config():
-    """6.25 hand-tuned one for the N150 (+0.196 ms/frame). Here no instrument can find any
-    benefit -- isolated 1.46x, whole step +0.174 (resolution ~0.3), pipeline signs flipping --
-    and removing it is bit-exact: all 45 utterances of a 15x3 run reproduced identical frame
-    counts. STATUS.md 6.43."""
-    assert not hasattr(gpt, "_WO_PRG"), "wo's program config is back -- 6.43 says it buys nothing"
+def test_wo_does_not_get_the_n150_hand_tuned_config_back():
+    """6.25 hand-tuned _WO_PRG for the N150 (+0.196 ms/frame); 6.43 found it buys nothing here and
+    deleted it. wo DOES now carry a program config again, but not that one -- it takes the shared
+    12x6 decode config from 6.52, whose reason is the reduction-depth collapse, not wo's shape.
+    Keep the two claims apart: the N150 constant stays dead."""
+    assert not hasattr(gpt, "_WO_PRG"), "the N150's hand-tuned wo config is back -- 6.43"
     assert not hasattr(gpt, "_WO_GRID")
+    assert gpt.DECODE_PRG["wo"] is gpt._PRG_WO
+
+
+def test_silu_is_fused_by_the_program_config_not_the_activation_kwarg():
+    """activation="silu" is NOT fused on this chip: 98.8 us against a plain matmul's 85.5, the
+    same +14.9 as a separate ttnn.silu, and UnaryWithParam/UnaryOpType behave identically. Only a
+    program config's fused_activation folds it in (88.1). Worth 2.42 ms/frame over the 47 w1 calls
+    across both blocks, and slightly MORE accurate (PCC 0.9999984 vs 0.9999970). STATUS.md 6.52."""
+    import inspect
+
+    assert gpt._PRG_W1.fused_activation is not None, "w1 lost its fused silu -- 6.52"
+    assert gpt._PRG_W3.fused_activation is None, "w3 must NOT have an activation"
+    for fn in (gpt.TtVoxtralGPT._layer_step, flow.TtVoxtralFlow._block):
+        # comments explain WHY the kwarg is gone and name it; strip them so only code is checked
+        code = "\n".join(ln.split("#")[0] for ln in inspect.getsource(fn).splitlines())
+        assert 'activation="silu"' not in code, (
+            f"{fn.__qualname__} is back on the unfused activation kwarg -- 6.52")
+
+
+def test_decode_matmul_configs_assume_one_tile_of_rows():
+    """per_core_M=1 and fuse_batch=True are only valid for a single tile of rows -- Block 1's 1 and
+    Block 2's 3-or-6. Prefill has many, so _mlp must reach it WITHOUT these configs. STATUS.md
+    6.52."""
+    import inspect
+
+    for p in gpt.DECODE_PRG.values():
+        assert p.per_core_M == 1, "a decode config grew rows; prefill would silently share it"
+    prefill = inspect.getsource(gpt.TtVoxtralGPT._layer)
+    assert "DECODE_PRG" not in prefill, "prefill must keep the ttnn heuristic -- 6.52"
+    assert "self._mlp(x, self._norm(x, w[\"fn\"]), w, ttnn.DRAM_MEMORY_CONFIG)" in prefill, (
+        "prefill's _mlp call gained an argument -- check it is not a program config")
 
 
 def test_kv_cache_uses_two_writes_not_the_fused_one():

@@ -14,6 +14,10 @@ from models.experimental.voxtral_tts.reference.voxtral_flow_ref import (
     load_flow_state,
     time_embedding,
 )
+
+# Block 2 has Block 1's dims exactly, so the decode matmul program configs are shared rather
+# than duplicated -- NOTES.md [flow-23]. gpt does not import flow, so this cannot cycle.
+from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import DECODE_PRG
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     DEFAULT_CKPT,
     EMPTY_AUDIO_ID,
@@ -120,7 +124,10 @@ class TtVoxtralFlow:
         """x [1,B*3,3072] -> same. Pre-norm, GQA 32/8, unmasked attention, SwiGLU."""
         h = self._norm(x, w["an"])
         # q, k and v share one weight and one matmul -- see NOTES.md [flow-09] for the fusion.
-        qkv = ttnn.linear(h, w["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
+        # NOTES.md [flow-23] -- Block 2 shares Block 1's dims exactly (3072 / 9216 / 32 heads x
+        # 128) and B*3 is 3 or 6 rows, one tile, so gpt's decode program configs apply unchanged.
+        qkv = ttnn.linear(h, w["wqkv"], program_config=DECODE_PRG["wqkv"],
+                          compute_kernel_config=COMPUTE_CONFIG)
         # NOTES.md [flow-10] -- FUSED head split. 6.31 hand-rolled this into 9 ops and won
         # 1.233 ms/frame on the N150; on Blackhole a small op costs 3.4x more (67.7 us against
         # ~20), so trading 9 ops for 1 wins 3.836 ms/frame here at IDENTICAL accuracy. 6.45.
@@ -137,15 +144,19 @@ class TtVoxtralFlow:
         # NOTES.md [flow-22] -- in place. Only safe because the residual stream is born in L1
         # in _trunk: add_ writes where x already lives, so a DRAM x would silently undo
         # [flow-02]'s L1 residency and move a code. STATUS.md 6.48.
-        x = ttnn.add_(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
-                                     memory_config=_L1))
+        x = ttnn.add_(x, ttnn.linear(a, w["wo"], program_config=DECODE_PRG["wo"],
+                                     compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1))
         h = self._norm(x, w["fn"])
-        # NOTES.md [flow-12] -- SiLU rides along on the w1 matmul instead of being its...
-        g = ttnn.linear(h, w["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1,
-                        activation="silu")
-        u = ttnn.multiply_(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
+        # NOTES.md [flow-12] -- SiLU rides along on the w1 matmul. It did NOT actually do so via
+        # activation="silu", which measures the same as a separate ttnn.silu; the fusion is real
+        # only in the program config. See NOTES.md [gpt-26]. STATUS.md 6.52.
+        g = ttnn.linear(h, w["w1"], program_config=DECODE_PRG["w1"],
+                        compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
+        u = ttnn.multiply_(g, ttnn.linear(h, w["w3"], program_config=DECODE_PRG["w3"],
+                                          compute_kernel_config=COMPUTE_CONFIG,
                                           memory_config=_L1))
-        return ttnn.add_(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG,
+        return ttnn.add_(x, ttnn.linear(u, w["w2"], program_config=DECODE_PRG["w2"],
+                                        compute_kernel_config=COMPUTE_CONFIG,
                                         memory_config=_L1))
 
     def _up(self, t, dtype=None):
