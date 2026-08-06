@@ -1978,6 +1978,7 @@ def test_prefill_trace_replay_stress(mesh_device, advance, reset_seeds, request)
     delay_ms = float(os.environ.get("GEMMA4_STRESS_DELAY_MS", "0"))
     sync_stage = os.environ.get("GEMMA4_STRESS_SYNC_STAGE", "0") == "1"
     max_chunk = int(os.environ.get("GEMMA4_STRESS_MAXCHUNK", "100000"))
+    min_chunk = int(os.environ.get("GEMMA4_STRESS_MINCHUNK", "1"))
     n_chunks = context_len // chunk
     model_path = _model_path()
     model_args, model, kv_cache, page_table_tt = _build_prefill_model(
@@ -2065,6 +2066,16 @@ def test_prefill_trace_replay_stress(mesh_device, advance, reset_seeds, request)
     out_ring = _forward(cap_start)
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     ttnn.synchronize_device(mesh_device)
+    # Log the ring CCL semaphore addresses so a hang can be inspected with ttexalens:
+    # these are the out_ready_sem instances the all-gather reader waits on
+    # (ring_attention_all_gather_reader.cpp:201) and destructively resets at exit.
+    try:
+        sem_addrs = [
+            ttnn.get_global_semaphore_address(sm) for sm in model.ccl_manager.ring_attention_ccl_semaphore_handles
+        ]
+        logger.info(f"[stress] RING_SEM_ADDRS={sem_addrs}")
+    except Exception as exc:  # address API is informational only; never fail the run for it
+        logger.info(f"[stress] RING_SEM_ADDRS unavailable: {exc}")
     logger.info(f"[stress] captured; replaying {n_replays}x mode={'advancing' if advance else 'fixed'}")
 
     try:
@@ -2073,7 +2084,12 @@ def test_prefill_trace_replay_stress(mesh_device, advance, reset_seeds, request)
             # GEMMA4_STRESS_MAXCHUNK caps the cycle so kv_actual_isl still CHANGES every
             # replay while the gather stays shallow. Separates "the value changed" from
             # "the transfer got big": if a capped cycle survives, size is the trigger.
-            _stage((i % min(max_chunk, n_chunks - 1)) + 1 if advance else 1)
+            # GEMMA4_STRESS_MINCHUNK biases the cycle to DEEP chunks, where the gather is
+            # largest and the race is most likely, so a hang reproduces in seconds
+            # instead of maybe-never over a full sweep.
+            hi = min(max_chunk, n_chunks - 1)
+            span = max(1, hi - min_chunk + 1)
+            _stage((min_chunk + (i % span)) if advance else 1)
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             # GEMMA4_STRESS_DELAY_MS: readback_all never hangs and adds ~140ms of host

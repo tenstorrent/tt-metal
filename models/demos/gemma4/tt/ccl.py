@@ -12,6 +12,17 @@ from models.demos.gemma4.config import Mode
 
 
 def default_num_links():
+    # GEMMA4_NUM_LINKS overrides the CCL link count. Used to test whether the ring
+    # replay deadlock involves the two parallel link workers racing each other.
+    import os as _os
+
+    _forced = _os.environ.get("GEMMA4_NUM_LINKS")
+    if _forced:
+        return int(_forced)
+    return _default_num_links_impl()
+
+
+def _default_num_links_impl():
     """Default TP-collective link count for the current arch.
 
     Blackhole boards expose 2 ethernet links between adjacent mesh devices, so
