@@ -317,8 +317,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
     uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
     uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
-    // in2 - scaler
-    uint32_t in2_CB_size = single_tile_size * (use_welford ? 3 : 1);
+    // in2 - scaler on the non-welford path, cb_xmm on the welford path. Welford only ever has a
+    // single cb_xmm tile in flight: (x - mean) is packed, read back by the multiply against the
+    // scaled-mask table, and packed again into the same single slot. Before the mask hoist this
+    // CB also carried the per-group mask * rsqrt product and needed 3 tiles.
+    uint32_t in2_CB_size = single_tile_size;
     // in3 - eps
     uint32_t in3_CB_size = single_tile_size;
     // gamma
@@ -334,6 +337,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t in_negative_mask_CB_size = block_wt * in_negative_mask_single_tile_size * 2;  // double buffer
     // repack cb
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;  // double buffer
+    // scaled-mask table: input_mask * 1/sqrt(Var + eps), precomputed once per batch by the
+    // welford compute kernel and then read once per group-tile. Same tile count and indexing as
+    // the input mask (block_wt * num_groups_per_core) and the same intermediate data format as
+    // cb_xmm, whose second slot it replaces as the destination of that product.
+    uint32_t scaled_mask_CB_size = single_tile_size * input_mask_num_tiles_per_core;
     // itermediate buffers
     uint32_t interm_block_tiles = block_ht * block_wt;
     uint32_t x_CB_size = single_tile_size * (use_welford ? 1 : interm_block_tiles);
@@ -1054,6 +1062,24 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             .page_size = single_tile_size,
         }}},
     });
+
+    // scaled-mask table (welford only). c_21 is free in this factory's map: the sharded groupnorm
+    // family occupies c_0..c_20 plus c_26 and c_29..c_31 across the factory, both compute kernels
+    // and all of its dataflow kernels, so c_21..c_25, c_27 and c_28 are unused. Produced and
+    // consumed entirely inside welford_groupnorm_sharded_v2.cpp, so no reader or writer kernel
+    // needs to know about it.
+    if (use_welford) {
+        constexpr uint32_t scaled_mask_cb_index = tt::CBIndex::c_21;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = scaled_mask_CB_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(scaled_mask_cb_index),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+    }
 
     // ex_partial
     constexpr uint32_t ex_cb_partial_index = tt::CBIndex::c_8;

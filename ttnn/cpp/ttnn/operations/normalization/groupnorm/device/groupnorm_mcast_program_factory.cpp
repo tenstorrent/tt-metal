@@ -308,9 +308,19 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t reciprocal_CB_size = reciprocals.has_value() ? reciprocals.value().buffer()->aligned_size_per_bank() : 0;
     uint32_t out_CB_size_group_1 = in0_block_tiles_group_1 * out_single_tile_size;
 
+    // Scaled-mask table: input_mask * 1/sqrt(Var + eps), precomputed once per batch by the
+    // welford compute kernel and then read once per group-tile. Same tile count and indexing as
+    // the input mask (block_wt * num_groups_per_core) and the same intermediate data format as
+    // cb_xmm, whose second slot it replaces as the destination of that product.
+    uint32_t scaled_mask_CB_size = single_tile_size * input_mask_num_tiles_per_core;
+
     if (use_welford) {
         x_CB_size_group_1 = single_tile_size * 1;
-        xmm_CB_size_group_1 = single_tile_size * 3;
+        // Welford now only ever has a single cb_xmm tile in flight: (x - mean) is packed, read
+        // back by the multiply against the scaled-mask table, and packed again into the same
+        // single slot. Before the mask hoist this CB also carried the per-group mask * rsqrt
+        // product and needed 3 tiles.
+        xmm_CB_size_group_1 = single_tile_size * 1;
     }
 
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
@@ -933,6 +943,24 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             .page_size = single_tile_size,
         }}},
     });
+
+    // Scaled-mask table (welford only). c_20 is the one free index in this factory's map: the
+    // mcast/no_mcast groupnorm family occupies c_0..c_11, c_13..c_16, c_18, c_19 and c_21..c_31
+    // across its factories, compute kernels and dataflow kernels, leaving c_12, c_17 and c_20
+    // unused. Produced and consumed entirely inside welford_groupnorm.cpp, so no reader or
+    // writer kernel needs to know about it.
+    if (use_welford) {
+        constexpr uint32_t scaled_mask_cb_index = tt::CBIndex::c_20;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = scaled_mask_CB_size,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(scaled_mask_cb_index),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+    }
 
     constexpr uint32_t xmm2_cb_index = tt::CBIndex::c_23;
     desc.cbs.push_back(CBDescriptor{

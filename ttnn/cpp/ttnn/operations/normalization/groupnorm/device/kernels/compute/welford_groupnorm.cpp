@@ -145,6 +145,14 @@ void kernel_main() {
     constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_31;
     constexpr uint32_t dfb_x_id = tt::CBIndex::c_24;
     constexpr uint32_t dfb_xmm_id = tt::CBIndex::c_25;
+    // Per-batch table of input_mask * 1/sqrt(Var + eps). The product depends only on the group g
+    // and the mask tile index within the group, never on the (mt, nt) position of the final
+    // normalization sweep, so it is loop-invariant across that sweep and is computed once per
+    // batch instead of once per group-tile incidence. Laid out and indexed exactly like
+    // dfb_input_mask (tile index = g * block_w + block_w_index), and allocated with the same
+    // intermediate data format as dfb_xmm - which is what makes the hoist bit-exact, and also
+    // keeps every downstream srcB reconfig that names dfb_xmm_id as its "old" operand valid.
+    constexpr uint32_t dfb_scaled_mask_id = tt::CBIndex::c_20;
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
     constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_27;
@@ -190,8 +198,17 @@ void kernel_main() {
     DataflowBuffer dfb_in0_welford(dfb_in0_welford_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
     DataflowBuffer dfb_out(dfb_out_id);
+    DataflowBuffer dfb_scaled_mask(dfb_scaled_mask_id);
     DataflowBuffer dfb_x(dfb_x_id);
     DataflowBuffer dfb_xmm(dfb_xmm_id);
+
+    // The scaled-mask table is a per-group-per-mask-tile table, so it must have exactly as many
+    // entries as the input mask itself. The factories derive both from num_groups_per_core *
+    // block_wt; assert the kernel-side view of that agrees so the table can never be short.
+    static_assert(
+        num_tiles_input_mask == num_groups * block_w,
+        "num_tiles_input_mask must equal group * block_w; the scaled-mask table is indexed as "
+        "g * block_w + block_w_index over that range.");
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -404,6 +421,38 @@ void kernel_main() {
 
         dfb_ex2pe.wait_front(num_groups);
 
+        // Start Scaled Mask Table
+        // scaled_mask[g][w] = input_mask[g][w] * 1/sqrt(Var_g + eps). Hoisted out of the
+        // per-group body of the final-normalization sweep below, where it used to be recomputed
+        // once per (mt, nt, g) incidence even though it only ever depends on (g, w).
+        //
+        // This is a pure code-motion of *when* the value is computed. Operand roles
+        // (input_mask -> SrcA, ex2pe -> SrcB via BroadcastType::SCALAR), math fidelity, the
+        // DEST clear, and the packer configuration are all identical to the per-group version
+        // this replaces, and the destination CB carries the same data format as dfb_xmm, so
+        // every packed tile is bit-identical to what the inner loop used to write into
+        // dfb_xmm[1].
+        dfb_scaled_mask.reserve_back(num_tiles_input_mask);
+        mul_tiles_bcast_scalar_init_short(dfb_input_mask_id, dfb_ex2pe_id);
+        // srcB currently holds dfb_eps, programmed unconditionally before the rsqrt loop above.
+        // dfb_eps and dfb_ex2pe are both the intermediate format so this does not fire today,
+        // but naming the operand that is actually configured keeps the guard honest if either
+        // format ever diverges.
+        reconfig_data_format_srcb(dfb_eps_id, dfb_ex2pe_id);
+        for (uint32_t g = 0; g < num_groups; ++g) {
+            for (uint32_t w = 0; w < block_w; ++w) {
+                tile_regs_acquire();
+                mul_tiles_bcast_scalar(dfb_input_mask_id, dfb_ex2pe_id, g * block_w + w, g, dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, dfb_scaled_mask_id);
+                tile_regs_release();
+            }
+        }
+        dfb_scaled_mask.push_back(num_tiles_input_mask);
+        dfb_scaled_mask.wait_front(num_tiles_input_mask);
+        // End Scaled Mask Table
+
         // Start Final Normalization
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
             uint32_t out_block_h_actual = out_block_h_normal;
@@ -440,7 +489,7 @@ void kernel_main() {
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
-                        dfb_xmm.reserve_back(2);
+                        dfb_xmm.reserve_back(1);
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
@@ -453,36 +502,29 @@ void kernel_main() {
                         tile_regs_wait();
                         pack_tile(dst0, dfb_xmm_id);
                         tile_regs_release();
+                        dfb_xmm.push_back(1);
 
-                        // // b. 1/[sqrt(Var + eps)] * mask
+                        // // b. a * (mask * 1/[sqrt(Var + eps)])
+                        // The second operand was precomputed once for this batch into
+                        // dfb_scaled_mask; see "Start Scaled Mask Table" above.
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
 
-                        mul_tiles_bcast_scalar_init_short(dfb_input_mask_id, dfb_ex2pe_id);
-                        reconfig_data_format_srcb(dfb_ex_global_id, dfb_ex2pe_id);
+                        dfb_xmm.wait_front(1);
+                        mul_tiles_init(dfb_xmm_id, dfb_scaled_mask_id);
+                        // srcB was last programmed for dfb_ex_global by step (a) above.
+                        reconfig_data_format_srcb(dfb_ex_global_id, dfb_scaled_mask_id);
                         tile_regs_acquire();
-                        mul_tiles_bcast_scalar(dfb_input_mask_id, dfb_ex2pe_id, mask_index, g, dst0);
+                        mul_tiles(dfb_xmm_id, dfb_scaled_mask_id, 0, mask_index, dst0);
                         tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(dst0, dfb_xmm_id);
-                        tile_regs_release();
-                        dfb_xmm.push_back(2);
-
-                        // // c. a * b
-                        dfb_xmm.wait_front(2);
-                        mul_tiles_init(dfb_xmm_id, dfb_xmm_id);
-                        reconfig_data_format_srcb(dfb_ex2pe_id, dfb_xmm_id);
-                        tile_regs_acquire();
-                        mul_tiles(dfb_xmm_id, dfb_xmm_id, 0, 1, dst0);
-                        tile_regs_commit();
-                        dfb_xmm.pop_front(2);
+                        dfb_xmm.pop_front(1);
                         dfb_xmm.reserve_back(1);
                         tile_regs_wait();
                         pack_tile(dst0, dfb_xmm_id);
                         tile_regs_release();
                         dfb_xmm.push_back(1);
 
-                        // // d. Add to cb_xmm_id (accumulate results)
+                        // // c. Add to cb_xmm_id (accumulate results)
                         // // First we get the result in dst0
                         if (group_offset == 0) {
                             // When group_offset is 0, this is the first group for this tile,
@@ -609,6 +651,7 @@ void kernel_main() {
         }
         // End Final Normalization
 
+        dfb_scaled_mask.pop_front(num_tiles_input_mask);
         dfb_ex_global.pop_front(2 * num_groups);
         dfb_ex2pe.pop_front(num_groups);
     }
