@@ -332,6 +332,33 @@ inline __attribute__((always_inline)) uint64_t noc_local_xy() {
     return NOC_XY_COORD(my_x, my_y);
 }
 
+// Set or clear the packet-tag flush bit on a full command buffer.
+//
+// The flush bit travels with every packet issued while it is set, and instructs the DESTINATION NIU
+// to commit all flits of that packet before committing the next packet it receives. Same-VC traffic
+// arrives in order but "flits committed to L1 can be committed out of order" (QSR_NOC_Specification
+// section 5.9), so this bit is what converts ordered arrival into ordered commit. Use it to keep a
+// following transaction -- e.g. a credit atomic -- from landing in L1 ahead of the payload it
+// advertises.
+//
+// This is STICKY command-buffer state, not a per-transaction argument: set it, issue the one packet
+// that should carry it, then clear it. Leaving it set tags all subsequent packets on this buffer and
+// is very expensive (per HW, down to 4% of peak bandwidth for single-flit packets).
+//
+// Only cmd bufs 0/1 have packet tags; the simple atomic buffer (index 2) does not.
+template <uint32_t cmd_buf>
+inline __attribute__((always_inline)) void noc_set_packet_flush(bool enable) {
+    static_assert(
+        cmd_buf == OVERLAY_WR_CMD_BUF || cmd_buf == OVERLAY_RD_CMD_BUF,
+        "packet-tag flush is only defined for the full command buffers (0/1)");
+    TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tags;
+    tags.val = 0;
+    tags.f.snoop_bit = 0;  // unchanged from boot default; nothing in FD uses snoop today
+    tags.f.flush_bit = enable;
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET / 8, tags.val);
+}
+
 inline __attribute__((always_inline)) void init_wr_cmd_buf(uint64_t my_xy) {
     __builtin_riscv_ttrocc_cmdbuf_reset(OVERLAY_WR_CMD_BUF);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(

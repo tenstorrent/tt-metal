@@ -11,11 +11,13 @@
 #include "cq_commands.hpp"
 #include "cq_helpers.hpp"
 #include "telemetry.hpp"
+#include "tt_metal/impl/dispatch/kernels/fd_copy_bench.hpp"
 
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
 #include <limits>
 #include <array>
+#include <type_traits>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
@@ -158,11 +160,16 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an arbitrary amount of data, when the NOC
 // config (dst_noc, VC..) have been specified.
+// flush_last_packet tags the final payload packet with the NoC flush bit, so that a transaction
+// issued after this call -- typically the credit atomic in CBWriter::release_pages -- cannot commit
+// to L1 ahead of the payload. Same-VC traffic arrives in order but may commit out of order; the
+// flush bit is what closes that gap. No-op on tt-1xx, which has no such bit.
 template <
     bool write_last_packet = true,
     bool update_counters = false,
     enum CQNocWait wait_first = CQ_NOC_WAIT,
-    uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
+    uint32_t cmd_buf = NCRISC_WR_CMD_BUF,
+    bool flush_last_packet = false>
 inline uint32_t cq_noc_async_write_with_state_any_len(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
     if (size > NOC_MAX_BURST_SIZE) {
@@ -180,10 +187,23 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
         }
     }
     if constexpr (write_last_packet) {
+        // The flush bit is sticky cmd-buf state, so it is set immediately before the issuing call and
+        // cleared immediately after. Leaving it set would tag every later packet on this buffer and
+        // collapse bandwidth (per HW: to 4% of peak for single-flit packets).
+        if constexpr (flush_last_packet) {
+            noc_set_packet_flush<cmd_buf>(true);
+        }
         cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
             src_addr, dst_addr, size, ndests, noc);
+        if constexpr (flush_last_packet) {
+            noc_set_packet_flush<cmd_buf>(false);
+        }
         return 0;
     } else {
+        static_assert(
+            !flush_last_packet,
+            "flush_last_packet requires write_last_packet: with write_last_packet=false this call does not issue "
+            "the final packet, so there is nothing here to tag. Tag it at the call that does issue it.");
         return size;
     }
 }
@@ -398,8 +418,25 @@ public:
         }
 #endif
 #ifdef ARCH_QUASAR
+        // iDMA's payload never touches the NoC, so there is no flush-bit ordering trick available here.
+        // Ordering instead comes from the explicit local_copy_bytes_wait() barrier the caller already
+        // did before release_pages -- by the time we get here the payload is guaranteed landed, so a
+        // cheap local store is correct and sufficient; routing it over the NoC would just add cost.
         Semaphore<programmable_core_type>(downstream_sem_id).up(n);
 #else
+        // The credit must travel the NoC on every arch, not a local store. The flush bit set on the
+        // last payload packet is enforced at the DESTINATION NIU, so it can only order a transaction
+        // that actually reaches that NIU -- a local DM store to the uncached alias bypasses it
+        // entirely and would leave the credit free to land before the payload.
+        //
+        // noc_semaphore_inc defaults to vc = NOC_UNICAST_WRITE_VC, which is 2 on Quasar and matches
+        // the write cmd buf's NOC_V2_WR_REQ_VC. That shared VC supplies the ordered arrival that the
+        // flush bit then converts into ordered commit.
+        //
+        // Note the address views: the NoC packet takes the PLAIN get_semaphore() offset, while every
+        // reader takes l1_uncached_addr(get_semaphore()). Those are the two aliases of one physical
+        // TL1 cell and the split is intentional -- the NoC atomic is serviced by the TL1 SRAM bank at
+        // the plain offset. Adding MEM_L1_UNCACHED_BASE here would target a different offset.
         noc_semaphore_inc(
             get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)), n, noc_idx);
 #endif
@@ -553,7 +590,18 @@ public:
                 }
                 move_rd_to_next_block_and_release_pages();
             }
+            // BENCHMARK: isolate time spent waiting specifically for the prefetcher's next credit, separate
+            // from move_rd_to_next_block_and_release_pages() above. Routed by call site (via T, the same tag
+            // callers already pass for telemetry) so different call sites' cycles are never blended into one
+            // number -- see fd_copy_bench.hpp kSlotDispAcquireWaitLoopCycles / kSlotDispAcquireWaitChunkCycles.
+            const uint32_t fd_bench_acq0 = fd_copy_bench::rdcycle();
             this->template acquire_pages<T>();
+            const uint32_t fd_bench_acq_cycles = fd_copy_bench::rdcycle() - fd_bench_acq0;
+            if constexpr (!std::is_same_v<T, NoTelemetryBlockGuard>) {
+                fd_copy_bench::note_acquire_wait_loop(fd_bench_acq_cycles);
+            } else {
+                fd_copy_bench::note_acquire_wait_chunk(fd_bench_acq_cycles);
+            }
         }
         return this->available_bytes(cmd_ptr);
     }
