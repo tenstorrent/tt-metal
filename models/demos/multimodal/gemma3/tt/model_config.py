@@ -1152,7 +1152,10 @@ class ModelArgs(TTModelArgs):
         # (dram_matmul_config derives in0_block_w = largest_divisor(K_tiles / cores)), and on this
         # model's other DRAM-sharded matmuls FEWER cores for a bigger K block is what actually paid.
         # 0 leaves stock's 40 alone.
-        if _GEMMA3_LM_HEAD_CORES:
+        # 12B-ONLY: the 15-core grid (and the split sizes it derives) is tuned for 12B's K=3840
+        # (120 K-tiles). On 27B (K=5376, 168 K-tiles) that DRAM-sharded matmul deadlocks the device,
+        # so leave 27B (and any non-12B) on stock's 40-core grid. See gemma3 27B handover notes.
+        if _GEMMA3_LM_HEAD_CORES and self.dim == 3840:
             for _rows in range(int(self.max_grid_size.y), 0, -1):
                 _cols = _GEMMA3_LM_HEAD_CORES // _rows
                 if _GEMMA3_LM_HEAD_CORES % _rows == 0 and _cols <= int(self.max_grid_size.x):
@@ -1312,6 +1315,11 @@ class ModelArgs(TTModelArgs):
     def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         """The same wasted-rows fix as ``_short_prefill_ff1_3_prg_config``, for the FF2 side.
 
+        12B-ONLY fast-path: the hand-picked grids and ``MinimalMatmulConfig`` subblocks below are
+        tuned for 12B's FF2 tile counts. On other sizes (e.g. 27B) those subblocks overflow the
+        matmul DST (``subblock_h*subblock_w <= max_dest_volume`` TT_FATAL), so defer to the stock
+        (dimension-agnostic) config, which uses the safe default blocking.
+
         Stock builds the short-prefill FF2 on ``mlp2_grid`` = ``find_prefill_grid(prefill_rows=8,
         hidden_dim_tiles)`` = (8, 8), so ``per_core_M = ceil(128 / (32*8)) = 1`` and the 8 grid ROWS
         are asked to cover 8 M-tiles when the op has only 4 -- half the rows do no work. Dropping the
@@ -1323,6 +1331,8 @@ class ModelArgs(TTModelArgs):
         8-bank DRAM shard width and mismatching it silently corrupts (measured PCC 0.31 elsewhere in
         this file). Returns to stock whenever it cannot improve on it.
         """
+        if self.dim != 3840:
+            return super().get_mlp_ff2_prg_config(mode, seq_len, prefetcher)
         if mode == Mode.PREFILL and seq_len > 128 and prefetcher is None and not self.is_galaxy:
             pc = self._long_prefill_ff2_minimal_config(seq_len)
             if pc is not None:
@@ -1890,7 +1900,13 @@ class ModelArgs(TTModelArgs):
         return ttnn.CoreCoord(best[2], best[3])
 
     def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
-        """Smaller MinimalMatmul blocks for traced long prefill (default 8³ overflows static CB vs L1)."""
+        """Smaller MinimalMatmul blocks for traced long prefill (default 8³ overflows static CB vs L1).
+
+        12B-ONLY: the hand-picked grids/subblocks here are tuned for 12B's QKV tile counts; on 27B
+        they overflow the matmul DST. Non-12B sizes defer to the stock config (safe default blocking).
+        """
+        if self.dim != 3840:
+            return super().get_attn_qkv_program_config(mode, seq_len, prefetcher)
         if (
             mode == Mode.PREFILL
             and prefetcher is None
