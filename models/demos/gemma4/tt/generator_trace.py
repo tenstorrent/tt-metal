@@ -33,7 +33,7 @@ from models.tt_transformers.tt.generator import (
 # lets the single-chunk sliding-tail stash in ``attention/prefill.py`` stay live
 # across vLLM chunk boundaries. Override with ``GEMMA4_TRACE_PREFILL_SEQ_LENS``
 # if a deployment needs traced 4k and does not use token-chunked prefill.
-_DEFAULT_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048]
+_DEFAULT_TRACE_PREFILL_SEQ_LENS = [96, 128, 512, 1024, 2048]
 
 
 def _resolve_trace_prefill_seq_lens() -> list[int]:
@@ -897,10 +897,10 @@ def warmup_gemma4_model_prefill(
     max_seq = int(getattr(generator.model_args[0], "max_seq_len", chunk) or chunk)
     # Never warm a length whose padded prefill bucket exceeds max_seq_len.
     # e.g. chunk=49152 → get_padded_prefill_len=65536 > pool → RoPE slice FATAL.
-    from models.tt_transformers.tt.common import get_padded_prefill_len
+    from models.demos.gemma4.tt.common import get_gemma4_padded_prefill_len
 
     chunk = min(chunk, max_seq)
-    if chunk > 0 and get_padded_prefill_len(chunk) > max_seq:
+    if chunk > 0 and get_gemma4_padded_prefill_len(chunk) > max_seq:
         chunk = 1 << max(max_seq.bit_length() - 1, 11)
         chunk = min(chunk, max_seq)
     # GEMMA4_TRACE_PREFILL_SEQ_LENS historically only trimmed the *traced* bucket
@@ -922,7 +922,7 @@ def warmup_gemma4_model_prefill(
             lengths = [min(128, max_seq)]
     else:
         lengths = []
-        for length in (128, chunk):
+        for length in (96, 128, chunk):
             if length > 0 and length <= max_seq and length not in lengths:
                 lengths.append(length)
 

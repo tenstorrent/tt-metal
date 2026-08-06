@@ -24,6 +24,21 @@ def sharded_norm_enabled() -> bool:
     return os.environ.get("GEMMA4_SHARDED_NORM", "1").lower() not in ("0", "false", "no")
 
 
+def prefill_mlp_island_enabled(padded_height: int, *, batch_size: int = 1, enable_moe: bool = False) -> bool:
+    """Width-sharded AR→LN→MLP island for short prefill (post-attn through MLP).
+
+    Keeps post-attn / pre-MLP / post-MLP norm outputs width-sharded so gate_up
+    can consume sharded in0 without S2I→DRAM between norms. Does *not* extend
+    across SDPA (input LN still S2I's to interleaved for QKV). Disabled for MoE
+    and batched prefill (reshape is interleaved-only).
+    """
+    if enable_moe or batch_size > 1:
+        return False
+    if not sharded_norm_enabled() or not norm_keep_sharded_enabled():
+        return False
+    return 1 <= int(padded_height) <= _SHARDED_NORM_MAX_HEIGHT
+
+
 def norm_keep_sharded_enabled() -> bool:
     """Leave RMSNorm output width-sharded in L1 when the caller asks.
 
@@ -101,7 +116,7 @@ def decode_width_shard_spec(mesh_device, dim):
 def width_shard_spec(mesh_device, dim, height):
     """``(input_memcfg, program_config)`` for width-sharded RMSNorm at ``(height, dim)``.
 
-    Shared by ``RMSNorm._build_sharded_cfg`` and ``ccl._norm_l1_gather_memcfg`` so
+    Shared by ``RMSNorm._build_sharded_cfg`` and ``ccl._short_seq_l1_gather_memcfg`` so
     an all-gather can write the exact layout the following norm expects.
     ``height`` must be tile-aligned and ``<= _SHARDED_NORM_MAX_HEIGHT``.
     """
@@ -206,18 +221,21 @@ class RMSNorm(nn.Module):
         """
         return width_shard_spec(self.mesh_device, dim, height)
 
-    def _forward_sharded(self, x, already_sharded=False, keep_sharded=False):
+    def _forward_sharded(self, x, already_sharded=False, keep_sharded=False, interleaved_memory_config=None):
         """Width-sharded RMSNorm: [I2S ->] sharded rms_norm [-> S2I].
 
         ``already_sharded`` means the producer handed us this exact layout (see
         :func:`width_shard_spec`), so the interleaved->sharded reshard is
-        skipped. The norm itself is unchanged, so the result is bit-identical --
-        verified with ``torch.equal`` in ops_list/tools/sweeps/l1_stream.py
+        skipped. The norm itself is unchanged, so the result is bit-identical
         (17.7 -> 10.8 us for the norm + its reshards).
 
         ``keep_sharded`` leaves the width-sharded L1 output in place so the next
         consumer (residual add, another norm, gate_up) can stay in the sharded
         domain. Default callers still S2I→DRAM for interleaved consumers.
+
+        ``interleaved_memory_config`` overrides the S2I destination when
+        ``keep_sharded=False`` (e.g. L1 for QKV prefill when the activation
+        budget allows, skipping a DRAM bounce before the matmul hoist).
         """
         if already_sharded:
             x_sh = x
@@ -233,11 +251,12 @@ class RMSNorm(nn.Module):
             x_sh.deallocate(True)
         if keep_sharded:
             return out
-        out_interleaved = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
+        dest = interleaved_memory_config if interleaved_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+        out_interleaved = ttnn.sharded_to_interleaved(out, dest)
         out.deallocate(True)
         return out_interleaved
 
-    def forward(self, x, keep_sharded=False):
+    def forward(self, x, keep_sharded=False, interleaved_memory_config=None, skip_sharded_path=False):
         if self.is_distributed:
             activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
             shard_height, shard_width = x.memory_config().shard_spec.shape
@@ -286,7 +305,8 @@ class RMSNorm(nn.Module):
             keep = bool(keep_sharded) and norm_keep_sharded_enabled()
             padded_height = ((int(x.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
             if (
-                sharded_norm_enabled()
+                not skip_sharded_path
+                and sharded_norm_enabled()
                 and self.with_scale
                 and self.tt_weight is not None
                 and len(x.shape) == 4
@@ -301,27 +321,42 @@ class RMSNorm(nn.Module):
                     # A producer may already have written the exact layout we want
                     # (ccl_allreduce L1-gather does for decode and short prefill).
                     if x.is_sharded() and x.memory_config() == self._sharded_cfg[0]:
-                        return self._forward_sharded(x, already_sharded=True, keep_sharded=keep)
+                        return self._forward_sharded(
+                            x,
+                            already_sharded=True,
+                            keep_sharded=keep,
+                            interleaved_memory_config=interleaved_memory_config,
+                        )
                     if not x.is_sharded():
-                        return self._forward_sharded(x, keep_sharded=keep)
+                        return self._forward_sharded(
+                            x, keep_sharded=keep, interleaved_memory_config=interleaved_memory_config
+                        )
                     # Mismatched shard spec: reshard into the norm layout rather
                     # than falling through to interleaved (which can't take a
                     # sharded input cleanly without an S2I first).
-                    return self._forward_sharded(x, already_sharded=False, keep_sharded=keep)
+                    return self._forward_sharded(
+                        x, already_sharded=False, keep_sharded=keep, interleaved_memory_config=interleaved_memory_config
+                    )
 
             # Interleaved path can't consume a sharded activation.
             if x.is_sharded():
                 x = maybe_interleave(x)
+
+            out_kwargs = {}
+            if interleaved_memory_config is not None:
+                out_kwargs["memory_config"] = interleaved_memory_config
 
             if self.with_scale:
                 tt_output = ttnn.rms_norm(
                     x,
                     weight=self.tt_weight,
                     epsilon=self.eps,
+                    **out_kwargs,
                 )
             else:
                 tt_output = ttnn.rms_norm(
                     x,
                     epsilon=self.eps,
+                    **out_kwargs,
                 )
             return tt_output

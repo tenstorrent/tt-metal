@@ -960,10 +960,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         ), f"start_pos length {len(num_cached_per_user)} != prompt_lens length {len(prompt_lens)}"
         for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
             assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
-        prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached)
-            for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
-        ]
+        prefill_seq_lens = kwargs.pop("prefill_seq_lens", None)
+        if prefill_seq_lens is None:
+            prefill_seq_lens = [
+                get_padded_prefill_len(seq_len - num_cached)
+                for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
+            ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
         # See _will_row_shard_prefill for when this path is taken.
         if self._will_row_shard_prefill(tokens, sampling_params):

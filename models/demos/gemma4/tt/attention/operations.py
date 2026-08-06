@@ -21,6 +21,7 @@ import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.dram_sharded import (
     DramShardedLinear,
+    in_prefill_l1_matmul_band,
     interleaved_o_proj_prefill_config,
     interleaved_prefill_config,
     matmul_rows,
@@ -59,18 +60,19 @@ PREFILL_SLIDING_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_SLIDING_CHUNK_SI
 def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     """Memory config for short-lived prefill attention activations (Qwen36 #48861).
 
-    Keep q/k/v head-split, q/k RMSNorm, and concat_heads temps in L1 when enabled.
-    The allreduce input stays DRAM interleaved. (The o_proj matmul itself may write
-    an L1 block-sharded output under the tuned prefill config, independently of this
-    knob — ``apply_allreduce`` interleaves it back; see
-    ``interleaved_o_proj_prefill_config``.)
-
-    ``GEMMA4_PREFILL_L1_ACT=0|1`` (default 0). Measured OOM on 31B / P150x8 /
-    chunk4k 128k with L1=1 (``ccl_prefill_ab.tsv``); leave off for long ISL.
+    Default DRAM so Q/K/V/RoPE/head-split temps stay out of SDPA's static L1 CBs.
+    Matmul ``in0`` hoists separately via ``prefill_matmul_in0_memcfg`` and is
+    freed before SDPA. Opt into L1 with ``GEMMA4_PREFILL_L1_ACT=1`` (long ISL OOM
+    risk on 31B / P150x8 / chunk4k 128k).
     """
     if os.environ.get("GEMMA4_PREFILL_L1_ACT", "0").lower() in ("1", "true", "yes"):
         return ttnn.L1_MEMORY_CONFIG
     return ttnn.DRAM_MEMORY_CONFIG
+
+
+def prefill_sdpa_act_memcfg() -> ttnn.MemoryConfig:
+    """DRAM (by default) for Q/K/V/RoPE through SDPA — see ``prefill_short_lived_memcfg``."""
+    return prefill_short_lived_memcfg()
 
 
 # Conservative interleaved-L1 budget for a *single* short-lived activation
@@ -100,12 +102,42 @@ def prefill_tilize_memcfg(seq_len: int, hidden_size: int, dtype_bytes: int = 2) 
     return prefill_tensor_memcfg(int(seq_len) * int(hidden_size), dtype_bytes=dtype_bytes)
 
 
+def prefill_matmul_in0_memcfg(rows: int, k: int) -> ttnn.MemoryConfig:
+    """L1 interleaved when ``[rows, k]`` bf16 fits the prefill activation budget, else DRAM."""
+    return prefill_tensor_memcfg(int(rows) * int(k))
+
+
+def should_hoist_prefill_matmul_in0(rows: int, k: int, program_config) -> bool:
+    """Whether to move matmul in0 from DRAM to L1 interleaved before the op."""
+    if prefill_matmul_in0_memcfg(rows, k) != ttnn.L1_MEMORY_CONFIG:
+        return False
+    if program_config is not None:
+        return True
+    return in_prefill_l1_matmul_band(rows)
+
+
+def hoist_prefill_matmul_in0_if_needed(tensor, program_config=None):
+    """Hoist interleaved in0 onto L1 when budget and prefill band allow.
+
+    Returns ``(act, owned_l1_temp)``; deallocate ``owned_l1_temp`` after the matmul.
+    """
+    rows = matmul_rows(tensor)
+    k = int(tensor.shape[-1])
+    if not should_hoist_prefill_matmul_in0(rows, k, program_config):
+        return tensor, None
+    if tensor.is_sharded() or tensor.memory_config().buffer_type == ttnn.BufferType.L1:
+        return tensor, None
+    act_l1 = ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+    return act_l1, act_l1
+
+
 def o_proj_input_memcfg(sdpa_out, hidden_size: int, default_memcfg=None):
     """Destination for prefill ``concat_heads`` when it feeds the tuned o_proj matmul.
 
-    ``interleaved_o_proj_prefill_config`` pins in0 to L1 interleaved. Writing the
-    head-concat straight into L1 makes the hoist in ``apply_output_projection`` a
-    no-op instead of a DRAM write + copy back on-chip.
+    ``interleaved_o_proj_prefill_config`` pins in0 to L1 interleaved when the
+    tuned path is enabled. On the default auto path, L1 is still used when the
+    short prefill band and L1 budget allow — same gate as
+    ``hoist_prefill_matmul_in0_if_needed``.
 
     Falls back to ``default_memcfg`` (normally ``prefill_short_lived_memcfg``) when
     the tuned config does not apply, or when the concat output misses the prefill
@@ -119,10 +151,9 @@ def o_proj_input_memcfg(sdpa_out, hidden_size: int, default_memcfg=None):
     for d in shape[:-3]:
         rows *= d
     k = heads * head_dim
-    program_config, _, _ = interleaved_o_proj_prefill_config(rows, k, int(hidden_size))
-    if program_config is None or prefill_tensor_memcfg(rows * k) != ttnn.L1_MEMORY_CONFIG:
-        return default_memcfg
-    return ttnn.L1_MEMORY_CONFIG
+    if should_hoist_prefill_matmul_in0(rows, k, None):
+        return ttnn.L1_MEMORY_CONFIG
+    return default_memcfg
 
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, decode=False):
@@ -140,9 +171,10 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
       N-tile per core and collapses the output subblock to 1x1, running at 33% of
       DRAM peak; fewer cores with a larger ``per_core_N`` fixes it.
     * **prefill** (everything else): ``interleaved_prefill_config``. Prefill output
-      defaults to L1 *interleaved* so ``nlp_create_qkv_heads`` consumes it with no
-      ``sharded_to_interleaved`` (block-sharded out + S2I was a net loss vs L1
-      interleaved out).
+      is DRAM interleaved so prefill SDPA keeps a clean L1 for its static CBs
+      (L1 QKV out under SDPA clashed on WH 8x8). When the prefill L1 budget allows,
+      in0 is hoisted from DRAM to L1 interleaved before the matmul (or landed
+      there by input_layernorm S2I) — see ``hoist_prefill_matmul_in0_if_needed``.
 
     NOTE the decode config is NOT bit-exact against auto (maxabs ~7 on the
     [32,2048] output), though it IS closer to an fp32 reference than auto is
@@ -159,13 +191,17 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
         program_config, tuned_out_memcfg, compute_kernel_config = interleaved_prefill_config(
             matmul_rows(hidden_states), int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
         )
-    return ttnn.linear(
-        hidden_states,
+    act, act_l1 = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
+    out = ttnn.linear(
+        act,
         weights.wqkv,
         program_config=program_config,
         memory_config=memory_config if memory_config is not None else tuned_out_memcfg,
         compute_kernel_config=compute_kernel_config,
     )
+    if act_l1 is not None:
+        act_l1.deallocate(True)
+    return out
 
 
 def interleave_qkv_if_sharded(xqkv, memory_config=None):
@@ -348,11 +384,11 @@ def prefill_sdpa_program_config(head_dim, seq_len):
         grid = ttnn.CoreCoord(8, 4)
         dq, dk = 128, 128
     else:
-        # head_dim<=256: q=k=512 (~3.5 MB) and even q=k=256 (~1.58 MB) overflow
-        # L1 (max 1.57 MB); q=256/k=128 keeps the static CBs in budget while
-        # still giving wider Q parallelism than the default.
+        # head_dim<=256: leave headroom under the ~1.57 MB L1 ceiling. q=k=256
+        # (~1.58 MB) overflows; even q=256/k=128 sits on the edge and clashes with
+        # any stray L1 temp (demo ISL 1024). q=k=128 keeps SDPA CBs safe.
         grid = ttnn.CoreCoord(8, 8)
-        dq, dk = 256, 128
+        dq, dk = 128, 128
     q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", dq))
     k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", dk))
     # Chunk sizes must be a multiple of 32 and not exceed the (padded) seq_len.
@@ -696,11 +732,8 @@ def apply_output_projection(tensor, weights: AttentionWeights, memory_config=Non
     ``apply_allreduce`` interleaves it back. ``memory_config`` overrides the tuned
     output layout for callers that want interleaved directly.
 
-    Default (flag off) is shipped ttnn auto, which hits ~65 µs device @ 56 cores in
-    the *full model* — faster than every pinned progcfg measured in isolation
-    (``1d_c28`` 69 µs, ``1d_c14_bw8`` 84 µs). The tuned matmul measures within noise
-    of auto and the interleave-back it forces costs ~55 µs on top, i.e. 0.56x auto
-    end-to-end (``test_o_proj_wired_config_vs_auto``).
+    Default (flag off) is shipped ttnn auto — see
+    ``interleaved_o_proj_prefill_config`` for the measurements behind that default.
     """
     if isinstance(weights.o_proj, DramShardedLinear):
         out = weights.o_proj(tensor, out_memory_config=memory_config)
@@ -710,12 +743,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, memory_config=Non
     program_config, tuned_out_memcfg, compute_kernel_config = interleaved_o_proj_prefill_config(
         matmul_rows(tensor), int(tensor.shape[-1]), int(weights.o_proj.shape[-1])
     )
-    act = tensor
-    act_l1 = None
-    if program_config is not None and not tensor.is_sharded():
-        if tensor.memory_config().buffer_type != ttnn.BufferType.L1:
-            act_l1 = ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
-            act = act_l1
+    act, act_l1 = hoist_prefill_matmul_in0_if_needed(tensor, program_config)
     out = ttnn.linear(
         act,
         weights.o_proj,
