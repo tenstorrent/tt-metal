@@ -247,19 +247,23 @@ class TtPrefillRuntime:
         return x
 
     def compile(self, kv_cache) -> None:
-        """Warm up one zero-token chunk so the per-chunk loop hits no first-run cost (JIT-compiles all
-        ops). The engine passes the cache it owns; the warm-up writes slot 0 and is harmless."""
+        """Warm up every KV-length the served loop can reach so no served chunk pays a first-run JIT. The
+        cache-read attention (RingJointSDPA) keys its program per KV-length bucket, so warming only the
+        first chunk just relocates the ~6s compile to the first un-warmed depth. Sweep the full per-user
+        cache in chunk steps (actual_start = 0, chunk, 2*chunk, ... max_seq_len-chunk); each warm-up writes
+        slot 0, which the real run overwrites in order."""
         assert self.model_built
         chunk = self.config.chunk_size
-        logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
+        starts = list(range(0, self.config.max_seq_len - chunk + 1, chunk))
+        logger.info(f"TtPrefillRuntime.compile() — warming {len(starts)} KV-length buckets ({chunk}-token chunks)")
         t0 = time.perf_counter()
-        tt_input = self.make_chunk_input([0] * chunk)
-        self.prefill_chunk(tt_input, kv_cache, slot_id=0, actual_start=0, actual_end=chunk)
+        for start in starts:
+            self.prefill_chunk(
+                self.make_chunk_input([0] * chunk), kv_cache, slot_id=0, actual_start=start, actual_end=start + chunk
+            )
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(
-            f"[prefill timing] task_id=WARMUP num_tokens={chunk} runtime.prefill_chunk(chunk) = {warmup_ms:.2f} ms"
-        )
+        logger.info(f"[prefill timing] task_id=WARMUP buckets={len(starts)} runtime.compile() = {warmup_ms:.2f} ms")
         self.compiled = True
 
     def prefill_chunk(
