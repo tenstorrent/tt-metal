@@ -50,33 +50,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Runtime params (templates only under SPEED_OF_LIGHT). Kept as runtime args so they do not
     // trigger per-value recompiles.
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
-    const std::uint32_t num_faces       = params.num_faces;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
     // This test always runs the FPU (non-unpack-to-dest) path, so unpack goes to SrcA.
-    const std::uint32_t SELECTED_UNPACKER = p_unpacr::UNP_A;
-    tdma_descriptor_t td_val;
-    const std::uint32_t buf_desc_id          = 0;
-    const std::uint32_t num_tiles_per_unpack = TILE_CNT;
+    const std::uint32_t SELECTED_UNPACKER       = p_unpacr::UNP_A;
+    const std::uint32_t buf_desc_id             = 0;
+    const std::uint32_t num_tiles_per_unpack    = TILE_CNT;
+    constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
 
     {
         ZONE_SCOPED("INIT")
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-        buffer_descriptor_u bd_val = {0};
-
-        bd_val.f.l1_addr_16B = params.buffer_A[0] >> 4;
-        bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-        bd_val.f.x_dim       = TEST_FACE_C_DIM;
-        bd_val.f.y_dim       = TEST_FACE_R_DIM;
-        bd_val.f.z_dim       = num_faces;
-
-        td_val.buf_desc        = bd_val;
-        td_val.buf_desc_id     = buf_desc_id;
-        td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
+        const tdma_descriptor_t td_val =
+            ckernel::trisc::construct_tdma_desc(tensor_shape, params.buffer_A[0] >> 4, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
 
         _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
         if constexpr (is_fp32_dest_acc_en)
@@ -87,15 +75,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
         }
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-            buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_unpack);
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape, num_tiles_per_unpack);
         PROFILER_SYNC();
     }
     {
         ZONE_SCOPED("TILE_LOOP")
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, ckernel::DEFAULT_TENSOR_SHAPE);
+            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0, tensor_shape);
         }
         PROFILER_SYNC();
     }
@@ -235,9 +222,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
-    const std::uint32_t num_faces          = params.num_faces;
-    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
-    const std::uint32_t TEST_FACE_C_DIM    = params.TEST_FACE_C_DIM;
     const std::uint32_t LAST_TILE_W_DATUMS = params.LAST_TILE_W_DATUMS;
 #endif
     constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
@@ -330,20 +314,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-        tdma_descriptor_t tdma_desc;
-        std::uint32_t const buf_desc_id = 31;
-
-        buffer_descriptor_u bd_val = {0};
-
-        bd_val.f.l1_addr_16B = params.buffer_Res[0] >> 4;
-        bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-        bd_val.f.x_dim       = TEST_FACE_C_DIM;
-        bd_val.f.y_dim       = TEST_FACE_R_DIM;
-        bd_val.f.z_dim       = num_faces;
-
-        tdma_desc.buf_desc        = bd_val;
-        tdma_desc.buf_desc_id     = buf_desc_id;
-        tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
+        const std::uint32_t buf_desc_id = 31;
+        const tdma_descriptor_t tdma_desc =
+            ckernel::trisc::construct_tdma_desc(tensor_shape, params.buffer_Res[0] >> 4, formats.pack_dst, buf_desc_id, formats.pack_src);
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
