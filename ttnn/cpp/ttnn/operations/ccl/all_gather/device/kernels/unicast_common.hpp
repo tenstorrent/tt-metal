@@ -99,8 +99,8 @@ private:
 // that announce them.
 //
 // Templated on the sender type (SenderT*) so the same writer drives either a direct WorkerToFabricEdmSender
-// (one worker per direction) or a WorkerToFabricMuxSender (workers sharing a fabric mux). The send calls are
-// base sender-pointer overloads that accept either, so no route-manager is needed -- which is also why this
+// (one worker per direction) or a FabricMuxV2Sender (workers sharing a fabric mux). The send calls accept
+// either (see CheckFabricSenderType in api_common.h), so no route-manager is needed -- which is also why this
 // class routes its own headers.
 template <uint32_t page_size, uint32_t packet_size, typename SenderT>
 class FabricWriter {

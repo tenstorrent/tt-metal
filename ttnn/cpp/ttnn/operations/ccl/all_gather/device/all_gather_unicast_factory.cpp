@@ -152,6 +152,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic.
     // This is a major perf knob, below heuristic was determined from extensive test sweeps.
+    // TODO(perf): every constant below was calibrated against Mux V1, whose throughput degrades with fan-in;
+    // V2 stays flat from 8 to 64 senders. Re-sweep: the ceiling of 12 is likely too low now, and re-check
+    // whether the {3,4,5} pessimum survives V2's stream-register credit path.
     uint32_t num_links = operation_attributes.axis_num_links[axis];
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
@@ -241,19 +244,14 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         return core_at(link, dir, mux_per_dir + w);
     };
     auto dir_neighbor = [&](uint32_t dir) { return dir == 0 ? fwd_coord : bwd_coord; };
-    auto dir_active = [&](uint32_t dir) { return dir_neighbor(dir).has_value(); };
+    auto dir_iters = [&](uint32_t dir) { return dir == 0 ? fwd_iters : bwd_iters; };
 
-    // Reader/writer kernels + CB run on worker cores only; the mux kernel runs on its own cores (created only
-    // for a direction that has a neighbor).
+    // Reader/writer kernels + CB run on worker cores only; the mux kernels run on their own cores.
     std::vector<CoreCoord> worker_cores;
     worker_cores.reserve(num_links * num_directions * workers_per_dir);
     std::set<CoreRange> worker_core_set;
-    std::set<CoreRange> mux_core_set;
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t dir = 0; dir < num_directions; ++dir) {
-            if (use_mux && dir_active(dir)) {
-                mux_core_set.emplace(mux_core(link, dir));
-            }
             for (uint32_t w = 0; w < workers_per_dir; ++w) {
                 worker_cores.push_back(worker_core(link, dir, w));
                 worker_core_set.emplace(worker_core(link, dir, w));
@@ -261,30 +259,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         }
     }
     const CoreRangeSet worker_core_range(worker_core_set);
-    const CoreRangeSet mux_core_range(mux_core_set);
-
-    // Fabric mux config
-    constexpr uint8_t num_buffers_per_channel = 2;  // hardcoded since no observable impact on performance
-    tt::tt_fabric::FabricMuxConfig mux_config(
-        /*num_full_size_channels=*/workers_per_dir,
-        /*num_header_only_channels=*/0,
-        /*num_buffers_full_size_channel=*/num_buffers_per_channel,
-        /*num_buffers_header_only_channel=*/0,
-        /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
-        /*base_l1_address=*/mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
-
-    tt::tt_metal::KernelHandle mux_kernel_id = 0;
-    if (use_mux && mux_core_range.num_cores() > 0) {
-        mux_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-            mux_core_range,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = mux_config.get_fabric_mux_compile_time_args(),
-                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-    }
 
     ////////////////////////////////////////////////////////////////
     // Page indexing
@@ -452,12 +426,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
-    // When multiple workers share a fabric mux, the writer connects through it: append the mux geometry (after
-    // the tensor-accessor args) and switch the kernel onto its USE_WORKER_MUX path.
     std::map<std::string, std::string> writer_defines;
     if (use_mux) {
-        ttnn::ccl::fabric_mux_connection_ct_args(
-            workers_per_dir, tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_config, writer_compile_args);
         writer_defines["USE_WORKER_MUX"] = "1";
     }
 
@@ -472,6 +442,42 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         worker_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args, writer_defines));
 
+    // Fabric mux
+    const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+    // TODO(perf): num_buffers_per_channel. Carried over from V1, where it measured as no-impact. That no longer
+    // applies: V2 publishes the read counter from a separate RISC, so slot depth now sets how far a worker can
+    // run ahead of the forwarder. The V2 test suite clusters on 4 and goes up to 8.
+    constexpr uint8_t num_buffers_per_channel = 2;
+    // TODO(perf): channel_buffer_size_bytes. The max fabric channel size over-allocates -- a slot holds one
+    // packet. The V2 throughput benchmark uses packet_header_size + payload; ours would be
+    //   use_scatter_write ? min(packet_size / output_chunk_size, NOC_SCATTER_WRITE_MAX_CHUNKS) * output_chunk_size
+    //                     : packet_size
+    // (needs NOC_SCATTER_WRITE_MAX_CHUNKS host-side). Frees mux L1, buying more num_buffers at equal cost.
+    const size_t channel_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    tt::tt_fabric::FabricMuxV2Config mux_config(
+        /*num_channels=*/static_cast<uint8_t>(workers_per_dir),
+        /*num_buffers_per_channel=*/num_buffers_per_channel,
+        /*channel_buffer_size_bytes=*/channel_buffer_size_bytes,
+        /*base_l1_address=*/mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    if (use_mux) {
+        // A mux owns exactly one downstream connection (dst node + link), so every dir and link needs its own.
+        for (uint32_t link = 0; link < num_links; ++link) {
+            for (uint32_t dir = 0; dir < num_directions; ++dir) {
+                // MuxV2 only exits once every channel has been opened and closed, so a mux with a channel nobody
+                // connects to hangs the op. Hence mux must be created under the same condition as worker connection.
+                if (dir_iters(dir) == 0) {
+                    continue;
+                }
+                const auto dst_node = mesh_device->get_fabric_node_id(*dir_neighbor(dir));
+                // TODO(perf): forwarder_noc (defaulted) picks the forwarder's NOC; the manager gets the other. Flipping
+                // to NOC::RISCV_1_default changes which NOC mux->ERISC traffic shares with our workers' writes into the
+                // mux.
+                tt::tt_fabric::add_fabric_mux_v2_to_program(
+                    program, mux_config, mux_core(link, dir), sender_fabric_node_id, dst_node, link);
+            }
+        }
+    }
+
     ////////////////////////////////////////////////////////////////
     // Runtime args
     //
@@ -481,26 +487,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // worker w on the neighbor.
     ////////////////////////////////////////////////////////////////
 
-    const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
     const uint32_t input_addr = input_tensor.buffer()->address();
     const uint32_t output_addr = output_tensor.buffer()->address();
-
-    // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
-    // direction's workers all feed this one connection.
-    if (use_mux) {
-        for (uint32_t link = 0; link < num_links; ++link) {
-            for (uint32_t dir = 0; dir < num_directions; ++dir) {
-                if (!dir_active(dir)) {
-                    continue;
-                }
-                const CoreCoord mux_core_coord = mux_core(link, dir);
-                const auto dst_node = mesh_device->get_fabric_node_id(*dir_neighbor(dir));
-                auto mux_rt_args = mux_config.get_fabric_mux_run_time_args(
-                    sender_fabric_node_id, dst_node, link, program, mux_core_coord);
-                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_core_coord}, mux_rt_args);
-            }
-        }
-    }
 
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t w = 0; w < workers_per_dir; ++w) {
@@ -530,7 +518,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 const auto neighbor = dir_neighbor(dir);
 
                 const uint32_t stripe_step = is_forward ? num_devices - 1 : 1;
-                const uint32_t num_iters = is_forward ? fwd_iters : bwd_iters;
+                const uint32_t num_iters = dir_iters(dir);
                 const uint32_t num_recv =
                     is_ring ? num_devices / 2 : (is_forward ? device_idx : num_devices - 1 - device_idx);
                 const bool do_local_write = is_forward ? (fwd_iters > 0) : (fwd_iters == 0);
@@ -601,20 +589,16 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 TT_FATAL(num_iters == 0 || neighbor.has_value(), "an active direction must have a neighbor");
                 if (num_iters > 0) {
                     if (use_mux) {
-                        // Connect this worker to its channel (== worker index w) on the direction's mux.
                         const CoreCoord mux_vc = mesh_device->worker_core_from_logical_core(mux_core(link, dir));
-                        const CoreCoord term_master_vc =
-                            mesh_device->worker_core_from_logical_core(worker_core(link, dir, 0));
-                        ttnn::ccl::fabric_mux_connection_rt_args(
-                            /*mux_connection_valid=*/true,
-                            /*is_termination_master=*/w == 0,
-                            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                        const auto flow_control_sem_id = tt::tt_metal::CreateSemaphore(program, core, 0);
+                        const auto teardown_sem_id = tt::tt_metal::CreateSemaphore(program, core, 0);
+                        mux_config.append_client_connection_rt_args(
                             mux_vc,
-                            /*worker_id=*/w,
-                            core,
-                            mux_config,
-                            program,
-                            term_master_vc,
+                            /*logical_channel_id=*/static_cast<uint8_t>(w),
+                            tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{
+                                .flow_control_sem_id = flow_control_sem_id,
+                                .teardown_sem_id = teardown_sem_id,
+                            },
                             writer_rt_args);
                     } else {
                         std::vector<tt::tt_fabric::FabricNodeId> dst = {mesh_device->get_fabric_node_id(*neighbor)};
