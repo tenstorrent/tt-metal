@@ -1404,6 +1404,15 @@ class resnet50:
             layer_module="layer3_module6",
         )
 
+        # [#48552] Layers-1-3 e2e gate (TT_METAL_QSR_RESNET_STOP_AFTER_LAYER3=1): return the layer3 output
+        # [1,1,NHW,1024] and SKIP layer4/avgpool/fc. Layer4 conv2 + the layer3_module1 downsample have no working
+        # 2-core path (fused conv_bmm bank-reuse 0x19 / DRAM-weight K-spill TILE_COUNTERS -- both deep LLK/sim
+        # bugs), so this lets the e2e run end-to-end through the WORKING height-sharded layers 1-3 (stem host-fold
+        # + host maxpool + layers 1-3 on the split path) for validation on the 2-core emulator. Remove once layer4
+        # has a working path (LLK fix or bigger grid num_cores_c>=4).
+        if os.environ.get("TT_METAL_QSR_RESNET_STOP_AFTER_LAYER3") == "1":
+            return x
+
         # [#48552] Quasar: layer4 conv2 STAYS block-sharded (fused conv / LLK path). Unlike layer3, layer4's
         # full per-core weights (K=144 x N=16 = 2304 tiles ~= 4.7 MB) EXCEED Quasar's ~4 MB unreserved L1, so
         # even with f6b15a's uint32 ring they don't physically fit the single-K-block height split
