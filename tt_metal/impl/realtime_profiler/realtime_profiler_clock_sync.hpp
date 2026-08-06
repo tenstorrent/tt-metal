@@ -11,7 +11,6 @@
 #include <memory>
 #include <optional>
 #include <span>
-#include <utility>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
@@ -139,12 +138,6 @@ public:
     // publishable once its end is covered: that is what says the clock is known on both sides of it. Receiver thread.
     [[nodiscard]] std::optional<uint64_t> coverage_past(uint64_t ticks) const;
 
-    // The tightest pair of probes surrounding `ticks` that is still wide enough to take a slope from. Keyed on the one
-    // timestamp being placed, not on the record as a whole: a chord wide enough to bracket a whole record is as wide as
-    // that record, and the curvature a DVFS step leaves scales with the span, so placing a 1.3ms program's start on a
-    // 1.8ms chord charges it for a rate change that happened nowhere near it. Receiver thread.
-    [[nodiscard]] std::optional<std::pair<Anchor, Anchor>> probes_bracketing(uint64_t ticks) const;
-
     // A rate measured across the whole retained history rather than across one chord.
     struct BaselineRate {
         double rate = 0.0;
@@ -156,23 +149,25 @@ public:
     // thread, like the rest of the probe history.
     [[nodiscard]] std::optional<BaselineRate> baseline_rate() const;
 
-    // What a closed interval publishes its records with. `mapping.device_cycle_offset` is per record, so it is left for
-    // device_cycle_offset_for; everything else is shared by every record the chord covers.
+    // What a closed interval publishes its records with. `mapping` is per record, so it is left for place_on_chord;
+    // everything else is shared by every record the chord covers.
     struct ChordMapping {
         experimental::ProgramRealtimeClockSync mapping;
         // Measured across kRateBaseline, not across this chord.
         double frequency = 0.0;
-        // Uncertainty in `frequency`, as a fraction.
-        double rate_noise = 0.0;
         // This interval's own slope. Published to nobody: it is the local rate, so it is what the next interval's
         // curvature term has to be compared against, and a baseline rate would have smoothed the step away.
         double chord_rate = 0.0;
+        // Uncertainty in `chord_rate`, as a fraction: the two brackets over the span they were measured across.
         double chord_rate_noise = 0.0;
         // Enough to place a timestamp on the chord: its near anchor, and the reciprocal slope, inverted once here
         // because the alternative is a division per record on the drain thread.
         uint64_t open_ticks = 0;
         double open_host_ns = 0.0;
         double inv_chord_rate = 0.0;
+        // Not needed to place anything; it is what says whether a timestamp is being interpolated between the two
+        // measured points or extrapolated past them. See place_on_chord.
+        uint64_t close_ticks = 0;
     };
 
     // The offset that restates a record's own interpolated placement in terms of the published `frequency`. Anchoring
@@ -186,6 +181,26 @@ public:
         return std::llround(static_cast<double>(start_ticks) - chord.frequency * host_ns);
     }
 
+    // Where `start_ticks` lands on `chord`, and what that placement is worth. Between the two anchors the secant cannot
+    // be further out than the worse of them whatever its slope, so the chord's own bound stands unchanged. Past them
+    // the slope is extrapolated and its uncertainty becomes distance * noise, unbounded: a timestamp placed from a
+    // chord a second away is wrong by milliseconds, and the chord's bound would report sub-microsecond.
+    [[nodiscard]] static experimental::ProgramRealtimeClockSync place_on_chord(
+        const ChordMapping& chord, uint64_t start_ticks) {
+        uint64_t outside = 0;
+        if (start_ticks < chord.open_ticks) {
+            outside = chord.open_ticks - start_ticks;
+        } else if (start_ticks > chord.close_ticks) {
+            outside = start_ticks - chord.close_ticks;
+        }
+        const auto extrapolation = std::chrono::nanoseconds(
+            static_cast<int64_t>(static_cast<double>(outside) * chord.inv_chord_rate * chord.chord_rate_noise));
+        return experimental::ProgramRealtimeClockSync{
+            .device_cycle_offset = device_cycle_offset_for(chord, start_ticks),
+            .sync_error = chord.mapping.sync_error + extrapolation,
+        };
+    }
+
     // Chooses what a closed interval publishes with, given its two probes and the previous interval's slope, or
     // nullopt when the pair cannot be taken as a chord at all. Pure: no device, no clock, no state.
     [[nodiscard]] static std::optional<ChordMapping> plan_chord_mapping(
@@ -196,10 +211,14 @@ public:
         double previous_rate_noise,
         double sanity_rate);
 
-    // plan_chord_mapping against this object's own baseline, previous interval and measured rate, retaining what the
-    // next interval will be compared against. Nullopt leaves all of it untouched, so a pair that cannot be taken as a
-    // chord does not disturb the interval before it.
-    [[nodiscard]] std::optional<ChordMapping> close_interval(const Anchor& open, const Anchor& closing);
+    // What to publish `ticks` with: the tightest pair of probes around it that can be taken as a chord, else the single
+    // probe past it sloped at the fitted rate. Nullopt only when no probe has read past `ticks` at all, so anything
+    // coverage_past admits, this places.
+    //
+    // Total on purpose, and it degrades rather than refusing. This is asked about the oldest staged record repeatedly
+    // and its inputs do not change between asks, so a refusal is not retried -- it stands until the ring laps the probe
+    // it refused, seconds later, with every record behind it held up because records publish in order. Receiver thread.
+    [[nodiscard]] std::optional<ChordMapping> place(uint64_t ticks);
 
     // sync_error of the last interval this closed, which is the bound currently standing for this device.
     [[nodiscard]] std::chrono::nanoseconds last_published_sync_error() const { return last_published_sync_error_; }
@@ -214,6 +233,16 @@ public:
     [[nodiscard]] Cost cost() const { return cost_; }
 
 private:
+    // How many successively wider near anchors place() tries before it gives up on measuring a slope at all. Both of
+    // plan_chord_mapping's refusals scale as 1/span, so widening is what clears them; past a few steps it is the far
+    // anchor that does not fit, and no near anchor repairs that.
+    static constexpr uint64_t kPlacementWidenSteps = 8;
+
+    // Index of the oldest retained probe whose counter read reached `ticks`, or probes_end_ when none has. Probes are
+    // appended in tick order, so this bisects: the retained span grows with the backlog, and scanning it per record is
+    // what turns a backlog into a stall.
+    [[nodiscard]] uint64_t first_probe_at_or_past(uint64_t ticks) const;
+
     // False when there is no usable cache entry, or the probe failed and a full fit is needed.
     bool try_cached_calibration();
     // False when the fit is not worth keeping and another attempt is likely to beat it.
@@ -262,8 +291,16 @@ private:
     }
     [[nodiscard]] const Anchor& probe_at(uint64_t index) const { return probe_history_[index % kProbeHistoryCapacity]; }
 
-    // The interval this last closed. Only the difference between consecutive intervals' slopes says the clock moved
-    // *within* one, so this is what the curvature term is measured against.
+    // The last two intervals' slopes. Only the difference between consecutive ones says the clock moved *within* one,
+    // so `previous_rate_` is what the curvature term is measured against.
+    //
+    // Which interval is which is keyed on the closing anchor rather than on call order, because an interval is closed
+    // once per drain pass until the next probe arrives -- passes run every few hundred microseconds against a 500us
+    // interval -- and rolling these forward per call would leave a chord compared against itself, reading zero
+    // curvature for every pass after the first.
+    uint64_t current_chord_close_ticks_ = 0;
+    double current_rate_ = 0.0;
+    double current_rate_noise_ = 0.0;
     double previous_rate_ = 0.0;
     double previous_rate_noise_ = 0.0;
     std::chrono::nanoseconds last_published_sync_error_{};

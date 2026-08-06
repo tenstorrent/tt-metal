@@ -442,9 +442,10 @@ RealtimeProfilerReceiver::DeviceState::DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::~DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::DeviceState(DeviceState&&) noexcept = default;
 
-void RealtimeProfilerReceiver::sync_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now) {
+std::chrono::nanoseconds RealtimeProfilerReceiver::sync_device(
+    DeviceState& dev_state, std::chrono::steady_clock::time_point now) {
     if (now < dev_state.next_poll_at) {
-        return;
+        return {};
     }
     const auto interval = RealtimeProfilerClockSync::sync_interval();
     // Advanced from the scheduled time, not from `now`, so a device keeps its staggered phase; scheduling off `now`
@@ -454,11 +455,13 @@ void RealtimeProfilerReceiver::sync_device(DeviceState& dev_state, std::chrono::
         dev_state.next_poll_at = now + interval;
     }
 
+    const auto before = dev_state.clock_sync->cost().busy;
     if (!dev_state.clock_sync->resync()) {
         ++dev_state.consecutive_resync_failures;
-        return;
+    } else {
+        dev_state.consecutive_resync_failures = 0;
     }
-    dev_state.consecutive_resync_failures = 0;
+    return dev_state.clock_sync->cost().busy - before;
 }
 
 // Reports what the clock sync costs the receiver thread. `busy` is time inside resync(), which is time this thread was
@@ -593,29 +596,24 @@ bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
     size_t ready = 0;
     while (ready < dev_state.staged.size()) {
         const ProgramRealtimeRecord& first = dev_state.staged[ready];
-        // Two separate questions: has the clock been read past this record yet, and which probes place its start.
+        // Two separate questions: has the clock been read past this record yet, and which probes place its start. Only
+        // the first can hold a record back, and it clears within one sync interval; place() answers whenever this does.
         const auto covered_through = dev_state.clock_sync->coverage_past(first.end_timestamp);
         if (!covered_through.has_value()) {
             break;
         }
-        const auto bracketing = dev_state.clock_sync->probes_bracketing(first.start_timestamp);
-        if (!bracketing.has_value()) {
-            break;
-        }
-        const auto& [open, closing] = *bracketing;
-        const auto chord = dev_state.clock_sync->close_interval(open, closing);
+        const auto chord = dev_state.clock_sync->place(first.start_timestamp);
         if (!chord.has_value()) {
             break;
         }
 
-        // Records are produced in order, so everything this pair places and this coverage completes is contiguous. A
-        // record whose start the pair no longer brackets goes back around for a tighter one.
+        // Records are produced in order, so everything this chord places and this coverage completes is contiguous. A
+        // record past the chord's far anchor goes back around for a tighter one.
         while (ready < dev_state.staged.size() && dev_state.staged[ready].end_timestamp <= *covered_through &&
-               dev_state.staged[ready].start_timestamp <= closing.ticks) {
+               dev_state.staged[ready].start_timestamp <= chord->close_ticks) {
             dev_state.staged[ready].frequency = chord->frequency;
-            dev_state.staged[ready].clock_sync = chord->mapping;
-            dev_state.staged[ready].clock_sync.device_cycle_offset =
-                RealtimeProfilerClockSync::device_cycle_offset_for(*chord, dev_state.staged[ready].start_timestamp);
+            dev_state.staged[ready].clock_sync =
+                RealtimeProfilerClockSync::place_on_chord(*chord, dev_state.staged[ready].start_timestamp);
             ++ready;
         }
     }
@@ -914,15 +912,18 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
     auto last_pass = std::chrono::steady_clock::now();
     while (!stop_.load(std::memory_order_acquire)) {
         const auto now = std::chrono::steady_clock::now();
-        // A pass has no blocking call, so a gap this large was imposed from outside this thread.
+        // The clock reads are the pass's only blocking call, so reporting what they took is what separates a stall this
+        // thread inflicted on itself from one imposed on it.
         if (const auto gap = now - last_pass; gap >= kDrainGapReportThreshold) {
             TT_LOG_WARNING_THROTTLED(
                 last_drain_gap_warn_,
                 now,
                 kWarnInterval,
-                "[Real-time profiler] Receiver drain stalled {} us between passes; FIFO high-water since the last "
-                "report is {} of {} pages",
+                "[Real-time profiler] Receiver drain stalled {} us between passes, {} us of it inside clock reads; "
+                "FIFO "
+                "high-water since the last report is {} of {} pages",
                 std::chrono::duration_cast<std::chrono::microseconds>(gap).count(),
+                std::chrono::duration_cast<std::chrono::microseconds>(pass_sync_busy_).count(),
                 fifo_pages_window_max_,
                 RealtimeProfilerRuntimeSizes::fifo_pages);
         }
@@ -966,8 +967,9 @@ uint32_t RealtimeProfilerReceiver::drain_all_devices(
     // A close can publish on a pass that drained nothing -- the time cap firing after the workload goes quiet -- and
     // those records are exactly the last ones of a program, so the wake cannot be gated on pages moving.
     bool published = false;
+    pass_sync_busy_ = std::chrono::nanoseconds::zero();
     for (auto& dev_state : devices_) {
-        sync_device(dev_state, now);
+        pass_sync_busy_ += sync_device(dev_state, now);
         published |= close_staging(dev_state);
         try {
             const uint32_t drained = drain_device_pages(dev_state, now, page_buf);

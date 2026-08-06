@@ -107,8 +107,9 @@ private:
     void bring_up_device_clocks();
 
     // Called on the drain loop immediately before draining dev_state, so a device's sync interval is bounded by its
-    // own drain rather than by every other device's.
-    void sync_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now);
+    // own drain rather than by every other device's. Returns the time the clock read blocked for, zero when none was
+    // due.
+    std::chrono::nanoseconds sync_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now);
     // Called from report_sync_cost, not from the drain loop: a device that has stopped answering is reported at
     // most once per warning interval, so scanning every device for it on every pass is work the drain never needs.
     void report_stalled_syncs(std::chrono::steady_clock::time_point now);
@@ -141,6 +142,7 @@ private:
 
     std::atomic<uint32_t> peak_fifo_pages_{0};  // all-time peak D2H FIFO usage
     uint32_t fifo_pages_window_max_ = 0;        // peak since the last Tracy plot sample
+    std::chrono::nanoseconds pass_sync_busy_{};  // clock-read time in the pass just finished
     std::chrono::steady_clock::time_point last_drain_gap_warn_{};
     std::atomic<uint64_t> num_published_records_{0};  // records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // batches published to the ring
