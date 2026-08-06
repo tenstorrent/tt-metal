@@ -156,12 +156,18 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
             split_work_to_cores(compute_grid, M);
     }
 
+    // narrow_scales_to_bf16: perform the multiply in bf16/HiFi2 (vs fp32/HiFi4)
+    const bool narrow_scales_to_bf16 = operation_attributes.narrow_scales_to_bf16;
+    const DataFormat compute_df = narrow_scales_to_bf16 ? DataFormat::Float16_b : fp32_df;
+    const uint32_t compute_tile_bytes = tile_h * tile_w * (narrow_scales_to_bf16 ? 2u : 4u);
+
     constexpr uint32_t cb_input_e4m3_idx = CBIndex::c_0;
-    constexpr uint32_t cb_in_rm_idx = CBIndex::c_1;
-    constexpr uint32_t cb_in_tile_idx = CBIndex::c_2;
-    constexpr uint32_t cb_loop_count_idx = CBIndex::c_3;  // token_count_aware: reader -> compute num_blocks mailbox
-    constexpr uint32_t cb_scale_bcast_idx = CBIndex::c_4;
-    constexpr uint32_t cb_out_tile_idx = CBIndex::c_5;
+    constexpr uint32_t cb_in_rm_fp32_idx = CBIndex::c_1;  // fp32 rm buffer (fp32 datapath only)
+    constexpr uint32_t cb_in_tile_idx = CBIndex::c_2;     // reused: tilized input
+    constexpr uint32_t cb_scale_bcast_bf16_idx =
+        CBIndex::c_3;  // bf16: packer packs fp32 scales to bf16 scales (bf16 datapath)
+    constexpr uint32_t cb_scale_bcast_fp32_idx = CBIndex::c_4;  // fp32: raw fp32 scales read from DRAM
+    constexpr uint32_t cb_loop_count_idx = CBIndex::c_5;  // token_count_aware: reader -> compute num_blocks mailbox
     constexpr uint32_t cb_scale_scratch_idx = CBIndex::c_6;
     constexpr uint32_t cb_region_scratch_r_idx = CBIndex::c_7;   // token_count_aware only
     constexpr uint32_t cb_counts_scratch_r_idx = CBIndex::c_8;   // token_count_aware only
@@ -169,7 +175,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     constexpr uint32_t cb_region_scratch_w_idx = CBIndex::c_10;  // token_count_aware only
     constexpr uint32_t cb_counts_scratch_w_idx = CBIndex::c_11;  // token_count_aware only
     constexpr uint32_t cb_table_scratch_w_idx = CBIndex::c_12;   // token_count_aware only
-    constexpr uint32_t cb_out_idx = CBIndex::c_16;
+    constexpr uint32_t cb_out_idx = CBIndex::c_16;               // reused: output
 
     auto make_fp32_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
         CircularBufferConfig cfg =
@@ -177,17 +183,30 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         CreateCircularBuffer(program, all_cores, cfg);
     };
 
-    // cb_input_e4m3: input_e4m3, one tile per page; tiles_per_block pages = one block, double-buffered.
+    // Compute tiles carry the datapath format (bf16 or fp32) selected by narrow_scales_to_bf16.
+    auto make_compute_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
+        CircularBufferConfig cfg = CircularBufferConfig(num_tiles * compute_tile_bytes, {{cb_idx, compute_df}})
+                                       .set_page_size(cb_idx, compute_tile_bytes);
+        CreateCircularBuffer(program, all_cores, cfg);
+    };
+
+    // cb_input_e4m3: input_e4m3, one tile per page; tiles_per_block pages = one block,
     // double-buffered. The reader fills the [tile_h x 128] block contiguously across these pages.
     CircularBufferConfig cb_input_e4m3_cfg =
         CircularBufferConfig(2 * tiles_per_block * input_e4m3_tile_bytes, {{cb_input_e4m3_idx, fp8_df}})
             .set_page_size(cb_input_e4m3_idx, input_e4m3_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_input_e4m3_cfg);
 
-    make_fp32_tile_cb(cb_in_rm_idx, tiles_per_block);     // input_e4m3 -> fp32 RM
-    make_fp32_tile_cb(cb_in_tile_idx, tiles_per_block);   // tilized fp32 input
-    make_fp32_tile_cb(cb_scale_bcast_idx, 2 * block_ht);  // col0 = scale
-    make_fp32_tile_cb(cb_out_tile_idx, tiles_per_block);  // divided tiles -> untilize
+    // Double-buffered so there is not stalling between the reader/compute/writer.
+    make_compute_tile_cb(cb_in_tile_idx, 2 * tiles_per_block);  // reused: tilized input
+    make_fp32_tile_cb(cb_scale_bcast_fp32_idx, 2 * block_ht);   // col0 = scale
+    if (narrow_scales_to_bf16) {
+        // bf16 datapath: scale narrowed to bf16 by the packer.
+        make_compute_tile_cb(cb_scale_bcast_bf16_idx, 2 * block_ht);
+    } else {
+        // fp32 datapath: fp8 e4m3 -> fp32 row-major before tilize.
+        make_fp32_tile_cb(cb_in_rm_fp32_idx, 2 * tiles_per_block);
+    }
 
     // cb_out: row-major output (bf16/fp32), one tile per page; tiles_per_block pages = one block,
     // double-buffered.
@@ -244,7 +263,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     // compute.
     std::vector<uint32_t> reader_ct_args = {
         cb_input_e4m3_idx,
-        cb_scale_bcast_idx,
+        cb_scale_bcast_fp32_idx,
         cb_scale_scratch_idx,
         input_e4m3_block_bytes,
         block_ht,
@@ -315,26 +334,41 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
             .compile_args = writer_ct_args,
             .defines = token_count_aware_defines});
 
-    // Compute (TRISC): input_e4m3 -> fp32 RM -> tilize -> scale bcast multiply -> untilize to output.
+    // Compute (TRISC): input_e4m3 -> compute data format tiles -> scale bcast multiply -> untilize to output.
     // Plain: num_blocks arrives as a runtime arg. Token-count-aware: num_blocks arrives via cb_loop_count.
     std::vector<uint32_t> compute_ct_args = {
         cb_input_e4m3_idx,
-        cb_in_rm_idx,
+        cb_in_rm_fp32_idx,
         cb_in_tile_idx,
-        cb_scale_bcast_idx,
-        cb_out_tile_idx,
+        cb_scale_bcast_fp32_idx,
         cb_out_idx,
         tile_h,
         tile_w,
+        static_cast<uint32_t>(narrow_scales_to_bf16),
+        cb_scale_bcast_bf16_idx,
         cb_loop_count_idx};
-    // fp32_dest_acc_en=True required (input_e4m3 CB on core); HiFi4 (the ComputeConfig default) keeps the
-    // broadcast multiply precise.
+
+    // HiFi2: bf16 datapath; HiFi4: fp32 datapath.
+    const MathFidelity math_fidelity = narrow_scales_to_bf16 ? MathFidelity::HiFi2 : MathFidelity::HiFi4;
+    // Skip trip through srcA register. fp8 goes straight to the DEST.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    unpack_to_dest_mode[cb_input_e4m3_idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    // On the bf16 path the fp32 scale must unpack losslessly to DEST before the packer rounds it to bf16.
+    if (narrow_scales_to_bf16) {
+        unpack_to_dest_mode[cb_scale_bcast_fp32_idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     KernelHandle compute_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/device/kernels/compute/"
         "compute_per_token_cast_back.cpp",
         all_cores,
-        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args, .defines = token_count_aware_defines});
+        ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = true,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .compile_args = compute_ct_args,
+            .defines = token_count_aware_defines});
 
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
     if (token_count_aware) {
