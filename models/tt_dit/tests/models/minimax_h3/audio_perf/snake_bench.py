@@ -22,8 +22,11 @@ from models.tt_dit.models.audio_vae.minimax_h3 import decoder_minimax_h3_audio  
 
 # (label, C, T) at the production tail. T values are the post-upsample lengths the snake sees.
 SHAPES = [
+    ("s3 C64  T20701", 64, 20701),
     ("s4 C32  T41403", 32, 41403),
+    ("s4 C32  T124206", 32, 124206),
     ("s5 C16  T82806", 16, 82806),
+    ("s5 C16  T165606", 16, 165606),
     ("s6 C8   T165606", 8, 165606),
     ("s6up C8 T331212", 8, 331212),
 ]
@@ -66,8 +69,10 @@ def main():
             ref = ttnn.to_torch(plain()).float()
             print(f"{label:<18} {'today':<14} {timed(plain):>8.2f}")
 
-            fold = 32 // C
-            if fold > 1 and T % fold == 0:
+            from models.tt_dit.layers.audio_ops import SnakeBeta as _SB
+
+            fold = _SB._fold_factor(type("S", (), {"parallel_config": None})(), T, C)
+            if fold > 1:
                 # Fold `fold` timesteps into C so the tile is full. Elementwise + per-channel means
                 # this is an exact re-indexing, provided alpha/beta repeat with the same period.
                 xf = x.reshape(2, T // fold, C * fold)

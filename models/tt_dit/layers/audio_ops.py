@@ -338,6 +338,11 @@ def depthwise_mac_preferred() -> bool:
     return os.environ.get("MINIMAX_H3_AUDIO_DEPTHWISE_MAC", "1" if audio_accurate_mode() else "0") == "1"
 
 
+# Channel width the timestep-fold aims for. Above ~256 the per-row cost starts climbing (11.3 ns/row
+# at C=256 against 4.2 at C=8) and the returns flatten, so 256 is where `audio_perf/row_cost.py` puts
+# the knee rather than an arbitrary round number.
+TARGET_FOLDED_CHANNELS = int(os.environ.get("MINIMAX_H3_AUDIO_FOLD_TARGET", "256"))
+
 CONV1D_L1_MODES = ("off", "safe", "aggressive", "verify")
 
 # Shapes whose L1_FULL output has been checked against the DRAM path, keyed by (B, C, T_pad, K, stride)
@@ -1660,24 +1665,38 @@ class SnakeBeta(Module):
                 state[name] = t.contiguous()
 
     def _fold_factor(self, local_T: int, C: int) -> int:
-        """How many timesteps to fold into the channel axis so a 32-wide tile is full.
+        """How many timesteps to fold into the channel axis, to make rows wide and few.
 
-        The audio tail runs at C=8 and C=16, so a TILE-layout op there carries 8 or 16 useful lanes out
-        of 32 and moves 4x or 2x more bytes than the data warrants. `snake_beta` is elementwise with
-        per-channel alpha/beta, so folding F consecutive timesteps into C is an exact re-indexing --
-        provided alpha/beta repeat with period C, which `_folded_ab` arranges. Measured bit-exact
-        (maxdiff 0.0) and worth 1.8x at C=16 and 3.6x at C=8 on the production lengths.
+        `snake_beta` is elementwise with per-channel alpha/beta, so folding F consecutive timesteps
+        into C is an exact re-indexing -- provided alpha/beta repeat with period C, which `_folded_ab`
+        arranges. F must divide the local T exactly; padding to make it divide would cost an op at the
+        *unfolded* row count, which is the very thing being avoided.
 
-        F must divide the local T exactly; padding to make it divide would cost a concat and give the
-        bytes straight back. So take the largest admissible factor that does.
+        The factor to maximise is the row count, not tile occupancy. `audio_perf/row_cost.py` holds
+        total elements fixed and varies C:
+
+            C      rows    fp32 ms   ns/row    GB/s   vs C=8
+            8   662 424      2.765      4.2    23.0    1.00x
+           32   165 606      0.751      4.5    84.7    3.68x
+          128    41 401      0.293      7.1   216.7    9.42x
+          256    20 700      0.235     11.3   271.0   11.78x
+
+        A row costs ~4.2 ns almost regardless of what it carries, so the same data is 11.8x cheaper at
+        C=256 than at C=8. An earlier version of this stopped at one tile width (C=32) on the
+        assumption that a full tile was the goal; that took 3.68x where ~11x was available. Tile
+        occupancy is second-order -- C=168 pads to 192 and still wins, because it cut rows 21-fold.
+
+        Nor does F need to be a power of two, and C >= 32 is no reason to stop: it only has to divide
+        T. At the production lengths that is worth far more than the old rule allowed --
+        T=165606/C=8 admits 21 (not 2), T=331212/C=8 admits 28 (not 4), and T=124206/C=32 admits 6
+        where the old rule folded not at all.
         """
-        if C >= 32 or 32 % C != 0 or channel_axis(self.parallel_config) is not None:
+        if channel_axis(self.parallel_config) is not None:
             return 1
-        f = 32 // C
-        while f > 1:
+        max_f = max(1, TARGET_FOLDED_CHANNELS // C)
+        for f in range(min(max_f, local_T), 1, -1):
             if local_T % f == 0:
                 return f
-            f //= 2
         return 1
 
     def _folded_ab(self, fold: int):
