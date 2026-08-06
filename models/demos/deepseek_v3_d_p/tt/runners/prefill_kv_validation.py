@@ -4,15 +4,13 @@
 """KV-cache PCC validation for the DeepSeek / Kimi (MLA) prefill model.
 
 The single home for the block-cyclic KV-cache PCC check and its golden-trace
-loaders, plus the slot->slot and multi-pair migration validators. There is ONE
-PCC entrypoint, ``kv_cache_pcc_check``, driven by the migration validators here
-(``validate_after_prefill`` and friends, via ``TtPrefillRuntime.kv_cache_pcc_check``
-which forwards here) — golden ``.pt`` or trace dir + ``real_len``.
+loaders. There is ONE PCC entrypoint, ``kv_cache_pcc_check`` (reached via
+``TtPrefillRuntime.kv_cache_pcc_check``, which forwards here) — golden ``.pt`` or
+trace dir + ``real_len``.
 
-``validate_after_prefill`` / ``validate_migration_kv`` / ``validate_migrations_pairwise``
-have NO in-repo caller: they are driven by tt-llm-engine (the prefill scheduler /
-migration driver) after it issues migrations. Keep their signatures in sync with that
-caller. Everything prefixed ``_`` is internal.
+It has NO in-repo caller: the prefill runner never PCCs, so the callers are
+out-of-tree (tt-llm-engine) and bring-up scripts. Keep the signature in sync with
+them. Everything prefixed ``_`` is internal.
 """
 
 from __future__ import annotations

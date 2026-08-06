@@ -11,7 +11,7 @@ Assumes the model is already integrated — adapter registered, golden trace sta
 | Gate | What it exercises | Needs |
 |------|-------------------|-------|
 | **1 — mock migration** | Prefill writes correct KV (precondition for everything) and the KV-chunk address table is correct, read device-lessly | tt-metal tree only |
-| **2 — loopback migration** | The real DRAM → transport → DRAM copy, and migrated-KV accuracy | + tt-llm-engine binaries |
+| **2 — loopback migration** | The real DRAM → transport → DRAM copy completes (transport only — no destination read-back) | + tt-llm-engine binaries |
 
 Gate 2 covers the same ground as the harness's own prefill-loopback stage. The difference is only that the
 harness drives it end to end instead of three terminals.
@@ -79,9 +79,8 @@ read-back side.
 { "env": { "PREFILL_MODEL": "my_model", "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32" } }
 ```
 
-The `env:` map is applied verbatim by `setdefault`, so a rank binding's `global_env` still wins. A manifest
-may also carry a `users[]` + `migration{}` block for the pairwise-validation path; a plain model-config
-manifest omits it.
+The `env:` map is applied verbatim by `setdefault`, so a rank binding's `global_env` still wins. It is the
+only block the runner reads.
 
 ## Rank binding
 
@@ -422,7 +421,7 @@ python -m models.demos.common.prefill.runners.prefill_producer --manifest $MANIF
 **not** use `migration_driver`.
 
 Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default
-`0.93` — note this differs from the runner's `0.88` default for the same variable).
+`0.93`).
 
 This gate is not a prerequisite for the producer's golden PCC on the real-migration path, because the runner
 serialises the device map there too: one `serialize_device_map` call sits above the mock/real split inside the
@@ -517,12 +516,11 @@ prefill→decode run needs the decode endpoint to publish its configs in the sam
 
 ## Runtime hooks each gate requires
 
-Validation is driven by the optional runtime hooks in `ADDING_A_PREFILL_MODEL.md` §2. Implement only what the
+Both gates run off the optional runtime hooks in `ADDING_A_PREFILL_MODEL.md` §2. Implement only what the
 gates you intend to run require.
 
 | Gate | Hook | Signature requirement |
 |------|------|-----------------------|
-| 0 | `kv_cache_pcc_check` | accepts `trace_dir`, `first_layer_idx` |
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
 | 2 | `kv_migration_base_address` | this rank's KV base DRAM address, for the cross-stage table merge |
 | 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
