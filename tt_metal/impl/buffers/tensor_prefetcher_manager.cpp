@@ -81,25 +81,41 @@ enum class LayoutMode : uint32_t {
 // num_banks (one receiver per bank, num_shards == num_banks == total_receivers): the count tie
 // would route a recv-contig tensor down the K-row path, where compute_tensor_layout_krow_major
 // calls shard_spec() and TT_FATALs because the buffer only has an NdShardSpec.
-LayoutMode detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t total_receivers) {
+// Classification result: the DRAM layout plus, for receiver-contiguous weights, whether this tensor
+// is delivered by broadcast (one multicast reaches every receiver) or by scatter (a slab each).
+struct TensorLayoutKind {
+    LayoutMode mode = LayoutMode::KRowMajor;
+    bool broadcast = false;
+};
+
+// Broadcast is inferred the same way the layout itself is -- from how the weight was allocated. A
+// receiver-contiguous scatter weight carries one shard per receiver; a broadcast weight carries a
+// single shard that every receiver reads in full. Keeping this per-tensor rather than per-GCB is
+// what lets one GCB serve scatter and broadcast tensors in the same request. With a single receiver
+// the two are the same delivery, so that case stays on the cheaper unicast path.
+TensorLayoutKind detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t total_receivers) {
     // Legacy ShardSpec path: one wide shard per bank by construction. Some WIDTH_SHARDED
     // tensors also carry an NdShardSpec-like descriptor through BDS, so prefer the explicit
     // legacy shard spec before classifying a tensor as receiver-contiguous.
     if (buf.has_shard_spec()) {
-        return LayoutMode::KRowMajor;
+        return {LayoutMode::KRowMajor, false};
     }
 
     if (t.nd_shard_spec().has_value()) {
         const auto& bds_opt = buf.buffer_distribution_spec();
+        TT_FATAL(bds_opt.has_value(), "Receiver-contiguous Tensor prefetcher weight has no buffer distribution spec");
+        const uint32_t num_shards = static_cast<uint32_t>(bds_opt->num_shards());
+        const bool broadcast = num_shards == 1 && total_receivers > 1;
         TT_FATAL(
-            bds_opt.has_value() && static_cast<uint32_t>(bds_opt->num_shards()) == total_receivers,
-            "Receiver-contiguous Tensor prefetcher weight must have num_shards == total_receivers "
-            "(ring_size = {}); got {} shards.",
+            broadcast || num_shards == total_receivers,
+            "Receiver-contiguous Tensor prefetcher weight must have either num_shards == total_receivers "
+            "(ring_size = {}, one slab per receiver) or num_shards == 1 (one slab broadcast to every receiver); "
+            "got {} shards.",
             total_receivers,
-            bds_opt.has_value() ? static_cast<uint32_t>(bds_opt->num_shards()) : 0u);
-        return LayoutMode::ReceiverContiguous;
+            num_shards);
+        return {LayoutMode::ReceiverContiguous, broadcast};
     }
-    return LayoutMode::KRowMajor;
+    return {LayoutMode::KRowMajor, false};
 }
 
 // Validate a streaming (receiver-contiguous) weight and return the shard distribution strategy that
@@ -236,7 +252,7 @@ bool layout_equal(const TensorPrefetcherTensorLayout& a, const TensorPrefetcherT
 // bank-local address is carried separately in the per-tensor
 // TensorPrefetcherEntry, so identical-geometry tensors share one layout.
 TensorPrefetcherTensorLayout compute_tensor_layout_recv_contig(
-    const MeshTensor& t, uint32_t block_count, uint32_t stage_third, ContextId context_id) {
+    const MeshTensor& t, uint32_t block_count, uint32_t stage_third, bool broadcast, ContextId context_id) {
     // Read the original (non-squeezed) NdShardSpec from the MemoryConfig — the
     // BDS internally collapses adjacent matching dims, so its
     // shard_shape_in_pages() can come back rank-1 even though the caller
@@ -357,7 +373,10 @@ TensorPrefetcherTensorLayout compute_tensor_layout_recv_contig(
     g.page_bytes_per_recv = page_bytes_per_recv;
     g.layout_mode = static_cast<uint32_t>(LayoutMode::ReceiverContiguous);
     g.target_per_visit_pages = target_per_visit_pages;
-    g.recv_stride_bytes = recv_stride_bytes;
+    // Broadcast has one slab that every receiver reads, so there is no per-receiver stride to walk.
+    // Pinning it to 0 collapses the kernel's slab address to tensor_base for every visit.
+    g.recv_stride_bytes = broadcast ? 0u : recv_stride_bytes;
+    g.broadcast = broadcast ? 1u : 0u;
     g.block_count = block_count;
     return g;
 }
@@ -372,8 +391,8 @@ TensorPrefetcherTensorLayout compute_tensor_layout(
     uint32_t stage_third,
     ContextId context_id) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
-    const LayoutMode mode = detect_layout_mode(t, *ref_buffer, total_receivers);
-    if (mode == LayoutMode::KRowMajor) {
+    const TensorLayoutKind kind = detect_layout_mode(t, *ref_buffer, total_receivers);
+    if (kind.mode == LayoutMode::KRowMajor) {
         // KRowMajor is single-sender-per-bank only, so receivers_per_bank is the bank's
         // full receiver count and the bank receiver counts must be uniform. (Receiver-
         // contiguous derives its geometry from the shard shape and ignores the receiver
@@ -386,7 +405,7 @@ TensorPrefetcherTensorLayout compute_tensor_layout(
             num_banks);
         return compute_tensor_layout_krow_major(t, block_count, receivers_per_bank, ring_half, context_id);
     }
-    return compute_tensor_layout_recv_contig(t, block_count, stage_third, context_id);
+    return compute_tensor_layout_recv_contig(t, block_count, stage_third, kind.broadcast, context_id);
 }
 
 }  // namespace
@@ -626,6 +645,31 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         total_receivers += receivers.num_cores();
     }
     TT_FATAL(num_banks_ > 0, "Tensor prefetcher: num_banks must be > 0");
+    // A broadcast tensor is multicast into each sender's receiver bounding box, which only names
+    // exactly that sender's receivers when they form a single row or column. Compute it once here;
+    // it gates broadcast tensors below, and leaves scatter tensors unaffected.
+    // Test the geometry, not the CoreRange count: a contiguous line is often represented as one
+    // range per core (the dual-sender split builds its halves that way), so a set is linear when it
+    // fills its bounding box and that box is one core wide or one core tall.
+    bool senders_are_linear = true;
+    for (const auto& [_sender, receivers] : mapping) {
+        const CoreRange bbox = receivers.bounding_box();
+        const CoreCoord grid = bbox.grid_size();
+        if (receivers.num_cores() != bbox.size() || (grid.x != 1 && grid.y != 1)) {
+            senders_are_linear = false;
+            break;
+        }
+    }
+    // A broadcast weight is a single shard, so it physically exists on exactly one bank. Every
+    // sender pushes the same bank-local address, so senders on any other bank would read whatever
+    // happens to live there. (Two senders sharing the one bank is fine.)
+    bool senders_share_one_bank = true;
+    for (const auto& [sender_logical, _receivers] : mapping) {
+        if (sender_logical.x != mapping.front().first.x) {
+            senders_share_one_bank = false;
+            break;
+        }
+    }
     // K-row-major stores one complete per-bank shard, so all receivers for a bank must
     // remain on its primary sender. Receiver-contiguous tensors may use either this
     // topology or a dual-sender split.
@@ -788,6 +832,28 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         // rotation participates in dedup (slot_equal), so tensors that differ only in rotation get
         // distinct slots.
         layout.streaming = streaming ? 1u : 0u;
+        if (layout.broadcast != 0) {
+            // Rotation permutes which block each receiver leads with, which only means something
+            // when receivers consume different blocks; a broadcast tensor gives them all the same.
+            TT_FATAL(
+                !streaming,
+                "Tensor prefetcher: input tensor {} is a broadcast weight (a single shard delivered identically to "
+                "every receiver), so it does not support streaming (a per-receiver rotation table). Queue it without "
+                "a rotation.",
+                tensor_idx);
+            TT_FATAL(
+                senders_are_linear,
+                "Tensor prefetcher: broadcast input tensor {} needs each sender's receivers to form a single row or "
+                "column so one multicast address can name them, but this GCB's receiver topology is not linear. Use "
+                "a per-receiver sharded (scatter) weight with this GCB, or give the GCB a 1-D receiver set.",
+                tensor_idx);
+            TT_FATAL(
+                senders_share_one_bank,
+                "Tensor prefetcher: broadcast input tensor {} is a single shard, so it lives on one DRAM bank, but "
+                "this GCB has senders on more than one bank -- the off-bank senders would read unrelated memory. "
+                "Broadcast tensors need a GCB whose senders all sit on the bank holding the weight.",
+                tensor_idx);
+        }
         TT_FATAL(
             layout.layout_mode != static_cast<uint32_t>(LayoutMode::KRowMajor) || krow_compatible_mapping,
             "Tensor prefetcher: K-row-major input tensor {} requires exactly one primary sender per DRAM bank; "

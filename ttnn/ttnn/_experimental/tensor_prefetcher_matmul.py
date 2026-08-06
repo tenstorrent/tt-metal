@@ -16,7 +16,9 @@ couplings nothing enforces.
 it derives ``block_count``, queues the request, then runs the consuming
 ``ttnn.linear`` with the same GCB and program config. Gather-in0 uses one block
 per ring receiver. Mcast-in0 uses ``K_tiles / in0_block_w`` natural-order blocks
-per receiver and requires a receiver-contiguous weight.
+per receiver and requires a receiver-contiguous weight. Mcast-in1 uses the same
+``K_tiles / in0_block_w`` count, but each block is the full weight width and is
+multicast to every worker from a broadcast GCB.
 
 This is a host-side composition, not a device-level fusion: the prefetch still
 runs on the DRAM-core (DRISC) path off the command queue while the matmul is
@@ -63,10 +65,12 @@ def prefetch_and_linear(
         The ``ttnn.linear`` output tensor.
     """
     device = input_tensor_a.device()
-    if program_config.mcast_in0 or program_config.stream_in1:
+    if not program_config.gather_in0 or program_config.stream_in1:
+        # Both multicast consumers and streaming gather derive their block count from the
+        # weight's K and the config's in0_block_w, so ask the validator rather than guessing.
         block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(program_config, weight, global_cb)
     else:
-        # Gather consumes one K-block per ring position.
+        # Batched gather consumes one K-block per ring position.
         block_count = global_cb.receiver_cores().num_cores()
 
     # Streaming gather needs identity ring rotation (``rotation[r] = r``). That table is

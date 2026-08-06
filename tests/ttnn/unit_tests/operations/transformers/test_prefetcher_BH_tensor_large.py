@@ -61,6 +61,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bank_receivers_strided as _bank_receivers_strided,
     bank_receivers_contiguous as _bank_receivers_contiguous,
     make_recv_contig_weight as _make_recv_contig_weight,
+    make_broadcast_weight as _make_broadcast_weight,
     tensor_prefetcher_session,
 )
 
@@ -1283,3 +1284,436 @@ def test_tensor_prefetcher_streaming_mcast_in0(device, distribution_strategy):
     assert (
         device.num_program_cache_entries() == cache_entries_after_first
     ), "second mcast_in0 invocation did not hit the program cache"
+
+
+def _broadcast_mcast_in1_setup(device, num_workers, k_tiles, n_tiles, in0_block_w, dtype, seed_tag):
+    """Shared shapes/config for the broadcast mcast-in1 tests.
+
+    mcast-in1 is M-parallel: the workers form a 1-wide row, split M between them, and every one
+    of them needs the *same* full (K, N) weight. That is what makes a broadcast GCB the right
+    delivery topology -- one DRAM bank holds the whole weight and multicasts each K-block.
+    """
+    M = num_workers * ttnn.TILE_SIZE
+    K = k_tiles * ttnn.TILE_SIZE
+    N = n_tiles * ttnn.TILE_SIZE
+    worker_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_workers - 1, 0))})
+
+    torch.manual_seed(zlib.crc32(seed_tag.encode()))
+    pt_weight = torch.randn(1, 1, K, N)
+    tt_weight = _make_broadcast_weight(device, pt_weight, dtype=dtype)
+
+    pt_act = torch.randn(1, 1, M, K)
+    # in0 is height-sharded: one M-tile per worker, each holding the full K.
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, K),
+        core_grid=worker_cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_act = ttnn.from_torch(pt_act, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config)
+
+    out_subblock_w = min(n_tiles, 4)
+    while n_tiles % out_subblock_w != 0:
+        out_subblock_w -= 1
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(num_workers, 1),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=1,
+        out_block_w=n_tiles,
+        per_core_M=1,
+        per_core_N=n_tiles,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=1,
+        untilize_out=False,
+        stream_in1=False,
+    )
+
+    # The whole weight lives on bank 0, whose DRISC multicasts to every worker.
+    bank_to_receivers = [(0, worker_cores)]
+    page_size_bytes = in0_block_w * n_tiles * _bytes_per_tile(dtype)
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, N),
+        core_grid=worker_cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return (
+        pt_weight,
+        tt_weight,
+        pt_act,
+        tt_act,
+        program_config,
+        bank_to_receivers,
+        page_size_bytes,
+        output_mem_config,
+        N,
+    )
+
+
+@pytest.mark.parametrize("num_workers", [3, 8], ids=["3cores", "8cores"])
+@pytest.mark.parametrize("use_bias", [False, True], ids=["nobias", "bias"])
+def test_tensor_prefetcher_broadcast_mcast_in1(device, num_workers, use_bias):
+    """A single DRAM bank multicasts the whole weight to a 1-D array of mcast-in1 workers."""
+    dtype = ttnn.bfloat16
+    k_tiles = 4
+    n_tiles = 2
+    in0_block_w = 1
+
+    (
+        pt_weight,
+        tt_weight,
+        pt_act,
+        tt_act,
+        program_config,
+        bank_to_receivers,
+        page_size_bytes,
+        output_mem_config,
+        N,
+    ) = _broadcast_mcast_in1_setup(
+        device, num_workers, k_tiles, n_tiles, in0_block_w, dtype, f"broadcast_mcast_in1_{num_workers}_{use_bias}"
+    )
+
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+        device,
+        [program_config],
+        [tt_weight],
+        bank_to_receivers=bank_to_receivers,
+        size=2 * page_size_bytes,
+    )
+
+    pt_bias = None
+    tt_bias = None
+    if use_bias:
+        pt_bias = torch.randn(1, N)
+        tt_bias = ttnn.from_torch(pt_bias, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    expected = pt_act.float() @ pt_weight.float()
+    if pt_bias is not None:
+        expected = expected + pt_bias.float()
+
+    # Run twice: the second invocation must hit the program cache, exercising the mcast-in1
+    # override path against a GCB-backed in1 CB (which a tensor-backed CB update would reject).
+    cache_entries_after_first = None
+    with tensor_prefetcher_session(device):
+        for run in range(2):
+            tt_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+                tt_act,
+                tt_weight,
+                global_cb=gcb,
+                program_config=program_config,
+                memory_config=output_mem_config,
+                compute_kernel_config=compute_kernel_config,
+                dtype=dtype,
+                bias=tt_bias,
+            )
+            if run == 0:
+                cache_entries_after_first = device.num_program_cache_entries()
+
+            out_torch = ttnn.to_torch(tt_out)
+            passing, output_str = comp_pcc(expected, out_torch, 0.999)
+            logger.info(f"[broadcast_mcast_in1 workers={num_workers} bias={use_bias} run={run}] {output_str}")
+            assert passing, f"broadcast_mcast_in1 run={run} PCC failed: {output_str}"
+
+    assert (
+        device.num_program_cache_entries() == cache_entries_after_first
+    ), "second broadcast mcast_in1 invocation did not hit the program cache"
+
+
+def test_tensor_prefetcher_broadcast_mcast_in1_rejects_multi_bank_gcb(device, expect_error):
+    """A broadcast weight is one shard on one bank, so a sender on any other bank would read
+    unrelated memory. The GCB itself is a legal topology, so this is caught when the tensor is
+    queued, not when the GCB is built."""
+    dtype = ttnn.bfloat16
+    (
+        _pt_weight,
+        tt_weight,
+        _pt_act,
+        tt_act,
+        program_config,
+        _bank_to_receivers,
+        page_size_bytes,
+        output_mem_config,
+        _N,
+    ) = _broadcast_mcast_in1_setup(device, 4, 4, 2, 1, dtype, "broadcast_reject_two_banks")
+
+    bank_to_receivers = [
+        (0, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})),
+        (1, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})),
+    ]
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+        device,
+        [program_config],
+        [tt_weight],
+        bank_to_receivers=bank_to_receivers,
+        size=2 * page_size_bytes,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    with tensor_prefetcher_session(device):
+        with expect_error(RuntimeError, "more than one bank"):
+            ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+                tt_act,
+                tt_weight,
+                global_cb=gcb,
+                program_config=program_config,
+                memory_config=output_mem_config,
+                compute_kernel_config=compute_kernel_config,
+                dtype=dtype,
+            )
+
+
+def test_tensor_prefetcher_broadcast_mcast_in1_rejects_non_linear_receivers(device, expect_error):
+    """One multicast address names a rectangle, and we require a line.
+
+    The constraint is per *sender*, not per GCB: with the default dual senders a 2x2 receiver block
+    splits into two rows, each of which is a line, and the push is legal. Force a single sender so
+    that one sender owns the whole 2x2 block, which no single multicast address can name.
+    """
+    dtype = ttnn.bfloat16
+    num_workers = 4
+    k_tiles, n_tiles, in0_block_w = 4, 2, 1
+    M = num_workers * ttnn.TILE_SIZE
+    K = k_tiles * ttnn.TILE_SIZE
+    N = n_tiles * ttnn.TILE_SIZE
+    # 2x2 block of workers: the active worker set fills it, so the worker/receiver match passes and
+    # the geometry check is what fires.
+    worker_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+
+    torch.manual_seed(zlib.crc32(b"broadcast_reject_non_linear"))
+    pt_weight = torch.randn(1, 1, K, N)
+    tt_weight = _make_broadcast_weight(device, pt_weight, dtype=dtype)
+    tt_act = ttnn.from_torch(
+        torch.randn(1, 1, M, K),
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, K),
+            core_grid=worker_cores,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(2, 2),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=n_tiles,
+        out_block_h=1,
+        out_block_w=n_tiles,
+        per_core_M=1,
+        per_core_N=n_tiles,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=1,
+        untilize_out=False,
+        stream_in1=False,
+    )
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, N),
+        core_grid=worker_cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+        device,
+        [program_config],
+        [tt_weight],
+        bank_to_receivers=[(0, worker_cores)],
+        size=2 * in0_block_w * n_tiles * _bytes_per_tile(dtype),
+        support_multi_receiver_shards=True,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    with tensor_prefetcher_session(device):
+        with expect_error(RuntimeError, "single row or column"):
+            ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+                tt_act,
+                tt_weight,
+                global_cb=gcb,
+                program_config=program_config,
+                memory_config=output_mem_config,
+                compute_kernel_config=compute_kernel_config,
+                dtype=dtype,
+            )
+
+
+def test_tensor_prefetcher_broadcast_mcast_in1_rejects_undersized_window(device, expect_error):
+    """A one-page window can't double-buffer, and that is a GCB sizing error."""
+    dtype = ttnn.bfloat16
+    (
+        _pt_weight,
+        tt_weight,
+        _pt_act,
+        _tt_act,
+        program_config,
+        bank_to_receivers,
+        page_size_bytes,
+        _output_mem_config,
+        _N,
+    ) = _broadcast_mcast_in1_setup(device, 4, 4, 2, 1, dtype, "broadcast_reject_window")
+
+    with expect_error(RuntimeError, "double-buffered window"):
+        ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+            device,
+            [program_config],
+            [tt_weight],
+            bank_to_receivers=bank_to_receivers,
+            size=page_size_bytes,
+        )
+
+
+def test_tensor_prefetcher_gcb_serves_scatter_and_broadcast(device):
+    """One GCB carries both delivery modes: a scatter (mcast-in0) weight and a broadcast
+    (mcast-in1) weight, back to back against the same receiver set.
+
+    Broadcast is a property of the tensor -- a single shard every receiver reads in full, versus one
+    slab per receiver -- so the same GCB switches between the two without being rebuilt.
+    """
+    dtype = ttnn.bfloat16
+    num_workers = 4
+    worker_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_workers - 1, 0))})
+    k_tiles = 4
+    K = k_tiles * ttnn.TILE_SIZE
+    in0_block_w = 1
+
+    torch.manual_seed(zlib.crc32(b"gcb_serves_scatter_and_broadcast"))
+
+    # --- Scatter half: mcast-in0, one full-K slab per receiver, all slabs on bank 0. ---
+    n_scatter_tiles = num_workers  # per_core_N == 1
+    N_scatter = n_scatter_tiles * ttnn.TILE_SIZE
+    pt_w_scatter = torch.randn(1, 1, K, N_scatter)
+    tt_w_scatter = _make_recv_contig_weight(
+        device,
+        pt_w_scatter,
+        num_dram_banks=1,
+        ring_size=num_workers,
+        dtype=dtype,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+    pt_act_scatter = torch.randn(1, 1, ttnn.TILE_SIZE, K)
+    tt_act_scatter = ttnn.from_torch(
+        pt_act_scatter,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, K // num_workers),
+            core_grid=worker_cores,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+    pc_scatter = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(num_workers, 1),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=num_workers,
+        untilize_out=False,
+        stream_in1=False,
+    )
+    out_cfg_scatter = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, N_scatter // num_workers),
+        core_grid=worker_cores,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # --- Broadcast half: mcast-in1, one shard the whole line reads. ---
+    n_bcast_tiles = 2
+    (
+        pt_w_bcast,
+        tt_w_bcast,
+        pt_act_bcast,
+        tt_act_bcast,
+        pc_bcast,
+        bank_to_receivers,
+        bcast_page_bytes,
+        out_cfg_bcast,
+        _N,
+    ) = _broadcast_mcast_in1_setup(
+        device, num_workers, k_tiles, n_bcast_tiles, in0_block_w, dtype, "gcb_mixed_broadcast_half"
+    )
+
+    # One GCB, sized for the larger of the two page shapes, validated against both configs.
+    scatter_page_bytes = in0_block_w * pc_scatter.per_core_N * _bytes_per_tile(dtype)
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+        device,
+        [pc_scatter, pc_bcast],
+        [tt_w_scatter, tt_w_bcast],
+        bank_to_receivers=bank_to_receivers,
+        size=2 * max(scatter_page_bytes, bcast_page_bytes),
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    with tensor_prefetcher_session(device):
+        out_scatter = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+            tt_act_scatter,
+            tt_w_scatter,
+            global_cb=gcb,
+            program_config=pc_scatter,
+            memory_config=out_cfg_scatter,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+        )
+        out_bcast = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+            tt_act_bcast,
+            tt_w_bcast,
+            global_cb=gcb,
+            program_config=pc_bcast,
+            memory_config=out_cfg_bcast,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+        )
+
+        passing, output_str = comp_pcc(pt_act_scatter.float() @ pt_w_scatter.float(), ttnn.to_torch(out_scatter), 0.999)
+        logger.info(f"[mixed gcb scatter half] {output_str}")
+        assert passing, f"scatter half PCC failed: {output_str}"
+
+        passing, output_str = comp_pcc(pt_act_bcast.float() @ pt_w_bcast.float(), ttnn.to_torch(out_bcast), 0.999)
+        logger.info(f"[mixed gcb broadcast half] {output_str}")
+        assert passing, f"broadcast half PCC failed: {output_str}"

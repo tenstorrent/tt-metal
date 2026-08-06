@@ -410,6 +410,68 @@ For both contracts one page contains
 exactly match the matmul output workers, and the receiver-contiguous NdShardSpec must provide one
 full-K, `per_core_N`-wide shard per receiver.
 
+#### Broadcast delivery (mcast-in1)
+
+The two contracts above scatter: each receiver gets a distinct slab. The third 1D consumer,
+**mcast-in1** (`gather_in0=false, mcast_in0=false`), does not partition in1 at all — it is
+M-parallel, so `per_core_N == N_tiles` and every worker needs the *same* full-width weight. A
+broadcast GCB delivers that directly:
+
+```
+1 DRAM bank (one DRISC sender)
+         |  one NoC multicast per in1 K-block
+         v
+  [w0][w1][w2] ... [wn-1]       1-D array of matmul workers, each holding the
+                                 SAME [in0_block_w x N] block in its GCB slot
+```
+
+**Broadcast is a per-tensor property, not a GCB mode.** It is inferred exactly the way the layout
+itself is — from how the weight was allocated. A receiver-contiguous *scatter* weight has
+`num_shards == total_receivers` (a slab each); a *broadcast* weight has `num_shards == 1`, a single
+`(K, N)` shard every receiver reads in full. `TensorPrefetcherTensorLayout::broadcast` carries the
+decision in the request page next to `streaming`, and joins the page's layout dedup key. So one GCB
+can serve scatter and broadcast tensors in the same request, and a matmul can switch modes without
+rebuilding its GCB.
+
+What the GCB contributes is geometry: `DramSenderStateBlock` always carries each sender's receiver
+bounding box in virtual worker coordinates, min-corner first (the kernel swaps the corners on NOC1,
+whose torus flows the other way — `drisc_mcast_writes_tensix.cpp` documents the same rule). A
+broadcast push multicasts into that box, so the prefetcher accepts a broadcast tensor only when
+
+- **each sender's** receivers form a single row or column and fill their bounding box, so one
+  multicast address names exactly them. This is per sender, not per GCB: under the dual-sender split
+  a 2-D receiver block becomes two lines, and each sender broadcasts into its own; and
+- all senders sit on the one bank that physically holds the single shard, since every sender pushes
+  the same bank-local address.
+
+Geometry aside, broadcast reuses the receiver-contiguous machinery: `recv_stride_bytes` is pinned to
+0 so the slab address collapses to `tensor_base`, the round makes one source visit instead of
+`num_receivers`, and `block_count = K_tiles / in0_block_w` in natural FIFO order with
+`stream_in1=false` and a two-page window — the same as mcast-in0, but the page is the full weight
+width. Streaming rotation is rejected: it permutes which block each receiver leads with, which means
+nothing when they all get the same one.
+
+Two consequences of using the multicast NoC path:
+
+- **Writes are non-posted.** There is no posted multicast and no multicast
+  `set_state`/`with_state` pair in the public API, so the broadcast branch reprograms the command
+  buffer per packet, links packets within a chunk, and drains the non-posted counters
+  (`noc_async_writes_flushed` for stage-slot reuse, `noc_async_write_barrier` before finalize).
+  The barrier before finalize is load-bearing: broadcast payload rides the multicast VC while the
+  credit increments stay unicast, so in-order delivery no longer covers them.
+- **Credits stay per-receiver.** `prefetcher_finalize_block` still walks the receiver NOC XY table
+  issuing one unicast `noc_semaphore_inc` each, and the sender's free-space poll still takes the
+  minimum across receivers. Collapsing those into one `noc_semaphore_inc_multicast` would need
+  every receiver's `aligned_pages_sent_ptr` moved to a uniform L1 offset, and Blackhole forces
+  multicast atomics non-posted; that is a measured optimization, not a correctness requirement.
+
+On the matmul side nothing but the in1 data path changes. The in1 sender/receiver kernel split,
+the two mcast semaphores and the bias path are all untouched: `ENABLE_GLOBAL_CB_MCAST_IN1`
+suppresses only the sender's in1 multicast block, so bias is still read from DRAM once by the
+sender core and multicast to the rest. Both in1 kernels take the global-CB wait/pop discipline
+(`remote_cb_wait_front(c_31, block == 0 ? 1 : 2)` with a matching `remote_cb_pop_front`), and
+`cb_src1` becomes the local view of the GCB on every worker.
+
 #### Fit ladder (receiver-contiguous)
 
 The receiver-contiguous path rotates through three stage slots

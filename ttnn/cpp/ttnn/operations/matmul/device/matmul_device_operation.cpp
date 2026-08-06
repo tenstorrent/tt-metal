@@ -1075,6 +1075,92 @@ void validate_dram_sender_global_cb_mcast_in0_geometry(
         2 * in1_block_size_bytes);
 }
 
+// mcast-in1 fed by a broadcast Tensor prefetcher: one DRAM bank holds the whole weight and its DRISC
+// multicasts each full-width K-block to every matmul worker, replacing the on-grid in1 multicast
+// from the first core. The bias path is unchanged (still one DRAM read on the sender core).
+void validate_dram_sender_global_cb_broadcast_mcast_in1_geometry(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& gcb,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::Shape& a_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    TT_FATAL(
+        tt::tt_metal::experimental::sender_core_type(gcb) == tt::tt_metal::experimental::SenderCoreType::Dram,
+        "mcast-in1 global_cb requires programmable DRAM senders");
+    // Broadcast delivery is chosen per tensor by the weight's shape (a single shard), not by the
+    // GCB, so what this op has to pin down is that the GCB's geometry can actually carry it: the
+    // weight lives on one bank, and each sender's receivers form a line one multicast can name.
+    const auto& sender_mapping = gcb.sender_receiver_core_mapping();
+    TT_FATAL(!sender_mapping.empty(), "mcast-in1 global_cb has no DRAM senders");
+    for (const auto& [sender_core, receivers] : sender_mapping) {
+        TT_FATAL(
+            sender_core.x == sender_mapping.front().first.x,
+            "mcast-in1 global_cb has senders on more than one DRAM bank (banks {} and {}), but the broadcast weight "
+            "is a single shard that lives on one bank; the off-bank sender would read unrelated memory",
+            sender_mapping.front().first.x,
+            sender_core.x);
+        // Geometry, not CoreRange count: a contiguous line is often stored as one range per core.
+        const CoreRange receiver_bbox = receivers.bounding_box();
+        const CoreCoord receiver_grid = receiver_bbox.grid_size();
+        TT_FATAL(
+            receivers.num_cores() == receiver_bbox.size() && (receiver_grid.x == 1 || receiver_grid.y == 1),
+            "mcast-in1 global_cb sender {} has receivers {}, which are not a single row or column; a broadcast push "
+            "names its receivers with one multicast address, so they must be contiguous and 1-D",
+            sender_core.str(),
+            receivers);
+    }
+    TT_FATAL(
+        program_config.out_block_h == program_config.per_core_M &&
+            program_config.out_block_w == program_config.per_core_N,
+        "mcast-in1 global_cb requires one output block per worker: out_block_h ({}) must equal per_core_M ({}) "
+        "and out_block_w ({}) must equal per_core_N ({})",
+        program_config.out_block_h,
+        program_config.per_core_M,
+        program_config.out_block_w,
+        program_config.per_core_N);
+
+    // The broadcast weight <-> matmul cross-checks (single-shard DRAM NdShardSpec spanning the whole
+    // (K, N), K % in0_block_w == 0, per_core_N == full N, stream_in1 == false) and the two-page
+    // window guard are owned by the shared prefetcher helper, so the contract lives in one place.
+    ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d(program_config, input_tensor_b, gcb);
+
+    // Every active worker must be a GCB receiver: one that isn't would wait forever on an in1 block
+    // nobody delivers. Derive the active set exactly as the program factory does.
+    const uint32_t M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
+    const uint32_t num_workers = tt::div_up(M, static_cast<uint32_t>(program_config.per_core_M));
+    // A single worker collapses the matmul to SKIP_MCAST (which would also drop the bias multicast)
+    // and leaves the prefetcher multicasting to a 1x1 rectangle. Neither is worth supporting: with
+    // one worker there is nothing to broadcast to, so use a plain mcast-in1 matmul.
+    TT_FATAL(
+        num_workers > 1,
+        "broadcast mcast-in1 requires at least two active matmul workers, but M={} at per_core_M={} needs only {}",
+        M,
+        program_config.per_core_M,
+        num_workers);
+    const auto& grid = program_config.compute_with_storage_grid_size;
+    CoreCoord start_core = {0, 0};
+    if (sub_device_id.has_value()) {
+        const auto sub_device_workers =
+            input_tensor_a.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+        start_core = sub_device_workers.bounding_box().start_coord;
+    }
+    const CoreRangeSet matmul_rect(
+        CoreRange(start_core, CoreCoord(start_core.x + grid.x - 1, start_core.y + grid.y - 1)));
+    const auto active_workers = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+        start_core, num_workers, matmul_rect, /*row_wise=*/true);
+    TT_FATAL(
+        active_workers == gcb.receiver_cores(),
+        "mcast-in1 global_cb receivers {} must be exactly the active matmul workers {} ({} workers for M={} at "
+        "per_core_M={}); a worker outside the GCB would never receive an in1 block.",
+        gcb.receiver_cores(),
+        active_workers,
+        num_workers,
+        M,
+        program_config.per_core_M);
+}
+
 // Helper: warns if a caller of MatmulDeviceOperation's static API hasn't populated
 // allowed_worker_cores on a program_config variant that supports the field. ttnn::prim::matmul()
 // normalizes its attributes before launch, but direct callers (e.g. CCL fused ops in
@@ -1761,15 +1847,23 @@ void validate_matmul_mcast1d_config(
         config_name);
 
     if (attributes.global_cb.has_value() && !program_config.gather_in0) {
-        TT_FATAL(
-            program_config.mcast_in0,
-            "{}: global_cb without gather_in0 is supported only for mcast_in0=true",
-            config_name);
-        validate_dram_sender_global_cb_mcast_in0_geometry(
-            attributes.global_cb.value(), input_tensor_b, in1_tile, program_config);
+        if (program_config.mcast_in0) {
+            validate_dram_sender_global_cb_mcast_in0_geometry(
+                attributes.global_cb.value(), input_tensor_b, in1_tile, program_config);
+        } else {
+            TT_FATAL(!attributes.transpose_b, "{}: mcast-in1 global_cb does not support transpose_b", config_name);
+            validate_dram_sender_global_cb_broadcast_mcast_in1_geometry(
+                attributes.global_cb.value(),
+                input_tensor_a,
+                input_tensor_b,
+                a_shape_padded,
+                in0_tile,
+                program_config,
+                attributes.sub_device_id);
+        }
         TT_FATAL(
             program_config.fuse_batch || get_batch_size(a_shape_padded) == 1,
-            "{}: mcast_in0 global_cb requires one effective activation batch, but fuse_batch={} and "
+            "{}: GCB-backed multicast requires one effective activation batch, but fuse_batch={} and "
             "activation batch size={}",
             config_name,
             program_config.fuse_batch,
@@ -2052,11 +2146,23 @@ void validate_matmul_mcast1d_config(
                 program_config.out_block_h,
                 per_core_N);
         }
-        TT_FATAL(
-            input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "{}: input B must be INTERLEAVED, got: {}",
-            config_name,
-            input_tensor_b.memory_config().memory_layout());
+        if (attributes.global_cb.has_value()) {
+            // The broadcast prefetcher reads the weight from DRAM itself, so B is a single-shard
+            // NdShardSpec tensor pinned to one bank rather than an interleaved one the matmul reads.
+            TT_FATAL(
+                input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM &&
+                    input_tensor_b.nd_shard_spec().has_value(),
+                "{}: GCB-backed mcast-in1 requires an NdShardSpec DRAM input B, got buffer type {} and layout {}",
+                config_name,
+                input_tensor_b.buffer()->buffer_type(),
+                input_tensor_b.memory_config().memory_layout());
+        } else {
+            TT_FATAL(
+                input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "{}: input B must be INTERLEAVED, got: {}",
+                config_name,
+                input_tensor_b.memory_config().memory_layout());
+        }
     }
 }
 

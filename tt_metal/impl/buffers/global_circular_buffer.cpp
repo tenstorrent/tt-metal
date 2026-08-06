@@ -272,6 +272,27 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
         hdr->num_receivers_and_remote_pages_sent_ptr =
             remote_cb_pack(this_num_receivers, static_cast<uint32_t>(pages_sent_worker_l1_base_));
 
+        // Multicast rectangle: the receivers' bounding box in the same virtual coordinate space as
+        // the NOC XY table below, stored min-corner-first (NOC0 orientation). Derived from the
+        // coords rather than the logical range so it cannot disagree with what the kernel unicasts
+        // to. Stamped unconditionally — it is a fact about this sender's receiver set, and a later
+        // request decides per tensor whether to push through it (see
+        // TensorPrefetcherTensorLayout::broadcast). It only names exactly this sender's receivers
+        // when they form a line; the prefetcher manager enforces that before accepting a broadcast
+        // tensor, so a non-linear GCB simply never uses these fields.
+        CoreCoord mcast_min = recv_phys.front();
+        CoreCoord mcast_max = recv_phys.front();
+        for (const auto& c : recv_phys) {
+            mcast_min.x = std::min(mcast_min.x, c.x);
+            mcast_min.y = std::min(mcast_min.y, c.y);
+            mcast_max.x = std::max(mcast_max.x, c.x);
+            mcast_max.y = std::max(mcast_max.y, c.y);
+        }
+        hdr->mcast_start_x = static_cast<uint32_t>(mcast_min.x);
+        hdr->mcast_start_y = static_cast<uint32_t>(mcast_min.y);
+        hdr->mcast_end_x = static_cast<uint32_t>(mcast_max.x);
+        hdr->mcast_end_y = static_cast<uint32_t>(mcast_max.y);
+
         for (uint32_t i = 0; i < max_num_receivers_per_sender; ++i) {
             const bool valid = i < this_num_receivers;
             const auto& c = valid ? recv_phys[i] : CoreCoord{0, 0};
