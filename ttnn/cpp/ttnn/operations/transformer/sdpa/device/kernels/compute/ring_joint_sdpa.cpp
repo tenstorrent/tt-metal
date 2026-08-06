@@ -211,6 +211,15 @@ void kernel_main() {
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 24);
 
+    // Attention-sink and frame-block-sparse are mutually exclusive (enforced host-side in
+    // ring_joint_sdpa_device_operation.cpp::validate). Guard here too so a mis-set config fails
+    // loudly at compile time rather than silently corrupting the windowed softmax (the sink folds
+    // an exp(sink - max) term into the denominator, which is fatal for sparse where a Q may attend
+    // few frames).
+    static_assert(
+        !(sparse_frames_enabled && use_attention_sink),
+        "sparse-frames and attention-sink cannot both be enabled on the ring-joint SDPA path");
+
     if constexpr (kv_pad_from_metadata) {
         CircularBuffer cb_derived(cb_kv_pad_derived);
         cb_derived.wait_front(1);

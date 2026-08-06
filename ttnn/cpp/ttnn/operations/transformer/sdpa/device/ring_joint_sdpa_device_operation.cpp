@@ -306,6 +306,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.attention_sink.has_value()) {
         const auto& attention_sink = tensor_args.attention_sink.value();
+        TT_FATAL(
+            !args.has_sparse_frames(),
+            "RingJointSDPA does not support attention_sink together with frame-block-sparse attention "
+            "(tokens_per_frame / num_frames_padded / sparse_frame_mask). These are mutually exclusive "
+            "features on the ring path; enable at most one.");
         TT_FATAL(args.is_causal, "RingJointSDPA attention_sink is supported only for causal attention");
         TT_FATAL(!has_joint_tensors, "RingJointSDPA attention_sink does not support joint attention tensors");
         TT_FATAL(!has_latent_v, "RingJointSDPA attention_sink does not support latent-V / Ring-MLA attention");
