@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <tuple>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -639,6 +640,19 @@ void SetFabricConfig(
         fabric_udm_mode,
         fabric_manager,
         router_config);
+}
+
+std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> get_fabric_route_hops(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t src_chan_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto route =
+        control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, static_cast<chan_id_t>(src_chan_id));
+    std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> out;
+    out.reserve(route.size());
+    for (const auto& [node, chan] : route) {
+        out.emplace_back(*node.mesh_id, static_cast<uint32_t>(node.chip_id), static_cast<uint32_t>(chan));
+    }
+    return out;
 }
 
 std::optional<eth_chan_directions> get_eth_forwarding_direction(

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
+#include <tuple>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -333,6 +334,10 @@ private:
 };
 
 // Returns the eth direction in which the data should be forwarded from the src to reach the dest
+// Full hop-by-hop route src -> dst as (mesh_id, chip_id, chan_id) tuples.
+std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> get_fabric_route_hops(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t src_chan_id);
+
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id);
 

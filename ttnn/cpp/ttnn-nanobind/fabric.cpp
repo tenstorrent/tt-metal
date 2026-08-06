@@ -8,6 +8,7 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
@@ -328,6 +329,51 @@ void bind_fabric_api(nb::module_& mod) {
         &tt::tt_fabric::get_tt_fabric_max_payload_size_bytes,
         R"(
             Returns the maximum fabric packet payload size in bytes.
+        )");
+
+    mod.def(
+        "get_fabric_route_hops",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+           uint32_t src_chan_id) -> std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> {
+            return tt::tt_fabric::get_fabric_route_hops(src_fabric_node_id, dst_fabric_node_id, src_chan_id);
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        nb::arg("src_chan_id"),
+        R"(
+            Full hop-by-hop fabric route as (mesh_id, chip_id, chan_id) tuples.
+        )");
+
+    mod.def(
+        "get_neighbor_eth_directions",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) -> std::vector<int> {
+            auto dirs = tt::tt_fabric::get_neighbor_eth_directions(src_fabric_node_id, dst_fabric_node_id);
+            std::vector<int> out;
+            out.reserve(dirs.size());
+            for (auto d : dirs) {
+                out.push_back(static_cast<int>(d));
+            }
+            return out;
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        R"(
+            Eth directions directly connecting src to dst. Empty if they are not
+            direct neighbours, i.e. reaching dst requires more than one hop.
+        )");
+
+    mod.def(
+        "get_forwarding_link_indices",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) -> std::vector<uint32_t> {
+            return tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        R"(
+            Link indices on src usable to forward toward dst.
         )");
 
     mod.def(

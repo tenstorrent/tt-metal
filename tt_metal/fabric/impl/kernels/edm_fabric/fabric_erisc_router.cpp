@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "api/debug/assert.h"
 #include "internal/ethernet/tunneling.h"
 
@@ -1661,12 +1662,29 @@ FORCE_INLINE
     bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
+    // RXFULL PROBE: this router holds a packet but the REMOTE receiver reports
+    // no space. Rate-limited; names the blocking direction.
+    if (has_unsent_packet && !receiver_has_space_for_packet) {
+        static uint32_t rxfull_ticks = 0;
+        if ((++rxfull_ticks & 0xFFFFF) == 0) {
+            DPRINT(
+                "RXFULL ch={} remote_free={} local_free={}\n",
+                (uint32_t)sender_channel_index,
+                (uint32_t)outbound_to_receiver_channel_pointers.num_free_slots,
+                (uint32_t)free_slots);
+        }
+    }
+
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
     if (can_send) {
         did_something = true;
         progress = true;
+        {  // FABRIC LOSS COUNTER: packet pushed onto the link
+            volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
+            dbg[0]++;
+        }
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
@@ -1810,6 +1828,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             // currently only support processing one packet at a time, so we only decrement by 1
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+            {  // FABRIC LOSS COUNTER: packet consumed from the ethernet link
+                volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
+                dbg[1]++;
+            }
 
             uint8_t src_ch_id;
             if constexpr (skip_src_ch_id_update) {
@@ -2169,6 +2191,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
     size_t did_nothing_count = 0;
+    {  // FABRIC LOSS COUNTERS: zero the scratch once per boot (magic-word guarded),
+        // so counts are cumulative across the run rather than starting from L1 garbage.
+        volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
+        if (dbg[7] != 0x00C0FFEE) {
+            for (uint32_t i = 0; i < 8; ++i) {
+                dbg[i] = 0;
+            }
+            dbg[7] = 0x00C0FFEE;
+        }
+    }
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);

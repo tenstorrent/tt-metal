@@ -199,6 +199,17 @@ FORCE_INLINE
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
 
+            // FABRIC LOSS COUNTERS (diagnostic): tally locally-executed fused incs.
+            {
+                volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
+                dbg[2]++;  // +72 total fused incs executed
+                uint32_t semlo =
+                    (uint32_t)(header.command_fields.unicast_seminc_fused.semaphore_noc_address & 0xFFFFFFFF);
+                dbg[4] = semlo;  // +80 last sem addr
+                if (semlo == 213440) {
+                    dbg[3]++;  // +76 R3 sem specifically
+                }
+            }
             const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
             const auto increment = header.command_fields.unicast_seminc_fused.val;
             if (header.command_fields.unicast_seminc_fused.flush) {
