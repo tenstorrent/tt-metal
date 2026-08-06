@@ -656,3 +656,146 @@ time this fired, the check aborted the test before any frame was saved, leaving 
 ratio near 1.0 is what a smooth scene gives, not what a correct one gives" — a false *pass*. This is a
 false *fail* from the same property. The instrument is one-dimensional and the defect is not, so the
 frames are the gate and the ratio is the trigger for looking at them.
+
+---
+
+## Amendment 131 (2026-08-06) — ref2va quality measured on all three shapes; three of t2va's six bars would fail on it, and none of the three failures is a defect
+
+**Assumed** (plan §7, and this is the one place the plan was right in advance): that t2va's VBench and
+CLIP bars would not transfer to reference-driven content.
+
+**Measured.** Mesh 4×8, ring params, `l1_small_size=16384`, commit `e10e6dda34e`, `transformer_ref`,
+seed 0, 1344×768 / 124 frames / 50 steps. CLIP over 8 evenly spaced frames via `open_clip`; VBench in
+its own interpreter over the muxed mp4, same runner and same file format the t2va gate uses. 3 passed
+in 1383 s.
+
+| dimension | one_image | video+sound | mixed | **min** | t2va | t2va bar |
+|---|---|---|---|---|---|---|
+| CLIP prompt alignment | 29.05 | 29.97 | 29.38 | **29.05** | 37.38 | 33.0 |
+| subject_consistency | 0.9631 | 0.9344 | 0.9587 | **0.9344** | 0.9804 | 0.95 |
+| background_consistency | 0.9569 | 0.9249 | 0.9397 | **0.9249** | 0.9812 | 0.95 |
+| motion_smoothness | 0.9957 | 0.9952 | 0.9959 | **0.9952** | 0.9914 | 0.97 |
+| dynamic_degree | 1.0000 | 1.0000 | 1.0000 | **1.0** | 1.0000 | 1.0 |
+| imaging_quality | 0.4826 | 0.6575 | 0.5826 | **0.4826** | 0.6925 | 0.64 |
+
+**Three of t2va's six bars would fail, and each failure is explainable and not a defect.**
+
+1. **CLIP 29.05–29.97 against 33.0.** Prompt-dependent, not quality-dependent. t2va's bar was
+   calibrated on a long dialogue-rich prompt naming four characters and a diner; ref2va's is one short
+   clause. The spread *across* ref2va's three cases is 0.92 points, against an 8-point gap to t2va —
+   so what the number tracks here is the prompt, not the pipeline.
+2. **subject/background consistency 0.9249–0.9631 against 0.95.** These penalise change over time, and
+   `dynamic_degree` is **1.0 in every case** — confirmed real motion. The lowest pair belongs to
+   `video_with_sound`, the case conditioned on a *moving* clip. Lower consistency with confirmed motion
+   is the expected trade, and the alternative reading — a frozen video — is exactly what
+   `dynamic_degree` rules out.
+3. **imaging_quality 0.4826–0.6575, a 0.17 spread on one pipeline and one prompt.** No-reference IQA,
+   and content-sensitive: am. 87 already recorded 0.4884 on a visually perfect night scene against the
+   same 0.64 bar. The frames behind the 0.4826 were inspected — a photographic interior with correct
+   window mullions, curtain folds and wood grain — and are excellent.
+
+**Where ref2va is better than t2va: motion_smoothness**, 0.9952–0.9959 against 0.9914. Worth stating,
+because a table of numbers that are all lower invites reading the whole thing as a regression.
+
+**Bars set**, below the minimum observed, with t2va's own headroom convention (its 33.0 sits ~4 points
+under a measured 37.05): CLIP **25.0**, subject_consistency **0.90**, background_consistency **0.89**,
+motion_smoothness **0.97** (t2va's, unchanged), dynamic_degree **1.0**, imaging_quality **0.44**.
+
+**Method note.** Recording before setting is what made this legible. Had the bars been inherited, the
+run would have failed on three dimensions at once and the obvious reading — "ref2va quality is worse" —
+would have been wrong on all three counts. The `None`-bar pass costs one extra e2e run and buys the
+distinction between a threshold that does not transfer and a defect that does.
+
+---
+
+## Amendment 132 (2026-08-06) — warm ref2va latency: 73.6 s at the smallest shape, 2.9× better than the cold number the campaign had been reporting; denoise is 85–90 % of it
+
+**Assumed** (am. 127 and every ref2va figure before it): that the cold e2e totals — 210.7 / 270.5 /
+372.0 s — described the pipeline. They described the pipeline *plus kernel compilation plus a 50 GB
+conditioner weight read*, and were labelled cold, but they were the only numbers on record.
+
+**Measured.** Mesh 4×8, TP=4 axis 0 / SP=8 axis 1, ring, 2 links, `l1_small_size=16384`, commit
+`e10e6dda34e`, `transformer_ref`, seed 0, 1344×768 / 124 frames, 49 forwards. Warm window: **one full
+warmup generation at the same shape with the same references**, plus a priming `encode_prompt` so the
+embedding cache is populated; prepares and export excluded. Both `padded_len` values asserted equal
+between warmup and the measured call, and equal to the gated value per case. Wall time, not isolated
+device time. 3 passed in 1703 s.
+
+| stage | one_image (46080) | video+sound (81664) | mixed (89856) |
+|---|---|---|---|
+| Encoder (cache) | 0.1 s | 0.8 s | 0.8 s |
+| Reference encode | 0.8 s | **21.6 s** | **22.0 s** |
+| **Denoise** (49 forwards) | **66.4 s (90.3 %)** | **164.4 s (85.0 %)** | **187.1 s (86.6 %)** |
+| VAE decode | 4.5 s | 4.6 s | 4.5 s |
+| Audio decode | 1.8 s | 1.9 s | 1.8 s |
+| **Total (compute)** | **73.6 s** | **193.3 s** | **216.1 s** |
+| per forward | 1355 ms | 3356 ms | 3818 ms |
+| realtime factor | 14.2× | 37.4× | 41.8× |
+
+Against the cold numbers: **2.9× / 1.4× / 1.7×** faster. The one_image gap is the largest because its
+cold run paid an 83.4 s conditioner encode that the embedding cache removes entirely.
+
+**Three things this establishes.**
+
+1. **Denoise is 85–90 %**, matching STATE.md's 92 % for t2va. Nothing else is worth optimizing until it
+   is, and the two decode stages are already 6 s combined.
+2. **Per-forward scales superlinearly but sublinearly in the square**: 1.95× the rows per device
+   (5760 → 11232) costs 2.82× the time, against 3.8× if it were pure attention and 1.95× if pure
+   matmul. So ref2va at these lengths is **not** in the host-dispatch-bound regime the 2-layer test's
+   docstring describes at seq_len 2048–21504 — device work dominates, which changes which levers are
+   worth pulling.
+3. **Reference encode is 11 % for a video reference** (21.6 s), encoding a 124-frame clip through the
+   taps=3 temporal chunking. Second-largest single stage after denoise, and previously invisible.
+
+**Named, with evidence, not yet attempted.** The warm log carries 12 distinct
+`No known best blocking for (M, K, N) = ...; using default` warnings at ref2va's shapes — including
+`(5760, 5376, 5376)` and `(5760, 7168, 1344)`, which are DiT block matmuls running 50× per forward. The
+matmul blocking table has no entry for `seq_local` 5760 / 10208 / 11232, exactly as STATE.md's pending
+item 2 records for `measured_sdpa_chunk_sizes` (keyed on 4768 / 9216 / 13632, so dead at 4736 / 4992
+*and* at all three ref2va values). Both are configuration sweeps, both need their own measured baseline
+and revalidation, and neither is attempted here.
+
+**Method note.** The cold numbers were labelled cold and were still the wrong thing to reason from —
+"denoise 232 s" for `video_with_sound` invited the conclusion that the loop was slow, when 68 s of that
+was compilation. `warmup()` not accepting `references` was recorded as a non-blocking loose end for most
+of this campaign; it was in fact blocking every perf statement.
+
+---
+
+## Amendment 133 (2026-08-06) — hoisting the provably-redundant per-step conditioning upload out of the denoise loop buys nothing measurable, and the reason is instructive
+
+**Assumed**: that re-uploading the conditioning blocks every step was costing real time. The arithmetic
+looked compelling — for a full-length video reference the block is 37296 × 96 bf16 = **7.16 MB**, and
+the loop was sending it **49 times**, i.e. 351 MB of provably identical bytes, plus 49 host bf16
+conversions of 3.58 M elements each. The blocks are invariant by construction and the invariant is
+already gated (the loop writes only rows from `num_cond` on and raises if a conditioning row moved).
+
+**Measured.** Same method as am. 132, same shapes, same warm-window definition, commit with the hoist
+applied. 3 passed in 1371 s.
+
+| case | baseline total | after hoist | Δ | baseline ms/fwd | after | Δ |
+|---|---|---|---|---|---|---|
+| one_image (46080) | 73.6 s | 73.0 s | −0.8 % | 1355.2 | 1341.6 | −1.0 % |
+| video+sound (81664) | 193.3 s | 193.1 s | −0.1 % | 3356.1 | 3342.3 | −0.4 % |
+| mixed (89856) | 216.1 s | 215.4 s | −0.3 % | 3818.5 | 3811.3 | −0.2 % |
+
+**All three are inside the ±8 % single-run noise floor am. 82 established, so none of them is a win.**
+And the prediction that mattered is falsified outright: the effect did **not** scale with the block
+size. `video_with_sound`'s block is 9.1× `one_image`'s, and its improvement was *smaller*.
+
+**Why.** The loop is asynchronous. `ttnn` enqueues work and the host upload for step *i* proceeds while
+the device is still executing step *i−1* — 3.3 s of it at the larger shapes. Host work that is hidden
+behind device work costs nothing, and removing it therefore saves nothing. The 351 MB was real and
+redundant; it was also free.
+
+**What changes.** The hoist is **kept** — it is bit-identical, strictly less work, and simpler to read —
+but it is recorded in `attempts.md` and **not** in `optimizations.md`, which requires a change to be
+correct *and measurably better*. Claiming it as a speedup would have been claiming a number inside the
+noise band as a result.
+
+**Method note.** Counting bytes is not profiling. "Provably redundant" and "provably costly" are
+different claims, and on an asynchronous device the first does not imply the second. The cheap test that
+would have settled it before the code change is the one am. 132 already contains: denoise scales
+2.82× for 1.95× the rows per device, which is device-work scaling, not host-work scaling — a pipeline
+bound on host dispatch would have scaled far more weakly, as the 2-layer test's own docstring records
+for seq_len 2048–21504.

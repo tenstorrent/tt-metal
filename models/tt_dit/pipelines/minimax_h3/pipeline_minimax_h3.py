@@ -1719,8 +1719,25 @@ class MiniMaxH3Pipeline:
             f"{padded_len // self.sp_factor} rows/device, {num_cond} condition rows"
         )
 
-        # Constant for the whole loop: the rotary tables and the text stream.
+        # Constant for the whole loop: the rotary tables, the text stream, and the conditioning
+        # blocks. The blocks are hoisted here rather than rebuilt per step, which they were until
+        # this campaign measured what that cost: they are *provably* invariant, and the invariant is
+        # already gated -- the loop only ever writes rows from `num_cond` / `num_cond_audio` on, and
+        # raises a RuntimeError at the end if a conditioning row moved. So this is bit-identical and
+        # removes a per-step host bf16 conversion plus upload of every conditioning row: 7.2 MB x 49
+        # for a full-length video reference, which the loop had been re-sending 49 times.
         rope_cos, rope_sin = self._device_metadata(layout, padded_len)
+        tt_cond = []
+        video_cursor = audio_cursor = 0
+        for modality, rows in condition_spec:
+            if modality == "audio":
+                chunk = audio_rows[audio_cursor : audio_cursor + rows]
+                audio_cursor += rows
+            else:
+                chunk = video_rows[video_cursor : video_cursor + rows]
+                video_cursor += rows
+            tt_cond.append((bf16_tensor(chunk.unsqueeze(0).unsqueeze(0), device=self.mesh_device), modality))
+        tt_cond = tt_cond or None
         # [1, L, 5120] -> [1, 1, L, 5120], replicated: the model projects and refines the text stream
         # before the packed sequence is fractured, so every device needs all of it.
         tt_prompt = bf16_tensor(prompt_embeds.reshape(1, 1, -1, prompt_embeds.shape[-1]), device=self.mesh_device)
@@ -1737,21 +1754,8 @@ class MiniMaxH3Pipeline:
                 max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG),
                 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP,
             )
-            # The condition rows travel as their own argument, not prepended to either stream: the
-            # packed layout puts them between text and audio, so the model places them there itself.
-            # Walked in packed order, cutting each modality's host tensor as it goes -- one `"video"`
-            # block for fl2va, an interleaved list for ref2va.
-            tt_cond = []
-            video_cursor = audio_cursor = 0
-            for modality, rows in condition_spec:
-                if modality == "audio":
-                    chunk = audio_rows[audio_cursor : audio_cursor + rows]
-                    audio_cursor += rows
-                else:
-                    chunk = video_rows[video_cursor : video_cursor + rows]
-                    video_cursor += rows
-                tt_cond.append((bf16_tensor(chunk.unsqueeze(0).unsqueeze(0), device=self.mesh_device), modality))
-            tt_cond = tt_cond or None
+            # `tt_cond` is hoisted above the loop -- see the comment there. Only the generated rows
+            # change from step to step, so only they are re-uploaded.
             tt_video = bf16_tensor(video_rows[num_cond:].unsqueeze(0).unsqueeze(0), device=self.mesh_device)
             tt_audio = bf16_tensor(audio_rows[num_cond_audio:].unsqueeze(0).unsqueeze(0), device=self.mesh_device)
             # Replicated, fp32 so the sinusoid is computed in fp32, and shaped [1, 1, T, 1] so it
