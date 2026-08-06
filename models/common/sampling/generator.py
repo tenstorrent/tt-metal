@@ -190,7 +190,8 @@ class SamplingGenerator:
                 Length-1 for simple cases; >1 for row-sharded (sampling_dp > data_parallel).
             reload_sampling_params: Upload temperature/top-k/top-p/etc.
             reset_sampling_state: Rebuild prompt/output penalty state.
-            prompt_tokens: Prompt tokens for penalty tracking.
+            prompt_tokens: Prompt tokens for penalty tracking. ``None`` leaves the
+                prompt mask untouched; only the caller can rebuild it.
             output_tokens: Output tokens for penalty tracking.
 
         Does NOT call ``seed_manager.get_new_values()`` — callers manage seed
@@ -221,7 +222,14 @@ class SamplingGenerator:
                 self.reset_sampling_params(formatted_params)
 
         if reset_sampling_state:
-            self.reset_prompt_tokens(prompt_tokens)
+            # Prompt history is caller-owned and has no "clear" encoding: penalties
+            # need the real prompt tokens to rebuild the mask. Callers that request a
+            # state reset without it (warmup, demos) keep the existing mask, matching
+            # apply_prefill_state.
+            if prompt_tokens is not None:
+                self.reset_prompt_tokens(prompt_tokens)
+            # Output history does have one: reset_output_tokens(None) zeroes the
+            # per-slot output counters, which a state reset must always do.
             self.reset_output_state(output_tokens)
 
     # ---------------------------------------------------------------------

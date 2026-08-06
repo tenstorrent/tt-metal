@@ -1545,7 +1545,10 @@ class Generator(WarmupForwardMixin):
                     )
             sampling_module.reset_sampling_params(sampling_params)
         if reset_sampling_state:
-            sampling_module.reset_prompt_tokens(prompt_tokens)
+            # Penalties cannot rebuild the prompt mask without the real tokens, so a
+            # caller that omits them (warmup, demos) keeps the existing mask.
+            if prompt_tokens is not None:
+                sampling_module.reset_prompt_tokens(prompt_tokens)
             sampling_module.reset_output_state(output_tokens)
 
         if sampling_params is not None and (active_seed_slots is None or active_seed_slots):
