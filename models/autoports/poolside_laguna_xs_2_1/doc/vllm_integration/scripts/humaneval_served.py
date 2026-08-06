@@ -32,9 +32,11 @@ def _extract_code(text, prompt):
 
     m = _re.search(r"```(?:python)?\s*(.+?)```", text, _re.S)
     if m:
-        code = m.group(1)
-        # chat mode returns the WHOLE function; if it restates the signature, use it as the full program
-        return code if code.strip().startswith(("def ", "from ", "import ")) else code
+        return m.group(1)
+    # Unclosed fence (model truncated before the closing ```): take everything after the opening fence.
+    m = _re.search(r"```(?:python)?\s*\n(.+)", text, _re.S)
+    if m:
+        return m.group(1)
     return text
 
 
@@ -98,6 +100,13 @@ def one(task_id, prob, args):
         )
     except Exception as e:  # noqa: BLE001
         return task_id, False, f"gen_err:{type(e).__name__}", time.time() - t0
+    if _is_full:
+        # Chat mode returns just the function; the model re-writes the signature but drops the prompt's
+        # import preamble (`from typing import List`, `import math`, ...), so `List[int]` hints NameError.
+        # Restore the prompt's imports (the completion path kept them via prompt+completion). Idempotent.
+        imports = "\n".join(ln for ln in prob["prompt"].splitlines() if ln.startswith(("import ", "from ")))
+        if imports:
+            program = imports + "\n" + program
     ok, err = run_test(program, prob["test"], prob["entry_point"])
     return task_id, ok, err, time.time() - t0
 
