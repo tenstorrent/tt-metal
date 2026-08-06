@@ -506,7 +506,7 @@ def test_eltwise_binary_bfp4_b(
 
 
 def _prepare_dest_reuse_inputs(
-    formats, input_dimensions, output_dimensions, tile_dimensions
+    formats, input_dimensions, output_dimensions, tile_dimensions, dest_acc
 ):
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
@@ -534,9 +534,13 @@ def _prepare_dest_reuse_inputs(
         tile_dimensions=tile_dimensions,
     )
 
+    # Float32 output forces dest accumulation regardless of the request.
     effective_dest_acc = (
         DestAccumulation.Yes
-        if formats.output_format == DataFormat.Float32
+        if (
+            dest_acc == DestAccumulation.Yes
+            or formats.output_format == DataFormat.Float32
+        )
         else DestAccumulation.No
     )
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -582,7 +586,32 @@ def _prepare_dest_reuse_inputs(
         "src_B_tilized_flat": src_B_tilized_flat,
         "tile_elements": num_faces * face_r_dim * FACE_C_DIM,
         "torch_format": format_dict[formats.output_format],
+        "effective_dest_acc": effective_dest_acc,
     }
+
+
+def _dest_to_src_reg(tensor, src_format):
+    """Model MOVD2A / MOVD2B moving a DEST face into a source register.
+
+    move_d2a_fixed_face issues TTI_MOVD2A(0, ...) -- dest_32b_lo = 0 -- so it reads the
+    HIGH 16 bits of each 32-bit DEST word and the low mantissa bits are dropped. That is
+    a truncation toward zero, not the round-to-nearest-even the packer would do.
+
+    Only applies when the source register is configured for a 16-bit format: it then
+    receives just the top half of the 32-bit DEST word. A Float32-configured source
+    register takes the whole word (ttsim reads the full 32 bits for src fmt Tf32/fp32),
+    so truncating there would be wrong -- measured bit-exact without it, and 1.3e-2 to
+    1.8e-2 relative error with it.
+
+    With dest_acc = No, DEST already holds the narrower format and this is a no-op
+    regardless.
+    """
+    if tensor.dtype != torch.float32 or src_format == DataFormat.Float32:
+        return tensor
+    bits = tensor.view(torch.int32) & torch.tensor(
+        -65536, dtype=torch.int32
+    )  # 0xFFFF0000
+    return bits.view(torch.float32)
 
 
 def _apply_dest_reuse_op(
@@ -658,10 +687,19 @@ def _compute_dest_reuse_golden(
     # during compile-producer, which has no _apply_fidelity_masking helper.
     binary_golden = EltwiseBinaryGolden()
 
+    # DEST is float32 under dest accumulation and is only narrowed by the packer, so the
+    # accumulator must not be held in the (narrower) output dtype. _dest_to_src_reg then
+    # models the MOVD2A/MOVD2B truncation on the way back out.
+    dest_format = (
+        torch.float32
+        if prepared["effective_dest_acc"] == DestAccumulation.Yes
+        else torch_format
+    )
+
     for out_t in range(prepared["tile_cnt_output"]):
         block_idx = out_t // prepared["output_tiles_in_block"]
         tile_in_block = out_t % prepared["output_tiles_in_block"]
-        dest = torch.zeros(tile_elements, dtype=torch_format)
+        dest = torch.zeros(tile_elements, dtype=dest_format)
 
         for i in range(prepared["inner_dim"]):
             input_tile_idx = (
@@ -677,12 +715,17 @@ def _compute_dest_reuse_golden(
             if i == 0:
                 srcA, srcB = a_tile, b_tile
             elif reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
-                srcA, srcB = dest.clone(), b_tile
+                srcA, srcB = (
+                    _dest_to_src_reg(dest.clone(), formats.input_format),
+                    b_tile,
+                )
             else:
-                srcA, srcB = a_tile, dest.clone()
+                srcA, srcB = a_tile, _dest_to_src_reg(
+                    dest.clone(), formats.input_format
+                )
 
             dest = _apply_dest_reuse_op(
-                math_op, math_fidelity, formats, torch_format, binary_golden, srcA, srcB
+                math_op, math_fidelity, formats, dest_format, binary_golden, srcA, srcB
             )
 
         out_start = out_t * tile_elements
@@ -703,6 +746,10 @@ def _compute_dest_reuse_golden(
         BroadcastType.Column,
         BroadcastType.Scalar,
     ],
+    # fp32 dest accumulation makes DEST hold float32, which exposes the MOVD2A/MOVD2B
+    # truncation modelled by _dest_to_src_reg. Under dest_acc=No that truncation is a
+    # no-op, so this axis is what actually exercises it.
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reuse_dest_type=lambda broadcast_type: (
         [
             EltwiseBinaryReuseDestType.DEST_TO_SRCA,
@@ -727,6 +774,7 @@ def _compute_dest_reuse_golden(
 def test_eltwise_binary_dest_reuse(
     broadcast_type,
     reuse_dest_type,
+    dest_acc,
     math_op,
     formats,
     math_fidelity,
@@ -735,7 +783,7 @@ def test_eltwise_binary_dest_reuse(
     output_dimensions,
 ):
     prepared = _prepare_dest_reuse_inputs(
-        formats, input_dimensions, output_dimensions, tile_dimensions
+        formats, input_dimensions, output_dimensions, tile_dimensions, dest_acc
     )
     golden_tensor = _compute_dest_reuse_golden(
         math_op, reuse_dest_type, math_fidelity, formats, prepared, broadcast_type
@@ -783,7 +831,7 @@ def test_eltwise_binary_dest_reuse(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=DestAccumulation.No,
+        dest_acc=dest_acc,
         unpack_to_dest=False,
     )
 

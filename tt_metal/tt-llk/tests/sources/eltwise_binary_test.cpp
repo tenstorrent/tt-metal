@@ -128,8 +128,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 LLK_ASSERT(
                     (static_cast<std::uint32_t>(tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                     "Block tile index exceeds maximum destination tiles");
+                // Must be true: this is the only path that reaches the per-face ZEROACC, and
+                // clear_fp32_dst_acc=0 makes it use 16-bit row geometry against a 32-bit DEST --
+                // clearing rows after the ELWMUL has written them and never clearing faces 2-3.
+                // Every tt-metal compute-API caller passes true (api/compute/eltwise_binary.h).
                 _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE>(
-                    tensor_shape, tile /* dst_index */, false /* clear_fp32_dst_acc */);
+                    tensor_shape, tile /* dst_index */, true /* clear_fp32_dst_acc */);
             }
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
