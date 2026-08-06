@@ -20,6 +20,25 @@ all in `blaze/ops/dram_streaming_matmul/common.py`, found by reading the source:
 | 401 `bank_id = idx % num_banks` | no-op today, since num_banks == len(cores) | **already the right shape** — becomes meaningful once 396 is decoupled |
 | 274 `per_core_N = weights_shard[1] // tile_w` | per-core N derived from the DRAM weight shard | must subdivide one bank's shard across its W workers |
 
+**The per-core plumbing already exists.** Line 414 passes `bank_id` as a per-core *map*
+(`bank_id_map`), so per-core CT args are an established pattern here — an `n_offset` map can be
+added the same way. That is a meaningful simplification over "redesign the page walk".
+
+Concrete recipe:
+
+1. `dram_bank_worker_cores(device, workers_per_bank=W)` -> W cores per bank, ordered
+   `[bank0..bank7, bank0..bank7, ...]` so line 401's `idx % num_banks` maps correctly as-is.
+   The extra cores will not be NOC-optimal (`get_pinned_optimal_...` only yields 8); any free
+   core works, just with a longer hop.
+2. `num_banks` = `device.dram_grid_size().x`, not `len(all_worker_cores)`.
+3. `per_core_N = (weights_shard[1] // tile_w) // W`.
+4. New per-core map `n_offset = (idx // num_banks) * per_core_N`, passed like `bank_id_map`.
+5. **The one genuinely new piece:** consume `n_offset` in the reader's weight page index inside
+   the kernel, so the two workers on a bank read disjoint column halves of the same shard.
+
+Step 5 is the only unknown; steps 1-4 are mechanical. `weights_tensor_addr` (line 435) stays a
+single scalar — the offset belongs in the page index, not the base address.
+
 The real work is the last row. Today each core reads its bank's **entire** shard, so there is no
 per-core column offset anywhere in the reader's page walk; W workers per bank means each reads a
 disjoint column sub-range of the same shard. That offset has to be threaded through the reader CT
