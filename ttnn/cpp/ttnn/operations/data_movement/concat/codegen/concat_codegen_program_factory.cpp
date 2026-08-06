@@ -272,8 +272,11 @@ ProgramDescriptor create_descriptor_rm_width(
             .buffer_index = kCbScratch, .data_format = cb_data_format, .page_size = scratch_page}}},
     });
 
+    // Read batch matches write_batch: the CB depth below (2*write_batch pages)
+    // is only actually pipelined if the reader fills it write_batch pages at a
+    // time instead of reserving/barriering one page per stick.
     std::vector<uint32_t> reader_ct = {
-        kCbIn, in0_stick, in1_stick, out_page, in0_page, in1_page, kCbScratch, in1_noc_alignment};
+        kCbIn, in0_stick, in1_stick, out_page, in0_page, in1_page, kCbScratch, in1_noc_alignment, *write_batch};
     TensorAccessorArgs(*src0).append_to(reader_ct);
     TensorAccessorArgs(*src1).append_to(reader_ct);
 
@@ -414,10 +417,6 @@ ProgramDescriptor create_descriptor_rm_width_nway(
         write_batch.has_value(),
         "ConcatCodegen: RM N-way width-concat CB page ({} B) does not fit per-core L1",
         out_page);
-    // Matches ops/concat/spec.py's build_concat_rm_width_nway default; unlike
-    // write_batch (and the CB depth it drives), read_batch is not scaled.
-    constexpr uint32_t kReadBatch = 1;
-
     const CoreSplit split = split_work(device, total_out_sticks);
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
@@ -439,7 +438,10 @@ ProgramDescriptor create_descriptor_rm_width_nway(
     // supported_by_codegen()), so one buffer's transport alignment answers
     // for every input's direct-write destination-offset check.
     const uint32_t noc_alignment = static_cast<uint32_t>(input_tensors[0].buffer()->alignment());
-    std::vector<uint32_t> reader_ct = {kCbIn, kCbScratch, n_inputs, out_page, kReadBatch, noc_alignment};
+    // Read batch matches write_batch, same as the 2-tensor width builder: the
+    // CB depth below (2*write_batch pages) is only pipelined if the reader
+    // fills it write_batch pages at a time instead of one page per barrier.
+    std::vector<uint32_t> reader_ct = {kCbIn, kCbScratch, n_inputs, out_page, *write_batch, noc_alignment};
     TensorAccessorArgs(*input_tensors[0].buffer()).append_to(reader_ct);
 
     KernelDescriptor reader_desc;

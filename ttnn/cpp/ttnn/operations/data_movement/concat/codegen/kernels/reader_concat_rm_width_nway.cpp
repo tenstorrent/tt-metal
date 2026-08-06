@@ -78,11 +78,13 @@ void kernel_main() {
         out_cb.reserve_back(batch);
         const uint32_t out_base = out_cb.get_write_ptr();
 
-        for (uint32_t page = 0; page < batch; ++page) {
-            if (all_direct) {
-                // Every input lands directly in a disjoint range of the same
-                // reserved output page: issue every read and barrier once,
-                // matching the two-input reader's fast path.
+        if (all_direct) {
+            // Every input of every page in this batch lands directly in a
+            // disjoint range of the reserved output pages: issue every read
+            // for the whole batch first, then barrier once -- matching the
+            // two-input reader's fast path, generalized across BATCH pages
+            // instead of re-barriering after each individual page.
+            for (uint32_t page = 0; page < batch; ++page) {
                 for (uint32_t input = 0; input < N_INPUTS; ++input) {
                     const auto accessor = TensorAccessor(src_args, bases[input], page_sizes[input]);
                     noc.async_read(
@@ -92,35 +94,36 @@ void kernel_main() {
                         {.page_id = src_page + page},
                         {.offset_bytes = page * OUT_PAGE_SIZE + dst_offsets[input]});
                 }
-                noc.async_read_barrier();
-                continue;
             }
+            noc.async_read_barrier();
+        } else {
+            for (uint32_t page = 0; page < batch; ++page) {
+                uint32_t dst = out_base + page * OUT_PAGE_SIZE;
+                for (uint32_t input = 0; input < N_INPUTS; ++input) {
+                    const auto accessor = TensorAccessor(src_args, bases[input], page_sizes[input]);
+                    if (direct[input]) {
+                        noc.async_read(
+                            accessor,
+                            out_cb,
+                            stick_sizes[input],
+                            {.page_id = src_page + page},
+                            {.offset_bytes = page * OUT_PAGE_SIZE + dst_offsets[input]});
+                        noc.async_read_barrier();
+                        continue;
+                    }
 
-            uint32_t dst = out_base + page * OUT_PAGE_SIZE;
-            for (uint32_t input = 0; input < N_INPUTS; ++input) {
-                const auto accessor = TensorAccessor(src_args, bases[input], page_sizes[input]);
-                if (direct[input]) {
+                    // Physical pages are always NOC-aligned.  Read one complete
+                    // source page, then copy only its logical bytes into the packed
+                    // output stick.  A byte loop handles bf16 and any future RM dtype
+                    // without imposing alignment on mixed-width segment boundaries.
                     noc.async_read(
-                        accessor,
-                        out_cb,
-                        stick_sizes[input],
-                        {.page_id = src_page + page},
-                        {.offset_bytes = page * OUT_PAGE_SIZE + dst_offsets[input]});
+                        accessor, scratch_cb, page_sizes[input], {.page_id = src_page + page}, {.offset_bytes = 0});
                     noc.async_read_barrier();
-                    continue;
-                }
-
-                // Physical pages are always NOC-aligned.  Read one complete
-                // source page, then copy only its logical bytes into the packed
-                // output stick.  A byte loop handles bf16 and any future RM dtype
-                // without imposing alignment on mixed-width segment boundaries.
-                noc.async_read(
-                    accessor, scratch_cb, page_sizes[input], {.page_id = src_page + page}, {.offset_bytes = 0});
-                noc.async_read_barrier();
-                CoreLocalMem<volatile uint8_t> src(scratch_addr);
-                CoreLocalMem<volatile uint8_t> target(dst + dst_offsets[input]);
-                for (uint32_t byte = 0; byte < stick_sizes[input]; ++byte) {
-                    target[byte] = src[byte];
+                    CoreLocalMem<volatile uint8_t> src(scratch_addr);
+                    CoreLocalMem<volatile uint8_t> target(dst + dst_offsets[input]);
+                    for (uint32_t byte = 0; byte < stick_sizes[input]; ++byte) {
+                        target[byte] = src[byte];
+                    }
                 }
             }
         }

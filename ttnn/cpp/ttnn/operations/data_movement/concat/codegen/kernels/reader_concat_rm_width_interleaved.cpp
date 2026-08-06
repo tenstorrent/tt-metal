@@ -16,7 +16,10 @@
 //   [5]   IN1_PAGE_SIZE  (aligned page size for in1)
 //   [6]   cb_scratch
 //   [7]   IN1_NOC_ALIGNMENT (source transport's legal destination alignment)
-//   [8..] TensorAccessorArgs for tensor 0, then tensor 1
+//   [8]   BATCH (read batch size on the aligned direct-write fast path;
+//               matches the writer's BATCH so both sides drive the same
+//               2*BATCH-deep CB -- see reader_concat_rm_interleaved.cpp)
+//   [9..] TensorAccessorArgs for tensor 0, then tensor 1
 //
 // RT args layout:
 //   [0]   num_sticks (total output sticks this core produces)
@@ -44,8 +47,9 @@ void kernel_main() {
     constexpr uint32_t IN1_PAGE_SIZE = get_compile_time_arg_val(5);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(6);
     constexpr uint32_t IN1_NOC_ALIGNMENT = get_compile_time_arg_val(7);
+    constexpr uint32_t BATCH = get_compile_time_arg_val(8);
 
-    constexpr uint32_t ta_base = 8;
+    constexpr uint32_t ta_base = 9;
     constexpr auto ta0_args = TensorAccessorArgs<ta_base>();
     constexpr auto ta1_args = TensorAccessorArgs<ta0_args.next_compile_time_args_offset()>();
 
@@ -61,33 +65,50 @@ void kernel_main() {
     // therefore needs the architecture's DRAM alignment; an L1 source only
     // needs the L1 alignment. Stage through scratch and RISC-copy otherwise.
     constexpr bool in1_direct = in1_aligned && ((IN0_STICK_SIZE % IN1_NOC_ALIGNMENT) == 0);
+    constexpr bool fast_path = in0_aligned && in1_direct;
 
     Noc noc;
     CircularBuffer input_cb(cb_in);
     CircularBuffer scratch_cb(cb_scratch);
 
-    // Reserve scratch buffer for non-aligned reads
-    if constexpr (!in0_aligned || !in1_direct) {
-        scratch_cb.reserve_back(1);
-    }
-    uint32_t scratch_addr = 0;
-    if constexpr (!in0_aligned || !in1_direct) {
-        scratch_addr = scratch_cb.get_write_ptr();
-    }
-
-    for (uint32_t i = 0; i < num_sticks; i++) {
-        input_cb.reserve_back(1);
-        uint32_t l1_addr = input_cb.get_write_ptr();
-
-        if constexpr (in0_aligned && in1_direct) {
-            // Both sticks land directly in disjoint ranges of the same reserved
-            // CB page with no scratch involved: issue both reads and barrier
-            // once, matching the native reader's batching instead of forcing a
-            // round trip after in0 with no consumer.
-            noc.async_read(s0, input_cb, IN0_STICK_SIZE, {.page_id = stick_id_0}, {.offset_bytes = 0});
-            noc.async_read(s1, input_cb, IN1_STICK_SIZE, {.page_id = stick_id_1}, {.offset_bytes = IN0_STICK_SIZE});
+    if constexpr (fast_path) {
+        // Both sticks land directly in disjoint ranges of the same reserved CB
+        // page, with no scratch involved.  Batch BATCH sticks into the CB
+        // depth the factory already allocates (2*BATCH pages) and issue one
+        // barrier per batch instead of one barrier per stick -- the CB was
+        // deep enough to overlap read and write all along, but barriering
+        // after every single stick serialized the reader against itself.
+        uint32_t sticks_left = num_sticks;
+        while (sticks_left > 0) {
+            const uint32_t batch = (sticks_left < BATCH) ? sticks_left : BATCH;
+            input_cb.reserve_back(batch);
+            for (uint32_t i = 0; i < batch; ++i) {
+                const uint32_t page_offset = i * OUT_PAGE_SIZE;
+                noc.async_read(
+                    s0, input_cb, IN0_STICK_SIZE, {.page_id = stick_id_0 + i}, {.offset_bytes = page_offset});
+                noc.async_read(
+                    s1,
+                    input_cb,
+                    IN1_STICK_SIZE,
+                    {.page_id = stick_id_1 + i},
+                    {.offset_bytes = page_offset + IN0_STICK_SIZE});
+            }
             noc.async_read_barrier();
-        } else {
+            input_cb.push_back(batch);
+            stick_id_0 += batch;
+            stick_id_1 += batch;
+            sticks_left -= batch;
+        }
+    } else {
+        // Non-aligned fallback: at least one side needs a scratch-staged,
+        // per-element copy, so stay stick-by-stick.
+        scratch_cb.reserve_back(1);
+        const uint32_t scratch_addr = scratch_cb.get_write_ptr();
+
+        for (uint32_t i = 0; i < num_sticks; i++) {
+            input_cb.reserve_back(1);
+            uint32_t l1_addr = input_cb.get_write_ptr();
+
             // Read in0's stick
             if constexpr (in0_aligned) {
                 noc.async_read(s0, input_cb, IN0_STICK_SIZE, {.page_id = stick_id_0}, {.offset_bytes = 0});
@@ -116,11 +137,11 @@ void kernel_main() {
                     dst_ptr[w] = src_ptr[w];
                 }
             }
+
+            input_cb.push_back(1);
+
+            stick_id_0++;
+            stick_id_1++;
         }
-
-        input_cb.push_back(1);
-
-        stick_id_0++;
-        stick_id_1++;
     }
 }
