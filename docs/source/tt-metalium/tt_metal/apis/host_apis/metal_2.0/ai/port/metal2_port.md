@@ -812,6 +812,19 @@ Scan the ported code against this checklist. Each item is a Metal 2.0 design-int
 - [ ] **No `tensor.buffer()->address()` survived.** Search the factory `.cpp` for this string; if present, the corresponding tensor needs a `TensorBinding` instead.
 - [ ] **No magic-number CB indices in CTAs.** Search `compile_time_args` for values that are CB indices (typically small integers or `CBIndex::c_*`); if found, the value should come from a `DFBBinding` instead.
 - [ ] **No `TensorAccessorArgs<N>()` survived in any ported kernel.** Search for this; if present, the kernel needs `TensorAccessor(tensor::name)` instead.
+- [ ] **No `cb` survives in a DFB's name.** The port renames `cb_*` → `dfb_*` ([Host-side: stay in the lane](#host-side-stay-in-the-lane)), and it lands unevenly — the two halves fail independently, so check both. **The most common miss is the variable**: the spec name gets renamed and the local holding it keeps its legacy one, on either side of the port —
+
+  ```cpp
+  auto cb_in = DataflowBuffer(dfb::dfb_in);   // name renamed, variable not
+  ```
+
+  **The costliest miss is the `DataflowBufferSpec` name string**, because that half escapes the op: it reaches the generated header and every kernel that binds it, as `dfb::cb_in0`, where a later reader takes it for the intended name. Run over the op directory:
+
+  ```bash
+  grep -rnE '[Cc][Bb]_|_[Cc][Bb]\b|\b[Cc][Bb]\b|\bCB[A-Z]' <op-dir>
+  ```
+
+  Expect **zero** hits: post-port the op has no CBs, so every hit is a real leftover rather than noise (the pattern excludes `cbegin` / `cbrt`, the only innocent `cb` substrings that occur here in practice). Rename each one everywhere it appears, in a single pass — the host variable, the spec-name string, every kernel-side `dfb::` reference, and the kernel local holding the constructed `DataflowBuffer` — and sweep the surrounding comments while you are there. A hit on a legacy CB *type* rather than a name (`CBFormatDescriptor` and relatives) is a different failure: that construct should have been replaced outright, not renamed — see [Kernel-side whitelist](#kernel-side-whitelist), where the CB transition is specified as total.
 - [ ] **Conditional DFB bindings follow [Pattern: Conditional / optional DFB bindings](../shared/port_patterns.md#pattern-conditional--optional-dfb-bindings).** For each conditionally-used DFB: the host conditionally binds it; `KernelSpec::compiler_options.defines` carries the matching preprocessor flag; the kernel `#ifdef`-gates both the constexpr alias of the DFB name and every expression referencing it. No unconditional bindings introduced as a workaround.
 - [ ] **No `.id` extraction at LLK call sites.** Search for `.id` on `dfb::` handles; if present, pass `dfb::name` directly.
 - [ ] **No CTA→RTA demotion in compute kernels.** If a per-group dimension was moved from CTA to RTA in the port, the structural decision is wrong; revisit planning.
