@@ -11,7 +11,7 @@
 # per-thread dvalid mock accounting for the custom RV_PACR pack loop (see the quasar-perf-test skill).
 
 import pytest
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PerfRunType
 from helpers.param_config import parametrize
 from quasar.test_pack_untilize_narrow_rv_quasar import (
     CASES,
@@ -32,7 +32,7 @@ PERF_RUN_TYPES_NARROW_RV = [[PerfRunType.L1_TO_L1]]
     formats=NARROW_RV_FORMATS,
     case=CASES,
     run_types=PERF_RUN_TYPES_NARROW_RV,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_pack_untilize_narrow_rv_quasar(
