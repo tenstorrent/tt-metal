@@ -21,13 +21,13 @@ jobs:
           days-before-issue-stale: -1
           days-before-issue-close: -1
           stale-pr-message: >
-            This PR has been automatically closed because it has had no activity
-            for 32 days. If you still need this change, feel free to reopen it
-            or open a new PR whenever you're ready to continue.
+            **AUTOMATION**: This PR has been automatically closed because it has
+            had no activity for 32 days. If you still need this change, feel free
+            to reopen it or open a new PR whenever you're ready to continue.
           close-pr-message: >
-            This PR has been automatically closed because it has had no activity
-            for 32 days. If you still need this change, feel free to reopen it
-            or open a new PR whenever you're ready to continue.
+            **AUTOMATION**: This PR has been automatically closed because it has
+            had no activity for 32 days. If you still need this change, feel free
+            to reopen it or open a new PR whenever you're ready to continue.
           stale-pr-label: "stale"
           exempt-draft-pr: false
           operations-per-run: 100
