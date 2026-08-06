@@ -6,13 +6,13 @@
 Mirrors ``reference/xtts_mel.py``. ttnn has no FFT, and the STFT-as-strided-conv1d
 approach OOMs L1 (a 512-tap kernel blows the CB allocation — the same limit tt_dit
 hit with its conv3d STFT). So, like tt_dit's ``MelSTFT``, the DFT is a **matmul**
-against a windowed cos/sin basis — but the framing is done **on device** via
-``ttnn.gather`` (tt_dit frames on the host with ``unfold``; we avoid that host
-round-trip). The gather index map folds in both the frame layout (``m*hop + n``)
-and the ``center=True`` reflect padding, so it is a data-independent constant
-(function of the sequence length only), not a host op on the activations.
+against a windowed cos/sin basis — and the framing is done **on device** too
+(tt_dit frames on the host with ``unfold``; we avoid that host round-trip), as a
+reflect-pad plus contiguous row slices of a ``[rows, hop]`` view of the padded
+signal — see :class:`_Framer`, which replaced a ``ttnn.gather`` that was 84% of
+the demo's whole traced replay time.
 
-Pipeline (all on device): preemphasis conv -> gather-frame -> DFT matmul (basis
+Pipeline (all on device): preemphasis conv -> frame -> DFT matmul (basis
 [512, 514]) -> real^2+imag^2 power -> mel-filterbank matmul -> [1, 64, T].
 """
 
@@ -26,18 +26,104 @@ from models.experimental.xtts.reference.xtts_mel import HOP_LENGTH, N_FFT, N_MEL
 
 N_FREQS = N_FFT // 2 + 1  # 257
 CENTER_PAD = N_FFT // 2  # 256
-# Frames processed per gather+reshape. The [1, nf*512] -> [nf, 512] ROW_MAJOR reshape
-# grows circular buffers ~linearly with nf; on p150 (1.5 MB L1) ~180 frames is the
-# ceiling, so chunk well under it and concat, letting the frontend handle long audio.
-FRAME_CHUNK = 128
 
 
-def _reflect_index(positions: torch.Tensor, length: int) -> torch.Tensor:
-    """torch 'reflect' index map: fold arbitrary integer positions into [0, length)
-    by mirroring without repeating the edge (matches F.pad(..., mode='reflect'))."""
-    period = 2 * (length - 1)
-    r = positions % period  # torch % follows divisor sign -> non-negative
-    return torch.where(r < length, r, period - r)
+class _Framer:
+    """Signal ``[1, L]`` -> STFT frame matrix ``[T, n_fft]`` (``center=True`` reflect padding).
+
+    Framing used to be a ``ttnn.gather`` per chunk over a ``[1, chunk*n_fft]`` index map, and it
+    was **84% of the whole demo's traced replay time** — 5.77 s for the conditioning mel and
+    1.21 s for the speaker mel, against 0.19 ms for the DFT matmul they feed. The reason is the
+    gather kernel's work split: ``gather_program_factory`` splits over ``Ht``, the index tensor's
+    TILE-ROW count, and a flat ``[1, chunk*n_fft]`` index map is ONE tile row — so the whole
+    gather runs on a single core, re-reading the full ``Wt_input``-tile signal row for every
+    output tile. 684 ms per 32-frame chunk. Chunking made it worse, not better: the cost is
+    per-chunk single-core work, so 9 chunks paid it 9 times.
+
+    Framing needs no indexing at all. Consecutive frames start exactly ``hop`` samples apart, so
+    reflect-pad the signal once, view it as ``[rows, hop]`` (a free ROW_MAJOR reshape) and frame
+    ``m`` is simply rows ``m .. m+ceil(n_fft/hop)-1`` read end to end. So the frame matrix is
+    ``ceil(n_fft/hop)`` CONTIGUOUS row slices of that view, concatenated along the columns and
+    trimmed to ``n_fft``: ``wide[m, j] == xpad[m*hop + j]`` by construction. All bulk copies, no
+    per-element indexing. The framing itself is bit-exact — 0.0 max abs err against a host
+    reference, given the same padded signal.
+
+    Framing alone: 5770 -> 1.0 ms at the conditioning shape. Whole frontend, in model:
+    conditioning mel 5801 -> 33 ms, speaker mel 1234 -> 25 ms, at PCC 0.9999993 and 0.99999996
+    against their torch references. Whole demo: 7.045 -> 0.068 s of traced setup, RTF 1.15 -> 0.19.
+
+    The one part that is not a copy is the reflect padding itself, which reverses a prefix and a
+    suffix of the signal. ttnn has no ``flip``, and a small ``ttnn.gather`` over just those
+    samples hits the same single-core path (35 ms), so the reversal is a matmul against a
+    constant anti-identity — 1.1 ms for both pads, at the cost of one ``[p, p]`` fp32 constant
+    per distinct pad length (4 MB at n_fft=2048). That matmul carries bf16-level rounding (~2e-3
+    relative) on the padded samples and no compute_kernel_config fixes it (HiFi4 + fp32_dest_acc
+    measures identically), but it only touches the ``n_fft/2`` samples at each end and the PCCs
+    above are measured with it in place.
+    """
+
+    def __init__(self, device, n_fft: int, hop: int):
+        self.device = device
+        self.n_fft = n_fft
+        self.hop = hop
+        self.center_pad = n_fft // 2
+        self._rev_cache = {}  # pad length p -> anti-identity [p, p]
+        self._geom_cache = {}  # signal length L -> geometry tuple
+
+    def num_frames(self, length: int) -> int:
+        return 1 + length // self.hop  # center=True frame count
+
+    def _geometry(self, length: int):
+        """``(T, rows_per_frame, num_rows, right_pad)`` for a signal of ``length`` samples."""
+        if length not in self._geom_cache:
+            frames = self.num_frames(length)
+            rows_per_frame = -(-self.n_fft // self.hop)
+            num_rows = (frames - 1) + rows_per_frame
+            right = num_rows * self.hop - self.center_pad - length
+            # A single reflection can only mirror `length - 1` samples. Signals shorter than
+            # ~n_fft would need the gather path's modular (repeated) reflection; fail loudly
+            # rather than silently mis-pad. Every real input here is seconds of audio.
+            assert 0 <= right < length, (
+                f"signal of {length} samples is too short for n_fft={self.n_fft}: the right "
+                f"reflect-pad would need {right} samples, more than one mirror can supply"
+            )
+            self._geom_cache[length] = (frames, rows_per_frame, num_rows, right)
+        return self._geom_cache[length]
+
+    def _anti_identity(self, p: int):
+        """Constant ``[p, p]`` reversal matrix (``x @ J`` = ``x`` reversed)."""
+        if p not in self._rev_cache:
+            self._rev_cache[p] = ttnn.from_torch(
+                torch.flip(torch.eye(p), dims=[0]), layout=ttnn.TILE_LAYOUT, device=self.device, dtype=ttnn.float32
+            )
+        return self._rev_cache[p]
+
+    def __call__(self, x, length: int):
+        """``x``: ttnn ``[1, length]`` TILE fp32. Returns ``[T, n_fft]`` TILE fp32."""
+        frames, rows_per_frame, num_rows, right = self._geometry(length)
+        cp = self.center_pad
+        # Reflect pad: xpad[p] == x[reflect(p - center_pad)]. Left is x[1..cp] reversed, right is
+        # x[L-2 .. L-1-right] reversed -- both a reversal of a plain slice, hence the anti-identity.
+        parts = [ttnn.matmul(ttnn.slice(x, [0, 1], [1, cp + 1]), self._anti_identity(cp)), x]
+        if right:
+            parts.append(
+                ttnn.matmul(ttnn.slice(x, [0, length - 1 - right], [1, length - 1]), self._anti_identity(right))
+            )
+        # NOTE: ttnn.concat is fp32-exact only when every input's last dim is a multiple of 32;
+        # with a mid-tile width (which `length` is, in general) it falls back to a path that
+        # rounds the WHOLE result to bf16 precision, pass-through regions included. Measured:
+        # tile-aligned widths 0.0 err, unaligned 3.1e-3. The column concat below is aligned
+        # (every block is `hop` wide) and so is exact; only this pad concat takes the hit.
+        xpad = ttnn.concat(parts, dim=1)  # [1, num_rows*hop]
+
+        # [rows, hop] view -> frame m is rows m .. m+rows_per_frame-1, so each column block is one
+        # contiguous row slice. Row slices + a column concat, no indexing.
+        rows = ttnn.reshape(ttnn.to_layout(xpad, ttnn.ROW_MAJOR_LAYOUT), [num_rows, self.hop])
+        blocks = [ttnn.slice(rows, [k, 0], [k + frames, self.hop]) for k in range(rows_per_frame)]
+        wide = ttnn.concat(blocks, dim=1) if len(blocks) > 1 else blocks[0]
+        if wide.shape[1] != self.n_fft:  # hop does not divide n_fft (speaker: 4x160 -> trim to 512)
+            wide = ttnn.slice(wide, [0, 0], [frames, self.n_fft])
+        return ttnn.to_layout(wide, ttnn.TILE_LAYOUT)
 
 
 def _dft_basis(window_400: torch.Tensor) -> torch.Tensor:
@@ -62,18 +148,7 @@ class TtMelFrontend(LightweightModule):
         self.device = device
         self.basis = ttnn.from_torch(_dft_basis(ref.window), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
         self.mel_fb = ttnn.from_torch(ref.mel_fb.float(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
-        self._index_cache = {}  # L -> (index tensor [1, T*N_FFT], T)
-
-    def _frame_index(self, length):
-        if length not in self._index_cache:
-            num_frames = 1 + length // HOP_LENGTH  # center=True frame count
-            m = torch.arange(num_frames).unsqueeze(1)  # [T, 1]
-            n = torch.arange(N_FFT).unsqueeze(0)  # [1, 512]
-            pos = m * HOP_LENGTH + n - CENTER_PAD  # position in the (unpadded) signal
-            idx = _reflect_index(pos, length).reshape(1, -1).to(torch.int32)  # [1, T*512]
-            idx_dev = ttnn.from_torch(idx, layout=ttnn.TILE_LAYOUT, device=self.device, dtype=ttnn.uint32)
-            self._index_cache[length] = (idx_dev, num_frames)
-        return self._index_cache[length]
+        self.framer = _Framer(device, N_FFT, HOP_LENGTH)
 
     def _preemphasize(self, wav):  # wav: [1, L, 1] ROW_MAJOR
         # y[t] = x[t] - 0.97*x[t-1], with reflect at the start (x[-1] -> x[1]).
@@ -87,20 +162,10 @@ class TtMelFrontend(LightweightModule):
     def forward(self, wav):  # wav: ttnn [1, L, 1] ROW_MAJOR
         length = wav.shape[1]
         x = self._preemphasize(wav)  # [1, L, 1]
-        x = ttnn.to_layout(ttnn.reshape(x, [1, length]), ttnn.TILE_LAYOUT)  # gather needs TILE
+        x = ttnn.to_layout(ttnn.reshape(x, [1, length]), ttnn.TILE_LAYOUT)
 
-        idx, num_frames = self._frame_index(length)
-        # Gather + reshape the frames in chunks so the ROW_MAJOR reshape stays in L1,
-        # then concat to the full [T, 512] frame matrix (a no-op single chunk for short
-        # audio, so the validated short-audio path is unchanged).
-        chunks = []
-        for start in range(0, num_frames, FRAME_CHUNK):
-            nf = min(FRAME_CHUNK, num_frames - start)
-            idx_c = ttnn.slice(idx, [0, start * N_FFT], [1, (start + nf) * N_FFT])  # [1, nf*512] TILE
-            g = ttnn.gather(x, dim=1, index=idx_c)  # [1, nf*512] TILE
-            g = ttnn.reshape(ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT), [nf, N_FFT])
-            chunks.append(ttnn.to_layout(g, ttnn.TILE_LAYOUT))
-        framed = chunks[0] if len(chunks) == 1 else ttnn.concat(chunks, dim=0)  # [T, 512] TILE
+        num_frames = self.framer.num_frames(length)
+        framed = self.framer(x, length)  # [T, 512] TILE
 
         spec = ttnn.matmul(framed, self.basis)  # [T, 514]
         real = ttnn.slice(spec, [0, 0], [num_frames, N_FREQS])
@@ -132,7 +197,6 @@ from models.experimental.xtts.reference.xtts_conditioning import (  # noqa: E402
 
 C_NFREQS = C_NFFT // 2 + 1  # 1025
 C_CENTER_PAD = C_NFFT // 2  # 1024
-C_FRAME_CHUNK = 32  # n_fft is 4x the speaker frontend's, so quarter the frame chunk to stay in L1
 
 
 def _cond_dft_basis():
@@ -167,31 +231,13 @@ class TtConditioningMel(LightweightModule):
         self.mel_norms = ttnn.from_torch(
             mel_norms.float().reshape(1, C_NMELS, 1), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32
         )  # [1, 80, 1]
-        self._index_cache = {}
-
-    def _frame_index(self, length):
-        if length not in self._index_cache:
-            num_frames = 1 + length // C_HOP
-            m = torch.arange(num_frames).unsqueeze(1)
-            n = torch.arange(C_NFFT).unsqueeze(0)
-            pos = m * C_HOP + n - C_CENTER_PAD
-            idx = _reflect_index(pos, length).reshape(1, -1).to(torch.int32)
-            idx_dev = ttnn.from_torch(idx, layout=ttnn.TILE_LAYOUT, device=self.device, dtype=ttnn.uint32)
-            self._index_cache[length] = (idx_dev, num_frames)
-        return self._index_cache[length]
+        self.framer = _Framer(device, C_NFFT, C_HOP)
 
     def forward(self, wav):  # wav: ttnn [1, L, 1] ROW_MAJOR fp32
         length = wav.shape[1]
         x = ttnn.to_layout(ttnn.reshape(wav, [1, length]), ttnn.TILE_LAYOUT)  # no preemphasis for the cond mel
-        idx, num_frames = self._frame_index(length)
-        chunks = []
-        for start in range(0, num_frames, C_FRAME_CHUNK):
-            nf = min(C_FRAME_CHUNK, num_frames - start)
-            idx_c = ttnn.slice(idx, [0, start * C_NFFT], [1, (start + nf) * C_NFFT])
-            g = ttnn.gather(x, dim=1, index=idx_c)
-            g = ttnn.reshape(ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT), [nf, C_NFFT])
-            chunks.append(ttnn.to_layout(g, ttnn.TILE_LAYOUT))
-        framed = chunks[0] if len(chunks) == 1 else ttnn.concat(chunks, dim=0)  # [T, C_NFFT]
+        num_frames = self.framer.num_frames(length)
+        framed = self.framer(x, length)  # [T, C_NFFT]
 
         spec = ttnn.matmul(framed, self.basis)  # [T, 2*C_NFREQS]
         real = ttnn.slice(spec, [0, 0], [num_frames, C_NFREQS])

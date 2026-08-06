@@ -254,6 +254,16 @@ class TtXttsGenerator:
 
         # Replay-only: execute_trace with on-device counter/noise updates inside the program.
         # Early-exit: read the just-sampled token from tok_buf; stop on STOP past the floor.
+        #
+        # This loop is DEVICE-bound, not host-bound: the captured step is ~8 ms of device work and
+        # the per-step blocking fence + one-int readback hide inside it. Measured alternatives, all
+        # WORSE or equal per step — do not retry them:
+        #   non-blocking execute + poll every 8   9.4 ms/step
+        #   blocking execute + poll every 8      10.3 ms/step
+        #   non-blocking execute + poll every 1   8.1 ms/step  (== this, within noise)
+        # Polling less often only buys back host time that was never on the critical path, while
+        # every skipped poll runs real extra decode steps past STOP. Poll every step and exit at
+        # the first STOP.
         t_replay = time.perf_counter()
         steps_run = 0
         for i in range(N):
