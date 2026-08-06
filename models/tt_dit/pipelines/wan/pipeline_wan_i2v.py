@@ -40,9 +40,7 @@ _ENCODER_T_CHUNK_BY_MESH = {
 }
 
 # Truncated VAE encode: encode only the first 33 pixel frames (-> 9 latent frames) and
-# replicate the last latent to fill the remaining slots. Every frame past the conditioned
-# one is zero and the encoder is causal in T, so the dropped latents repeat the last
-# computed one.
+# replicate the last latent to fill the remaining slots.
 _I2V_ENCODE_FRAMES = 33
 
 
@@ -277,7 +275,7 @@ class WanPipelineI2V(WanPipeline):
 
         Materializing the whole conditioning video on the host costs 896 MB of float32 at
         81x720x1280, though every frame but the conditioned one is zero. So only the real
-        frames are uploaded and the zero runs are built on device; the encode is truncated to
+        frames are uploaded and written into a zeroed device buffer; the encode is truncated to
         ``_I2V_ENCODE_FRAMES`` and the tail latents are replicated on the host; and channel
         padding happens on device, so each frame crosses PCIe with 3 channels instead of 32.
         The encoder's conv3d blockings are picked to match (see ``_vae_encoder_build_dims``).
@@ -337,34 +335,32 @@ class WanPipelineI2V(WanPipeline):
 
         encode_frames = _truncated_encode_frames(max(cond_by_pos), num_frames)
 
-        tt_zero_1 = None
+        # ---- device: one zeroed video, conditioned frames written in place ---
+        # Assembling by concat instead would hold the pieces and the assembled result live at
+        # once, so it cannot cost less than twice the video. slice_write takes rank 4 and
+        # batch size is 1, so the buffer carries no batch axis and the write offset lands on T.
+        # T is not one of the mesh-sharded axes (H and W are), so the same offset is correct on
+        # every device, and the buffer is replicated because every shard of a zero frame is equal.
+        _, _, h_pad, w_pad, c_pad = next(iter(cond_by_pos.values())).shape
+        tt_video_THWC = ttnn.zeros(
+            (encode_frames, h_pad, w_pad, c_pad),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+        )
+        for pos, tt_frame in cond_by_pos.items():
+            ttnn.experimental.slice_write(
+                ttnn.squeeze(tt_frame, 0),
+                tt_video_THWC,
+                [pos, 0, 0, 0],
+                [pos + 1, h_pad, w_pad, c_pad],
+                [1, 1, 1, 1],
+            )
+            ttnn.deallocate(tt_frame)
 
-        def _zero_run(n: int) -> ttnn.Tensor:
-            nonlocal tt_zero_1
-            if tt_zero_1 is None:
-                tt_zero_1 = ttnn.zeros_like(next(iter(cond_by_pos.values())))
-            z, built = tt_zero_1, 1
-            while built * 2 <= n:
-                z = ttnn.concat([z, z], dim=1)
-                built *= 2
-            if built < n:
-                z = ttnn.concat([z, z[:, : n - built, :, :, :]], dim=1)
-            return z
-
-        segments: list[ttnn.Tensor] = []
-        zero_start = None
-        for i in range(encode_frames):
-            if i in cond_by_pos:
-                if zero_start is not None:
-                    segments.append(_zero_run(i - zero_start))
-                    zero_start = None
-                segments.append(cond_by_pos[i])
-            elif zero_start is None:
-                zero_start = i
-        if zero_start is not None:
-            segments.append(_zero_run(encode_frames - zero_start))
-
-        tt_video_BTHWC = segments[0] if len(segments) == 1 else ttnn.concat(segments, dim=1)
+        # Restore the batch axis for the encoder. Free: row major with an unchanged last
+        # dimension reshapes to a view over the same buffer rather than a copy.
+        tt_video_BTHWC = ttnn.unsqueeze(tt_video_THWC, 0)
 
         chunk = _ENCODER_T_CHUNK_BY_MESH.get(tuple(self.mesh_device.shape))
 
@@ -381,13 +377,7 @@ class WanPipelineI2V(WanPipeline):
                 f"(encode_frames={encode_frames}, forward chunk={chunk})"
             )
 
-        # tt_video_BTHWC may alias a conditioned frame or the zero tensor when there is
-        # only one segment, so guard against a double free.
-        owned = list(cond_by_pos.values()) + ([tt_zero_1] if tt_zero_1 is not None else [])
-        if all(tt_video_BTHWC is not t for t in owned):
-            ttnn.deallocate(tt_video_BTHWC)
-        for tt in owned:
-            ttnn.deallocate(tt)
+        ttnn.deallocate(tt_video_BTHWC)
 
         # ---- device -> host --------------------------------------------------
         concat_dims = [None, None]
