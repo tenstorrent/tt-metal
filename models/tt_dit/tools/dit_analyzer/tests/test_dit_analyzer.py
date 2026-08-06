@@ -369,12 +369,18 @@ def test_connected_pipeline_reveals_a_cross_boundary_redundant_gather():
     y = dec.input("y", [1, 256, 1024])  # replicated input, shape matches enc's output
     dec_g = dec.finish([dec.pointwise("act", [y], label="use")])
 
-    redundancy = ("unused_gather", "participant_shrink", "dead_collective")
+    redundancy = ("unused_gather", "participant_shrink", "dead_collective", "replicated_stage")
     disconnected = analyze_graph(link_stages([("enc", enc_g), ("dec", dec_g)]))
     assert not any(f.rule in redundancy for f in disconnected.findings), [f.rule for f in disconnected.findings]
 
+    # Connected: the gather is dead on the group the boundary doesn't read back, but the
+    # read group still needs it -- so it is a replicated_stage (run on a submesh), NOT a
+    # deletable dead_collective, and the suggested fix says so.
     connected = analyze_graph(link_stages([("enc", enc_g), ("dec", dec_g)], connect=True))
-    assert any(f.rule in redundancy for f in connected.findings), [f.rule for f in connected.findings]
+    repl = [f for f in connected.findings if f.rule == "replicated_stage"]
+    assert repl, [f.rule for f in connected.findings]
+    assert all(f.rule != "dead_collective" for f in connected.findings)
+    assert "submesh" in repl[0].suggestion and repl[0].severity == "medium"
 
 
 def test_symmetric_halo_is_necessary_but_asymmetric_halo_shrinks():

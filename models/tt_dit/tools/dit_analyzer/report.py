@@ -14,6 +14,7 @@ from .semantics import lookup
 
 RULE_ORDER = [
     "dead_collective",
+    "replicated_stage",
     "unused_gather",
     "duplicate_gather",
     "overwide_gather",

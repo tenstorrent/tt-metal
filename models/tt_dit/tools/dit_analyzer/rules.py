@@ -751,6 +751,7 @@ def _merge_across_groups(
             if not f.stack:
                 f.stack = list(v.node.stack)
             f.proof["participant_groups"] = [list(v.group)]
+            f.proof["node_name"] = _name(v)
             f.groups_total = groups_per_node.get(v.node.id, 1)
             merged[key] = f
             order.append(key)
@@ -763,7 +764,36 @@ def _merge_across_groups(
     for key in order:
         f = merged[key]
         covered = len(f.proof["participant_groups"])
-        if f.groups_total > covered:
+        partial = f.groups_total > covered
+        if f.rule == "dead_collective" and partial:
+            # Dead on a *subset* of the collective's groups: the other groups still consume
+            # it, so it is not deletable. Those groups recompute the same value and read none
+            # of it -- a stage replicated across a mesh axis it does not shard (e.g. a
+            # TP-only encoder on a TP×SP mesh: every SP row is identical, one is read back).
+            # The fix is a narrower mesh, not a deletion, so this is its own rule.
+            consumed = f.groups_total - covered
+            f.rule = "replicated_stage"
+            f.severity = MEDIUM
+            f.confidence = LIKELY  # deadness is provable; "run on a submesh" needs no asymmetric consumer
+            f.title = "%s is replicated across %d groups but consumed on %d — %d redundant" % (
+                f.proof["node_name"],
+                f.groups_total,
+                consumed,
+                covered,
+            )
+            f.suggestion = (
+                "This stage does not shard across this mesh axis, so it replicates the same result "
+                "on every group and %d of %d copies are computed then discarded. Run it on a submesh "
+                "that omits the redundant groups rather than replicating and reading one back."
+                % (covered, f.groups_total)
+            )
+            f.reason = [
+                "The result is consumed on %d of %d participant groups; the other %d recompute the "
+                "same replicated value and none of it is read." % (consumed, f.groups_total, covered),
+                "Redundant groups: %s. Verify no asymmetric consumer before narrowing the mesh."
+                % f.proof["participant_groups"],
+            ]
+        elif partial:
             f.title += " [only on %d of %d participant groups: %s]" % (
                 covered,
                 f.groups_total,
