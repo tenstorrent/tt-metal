@@ -25,7 +25,12 @@ from models.demos.deepseek_v3.utils.config_helpers import (
 d = ttnn.open_device(device_id=0)
 K, NQ, NKV, DS = 2048, 768, 576, 32
 banks = d.dram_grid_size().x
-nq, nkv = _pad_to_dram_banks(NQ, 32, 32 * banks), _pad_to_dram_banks(NKV, 32, 32 * banks)
+# A worker's shard must be a whole number of 32-wide tiles, so with W workers per bank N has to
+# be a multiple of 32*banks*W. This is a real cost of widening at GLM's shapes: q_a 768 and
+# kv_a 576 both pad to 1024 at W>=2, work ttnn does not do.
+_W = int(__import__("os").environ.get("BLAZE_DSM_WORKERS_PER_BANK", "1"))
+_PADM = 32 * banks * _W
+nq, nkv = _pad_to_dram_banks(NQ, 32, _PADM), _pad_to_dram_banks(NKV, 32, _PADM)
 torch.manual_seed(47)
 row = torch.randn(1, 1, 1, K).bfloat16().float()
 native = torch.zeros(1, 1, 32, K, dtype=torch.bfloat16).float()

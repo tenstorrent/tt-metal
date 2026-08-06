@@ -439,3 +439,45 @@ it is removable.
    target on both shape and size grounds.
 3. If they clear ~1.1x, enable `GLM4_MOE_LITE_BLAZE_QKV_A=1` and measure traced e2e against
    34.8 ms in the blaze tree.
+
+### CORRECTION + gated results
+
+The 3.02x above was measured **before** a correctness gate and with a core-ordering bug. Corrected
+and now trustworthy: the full op gates at **PCC 0.999947 / 0.999957 at W=2 and W=4**, so the core
+numbers below are computing the right answer.
+
+The bug: cores were ordered `[b0..b7, b0..b7]`, so sender *i* was not output column block *i*,
+which is what `GatherRowToDRAM` assumes. Per-core maths was right, columns were assembled in the
+wrong order — **PCC 0.13**. Fixed by ordering bank-major (`[b0w0, b0w1, b1w0, ...]`), with
+`bank_id = idx // W` and `offset = (idx % W) * per_core_N * Kt * tile_size`.
+
+Full decomposition, N padded to 1024 at every W so only core count varies:
+
+| W | cores | A core | B +input | C +gather | D both |
+|---|---:|---:|---:|---:|---:|
+| 1 | 8 | 48.4 | 64.7 | 102.3 | 118.9 |
+| 2 | 16 | 30.1 | 46.5 | 84.1 | 100.2 |
+| 4 | 32 | **16.1** | **33.3** | 69.4 | 86.5 |
+
+ttnn = **47.4 µs**.
+
+- **The core scales: 3.01x at W=4.** Confirmed and gated.
+- **`B` at W=4 = 33.3 µs beats ttnn's 47.4 — 1.43x.** That is a real win, and it is available
+  *only if outputs stay in L1*.
+- **The output gather is now the whole problem: ~53 µs, and flat in W** (53.9 at W=1, 53.4 at
+  W=4). It does not benefit from more workers and is 3.3x the cost of the core it drains.
+
+So `D`, the drop-in integration, is still 86.5 µs = 0.55x. The widening moved the bottleneck from
+the matmul to `GatherRowToDRAM`; it did not remove it.
+
+### The remaining work is now one op
+
+`GatherRowToDRAM` carries the same barrier-per-page defect I fixed in `TileRowReplicate`
+(`noc_async_write_page` + `noc_async_write_barrier()` per page, kernels/op.hpp:94-95). Chunking it
+bought 23.4 µs on the replicate; the same treatment here is the last blocker. If it lands anywhere
+near the replicate's improvement, `D` at W=4 lands close to or under ttnn's 47.4 µs and the flag
+can be turned on.
+
+Note also W=2 is *worse* than W=1 on the full op (100.2 vs 118.9 is better, but on the real
+unpadded shapes 100.6 vs 94.0 is worse) because q_a/kv_a pad 768/576 -> 1024. o_proj's N=2048
+divides exactly and pays no such penalty — it remains the better integration target.

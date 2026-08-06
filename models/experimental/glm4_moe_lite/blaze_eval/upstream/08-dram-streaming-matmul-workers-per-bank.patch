@@ -1,5 +1,5 @@
 --- a/blaze/ops/dram_streaming_matmul/common.py	2026-08-06 17:28:58.268956710 +0000
-+++ blaze/ops/dram_streaming_matmul/common.py	2026-08-06 17:31:46.279979408 +0000
++++ blaze/ops/dram_streaming_matmul/common.py	2026-08-06 17:39:16.827219514 +0000
 @@ -31,6 +31,12 @@
  FUSED_ACT_SCALED_TANH = 7
  
@@ -13,7 +13,7 @@
  def dram_bank_worker_cores(device) -> tuple[list, ttnn.CoreRangeSet]:
      """One worker core per DRAM bank, pinned adjacent to the bank it streams
      from (NOC_0). Returns ``(worker_cores, core_range_set)``.
-@@ -39,6 +45,23 @@
+@@ -39,6 +45,27 @@
          device,
          ttnn.NOC.NOC_0,
      )
@@ -30,14 +30,18 @@
 +            for x in range(grid.x)
 +            if (x, y) not in pinned
 +        ]
-+        need = len(worker_cores) * (w - 1)
++        nb = len(worker_cores)
++        need = nb * (w - 1)
 +        if len(spare) < need:
 +            raise ValueError(f"workers_per_bank={w} needs {need} spare cores, have {len(spare)}")
-+        worker_cores = list(worker_cores) + spare[:need]
++        extra = spare[:need]
++        worker_cores = [
++            worker_cores[b] if k == 0 else extra[(k - 1) * nb + b] for b in range(nb) for k in range(w)
++        ]
      core_range_set = ttnn.CoreRangeSet(
          [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in worker_cores]
      )
-@@ -271,7 +294,7 @@
+@@ -271,7 +298,7 @@
      weights_tile_shape = weights_tile.tile_shape
      weights_dtype = weights.dtype
      weights_shard = weights.memory_config().shard_spec.shape
@@ -46,23 +50,30 @@
  
      K_from_weights = weights_shard[0]
      K_from_act = Kt * act_tile_w
-@@ -393,7 +416,7 @@
+@@ -393,12 +420,13 @@
      f.per_core_unified_ct_args(per_core_flags)
  
      # ── Per-core: DRAM bank_id and virtual channel ───────────
 -    num_banks = len(all_worker_cores)
-+    num_banks = len(all_worker_cores) // _workers_per_bank()
++    workers_per_bank = _workers_per_bank()
++    num_banks = len(all_worker_cores) // workers_per_bank
      bank_id_map: dict = {}
      vc_map: dict = {}
      bank_ids: list[int] = []
-@@ -412,6 +435,13 @@
+     for idx, core in enumerate(all_worker_cores):
+-        bank_id = idx % num_banks
++        bank_id = idx // workers_per_bank
+         vc = bank_id & 0x3
+         for j in range(idx):
+             if all_worker_cores[j].y == core.y and (bank_ids[j] & 0x3) == (bank_id & 0x3):
+@@ -412,6 +440,13 @@
      f.per_core_unified_rt_or_ct_arg(
          [
              (f"{prefix}.bank_id", bank_id_map),
 +            (
 +                f"{prefix}.weights_byte_offset",
 +                {
-+                    ttnn.CoreCoord(c.x, c.y): (i // num_banks) * per_core_N * Kt * weights_tile_size
++                    ttnn.CoreCoord(c.x, c.y): (i % workers_per_bank) * per_core_N * Kt * weights_tile_size
 +                    for i, c in enumerate(all_worker_cores)
 +                },
 +            ),
