@@ -128,9 +128,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_wait_for_dest_available_<dest_sync>();
         for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
         {
-            // Folded compute: the intrinsic replaces the LLK's eltwise-binary
-            // init+op.  Compiler emits config once (state tracking) + two
-            // TTELWMULs with the INCRWC row-advance between (16-row face).
+            // Dest-walking (author-owned; the LLK eltwise-binary API does this
+            // internally via set_dst_write_addr): per-tile dest base, then the
+            // folded compute.  The compiler emits config once (state tracking)
+            // + two TTELWMULs with the INCRWC row-advance between (16-row face).
+            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(tile);
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
             INTR_ELWMUL(
                 ckernel::to_underlying(formats.math),
@@ -146,6 +148,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TTI_INCRWC(0 /*cr*/, 8 /*dest*/, 8 /*srcb*/, 8 /*srca*/);
             INTR_ELWMUL(MATH_FORMAT, MATH_FORMAT, 0, 0, 0, 0, 0);
 #endif
+            // Release the source banks for the next tile and reset the RWC
+            // A/B/D counters (they sit at 8 after the face).
+            TTI_SETRWC(p_setrwc::CLR_AB, 0 /*cr*/, 0 /*dest*/, 0 /*srcb*/, 0 /*srca*/, p_setrwc::SET_ABD);
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

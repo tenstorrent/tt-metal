@@ -3,18 +3,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-/* Elementwise binary test whose MATH thread drives the compute through the
- * compiler-managed Tensix compute intrinsics (__builtin_rvtt_tt*_ttelwmul)
- * instead of the LLK's llk_math_eltwise_binary_* API.  The compiler's config
- * pass emits the ALU hw_configure baseline + per-compute reconfig (the LLK's
- * _llk_math_hw_configure_ / _llk_math_reconfig_data_format_ equivalents), so
- * this thread deliberately does NOT call those LLK functions.  It still calls
- * the synchronization primitives (_llk_math_pack_sync_init_, wait/done) which
- * own the semaphores and dest-section coordination -- not the ALU config.
+/* Multi-tile elementwise binary test.  As in the single-tile oracle
+ * (intrinsic_eltwise_binary_test.cpp), the MATH thread drives the compute
+ * through the compiler-managed Tensix compute intrinsics
+ * (__builtin_rvtt_tt*_ttelwmul) and deliberately does NOT call the LLK math
+ * configure/reconfig functions: the compiler's config pass emits the ALU
+ * hw_configure baseline + per-compute reconfig.  What this thread DOES own is
+ * dest-walking across a block of tiles (the agreed programming model):
  *
- * The compute is one 16x16 face per call (a single TTELWMUL), which matches
- * the LLK's LoFi MOP for a single-face tile.  Multi-face tiles need the
- * deferred addr-mod / INCRWC dest-walking work.
+ *   - per-tile dest base: math::set_dst_write_addr<Tile32x32>(tile) -- the
+ *     LLK's TT_SETC16 to DEST_TARGET_REG_CFG_MATH_Offset = tile<<6.  This is
+ *     the instrn-buffer (LLK) channel, because SETC16 data is an immediate and
+ *     a runtime per-tile base is not expressible as a compiler-emitted config.
+ *     The compiler's baseline dest-base=0 is never re-emitted (its state stays
+ *     "known 0", satisfied), so it does not fight the per-tile bases.
+ *   - intra-tile row advance: TTI_INCRWC (the LLK partial-face MOP loop_op1).
+ *   - per-tile cleanup: TTI_SETRWC(CLR_AB, ..., SET_ABD) -- clears the SrcA/B
+ *     valid bits so the unpacker can write the next tile into the bank, and
+ *     resets the RWC A/B/D counters to 0 (they sit at 8 after a 16-row face).
+ *     This mirrors the MOP end_op (CLR_AB, SET_AB) + clear_dst_reg_addr().
+ *
+ * Each 16x16 tile is one 16-row face = two TTELWMULs (8 rows each,
+ * MAX_FPU_ROWS) with an INCRWC(0,8,8,8) between, exactly as the single-tile
+ * oracle.  scope: NUM_TILES_IN_BLOCK tiles in one block.
  */
 
 #include <cstdint>
@@ -101,41 +112,44 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     // Semaphore + dest-section sync only.  The compiler's config pass emits the
     // ALU hw_configure baseline (zeroacc/INT8/Fp32/SFPU_Fp32/override-clear/
-    // zero-flag/dest-base) and the per-compute reconfig for the intrinsic below.
+    // zero-flag/dest-base) and the per-compute reconfig for the intrinsics.
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
 
-    // One 16x16 tile (one 16-row face) at dest index 0.  A single TTELWMUL
-    // computes 8 rows (MAX_FPU_ROWS); a 16-row face needs two ELWMULs with an
-    // INCRWC row-advance between, mirroring the LLK's partial-face MOP
-    // (eltwise_binary_configure_mop_standard's loop_op1 INCRWC).  The
-    // intrinsic's dst operand is a compile-time constant (dest-walking /
-    // runtime dst is deferred work), so this oracle is scoped to the one-tile
-    // case.  The INCRWC is a hand-written row advance between two identical
-    // intrinsic calls; the compiler emits config once (state tracking) and
-    // TTELWMUL twice.
-    _llk_math_wait_for_dest_available_<dest_sync>();
+    const std::uint32_t tiles_in_block = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t num_blocks     = params.NUM_BLOCKS;
+
+    for (std::uint32_t block = 0; block < num_blocks; block++)
+    {
+        _llk_math_wait_for_dest_available_<dest_sync>();
+        for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
+        {
+            // Dest base for this tile (author-owned; LLK instrn-buffer channel).
+            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(tile);
+
+            // One 16-row face: two TTELWMULs (8 rows each) with an INCRWC
+            // row-advance between (the compiler emits config once, state
+            // tracked, and TTELWMUL twice per tile).
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    INTR_ELWMUL(
-        ckernel::to_underlying(formats.math),
-        ckernel::to_underlying(formats.math),
-        0 /*clr_src*/, 0 /*acc_to_dest*/, 0 /*broadcast*/, 0 /*addr_mod*/, 0 /*dst*/);
-    TTI_INCRWC(0 /*cr*/, 8 /*dest*/, 8 /*srcb*/, 8 /*srca*/);
-    INTR_ELWMUL(
-        ckernel::to_underlying(formats.math),
-        ckernel::to_underlying(formats.math),
-        0 /*clr_src*/, 0 /*acc_to_dest*/, 0 /*broadcast*/, 0 /*addr_mod*/, 0 /*dst*/);
+            INTR_ELWMUL(
+                ckernel::to_underlying(formats.math),
+                ckernel::to_underlying(formats.math),
+                0 /*clr_src*/, 0 /*acc_to_dest*/, 0 /*broadcast*/, 0 /*addr_mod*/, 0 /*dst*/);
+            TTI_INCRWC(0 /*cr*/, 8 /*dest*/, 8 /*srcb*/, 8 /*srca*/);
+            INTR_ELWMUL(
+                ckernel::to_underlying(formats.math),
+                ckernel::to_underlying(formats.math),
+                0 /*clr_src*/, 0 /*acc_to_dest*/, 0 /*broadcast*/, 0 /*addr_mod*/, 0 /*dst*/);
 #else
-    INTR_ELWMUL(MATH_FORMAT, MATH_FORMAT, 0, 0, 0, 0, 0);
-    TTI_INCRWC(0 /*cr*/, 8 /*dest*/, 8 /*srcb*/, 8 /*srca*/);
-    INTR_ELWMUL(MATH_FORMAT, MATH_FORMAT, 0, 0, 0, 0, 0);
+            INTR_ELWMUL(MATH_FORMAT, MATH_FORMAT, 0, 0, 0, 0, 0);
+            TTI_INCRWC(0 /*cr*/, 8 /*dest*/, 8 /*srcb*/, 8 /*srca*/);
+            INTR_ELWMUL(MATH_FORMAT, MATH_FORMAT, 0, 0, 0, 0, 0);
 #endif
-    // Leave the simulator in a clean state for the next kernel (ttsim persists
-    // across tests in one process): clear the SrcA/B valid bits so a following
-    // kernel's ELWMUL source-valid stall waits for its own unpack, and reset
-    // the RWC A/B/D counters that sit at 8 after the face.  The stock LLK's
-    // MOP end_op does the same (CLR_AB + clear_dst_reg_addr).
-    TTI_SETRWC(p_setrwc::CLR_AB, 0 /*cr*/, 0 /*dest*/, 0 /*srcb*/, 0 /*srca*/, p_setrwc::SET_ABD);
-    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            // Release the source banks for the next tile and reset the RWC
+            // A/B/D counters (they sit at 8 after the face).
+            TTI_SETRWC(p_setrwc::CLR_AB, 0 /*cr*/, 0 /*dest*/, 0 /*srcb*/, 0 /*srca*/, p_setrwc::SET_ABD);
+        }
+        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif

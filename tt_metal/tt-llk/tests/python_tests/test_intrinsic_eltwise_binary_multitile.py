@@ -2,24 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# U10 oracle, folded variant: the ORIGINAL eltwise-binary kernel structure is
-# preserved (sync init, the _llk_math_hw_configure_ call, the block/tile loops
-# with wait/done) but the MATH thread's compute is folded into the
-# compiler-managed Tensix compute intrinsics (__builtin_rvtt_ttbh_ttelwmul).
-# The kernel defines TT_COMPILER_EMITS_MATH_CONFIG, which makes the LLK's
-# _llk_math_hw_configure_ a no-op -- the compiler's config pass emits the ALU
-# hw_configure baseline + per-compute reconfig itself.  So the kernel still
-# calls the LLK config API but the config comes entirely from the compiler.
-# The sync primitives (_llk_math_pack_sync_init_ etc.) remain real LLK calls.
+# Multi-tile extension of the U10 compute-intrinsics oracle: the MATH thread
+# computes through __builtin_rvtt_ttbh_ttelwmul (the compiler owns the ALU
+# config: hw_configure baseline + per-compute reconfig) but now walks the dest
+# register across NUM_TILES_IN_BLOCK tiles.  Dest-walking is author-owned, per
+# the agreed programming model: per-tile dest base via math::set_dst_write_addr
+# (SETC16 DEST_TARGET_REG_CFG_MATH_Offset = tile<<6, LLK instrn-buffer channel),
+# intra-tile row advance via TTI_INCRWC, and per-tile source-valid clear + RWC
+# counter reset via TTI_SETRWC.  The compiler never re-emits the dest-base
+# baseline (its state stays "known 0", satisfied), so its dest-base=0 does not
+# fight the author's per-tile bases.
 #
-# Scope: 4x 16x16 tiles ([64,16] input).  The MATH thread walks dest per tile
-# (author-owned, like the intrinsic multitile oracle): per-tile dest base via
-# math::set_dst_write_addr (SETC16 DEST_TARGET_REG_CFG_MATH_Offset = tile<<6),
-# intra-tile row advance via TTI_INCRWC, per-tile source-valid clear + RWC
-# counter reset via TTI_SETRWC.  Each 16-row face is two TTELWMULs (8 rows
-# each) with an INCRWC(0,8,8,8) between.  Formats are baked at compile time so
-# the intrinsic receives constexpr format args and the compiler emits a clean
-# config stream.
+# Scope: 4x 16x16 tiles ([64,16] input, one 16-row face each = two TTELWMULs
+# with an INCRWC(0,8,8,8) between).  Formats baked at compile time so the
+# intrinsic receives constexpr format args.
 
 import torch
 from helpers.format_config import DataFormat
@@ -61,7 +57,7 @@ from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
 
-def test_intrinsic_elwmul_folded_multitile():
+def test_intrinsic_elwmul_multitile():
     formats = input_output_formats([DataFormat.Float16_b])[0]
     input_dimensions = [64, 16]  # four 16x16 tiles
     tile_dimensions = [16, 16]
@@ -111,7 +107,7 @@ def test_intrinsic_elwmul_folded_multitile():
     )
 
     configuration = TestConfig(
-        "sources/eltwise_binary_folded_test.cpp",
+        "sources/intrinsic_eltwise_binary_multitile_test.cpp",
         formats,
         templates=[
             MATH_FIDELITY(MathFidelity.LoFi),
