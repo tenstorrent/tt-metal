@@ -224,11 +224,9 @@ TopologyMappingResult run_topology_mapping(
         config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
     }
 
-    // Extract pinnings from MGD and add to config (same as control plane)
+    // Append MGD many-to-many pinning groups directly (same as control plane).
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& [pos, fabric_node] : pinnings) {
-        config.pinnings.emplace_back(pos, fabric_node);
-    }
+    config.pinnings.insert(config.pinnings.end(), pinnings.begin(), pinnings.end());
 
     // Apply the same galaxy corner pinnings as the control plane (Phase 2) so Phase 1 and Phase 2 place
     // the galaxy pins identically. Full galaxies (per-host slice >= 32) pin all four corners; sub-galaxy
@@ -242,11 +240,7 @@ TopologyMappingResult run_topology_mapping(
             if (!is_1d && mesh_shape.mesh_size() % 32 == 0) {
                 auto mesh_pinnings = get_galaxy_fixed_asic_position_pinnings_for_mesh(
                     mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/false);
-                for (const auto& [fabric_node, positions] : mesh_pinnings) {
-                    for (const auto& position : positions) {
-                        config.pinnings.emplace_back(position, fabric_node);
-                    }
-                }
+                config.pinnings.insert(config.pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
             }
         }
     }
