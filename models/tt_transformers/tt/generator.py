@@ -1491,9 +1491,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             user_page_table = page_table[i] if page_table is not None else None
 
             if reload_inputs:
-                # Full resets are required when host token/position inputs are
-                # authoritative again, or for models that explicitly opt out of
-                # partial decode trace input refreshes.
+                # The caller declared host token/position inputs authoritative for
+                # this step, so restage all of them; reload_page_table is subsumed.
                 host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
