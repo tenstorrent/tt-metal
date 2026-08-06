@@ -91,6 +91,7 @@ DB_SCHEMA = [
     Column("in1_c_dim", "int64", True, "configuration"),
     Column("in1_r_dim", "int64", True, "configuration"),
     Column("input_format", "string", True, "configuration"),
+    Column("input_num_blocks", "int64", True, "configuration"),
     Column("input_num_tiles_in_block", "int64", True, "configuration"),
     Column("iterations", "int64", True, "configuration"),
     Column("k_dimm", "int64", True, "configuration"),
@@ -104,6 +105,7 @@ DB_SCHEMA = [
     Column("num_faces_B", "int64", True, "configuration"),
     Column("num_tiles_in_block", "int64", True, "configuration"),
     Column("output_format", "string", True, "configuration"),
+    Column("output_num_blocks", "int64", True, "configuration"),
     Column("output_num_tiles_in_block", "int64", True, "configuration"),
     Column("partial_a", "bool", True, "configuration"),
     Column("partial_b", "bool", True, "configuration"),
@@ -143,12 +145,8 @@ MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
 
 # Columns a test emits but the published table intentionally drops. The converter
 # removes them instead of failing on an unknown column.
-#   input_num_blocks, output_num_blocks  — always == num_blocks (redundant; no
-#                                          perf test ever sets them apart)
-#   TEXT_SIZE(...)                        — ELF code size; not used by the gate
+#   TEXT_SIZE(...)  — per-stage ELF code size; not used by the gate
 DROPPED_COLUMNS = {
-    "input_num_blocks",
-    "output_num_blocks",
     "TEXT_SIZE(L1_TO_L1)",
     "TEXT_SIZE(MATH_ISOLATE)",
     "TEXT_SIZE(PACK_ISOLATE)",
