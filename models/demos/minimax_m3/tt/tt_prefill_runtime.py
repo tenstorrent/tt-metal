@@ -308,13 +308,16 @@ class TtPrefillRuntime:
         # per-chunk host reshard, and the tensors are persistent (do NOT deallocate them here). The KV
         # cache is engine-owned and passed in. If a LayerAck channel is registered, the model bumps it
         # once per layer via on_layer_complete.
-        # Pipelined mode registers a completion sink keyed by (layer_idx, request_id); bind request_id per
-        # call so the synchronous per-layer callback reads no mutable state. Single-host mode uses the ack.
+        # Pipelined mode registers a completion sink keyed by (global_layer_idx, request_id); bind request_id
+        # per call so the synchronous per-layer callback reads no mutable state. Single-host mode uses the ack.
         if self._layer_completion_sink is not None:
             sink = self._layer_completion_sink
 
             def on_layer_complete(layer_idx: int) -> None:
-                sink(layer_idx, request_id)
+                # The model reports a rank-local index; the sink's seq = request_id * total_layers +
+                # layer_idx needs the GLOBAL index, else every rank's local layer k collides at one seq
+                # and all but the first rank's completion is dropped.
+                sink(self.config.first_layer_idx + layer_idx, request_id)
 
         else:
             on_layer_complete = self._on_layer_complete
