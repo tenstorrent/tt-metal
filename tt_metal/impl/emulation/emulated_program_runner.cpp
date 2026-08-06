@@ -2361,8 +2361,14 @@ struct ConnRoute {
 };
 static std::mutex g_conn_route_mu;
 // Keyed by SRC CHIP only (line direction is a per-chip property; the connection-owner core can differ from
-// the sender, so a per-core key would miss). Deduped by direction; append order makes index 0=fwd, 1=bwd.
-// See tt-emule docs/fabric-ccl-emulation.md.
+// the sender, so a per-core key would miss). Deduped by direction and kept sorted by RoutingDirection
+// (N=0,E=1,S=2,W=3,Z=4), i.e. COMPASS order — which is the order the kernel's own connection open sequence
+// walks the active directions, so the sender's per-fiber open-sequence index (ConnRoute::dir_index below)
+// selects the direction it actually opened. Sorted, NOT append order: many fibers on one src chip record
+// concurrently at TT_EMULE_FIBER_WORKERS > 1, so append order is a race — whichever fiber won put its
+// direction at index 0, flipping fwd/bwd for every sender that indexes by open-sequence and teleporting
+// whole slices to the wrong chip (nondeterministic CCL PCC; invisible at K=1, where append order is the
+// deterministic fiber order). See tt-emule docs/fabric-ccl-emulation.md.
 static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
 // Persistent UNDIRECTED ring adjacency (chip -> ring-neighbor chips), accumulated across ALL ops and never
 // reset: the physical ethernet ring is static, but each op's senders open only the connection(s) they use,
@@ -2399,12 +2405,18 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     g_ring_adj[src].insert(neighbor);
     g_ring_adj[neighbor].insert(src);
     auto& v = g_conn_route[src];
-    for (const auto& c : v) {
-        if (c.dir == dir) {
+    // Insert in compass order (see g_conn_route's comment): the position must be a function of `dir`
+    // alone, never of which fiber recorded first.
+    auto at = v.begin();
+    for (; at != v.end(); ++at) {
+        if (at->dir == dir) {
             return;  // already recorded this direction for src
         }
+        if (at->dir > dir) {
+            break;
+        }
     }
-    v.push_back(ConnRoute{dir, neighbor});
+    v.insert(at, ConnRoute{dir, neighbor});
 }
 
 // Ordered ring members at distance 1,2,... from `src` in `start_dir`: first hop from g_conn_route[src], then
