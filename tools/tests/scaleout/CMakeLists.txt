@@ -88,9 +88,14 @@ target_include_directories(
         "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
 )
 
+# TT::ScaleoutTools is required explicitly. generate_mgd_lib is an OBJECT library, so its own
+# PUBLIC link to scaleout_tools does not propagate those objects to consumers -- only usage
+# requirements. These symbols used to be satisfied by libtt_metal.so's exports, which are now
+# hidden (see the visibility comment in tools/scaleout/CMakeLists.txt).
 target_link_libraries(
     test_cabling_descriptor_mgd_generation
     PRIVATE
+        TT::ScaleoutTools
         test_common_libs
         tt_metal
         generate_mgd_lib
