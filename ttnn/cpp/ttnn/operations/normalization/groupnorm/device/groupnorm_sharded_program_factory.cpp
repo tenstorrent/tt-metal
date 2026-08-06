@@ -1260,7 +1260,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t input_mask_tile_start_id = 0;
     for (const auto& core : core_coords) {
         tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
-        writer_mcast_sender_args.reserve(8);
+        // 8 base args plus the two #50682 pad-correction args pushed unconditionally below.
+        writer_mcast_sender_args.reserve(10);
         writer_mcast_sender_args.push_back(eps_u);
         if (gamma.has_value()) {
             writer_mcast_sender_args.push_back(gamma.value().buffer());
