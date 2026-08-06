@@ -86,10 +86,7 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
         // slice/untilize/concat cascade outside this port's scope. Uses ceil(W/TILE_W) since W is
         // not tile-aligned here.
         uint32_t wt_ceil = (logical[-1] + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
-        if (2ull * wt_ceil * kTileSize > kWideChunkThreshold) {
-            return false;
-        }
-        return true;
+        return 2ull * wt_ceil * kTileSize <= kWideChunkThreshold;
     }
 
     // Tile-aligned path: mirrors ops/untilize/untilize.py's wide-tensor guard for
