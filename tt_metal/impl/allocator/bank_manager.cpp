@@ -471,6 +471,9 @@ uint64_t BankManager::allocate_buffer(
             DeviceAddr end_address = address.value() + size_per_bank;
             allocation_high_water_mark_ = std::max(allocation_high_water_mark_, end_address);
         }
+        if (tracking_footprint_) {
+            record_footprint(alloc);
+        }
 
         // No neighbors, nothing to invalidate
         return address.value();
@@ -535,6 +538,9 @@ uint64_t BankManager::allocate_buffer(
         // are done in interleaved space where both allocations have the same bank offset applied
         DeviceAddr end_address = address.value() + size_per_bank;
         allocation_high_water_mark_ = std::max(allocation_high_water_mark_, end_address);
+    }
+    if (tracking_footprint_) {
+        record_footprint(alloc);
     }
 
     // Allocation in this allocator invalidates caches in allocators that depend on this allocator
@@ -633,6 +639,35 @@ DeviceAddr BankManager::get_high_water_mark() const {
 DeviceAddr BankManager::get_allocation_high_water_mark() const { return allocation_high_water_mark_; }
 
 DeviceAddr BankManager::get_deletion_high_water_mark() const { return deletion_high_water_mark_; }
+
+void BankManager::begin_footprint_tracking() {
+    tracking_footprint_ = true;
+    peak_allocated_bytes_ = 0;
+    min_largest_free_bytes_ = std::numeric_limits<size_t>::max();
+}
+
+DramFootprint BankManager::end_footprint_tracking() {
+    tracking_footprint_ = false;
+    return get_footprint();
+}
+
+DramFootprint BankManager::get_footprint() const {
+    return DramFootprint{
+        .peak_allocated_bytes = peak_allocated_bytes_,
+        // Normalize the unset min (SIZE_MAX) to 0. Read the pair to disambiguate: {peak==0, min==0} means
+        // nothing was recorded, whereas {peak>0, min==0} means contiguous free genuinely reached zero.
+        .min_largest_free_bytes =
+            min_largest_free_bytes_ == std::numeric_limits<size_t>::max() ? 0 : min_largest_free_bytes_,
+    };
+}
+
+void BankManager::record_footprint(const allocator::Algorithm* alloc) {
+    // Sampled right after an allocation -- the instant usage peaks and the largest free block bottoms out
+    // (deallocation only lowers usage and grows free), so tracking the allocate path alone suffices.
+    auto stats = alloc->get_statistics();
+    peak_allocated_bytes_ = std::max(peak_allocated_bytes_, stats.total_allocated_bytes);
+    min_largest_free_bytes_ = std::min(min_largest_free_bytes_, stats.largest_free_block_bytes);
+}
 
 void BankManager::dump_blocks(std::ostream& out, BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     const auto* alloc = this->get_allocator_from_id(allocator_id);

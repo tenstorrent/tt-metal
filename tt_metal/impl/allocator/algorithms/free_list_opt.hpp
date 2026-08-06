@@ -81,6 +81,10 @@ private:
     std::vector<uint8_t> block_is_allocated_;       // not using bool to avoid compacting
     std::vector<uint8_t> meta_block_is_allocated_;  // not using bool to avoid compacting
 
+    // Running sum of allocated bytes, maintained on alloc/dealloc so get_statistics() is O(size classes)
+    // instead of O(blocks) -- see largest_free_block_bytes() for the matching free-side query.
+    DeviceAddr total_allocated_bytes_ = 0;
+
     // Metadata block indices that is not currently used (to reuse blocks instead of always allocating new ones)
     std::vector<size_t> free_meta_block_indices_;
 
@@ -137,6 +141,9 @@ private:
     void update_lowest_occupied_address(DeviceAddr address);
 
     size_t find_free_block(DeviceAddr size, bool bottom_up);
+
+    // Largest free block, read from the highest non-empty size class (O(size classes), not O(blocks)).
+    DeviceAddr largest_free_block_bytes() const;
 
     SearchPolicy policy_;
 };

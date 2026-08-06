@@ -20,6 +20,16 @@ struct Statistics {
     size_t largest_free_block_bytes = 0;
 };
 
+// Peak DRAM pressure over a tracking window (see Allocator::begin_dram_footprint_tracking). Both are
+// per-bank bytes -- multiply by get_num_banks(BufferType::DRAM) for per-device totals.
+struct DramFootprint {
+    // Highest live usage (sum of allocations) reached during the window.
+    size_t peak_allocated_bytes = 0;
+    // Smallest "largest free block" seen: the contiguity that actually gates allocation. A buffer's
+    // per-bank shard fails once it exceeds this, even while total free still looks ample (fragmentation).
+    size_t min_largest_free_bytes = 0;
+};
+
 class Buffer;
 enum class BufferType;
 class AllocatorState;
@@ -49,6 +59,24 @@ public:
     // this helper function is made for reports.cpp in TTNN and act as a transient member function.
     size_t get_worker_l1_size() const;
     Statistics get_statistics(const BufferType& buffer_type) const;
+
+    // DRAM footprint tracking. While active, every DRAM allocation samples the allocator on the
+    // allocation path itself (O(size classes) -- no per-op hooks, no capture buffers), so it measures
+    // the true peak DRAM footprint of a region at effectively zero overhead. Reports both metrics that
+    // predict OOM: peak usage, and the min largest-free block (the contiguity limit under fragmentation
+    // -- the number that actually runs out first). `get_dram_footprint` returns the running values;
+    // `end_...` stops tracking and returns the final ones.
+    //
+    // These are `const` on the handle: like the rest of this facade they drive the underlying
+    // (mutable) allocator through `impl`, and `IDevice::allocator()` only hands out a `const Allocator&`.
+    void begin_dram_footprint_tracking() const;
+    DramFootprint end_dram_footprint_tracking() const;
+    DramFootprint get_dram_footprint() const;
+
+    // DRAM reserved outside the allocator arena (physical bank size - arena), per bank.
+    // Fixed at device init (firmware base + any trace region). Multiply by get_num_banks(DRAM) for per-device.
+    DeviceAddr get_dram_reserved_bytes() const;
+
     // AllocatorState Methods
     // Extracts the current state of the allocator.
     AllocatorState extract_state() const;
