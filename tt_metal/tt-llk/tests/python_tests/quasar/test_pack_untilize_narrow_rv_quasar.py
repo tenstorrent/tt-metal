@@ -102,9 +102,6 @@ def test_pack_untilize_narrow_rv_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    # @parametrize may wrap a tuple-valued param in a 1-tuple; unwrap defensively.
-    if isinstance(case, tuple) and len(case) == 1 and isinstance(case[0], tuple):
-        case = case[0]
     whole_tile, num_tiles, last_tile_width = case
 
     dest_acc = DestAccumulation.No
