@@ -15,7 +15,6 @@
 
 void kernel_main() {
 #ifdef IDLE_CORE
-    // No shard on this core (see reader_mcast_receiver_unary_sharded_ln.cpp): nothing to write out.
     return;
 #endif
 

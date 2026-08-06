@@ -358,18 +358,11 @@ def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w,
     run_sharded_norm_logical_width_multicore(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, dtype=dtype)
 
 
-# Full rows plus a partial one, expressed relative to the device grid width so the grid is always
-# non-rectangular whatever the device is.
 @pytest.mark.parametrize(
     ("full_rows", "cores_in_last_row"), [(1, 1), (2, 3), (4, 1)], ids=["1_row_plus_1", "2_rows_plus_3", "4_rows_plus_1"]
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 def test_rms_norm_sharded_width_non_rectangular_grid(device, full_rows, cores_in_last_row, dtype):
-    """
-    Width-sharded rms_norm over a core count that does not fill a rectangle, so the shard grid leaves
-    part of its bounding box unused. The sender broadcasts the reduced statistics to the whole bounding
-    box, including the unused cores, which take no part in the reduction.
-    """
     torch.manual_seed(0)
 
     device_grid = device.compute_with_storage_grid_size()
@@ -406,7 +399,6 @@ def test_rms_norm_sharded_width_non_rectangular_grid(device, full_rows, cores_in
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Keeping the output sharded exercises the write-back path on the same non-rectangular grid.
     output_tensor = ttnn.rms_norm(input_tensor, weight=weight, memory_config=sharded_mem_config)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
 

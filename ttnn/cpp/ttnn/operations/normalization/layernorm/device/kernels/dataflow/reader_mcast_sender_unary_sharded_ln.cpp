@@ -54,10 +54,6 @@ void kernel_main() {
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(15);
     constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
     constexpr bool use_welford = get_compile_time_arg_val(18) == 1;
-    // Cores reached by the broadcast rectangle, excluding this sender. This is num_blocks - 1 for a
-    // rectangular grid, but larger when the shard grid leaves part of its bounding box unused: those
-    // cores contribute no partial to the reduction yet still sit inside the rectangle and acknowledge
-    // the broadcast, so the NOC must be told about them.
     constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(19);
 
     // ---------------------------------------------------------------------------

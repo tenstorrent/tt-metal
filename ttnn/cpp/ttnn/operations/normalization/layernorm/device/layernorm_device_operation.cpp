@@ -183,11 +183,6 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1};
         uint32_t bbox_num_cores = bbox_grid_size.x * bbox_grid_size.y;
         if (shard_spec.grid.num_cores() != bbox_num_cores) {
-            // A non-rectangular grid is handled by broadcasting the reduced statistics to the whole
-            // bounding box and running (idle) kernels on the leftover cores, so the leftover cores'
-            // L1 is reserved at the same addresses the broadcast targets. That only works on the
-            // single-shot mcast path: the 2D and distributed paths reduce along a grid axis and
-            // assume every row/column is complete.
             const uint32_t M = a.physical_volume() / a.padded_shape()[-1];
             const auto& sharded_pc =
                 std::get<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
@@ -200,9 +195,6 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
                 "Sharded layernorm does not support a non-rectangular core grid for distributed norm.");
-            // The sender gathers the per-core partials by walking the bounding box in shard order, so
-            // the grid must be exactly the leading run of that walk: full rows (or columns) followed by
-            // one partial one. An arbitrary set of holes would desynchronize the gather from the shards.
             const CoreRangeSet shard_order_prefix = num_cores_to_corerangeset_in_subcoregrids(
                 bbox.start_coord,
                 shard_spec.grid.num_cores(),

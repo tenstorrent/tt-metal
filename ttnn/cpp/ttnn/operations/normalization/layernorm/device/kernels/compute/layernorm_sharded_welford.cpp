@@ -131,7 +131,6 @@ inline uint32_t get_next_set_size(
 }  // namespace
 void kernel_main() {
 #ifdef IDLE_CORE
-    // No shard on this core (see reader_mcast_receiver_unary_sharded_ln.cpp): no partial to compute.
     return;
 #endif
 

@@ -124,8 +124,6 @@ GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord
     }
     uint32_t nb = get_num_blocks(mcast, rw, gs, spec);
     bool rectangular = spec.grid.num_cores() == gs.x * gs.y;
-    // The two-stage reduce splits the grid into complete rows (or columns) and reduces along each axis in
-    // turn, so it cannot be used when the last row/column of the bounding box is only partly owned.
     bool two_stage = rectangular && should_use_two_stage_reduce(mcast, rw, gs, compute_with_storage_grid_size);
     return GridParams{
         .shard_spec = spec,
@@ -407,9 +405,6 @@ CoreRanges CoreRanges::compute(const GridParams& grid, const WorkerDistribution&
         cr.not_all_to_all_workers = apply_grid_offset(cr.not_all_to_all_workers, offset);
     }
 
-    // The broadcast rectangle is the shard grid's bounding box on the mcast_1d path (see
-    // build_reader_sender_args), and a single row or column of it otherwise. Only the former can be
-    // wider than the shard grid, which is why the 2D path keeps its destination count at num_blocks - 1.
     const CoreRange bbox = grid.shard_spec.grid.bounding_box();
     cr.mcast_dest_cores = CoreRangeSet(bbox);
     cr.inactive_cores = cr.mcast_dest_cores.subtract(cr.all_cores);
@@ -838,12 +833,6 @@ void bind_writer_gamma_beta(KernelDescriptor& desc, Buffer* gamma_buffer, Buffer
     }
 }
 
-// A non-rectangular shard grid leaves cores inside the sender's broadcast rectangle that own no shard.
-// They are kept in the program so the L1 the broadcast writes to stays reserved on them (see
-// add_cb_descriptors), so every processor they would otherwise leave idle needs a kernel. They run the
-// same sources as the real receiver cores, compiled with IDLE_CORE so they return before touching any
-// shard, buffer or semaphore. Compile-time args are copied from the receiver variants purely to keep the
-// sources compiling; nothing reads them.
 void add_idle_core_kernel_descriptors(
     ProgramDescriptor& program_descriptor,
     const CoreRanges& core_ranges,
@@ -973,8 +962,6 @@ void add_kernel_descriptors(
         {"cb_col_mask_packed", tt::CBIndex::c_19},
     };
 
-    // Placed before the real kernels because the descriptors below move their compile-time args and
-    // defines out of kernel_config, and the idle cores reuse copies of the receiver ones.
     add_idle_core_kernel_descriptors(
         program_descriptor,
         core_ranges,
@@ -1420,12 +1407,6 @@ void add_cb_descriptors(
             cb_config.output_reshard_buffer));
     }
 
-    // A non-rectangular shard grid leaves cores inside the broadcast rectangle that own no shard. The
-    // broadcast writes the reduced statistics to the sender's own CB address, so that address has to be
-    // reserved on those cores too, or the write lands on whatever else the allocator put there. Widening
-    // every locally allocated CB to the whole rectangle reserves it and keeps the addresses identical
-    // across cores, which a multicast requires. Tensor-backed CBs (buffer != nullptr) are left alone:
-    // their address comes from the buffer, and the inactive cores own no part of it.
     if (!core_ranges.inactive_cores.empty()) {
         for (auto& cb_desc : program_descriptor.cbs) {
             if (cb_desc.buffer == nullptr && cb_desc.core_ranges == core_ranges.all_cores) {
