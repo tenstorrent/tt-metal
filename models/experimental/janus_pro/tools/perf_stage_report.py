@@ -127,21 +127,18 @@ def matmul_table(text):
 def matmul_deltas(shape, fidelity, instances, us_each, before):
     """`(Δ inst, Δ us each)` for one matmul row against the previous stage.
 
-    Matched on fidelity first, then on instance count: a stage that only changes fidelity should
-    still compare against the same op, and a shape the tower runs at two fidelities (c_fc and the
-    aligner's fc1 both at 576x1024x4096) needs the fidelity to tell its rows apart.
+    The instance count has to agree, so a stage that only changes fidelity still compares against
+    the same op. Where it does not agree the two rows are not the same set of instances -- one side
+    is grouping c_fc together with the aligner's fc1, which share the 576x1024x4096 shape -- and
+    there is no honest number to print, so the cells stay empty.
     """
     if before is None:
         return "", ""
-    candidates = before.get(shape, [])
-    match = next((c for c in candidates if c[0] == fidelity), None)
-    if match is None:
-        match = next((c for c in candidates if c[1] == instances), None)
-    if match is None and len(candidates) == 1:
-        match = candidates[0]
-    if match is None:
-        return "new", "new"
-    _, prev_n, prev_us = match
+    candidates = [c for c in before.get(shape, []) if c[1] == instances]
+    if not candidates:
+        return ("new", "new") if shape not in before else ("—", "—")
+    # Same count at more than one fidelity is possible in principle; prefer the matching fidelity.
+    _, prev_n, prev_us = next((c for c in candidates if c[0] == fidelity), candidates[0])
     return f"{instances - prev_n:+d}", f"{us_each - prev_us:+.1f}"
 
 

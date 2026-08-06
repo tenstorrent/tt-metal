@@ -28,7 +28,7 @@ at HiFi4 with unfused biases. Housekeeping, found by reading rather than by prof
 
 | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | +1 | 139.9 | +1.6 | 3.497 | 64 | 26.6 | 24.2 | HiFi2 |
+| 576 x 1024 x 4096 | 25 | — | 139.9 | — | 3.497 | 64 | 26.6 | 24.2 | HiFi2 |
 | 576 x 1024 x 3072 | 24 | +0 | 134.2 | +0.6 | 3.220 | 48 | 27.4 | 28.5 | HiFi2 |
 | 576 x 4096 x 1024 | 24 | +0 | 126.5 | +0.4 | 3.036 | 48 | 38.7 | 26.3 | HiFi2 |
 | 576 x 1024 x 1024 | 24 | +0 | 47.9 | -0.1 | 1.150 | 48 | 25.6 | 32.3 | HiFi2 |
