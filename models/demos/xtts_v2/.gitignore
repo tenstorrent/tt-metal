@@ -5,3 +5,17 @@ generated/
 # Python bytecode.
 __pycache__/
 *.pyc
+# Bring-up run/state artifacts — regenerated per bring-up. Not template state.
+RUN_REPORT.md
+E2E_REPORT.md
+BRING_UP_PLAN.md
+bringup_status.json
+.bringup_cc_state.json
+_runtime_fallbacks.json
+kernel_findings.json
+e2e_plan.json
+.loader_blocker.txt
+_stubs/*.best_native
+_stubs/*.last_good_native
+_stubs/*.last_good_sharded
+_stubs/*.preiter_native
