@@ -106,6 +106,22 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
     CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
 
+// The cores driving one fabric connection: the workers push data into it and the mux owns it. A single
+// worker connects to the fabric directly, so its group has no mux.
+struct MuxWorkerGroup {
+    std::optional<CoreCoord> mux;
+    std::vector<CoreCoord> workers;
+};
+
+// Allocates `num_groups` groups of (mux + `num_workers_per_group` workers), putting each mux on a NOC row of
+// its own where the grid allows (see the implementation for why). Always succeeds if the cores exist.
+std::vector<MuxWorkerGroup> choose_mux_worker_cores(
+    size_t num_groups,
+    size_t num_workers_per_group,
+    MeshDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+
 class EriscDatamoverBuilder;
 
 std::vector<ttnn::Tensor> unpad_output_tensor(

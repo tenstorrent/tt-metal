@@ -474,6 +474,102 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }
 
+namespace {
+
+// The available cores in each NOC row, top to bottom. Rows with fewer than `min_cores_per_row` are dropped.
+std::vector<std::vector<CoreCoord>> place_cores_by_row(const CoreRangeSet& available_cores, size_t min_cores_per_row) {
+    const auto bbox = available_cores.bounding_box();
+    std::vector<std::vector<CoreCoord>> rows;
+    for (size_t y = bbox.start_coord.y; y <= bbox.end_coord.y; ++y) {
+        std::vector<CoreCoord> row;
+        for (size_t x = bbox.start_coord.x; x <= bbox.end_coord.x; ++x) {
+            if (const CoreCoord core(x, y); available_cores.contains(core)) {
+                row.push_back(core);
+            }
+        }
+        if (row.size() >= min_cores_per_row) {
+            rows.push_back(std::move(row));
+        }
+    }
+    return rows;
+}
+
+// Deals the groups out to the rows, one each, and only starts a second pass around after every row has one.
+// Empty if the rows run out of cores.
+std::vector<MuxWorkerGroup> place_core_groups_across_rows(
+    const std::vector<std::vector<CoreCoord>>& rows, size_t num_groups, size_t cores_per_group, bool with_mux) {
+    if (rows.empty()) {
+        return {};
+    }
+    std::vector<MuxWorkerGroup> groups;
+    groups.reserve(num_groups);
+    for (size_t g = 0; g < num_groups; ++g) {
+        const auto& row = rows[g % rows.size()];
+        const size_t offset = (g / rows.size()) * cores_per_group;
+        if (offset + cores_per_group > row.size()) {
+            return {};  // this row has no cores left
+        }
+        const auto first = row.begin() + offset;
+        auto& group = groups.emplace_back();
+        if (with_mux) {
+            group.mux = *first;
+        }
+        group.workers.assign(first + (with_mux ? 1 : 0), first + cores_per_group);
+    }
+    return groups;
+}
+
+}  // namespace
+
+// Measured on Blackhole: muxes must not share a NOC row. Each one forwards to an ethernet core, and two on
+// the same row fight over the same links getting there. That outweighs everything else about placement,
+// including how far a worker sits from its mux. So: one group per row, and only double up when there are
+// more groups than rows.
+std::vector<MuxWorkerGroup> choose_mux_worker_cores(
+    size_t num_groups,
+    size_t num_workers_per_group,
+    MeshDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    // One worker connects to the fabric itself, so there is no mux to keep apart from anything.
+    const bool with_mux = num_workers_per_group > 1;
+    const size_t cores_per_group = num_workers_per_group + (with_mux ? 1 : 0);
+
+    auto available_cores = device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    if (sub_core_grid.has_value()) {
+        available_cores = available_cores.intersection(*sub_core_grid);
+    }
+
+    std::vector<MuxWorkerGroup> groups;
+    if (with_mux) {
+        const auto rows = place_cores_by_row(available_cores, cores_per_group);
+        groups = place_core_groups_across_rows(rows, num_groups, cores_per_group, with_mux);
+        if (groups.empty()) {
+            log_warning(
+                tt::LogOp,
+                "Core grid shape prevents giving each fabric mux its own NOC row; falling back to a row-major "
+                "fill. This may lead to performance loss.");
+        }
+    }
+    if (groups.empty()) {
+        // No mux to keep apart, or no row is wide enough: fill the grid row by row instead.
+        const std::vector<std::vector<CoreCoord>> all_cores_in_one_row = {
+            corerange_to_cores(available_cores, std::nullopt, /*row_wise=*/true)};
+        groups = place_core_groups_across_rows(all_cores_in_one_row, num_groups, cores_per_group, with_mux);
+    }
+    TT_FATAL(
+        groups.size() == num_groups,
+        "CCL needs {} worker cores ({} muxes x {} cores) but only {} are available; provide a larger "
+        "sub_core_grid.",
+        num_groups * cores_per_group,
+        num_groups,
+        cores_per_group,
+        available_cores.num_cores());
+    return groups;
+}
+
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     const uint32_t num_devices,
