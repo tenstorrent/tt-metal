@@ -153,7 +153,7 @@ PCC against PyTorch goldens captured from the unmodified reference.
 | CFM estimator UNet, first / last step | 0.9998326979 / 0.9991904460 |
 | flow Conformer encoder, 6 blocks | 0.9999176853 |
 | LLM AR prefill, 209 tokens | 0.9997355989 |
-| LLM AR decode step (fixed cache) | 0.9994433945 |
+| LLM AR decode step (fixed cache) | 0.9986645835 |
 | LLM text encoder, causal | 0.9998775504 |
 | whole HiFT vocoder, mel → waveform | 0.9996373743 |
 | iSTFT vs the captured golden | 0.9999298811 |
