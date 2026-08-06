@@ -57,7 +57,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v) {
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
+    std::optional<uint32_t> kv_cache_num_layers,
+    std::optional<uint32_t> kv_cache_layer_idx) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -93,7 +97,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         attention_sink,
         sliding_window_size,
         persistent_output_buffer_joint_k,
-        persistent_output_buffer_joint_v);
+        persistent_output_buffer_joint_v,
+        slot_id,
+        kv_actual_isl_tensor,
+        kv_cache_num_layers,
+        kv_cache_layer_idx);
     return outputs;
 }
 
@@ -697,7 +705,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("attention_sink") = nb::none(),
         nb::arg("sliding_window_size") = nb::none(),
         nb::arg("persistent_output_buffer_joint_k").noconvert() = nb::none(),
-        nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none());
+        nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none(),
+        nb::arg("slot_id").noconvert() = nb::none(),
+        nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
+        nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
