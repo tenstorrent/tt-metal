@@ -37,6 +37,18 @@ std::map<std::string, std::string> get_defines(
     return defines;
 }
 
+// Padding identity for the pre-reduce tilize, mirroring get_pad_value() in generic_reductions.cpp.
+static ttnn::PadValue get_tilize_pad_value(tt::tt_metal::ReduceOpMath reduce_math, tt::tt_metal::DataType dtype) {
+    if (dtype == tt::tt_metal::DataType::INT32) {
+        switch (reduce_math) {
+            case tt::tt_metal::ReduceOpMath::MAX: return ttnn::PadValue{uint32_t{0x80000001}};  // INT32_MIN + 1
+            case tt::tt_metal::ReduceOpMath::MIN: return ttnn::PadValue{uint32_t{0x7FFFFFFF}};  // INT32_MAX
+            default: return ttnn::PadValue{uint32_t{0}};
+        }
+    }
+    return ttnn::PadValue{ttnn::prim::get_reduce_pad_value(reduce_math)};
+}
+
 }  // namespace reduce_op_utils
 namespace ttnn::operations::reduction::generic::detail {
 
@@ -92,7 +104,7 @@ Tensor reduce(
 
     auto parallelization_strategy = ttnn::prim::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
-    float pad_value = reduce_math == tt::tt_metal::ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
+    const ttnn::PadValue pad_value = reduce_op_utils::get_tilize_pad_value(reduce_math, input_tensor.dtype());
 
     TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Expected input tensor to be on device");
     TT_FATAL(
