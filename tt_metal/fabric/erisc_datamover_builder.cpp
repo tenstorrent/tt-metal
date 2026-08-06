@@ -1008,12 +1008,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // Get actual VC1 downstream EDM count from adapter (only relevant for multi-mesh 2D routing)
     uint32_t num_vc1_downstream_edms =
         needs_vc1 ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(1) : 0;
-    bool z_router_enabled = fabric_context.has_z_router_on_device(control_plane, local_fabric_node_id);
 
     log_debug(
         LogFabric,
-        "z_router_enabled: {}, needs_vc1: {}, num_vc0_downstream_edms: {}, num_vc1_downstream_edms: {}",
-        z_router_enabled,
+        "needs_vc1: {}, num_vc0_downstream_edms: {}, num_vc1_downstream_edms: {}",
         needs_vc1,
         num_vc0_downstream_edms,
         num_vc1_downstream_edms);
@@ -1196,7 +1194,6 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = final_enable_first_level_ack_vc0 ? 1 : 0;
     named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;  // VC1 does not use bubble flow control
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
-    named_args["Z_ROUTER_ENABLED"] = z_router_enabled;
     named_args["VC0_DOWNSTREAM_EDM_SIZE"] = vc0_downstream_edm_size;
     named_args["VC1_DOWNSTREAM_EDM_SIZE"] = vc1_downstream_edm_size;
     named_args["ACTUAL_VC0_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc0);
@@ -1262,8 +1259,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["IS_INTERMESH_ROUTER_ON_EDGE"] = is_intermesh_router_on_edge;
     named_args["IS_INTRAMESH_ROUTER_ON_EDGE"] = is_intramesh_router_on_edge;
 
-    // --- Skip-link ABI args (only when this router's mesh selected the indexed 2D ABI) ---
-    // Agreement with the FABRIC_SKIP_LINKS_ENABLED define emission in
+    // --- Express ABI args (only when this router's mesh selected the indexed 2D ABI) ---
+    // Agreement with the FABRIC_EXPRESS_ENABLED define emission in
     // ComputeMeshRouterBuilder::create_kernel is by construction: both key on
     // express_routing_enabled. The kernel reads these named args only under that define, and a
     // missing arg fails the compile.

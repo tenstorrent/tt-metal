@@ -140,7 +140,7 @@ bool fabric_set_unicast_route(
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id = MAX_NUM_MESHES);
 
-// Defined in the indexed codec section below; the skip-link worker path delegates to it.
+// Defined in the indexed codec section below; the express worker path delegates to it.
 inline bool fabric_set_indexed_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
@@ -148,11 +148,11 @@ inline bool fabric_set_indexed_unicast_route(
     uint8_t mesh_y_size,
     uint8_t mesh_x_size);
 
-#if defined(FABRIC_SKIP_LINKS_ENABLED) && !defined(FABRIC_SKIP_LINK_MESH_Y_SIZE)
+#if defined(FABRIC_EXPRESS_ENABLED) && !defined(FABRIC_EXPRESS_MESH_Y_SIZE)
 // The host emits the shape defines only to worker kernels; the ERISC compile selects the ABI with
 // its own named args and never instantiates the worker flavor, so zeros are sufficient here.
-#define FABRIC_SKIP_LINK_MESH_Y_SIZE 0
-#define FABRIC_SKIP_LINK_MESH_X_SIZE 0
+#define FABRIC_EXPRESS_MESH_Y_SIZE 0
+#define FABRIC_EXPRESS_MESH_X_SIZE 0
 #endif
 
 template <bool called_from_router = false>
@@ -181,7 +181,7 @@ void fabric_set_mcast_route(
             return;
         }
     }
-#if defined(FABRIC_SKIP_LINKS_ENABLED)
+#if defined(FABRIC_EXPRESS_ENABLED)
     if constexpr (!called_from_router) {
         // Same-mesh 2D mcast has no indexed encode yet, and the indexed kernel decode would
         // misread a legacy spine/branch hop program. Remote-mesh carriers already returned above
@@ -252,13 +252,13 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 template <bool called_from_router, eth_chan_directions my_direction>
 bool fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
-#if defined(FABRIC_SKIP_LINKS_ENABLED)
+#if defined(FABRIC_EXPRESS_ENABLED)
     if constexpr (!called_from_router) {
-        // Workers on skip-link meshes widen the destination's indexed action maps; the mesh shape
-        // comes from the per-kernel FABRIC_SKIP_LINK_MESH_*_SIZE defines. called_from_router (the
+        // Workers on express meshes widen the destination's indexed action maps; the mesh shape
+        // comes from the per-kernel FABRIC_EXPRESS_MESH_*_SIZE defines. called_from_router (the
         // edge rewrite path) keeps the legacy hop-program encode below.
         return fabric_set_indexed_unicast_route(
-            packet_header, dst_dev_id, dst_mesh_id, FABRIC_SKIP_LINK_MESH_Y_SIZE, FABRIC_SKIP_LINK_MESH_X_SIZE);
+            packet_header, dst_dev_id, dst_mesh_id, FABRIC_EXPRESS_MESH_Y_SIZE, FABRIC_EXPRESS_MESH_X_SIZE);
     }
 #endif
     if constexpr (!called_from_router) {

@@ -291,37 +291,75 @@ bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
     return false;
 }
 
-bool FabricContext::has_z_router_on_device(
+bool FabricContext::has_intra_mesh_z_router(
     const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const {
-    // Check if this fabric node has Z router ethernet channels
-    // Query control plane for active channels and check if any have Z direction
+    // Source of truth is the mesh graph's intra-mesh connectivity: sub-torus skip links are folded in
+    // as RoutingDirection::Z edges within the same mesh. A node has intra-mesh Z iff one of its
+    // intra-mesh edges has port_direction == Z.
+    const auto& intra_mesh_connectivity = control_plane.get_mesh_graph().get_intra_mesh_connectivity();
 
-    // Every configured fabric node has channel metadata; an absent entry is a topology error.
-    auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
-
-    // If no channels, node doesn't have Z router (or isn't configured yet)
-    if (active_channels.empty()) {
-        log_debug(
-            LogMetal,
-            "Fabric node M{}D{} does NOT have Z router (no active channels)",
-            *fabric_node_id.mesh_id,
-            fabric_node_id.chip_id);
+    const auto mesh_idx = *fabric_node_id.mesh_id;
+    const auto chip_idx = fabric_node_id.chip_id;
+    if (mesh_idx >= intra_mesh_connectivity.size() || chip_idx >= intra_mesh_connectivity[mesh_idx].size()) {
         return false;
     }
-    for (const auto& [eth_chan_id, direction] : active_channels) {
-        // direction is eth_chan_directions, compare with eth_chan_directions::Z
-        if (direction == eth_chan_directions::Z) {
+
+    for (const auto& [neighbor_chip_id, router_edge] : intra_mesh_connectivity[mesh_idx][chip_idx]) {
+        if (router_edge.port_direction == RoutingDirection::Z) {
             log_debug(
                 LogMetal,
-                "Fabric node M{}D{} HAS Z router (channel {} has Z direction)",
+                "Fabric node M{}D{} HAS intra-mesh Z (skip-link neighbor D{})",
                 *fabric_node_id.mesh_id,
                 fabric_node_id.chip_id,
-                eth_chan_id);
+                neighbor_chip_id);
             return true;
         }
     }
+    return false;
+}
 
-    log_debug(LogMetal, "Fabric node M{}D{} does NOT have Z router", *fabric_node_id.mesh_id, fabric_node_id.chip_id);
+bool FabricContext::has_any_intra_mesh_z_router(const ControlPlane& control_plane) const {
+    // Fabric-wide variant of has_intra_mesh_z_router: returns true if ANY node in ANY mesh has an
+    // intra-mesh Z edge (sub-torus skip link). Used when sizing the fabric-wide max channel counts:
+    // a single intra-mesh Z router widens VC0 from 4 -> 5, so the shared EDM config must reserve the
+    // 5th VC0 sender channel for the whole fabric instance.
+    const auto& intra_mesh_connectivity = control_plane.get_mesh_graph().get_intra_mesh_connectivity();
+    for (const auto& mesh_connections : intra_mesh_connectivity) {
+        for (const auto& chip_connections : mesh_connections) {
+            for (const auto& [neighbor_chip_id, router_edge] : chip_connections) {
+                if (router_edge.port_direction == RoutingDirection::Z) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool FabricContext::has_inter_mesh_z_router(
+    const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const {
+    // Source of truth is the mesh graph's inter-mesh connectivity: a galaxy Z router that bridges two
+    // meshes shows up as a RoutingDirection::Z edge to a neighbor mesh. A node has an inter-mesh Z router
+    // iff one of its inter-mesh edges has port_direction == Z.
+    const auto& inter_mesh_connectivity = control_plane.get_mesh_graph().get_inter_mesh_connectivity();
+
+    const auto mesh_idx = *fabric_node_id.mesh_id;
+    const auto chip_idx = fabric_node_id.chip_id;
+    if (mesh_idx >= inter_mesh_connectivity.size() || chip_idx >= inter_mesh_connectivity[mesh_idx].size()) {
+        return false;
+    }
+
+    for (const auto& [neighbor_mesh_id, router_edge] : inter_mesh_connectivity[mesh_idx][chip_idx]) {
+        if (router_edge.port_direction == RoutingDirection::Z) {
+            log_debug(
+                LogMetal,
+                "Fabric node M{}D{} HAS inter-mesh Z router (neighbor mesh M{})",
+                *fabric_node_id.mesh_id,
+                fabric_node_id.chip_id,
+                *neighbor_mesh_id);
+            return true;
+        }
+    }
     return false;
 }
 

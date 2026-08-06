@@ -73,9 +73,26 @@ public:
     bool is_switch_mesh(MeshId mesh_id) const;
 
     // ============ Z Router Queries ============
-    // Check if a fabric node has Z router channels
-    // Queries control plane to see if any ethernet channels are assigned Z direction
-    bool has_z_router_on_device(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
+    // Check if a fabric node has an INTRA-mesh Z neighbor (sub-torus "skip link"): a RoutingDirection::Z
+    // edge within the same mesh. When true, the standard mesh router gains a 5th VC0 sender channel
+    // (channel 4 = intra-mesh Z).
+    bool has_intra_mesh_z_router(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
+
+    // Fabric-wide check: true if ANY node in ANY mesh has an intra-mesh Z edge (sub-torus skip link).
+    // Used to size the fabric-wide max sender channel counts: a single intra-mesh Z router widens VC0
+    // from 4 -> 5, so the shared EDM config must reserve the 5th VC0 sender channel.
+    bool has_any_intra_mesh_z_router(const ControlPlane& control_plane) const;
+
+    // NOTE: the indexed ABI is NOT selected from raw Z-edge presence. Use
+    // ControlPlane::express_routing_enabled(mesh_id), which additionally requires that the ring
+    // decomposition validated -- it is what route generation keyed on, so it is the only gate that
+    // keeps the packed L1 table, the worker encode and the router decode in agreement.
+
+    // Check if a fabric node has an INTER-mesh Z neighbor (galaxy Z router bridging two meshes): a
+    // RoutingDirection::Z edge in inter-mesh connectivity. It stays false on a device whose only Z
+    // links are intra-mesh. Used to gate the inter-mesh-Z-specific builder behavior (VC1 4th sender
+    // channel + MESH_TO_Z) and to select the Z_ROUTER variant for a Z-direction router.
+    bool has_inter_mesh_z_router(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
 
     // ============ Tensix Config Query ============
     // Returns true if tensix is enabled (MUX or UDM mode)
