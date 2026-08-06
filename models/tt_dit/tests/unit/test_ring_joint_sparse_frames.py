@@ -393,6 +393,12 @@ def _run_sparse_frames_op(
         )
         return
 
+    gt_f = gt.reshape(gt.shape[0], gt.shape[1], num_frames_real, tokens_per_frame, gt.shape[-1])
+    out_f = out.reshape(out.shape[0], out.shape[1], num_frames_real, tokens_per_frame, out.shape[-1])
+    for fi in range(num_frames_real):
+        _, fpcc = comp_pcc(gt_f[:, :, fi], out_f[:, :, fi])
+        logger.info(f"[per-frame] frame {fi:3d}: pcc={fpcc}")
+
     passing, pcc = comp_pcc(gt, out, pcc_threshold)
     logger.info(
         f"[sparse-frames ring] nf_real={num_frames_real} nf_pad={num_frames_padded} fsl={tokens_per_frame} "
