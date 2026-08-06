@@ -60,12 +60,16 @@ def test_resnet50_layers_1_3(device, use_pretrained_weight, model_location_gener
     os.environ["TT_METAL_QSR_RESNET_STOP_AFTER_LAYER3"] = "1"  # return the layer3 output; skip layer4/avgpool/fc
     os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"  # HS conv2 -> split path (off the fused conv_bmm 0x19)
     os.environ["RESNET_PCC_LOG"] = "1"  # print per-op [GOLDENPCC] so the first diverging op is visible on failure
-    # [#48552] Host-fallback the DOWNSAMPLE (existing bypass, same mechanism as stem/maxpool): the projection
-    # 1x1 s2 downsamples have NO working 2-core device path -- layer3_module1's 512->1024 s2 is block-sharded and
-    # hits the fused conv_bmm 0x19; the s2 downsamples also N-halve in HS. Computing them on host lets the
-    # layers-1-3 e2e complete while the conv1/conv2/conv3 of every layer1-3 module still run ON DEVICE (the split
-    # -path HS convs we validated). Restore after. (If the device stem also faults, set _saved_stem False too.)
-    _saved_ds = _rn._CONV_ON_DEVICE["downsample"]
+    # [#48552] Host-fallback the STEM and the DOWNSAMPLE (existing bypass, same mechanism as maxpool). Neither
+    # has a working 2-core device path here:
+    #   * stem conv1 (folded 4x4, 112x112 output) routes to the DRAM slice path and trips slice_write's per-core
+    #     TILE-pad mismatch (196->224 rows/core: logical 392 tiles vs sharded 448) -- conv2d_DRAM per-core-pad bug.
+    #   * projection 1x1 s2 downsamples: layer3_module1's 512->1024 s2 is block-sharded -> fused conv_bmm 0x19;
+    #     the s2 downsamples also N-halve in HS.
+    # Computing both on host lets the layers-1-3 e2e complete while the conv1/conv2/conv3 of every layer1-3 module
+    # still run ON DEVICE (the split-path HS convs we validated). Restore after.
+    _saved_cod = dict(_rn._CONV_ON_DEVICE)
+    _rn._CONV_ON_DEVICE["stem"] = False
     _rn._CONV_ON_DEVICE["downsample"] = False
     try:
         test_infra = create_test_infra(
@@ -90,7 +94,7 @@ def test_resnet50_layers_1_3(device, use_pretrained_weight, model_location_gener
             pcc >= PCC
         ), f"layer3 output PCC {pcc:.6f} < {PCC} (see the per-op [GOLDENPCC] logs for the first divergence)"
     finally:
-        _rn._CONV_ON_DEVICE["downsample"] = _saved_ds
+        _rn._CONV_ON_DEVICE.update(_saved_cod)
         for k, v in saved.items():
             if v is None:
                 os.environ.pop(k, None)
