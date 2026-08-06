@@ -30,6 +30,16 @@ void validate_tensor_specs(const Tensor& tensor, const std::string& name) {
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
 }
 
+void validate_index_tensor(const Tensor& tensor, const std::string& name) {
+    validate_tensor_specs(tensor, name);
+    TT_FATAL(tensor.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32, got {}", name, tensor.dtype());
+    const auto& shape = tensor.logical_shape();
+    const auto rank = shape.rank();
+    const bool valid_1d = rank == 1;
+    const bool valid_2d = rank == 2 && shape[0] == 1;
+    TT_FATAL(valid_1d || valid_2d, "{} must be 1D or 2D with first dimension == 1, got shape {}", name, shape);
+}
+
 }  // namespace
 
 PerTokenCastBackDeviceOperation::program_factory_t PerTokenCastBackDeviceOperation::select_program_factory(
@@ -41,6 +51,8 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input_e4m3 = tensor_args.input_e4m3;
     const auto& input_scale = tensor_args.input_scale;
+    const bool token_count_aware = attrs.token_count_aware;
+    const bool scales_from_metadata = attrs.scales_from_metadata;
 
     validate_tensor_specs(input_e4m3, "per_token_cast_back: input_e4m3");
     validate_tensor_specs(input_scale, "per_token_cast_back: input_scale");
@@ -57,9 +69,64 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_e4m3.dtype() == tt::tt_metal::DataType::FP8_E4M3,
         "per_token_cast_back: input_e4m3 dtype must be FP8_E4M3");
-    TT_FATAL(
-        input_scale.dtype() == tt::tt_metal::DataType::FLOAT32,
-        "per_token_cast_back: input_scale dtype must be FLOAT32");
+
+    if (token_count_aware) {
+        const auto& expert_region_offsets = tensor_args.expert_region_offsets;
+        const auto& expert_token_counts = tensor_args.expert_token_counts;
+        const auto& global_expert_idx_table = tensor_args.global_expert_idx_table;
+        TT_FATAL(
+            expert_region_offsets.has_value() && expert_token_counts.has_value() && global_expert_idx_table.has_value(),
+            "per_token_cast_back: token_count_aware path requires expert_region_offsets, expert_token_counts and "
+            "global_expert_idx_table");
+        validate_index_tensor(*expert_region_offsets, "per_token_cast_back: expert_region_offsets");
+        validate_index_tensor(*expert_token_counts, "per_token_cast_back: expert_token_counts");
+        validate_index_tensor(*global_expert_idx_table, "per_token_cast_back: global_expert_idx_table");
+        // The kernels run on input_e4m3's device and read the metadata buffers by raw address, so all three
+        // must live on that same device (a cross-device buffer would be read as an unrelated local address).
+        auto* input_device = input_e4m3.device();
+        TT_FATAL(
+            expert_region_offsets->device() == input_device && expert_token_counts->device() == input_device &&
+                global_expert_idx_table->device() == input_device,
+            "per_token_cast_back: expert_region_offsets, expert_token_counts and global_expert_idx_table must be on "
+            "the same device as input_e4m3");
+        // The kernels index both region offsets and token counts by the same global expert id (bounded by
+        // num_routed_experts = expert_region_offsets last dim), so the two vectors must be the same length;
+        // a shorter counts vector would read past its L1 scratch.
+        TT_FATAL(
+            expert_token_counts->logical_shape()[-1] == expert_region_offsets->logical_shape()[-1],
+            "per_token_cast_back: expert_token_counts last dim ({}) must equal expert_region_offsets last dim ({})",
+            expert_token_counts->logical_shape()[-1],
+            expert_region_offsets->logical_shape()[-1]);
+        TT_FATAL(attrs.experts_per_chip > 0, "per_token_cast_back: experts_per_chip must be > 0");
+        TT_FATAL(
+            attrs.experts_per_chip <= global_expert_idx_table->logical_shape()[-1],
+            "per_token_cast_back: experts_per_chip ({}) must be <= global_expert_idx_table last dim ({})",
+            attrs.experts_per_chip,
+            global_expert_idx_table->logical_shape()[-1]);
+        // Scale source dtype: scales are always fp32. The plain scale path requires FLOAT32; the metadata
+        // path carries the fp32 scales bit-stored in the int32 metadata tail, so UINT32/INT32 are accepted there.
+        if (scales_from_metadata) {
+            const auto sdt = input_scale.dtype();
+            TT_FATAL(
+                sdt == tt::tt_metal::DataType::FLOAT32 || sdt == tt::tt_metal::DataType::UINT32 ||
+                    sdt == tt::tt_metal::DataType::INT32,
+                "per_token_cast_back: metadata scale source dtype must be FLOAT32/UINT32/INT32, got {}",
+                sdt);
+        } else {
+            TT_FATAL(
+                input_scale.dtype() == tt::tt_metal::DataType::FLOAT32,
+                "per_token_cast_back: input_scale dtype must be FLOAT32, got {}",
+                input_scale.dtype());
+        }
+    } else {
+        TT_FATAL(
+            !attrs.scales_from_metadata,
+            "per_token_cast_back: scales_from_metadata is only valid on the token_count_aware path");
+        TT_FATAL(
+            input_scale.dtype() == tt::tt_metal::DataType::FLOAT32,
+            "per_token_cast_back: input_scale dtype must be FLOAT32");
+    }
+
     const auto tile_shape = input_e4m3.tensor_spec().tile().get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
     const uint32_t tile_w = tile_shape[1];
@@ -101,14 +168,30 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t H = static_cast<uint32_t>(e4m3_shape[-1]);
     const uint32_t H_scale = static_cast<uint32_t>(scale_shape[-1]);
-    // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). The
-    // e4m3 width must equal scale_width * 128, which keeps H a multiple of the block width.
-    TT_FATAL(
-        H == H_scale * fp8::BLOCK_W,
-        "per_token_cast_back: e4m3 last dim ({}) must equal scale last dim ({}) * BLOCK_W ({})",
-        H,
-        H_scale,
-        fp8::BLOCK_W);
+    if (token_count_aware && scales_from_metadata) {
+        // Metadata row = [routing fields ...][H/BLOCK_W fp32 scales]. Require H % BLOCK_W == 0 and that the
+        // row is wide enough to hold the H/BLOCK_W scale tail after the leading routing columns.
+        TT_FATAL(
+            H % fp8::BLOCK_W == 0,
+            "per_token_cast_back: e4m3 last dim ({}) must be a multiple of BLOCK_W ({})",
+            H,
+            fp8::BLOCK_W);
+        const uint32_t blocks_per_row = H / fp8::BLOCK_W;
+        TT_FATAL(
+            H_scale >= blocks_per_row,
+            "per_token_cast_back: metadata last dim ({}) must be >= H/BLOCK_W ({}) to hold the scale tail",
+            H_scale,
+            blocks_per_row);
+    } else {
+        // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). The
+        // e4m3 width must equal scale_width * 128, which keeps H a multiple of the block width.
+        TT_FATAL(
+            H == H_scale * fp8::BLOCK_W,
+            "per_token_cast_back: e4m3 last dim ({}) must equal scale last dim ({}) * BLOCK_W ({})",
+            H,
+            H_scale,
+            fp8::BLOCK_W);
+    }
 
     uint64_t folded_M = 1;
     for (size_t i = 0; i + 1 < rank; ++i) {
@@ -145,19 +228,19 @@ PerTokenCastBackDeviceOperation::tensor_return_value_t PerTokenCastBackDeviceOpe
 
 ttsl::hash::hash_t PerTokenCastBackDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    const auto tile_shape = tensor_args.input_e4m3.tensor_spec().tile().get_tile_shape();
-    const auto face_shape = tensor_args.input_e4m3.tensor_spec().tile().get_face_shape();
+    // Hash each tensor's full TensorSpec (shape + dtype + layout + tile + memory config) rather than
+    // cherry-picking fields, so nothing that changes program structure is missed. The token-count-aware
+    // metadata tensors are optional (absent on the plain path, which attrs.token_count_aware distinguishes).
+    const auto opt_spec = [](const std::optional<Tensor>& t) {
+        return t.has_value() ? std::optional<tt::tt_metal::TensorSpec>(t->tensor_spec()) : std::nullopt;
+    };
     return tt::tt_metal::operation::hash_operation<PerTokenCastBackDeviceOperation>(
         attrs,
-        tensor_args.input_e4m3.dtype(),
-        tensor_args.input_e4m3.memory_config(),
-        tensor_args.input_scale.memory_config(),
-        tensor_args.input_e4m3.logical_shape(),
-        tensor_args.input_scale.logical_shape(),
-        tile_shape[0],
-        tile_shape[1],
-        face_shape[0],
-        face_shape[1]);
+        tensor_args.input_e4m3.tensor_spec(),
+        tensor_args.input_scale.tensor_spec(),
+        opt_spec(tensor_args.expert_region_offsets),
+        opt_spec(tensor_args.expert_token_counts),
+        opt_spec(tensor_args.global_expert_idx_table));
 }
 
 }  // namespace ttnn::experimental::prim::per_token_cast_back
@@ -168,11 +251,26 @@ ttnn::Tensor per_token_cast_back(
     const Tensor& input_e4m3,
     const Tensor& input_scale,
     tt::tt_metal::DataType output_dtype,
-    const tt::tt_metal::MemoryConfig& output_memory_config) {
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    bool token_count_aware,
+    const std::optional<Tensor>& expert_region_offsets,
+    const std::optional<Tensor>& expert_token_counts,
+    const std::optional<Tensor>& global_expert_idx_table,
+    uint32_t experts_per_chip,
+    bool scales_from_metadata) {
     using OperationType = ttnn::experimental::prim::per_token_cast_back::PerTokenCastBackDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
-        .output_dtype = output_dtype, .output_memory_config = output_memory_config};
-    auto tensor_args = OperationType::tensor_args_t{.input_e4m3 = input_e4m3, .input_scale = input_scale};
+        .output_dtype = output_dtype,
+        .output_memory_config = output_memory_config,
+        .token_count_aware = token_count_aware,
+        .experts_per_chip = experts_per_chip,
+        .scales_from_metadata = scales_from_metadata};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_e4m3 = input_e4m3,
+        .input_scale = input_scale,
+        .expert_region_offsets = expert_region_offsets,
+        .expert_token_counts = expert_token_counts,
+        .global_expert_idx_table = global_expert_idx_table};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

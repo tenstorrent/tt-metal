@@ -20,6 +20,7 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(con
 
     // Collect all mesh and switch instances (same order as MeshGraph: meshes then switches)
     std::vector<GlobalNodeId> mesh_and_switch_instances;
+    mesh_and_switch_instances.reserve(mgd.all_meshes().size() + mgd.all_switches().size());
     for (GlobalNodeId id : mgd.all_meshes()) {
         mesh_and_switch_instances.push_back(id);
     }

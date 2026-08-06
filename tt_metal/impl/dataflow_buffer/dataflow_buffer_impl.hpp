@@ -61,7 +61,11 @@ struct DfbGroup {
 };
 
 struct DataflowBufferImpl {
+    // Unique, program-wide handle
     uint32_t id{};
+    // Device-facing slot number, baked into kernel binaries as the dfb::<name> accessor value and
+    // used as the config-table index in the dispatch payload.
+    uint32_t device_slot{};
     CoreRangeSet core_ranges;
     DataflowBufferConfig config;
 

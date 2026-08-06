@@ -80,7 +80,7 @@
     wh_llmbox_perf:
       timeout: 5
       tier: 3
-  owner_id: U03FJB5TM5Y # Colman Glagovich
+  owner_id: U06UEFWB4P9 # Colman Glagovich
   team: models
 
 - name: Llama 3.2-90B-Vision unit tests
@@ -106,7 +106,7 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: Llama 3.3-70B unit tests
@@ -522,21 +522,8 @@
     wh_galaxy_perf:
       timeout: 10
       tier: 1
-  owner_id: U053W15B6JF # Djordje Ivanovic
-  team: models
-
-- name: Qwen3-32B unit tests (Blackhole Galaxy)
-  cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
-    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder.py
-  model: qwen3-32b-galaxy
-  model_family: Qwen
-  skus:
     bh_galaxy:
-      timeout: 25
+      timeout: 15
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -696,7 +683,7 @@
     wh_n150:
       timeout: 5
       tier: 3
-  owner_id: UBHPP2NDP # Joseph Chu
+  owner_id: U07D5N7QL4U # Joseph Chu
   team: models
 
 - name: Falcon-40B unit tests
@@ -754,7 +741,7 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: Qwen2.5-VL-32B unit tests
@@ -769,7 +756,7 @@
     wh_llmbox_perf:
       timeout: 5
       tier: 3
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: Qwen3-VL-32B unit tests
@@ -843,9 +830,7 @@
 #     wh_n150:
 #       timeout: 5
 #       tier: 3
-#   owner_id: U06ECNVR0EN # Evan Smal
-#   team: models
-#   owner_id: U06ECNVR0EN # Evan Smal
+#   owner_id: U088DBNUKGR # Evan Smal
 #   team: models
 
 - name: TT-DiT Flux.1-schnell unit tests
@@ -1049,7 +1034,7 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
-- name: TT-DiT Wan2.2-T2V-A14B  unit tests
+- name: TT-DiT Wan2.2-T2V-A14B unit tests
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
@@ -1069,7 +1054,7 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
-- name: TT-DiT Wan2.2-I2V-A14B  unit tests
+- name: TT-DiT Wan2.2-I2V-A14B unit tests
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
@@ -1085,6 +1070,48 @@
     #   tier: 1
     wh_galaxy:
       timeout: 40
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ----------------------------------------------------------------------------
+# LTX-2.3 component unit tests (Black Hole single galaxy, bh_sc1)
+# ----------------------------------------------------------------------------
+- name: TT-DiT LTX-2.3 component unit tests
+  cmd: |
+    export NO_PROMPT=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # test_audio_ltx discovers its checkpoint via the DEFAULT hf cache (~/.cache/huggingface), not
+    # HF_HOME -- symlink it to the pre-staged /mnt/models cache so it resolves offline (no-op for the rest).
+    mpirun --pernode --tag-output bash -lc 'mkdir -p ~/.cache && ln -sfn /mnt/models/huggingface ~/.cache/huggingface' || true
+    # One ttop allocation runs every LTX component test on the 4x8 galaxy (bh_sc1). Block tests use
+    # random weights; audio/upsampler/lora resolve offline from /mnt/models. Run all, accumulate
+    # failures, fail the leg if any component failed.
+    rc=0
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1800 "$@" || rc=1; }
+    # Cheap/CPU/block tests first so a slow later test can never starve them out of the leg timeout.
+    run models/tt_dit/tests/models/ltx/test_ltx_adapter_loader.py
+    run models/tt_dit/tests/models/ltx/test_embeddings_ltx.py
+    run models/tt_dit/tests/models/ltx/test_rope_ltx.py
+    run models/tt_dit/tests/models/ltx/test_attention_ltx.py     -k "4x8sp1tp0nl2_line_is_fsdp0"
+    # video block; ckpt_fast pins one checkpoint_variant (video ignores it -> avoids redundant skips).
+    run models/tt_dit/tests/models/ltx/test_transformer_ltx.py   -k "4x8sp1tp0nl2_ring_is_fsdp0 and video and ckpt_fast"
+    run models/tt_dit/tests/models/ltx/test_ltx_lora_ondevice.py -k "bh_4x8sp1tp0"
+    run models/tt_dit/tests/models/ltx/test_latent_upsampler.py  -k "4x8h0w1nl2_line"
+    # heavier last. VAE: drop the 145-frame full-res decode (e2e-scale, >20 min); 9f-2K still covers decode.
+    run models/tt_dit/tests/models/ltx/test_vae_ltx.py           -k "4x8h0w1nl2_line and not 145f"
+    run models/tt_dit/tests/models/ltx/test_audio_ltx.py         -k "4x8sp1tp0nl2_ring_is_fsdp0 and (stage_a or stage_b)"
+    exit $rc
+  model: ltx-2.3
+  model_family: LTX
+  skus:
+    bh_sc1:
+      timeout: 55
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

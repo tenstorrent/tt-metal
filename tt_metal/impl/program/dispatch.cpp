@@ -341,7 +341,7 @@ void finalize_dfb_masks(
         for (const auto& dfb : dataflow_buffers) {
             for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
                 if (dfb->core_ranges.intersects(kg_range)) {
-                    kg_dfb_mask |= (uint64_t(1) << dfb->id);
+                    kg_dfb_mask |= (uint64_t(1) << dfb->device_slot);
                     break;
                 }
             }
@@ -1382,12 +1382,19 @@ public:
 
             size_t max_byte_end = 0;
             if (!hal.has_tile_counter_registers()) {
-                // WH/BH: DFBs reuse the CB slot format; slot N starts at N * 4 words.
+                // WH/BH: DFBs reuse the CB slot format; device slot N starts at N * 4 words.
                 for (const auto& dfb : dfbs_on_corerange) {
-                    size_t dfb_byte_offset =
-                        static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+                    size_t dfb_byte_offset = static_cast<size_t>(dfb->device_slot) *
+                                            UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
                     auto serialized = dfb->serialize_for_core(logical_representative);
-                    TT_ASSERT(dfb_byte_offset + serialized.size() <= payload.size());
+                    TT_FATAL(
+                        dfb_byte_offset + serialized.size() <= payload.size(),
+                        "DFB {} (device slot {}) config at byte offset {} does not fit in the {}-byte config payload "
+                        "sized by finalize_dfbs",
+                        dfb->id,
+                        dfb->device_slot,
+                        dfb_byte_offset,
+                        payload.size());
                     std::copy(serialized.begin(), serialized.end(), payload.begin() + dfb_byte_offset);
                     max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
                 }
@@ -2570,7 +2577,7 @@ void update_program_dispatch_commands(
             if (!hal.has_tile_counter_registers()) {
                 // WH/BH: overwrite the 4 uint32 words for each DFB slot in-place.
                 for (const auto& dfb : dfbs_on_core_range) {
-                    uint32_t base_index = dfb->id * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                    uint32_t base_index = dfb->device_slot * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
                     uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload) + base_index;
                     words[0] = dfb->uniform_alloc_addr();
                     words[1] = dfb->config.entry_size * dfb->config.num_entries;
@@ -3048,7 +3055,8 @@ TraceNode create_trace_node(
                 max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), 0);
             size_t first_unused_byte = 0;
             for (const auto& dfb : dfbs_on_core_range) {
-                size_t base_index = static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                size_t base_index =
+                    static_cast<size_t>(dfb->device_slot) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
                 size_t byte_offset = base_index * sizeof(uint32_t);
                 uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload.data()) + base_index;
                 words[0] = dfb->uniform_alloc_addr();

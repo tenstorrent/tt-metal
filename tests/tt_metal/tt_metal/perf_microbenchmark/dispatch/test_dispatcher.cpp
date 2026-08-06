@@ -70,6 +70,11 @@ struct LinearWriteParams {
     bool is_mcast{};  // Whether to use multicast or unicast
 };
 
+// How the paged write test reads PagedWriteParams::page_size. Random draws a size per run with
+// page_size as the ceiling, so those cases sweep sizes across runs; Exact emits page_size itself,
+// for cases that cover a property of one particular size.
+enum class PageSizeMode : uint8_t { Random, Exact };
+
 // Params that control the data volume, iteration count, and DRAM/L1
 // for the paged write test
 struct PagedWriteParams {
@@ -77,7 +82,8 @@ struct PagedWriteParams {
     uint32_t num_pages{};       // Number of pages
     uint32_t num_iterations{};  // Number of iterations for the test
     uint32_t dram_data_size_words{};
-    bool is_dram{};  // Whether to use DRAM or L1
+    bool is_dram{};                                      // Whether to use DRAM or L1
+    PageSizeMode page_size_mode = PageSizeMode::Random;  // Whether page_size is a ceiling or the size to emit
 };
 
 // Params that control the data volume, iteration count
@@ -350,6 +356,7 @@ class DispatchPagedWriteTestFixture : public BaseDispatchTestFixture,
     uint32_t num_iterations_{};
     uint32_t dram_data_size_words_{};
     bool is_dram_{};
+    PageSizeMode page_size_mode_ = PageSizeMode::Random;
 
     // Get the logical core for this bank
     CoreCoord get_bank_core(uint32_t bank_id) const {
@@ -372,6 +379,7 @@ protected:
         num_iterations_ = p.num_iterations;
         dram_data_size_words_ = p.dram_data_size_words;
         is_dram_ = p.is_dram;
+        page_size_mode_ = p.page_size_mode;
     }
 
 public:
@@ -393,6 +401,16 @@ public:
         // This vector stores commands related information for each iteration
         std::vector<HostMemDeviceCommand> commands_per_iteration;
         const uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
+
+        // A whole page has to fit in one command for the chunk loop below to make progress. Random
+        // page sizes are bounded by MAX_XFER_SIZE_16B; a PageSizeMode::Exact case is bounded only by
+        // what it asks for.
+        TT_FATAL(
+            page_size_bytes <= max_payload_per_cmd_bytes,
+            "Paged write page size of {} B exceeds the {} B payload one command can carry; lower the page size or "
+            "raise the fetch size",
+            page_size_bytes,
+            max_payload_per_cmd_bytes);
 
         uint32_t remaining_pages = num_pages_;
         uint32_t absolute_start_page = 0;
@@ -460,6 +478,7 @@ public:
     }
 
     uint32_t get_page_size() const { return page_size_; }
+    PageSizeMode get_page_size_mode() const { return page_size_mode_; }
     uint32_t get_num_pages() const { return num_pages_; }
     uint32_t get_num_iterations() const { return num_iterations_; }
     uint32_t get_dram_data_size_words() const { return dram_data_size_words_; }
@@ -486,9 +505,11 @@ public:
         const uint32_t num_banks = device_->allocator_impl()->get_num_banks(buf_type);
         const tt::CoreType core_type = is_dram ? tt::CoreType::DRAM : tt::CoreType::WORKER;
 
-        uint32_t max_allowed = MAX_XFER_SIZE_16B - 1;
-        uint32_t page_size_bytes =
-            payload_generator_->get_random_size(max_allowed, bytes_per_16B_unit, page_size_bytes_param);
+        const uint32_t max_allowed = MAX_XFER_SIZE_16B - 1;
+        const uint32_t page_size_bytes =
+            get_page_size_mode() == PageSizeMode::Exact
+                ? page_size_bytes_param
+                : payload_generator_->get_random_size(max_allowed, bytes_per_16B_unit, page_size_bytes_param);
 
         DeviceCommandCalculator cmd_calc;
         cmd_calc.add_dispatch_write_paged<inline_data_>(page_size_bytes, 0);
@@ -497,7 +518,7 @@ public:
 
         log_info(
             tt::LogTest,
-            "Paged Write test to {} - random page_size: {} bytes, num_pages_per_cmd: {}, iterations: {}",
+            "Paged Write test to {} - page_size: {} bytes, num_pages_per_cmd: {}, iterations: {}",
             is_dram ? "DRAM" : "L1",
             page_size_bytes,
             num_pages_per_cmd,
@@ -1384,14 +1405,30 @@ INSTANTIATE_TEST_SUITE_P(
         PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
         // Testcase: 128 pages x 2048 bytes (L1)
         PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
-        // Testcase: 10 pages x 4128 bytes (not 4K-aligned) (DRAM)
-        PagedWriteParams{4128, 10, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 10 pages x 4128 bytes (not 4K-aligned) (DRAM). Exact: a smaller drawn size would be 4K-aligned or
+        // no longer straddle a dispatch buffer page, either of which drops the property being covered.
+        PagedWriteParams{
+            4128, 10, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true, PageSizeMode::Exact},
         // Testcase: 13 pages x 16 bytes (arbitrary non-even numbers) (DRAM)
         PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
         // Testcase: 13 pages x 16 bytes (arbitrary non-even numbers) (L1)
         PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 100 pages x 8192 bytes (high BW) (DRAM)
-        PagedWriteParams{8192, 100, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true}),
+        PagedWriteParams{8192, 100, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 40 pages x 4112 bytes (DRAM). A page occupies a whole allocation-aligned slot in its bank, so the
+        // in-bank stride between rows of pages is the page size rounded up to that alignment. 4112 is not a multiple
+        // of either DRAM alignment -- 32 B on Wormhole, 64 B on Blackhole -- so the stride differs from the page size
+        // on both, and being larger than a 4 KB dispatch buffer page it also splits across the data the dispatcher has
+        // available, which reaches the row advance on the split-page path as well as the whole-page one. 40 pages
+        // wraps the bank cycle at least three times on either arch. Exact, since every one of those properties is a
+        // property of 4112 specifically.
+        PagedWriteParams{
+            4112, 40, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true, PageSizeMode::Exact},
+        // Testcase: 40 pages x 4112 bytes (L1). The control for the case above: L1 is 16 B aligned, so the same page
+        // size strides by itself and only the DRAM case can tell the two strides apart. Exact for the same reason, and
+        // so the two cases are guaranteed to run the same page size.
+        PagedWriteParams{
+            4112, 40, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false, PageSizeMode::Exact}),
     [](const testing::TestParamInfo<PagedWriteParams>& info) {
         std::stringstream ss;
         ss << "page_size" << info.param.page_size << "_np" << info.param.num_pages << "_iter"
@@ -1469,7 +1506,8 @@ INSTANTIATE_TEST_SUITE_P(
         // Testcase: 128 pages x 2048 bytes (L1)
         PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
         // Testcase: 10 pages x 4128 bytes (not 4K-aligned) (DRAM)
-        PagedWriteParams{4128, 10, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        PagedWriteParams{
+            4128, 10, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true, PageSizeMode::Exact},
         // Testcase: 13 pages x 16 bytes (arbitrary non-even numbers) (DRAM)
         PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
         // Testcase: 13 pages x 16 bytes (arbitrary non-even numbers) (L1)
@@ -1555,9 +1593,14 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         PagedWriteParams{16, 512, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
         PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
-        PagedWriteParams{4128, 10, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        PagedWriteParams{
+            4128, 10, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true, PageSizeMode::Exact},
         PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
-        PagedWriteParams{8192, 100, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true}),
+        PagedWriteParams{8192, 100, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        // Page size that is not a multiple of either DRAM alignment, so the in-bank row stride differs from it; see
+        // the FD instantiation above.
+        PagedWriteParams{
+            4112, 40, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true, PageSizeMode::Exact}),
     [](const testing::TestParamInfo<PagedWriteParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + (info.param.is_dram ? "dram" : "l1");

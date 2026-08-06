@@ -1013,9 +1013,9 @@ inline tt_metal::KernelHandle create_sd_cq_kernel(
                 .is_legacy_kernel = true});
     }
     if (device->arch() == tt::ARCH::QUASAR) {
-        // Quasar interim Tensix path (TT_METAL_TENSIX_DISPATCH_CORES=1): the experimental API
-        // auto-assigns DMs by creation order (prefetch first -> DM0, dispatch -> DM1), matching the
-        // legacy behavior. dm_processor is not used here.
+        // Quasar interim Tensix path (TT_METAL_TENSIX_DISPATCH_CORES=1): CreateKernel skips
+        // reserved DM0/DM1 and auto-assigns free user DMs (prefetch first -> DM2, …).
+        // dm_processor is not used here.
         return tt::tt_metal::experimental::quasar::CreateKernel(
             program,
             kernel_path,

@@ -247,6 +247,9 @@ void kernel_main() {
                             }
                         }
 
+                        // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
+                        prepare_uint16_fp32_dest_value_tiles_for_pack(tile_input_low, tile_input_high);
+
                         tile_regs_commit();
                         tile_regs_wait();
 
@@ -286,7 +289,8 @@ void kernel_main() {
         // the full row back to RM pages.
 #ifndef IS_ROW_MAJOR
         // Values tensor → 2-tile streaming buffer (writer drains to DRAM)
-        transpose_and_pack(input_tensor_transposed_dfb, value_tensor_dfb, Wt);
+        transpose_and_pack(
+            input_tensor_transposed_dfb, value_tensor_dfb, Wt, /*prepare_uint16_value_for_pack=*/true);
         // Index tensor → 2-tile streaming buffer (reader drains to DRAM)
         transpose_and_pack(index_tensor_transposed_dfb, index_tensor_output_dfb, Wt);
 #else
@@ -302,7 +306,8 @@ void kernel_main() {
             static_assert(Wt % SUB_BLOCK_DIM == 0, "Wt must be divisible by SUB_BLOCK_DIM");
 
             // Un-transpose sorted value tiles → input_tensor (Wt tiles).
-            transpose_and_pack(input_tensor_transposed_dfb, input_tensor_dfb, Wt);
+            transpose_and_pack(
+                input_tensor_transposed_dfb, input_tensor_dfb, Wt, /*prepare_uint16_value_for_pack=*/true);
 
             // Un-transpose sorted index tiles → rm_post_sort_index (Wt tiles).
             transpose_and_pack(index_tensor_transposed_dfb, rm_post_sort_index_dfb, Wt);

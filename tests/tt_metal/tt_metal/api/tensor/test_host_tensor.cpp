@@ -127,6 +127,11 @@ TEST(HostTensorTest, ElementSizeUInt8) {
     EXPECT_EQ(tensor.element_size(), sizeof(uint8_t));
 }
 
+TEST(HostTensorTest, ElementSizeInt8) {
+    auto tensor = create_simple_host_tensor(Shape{1, 32}, DataType::INT8);
+    EXPECT_EQ(tensor.element_size(), sizeof(int8_t));
+}
+
 TEST(HostTensorTest, MoveConstruction) {
     Shape shape{2, 64};
     auto tensor = create_simple_host_tensor(shape);

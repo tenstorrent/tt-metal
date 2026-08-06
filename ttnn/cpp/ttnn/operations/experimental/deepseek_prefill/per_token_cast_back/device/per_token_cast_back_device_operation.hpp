@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <variant>
 
 #include "per_token_cast_back_device_operation_types.hpp"
@@ -17,6 +19,9 @@ struct PerTokenCastBackDeviceOperation {
     using tensor_args_t = PerTokenCastBackInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
+    // A single program factory serves both the plain and the token-count-aware paths; it branches
+    // internally on operation_attributes.token_count_aware (kernels are shared, toggled by a
+    // TOKEN_COUNT_AWARE define).
     using program_factory_t = std::variant<PerTokenCastBackProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -30,9 +35,18 @@ struct PerTokenCastBackDeviceOperation {
 }  // namespace ttnn::experimental::prim::per_token_cast_back
 
 namespace ttnn::prim {
+// Single decompression entry point. token_count_aware == false runs the plain whole-buffer path; when
+// true, only the valid contiguously-packed prefix of the dispatch buffer is dequantized (the row range
+// is derived on-device from the per-expert counts / region offsets in the expert_* tensors).
 ttnn::Tensor per_token_cast_back(
     const Tensor& input_e4m3,
     const Tensor& input_scale,
     tt::tt_metal::DataType output_dtype,
-    const tt::tt_metal::MemoryConfig& output_memory_config);
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    bool token_count_aware = false,
+    const std::optional<Tensor>& expert_region_offsets = std::nullopt,
+    const std::optional<Tensor>& expert_token_counts = std::nullopt,
+    const std::optional<Tensor>& global_expert_idx_table = std::nullopt,
+    uint32_t experts_per_chip = 0,
+    bool scales_from_metadata = false);
 }  // namespace ttnn::prim

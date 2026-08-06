@@ -184,6 +184,28 @@ class LoopBlockRow(FusedLoop):
         code += "}\n"
         return code
 
+    def pack_loop(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        pack_node: "PackNode",
+        block: "BlockData",
+    ) -> str:
+        code = ""
+        if config.perf_run_type in (
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ):
+            return code
+        code += f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n"
+        block.tile_id_global = (
+            f"{block.tile_count_x} * ({block.block_y} + tile_y) + {block.block_x}"
+        )
+        block.tile_id_block = f"tile_y * {block.block_tiles_x}"
+        code += pack_node.packer.pack(pack_node, operation, config, block)
+        code += "}\n"
+        return code
+
 
 class LoopTileByTile(FusedLoop):
     def unpack_loop(

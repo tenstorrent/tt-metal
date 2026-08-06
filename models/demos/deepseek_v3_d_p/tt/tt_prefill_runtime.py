@@ -393,6 +393,8 @@ class TtPrefillRuntime:
         actual_start: int,
         actual_end: int,
         request_id: int = 0,
+        d2h_service=None,
+        record_dev: Optional[ttnn.Tensor] = None,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
@@ -408,7 +410,10 @@ class TtPrefillRuntime:
         may be pad, so actual_end < actual_start + chunk_size). actual_end is the migration pad-zero
         boundary, passed straight through to MLA. The caller drives chunked prefill by
         calling this once per chunk, in order; a chunk's KV must be populated before the next reads
-        it. If a LayerAck channel is registered (set_layer_ack_channel), the model bumps it per layer.
+        it. If d2h_service + record_dev are passed, the model sends one per-layer ack completion signal back
+        to host (via the outbound_socket_service_sync device op) once each layer's KV cache is populated.
+        Alternatively, if a host-side per-layer callback is registered (set_layer_ack_channel /
+        set_layer_completion_sink), the model fires that once per layer instead.
 
         Always returns None: no token is sampled. (When `kv_only_last_layer` is set on the config the
         last layer's compute is stripped down to the KV cache fill, which migration consumes, and the
@@ -424,6 +429,14 @@ class TtPrefillRuntime:
             slot_id: cache user slot to fill, in [0, num_users).
             actual_start: absolute KV pos of the chunk's first real token (the cache write offset).
             actual_end: absolute KV pos past the chunk's last real token.
+            request_id: this chunk's request/chunk id. Only the pipelined layer-completion sink uses it
+                (to build the globally-dense ordering key); the single-host layer-ack paths ignore it.
+            d2h_service: optional service used to send a layer-ack completion signal back to host once
+                each layer's KV cache has been populated on device. When set, each block zeros the cache
+                pad window and enqueues the ack via the outbound_socket_service_sync device op on the same
+                CQ (no host sync). When None, no ack or zeroing.
+            record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
+                d2h_service is set.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
@@ -448,6 +461,15 @@ class TtPrefillRuntime:
             assert self._trace_captured, (
                 "use_trace: capture_trace() must run before the first prefill_chunk(); capturing here "
                 "would stall the first request by a warm pass + capture"
+            )
+            # The D2H layer-ack is not on the traced path: record_dev is the per-chunk socket metadata
+            # tensor, whose address changes every chunk, so the capture would bake in a stale address.
+            # Fail loudly rather than silently replaying a trace that emits no acks. (Wiring it up needs
+            # record_dev to become a persistent, in-place-updated buffer like _trace_metadata.)
+            assert d2h_service is None, (
+                "use_trace does not support the D2H layer-ack path yet (record_dev is a per-chunk socket "
+                "tensor, so its address cannot be captured); run with PREFILL_USE_TRACE=0 or use the "
+                "host-callback ack (set_layer_ack_channel / set_layer_completion_sink)"
             )
             # Per-layer completion callbacks live on the CONTROLLER, registered once at capture time (a
             # host-side callback cannot execute inside a trace, so the capture splits at each ack point).
@@ -481,6 +503,8 @@ class TtPrefillRuntime:
             input_tensor,
             kv_caches.kvpe,
             actual_isl=actual_end - actual_start,
+            d2h_service=d2h_service,
+            record_dev=record_dev,
             on_layer_complete=on_layer_complete,
             actual_start=actual_start,
             actual_end=actual_end,
@@ -643,12 +667,23 @@ class TtPrefillRuntime:
         return [block]
 
     def kv_cache_pcc_check(
-        self, kv_caches: MlaKvCaches, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
+        self,
+        kv_caches: MlaKvCaches,
+        *,
+        slot_id: int,
+        n_chunks: int,
+        trace_dir=None,
+        first_layer_idx: int = 0,
+        real_len=None,
+        pt_path_override=None,
     ) -> float:
         """Optional bring-up hook (not part of the core runtime contract; never called in production
         serving). PCC the populated engine-owned primary KV cache (`.kvpe`) for `slot_id` against the
         golden trace; returns the min per-layer PCC and asserts on failure (unless
-        PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module."""
+        PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module.
+        `real_len` caps the compared extent to the real (non-pad) tokens — a partial last chunk makes
+        n_chunks * chunk_size overshoot the prompt; `pt_path_override` selects a per-slot .pt golden
+        (both are used by the migration validators in prefill/runners/validation.py)."""
         from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import kv_cache_pcc_check
 
         return kv_cache_pcc_check(
@@ -658,6 +693,8 @@ class TtPrefillRuntime:
             n_chunks=n_chunks,
             trace_dir=trace_dir,
             first_layer_idx=first_layer_idx,
+            real_len=real_len,
+            pt_path_override=pt_path_override,
         )
 
     def set_layer_completion_sink(self, sink) -> None:
