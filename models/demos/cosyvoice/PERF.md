@@ -24,9 +24,9 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Metric | Value | Target |
 |---|---:|---:|
-| End-to-end RTF | `1.096` | `< 0.5` ❌ |
-| LLM throughput (traced) | `65.8 tok/s` | `>= 60` ✅ |
-| LLM decode latency (traced) | `15.19 ms` | — |
+| End-to-end RTF | `0.648` | `< 0.5` ❌ |
+| LLM throughput (traced) | `121.3 tok/s` | `>= 60` ✅ |
+| LLM decode latency (traced) | `8.25 ms` | — |
 | Token agreement, teacher-forced | `98.56 %` | `> 95 %` ✅ |
 | Token agreement, through the KV cache | `95.83 %` | `> 95 %` ✅ |
 | WER (English) | `0.00 %` | `< 3.0` ✅ |
@@ -38,44 +38,111 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Stage | Cost | RTF | Share |
 |---|---:|---:|---:|
-| LLM (14-block AR decoder, traced) | `15.19 ms/token × 164` | `0.761` | 69 % |
-| Flow decoder (10 Euler steps, traced) | `1.049 s` | `0.320` | 29 % |
-| HiFT vocoder | `0.048 s` | `0.015` | 1 % |
-| **Total** | `3.588 s` | **`1.096`** | |
+| LLM (14-block AR decoder, traced) | `8.25 ms/token × 164` | `0.413` | 64 % |
+| Flow decoder (10 Euler steps, traced) | `0.719 s` | `0.220` | 34 % |
+| HiFT vocoder | `0.050 s` | `0.015` | 2 % |
+| **Total** | `2.121 s` | **`0.648`** | |
 
-**RTF misses its target, and both traced stages show why.** Trace capture is worth **2.22×** on the
-AR decoder (34.92 → 15.71 ms/token) but only **1.09×** on the flow decoder (1.151 → 1.053 s). That
-gap is the finding: tracing buys back *dispatch* overhead, so it pays in proportion to how
-dispatch-bound a stage already is. The AR decoder issues ~14 small ops per token at batch 1 and is
-almost pure overhead; the flow decoder runs 16 resnet and 64 transformer blocks over 608 frames at
-batch 2 and is close to compute-bound. End-to-end that took RTF from 2.120 to 1.123, and the op-count work below to 1.096.
+RTF has come down **1.096 → 0.648** (and **2.120 → 0.648** since before either stage was traced),
+but it still misses. The rest of this section is the account of where the time went and what is
+left, because "it is 30 % away" is only useful with the reason attached.
 
-Reaching 0.5 therefore needs a shorter critical path per token, and two measurements narrow what
-that means.
+**Trace capture is worth 2.54× on the AR decoder** (20.96 → 8.26 ms/token) and **1.09× on the flow
+decoder** (1.151 → 1.053 s at the time it was measured). That gap was the first finding: tracing
+buys back *dispatch* overhead, so it pays in proportion to how dispatch-bound a stage already is.
 
-**`bfloat8_b` weights give 1.00×** (13.09 → 13.12 ms/step) at PCC `0.9997040033`. The decoder's
-176 M linear parameters move 352 MB per token, which at 13.09 ms is **27 GB/s effective** — roughly
-15× short of the bandwidth floor. The step is nowhere near bandwidth-bound, so halving the traffic
-is invisible. Kept as a memory option (352 MB → 176 MB), not a speed one.
+### The largest matmul in the decoder did not depend on the token
 
-**What it is bound by is per-op cost on one-row tensors**, and counting them
-(`scripts/count_decode_ops.py`) says which:
+`linear_pos(pos_emb)` projects `2·max_len − 1 = 511` rows through `[1024, 1024]`, where q, k and v
+each project **one** row — about 536 MFLOP against roughly 1 MFLOP apiece. And `positional()` hands
+back the same cached tensor on every decode step, because the window is a function of `max_len`,
+which is fixed for an utterance. The decoder was recomputing an identical result 164 times per
+utterance, inside the trace.
 
-| op | count | share | | op | count | share |
-|---|---:|---:|---|---|---:|---:|
-| `linear` | 99 | 9.6 % | | `concat` | 42 | 4.1 % |
-| `reshape` | 98 | 9.5 % | | `matmul` | 42 | 4.1 % |
-| `permute` | 98 | 9.5 % | | `layer_norm` | 30 | 2.9 % |
-| `add` | 84 | 8.1 % | | `multiply` | 29 | 2.8 % |
-| `slice` | 70 | 6.8 % | | `softmax` | 14 | 1.4 % |
+Hoisting it, plus three op removals on the same path, took the step **15.71 → 8.25 ms** and
+throughput **63.6 → 121.3 tok/s**:
 
-**`reshape` and `permute` together are 31 % — more than every `linear` and `matmul` combined**, and
-they are pure data movement. Reading the code, the projections look like the bulk; they are 9.6 %.
-Acting on it: at `T = 1` the head-split permute is a relabelling, so it is skipped, taking `permute`
-from 98 to 42 and the step from 13.09 to 12.52 ms with bit-identical output.
+| change | ops removed / layer | effect |
+|---|---:|---|
+| cache `linear_pos` head-split transpose | 3 | the bulk of it |
+| `rel_shift` → one slice at `T = 1` | 6 | seven ops become one; identity only at `t1 = 1` |
+| `transpose_b` on the score matmul | 1 | bit-exact vs permute + matmul |
+| `scale_mask_softmax` on the decode mask | 2 | decode mask only — see below |
 
-The same list points at what is left — the five-op `rel_shift` skew behind `slice` and `concat`, and
-flash attention to collapse the score chain.
+`scale_mask_softmax` accepts a `[B, 1, 1, W]` padding mask and raises `TT_FATAL` on a square causal
+one with or without `is_causal_mask`. That is exactly the split between the decode path (mask
+`[1, 1, 1, 256]`) and the prefill/text-encoder path (causal `[1, 1, T, T]`), so the fusion lands on
+the path that runs per token and skips the one that runs per utterance.
+
+### Fusing QKV pays in one stage and not the other
+
+q, k and v project the same activation, so they can be one matmul over a concatenated weight plus
+`split_query_key_value_and_split_heads`. Applied to both stages, it measured:
+
+| stage | before | after |
+|---|---:|---:|
+| flow decoder (T ≈ 600, batch 2, 64 blocks × 10 steps) | `1.075 s` | **`0.719 s`** |
+| AR decode step (T = 1) | `8.29 ms` | `8.31 ms` |
+
+Same change, opposite outcomes. The split op physically rearranges the fused row into three
+head-major tensors, and at `T = 1` that costs about what the two matmuls it removed did. **Op count
+is a proxy for cost, not the cost** — the flow's numbers agree with it and the decoder's do not.
+
+The flow also folds `1/sqrt(d_head)` into the q half of the fused weight on the host, deleting a
+device `multiply` per block, and uses `concatenate_heads` for the merge.
+
+### What the decode step is actually bound by
+
+Three measurements, each of which closed off a line of attack:
+
+**A per-op floor of ~6.3 µs, flat in tensor size** (`scripts/probe_op_floor.py`, a traced chain of
+elementwise adds):
+
+| shape | µs/op |
+|---|---:|
+| `[1, 1, 1024]` | `6.3` |
+| `[1, 16, 1, 64]` | `6.3` |
+| `[1, 1, 4096]` | `6.4` |
+| `[2, 608, 512]` | `12.4` |
+
+A 622 K-element tensor costs twice a 1 K-element one. There is a fixed per-program cost that trace
+replay does not remove, so a ~330-op decode step carries **~2.1 ms of irreducible overhead** inside
+its 8.25 ms.
+
+**`bfloat8_b` weights measure 1.00×, twice.** First at 27 GB/s effective, then again after the work
+above at 42 GB/s — `8.77` vs `8.77 ms`, PCC `0.9997040033`. Halving weight traffic changed nothing at
+either operating point, which rules out DRAM bandwidth as the constraint. Kept as a memory option
+(352 MB → 176 MB), not a speed one.
+
+**Explicit core grids are worse than the default** (`scripts/probe_matmul_config.py`). Per-matmul,
+traced:
+
+| linear | default | best explicit grid |
+|---|---:|---:|
+| `1024 × 3072` | `43.2 µs` | `46.0 µs` (4×8) |
+| `1024 × 1024` | `32.4 µs` | `44.3 µs` (8×8) |
+| `1024 × 4096` | `50.0 µs` | `47.9 µs` (4×8) |
+| `4096 × 1024` | `75.5 µs` | `49.3 µs` (4×8) |
+
+TTNN's default choice already reaches 65–168 GB/s on individual matmuls. More importantly the four
+linears total **201 µs per layer — 2.82 ms across 14 layers, only 34 % of the step**. The weights
+were never the bottleneck; the remaining ~280 non-linear ops are, at ~19 µs each against the 6.3 µs
+floor.
+
+### Why it stops here, and what would move it
+
+The largest identifiable block of that remainder is KV-cache maintenance: `slice` + `concat` + `copy`
+per tensor per layer, six ops on `[1, 16, 256, 64]` buffers. Replacing it with an in-place
+`ttnn.update_cache` would move 2 KB instead of 0.5 MB — but the live tokens must sit at the **end**
+of the buffer, because `rel_shift` skews on the assumption that the queries are the last of the key
+positions. Left-aligning would need a per-step slice offset, and a trace bakes slice offsets in at
+capture. The two requirements are incompatible as the graph stands.
+
+Reaching `RTF < 0.5` needs 2.121 s → 1.635 s, a further 23 %; `RTF < 0.2` needs 0.654 s, which at
+164 tokens is under 4 ms per token for the LLM alone with nothing left for the flow. Neither is
+reachable by further op-level fusion on this decomposition. What would move it is a fused attention
+kernel (new C++, outside this bring-up's scope) or batching across utterances, which single-utterance
+TTS does not offer.
 
 **The per-token tail outside the traced step is 0.352 ms — 2.7 %** — and its breakdown is what
 settled P4's on-device sampling item:
@@ -146,8 +213,8 @@ stage.
 | tokens → waveform (reference excitation) | `0.9951367159` |
 | flow: tokens → mel | `0.9992029011` |
 | whole HiFT vocoder | `0.9996373743` |
-| LLM AR prefill, 209 tokens | `0.9997355989` |
-| LLM AR decode step | `0.9986645835` |
+| LLM AR prefill, 209 tokens | `0.9997530373` |
+| LLM AR decode step | `0.9989617190` |
 | traced vs untraced decode | `1.0000000000` (bit-exact) |
 | iSTFT vs captured golden | `0.9999298811` |
 
@@ -220,5 +287,5 @@ Source suites: `tests/perf/`, `tests/e2e/`, `tests/pcc/`
 
 | Tier | Count | Hardware |
 |---|---:|---|
-| host | 106 | none |
+| host | 111 | none |
 | device | 41 | Blackhole `p150a` |
