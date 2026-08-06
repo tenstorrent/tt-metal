@@ -29,7 +29,6 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
     SEMANTIC_CODEBOOK_SIZE,
 )
 
-TILE = 32                    # tile height; matches ttnn_voxtral_gpt.py
 CFG_ALPHA = 1.2
 N_DECODING_STEPS = 7
 SCALE = FM_HEAD_DIM**-0.5
@@ -57,16 +56,10 @@ WEIGHT_DTYPE = ttnn.bfloat8_b
 # NOTES.md [flow-06] -- The SEMANTIC head is the one thing here that is not...
 SEMANTIC_DTYPE = ttnn.float32
 
-# NOTES.md [flow-07] -- RMSNORM, WIDTH-SHARDED. Same finding as Block 1's...
-_NORM_GRID_X, _NORM_GRID_Y, _NORM_SUBBLOCK_W = 8, 4, 1
-_NORM_CORES = _NORM_GRID_X * _NORM_GRID_Y
-_NORM_SHARD = ttnn.create_sharded_memory_config(
-    shape=(1, 1, TILE, FM_INPUT_DIM), core_grid=ttnn.CoreGrid(y=_NORM_GRID_Y, x=_NORM_GRID_X),
-    strategy=ttnn.ShardStrategy.WIDTH)
-_NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(_NORM_GRID_X, _NORM_GRID_Y),
-    subblock_w=_NORM_SUBBLOCK_W, block_h=1,
-    block_w=FM_INPUT_DIM // _NORM_CORES // TILE, inplace=False)
+# NOTES.md [flow-07] -- the norm is NOT width-sharded on Blackhole, for the same reason Block 1's
+# is not (STATUS.md 6.39/6.40): the reshard is the tax, and the p150's interleaved kernel made
+# the reduction cheap enough that the tax stops paying for itself. Worth 4.5 ms/frame over the
+# 49 calls, and it is CLOSER to fp32 truth, not further.
 
 
 class TtVoxtralFlow:
@@ -120,13 +113,9 @@ class TtVoxtralFlow:
     # One bidirectional block over the 3-token sequence
     # ----------------------------------------------------------------------------------
     def _norm(self, x, gamma):
-        """RMSNorm, width-sharded -- see _NORM_SHARD. Both memory_config moves are required: the
-        op will not write interleaved from a sharded input, and handing the sharded result to the
-        next matmul directly measured slower than converting back."""
-        h = ttnn.rms_norm(ttnn.to_memory_config(x, _NORM_SHARD), weight=gamma, epsilon=FM_NORM_EPS,
-                          compute_kernel_config=COMPUTE_CONFIG, program_config=_NORM_PRG,
-                          memory_config=_NORM_SHARD)
-        return ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
+        """RMSNorm, interleaved. NOT width-sharded on this fork -- see NOTES.md [flow-07]."""
+        return ttnn.rms_norm(x, weight=gamma, epsilon=FM_NORM_EPS,
+                             compute_kernel_config=COMPUTE_CONFIG)
 
     def _block(self, x, w, B):
         """x [1,B*3,3072] -> same. Pre-norm, GQA 32/8, unmasked attention, SwiGLU."""
