@@ -1162,10 +1162,12 @@ class LAST_TILE_W_DATUMS(TemplateParameter):
     (cols 0-7), relying on the next output row / tile 0 overwriting the spilled upper 8.
     """
 
-    width: int = 16
+    last_tile_w_datums: int = 16
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t LAST_TILE_W_DATUMS = {self.width};"
+        return (
+            f"constexpr std::uint32_t LAST_TILE_W_DATUMS = {self.last_tile_w_datums};"
+        )
 
 
 @dataclass
@@ -1178,10 +1180,10 @@ class RV_WHOLE_TILE(TemplateParameter):
              face-row with software addressing (enables narrow / custom-width rows).
     """
 
-    whole_tile: bool = False
+    rv_whole_tile: bool = False
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool RV_WHOLE_TILE = {str(self.whole_tile).lower()};"
+        return f"constexpr bool RV_WHOLE_TILE = {str(self.rv_whole_tile).lower()};"
 
 
 @dataclass
