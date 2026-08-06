@@ -123,6 +123,13 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     }
 
 #if defined(ARCH_BLACKHOLE)
+    // [SLOT-CONTENT PROBE] Read the bytes in the slot we would transmit next, unconditionally --
+    // including when the gate says the channel is empty. That is the whole point: if the gate claims
+    // nothing is queued but the slot contains an atomic-inc header, the packet demonstrably arrived
+    // and the router just isn't picking it up, proven from memory contents rather than a NoC ack.
+    fabric_dbg_set_next_slot_content(
+        local_sender_channel.get_cached_next_buffer_slot_addr(), sender_channel_free_slots_stream_id);
+
     // [SEND-GATE PROBE] Record why this channel will/won't transmit. At end of run the only packet
     // left is the sync packet, so a frozen gate state here is the reason the barrier wedged.
     fabric_dbg_set_sender_gate(

@@ -631,6 +631,55 @@ constexpr uint32_t MEM_AERISC_SENDER_GATE_CH1_ADDR = MEM_AERISC_RESUME_PHASE_BAS
 constexpr uint32_t MEM_AERISC_SYNC_TX_COUNT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 72;  // word[18]
 constexpr uint32_t MEM_AERISC_SYNC_RX_COUNT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 76;  // word[19]
 
+// [SLOT-CONTENT PROBE] What is actually sitting in the buffer slot the router would read NEXT?
+//
+// Everything so far says the sync packet reaches the router's L1 -- but that rests on the NoC ack
+// (noc_async_writes_flushed returning), which is indirect. This reads the BYTES instead: the router
+// dereferences its own next buffer slot every sender step and records the packet header's
+// payload_size/noc_send_type word, which lives at offset 40 (sizeof(NocCommandFields) == 40, and
+// PackedPayloadAndSendType::load reads exactly this word: size = raw & 0xFFFF, type = (raw>>16)&0xFF).
+//
+// A sync packet is size=0, noc_send_type=NOC_UNICAST_ATOMIC_INC(2)  ->  word == 0x00020000
+// A data packet here is size=4096(0x1000), NOC_UNICAST_WRITE(0)     ->  word == 0x00001000
+//
+// So at the hang:
+//   word[21] == 0x00020000  -> the sync packet IS in the slot the router would read next. Independent
+//                              confirmation, no NoC ack involved: delivered, and the router is simply
+//                              not picking it up.
+//   word[21] == 0x00001000  -> the slot still holds the last DATA packet; the sync packet is not here
+//                              (wrong channel, or never landed).
+// word[20] records the slot address that was read, so the value can be tied to a concrete location.
+constexpr uint32_t MEM_AERISC_SLOT_ADDR_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 80;  // word[20]
+constexpr uint32_t MEM_AERISC_SLOT_HDR_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 84;   // word[21]
+
+// Offset of PacketHeaderBase::payload_size_bytes within the packet header (see comment above).
+constexpr uint32_t FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET = 40;
+
+// [STREAM-ID PROBE] Which stream register does the ROUTER poll for "a packet is waiting"?
+//
+// The data path proves this register works after a retrain: 100M packets flow post-retrain, each one
+// decrementing it from the worker side and being seen here. So the register is not corrupted. What
+// differs for the sync path is that its connection is CLOSED and REOPENED across the retrain, and the
+// worker resolves its target register at open time:
+//     edm_buffer_remote_free_slots_update_addr = get_stream_reg_write_addr(sender_channel_credits_stream_id)
+// If the rebuilt connection resolves a different id than the router polls, the decrement lands on a
+// register nobody reads -- which fits every observation (both writes acked, localfree stuck at
+// num_buffers, round 0 fine because that connection predates the teardown).
+//
+// Packed with the slot address since both are ERISC0 and one word is enough for each:
+//   [31:16] stream id polled by the router   [15:0] low 16 bits of the next-read slot address
+// The full slot address is still recoverable: the region is well under 64KB and the high bits are
+// fixed, and word[21] carries the header word read from it.
+inline void fabric_dbg_set_next_slot_content(
+    [[maybe_unused]] uint32_t slot_addr, [[maybe_unused]] uint32_t free_slots_stream_id) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SLOT_ADDR_ADDR) =
+        ((free_slots_stream_id & 0xFFFF) << 16) | (slot_addr & 0xFFFF);
+    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SLOT_HDR_ADDR) =
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr + FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET);
+#endif
+}
+
 // ERISC0 owns the sender step, so the TX counter is single-writer there.
 inline void fabric_dbg_inc_sync_tx_count() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
