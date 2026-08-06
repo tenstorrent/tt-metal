@@ -199,6 +199,8 @@ def ring_prefill_attention(
     global RING_ATTENTION_CALLS
     RING_ATTENTION_CALLS += 1
     program_config = program_config or ring_prefill_program_config(mesh_device, ccl_manager, head_dim)
+    # Shared by every layer; the caller sets them once per chunk via set_ring_metadata.
+    metadata = ccl_manager.get_ring_metadata()
     cp = cp_degree(mesh_config)
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
 
@@ -246,11 +248,17 @@ def ring_prefill_attention(
         is_causal=True,
         # Chunked prefill does not zigzag-balance the causal work.
         is_balanced=False,
-        # Fold the layer into the cache batch index, matching the writer's
-        # slot = slot_idx*num_layers + layer_idx packing. Passing slot_idx alone makes
-        # every layer read layer 0's cache.
-        kv_cache_batch_idx=slot_idx * num_layers + layer_idx,
-        kv_actual_isl=kv_actual_global,
+        # Per-chunk scalars as metadata tensors rather than Python ints. The readers load
+        # them on-device, so they stay out of the program's runtime args and a captured
+        # trace replays across chunks; the scalar form would freeze the capturing chunk's
+        # prefix length into every replay. The layer packing that kv_cache_batch_idx used
+        # to carry moves to kv_cache_num_layers/kv_cache_layer_idx, which the readers
+        # combine as slot_id[0]*num_layers + layer_idx — those are constant per layer, so
+        # they are safe to keep as host scalars.
+        slot_id=metadata[0],
+        kv_actual_isl_tensor=metadata[1],
+        kv_cache_num_layers=num_layers,
+        kv_cache_layer_idx=layer_idx,
         sliding_window_size=sliding_window,
     )
     return out
