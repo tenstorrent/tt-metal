@@ -8,7 +8,7 @@ will be able to run everything and change something without breaking it.
 | file | what it is | when to read it |
 |---|---|---|
 | **`ONBOARDING.md`** (this) | how to run things, how to prove you didn't break them, the method | first, once |
-| **`STATUS.md`** | the running log, `§1`–`§6.38`. Every experiment with its numbers, **including the rejected ones** | before trying anything, to check it isn't already settled |
+| **`STATUS.md`** | the running log, `§1`–`§6.45`. `§1`–`§6.38` are N150; `§6.39+` is this fork. Every experiment with its numbers, **including the rejected ones** | before trying anything, to check it isn't already settled |
 | **`tt/NOTES.md`** | the prose that used to live in the code. Grep-able IDs `[gpt-04]`, `[flow-10]`, `[codec-12]`, `[pipe-02]` | when a line of code carries a `NOTES.md [id]` pointer |
 
 The `tt/*.py` files are deliberately thin — one-line pointers, no essays. **If you find yourself
@@ -49,7 +49,7 @@ Text + a voice preset in, 24 kHz audio out. Three stages per utterance:
 | **Block 2** | flow-matching acoustic transformer. Hidden state → 36 acoustic codes, by solving an ODE in 7 Euler steps over 3 layers | 390M | `tt/ttnn_voxtral_flow.py` | ~21.9 ms |
 | **Codec** | codes → waveform. Once per utterance, not per frame | | `tt/ttnn_voxtral_codec.py` | ~3.5 ms total |
 
-One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~48, i.e. RTF ~0.6.
+One frame is **80 ms of audio**, so real-time is 80 ms/frame and we are at ~45.4, RTF ~0.57.
 
 `tt/ttnn_voxtral_pipeline.py` wires the three together. `reference/` is a pure-fp32 PyTorch
 implementation — **it is the ground truth, not the device.**
@@ -60,11 +60,15 @@ single most useful fact on this fork, and they invert the N150's: bytes are chea
 expensive, so **deleting ops wins where the N150 wanted fewer, bigger kernels**. Six N150 decisions
 have already reversed here — §6.39, §6.40, §6.43, §6.44 and two in §6.45.
 
-> **Every tuned constant in `tt/*.py` was measured on this card.** The norm grids (8×4), `_QKV_GRID_X`,
-> `_WO_PRG`'s `in0_block_w=2`, `_SDPA_PRG`'s `k_chunk_size=512`, the core-count minimum at 32 — all of
-> it. On different silicon they are starting guesses, not answers, and the sweeps in STATUS are the way
-> to re-derive them. Note the code hardcodes `8` rather than querying
-> `device.compute_with_storage_grid_size()`, which returns `8×8` here.
+> **Every tuned constant here has now been re-derived on the p150, and most of the N150's did not
+> survive.** Gone: both width-sharded norms (§6.39/§6.40), `_WO_PRG` (§6.43), `_V_SHARD` and the
+> fused cache write (§6.44), Block 2's hand-rolled head split and row fold (§6.45). Changed:
+> `_QKV_GRID_X` 8 → 1. Kept and re-verified: `_SDPA_PRG`'s `k_chunk_size=512` on 8×2, the only
+> config exact at all 13 positions — and **a position sweep, not a gate run, is what makes an sdpa
+> config safe** (§6.27, reproduced here on a different config).
+>
+> The code still hardcodes grid numbers rather than querying
+> `device.compute_with_storage_grid_size()`, which returns **13×10** here.
 
 ---
 
