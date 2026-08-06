@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_tp_mesh_composer,
     initialize_test_inputs,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule, _weights_have_output_channel_dim
 from tests.ttnn.utils_for_testing import comp_pcc
 
 REDUCE_MESH_PARAMS = [
@@ -48,6 +48,28 @@ REDUCE_MESH_PARAMS = [
         id="mesh-4x2",
     ),
 ]
+
+
+@pytest.mark.parametrize(
+    "weights_shape, combine_output_shape, expected",
+    [
+        # A top-k=1 score lacks the output channel and must be unsqueezed.
+        ((4, 64, 1), (1, 4, 64, 1, 1024), False),
+        # The same score with an explicit output channel omits only a leading
+        # mesh dimension and must not receive a second trailing singleton.
+        ((4, 64, 1, 1), (1, 4, 64, 1, 1024), True),
+        ((1, 4, 64, 1, 1), (1, 4, 64, 1, 1024), True),
+        # A top-k>1 score has no ambiguity: without the output channel it is
+        # not broadcastable to the complete combine output.
+        ((4, 64, 8), (1, 4, 64, 8, 1024), False),
+    ],
+)
+def test_weights_output_channel_shape_detection(weights_shape, combine_output_shape, expected):
+    actual = _weights_have_output_channel_dim(weights_shape, combine_output_shape)
+    assert actual is expected, (
+        f"Expected channel-dimension inference to be {expected} for weights={weights_shape} "
+        f"and combine_output={combine_output_shape}, but got {actual}"
+    )
 
 
 def run_reduce(
