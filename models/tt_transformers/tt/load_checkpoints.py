@@ -259,6 +259,7 @@ def map_hf_to_meta_keys_vision_only(state_dict):
         ("v_proj", "wv"),
         ("o_proj", "wo"),
         ("out_proj", "wo"),
+        ("projection_layer", "wo"),
         ("q_norm", "q_norm"),
         ("k_norm", "k_norm"),
         ("fc1", "c_fc"),

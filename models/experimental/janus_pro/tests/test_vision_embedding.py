@@ -35,10 +35,11 @@ def test_vision_embedding_integration(
     mesh_device,
     reset_seeds,
     bsz,
+    dummy_weights,
 ):
     pcc_required = 0.9999
     dtype = ttnn.bfloat16
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)
     state_dict = model_args.load_state_dict()
 
     first_layer_prefix = "model.vision_model.embeddings."
@@ -60,7 +61,6 @@ def test_vision_embedding_integration(
         dtype=dtype,
         image_size=image_size,
         patch_size=patch_size,
-        num_channels=in_channels,
         hidden_dim=hidden_dim,
         bias=True,
     )

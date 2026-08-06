@@ -15,20 +15,21 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import nearest_32
 
 
 class TtJanusProConv2dPatch(LightweightModule):
     """Conv2D Patching layer.
     Column parallel over unfolded input.
     Arguments:
-        in_channels: Input channels.
         out_channels: Output channels.
         kernel_size: Size of convolution kernel.
         stride: Stride for convolution.
         bias: Use bias in Conv2d.
     Input: (bsz, in_channels, height, width)
     Output: (bsz, num_tokens, out_channels)
+
+    The input channel count is not an argument: the folded weight already carries it as the
+    matmul's K, and the host unfold reads it off the tensor.
     """
 
     def __init__(
@@ -37,7 +38,6 @@ class TtJanusProConv2dPatch(LightweightModule):
         state_dict,
         state_dict_prefix,
         dtype,
-        in_channels: int,
         out_channels: int,
         kernel_size: int,
         stride: int,
@@ -46,10 +46,7 @@ class TtJanusProConv2dPatch(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
-        self.num_devices = self.mesh_device.get_num_devices()
         self.dtype = dtype
-
-        self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.stride = stride
@@ -72,14 +69,11 @@ class TtJanusProConv2dPatch(LightweightModule):
         weight = state_dict[f"{state_dict_prefix}_linear.weight"]
         if weight.ndim == 4:
             weight = weight.view(out_channels, -1)
-        pad_len = nearest_32(weight.shape[-1]) - weight.shape[-1]
-        padding = torch.zeros(self.out_channels, pad_len, dtype=weight.dtype)
-        padded_weight = torch.cat([weight, padding], dim=-1)
-        padded_weight = padded_weight.permute(1, 0).reshape(1, 1, -1, self.out_channels)
+        weight = weight.permute(1, 0).reshape(1, 1, -1, self.out_channels)
 
         self._linear_weight = ttnn.as_tensor(
-            padded_weight,
-            dtype=self.dtype,
+            weight,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -94,27 +88,40 @@ class TtJanusProConv2dPatch(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: torch.Tensor):
-        x = self._unfold(x)
-        x = x.permute(0, 2, 1)
+    def prepare_patches(self, x: torch.Tensor) -> torch.Tensor:
+        """Host-side im2col, returning patches ready for transfer.
 
-        # Need to pad the last dimension of x to be a multiple of a tile
-        pad_len = nearest_32(x.shape[-1]) - x.shape[-1]
-        padding = torch.zeros((x.shape[0], x.shape[1], pad_len), dtype=x.dtype, device=x.device)
-        x = torch.cat([x, padding], dim=-1)
+        Split out of the device compute so a trace can begin at the first device op: this
+        is torch on host, and a host call captured inside a trace region would execute once
+        at capture and never again on replay.
+        """
+        return self._unfold(x).permute(0, 2, 1)
 
-        x = ttnn.as_tensor(
-            x,
-            dtype=self.dtype,
+    def patches_to_device(self, patches: torch.Tensor) -> ttnn.Tensor:
+        """Move prepared patches to device.
+
+        Also outside the device compute: a traced replay reads its inputs from buffers that
+        already exist at fixed addresses, so the allocation cannot happen inside the trace.
+        """
+        return ttnn.as_tensor(
+            patches,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        # Bias applied outside ttnn.linear to avoid the FUSE_BIAS matmul kernel path.
+    def forward_device(self, patches: ttnn.Tensor) -> ttnn.Tensor:
+        """Patch projection over already-resident patches; traceable end to end.
+
+        Does not free ``patches``: on the traced path that tensor is the persistent input
+        buffer and has to outlive every replay.
+        """
+        # The bias is a separate add. Folding it in was never evaluated here -- unlike the
+        # transformer body, this linear runs once per image, so an op saved is not measurable.
         out = ttnn.linear(
-            x,
+            patches,
             self._linear_weight,
             dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -125,6 +132,10 @@ class TtJanusProConv2dPatch(LightweightModule):
         if self.bias is not None:
             out = ttnn.add(out, self.bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        ttnn.deallocate(x)
+        return out
 
+    def forward(self, x: torch.Tensor):
+        patches = self.patches_to_device(self.prepare_patches(x))
+        out = self.forward_device(patches)
+        ttnn.deallocate(patches)
         return out

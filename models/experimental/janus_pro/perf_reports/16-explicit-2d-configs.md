@@ -1,0 +1,53 @@
+# Stage: 16-explicit-2d-configs
+
+- source commit: `45b59edfb69`
+- kernel time (mean of replays 2-10): **13.481 ms**
+- change from the previous stage: **-0.350 ms**
+- device ops: **367**
+- note: Explicit 2D program configs with in0_block_w swept per shape.
+
+## What this change was
+
+**Explicit 2D configs, in0_block_w per shape.** `in0_block_w` sets how many K-tiles a matmul stages per block. Sweeping each shape in-model found
+`qkv` 4, `wo` 8, `c_proj` 16 — and `c_proj` alone gave **−10.6%**.
+
+**Trap: a partial sweep looks conclusive.** ttnn's derived value *is* optimal for `qkv`, so
+sweeping only that shape supports "leave it to ttnn". `c_proj` disproves it. Sweep every shape,
+or claim nothing.
+
+**Sweep in the model, never standalone.** An isolated bench of the same three shapes disagreed
+with the in-model result on two of them.
+
+These values were re-swept in both directions after change 22 changed the fidelity, on the theory
+that the compute/read balance had moved. It had not: larger (8/16/32) measured +1.1%, smaller
+(2/4/8) +3.0%. The values are a genuine two-sided optimum.
+
+## Kernel time by op code, one replay
+
+| Op | inst | us each | ms | % |
+|---|---:|---:|---:|---:|
+| MatmulDeviceOperation | 99 | 69.45 | 6.875 | 50.9 |
+| SDPAOperation | 24 | 95.10 | 2.282 | 16.9 |
+| NlpCreateHeadsDeviceOperation | 24 | 50.91 | 1.222 | 9.0 |
+| LayerNormDeviceOperation | 49 | 20.18 | 0.989 | 7.3 |
+| BinaryNgDeviceOperation | 50 | 18.51 | 0.925 | 6.9 |
+| NLPConcatHeadsDeviceOperation | 24 | 17.70 | 0.425 | 3.1 |
+| InterleavedToShardedDeviceOperation | 48 | 7.40 | 0.355 | 2.6 |
+| ShardedToInterleavedDeviceOperation | 48 | 6.32 | 0.304 | 2.2 |
+| UnaryDeviceOperation | 1 | 125.28 | 0.125 | 0.9 |
+
+## Matmul instances by shape
+
+| shape | inst | us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 576 x 1024 x 4096 | 25 | 82.9 | 2.073 | 64 | 45.2 | 20.8 | HiFi2 |
+| 576 x 1024 x 3072 | 24 | 80.5 | 1.933 | 48 | 45.6 | 23.7 | HiFi2 |
+| 576 x 4096 x 1024 | 24 | 74.9 | 1.796 | 48 | 65.4 | 22.2 | HiFi2 |
+| 576 x 1024 x 1024 | 24 | 29.8 | 0.715 | 48 | 41.1 | 26.0 | HiFi2 |
+| 576 x 4096 x 4096 | 1 | 313.9 | 0.314 | 48 | 62.4 | 29.0 | HiFi2 |
+| 576 x 768 x 1024 | 1 | 44.6 | 0.045 | 48 | 20.6 | 28.3 | HiFi2 |
+
+`FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
+well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why
+`cores` and `fidelity` are next to it. See PROFILER_NOTES.md for a worked case where the number moved
+14 points while the op's time did not change at all.

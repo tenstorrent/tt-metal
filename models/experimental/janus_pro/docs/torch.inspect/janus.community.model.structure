@@ -1,0 +1,332 @@
+MJ: /transformers/models/janus/modeling_janus.py
+ML: /transformers/models/llama/modeling_llama.py
+MS: /transformers/models/siglip/modeling_siglip.py
+A: /transformers/activations.py
+T: torch
+
+REFERENCE                                                                                             -> TT IMPL CLASS                                    TT IMPL PATH                                                              TT TEST
+
+MJ.JanusForConditionalGeneration(                                                                     -> - [#47701] TtJanusProMultimodalGenerator         models/experimental/janus_pro/tt/janus_pro_e2e_model.py
+  (model): MJ.JanusModel(                                                                             -> - [#47701] TtJanusProModel                       models/experimental/janus_pro/tt/janus_pro_e2e_model.py
+                                                                                                         - [#47699] TtJanusProTransformerVision           models/experimental/janus_pro/tt/janus_pro_vision_model.py                - [#47699] test_vision_model
+    (vision_model): MJ.JanusVisionModel(                                                              -> - [#47665] TtJanusProVisionModel                 models/experimental/janus_pro/tt/janus_pro_vision_block.py                - [#47665] test_vision_pipeline
+      (embeddings): MJ.JanusVisionEmbeddings(                                                         -> - [#47244] TtJanusProVisionEmbeddings            models/experimental/janus_pro/tt/janus_pro_vision_embedding.py            - [#47244] test_vision_embedding
+        (patch_embedding): T.Conv2d(3, 1024, kernel_size=(16, 16), stride=(16, 16), padding=valid)    -> - [#47243] TtJanusProConv2dPatch                 models/experimental/janus_pro/tt/janus_pro_conv2d_patch.py                - [#47243] test_patch_embedding
+        (position_embedding): T.Embedding(576, 1024)                                                  -> ttnn.embedding                                   ttnn/cpp/ttnn/operations/embedding
+      )
+      (encoder): MJ.JanusVisionEncoder(                                                               -> - [#47664] TtJanusProImageTransformer            models/experimental/janus_pro/tt/janus_pro_image_transformer.py           - [#47664] test_vision_transformer
+        (layers): T.ModuleList(                                                                       ->
+          (0-23): 24 x MJ.JanusVisionEncoderLayer(                                                    -> -? [#47664.x] TtJanusProImageTransformerBlock    models/experimental/janus_pro/tt/gemma_image_block.py                     -? [#47664.x] test_vision_transformer_block
+            (layer_norm1): T.LayerNorm((1024,), eps=1e-06, elementwise_affine=True)                   -> TtLayerNorm                                      models/tt_transformers/tt/multimodal/llama_layernorm.py                   -? [#47664.x] test_vision_layernorm
+            (self_attn): MJ.JanusVisionAttention(                                                     -> -? [#47664.x] TtJanusProImageAttention           models/experimental/janus_pro/tt/janus_pro_image_attention.py             -? [#47664.x] test_vision_attention
+              (q_proj): T.Linear(in_features=1024, out_features=1024, bias=True)
+              (k_proj): T.Linear(in_features=1024, out_features=1024, bias=True)
+              (v_proj): T.Linear(in_features=1024, out_features=1024, bias=True)
+              (q_norm): T.LayerNorm or T.Identity()
+              (k_norm): T.LayerNorm or T.Identity()
+              (projection_layer): T.Linear(in_features=1024, out_features=1024, bias=True)
+              (projection_dropout): T.Dropout or T.Identity()
+            )
+            (layer_norm2): LayerNorm((1024,), eps=1e-06, elementwise_affine=True)                     -> TtLayerNorm                                      models/tt_transformers/tt/multimodal/llama_layernorm.py                   - [#47664.x] test_vision_layernorm
+            (mlp): MJ.JanusVisionMLP(                                                                 -> -? [#47664.x] TtJanusProImageFeedForward         models/experimental/janus_pro/tt/janus_pro_image_mlp.py                   - [#47664.x] test_vision_mlp
+              (fc1): T.Linear(in_features=1024, out_features=4096, bias=True)                         -> ttnn.linear  (fused QKV)                         ttnn/cpp/ttnn/operations/matmul
+              (activation_fn): A.GELUActivation()                                                     -> ttnn.gelu                                        ttnn/cpp/ttnn/operations/eltwise/unary
+              (dropout1): T.Dropout(p=0.0, inplace=False)                                             -> ttnn.dropout                                     ttnn/cpp/ttnn/operations/experimental/dropout
+              (fc2): T.Linear(in_features=4096, out_features=1024, bias=True)                         -> ttnn.linear  (fused QKV)                         ttnn/cpp/ttnn/operations/matmul
+              (dropout2): T.Dropout(p=0.0, inplace=False)                                             -> ttnn.dropout                                     ttnn/cpp/ttnn/operations/experimental/dropout
+            )
+          )
+        )
+      )
+      (post_layernorm): T.LayerNorm((1024,), eps=1e-06, elementwise_affine=True)                      -> TtLayerNorm                                      models/tt_transformers/tt/multimodal/llama_layernorm.py
+    )
+    (aligner): MJ.JanusVisionAlignerMLP(                                                              -> - [#47696] TtJanusProVisionAligner               models/demos/multimodal/gemma3/tt/janus_pro_vision_aligner.py             - [#47696] test_vision_aligner
+      (fc1): T.Linear(in_features=1024, out_features=4096, bias=True)
+      (activation_fn): A.GELUActivation()
+      (hidden_layers): T.ModuleList(
+        (0): T.Linear(in_features=4096, out_features=4096, bias=True)
+      )
+    )
+    (vqmodel): JanusVQVAE(
+      (encoder): JanusVQVAEEncoder(
+        (conv_in): Conv2d(3, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (down): ModuleList(
+          (0-1): 2 x Module(
+            (block): ModuleList(
+              (0-1): 2 x JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 128, eps=1e-06, affine=True)
+                (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 128, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+              )
+            )
+            (attn): ModuleList()
+            (downsample): JanusVQVAEConvDownsample(
+              (conv): Conv2d(128, 128, kernel_size=(3, 3), stride=(2, 2))
+            )
+          )
+          (2): Module(
+            (block): ModuleList(
+              (0): JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 128, eps=1e-06, affine=True)
+                (conv1): Conv2d(128, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (nin_shortcut): Conv2d(128, 256, kernel_size=(1, 1), stride=(1, 1))
+              )
+              (1): JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (conv1): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+              )
+            )
+            (attn): ModuleList()
+            (downsample): JanusVQVAEConvDownsample(
+              (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(2, 2))
+            )
+          )
+          (3): Module(
+            (block): ModuleList(
+              (0-1): 2 x JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (conv1): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+              )
+            )
+            (attn): ModuleList()
+            (downsample): JanusVQVAEConvDownsample(
+              (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(2, 2))
+            )
+          )
+          (4): Module(
+            (block): ModuleList(
+              (0): JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (conv1): Conv2d(256, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 512, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (nin_shortcut): Conv2d(256, 512, kernel_size=(1, 1), stride=(1, 1))
+              )
+              (1): JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 512, eps=1e-06, affine=True)
+                (conv1): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 512, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+              )
+            )
+            (attn): ModuleList(
+              (0-1): 2 x JanusVQVAEAttnBlock(
+                (norm): GroupNorm(32, 512, eps=1e-06, affine=True)
+                (q): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+                (k): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+                (v): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+                (proj_out): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+              )
+            )
+          )
+        )
+        (mid): JanusVQVAEMidBlock(
+          (block_1): JanusVQVAEResnetBlock(
+            (norm1): GroupNorm(32, 512, eps=1e-06, affine=True)
+            (conv1): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+            (norm2): GroupNorm(32, 512, eps=1e-06, affine=True)
+            (dropout): Dropout(p=0.0, inplace=False)
+            (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          )
+          (attn_1): JanusVQVAEAttnBlock(
+            (norm): GroupNorm(32, 512, eps=1e-06, affine=True)
+            (q): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+            (k): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+            (v): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+            (proj_out): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+          )
+          (block_2): JanusVQVAEResnetBlock(
+            (norm1): GroupNorm(32, 512, eps=1e-06, affine=True)
+            (conv1): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+            (norm2): GroupNorm(32, 512, eps=1e-06, affine=True)
+            (dropout): Dropout(p=0.0, inplace=False)
+            (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          )
+        )
+        (norm_out): GroupNorm(32, 512, eps=1e-06, affine=True)
+        (conv_out): Conv2d(512, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      )
+      (quantize): JanusVQVAEVectorQuantizer(
+        (embedding): Embedding(16384, 8)
+      )
+      (quant_conv): Conv2d(256, 8, kernel_size=(1, 1), stride=(1, 1))
+      (post_quant_conv): Conv2d(8, 256, kernel_size=(1, 1), stride=(1, 1))
+      (decoder): JanusVQVAEDecoder(
+        (conv_in): Conv2d(256, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (mid): JanusVQVAEMidBlock(
+          (block_1): JanusVQVAEResnetBlock(
+            (norm1): GroupNorm(32, 512, eps=1e-06, affine=True)
+            (conv1): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+            (norm2): GroupNorm(32, 512, eps=1e-06, affine=True)
+            (dropout): Dropout(p=0.0, inplace=False)
+            (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          )
+          (attn_1): JanusVQVAEAttnBlock(
+            (norm): GroupNorm(32, 512, eps=1e-06, affine=True)
+            (q): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+            (k): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+            (v): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+            (proj_out): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+          )
+          (block_2): JanusVQVAEResnetBlock(
+            (norm1): GroupNorm(32, 512, eps=1e-06, affine=True)
+            (conv1): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+            (norm2): GroupNorm(32, 512, eps=1e-06, affine=True)
+            (dropout): Dropout(p=0.0, inplace=False)
+            (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+          )
+        )
+        (up): ModuleList(
+          (0): Module(
+            (block): ModuleList(
+              (0-2): 3 x JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 512, eps=1e-06, affine=True)
+                (conv1): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 512, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+              )
+            )
+            (attn): ModuleList(
+              (0-2): 3 x JanusVQVAEAttnBlock(
+                (norm): GroupNorm(32, 512, eps=1e-06, affine=True)
+                (q): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+                (k): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+                (v): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+                (proj_out): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1))
+              )
+            )
+            (upsample): JanusVQVAEConvUpsample(
+              (conv): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+            )
+          )
+          (1): Module(
+            (block): ModuleList(
+              (0): JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 512, eps=1e-06, affine=True)
+                (conv1): Conv2d(512, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (nin_shortcut): Conv2d(512, 256, kernel_size=(1, 1), stride=(1, 1))
+              )
+              (1-2): 2 x JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (conv1): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+              )
+            )
+            (attn): ModuleList()
+            (upsample): JanusVQVAEConvUpsample(
+              (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+            )
+          )
+          (2): Module(
+            (block): ModuleList(
+              (0-2): 3 x JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (conv1): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+              )
+            )
+            (attn): ModuleList()
+            (upsample): JanusVQVAEConvUpsample(
+              (conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+            )
+          )
+          (3): Module(
+            (block): ModuleList(
+              (0): JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 256, eps=1e-06, affine=True)
+                (conv1): Conv2d(256, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 128, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (nin_shortcut): Conv2d(256, 128, kernel_size=(1, 1), stride=(1, 1))
+              )
+              (1-2): 2 x JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 128, eps=1e-06, affine=True)
+                (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 128, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+              )
+            )
+            (attn): ModuleList()
+            (upsample): JanusVQVAEConvUpsample(
+              (conv): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+            )
+          )
+          (4): Module(
+            (block): ModuleList(
+              (0-2): 3 x JanusVQVAEResnetBlock(
+                (norm1): GroupNorm(32, 128, eps=1e-06, affine=True)
+                (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                (norm2): GroupNorm(32, 128, eps=1e-06, affine=True)
+                (dropout): Dropout(p=0.0, inplace=False)
+                (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+              )
+            )
+            (attn): ModuleList()
+          )
+        )
+        (norm_out): GroupNorm(32, 128, eps=1e-06, affine=True)
+        (conv_out): Conv2d(128, 3, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+      )
+    )
+    (generation_embeddings): Embedding(16384, 8)
+    (generation_aligner): JanusVQVAEAlignerMLP(
+      (fc1): Linear(in_features=8, out_features=4096, bias=True)
+      (hidden_layers): ModuleList(
+        (0): Linear(in_features=4096, out_features=4096, bias=True)
+      )
+      (activation_fn): GELUActivation()
+    )
+    (generation_head): JanusVQVAEHead(
+      (proj_out): Linear(in_features=4096, out_features=4096, bias=True)
+      (activation_fn): GELUActivation()
+      (vision_head): Linear(in_features=4096, out_features=16384, bias=True)
+    )
+    (language_model): ML.LlamaModel(                                                                  -> Transformer                                      models/tt_transformers/tt/model.py                                        - [#47693] test_lang_decoder.py
+      (embed_tokens): T.Embedding(102400, 4096, padding_idx=100015)
+      (layers): T.ModuleList(
+        (0-29): 30 x ML.LlamaDecoderLayer(                                                            -> TransformerBlock                                 models/tt_transformers/tt/decoder.py                                      - [#47693] test_lang_decoder_block
+          (self_attn): ML.LlamaAttention(                                                             -> Attention                                        models/tt_transformers/tt/attention.py                                    - [#47693.x] test_lang_decoder_attention
+            (q_proj): T.Linear(in_features=4096, out_features=4096, bias=False)
+            (k_proj): T.Linear(in_features=4096, out_features=4096, bias=False)
+            (v_proj): T.Linear(in_features=4096, out_features=4096, bias=False)
+            (o_proj): T.Linear(in_features=4096, out_features=4096, bias=False)
+          )
+          (mlp): ML.LlamaMLP(                                                                         -> MLP                                              models/tt_transformers/tt/mlp.py                                          - [#47693.x] test_lang_decoder_mlp
+            (gate_proj): T.Linear(in_features=4096, out_features=11008, bias=False)
+            (up_proj): T.Linear(in_features=4096, out_features=11008, bias=False)
+            (down_proj): T.Linear(in_features=11008, out_features=4096, bias=False)
+            (act_fn): A.SiLUActivation()                                                              -> ttnn.silu                                        ttnn/cpp/ttnn/operations/eltwise/unary
+          )
+          (input_layernorm): ML.LlamaRMSNorm((4096,), eps=1e-06)                                      -> DistributedNorm                                  models/common/rmsnorm.py
+          (post_attention_layernorm): ML.LlamaRMSNorm((4096,), eps=1e-06)                             -> DistributedNorm                                  models/common/rmsnorm.py
+        )
+      )
+      (norm): ML.LlamaRMSNorm((4096,), eps=1e-06)                                                     -> DistributedNorm                                  models/common/rmsnorm.py                                                  - [#47693] test_lang_decoder_rms
+      (rotary_emb): ML.LlamaRotaryEmbedding()                                                         -> RotaryEmbedding                                  models/tt_transformers/tt/rope.py                                         - [#47693] test_lang_decoder_rope
+    )
+  )
+  (lm_head): T.Linear(in_features=4096, out_features=102400, bias=False)
+)

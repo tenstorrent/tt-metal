@@ -1,6 +1,8 @@
 """
-This is the VisionEmbedding implementation for the Janus-Pro-7B
-This implementation combines patch_conv followed by Embeddings as a submodule.
+Patch and position embeddings for the Janus-Pro-7B vision tower: the patch projection plus the
+positional embedding added to it.
+
+HF reference: `vision_model.embeddings` (`ModelArgs.reference_vision_embedding`).
 """
 
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
@@ -24,7 +26,6 @@ class TtJanusProVisionEmbeddings(LightweightModule):
         dtype,
         image_size,
         patch_size,
-        num_channels,
         hidden_dim,
         bias=True,
     ):
@@ -33,7 +34,6 @@ class TtJanusProVisionEmbeddings(LightweightModule):
         self.image_size = image_size
         self.patch_size = patch_size
         self.hidden_dim = hidden_dim
-        self.num_channels = num_channels
         self.mesh_device = mesh_device
 
         self.num_patches = (self.image_size // self.patch_size) ** 2
@@ -46,7 +46,6 @@ class TtJanusProVisionEmbeddings(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}patch_embedding.",
             dtype=dtype,
-            in_channels=num_channels,
             out_channels=hidden_dim,
             kernel_size=patch_size,
             stride=patch_size,
@@ -59,11 +58,20 @@ class TtJanusProVisionEmbeddings(LightweightModule):
         self.pos_emb_weights = ttnn.as_tensor(
             positional_embedding,
             dtype=dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+
+        # position_ids is a fixed arange, so the embedding lookup is constant — precompute it once.
+        self.positional_embeddings = ttnn.embedding(self.position_ids, self.pos_emb_weights, layout=ttnn.TILE_LAYOUT)
+
+    def _add_position(self, patch_embeddings: ttnn.Tensor) -> ttnn.Tensor:
+        # patch_embeddings: [1, B, num_patches, hidden_dim]
+        batch_size = patch_embeddings.shape[1]
+        patch_embeddings = ttnn.reshape(patch_embeddings, (batch_size, -1, self.hidden_dim))
+        return ttnn.add(patch_embeddings, self.positional_embeddings)
 
     def forward(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
         """
@@ -72,11 +80,9 @@ class TtJanusProVisionEmbeddings(LightweightModule):
         Returns:
             embeddings: ttnn.Tensor of shape (B, num_patches, hidden_dim)
         """
-        # Conv2d patch returns [1, B, num_patches, hidden_dim]; the leading 1 comes from the
-        # 4D linear weight inside TtJanusProConv2dPatch, so the batch axis is at index 1.
-        patch_embeddings = self.patch_embed(pixel_values)
-        batch_size = patch_embeddings.shape[1]
-        patch_embeddings = ttnn.reshape(patch_embeddings, (batch_size, -1, self.hidden_dim))
-        positional_embeddings = ttnn.embedding(self.position_ids, self.pos_emb_weights, layout=ttnn.TILE_LAYOUT)
-        embeddings = ttnn.add(patch_embeddings, positional_embeddings)
-        return embeddings
+        return self._add_position(self.patch_embed(pixel_values))
+
+    def forward_device(self, patches: ttnn.Tensor) -> ttnn.Tensor:
+        """Same as :meth:`forward` from patches already on device, so the caller can keep the
+        host im2col and the transfer outside a trace region."""
+        return self._add_position(self.patch_embed.forward_device(patches))

@@ -1,0 +1,73 @@
+MG: /transformers/models/gemma3/modeling_gemma3.py
+MS: /transformers/models/siglip/modeling_siglip.py
+A: /transformers/activations.py
+T: torch
+
+REFERENCE                                                                                               -> TT IMPL CLASS                  TT IMPL PATH                                                              TT TEST
+
+MG.Gemma3ForConditionalGeneration(                                                                      -> GemmaMultimodalGenerator       models/demos/multimodal/gemma3/tt/gemma_e2e_model.py                      ?
+  (model): MG.Gemma3Model(                                                                              -> TtGemmaModel                   models/demos/multimodal/gemma3/tt/gemma_e2e_model.py                      ?
+                                                                                                           TtGemmaTransformerVision       models/demos/multimodal/gemma3/tt/gemma_vision_model.py                   test_vision_cross_attention_transformer
+    (vision_tower): MS.SiglipVisionModel(                                                               -> TtSiglipGemmaVisionModel       models/demos/multimodal/gemma3/tt/gemma_vision_block.py                   test_vision_pipeline
+      (vision_model): MS.SiglipVisionTransformer(                                                       -> TtSiglipGemmaVisionModel       models/demos/multimodal/gemma3/tt/gemma_vision_block.py                   test_vision_pipeline
+        (embeddings): MS.SiglipVisionEmbeddings(                                                        -> TtSiglipVisionEmbeddings       models/demos/multimodal/gemma3/tt/siglip_vision_embedding.py              test_vision_embedding
+          (patch_embedding): T.Conv2d(3, 1152, kernel_size=(14, 14), stride=(14, 14), padding=valid)    -> TtGemmaConv2dPatch             models/demos/multimodal/gemma3/tt/gemma_conv2d_patch.py                   test_patch_embedding
+          (position_embedding): T.Embedding(4096, 1152)                                                 -> ttnn.embedding                 ttnn/cpp/ttnn/operations/embedding
+        )
+        (encoder): MS.SiglipEncoder(                                                                    -> TtGemmaImageTransformer        models/demos/multimodal/gemma3/tt/gemma_image_transformer.py              test_vision_transformer
+          (layers): T.ModuleList(                                                                       ->
+            (0-26): 27 x MS.SiglipEncoderLayer(                                                         -> TtGemmaImageTransformerBlock   models/demos/multimodal/gemma3/tt/gemma_image_block.py                    test_vision_transformer_block
+              (layer_norm1): T.LayerNorm((1152,), eps=1e-06, elementwise_affine=True)                   -> TtLayerNorm                    models/tt_transformers/tt/multimodal/llama_layernorm.py                   test_vision_layernorm
+              (self_attn): MS.SiglipAttention(                                                          -> TtGemmaImageAttention          models/demos/multimodal/gemma3/tt/gemma_image_attention.py                test_vision_attention
+                (k_proj): T.Linear(in_features=1152, out_features=1152, bias=True)                      -> ttnn.linear  (fused QKV)       ttnn/cpp/ttnn/operations/matmul
+                (v_proj): T.Linear(in_features=1152, out_features=1152, bias=True)                         # ttnn.experimental.nlp_create_qkv_heads  (fused QKV split + MHA priprema heads)         ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads
+                (q_proj): T.Linear(in_features=1152, out_features=1152, bias=True)                         # ttnn.transformer.scaled_dot_product_attention (softmax)                                ttnn/cpp/ttnn/operations/transformer/sdpa
+                                                                                                           # ttnn.experimental.nlp_concat_heads  (reshape)                                          ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads
+                (out_proj): T.Linear(in_features=1152, out_features=1152, bias=True)                    -> ttnn.linear                    ttnn/cpp/ttnn/operations/matmul
+              )
+              (layer_norm2): T.LayerNorm((1152,), eps=1e-06, elementwise_affine=True)                   -> TtLayerNorm                    models/tt_transformers/tt/multimodal/llama_layernorm.py                   test_vision_layernorm
+              (mlp): MS.SiglipMLP(                                                                      -> TtGemmaImageFeedForward        models/demos/multimodal/gemma3/tt/gemma_image_mlp.py                      test_vision_mlp
+                (fc1): T.Linear(in_features=1152, out_features=4304, bias=True)                         -> ttnn.linear                    ttnn/cpp/ttnn/operations/matmul
+                (activation_fn): A.GELUTanh()                                                           -> ttnn.gelu                      ttnn/cpp/ttnn/operations/eltwise/unary
+                (fc2): T.Linear(in_features=4304, out_features=1152, bias=True)                         -> ttnn.linear                    ttnn/cpp/ttnn/operations/matmul
+              )
+            )
+          )
+        )
+        (post_layernorm): T.LayerNorm((1152,), eps=1e-06, elementwise_affine=True)                      -> TtLayerNorm                    models/tt_transformers/tt/multimodal/llama_layernorm.py                   ?
+      )
+    )
+    (multi_modal_projector): MG.Gemma3MultiModalProjector(                                              -> TtGemma3MultiModalProjector    models/demos/multimodal/gemma3/tt/multi_modal_projector.py                test_mmp.py
+      (avg_pool): T.AvgPool2d(kernel_size=4, stride=4, padding=0)
+      (mm_soft_emb_norm): MG.Gemma3RMSNorm((1152,), eps=1e-06)                                          -> rmsnorm                        models/demos/multimodal/gemma3/tt/gemma_vision_rmsnorm.py                 test_vision_rmsnorm.py
+    )
+    (language_model): MG.Gemma3TextModel(                                                               -> Transformer                    models/tt_transformers/tt/model.py                                        test_decoder.py
+      (embed_tokens): MG.Gemma3TextScaledWordEmbedding(262208, 5376, padding_idx=0)
+      (layers): T.ModuleList(
+        (0-61): 62 x MG.Gemma3DecoderLayer(
+          (self_attn): MG.Gemma3Attention(
+            (q_proj): T.Linear(in_features=5376, out_features=4096, bias=False)
+            (k_proj): T.Linear(in_features=5376, out_features=2048, bias=False)
+            (v_proj): T.Linear(in_features=5376, out_features=2048, bias=False)
+            (o_proj): T.Linear(in_features=4096, out_features=5376, bias=False)
+            (q_norm): MG.Gemma3RMSNorm((128,), eps=1e-06)
+            (k_norm): MG.Gemma3RMSNorm((128,), eps=1e-06)
+          )
+          (mlp): MG.Gemma3MLP(
+            (gate_proj): T.Linear(in_features=5376, out_features=21504, bias=False)
+            (up_proj): T.Linear(in_features=5376, out_features=21504, bias=False)
+            (down_proj): T.Linear(in_features=21504, out_features=5376, bias=False)
+            (act_fn): A.GELUTanh()
+          )
+          (input_layernorm): MG.Gemma3RMSNorm((5376,), eps=1e-06)
+          (post_attention_layernorm): MG.Gemma3RMSNorm((5376,), eps=1e-06)
+          (pre_feedforward_layernorm): MG.Gemma3RMSNorm((5376,), eps=1e-06)
+          (post_feedforward_layernorm): MG.Gemma3RMSNorm((5376,), eps=1e-06)
+        )
+      )
+      (norm): MG.Gemma3RMSNorm((5376,), eps=1e-06)
+      (rotary_emb): MG.Gemma3RotaryEmbedding()
+    )
+  )
+  (lm_head): T.Linear(in_features=5376, out_features=262208, bias=False)
+)
