@@ -2449,6 +2449,89 @@ benched lambda, so it timed a host->device upload every iteration and reported t
 2.8x slower (185.2 vs 65.1 us). Hoist every operand out of the timed callable; if a "smaller" thing
 measures slower, suspect the harness before the hardware.
 
+### 6.36 — Block 2's overhead map REGENERATED, with source line numbers (supersedes §6.29)
+
+§6.29 is stale: three of the things it measured have since changed -- `nlp_create_qkv_heads` (its largest
+line, 2.564 ms/frame) is now a hand-rolled 9-op split, `_trunk`'s three reshapes are hoisted, and
+`semantic_code`'s mask and argmax moved to the host. **Rank off THIS table, not §6.29.** Line numbers are
+into `tt/ttnn_voxtral_flow.py` at commit `f1d985a37fe`. 300 reps x 3 rounds; `_block` ops run 21x a
+frame, `_solve`/`_trunk` ops 7x, two once.
+
+| line | op | ×/frame | floor µs | actual | spread | ovhd | ms/frame | recoverable |
+|---|---|---|---|---|---|---|---|---|
+| `157` | ffn norm, all 3 ops | 21 | 2.0 | 56.7 | 8.7 | 54.7 | 1.191 | 1.148 |
+| `267` | CFG combine: 2 multiply + 1 add | 7 | 0.0 | 122.1 | 14.6 | 122.1 | 0.855 | 0.855 |
+| `142` | reshape+permute v (0,2,1,3) | 21 | 0.0 | 37.6 | 0.7 | 37.6 | 0.790 | 0.790 |
+| `176` | reshape seq -> [1,6,3072] | 7 | 0.0 | 106.0 | 0.2 | 106.0 | 0.742 | 0.742 |
+| `174` | concat([p0,p1,p2], dim=1) | 7 | 0.0 | 101.0 | 0.1 | 101.0 | 0.707 | 0.707 |
+| `139` | reshape+permute k (0,2,3,1)  pre-transposed | 21 | 0.0 | 33.6 | 6.0 | 33.6 | 0.705 | 0.705 |
+| `146` | matmul q(row-fold) @ kT -> scores | 21 | 0.0 | 33.2 | 8.2 | 33.2 | 0.696 | 0.696 |
+| `162` | add residual (ffn) | 21 | 0.0 | 31.1 | 8.2 | 31.1 | 0.654 | 0.654 |
+| `160` | multiply(g, w3) | 21 | 0.0 | 30.7 | 1.1 | 30.7 | 0.645 | 0.645 |
+| `154` | add residual (attn) | 21 | 0.0 | 30.6 | 1.5 | 30.6 | 0.643 | 0.643 |
+| `153` | permute+reshape -> folded rows | 21 | 0.0 | 28.4 | 1.3 | 28.4 | 0.597 | 0.597 |
+| `162` | linear w2     9216x3072 BFP8 | 21 | 155.1 | 179.0 | 0.3 | 24.0 | 3.760 | 0.504 |
+| `269` | Euler update: multiply + add | 7 | 0.0 | 70.8 | 6.6 | 70.8 | 0.496 | 0.496 |
+| `137` | reshape q -> [2,3,32,128] | 21 | 0.0 | 22.6 | 0.3 | 22.6 | 0.474 | 0.474 |
+| `125` | rms_norm sharded                 (attn norm 2/3) | 21 | 0.0 | 21.6 | 1.0 | 21.6 | 0.453 | 0.453 |
+| `149` | softmax numeric_stable | 21 | 0.0 | 19.4 | 0.1 | 19.4 | 0.407 | 0.407 |
+| `179` | _trunk final norm, all 3 ops | 7 | 2.0 | 55.7 | 4.3 | 53.7 | 0.390 | 0.376 |
+| `125` | to_memory_config -> _NORM_SHARD  (attn norm 1/3) | 21 | 1.0 | 18.7 | 1.5 | 17.7 | 0.394 | 0.372 |
+| `242` | semantic_code: upload + linear + HOST argmax | 1 | 527.0 | 895.8 | 10.6 | 368.8 | 0.896 | 0.369 |
+| `150` | matmul a @ v | 21 | 0.0 | 17.3 | 2.3 | 17.3 | 0.363 | 0.363 |
+| `152` | reshape av -> [2,32,3,128] | 21 | 0.0 | 16.6 | 1.3 | 16.6 | 0.348 | 0.348 |
+| `136` | slice q  cols 0..4095    -> L1 | 21 | 0.0 | 14.3 | 0.3 | 14.3 | 0.301 | 0.301 |
+| `137` | permute  q (0,2,1,3) | 21 | 0.0 | 14.2 | 2.9 | 14.2 | 0.298 | 0.298 |
+| `136` | slice k  cols 4096..5119 -> L1 | 21 | 0.0 | 13.8 | 0.4 | 13.8 | 0.290 | 0.290 |
+| `136` | slice v  cols 5120..6143 -> L1 | 21 | 0.0 | 13.7 | 0.0 | 13.7 | 0.287 | 0.287 |
+| `154` | linear wo     4096x3072 BFP8 | 21 | 68.9 | 81.5 | 0.1 | 12.6 | 1.711 | 0.264 |
+| `181` | linear acoustic_codebook_output  3072x36 | 7 | 1.1 | 32.9 | 0.3 | 31.8 | 0.230 | 0.223 |
+| `128` | to_memory_config -> DRAM         (attn norm 3/3) | 21 | 1.0 | 11.6 | 0.1 | 10.5 | 0.243 | 0.221 |
+| `262` | typecast x2 -> bf16 | 7 | 0.0 | 26.4 | 0.2 | 26.4 | 0.185 | 0.185 |
+| `184` | slice -> [2,1,36] | 7 | 0.0 | 24.2 | 0.3 | 24.2 | 0.170 | 0.170 |
+| `262` | linear input_projection   36x3072 | 7 | 1.1 | 17.5 | 0.7 | 16.4 | 0.123 | 0.115 |
+| `261` | concat([x,x], dim=0) | 7 | 0.0 | 15.3 | 0.5 | 15.3 | 0.107 | 0.107 |
+| `266` | slice v_unc | 7 | 0.0 | 14.0 | 2.1 | 14.0 | 0.098 | 0.098 |
+| `265` | slice v_cond | 7 | 0.0 | 13.0 | 0.2 | 13.0 | 0.091 | 0.091 |
+| `264` | typecast v -> fp32 | 7 | 0.0 | 11.3 | 0.9 | 11.3 | 0.079 | 0.079 |
+| `183` | reshape out -> [2,3,36] | 7 | 0.0 | 10.8 | 0.1 | 10.8 | 0.076 | 0.076 |
+| `158` | linear w1     3072x9216 BFP8 +silu | 21 | 155.1 | 157.8 | 0.3 | 2.7 | 3.314 | 0.058 |
+| `255` | linear llm_projection  3072x3072  (once/frame) | 1 | 51.7 | 65.1 | 0.0 | 13.4 | 0.065 | 0.013 |
+| `134` | linear wqkv   3072x6144 BFP8 | 21 | 103.4 | 101.8 | 0.1 | -1.6 | 2.137 | -0.033 |
+| `160` | linear w3     3072x9216 BFP8 | 21 | 155.1 | 147.5 | 0.5 | -7.5 | 3.098 | -0.158 |
+
+**Frame 21.243 ms. Weight-read floor 14.080 ms. Reachable ceiling 7.163 ms (34%.)** The floor now
+includes `semantic_code`'s fp32 head (102 MB, 527 us), which §6.29 wrongly counted as zero -- that is why
+the floor moved 13.553 -> 14.080.
+
+**FOUR THINGS TO READ CAREFULLY, because the table looks more actionable than it is.**
+
+1. **Isolated sums to 29.1 ms against a real 21.2 ms frame.** ~8 ms is overlapped in the live graph. The
+   per-op ranking is usable; the total is an upper bound; "recoverable" means *if the op vanished and
+   nothing else changed*, which §6.33 proved is not how this behaves.
+
+2. **The hand-rolled head split sums HIGHER than what it replaced.** Lines 136/137/139/142 total ~150 us
+   (41.8 in slices, ~108 in reshape/permutes) against the 122 us fused op -- and it is still 1.233
+   ms/frame FASTER on the whole block. That contradiction is the single best argument against treating
+   this table as a to-do list.
+
+3. **Six of the top ten are already closed.** 157 (one-op interleaved norm: 2.4x SLOWER, §6.30), 267
+   (weighted-reduce fold: 1.543x isolated, ZERO whole-block, flips an FSQ boundary, §6.30), 139/142/153
+   (swept as part of the split and the unfold, §6.30), 125 (norm grid swept, [flow-07]).
+
+4. **Read the SPREAD column before believing any row.** The residual adds show 8.2 us of spread on a 31
+   us overhead; the CFG combine 14.6 on 122. Enough to rank, not enough to decide. §6.33 is the case
+   where an effect smaller than its own measurement spread was reported with the wrong sign.
+
+**The largest genuinely untouched item is the sequence build: lines 174 + 176, 1.449 ms/frame combined.**
+The three reshapes were hoisted (§6.30/[flow-19]) but the `concat` of three [2,1,3072] tensors (101.0 us)
+and the final reshape to [1,6,3072] (106.0 us) remain. After that: the two residual adds (1.297
+combined), `multiply(g, w3)` (0.645), the scores matmul (0.696).
+
+**And note what is NOT here.** wqkv measures 1.6 us and w3 7.5 us BELOW their 194 GB/s floors, which is
+how we know the true ceiling is ~202. All five weight matmuls are at the roofline; there is no matmul
+work left in Block 2.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
