@@ -1,7 +1,7 @@
 # MiniMax-M3 pipeline prefill — running & testing
 
-Multi-galaxy pipeline-parallel prefill for MiniMax-M3 via the common prefill runner. Accuracy (KV PCC)
-uses the standalone bindings; throughput + overlap plots use request mode + the producer.
+Multi-galaxy pipeline-parallel prefill for MiniMax-M3 via the common prefill runner. Serving is always
+request mode (runner + producer); accuracy (KV PCC) and throughput differ only in the producer flags.
 
 ## Setup
 
@@ -25,31 +25,27 @@ Run the commands below from inside the allocation.
 
 ## Accuracy — KV PCC
 
-Run from `TT_METAL_HOME`. PASS = every rank's KV PCC passes.
+Same two processes as the perf run below (runner under `tt-run`, producer on rank 0's host); the producer
+reads the KV back and PCCs it against the golden trace. Start the runner with the request binding for the
+rank count you want:
 
-### 1 galaxy
 ```bash
 PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
+PREFILL_MOCK_MIGRATION=1 \
   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
-  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_real_1galaxy_1rank.yaml \
+  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank.yaml \
   bh-glx-b08u02:1
 ```
+`PREFILL_MOCK_MIGRATION=1` is what makes the runner publish its KV chunk table for the read-back gate;
+without it the producer has nothing to PCC. Then add `PREFILL_PRODUCER_CHECK_PCC=1` to the producer
+command (Process 2 below) and drop
+`PREFILL_PRODUCER_MAX_REQUESTS` down to one request per slot so every slot's KV is still resident when it
+is read back. PASS = `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_PCC`,
+default `0.93`).
 
-### 2 galaxies
-```bash
-PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
-  ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
-  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_rank_binding_2rank_d2d.yaml \
-  bh-glx-b08u02:1,bh-glx-b08u08:1
-```
-
-### 4 galaxies
-```bash
-PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
-  ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
-  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_rank_binding_4rank_d2d.yaml \
-  bh-glx-b09u02:1,bh-glx-b09u08:1,bh-glx-b08u08:1,bh-glx-b08u02:1
-```
+Swap `..._request_1rank.yaml` for `..._request_2rank.yaml` / `..._request_4rank.yaml` and extend the
+`--host` list (see the table below) for 2 and 4 galaxies. At 2+ galaxies the manifest must live in the
+binding's `global_env`, not the shell — see the multi-host note under Process 1 below.
 
 ## Perf — throughput + overlap plot
 
@@ -58,7 +54,19 @@ Two processes: the runner (blocks waiting for input) and the producer on rank 0'
 
 ### Process 1 — runner (tee to a log)
 
-1 galaxy:
+Shell-exported `PREFILL_MANIFEST` is forwarded with `mpirun -x`, which lands on the launch-host rank only.
+That is fine at 1 galaxy (one rank), but at 2+ galaxies the remote ranks never see it and silently fall
+back to the default model, so they disagree on the chunk plan. For multi-host, copy the request binding
+and set `PREFILL_MANIFEST` to the **absolute** manifest path in its `global_env` (every rank reads the
+binding), then run the copy with no shell `PREFILL_MANIFEST=`:
+```yaml
+# pipeline_prefill_request_2rank_minimax.yaml (copy of ..._request_2rank.yaml)
+global_env:
+  PREFILL_MANIFEST: "<tt-metal>/models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json"
+  # ... rest unchanged
+```
+
+1 galaxy (single host, shell export reaches the one rank):
 ```bash
 PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
@@ -67,20 +75,18 @@ PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
   2>&1 | tee /data/philei/health/pp_1rank.log
 ```
 
-2 galaxies:
+2 galaxies (manifest in the binding's `global_env`, per the note above):
 ```bash
-PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
-  ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
-  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_2rank.yaml \
+./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_2rank_minimax.yaml \
   bh-glx-b09u02:1,bh-glx-b09u08:1 \
   2>&1 | tee /data/philei/health/pp_2rank.log
 ```
 
-4 galaxies:
+4 galaxies (manifest in the binding's `global_env`, per the note above):
 ```bash
-PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
-  ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
-  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_4rank.yaml \
+./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_4rank_minimax.yaml \
   bh-glx-b09u02:1,bh-glx-b09u08:1,bh-glx-b08u08:1,bh-glx-b08u02:1 \
   2>&1 | tee /data/philei/health/pp_4rank.log
 ```
