@@ -207,7 +207,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
             formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
         _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(
-            formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces, false /* partial_face */, false /* narrow_tile */, TILE_CNT /* num_tiles */);
+            formats.pack_src,
+            formats.pack_dst,
+            FACE_R_DIM,
+            TILE_C_DIM,
+            num_faces,
+            false /* partial_face */,
+            false /* narrow_tile */,
+            // One block's worth, not the whole tile count. num_tiles sets MOP_OUTER_LOOP
+            // (num_faces * num_tiles), so it is how many tiles a single _llk_pack_ call packs, and the
+            // loop below already calls it once per block. Passing TILE_CNT made each call pack every
+            // tile, so the kernel packed NUM_BLOCKS * TILE_CNT tiles per loop iteration while the host
+            // divides by loop_factor * tile_cnt, inflating reported cycles/tile by exactly NUM_BLOCKS.
+            // The functional twin pack_dest_bank_test.cpp passes num_tiles_in_block here.
+            NUM_TILES_IN_BLOCK /* num_tiles */);
         reconfigure_packer_l1_acc(L1_ACC);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_packer_wait_for_math_done_();
