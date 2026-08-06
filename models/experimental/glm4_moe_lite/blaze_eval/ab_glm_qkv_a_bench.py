@@ -133,6 +133,23 @@ def test_ab_glm_qkv_a(device):
         )
         return a, b
 
+    # THE BASELINE THE MODEL ACTUALLY RUNS. GLM4_MOE_LITE_FUSE_QKV_A=1 is in the winning
+    # defaults, so the shipping path is ONE concatenated 2048 -> (768+576) matmul, sliced
+    # afterwards -- not two independent ones. Comparing against the two-matmul form overstates
+    # blaze by ~2x, so measure the fused ttnn form too.
+    n_cat = _pad_to_dram_banks(N_Q + N_KV, TILE_W, TILE_W * banks)
+    w_cat = torch.cat([wq, wkv], dim=-1)[:, :, :, :n_cat].contiguous()
+    tw_cat, pc_cat = mk_ttnn(w_cat, n_cat)
+
+    def ttnn_fused_fn():
+        return ttnn.linear(
+            t_act,
+            tw_cat,
+            program_config=pc_cat,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=t_ckc,
+        )
+
     # ---- blaze: ONE fused dispatch
     cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
     bg = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in cores])
@@ -174,6 +191,7 @@ def test_ab_glm_qkv_a(device):
         return b_oq, b_okv
 
     t_us, t_res = ab_harness._measure(device, ttnn_fn, warmup=2, iters=5)
+    tf_us, _ = ab_harness._measure(device, ttnn_fused_fn, warmup=2, iters=5)
     b_us, b_res = ab_harness._measure(device, blaze_fn, warmup=2, iters=5)
     _, tq = comp_pcc(gq32, ttnn.to_torch(t_res[0]))
     _, tkv = comp_pcc(gkv32, ttnn.to_torch(t_res[1]))
@@ -186,9 +204,11 @@ def test_ab_glm_qkv_a(device):
             "| impl | dispatches | cores | us | q_a PCC | kv_a PCC |",
             "|---|---:|---:|---:|---:|---:|",
             f"| ttnn: 2x dram_sharded_linear | 2 | {in_cores} | {t_us:.1f} | {tq:.4f} | {tkv:.4f} |",
+            f"| ttnn: 1x FUSED q_kv_a (what the model runs) | 1 | {in_cores} | {tf_us:.1f} | - | - |",
             f"| blaze: GLMQKVAProjection | 1 | {banks} | {b_us:.1f} | {bq:.4f} | {bkv:.4f} |",
             "",
-            f"speedup {sp:.2f}x | saved {(t_us-b_us)*N_LAYERS/1000.0:+.2f} ms/token over {N_LAYERS} layers (UPPER bound)",
+            f"vs the REAL baseline (fused ttnn): {tf_us/b_us:.2f}x",
+            f"vs two separate matmuls: {sp:.2f}x | saved {(t_us-b_us)*N_LAYERS/1000.0:+.2f} ms/token over {N_LAYERS} layers (UPPER bound)",
         ]
     )
     print(text)

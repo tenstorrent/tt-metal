@@ -161,11 +161,17 @@ an activation — modelled on `swiglu`'s gate/up pair, stopping before the Gathe
 
 | impl | dispatches | cores | µs | q_a PCC | kv_a PCC |
 |---|---:|---:|---:|---:|---:|
-| ttnn: 2x `dram_sharded_linear` | 2 | 64 | 89.3 | 0.9999 | 0.9999 |
+| ttnn: 2x `dram_sharded_linear` | 2 | 64 | 89.4 | 0.9999 | 0.9999 |
+| ttnn: **1x fused `q_kv_a`** — what the model actually runs | 1 | 64 | **45.1** | — | — |
 | **blaze: `GLMQKVAProjection`** | **1** | 8 | **9.5** | 0.9999 | 0.9999 |
 
-**9.43x, and 3.75 ms/token over 47 layers as an upper bound** — the largest single opportunity in
-the table. It also proves blaze is usable for this model *without* waiting on F3/F4/F11: a
+**4.76x against the real baseline**, ~1.67 ms/token over 47 layers as an upper bound.
+
+**A correction:** the first version of this measured only against two separate ttnn matmuls and
+claimed 9.43x. That is not the shipping path — `GLM4_MOE_LITE_FUSE_QKV_A=1` is in the winning
+defaults, so the model already concatenates these into ONE 2048x1344 matmul and slices it. The
+two-matmul baseline overstated blaze by 2x. The lesson generalises to the rest of this document:
+a per-op A/B is only as honest as its baseline is representative of the shipping configuration. It also proves blaze is usable for this model *without* waiting on F3/F4/F11: a
 GLM-shaped FusedOp can be assembled from micro-ops that already work on a harvested grid.
 
 **But read where the win comes from.** The two matmuls measured *separately* are 4.9 + 5.0 =
