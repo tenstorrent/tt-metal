@@ -15,6 +15,12 @@ from models.common.llama_models import (
     CompletionPrediction,
     StopReason,
 )
+from models.common.decode_contract import (
+    DecodeInputStaging,
+    decode_input_staging,
+    rank_local_slot_remap,
+    reject_legacy_reload_signal,
+)
 from models.common.sampling import (
     SamplingParams,
     broadcast_sampling_params,
@@ -1258,6 +1264,7 @@ class Generator(WarmupForwardMixin):
         reload_page_table: bool = False,
         reload_sampling_params: bool = False,
         reset_sampling_state: bool = False,
+        **kwargs,
     ):
         """Run one decode step, executing the caller's reload commands exactly.
 
@@ -1274,6 +1281,7 @@ class Generator(WarmupForwardMixin):
 
         See ``models/common/decode_contract.py`` for the full contract.
         """
+        reject_legacy_reload_signal(type(self).__name__, kwargs)
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False
         if not enable_trace and not reload_inputs:
@@ -1464,6 +1472,7 @@ class Generator(WarmupForwardMixin):
         Run decode forward text with tracing
         """
         tokens = tokens.view(-1, 1)
+        staging = decode_input_staging(reload_inputs, reload_page_table)
         # The trace is different depending on whether decode returns sampling-layout logits.
         if not self.trace_ids_decode[on_device_logits]:
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
@@ -1478,7 +1487,7 @@ class Generator(WarmupForwardMixin):
             self.trace_ids_decode[on_device_logits] = trace_id
             self.trace_inputs_decode[on_device_logits] = device_inputs
             self.trace_output_decode[on_device_logits] = tt_out_tok
-        if reload_inputs:
+        if staging is DecodeInputStaging.ALL:
             # Full resets are required when host token/position inputs are
             # authoritative again (host sampling, trace switch, or batch reset).
             host_inputs = self.model.prepare_decode_inputs_host(
@@ -1490,7 +1499,7 @@ class Generator(WarmupForwardMixin):
                 device_tensors=self.trace_inputs_decode[on_device_logits],
                 shard_specs=shard_specs,
             )
-        elif reload_page_table:
+        elif staging is DecodeInputStaging.PAGE_TABLE_ONLY:
             # With async device sampling, token/position inputs may intentionally
             # be stale on host: the previous decode updates them on device. Page
             # tables still need refreshing when new KV blocks are allocated, so
@@ -1523,8 +1532,11 @@ class Generator(WarmupForwardMixin):
         if sampling_module is None:
             return
         seed_manager = sampling_module.seed_manager
-        sm_bs = seed_manager.max_batch_size
-        seed_manager.apply_slot_remap(slot_remap[0:sm_bs])
+        # This generator holds one model, so rank 0 is the only view. Going through the
+        # shared normalizer anyway is what checks that the plugin's stride matches: a
+        # bare slice would take another rank's entries as its own if they ever differed.
+        rank_remap = rank_local_slot_remap(slot_remap, rank=0, slots_per_rank=seed_manager.max_batch_size)
+        seed_manager.apply_slot_remap(rank_remap)
 
     def sample_decode_on_device(
         self,

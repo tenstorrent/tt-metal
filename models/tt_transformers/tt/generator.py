@@ -9,6 +9,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.decode_contract import (
+    DecodeInputStaging,
+    decode_input_staging,
+    rank_local_slot_remap,
+    reject_legacy_reload_signal,
+)
 from models.common.llama_models import (
     CompletionMessage,
     StopReason,
@@ -1291,13 +1297,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         See ``models/common/decode_contract.py`` for the full contract.
         """
-        if "reset_batch" in kwargs:
-            # The legacy signal is gone, and a caller old enough to send it also omits
-            # the four commands, so its layout changes would silently take the defaults.
-            raise ValueError(
-                "reset_batch is not part of the decode input-update contract; a vLLM "
-                "build that sends it predates the contract and cannot drive this model"
-            )
+        reject_legacy_reload_signal(type(self).__name__, kwargs)
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
 
@@ -1523,6 +1523,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         """
         Run decode forward text with tracing
         """
+        staging = decode_input_staging(reload_inputs, reload_page_table)
         # The trace is different depending on whether we are doing device sampling or not
         if not self.trace_ids_decode[on_device_sampling]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
@@ -1535,15 +1536,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
 
-            if reload_inputs:
+            if staging is DecodeInputStaging.ALL:
                 # The caller declared host token/position inputs authoritative for
-                # this step, so restage all of them; reload_page_table is subsumed.
+                # this step, so restage all of them; page tables are included.
                 host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_decode[on_device_sampling][i],
                 )
-            elif reload_page_table:
+            elif staging is DecodeInputStaging.PAGE_TABLE_ONLY:
                 # With async device sampling, token/position inputs may
                 # intentionally be stale on host: the previous decode updates
                 # them on device. Page tables still need refreshing when new KV
@@ -1566,20 +1567,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             sampling_module = getattr(self.model[i], "sampling", None)
             if sampling_module is None:
                 continue
-            sm_bs = sampling_module.seed_manager.max_batch_size
-            # slot_remap holds GLOBAL slot indices: vLLM offsets each DP rank's local
-            # [0, sm_bs) remap by rank*sm_bs. The seed manager indexes its own rank-local
-            # state, so rebase before handing it over -- otherwise rank i>=1 indexes past
-            # the end (e.g. value 32 into a size-32 list).
-            rank_remap = []
-            for new_slot, old_value in enumerate(slot_remap[i * sm_bs : (i + 1) * sm_bs]):
-                old_slot = int(old_value) - i * sm_bs
-                if not 0 <= old_slot < sm_bs:
-                    raise ValueError(
-                        f"slot_remap[{i * sm_bs + new_slot}]={int(old_value)} moves a request across "
-                        f"DP rank {i} (slots [{i * sm_bs}, {(i + 1) * sm_bs}))"
-                    )
-                rank_remap.append(old_slot)
+            rank_remap = rank_local_slot_remap(
+                slot_remap,
+                rank=i,
+                slots_per_rank=sampling_module.seed_manager.max_batch_size,
+                data_parallel=self.data_parallel,
+            )
             sampling_module.seed_manager.apply_slot_remap(rank_remap)
 
     def sample_decode_on_device(
