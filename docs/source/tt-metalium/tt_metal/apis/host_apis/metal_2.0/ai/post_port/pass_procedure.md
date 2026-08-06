@@ -1,6 +1,6 @@
-# Post-Port Style Pass — the procedure
+# Post-Port Pass — the procedure
 
-You have been asked to apply **one style fix** to **one TTNN operation** that has already been
+You have been asked to apply **one targeted fix** to **one TTNN operation** that has already been
 ported to the Metal 2.0 API. This file is the procedure; the fix recipe your invoker named is the
 content. Read this file first, then open the fix recipe when [Step 2](#step-2--survey-every-site)
 sends you there.
@@ -40,20 +40,25 @@ headers so those names resolve at compile time.
 Gen2. Legacy code says `cb`, ported code says `dfb`.
 
 **A port** converts an op's factory from the legacy API to Metal 2.0 — a large rewrite. That has
-already happened for your op. **A style pass**, which is what you are doing, is a small targeted
+already happened for your op. **A post-port pass**, which is what you are doing, is a small targeted
 improvement on top of a working port.
 
 If the fix recipe assumes a concept this section didn't give you, the API and concept reference is
-[`migration_guide.md`](../../shared/migration_guide.md). Read only the part you need — it is long,
+[`migration_guide.md`](../shared/migration_guide.md). Read only the part you need — it is long,
 and you are not expected to have read it.
 
 ---
 
-## What a style pass is
+## What a post-port pass is
 
-One targeted improvement, applied to one op, on top of a working Metal 2.0 port. The op behaves
-identically before and after: same numerics, same performance, same observable side effects. What
-changes is how the code expresses what it already does.
+One targeted improvement, applied to one op, on top of a working Metal 2.0 port.
+
+Most of these fixes are purely expressive: the op behaves identically before and after — same
+numerics, same performance, same observable side effects — and what changes is how the code says
+what it already does. A few do change behaviour deliberately. **Each fix recipe states its own
+behaviour-preservation property at the top**; read it, because it tells you what your verification
+in [Step 4](#step-4--re-verify) is and is not entitled to conclude. A recipe may also override a
+step of this procedure outright, and will say so where it does.
 
 **Why this is worth doing.** The port that preceded you was mechanical — it got the op compiling
 against the new API, but a mechanical conversion leaves the code expressing the old model in new
@@ -102,7 +107,7 @@ written plan, no inventory, and no audit — what it asks for instead is discipl
 Three things. Get them explicitly rather than inferring them.
 
 1. **The op directory** — e.g. `ttnn/cpp/ttnn/operations/data_movement/tilize`.
-2. **The fix** — which style recipe to run. If your invoker named a symptom rather than a recipe,
+2. **The fix** — which fix recipe to run. If your invoker named a symptom rather than a recipe,
    ask which they mean; do not choose one yourself.
 3. **The sentinel set** — the tests that must pass before and after. Your invoker supplies these.
    If they didn't, ask; do not assemble a set on your own judgement, because a missed test turns
@@ -171,7 +176,7 @@ Three scope limits hold throughout, whatever the fix recipe says:
   would be silently blind to it.
 - **Nothing outside the program factory and its kernels.** The device-operation class — `validate`,
   `invoke`, `compute_output_specs`, attribute parsing, dtype checks — is the op's contract with its
-  callers, not Metal 2.0 surface. Editing it makes the diff something other than a style pass, and
+  callers, not Metal 2.0 surface. Editing it makes the diff something other than a post-port pass, and
   a reviewer expecting one will not be looking there.
 - **No opportunistic cleanup.** Not a rename you prefer, not a comment you'd word differently, not
   a simplification you can see. These passes are cheap to review precisely because a reviewer can
@@ -188,15 +193,15 @@ Every sentinel that passed in Step 1 must pass now. Beware the false green: a `-
 matching no tests reports success with zero tests run, so confirm the run actually selected the
 cases you meant.
 
-**On a regression: revert, then report. Do not patch forward.** A style fix is behaviour-preserving
-by construction, so a newly failing test means the transformation was misapplied — not that it
-needs an adjustment. Patching forward is how a three-line pass becomes a diff nobody can review,
+**On a regression: revert, then report. Do not patch forward.** Every fix leaves the behaviour your
+sentinels exercise unchanged — that is what makes them a valid check — so a newly failing test
+means the transformation was misapplied, not that it needs an adjustment. Patching forward is how a three-line pass becomes a diff nobody can review,
 and it usually buries the evidence of what actually went wrong. Revert to the baseline and report
 the site and the failure; that report is worth more than a rescued diff.
 
 ## Step 5 — Report
 
-A style pass produces **no committed document.** These passes are small and numerous, and a file
+A post-port pass produces **no committed document.** These passes are small and numerous, and a file
 per fix per op would litter the tree faster than anyone would read it. Report to your invoker, in
 the session, in this shape:
 
