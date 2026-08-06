@@ -3307,6 +3307,189 @@ It also removes the motivation for a full-frame trace: you would spend +0.90 ms 
 make the frame monolithic, in order to recover dispatch that §6.49's two-region trace already
 captures. **Trace the two device graphs or nothing; leave the 82 µs of host work alone.**
 
+### 6.51 — p150: what the rest of the repo and `ign/voxtral_p150_qb2` actually have
+
+Asked to check both for Blackhole techniques worth stealing. Net: **nothing that changes a shipped
+decision**, and the one thing that would have is aimed at a bottleneck we measured at 3–4%.
+
+**The repo.** 215 files reference `is_blackhole`, overwhelmingly vision/CNN test skips and grid
+literals. Three substantive patterns, none applicable:
+
+| pattern | where | why not us |
+|---|---|---|
+| `grid=(8,10) if is_blackhole() else (8,8)` | `attention_1d.py` prefill | we don't use `models/common`'s attention |
+| `dram_shard_grid_width = dram_grid_size().x`, "avoids silent PCC issues on P100" | `attention_1d.py` | §6.28 rejected DRAM-sharded matmuls; §6.43 showed the gap is overlapped |
+| `CoreCoord(8,8) if is_blackhole()` for batch corerangesets | rope / sampling | batch 1 |
+
+**2 command queues are a vision-only idiom here.** `num_command_queues=2` appears in resnet50,
+mobilenetv2, unet and the `tt_cnn` pipelines — every one a model streaming *large host inputs*.
+**No LLM or decode model in the repo uses it**, and the reason is structural: our per-step host
+input is `embed_frame`'s 6 KB output (§6.50 measured the whole host tail at 82 µs). There is
+nothing to overlap.
+
+Also confirmed directly: `compute_with_storage_grid_size()` returns **13×10** and already excludes
+dispatch cores, so ign's eastern-column warning is about *their* `find_grid` helper, not the API.
+
+**`ign/voxtral_p150_qb2` (30322d621c, 2026-06-19, 1235 commits behind).** Their whole performance
+architecture rests on a premise that **contradicts our measurement**: *"each of the ~hundreds of
+tiny ttnn ops per token finishes on-device in microseconds, then waits ~100 µs for the host to
+enqueue the next op."* §6.49 measures dispatch at **2.8–3.9%**. At 100 µs/op, Block 1's 470 ops
+would be 47 ms of pure dispatch against a whole step of 19.7 ms — arithmetically impossible on our
+tree. The likely explanation is that tt-metal dispatch improved enormously in 1235 commits. §6.5
+already noted their dispatch-bound claim "does not transfer"; it now does not transfer **even on
+their own target hardware**. So their 2CQ+trace design is not worth copying.
+
+Four concrete P150 facts from them worth having, none currently biting us:
+- **`packer_l1_acc=False` avoids P150 static-CB clashes on long conv sequences.** We use `True`
+  everywhere including the codec. First thing to try if the codec ever throws on a long utterance.
+- **P150 concat CB page limit ≈768k bf16 elements on dim=2.** Our codec concatenates 3.8M at
+  T=469 and works, so it is version- or shape-specific — but the failure mode exists.
+- Conv-transpose output chunking at 1024 for P150 L1 pressure.
+- `_voxtral_worker_shard_cap` caps worker x at 8 on Blackhole.
+
+**The useful result is negative and worth stating plainly: there is no LLM-decode Blackhole
+playbook in this repo to copy from.** Everything in §6.39–§6.52 had to be measured.
+
+### 6.52 — p150: decode matmul program configs, −4.24 ms/frame. And `activation="silu"` never fused
+
+Asked to give the remaining matmuls the treatment §6.43 gave `wo`. Both blocks share dims exactly
+and both are one tile of rows, so four shapes cover all eight sites.
+
+**The sweep found the ttnn heuristic collapses on deep reductions.** Achieved bandwidth, isolated:
+
+| matmul | K-tiles | default | tuned `in0_block_w` | |
+|---|---|---|---|---|
+| `w1`/`w3` | 96 | 352 GB/s | 362 | 1.03x |
+| `wqkv` | 96 | 281 | 346 | 1.23x |
+| `wo` | 128 | **144** | 336 | **2.33x** |
+| `w2` | 288 | **147** | 355 | **2.43x** |
+
+At Kt=96 the heuristic already reaches this chip's measured 367 GB/s ceiling. At Kt=128/288 it
+delivers **under half the memory system**. That is the same reduction-depth effect §6.53 measures
+from the other direction, and §6.50's note anticipated the shape of it: *"it was measured on wq,
+which is already at 94% of its floor. Sweeping an op with no headroom finds none."*
+
+**THE ISOLATED WINS INVERTED IN THE BLOCK, AND THIS IS THE REAL RESULT.** Whole-block A/B:
+
+| arm | Block 1 | Block 2 | total | vs shipped | isolated predicted |
+|---|---|---|---|---|---|
+| **ALL, uniform 12×6** | 17.87 | 19.12 | **36.99** | **−4.24** | −9.0 |
+| ALL, per-shape winners | 17.96 | 19.08 | 37.04 | −4.18 | −9.0 |
+| ALL, uniform 13×10 | 18.15 | 19.15 | 37.30 | −3.93 | |
+| w1 only | 19.10 | 19.71 | 38.81 | −2.42 | −0.11 |
+| **w1 config, silu NOT fused** | | | 41.73 | **+0.33** | |
+| w3 config only | | | 41.79 | +0.39 | −0.11 |
+| shipped | 20.23 | 20.99 | 41.23 | — | |
+
+noise floor 0.070 ms. `w2` and `wo`, with the **2.4× isolated wins, delivered 0.00 ms**. `w1`,
+with essentially none, delivered **2.42**.
+
+**The control settles why.** Same program config with silu as a separate op gives back every
+millisecond (+0.33). So the w1 win is not the grid at all — it is that **`activation="silu"` is
+not fused**:
+
+| | µs |
+|---|---|
+| plain matmul, no activation | 85.5 |
+| `activation="silu"` — what shipped | 98.8 |
+| `activation=UnaryWithParam(SILU)` / `UnaryOpType.SILU` | 100.6 / 100.2 |
+| explicit `ttnn.silu(linear(...))` — deliberately two ops | 101.8 |
+| **program config `fused_activation`** | **88.1** |
+
+The kwarg costs exactly what a separate op costs, because that is what it is. Only
+`fused_activation` folds it in — and it is *more* accurate too (PCC 0.9999984 vs 0.9999970),
+since the value never leaves the dest registers. Across 47 w1 calls per frame: **2.42 ms**.
+
+This invalidates `[flow-12]`, which claimed SiLU "rides along on the w1 matmul instead of being
+its own op". **It was its own op on both chips**, for the entire life of this port. The repo's
+serious LLM models (deepseek_v3, llama3_70b_galaxy, blackhole/qwen36, gemma3) all use
+`fused_activation`; only 13 call sites repo-wide use the string kwarg, and ours were among them.
+
+**A METHODOLOGICAL RESULT THAT EXPLAINS TODAY'S REPEATED MISPREDICTIONS.** The silu op costs
+**12.2 µs isolated but ~54 µs in-block** (2.42 ms ÷ 47) — near the full ~68 µs floor. A tight loop
+of *identical* ops pipelines; a real block of *differing* ops does not. So isolated
+microbenchmarks understate op cost by ~4×, and overstate bandwidth wins that were really
+pipelining. This is §6.43's rule with a cause attached: **isolated sweeps measure pipelining,
+blocks measure dispatch.** It is why §6.47's residual-as-bias estimate missed by 48×, and why the
+2.4× on `w2` was never real.
+
+**ONE grid, not four.** Uniform 12×6 ties a per-shape set of isolated winners (36.99 vs 37.04,
+under the noise floor), so no shape earns its own constant — which matters on a branch where
+seven tuned constants have already had to be re-derived. 13×10, the full 130 cores, is worse.
+
+**Decode only.** `per_core_M=1` / `fuse_batch=True` assume one tile of rows, which prefill
+violates; `_mlp` is shared, so the configs are passed in as an argument and prefill passes none.
+Guarded by `test_decode_matmul_configs_assume_one_tile_of_rows`.
+
+**Gates.** 129 pytest (three new guards; the stale `test_wo_has_no_program_config` was passing
+vacuously on a name check while its docstring had become false, and is rewritten).
+`--gate wiring/prefill26/flow/codec/decode` all at baseline — `flow` reads 2 of 74, matching the
+record. `--gate codes` is **not** bit-exact and needed a PAIRED run to read at all: baseline
+86/288 acoustic, this change **85/288**, semantic 1 both. The 10/288 figures elsewhere in NOTES
+are from a different state and are not comparable — reading against them looked like an 8.5×
+regression that does not exist.
+
+**FRAME-COUNT A/B AND WER, 15 cases × 3 seeds, one process per (arm, seed) per §6.21.** Frame
+counts are **not** preserved — 6 of 15 match on seed 0 — so the exactness test is inconclusive by
+construction and the change goes to WER, which is where it is decided:
+
+| arm | long-form (the gate) | short | `[END_AUDIO]` | ms/frame | RTF |
+|---|---|---|---|---|---|
+| baseline | **1 wrong of 894** | 8 of 126 | 45/45 | 47.89 (47.50 / 47.94 / 48.24) | 0.759 |
+| decode configs | **1 wrong of 894** | 9 of 126 | 45/45 | **42.92** (42.91 / 42.71 / 43.14) | **0.694** |
+
+**WER is identical**, every utterance terminates, and the short bucket's 8→9 is inside its
+documented seed noise (§6.7). End-to-end **−4.97 ms/frame, 1.116×** — slightly better than the
+block A/B's −4.24, the remainder being the trunk projections that also carry configs now.
+
+**Still unexplained, and flagged rather than papered over:** `wqkv` + `wo` + `w2` contribute
+**0.00 ms on their own** but a further **−1.8 ms once w1's silu is fused** (reproduced twice:
+−1.70 and −1.82). Grid consistency is not the mechanism — a mixed-grid set ties uniform 12×6, and
+uniform 13×10 is worse. Whatever it is, the combination is measured three times and gates clean.
+
+### 6.53 — why a "much more powerful" p150 was only ~7% faster than the N150
+
+Asked directly, and it is worth having the answer written down because it bounds every future
+optimisation on this branch. Both ceilings measured here:
+
+| ceiling | p150 measured | what one frame used (pre-§6.52) | fraction |
+|---|---|---|---|
+| **compute** | **85.6 TFLOP/s** | 12.6 GFLOP in 40.18 ms = 0.31 TFLOP/s | **0.37%** |
+| **DRAM bandwidth** | **367 GB/s** | 6.698 GB in 40.18 ms = 167 GB/s | **45%** |
+
+**The p150's headline advantage is compute, and this workload uses 0.37% of it.** Batch-1 decode
+is a matrix-*vector* product: every weight byte is read from DRAM, used for one multiply-add, and
+discarded — arithmetic intensity ~2 FLOP/byte. The direct evidence is that **rows 1 → 32 cost
+identical time** (`w2` 0.186 → 0.184 ms; `wqkv` 0.063 → 0.072). Thirty-two times the arithmetic,
+free. The 130 cores and 85.6 TFLOP/s are unusable at batch 1, on either chip.
+
+**So the only axis in play is DRAM, where the advantage is 1.8×, not "a lot"** (367 vs ~200). And
+we reached a *smaller share* of it than the N150 did of its own:
+
+| | achieved | its ceiling | utilisation |
+|---|---|---|---|
+| N150, same graph, ~48 ms | ~140–153 GB/s | ~200 | **70–77%** |
+| p150 before §6.52 | 167 GB/s | 367 | **45%** |
+| p150 after §6.52 | **181 GB/s** | 367 | **49%** |
+
+Effective ratio 167/140 ≈ **1.19×**, diluted to the ~1.07× seen end-to-end by the host tail and
+codec. §6.52 recovered part of the gap — `wo` and `w2` were running at 144–147 GB/s purely
+because of a bad default `in0_block_w`.
+
+**Why a skinny matmul cannot fill a wider pipe.** Memory-level parallelism at batch 1 is fixed by
+the *weight shape*, not the chip; saturating 367 GB/s needs proportionally more reads in flight
+than saturating 200, and a 1-row matmul does not have them. Spreading it over 130 cores instead of
+64 gives each core a smaller slice — *less* work to hide DRAM latency behind, and a larger fixed
+sync cost per op. This is also why every one of the reversals in §6.39–§6.45 removed cores or ops,
+and why 13×10 loses to 12×6 in §6.52.
+
+**THE PRACTICAL CONSEQUENCE.** Single-stream latency is close to done: ~49% DRAM, 0.37% compute,
+and the remaining single-stream levers are worth percent, not multiples. **Batching is the only
+lever with an order of magnitude behind it** — rows 1→32 being free means ~32 concurrent
+utterances at roughly the current per-frame time. Weight reads dominate and are genuinely free at
+batch 32; KV-cache traffic and attention scale linearly, so expect **~20–30× aggregate RTF for
+~1.1× per-stream latency**, not 32×. Untested — see §7.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.

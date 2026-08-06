@@ -71,6 +71,48 @@ _SDPA_PRG = ttnn.SDPAProgramConfig(
     q_chunk_size=TILE, k_chunk_size=512,
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 2))
 
+# NOTES.md [gpt-26] -- DECODE matmul program configs. Two separate p150 findings, one fix:
+#   * activation="silu" IS NOT FUSED. It costs 98.8 us against a plain matmul's 85.5 -- the same
+#     +14.9 as writing ttnn.silu() as its own op, which is what it evidently does. Passing
+#     UnaryWithParam or UnaryOpType instead changes nothing (100.6 / 100.2). ONLY a program
+#     config's fused_activation actually folds it in, at 88.1. That one op is worth 2.42 ms/frame
+#     over the 47 w1 calls in the two blocks, and is slightly MORE accurate besides (PCC
+#     0.9999984 vs 0.9999970) because the value stays in the dest registers.
+#   * the ttnn heuristic collapses on deep reductions -- 144-147 GB/s at Kt=128/288 against 352 at
+#     Kt=96, under half of this chip's measured 367 GB/s. A tuned in0_block_w recovers ~350.
+# ONE 12x6 grid serves all four shapes: it ties a set of per-shape isolated winners in the block
+# (36.99 vs 37.04 ms, against a 0.070 noise floor), so no shape earns its own grid. Whole-block
+# A/B, three runs: -4.66 / -4.38 / -4.24 ms/frame. STATUS.md 6.52.
+#
+# DECODE ONLY. per_core_M=1 and fuse_batch=True assume ONE tile of rows -- true for Block 1's 1
+# row and Block 2's 3-or-6, false for prefill. _mlp is shared with prefill, so the configs are
+# passed IN rather than read from module scope; prefill passes nothing and keeps the heuristic.
+_MM_GRID = (12, 6)                    # 72 of the 130 cores; 13x10 measured 0.31 ms WORSE
+
+
+def _mm1d(in0_block_w, per_core_n, activation=None):
+    """1D multicast: split N across the grid, broadcast in0. The batch-1 decode shape."""
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=_MM_GRID, in0_block_w=in0_block_w, out_subblock_h=1,
+        # osh*osw <= 4, not 8: fp32_dest_acc_en halves the dest register file
+        out_subblock_w=next(s for s in (4, 2, 1) if per_core_n % s == 0),
+        per_core_M=1, per_core_N=per_core_n, fuse_batch=True,
+        fused_activation=activation, mcast_in0=True)
+
+
+#                       in0_block_w   per_core_N = ceil(N_tiles / 72)
+_PRG_QKV = _mm1d(2, 3)              # K=3072  N=6144   Nt=192
+_PRG_WO = _mm1d(4, 2)               # K=4096  N=3072   Nt= 96
+_PRG_W1 = _mm1d(2, 4, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU))   # K=3072 N=9216 Nt=288
+_PRG_W3 = _mm1d(2, 4)               # same shape as w1, no activation
+_PRG_W2 = _mm1d(4, 2)               # K=9216  N=3072   Nt= 96 -- the deepest reduction in the model
+DECODE_PRG = {"wqkv": _PRG_QKV, "wo": _PRG_WO, "w1": _PRG_W1, "w3": _PRG_W3, "w2": _PRG_W2}
+
+
+def _pc(prg, key):
+    """program_config kwarg for `key`, or nothing at all when prg is empty (the prefill path)."""
+    return {"program_config": prg[key]} if prg else {}
+
 # NOTES.md [gpt-06] -- WEIGHT PRECISION -- load-bearing for CORRECTNESS, not...
 WEIGHT_DTYPE = ttnn.bfloat16          # w2 -- bf16 for ACCURACY (6.16), not for the hang (6.13)
 FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # FF1 and FF3
@@ -206,21 +248,29 @@ class TtVoxtralGPT:
         # bit-identical to permute(0,2,1,3) + reshape, in one dispatch
         return ttnn.reshape(ttnn.experimental.nlp_concat_heads(a), [1, S, Q_WIDTH])
 
-    def _mlp(self, x, h, w, mc):
+    def _mlp(self, x, h, w, mc, prg=None):
         """Residual + SwiGLU over an ALREADY-NORMED `h`. Shared by prefill and decode.
+
+        `prg` is DECODE_PRG on the decode path and None on the prefill one -- see NOTES.md
+        [gpt-26]; those configs assume a single tile of rows, which prefill violates.
 
         See NOTES.md [gpt-14].
         """
+        prg = prg or {}
         # NOTES.md [gpt-22] -- w1 and w3 stay SEPARATE -- fusing them is 4x SLOWER, and why...
-        g = ttnn.linear(h, w["w1"], activation="silu", compute_kernel_config=COMPUTE_CONFIG,
-                        memory_config=mc)
+        # NOTES.md [gpt-26] -- silu rides in the program config, NOT activation="silu", which is
+        # not fused. With no config (prefill) fall back to the kwarg.
+        g = (ttnn.linear(h, w["w1"], program_config=prg["w1"],
+                         compute_kernel_config=COMPUTE_CONFIG, memory_config=mc) if prg else
+             ttnn.linear(h, w["w1"], activation="silu", compute_kernel_config=COMPUTE_CONFIG,
+                         memory_config=mc))
         # NOTES.md [gpt-25] -- IN PLACE. g and x are both dead immediately after, and on Blackhole
         # the allocation is ~12 us of a ~65 us op. Worth 0.929 ms/step with the two adds, and
         # bit-identical. 6.37 measured this at +0.001 ms on the N150. STATUS.md 6.47.
         u = ttnn.multiply_(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
-                                          memory_config=mc))
+                                          memory_config=mc, **_pc(prg, "w3")))
         return ttnn.add_(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG,
-                                        memory_config=mc))
+                                        memory_config=mc, **_pc(prg, "w2")))
 
     def _layer(self, x, w, S, cos, sin, mask, cache=None):
         """x [1,S,3072] -> same. Pre-norm GQA with RoPE + causal mask, then SwiGLU.
@@ -243,7 +293,7 @@ class TtVoxtralGPT:
 
         See NOTES.md [gpt-16].
         """
-        qkv = ttnn.linear(self._norm(x, w["an"]), w["wqkv"],
+        qkv = ttnn.linear(self._norm(x, w["an"]), w["wqkv"], program_config=DECODE_PRG["wqkv"],
                           compute_kernel_config=COMPUTE_CONFIG)
         qkv = ttnn.to_memory_config(ttnn.reshape(qkv, [1, 1, 1, _QKV_WIDTH]), _QKV_SHARD)
         qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -264,9 +314,9 @@ class TtVoxtralGPT:
         a = ttnn.reshape(o, [1, 1, Q_WIDTH])
         # in place -- see NOTES.md [gpt-25]. Safe: `x` is the layer input and is dead the moment
         # this returns, and _norm below is evaluated BEFORE _mlp mutates anything.
-        x = ttnn.add_(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
-                                     memory_config=_L1))
-        return self._mlp(x, self._norm(x, w["fn"]), w, _L1)
+        x = ttnn.add_(x, ttnn.linear(a, w["wo"], program_config=DECODE_PRG["wo"],
+                                     compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1))
+        return self._mlp(x, self._norm(x, w["fn"]), w, _L1, DECODE_PRG)
 
     @torch.no_grad()
     def prefill(self, embeds, apply_final_norm=True, last_only=False):
