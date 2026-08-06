@@ -44,11 +44,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/debug/dprint.h"  // DEBUG: matmul layer3 hang localization (remove after)
 #include "api/debug/ring_buffer.h"  // DEBUG mcast2d compute-stall: ring-buffer markers (remove after)
-// DEBUG: neutralize compute-kernel DPRINT. DPRINT inside the compute (pack/math/unpack) perturbs the
-// kernel epilogue timing and re-triggers the program-completion stall when DPRINT is enabled on-device.
-// Keep DM-kernel DPRINT (reader/writer) for diagnosis; make the CMPM markers here no-ops.
-#undef DPRINT
-#define DPRINT(...) ((void)0)
+// [#48552 DIAG - REVERT AFTER] DPRINT-neutralize REMOVED so compute-kernel DPRINT is active, to localize the
+// single-core K-spill TILE_COUNTERS 0x10000 fault on the UNPACK thread (ring watcher is unavailable on Quasar).
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
@@ -343,6 +340,7 @@ void kernel_main() {
                     UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles));
                     in1_cb.wait_front(in1_block_num_tiles);
                     UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u));
+                    UNPACK(DPRINT("U got_in blk={}\n", (uint32_t)block));  // [#48552 DIAG] both input waits done
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -360,7 +358,10 @@ void kernel_main() {
 
                             DPRINT("MMC sb{} preacq\n", in0_subblock);  // DEBUG #48552 subblock stall localize
                             tile_regs_acquire();
+                            UNPACK(DPRINT(
+                                "U acq sb={},{}\n", (uint32_t)in0_subblock, (uint32_t)in1_subblock));  // [#48552 DIAG]
                             if (enable_reload) {
+                                UNPACK(DPRINT("U reload sb={}\n", (uint32_t)in0_subblock));  // [#48552 DIAG]
                                 reload_from_cb_to_dst(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -384,6 +385,13 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
+                                UNPACK(DPRINT(  // [#48552 DIAG] about to issue the matmul unpack for this K-tile
+                                    "U mmpre sb={},{} k={} in0i={} in1i={}\n",
+                                    (uint32_t)in0_subblock,
+                                    (uint32_t)in1_subblock,
+                                    (uint32_t)inner_dim_idx,
+                                    (uint32_t)in0_index,
+                                    (uint32_t)in1_index));
                                 matmul_block(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -394,6 +402,7 @@ void kernel_main() {
                                     effective_subblock_w,
                                     out_subblock_h,
                                     in0_block_w);
+                                UNPACK(DPRINT("U mmpost k={}\n", (uint32_t)inner_dim_idx));  // [#48552 DIAG]
                                 in0_index++;               // stride right by 1
                                 in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
                                                            // (should be called in1_block_w)
