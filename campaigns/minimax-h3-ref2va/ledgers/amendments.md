@@ -296,3 +296,160 @@ shapes*. It does not follow that every gate must run at production length — he
 the reference implementation on CPU, and paying ~30 min of CPU per case would have bought no
 additional sensitivity. Say which property a shape is protecting before paying for it, and put the
 length where the property actually depends on it.
+
+---
+
+## Amendment 123 (2026-08-06) — every ref2va shape fits at full depth, and `transformer_ref` loads strictly
+
+**Assumed** (am. 114): that ref2va's 1.2×–3.0× packed lengths were a residency risk serious enough to
+gate the campaign, and that the 9-image ceiling might not fit at all.
+
+**Measured.** Mesh 4×8, TP=4 axis 0 / SP=8 axis 1, ring, 2 links. **Full 50 layers, real checkpoint**,
+`MINIMAX_H3_SUBFOLDER=transformer_ref`, commit `5ec8933bbfa`. Command:
+`scripts/run_safe_pytest.sh --run-all .../test_transformer_minimax_h3.py -k "real_weights and ref2va"`.
+6 passed in 1162 s, exit 0. Warm window is the second of two identical forwards in one process, device
+time not isolated from host dispatch (the test's own docstring notes this stack is host-dispatch bound):
+
+| case | padded | rows/device | cold forward | **warm forward** | video std / absmax |
+|---|---|---|---|---|---|
+| `ref2va_1image_s46080` | 46080 | 5760 | 20.27 s | **2.11 s** | 1.2711 / 7.5312 |
+| `ref2va_1video_s81664` | 81664 | 10208 | 114.33 s | **3.26 s** | 1.4478 / 8.2500 |
+| `ref2va_9image_s111616` | 111616 | 13952 | 177.93 s | **5.45 s** | 1.6485 / 10.1875 |
+
+No allocation failure at any of them. Outputs finite, non-degenerate and in range at all three. The
+state-dict load took 259.3 s cold and 141.8 s once the weight cache was warm.
+
+**Two further results, neither of which was the question asked.**
+
+1. **`transformer_ref` loads strictly.** `load_torch_state_dict` is strict and all 638 keys of the ref
+   partition map onto the same TT module as `transformer/`'s. So "the configs are byte-identical, our
+   DiT needs no architectural change" is now verified against the weights and not just the config.
+2. **The cold forward scales far worse than the warm one** — 20 s → 178 s across a 2.4× length, i.e.
+   kernel compilation at a new shape, while warm goes 2.11 → 5.45 s (2.6×, close to linear). Every
+   distinct ref2va request shape pays that compile once. For a 49-forward denoise the warm number is
+   what matters, so ref2va's denoise is ~1.6×/2.5×/4.2× t2va's per-step cost at these three shapes.
+
+**What changes.** The Phase 6 e2e case list is unblocked at every shape rather than trimmed. The
+campaign's `mixed` case (90112 padded) was **not** probed directly; it sits between two shapes that
+both fit, which is an interpolation and is recorded as one rather than as a measurement.
+
+**Method note.** The probe was worth its 19 minutes for the *second* result, not the first. It was
+built to answer "does it fit"; what it actually pinned down was that the ref partition's weights load
+at all — a question the plan had assumed away from a `diff` of two config files.
+
+---
+
+## Amendment 124 (2026-08-06) — the image reference encode is green at production resolution; the taps=3 video-reference encoder does not fit in L1 at the shipping `l1_small_size`
+
+**Assumed** (campaign plan, Phase 3): that all three reference modalities would encode through existing,
+already-gated machinery, and that the only open question was numerical parity at `pcc=0.99`.
+
+**Measured.** Mesh 4×8, `l1_small_size=65536`, `trace_region_size=200 MB`, commit `5ec8933bbfa`.
+Command: `scripts/run_safe_pytest.sh --run-all .../test_references_minimax_h3.py -k encode_references`.
+Real media throughout — a decoded frame of `~/h3_fl2va_artifacts/fl2va_first.mp4` as the image
+reference, its own frames as the video, its own soundtrack as the audio. 1 passed, 2 failed in 255 s.
+
+**Green: the image reference.** Resolved geometry `1 x 128 x 224` (a 16:9 frame at the 2048 px short
+edge is 2048x3584, i.e. 7168 condition rows), and **PCC 99.9905 %** against
+`MiniMaxH3Ref2VAReferenceEncoderStep` — far above the 0.99 floor, as expected, because the image path
+reuses fl2va's already-gated `encode_clip` + seeded sample + fp16 round trip unchanged. That is gate 3
+for images, on natural pixel statistics.
+
+**Red: the video reference.** `TT_THROW program.cpp:1763` —
+
+```
+Statically allocated circular buffers in program 654 clash with L1 buffers on core range
+[0-0 - 11-9]. L1 buffer allocated at 1504000 and static circular buffer region ends at 1508224
+```
+
+inside `vae.encode` → `_run_encoder_units(flat, 3)` → the **taps=3** encoder's forward
+(`encoder_minimax_h3.py:335`). The overlap is **4224 bytes** — marginal, not an order of magnitude.
+
+**Why it had never been seen.** The video VAE encoder's own tests run at
+`SINGLE_DEVICE = [pytest.param((1, 1), {})]` — a 1×1 mesh with **empty device_params**, i.e. no
+`l1_small_size` reserved at all. And `t2va` / `fl2va` never encode a video: a keyframe is one frame and
+takes the **taps=1** path. So the combination "taps=3 encoder, `l1_small_size=65536`" is new to ref2va
+and had no prior coverage. This is STATE.md's "a measurement only describes the configuration it ran
+in", reached from the test side: the component was green, in a configuration production does not use.
+
+**What changes.** The Phase 3 gate is parametrized per modality, so image / audio / video pass or fail
+independently instead of the first failure masking the rest — a single combined request had reported
+all three as one red. And `MINIMAX_H3_L1_SMALL` now overrides the device parameter so the campaign can
+*measure* what the taps=3 encoder needs; a sweep over 65536 / 32768 / 16384 / 8192 follows, one config
+per process per `shared/device-hangs.md`. Reducing it is not obviously free: STATE.md records 65536 as
+mandatory for audio, so a value that fits the encoder must still be checked against audio decode
+before it can ship.
+
+---
+
+## Amendment 125 (2026-08-06) — the audio VAE encoder's readback only ever worked on a single-device mesh
+
+**Assumed** (am. 119 / source-ideas r0): that `MiniMaxH3AudioEncoder` was "a complete device port,
+gated by `test_encode` (pcc 0.99) and `test_roundtrip` (28 dB PSNR)" and needed only wiring.
+
+**Measured.** Same run as am. 124, the `audio` case:
+
+```
+TT_FATAL pytensor.cpp:299: buffers.size() == 1
+Can't convert a tensor distributed on MeshShape([4, 8]) mesh to row-major logical tensor.
+Supply a mesh composer to concatenate multi-device shards.
+```
+
+from `encoder_minimax_h3_audio.py:361`, `ttnn.to_torch(self.mean_proj(projected))`.
+
+**The cause, and that it was already known one file over.** `MiniMaxH3AudioDecoder.__call__` carries
+exactly this fix, with a comment that names the failure: *"A bare `ttnn.to_torch` asserts
+`buffers.size() == 1` and so only ever worked on a single-device mesh — which is what kept this
+decoder off the mesh entirely."* The encoder was written to the same shape and never received the
+same fix, because its tests are `SINGLE_DEVICE` and the pipeline had never built it — `_prepare_audio_decoder`
+loads the decoder half only.
+
+**What changes.** The encoder reads back one replica when `get_num_devices() > 1`, matching the
+decoder. Two-line fix; the value is in what it says about the gate that passed.
+
+**Method note.** "Exists and is gated" is not "runs where you need it". Both of this round's failures
+are the same shape: a component green under `SINGLE_DEVICE` with empty `device_params`, first exercised
+on the production mesh by ref2va. Worth checking the *device configuration* of a component's existing
+tests before counting it as reusable — the prior-art ledger recorded the pcc numbers and not the mesh
+they were taken on.
+
+---
+
+## Amendment 126 (2026-08-06) — `l1_small_size` 16384 is the first value the taps=3 video-reference encoder fits in; the video encode is then parity-green
+
+**Assumed** (am. 124): that the 4224-byte L1 clash might need a conv-blocking change or a smaller
+spatial tile, either of which would have broken parity with the reference's own tiling.
+
+**Measured.** Mesh 4×8, commit `5ec8933bbfa`, the ref2va **video** reference-encode case only, **one
+configuration per process** with its own 1800 s timeout per `shared/device-hangs.md`. Override via
+`MINIMAX_H3_L1_SMALL`; everything else held fixed.
+
+| `l1_small_size` | result |
+|---|---|
+| 65536 (the shipping value) | **failed** — CB/L1 clash |
+| 32768 | **failed** — CB/L1 clash |
+| **16384** | **passed** |
+| 8192 | passed |
+
+So the fix is a device parameter, not a kernel or a tiling change. `l1_small_size` reserves the **top**
+of L1, so a smaller reservation pushes those small allocations *above* the static circular-buffer
+region instead of into it — which is why shrinking it helps and growing it would not. 16384 is chosen
+over 8192 as the largest value that fits, leaving the most headroom for whatever else wants the small
+region.
+
+At 16384 the video reference encode is parity-green: geometry `7 x 48 x 84` (22 frames → 7 latent
+frames on the 768x1344 canvas), 7056 condition rows, **PCC 99.9927 %**, CCC 99.9882 %, against
+`MiniMaxH3Ref2VAReferenceEncoderStep` on real decoded frames.
+
+**What changes.** Both ref2va test files default to `l1_small_size=16384` with the measurement cited.
+t2va and fl2va keep 65536 and are untouched — they never reach the taps=3 encoder.
+
+**Still open, and it is the reason this is not yet a closed question.** One process holds every ref2va
+stage at one `l1_small_size`, and STATE.md records 65536 as mandatory *for audio*. Audio decode at
+16384 is therefore unverified: the e2e run is what settles it. If audio decode fails there, the options
+are a conv-blocking change for the taps=3 encoder or splitting reference encode into its own process —
+not raising the value back, which is measured not to work.
+
+**Method note.** The sweep was worth four processes because the *shape* of the answer was unknown: a
+4 KB overlap could have meant "one parameter away" or "the blocking is wrong". Measuring the cheap
+parameter first is what kept a kernel change off the table.

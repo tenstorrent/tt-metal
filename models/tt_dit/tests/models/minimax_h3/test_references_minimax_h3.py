@@ -29,10 +29,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+from loguru import logger
+
+import ttnn
 
 from ....pipelines.minimax_h3 import packing as p
 from ....pipelines.minimax_h3 import packing_ref2va as rp
 from ....pipelines.minimax_h3 import references as R
+from ....utils.check import assert_quality
 
 reference_before_encoder = pytest.importorskip(
     "diffusers.modular_pipelines.minimax_h3.before_encoder",
@@ -40,6 +44,10 @@ reference_before_encoder = pytest.importorskip(
 )
 reference_packing = pytest.importorskip(
     "diffusers.modular_pipelines.minimax_h3.packing_ref2va",
+    reason="requires the minimax-h3 diffusers branch",
+)
+reference_encoders = pytest.importorskip(
+    "diffusers.modular_pipelines.minimax_h3.encoders",
     reason="requires the minimax-h3 diffusers branch",
 )
 
@@ -370,6 +378,176 @@ def _weights_dir() -> Path:
     if not directory.is_dir():
         pytest.skip(f"set {WEIGHTS_ENV} to a diffusers snapshot of the checkpoint")
     return directory
+
+
+# ---------------------------------------------------------------- the encode, on device
+#
+# The Phase 3 gate: our device encode against `MiniMaxH3Ref2VAReferenceEncoderStep`, on
+# real media. `pcc=0.99` is the floor the encoder's thirteen `ttnn.group_norm` calls set
+# -- none has an fp32 path -- and it is the same bar the fl2va keyframe encode holds to.
+#
+# On lengths: the IMAGE case runs at its full production 2048x2048, and the soundtrack at
+# its full production duration. The VIDEO case runs at a reduced FRAME COUNT on the
+# production canvas, because the reference's video VAE encode runs on CPU and 124 frames
+# at 768x1344 is hours there. What the video path adds over the image path is the entry
+# point (`vae.encode`, with its 17-frames-per-5-latents chunking) and the frame trim, and
+# both are exercised by 22 frames -> 7 latent frames just as well as by 124 -> 37. The
+# production frame count is covered end to end by the e2e gate. Same reasoning as am. 122.
+
+# 16384, not the 65536 every other MiniMax-H3 gate uses. MEASURED, not chosen (am. 124/126): the
+# taps=3 video-reference encoder's static circular buffers clash with L1 by 4224 bytes at 65536 and
+# still clash at 32768; 16384 is the first value that fits. `l1_small_size` reserves the TOP of L1,
+# so a smaller reservation pushes those small allocations above the CB region rather than into it.
+# `MINIMAX_H3_L1_SMALL` overrides it, which is how that was measured -- one config per process.
+_L1_SMALL = int(os.environ.get("MINIMAX_H3_L1_SMALL", 16384))
+
+MESH_4X8 = [
+    pytest.param(
+        (4, 8),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": _L1_SMALL, "trace_region_size": 200000000},
+        id="blackhole-4x8",
+    )
+]
+
+REFERENCE_PCC = 0.99
+# 22 frames is `17 * 1 + 5`, the smallest count with more than one chunk's worth of
+# temporal structure, and it maps to 7 latent frames.
+VIDEO_FRAMES = 22
+
+
+def _reference_components(weights: Path, device: str = "cpu"):
+    """A stand-in for the reference pipeline, carrying only what its encoder step reads."""
+    from diffusers.models import AutoencoderKLMiniMaxH3, AutoencoderKLMiniMaxH3Audio
+
+    vae = AutoencoderKLMiniMaxH3.from_pretrained(str(weights), subfolder="vae").to(device).eval()
+    audio_vae = AutoencoderKLMiniMaxH3Audio.from_pretrained(str(weights), subfolder="audio_vae").to(device).eval()
+    return SimpleNamespace(
+        vae=vae,
+        audio_vae=audio_vae,
+        patch_size=(1, 2, 2),
+        audio_latent_channels=audio_vae.config.latent_channels,
+        _execution_device=torch.device(device),
+    )
+
+
+def _real_frame() -> np.ndarray:
+    """One decoded frame of the real clip: natural pixel statistics, as an image reference.
+
+    Not `randn`. The sampled latent is rounded through float16 before normalization,
+    discarding about half the mantissa of every conditioning value, and how that lands is a
+    property of natural image statistics -- a Gaussian exercises the code path and not the
+    thing under test.
+    """
+    frames, _, _ = rp.decode_reference_video(_real_media())
+    return frames[0]
+
+
+def _reference_case(case: str):
+    """`(ours, theirs)` prepared references for one modality's gate.
+
+    Audio is paired with a small image because the reference forbids an audio-only request;
+    the pairing is inert for the audio comparison, which slices its own rows out.
+    """
+    media = _real_media()
+    frames, fps, soundtrack = rp.decode_reference_video(media)
+    waveform, sample_rate = soundtrack
+
+    if case == "image":
+        specs = [dict(image=_real_frame())]
+    elif case == "video":
+        specs = [dict(video=frames[:VIDEO_FRAMES], fps=fps)]
+    elif case == "audio":
+        specs = [dict(image=_real_frame()), dict(audio=waveform, sample_rate=sample_rate)]
+    else:
+        raise ValueError(case)
+
+    ours, _ = R.prepare_references([rp.MiniMaxH3Reference(**s) for s in specs], VIDEO_FRAMES, AUDIO_RATE)
+    theirs, _ = reference_before_encoder.MiniMaxH3Ref2VASetupStep.prepare_references(
+        _components(), [reference_packing.MiniMaxH3Reference(**s) for s in specs], VIDEO_FRAMES
+    )
+    return ours, theirs
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("case", ["image", "audio", "video"])
+def test_encode_references_matches_reference(mesh_device, case, reset_seeds):
+    """One modality's reference encode, against the reference implementation, on real media.
+
+    Parametrized per modality rather than one request carrying all three, because the three
+    take different code paths with different device requirements and a single case would
+    report the first failure as a failure of all of them. `video` in particular needs the
+    taps=3 encoder, whose L1 footprint is a separate question from the other two
+    (campaign am. 124).
+
+    Also asserts the resolved **geometry**, because the packed layout is built from it: a
+    latent frame count or a latent height off by one produces a valid request conditioned on
+    the wrong rows, and no PCC on the rows themselves would show it.
+    """
+    from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+
+    weights = _weights_dir()
+    ours, theirs = _reference_case(case)
+
+    # ---- ours, on the mesh. Only the encoders this case needs. ----
+    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, task="ref2va")
+    needs_video = any(reference.kind == "video" for reference in ours)
+    vae = pipeline._prepare_vae()
+    vae = pipeline._prepare_vae(encode_shape=(1, vae.tile_size, vae.tile_size), encode_taps=1)
+    if needs_video:
+        vae = pipeline._prepare_vae(
+            encode_shape=(pipeline.vae_config.clip_length, vae.tile_size, vae.tile_size), encode_taps=3
+        )
+    audio_encoder = pipeline._prepare_audio_encoder() if any(r.has_audio for r in ours) else None
+
+    got_video, got_audio = R.encode_references(
+        ours,
+        encode_clip=vae.encode_clip,
+        encode_video=vae.encode if needs_video else None,
+        encode_audio=(lambda waveform: audio_encoder(waveform)[0]) if audio_encoder else None,
+        latents_mean=pipeline.vae_config.latents_mean,
+        latents_std=pipeline.vae_config.latents_std,
+        audio_latents_mean=pipeline.audio_config["latents_mean"],
+        audio_latents_std=pipeline.audio_config["latents_std"],
+        patch_size=pipeline.patch_size,
+        audio_latent_channels=pipeline.audio_config["latent_channels"],
+    )
+
+    # ---- theirs, on CPU ----
+    components = _reference_components(weights)
+    with torch.no_grad():
+        want_video, want_audio = reference_encoders.MiniMaxH3Ref2VAReferenceEncoderStep.encode_references(
+            components, theirs, device=torch.device("cpu")
+        )
+
+    # Geometry first: the layout is built from it, so a mismatch here invalidates everything
+    # downstream regardless of how the rows compare.
+    for index, (a, b) in enumerate(zip(ours, theirs)):
+        assert (a.num_latent_frames, a.latent_height, a.latent_width) == (
+            b.num_latent_frames,
+            b.latent_height,
+            b.latent_width,
+        ), f"reference {index} resolved to different visual latent geometry"
+        assert a.num_audio_latents == b.num_audio_latents, f"reference {index} resolved a different audio length"
+    logger.info(
+        f"[{case}] resolved geometry: "
+        + ", ".join(
+            f"{r.kind}({r.num_latent_frames}x{r.latent_height}x{r.latent_width}, audio {r.num_audio_latents})"
+            for r in ours
+        )
+    )
+
+    assert got_video.shape == want_video.shape, f"{tuple(got_video.shape)} != {tuple(want_video.shape)}"
+    logger.info(f"[{case}] video condition rows {tuple(got_video.shape)}")
+    assert_quality(want_video, got_video, pcc=REFERENCE_PCC)
+
+    if got_audio is not None:
+        assert got_audio.shape == want_audio.shape, f"{tuple(got_audio.shape)} != {tuple(want_audio.shape)}"
+        logger.info(f"[{case}] audio condition rows {tuple(got_audio.shape)}")
+        # The soundtrack takes the posterior MEAN, so it carries no sampling noise at all.
+        assert_quality(want_audio, got_audio, pcc=REFERENCE_PCC)
+    else:
+        assert want_audio is None, "the reference produced audio rows where we produced none"
 
 
 # ------------------------------------------------------- the presentation, on host
