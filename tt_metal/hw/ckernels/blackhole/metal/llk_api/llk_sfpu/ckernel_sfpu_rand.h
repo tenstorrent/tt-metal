@@ -40,6 +40,8 @@ inline void make_lane_salt() {
     // mutable LREG between calls. Reconstruct a lane-specific salt from the
     // read-only lane ID at the start of each face instead of carrying it in an
     // LREG. Offset LTILEID first so lane zero also receives a nonzero salt.
+    // The immediate offset also eliminates long-stream spatial ridges that
+    // remained when the salt was derived directly from LTILEID.
     // All lane PRNGs receive the same seed, while nearby cores receive related
     // seeds. Salting before a bijective finalizer diffuses those relationships
     // through the 31 bits consumed by SFPCAST without biasing a lane's output.
@@ -57,9 +59,12 @@ inline void begin_mix_uint32_mul24() {
     //   x ^= x << 8; x ^= x >> 14.
     // Blackhole's SFPMUL24 provides better diffusion than same-cost pure-ARX
     // candidates. LCONST_0_8373 has FP32 bits 0x3F56594B; its low 23 bits form
-    // the odd multiplier above, so the modular multiply is bijective. The salt
-    // and shift counts were selected by bounded search, scored for integer
-    // avalanche and lane/offset correlation after FP32 conversion.
+    // the odd multiplier above, so the modular multiply is bijective. The
+    // search was constrained to bijective sequences fitting the instruction
+    // and register budget. Candidates minimized avalanche RMS from 50% and
+    // worst lane/offset Pearson correlation across seeds, while keeping
+    // tile-mean dispersion near the IID expectation after FP32 conversion.
+    // Finalists were also checked for long-stream spatial ridges.
     TTI_SFPSHFT((-8) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG5, sfpshft_mod1_arg_imm_use_vc);
 }
 

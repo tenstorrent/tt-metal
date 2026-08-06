@@ -37,8 +37,10 @@ inline void make_lane_salt() {
     // Reconstruct the salt for every face so rand_tile remains valid after
     // arbitrary SFPU operations have clobbered the mutable LREGs. LTILEID is
     // the ISA-defined LREG15, whose lane i contains 2*i. Offset LTILEID first
-    // so lane zero also receives a nonzero salt. Load the shift counts into
-    // LREG0 because TTSim does not yet support SFPSHFT2's immediate mode.
+    // so lane zero also receives a nonzero salt. The immediate offset also
+    // eliminates long-stream spatial ridges that remained when the salt was
+    // derived directly from LTILEID. Load the shift counts into LREG0 because
+    // TTSim does not yet support SFPSHFT2's immediate mode.
     // All lane PRNGs receive the same seed, while nearby cores receive related
     // seeds. Salting before a bijective finalizer diffuses those relationships
     // through the 31 bits consumed by SFPCAST without biasing a lane's output.
@@ -59,10 +61,13 @@ inline void begin_mix_uint32_fast() {
     //   x ^= x >> 16; x += x << 10; x ^= x >> 6;
     //   x += x << 13; x ^= x >> 16.
     // Wormhole has no SFPMUL24, so this uses only shift, XOR, and modular add;
-    // every stage is bijective. The salt and shift counts were selected by
-    // bounded search, scored for integer avalanche and lane/offset correlation
-    // after FP32 conversion. Reusing shift 16 limits setup to four counts and
-    // keeps the replayed row at 18 instructions.
+    // every stage is bijective. The search was constrained to bijective
+    // sequences fitting the instruction and register budget. Candidates
+    // minimized avalanche RMS from 50% and worst lane/offset Pearson
+    // correlation across seeds, while keeping tile-mean dispersion near the
+    // IID expectation after FP32 conversion. Finalists were also checked for
+    // long-stream spatial ridges. Reusing shift 16 limits setup to four counts
+    // and keeps the replayed row at 18 instructions.
     //
     // SFPSHFT2's independent source and destination registers avoid staging
     // each input. LREG4, LREG7, LREG12, and LREG13 hold -16, 10, -6, and 13,
