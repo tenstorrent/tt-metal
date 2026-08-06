@@ -396,9 +396,9 @@ void inject_fabric_kernel_defines(
         if (control_plane.express_routing_enabled(src_fabric_node_id.mesh_id)) {
             const auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
             add_kernel_defines({
-                {"FABRIC_SKIP_LINKS_ENABLED", "1"},
-                {"FABRIC_SKIP_LINK_MESH_Y_SIZE", fmt::format("{}", mesh_shape[0])},
-                {"FABRIC_SKIP_LINK_MESH_X_SIZE", fmt::format("{}", mesh_shape[1])},
+                {"FABRIC_EXPRESS_ENABLED", "1"},
+                {"FABRIC_EXPRESS_MESH_Y_SIZE", fmt::format("{}", mesh_shape[0])},
+                {"FABRIC_EXPRESS_MESH_X_SIZE", fmt::format("{}", mesh_shape[1])},
             });
         }
     }

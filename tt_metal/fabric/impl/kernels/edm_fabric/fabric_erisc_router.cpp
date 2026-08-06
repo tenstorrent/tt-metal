@@ -505,7 +505,8 @@ FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index(eth_chan
 FORCE_INLINE uint16_t hop_cmd_to_sender_channel_mask(uint32_t hop_cmd) {
     uint32_t fwd_directions = hop_cmd & ~(1u << my_direction);
     uint16_t fwd_mask = 0;
-    constexpr size_t num_directions = z_router_enabled ? eth_chan_directions::COUNT : eth_chan_directions::COUNT - 1;
+    // Legacy hop commands are cardinal-only (4-bit FIELD_MASK), so Z is never set here.
+    constexpr size_t num_directions = eth_chan_directions::COUNT - 1;
     for (uint32_t dir = 0; dir < num_directions && fwd_directions; dir++) {
         if (fwd_directions & (1u << dir)) {
             size_t compact_idx = map_downstream_direction_to_compact_index(static_cast<eth_chan_directions>(dir));
@@ -542,10 +543,10 @@ enum PacketLocalForwardType : uint8_t {
 // the link is down
 bool did_something;
 
-// Cached pinned logical coordinates for skip-link decode: cached once at setup so transit does no
-// divide/mod. Populated in kernel_main when skip_links_enabled.
-uint8_t skip_link_local_y = 0;
-uint8_t skip_link_local_x = 0;
+// Cached pinned logical coordinates for express decode: cached once at setup so transit does no
+// divide/mod. Populated in kernel_main when express_enabled.
+uint8_t express_local_y = 0;
+uint8_t express_local_x = 0;
 
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
@@ -745,13 +746,6 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
             ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH>(
                            downstream_edm_interfaces, local_relay_interface);
     }
-    if constexpr (z_router_enabled) {
-        if ((hop_cmd & MeshRoutingFields::FORWARD_Z) && my_direction != eth_chan_directions::Z) {
-            ret_val =
-                ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, Z>(
-                               downstream_edm_interfaces, local_relay_interface);
-        }
-    }
     return ret_val;
 #else
     bool ret_val = false;
@@ -762,24 +756,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     using eth_chan_directions::WEST;
 
     switch (hop_cmd) {
-        case MeshRoutingFields::NOOP:
-            if constexpr (z_router_enabled) {
-                ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, Z>(
-                    downstream_edm_interfaces, local_relay_interface);
-            }
-            break;
-        case MeshRoutingFields::FORWARD_Z:
-            // Dedicated intra-mesh skip (Z) hop. The Z router itself delivers locally (no downstream
-            // needed); any cardinal router forwards onto its Z downstream.
-            if constexpr (z_router_enabled) {
-                if constexpr (my_direction == Z) {
-                    ret_val = true;
-                } else {
-                    ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, Z>(
-                        downstream_edm_interfaces, local_relay_interface);
-                }
-            }
-            break;
+        case MeshRoutingFields::NOOP: break;
         case MeshRoutingFields::FORWARD_EAST:
             ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST>(
                 downstream_edm_interfaces, local_relay_interface);
@@ -1005,14 +982,14 @@ FORCE_INLINE void forward_to_local_destination(
 // complete packet image with local delivery last. Skip-link transit never calls the legacy
 // hop-program header updates, never increments hop_index, and never rewrites per branch.
 //
-// Reachable only when skip_links_enabled; otherwise the RX hot path calls none of this and the
+// Reachable only when express_enabled; otherwise the RX hot path calls none of this and the
 // templates are never instantiated.
 
 // admit_combo<KEY>: local relay capacity when ld, plus the local downstream queue for every
 // eth output selected by KEY. The relay check mirrors check_downstream_has_space's self-direction
 // branch: only UDM mode queues local delivery through a relay interface.
 template <uint8_t KEY, typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE bool admit_skip_link_combo(
+FORCE_INLINE bool admit_express_combo(
     bool ld,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
@@ -1045,7 +1022,7 @@ FORCE_INLINE bool admit_skip_link_combo(
 // before send. Local delivery is done by the caller after the dispatch so every arm is
 // straight-line code and the key switch lowers to a clean jump table.
 template <uint8_t KEY, typename DownstreamSenderT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE void forward_skip_link_combo(
+FORCE_INLINE void forward_express_combo(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     uint16_t payload_size_bytes,
     ROUTING_FIELDS_TYPE cached_routing_fields,
@@ -1093,28 +1070,28 @@ FORCE_INLINE void forward_skip_link_combo(
 // Hand-written 16-arm admit dispatch over the dense key. Compile-time KEY selection keeps
 // each admitted output compile-time visible and removes unselected queue checks.
 template <typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE __attribute__((optimize("jump-tables"))) bool admit_skip_link_dispatch(
+FORCE_INLINE __attribute__((optimize("jump-tables"))) bool admit_express_dispatch(
     uint8_t key,
     bool ld,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
     switch (key) {
-        case 0: return admit_skip_link_combo<0>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 1: return admit_skip_link_combo<1>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 2: return admit_skip_link_combo<2>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 3: return admit_skip_link_combo<3>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 4: return admit_skip_link_combo<4>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 5: return admit_skip_link_combo<5>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 6: return admit_skip_link_combo<6>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 7: return admit_skip_link_combo<7>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 8: return admit_skip_link_combo<8>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 9: return admit_skip_link_combo<9>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 10: return admit_skip_link_combo<10>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 11: return admit_skip_link_combo<11>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 12: return admit_skip_link_combo<12>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 13: return admit_skip_link_combo<13>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 14: return admit_skip_link_combo<14>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 15: return admit_skip_link_combo<15>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 0: return admit_express_combo<0>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 1: return admit_express_combo<1>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 2: return admit_express_combo<2>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 3: return admit_express_combo<3>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 4: return admit_express_combo<4>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 5: return admit_express_combo<5>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 6: return admit_express_combo<6>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 7: return admit_express_combo<7>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 8: return admit_express_combo<8>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 9: return admit_express_combo<9>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 10: return admit_express_combo<10>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 11: return admit_express_combo<11>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 12: return admit_express_combo<12>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 13: return admit_express_combo<13>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 14: return admit_express_combo<14>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 15: return admit_express_combo<15>(ld, downstream_edm_interfaces, local_relay_interface);
         default: return false;
     }
 }
@@ -1122,7 +1099,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool admit_skip_link_dispa
 // Hand-written 16-arm forward dispatch over the same dense key. Every arm is straight-line code
 // (local delivery lives at the call site), so the switch lowers to a clean jump table.
 template <typename DownstreamSenderT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE __attribute__((optimize("jump-tables"))) void forward_skip_link_dispatch(
+FORCE_INLINE __attribute__((optimize("jump-tables"))) void forward_express_dispatch(
     uint8_t key,
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
@@ -1131,67 +1108,67 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void forward_skip_link_dis
     const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
     switch (key) {
         case 0:
-            forward_skip_link_combo<0>(
+            forward_express_combo<0>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 1:
-            forward_skip_link_combo<1>(
+            forward_express_combo<1>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 2:
-            forward_skip_link_combo<2>(
+            forward_express_combo<2>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 3:
-            forward_skip_link_combo<3>(
+            forward_express_combo<3>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 4:
-            forward_skip_link_combo<4>(
+            forward_express_combo<4>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 5:
-            forward_skip_link_combo<5>(
+            forward_express_combo<5>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 6:
-            forward_skip_link_combo<6>(
+            forward_express_combo<6>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 7:
-            forward_skip_link_combo<7>(
+            forward_express_combo<7>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 8:
-            forward_skip_link_combo<8>(
+            forward_express_combo<8>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 9:
-            forward_skip_link_combo<9>(
+            forward_express_combo<9>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 10:
-            forward_skip_link_combo<10>(
+            forward_express_combo<10>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 11:
-            forward_skip_link_combo<11>(
+            forward_express_combo<11>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 12:
-            forward_skip_link_combo<12>(
+            forward_express_combo<12>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 13:
-            forward_skip_link_combo<13>(
+            forward_express_combo<13>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 14:
-            forward_skip_link_combo<14>(
+            forward_express_combo<14>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 15:
-            forward_skip_link_combo<15>(
+            forward_express_combo<15>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         default: break;
@@ -1217,43 +1194,9 @@ FORCE_INLINE
     using eth_chan_directions::NORTH;
     using eth_chan_directions::SOUTH;
     using eth_chan_directions::WEST;
-    using eth_chan_directions::Z;
 
     switch (hop_cmd) {
-        case MeshRoutingFields::NOOP:
-            if constexpr (z_router_enabled) {
-                if constexpr (my_direction == Z) {
-                    forward_to_local_destination<rx_channel_id>(
-                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-                } else {
-                    constexpr auto edm_index = get_downstream_edm_interface_index<Z>();
-                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                        packet_start,
-                        payload_size_bytes,
-                        cached_routing_fields,
-                        downstream_edm_interfaces[edm_index],
-                        transaction_id);
-                }
-            }
-            break;
-        case MeshRoutingFields::FORWARD_Z:
-            // Dedicated intra-mesh skip (Z) hop. At the destination Z router deliver locally; otherwise
-            // forward the packet onto the Z downstream (skip link).
-            if constexpr (z_router_enabled) {
-                if constexpr (my_direction == Z) {
-                    forward_to_local_destination<rx_channel_id>(
-                        local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-                } else {
-                    constexpr auto edm_index = get_downstream_edm_interface_index<Z>();
-                    forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                        packet_start,
-                        payload_size_bytes,
-                        cached_routing_fields,
-                        downstream_edm_interfaces[edm_index],
-                        transaction_id);
-                }
-            }
-            break;
+        case MeshRoutingFields::NOOP: break;
         case MeshRoutingFields::FORWARD_EAST:
             if constexpr (my_direction == EAST) {
                 forward_to_local_destination<rx_channel_id>(
@@ -1973,7 +1916,7 @@ FORCE_INLINE
             local_sender_channel.get_cached_next_buffer_slot_addr());
         // Skip-link 2D transit consumes no hop program, so the sender step must not run the
         // legacy 2D header update (hop_index advance / branch-offset jump).
-        if constexpr (!UPDATE_PKT_HDR_ON_RX_CH && !skip_links_enabled) {
+        if constexpr (!UPDATE_PKT_HDR_ON_RX_CH && !express_enabled) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
@@ -2156,17 +2099,17 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
         uint32_t hop_cmd;
-        uint8_t skip_link_fwd_key = 0;
-        bool skip_link_local_deliver = false;
+        uint8_t express_fwd_key = 0;
+        bool express_local_deliver = false;
         // Intermesh egress handoff state: set only when this chip is the mesh's exit for the packet;
         // carries the resolved INTERMESH downstream slot from admission to the forward phase.
-        bool skip_link_egress = false;
-        uint8_t skip_link_egress_index = 0;
+        bool express_egress = false;
+        uint8_t express_egress_index = 0;
         bool can_send_to_all_local_chip_receivers;
         if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D)
             // need the FABRIC_2D ifdef since the packet header for 1D does not have route_buffer field in it.
-            if constexpr (skip_links_enabled) {
+            if constexpr (express_enabled) {
                 // Skip-link RX hot path: landing intercept (boundary receivers only)
                 // -> decode -> validate -> intermesh-exit intercept -> admit. No hop program, no map
                 // rebuild beyond the landing encode, no header mutation.
@@ -2177,11 +2120,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     // destination: final target — preserving the retained final destination; ordinary
                     // decode then resumes below on the fresh maps.
                     fabric_set_indexed_intermesh_landing_route(
-                        packet_header, routing_table, SKIP_LINK_MESH_Y_SIZE, SKIP_LINK_MESH_X_SIZE);
+                        packet_header, routing_table, EXPRESS_MESH_Y_SIZE, EXPRESS_MESH_X_SIZE);
                 }
                 const std::uint8_t action =
                     IndexedMeshRoutingFields::decode_action<static_cast<eth_chan_directions>(my_direction)>(
-                        packet_header->route_buffer, skip_link_local_y, skip_link_local_x, SKIP_LINK_MESH_Y_SIZE);
+                        packet_header->route_buffer, express_local_y, express_local_x, EXPRESS_MESH_Y_SIZE);
                 if (!IndexedMeshRoutingFields::action_is_valid<static_cast<eth_chan_directions>(my_direction)>(
                         action)) {
                     // Fail-stop on invalid actions: commit no copy and stall the parent RX packet.
@@ -2211,23 +2154,20 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                             ASSERT(false);
                             can_send_to_all_local_chip_receivers = false;
                         } else {
-                            skip_link_egress = true;
-                            skip_link_egress_index =
+                            express_egress = true;
+                            express_egress_index =
                                 static_cast<uint8_t>(get_downstream_edm_interface_index(boundary_dir));
                             can_send_to_all_local_chip_receivers =
-                                downstream_edm_interfaces[skip_link_egress_index]
+                                downstream_edm_interfaces[express_egress_index]
                                     .template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
                         }
                     } else {
-                        skip_link_local_deliver = (action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) != 0;
-                        skip_link_fwd_key =
+                        express_local_deliver = (action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) != 0;
+                        express_fwd_key =
                             IndexedMeshRoutingFields::pack_fwd_key<static_cast<eth_chan_directions>(my_direction)>(
                                 action);
-                        can_send_to_all_local_chip_receivers = admit_skip_link_dispatch(
-                            skip_link_fwd_key,
-                            skip_link_local_deliver,
-                            downstream_edm_interfaces,
-                            local_relay_interface);
+                        can_send_to_all_local_chip_receivers = admit_express_dispatch(
+                            express_fwd_key, express_local_deliver, downstream_edm_interfaces, local_relay_interface);
                     }
                 }
             } else {
@@ -2274,27 +2214,23 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     receiver_buffer_index);
                 if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D)
-                    if constexpr (skip_links_enabled) {
-                        if (skip_link_egress) {
+                    if constexpr (express_enabled) {
+                        if (express_egress) {
                             // The exit chip's only output is the INTERMESH egress, sent
                             // as-is — no local delivery, no header mutation.
                             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                                 packet_header,
                                 packet_header->payload_size_bytes,
                                 cached_routing_fields,
-                                downstream_edm_interfaces[skip_link_egress_index],
+                                downstream_edm_interfaces[express_egress_index],
                                 trid);
                         } else {
                             // Same dense key as admission; immutable full-packet copies to the
                             // selected eth outputs. Local delivery stays outside the dispatch so
                             // every arm is straight-line and the key switch lowers to a jump table.
-                            forward_skip_link_dispatch(
-                                skip_link_fwd_key,
-                                packet_header,
-                                cached_routing_fields,
-                                downstream_edm_interfaces,
-                                trid);
-                            if (skip_link_local_deliver) {
+                            forward_express_dispatch(
+                                express_fwd_key, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
+                            if (express_local_deliver) {
                                 forward_to_local_destination<receiver_channel>(
                                     local_relay_interface, packet_header, packet_header->payload_size_bytes, trid);
                             }
@@ -2579,11 +2515,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
     tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
-    if constexpr (skip_links_enabled) {
+    if constexpr (express_enabled) {
         // Cache the pinned logical coordinates once at setup; transit reads no table fields and
         // does no divide/mod on the hot path.
-        skip_link_local_y = routing_table.my_mesh_coord_y;
-        skip_link_local_x = routing_table.my_mesh_coord_x;
+        express_local_y = routing_table.my_mesh_coord_y;
+        express_local_x = routing_table.my_mesh_coord_x;
     }
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
