@@ -105,6 +105,16 @@ std::chrono::seconds writer_timeout() {
     return v;
 }
 
+// TT_METAL_PERF_DEBUG_WRITER_DIE_AFTER: test hook -- writer thread exits after N successful reads, so the
+// "consumer vanished mid-stream" deadlock can be reproduced deliberately. 0 (default) disables it.
+uint32_t writer_die_after() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_WRITER_DIE_AFTER");
+        return (s == nullptr || *s == '\0') ? 0u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+    }();
+    return v;
+}
+
 // TT_METAL_PERF_DEBUG_DRAIN_TENSIX: run the drain kernel on a Tensix BRISC instead of a DRISC. Control
 // path only -- see boot_device(). Requires slow dispatch.
 bool drain_on_tensix() {
@@ -596,7 +606,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         ctx.stop_addr[d] = ctx.done_addr[d] + 64;
         ctx.results_addr[d] = ctx.stop_addr[d] + 64;
         const uint32_t cfg_l1 = ctx.drisc_l1_base[d] + region - kCfgReserve;
-        TT_FATAL(ctx.results_addr[d] + 128 <= cfg_l1, "DRISC L1 layout overlaps the socket config");
+        TT_FATAL(ctx.results_addr[d] + 192 <= cfg_l1, "DRISC L1 layout overlaps the socket config");
 
         // Stream mode first: the socket config is written from the host and only lands in L1 once the NIU
         // stops forwarding inbound DRAM-range addresses to GDDR. The kernel restores it on the host's word.
@@ -631,6 +641,15 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 sizeof(zero3),
                 tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
                 ctx.drisc_l1_noc[d] + (ctx.done_addr[d] - ctx.drisc_l1_base[d]));
+            // Same reason, for the results block: it is published only on kernel exit, so a drainer that is
+            // still running at teardown leaves the PREVIOUS run's numbers there and they read as this run's.
+            // That is how a 42 s run reported "495.7 ms, credit-wait 0.1%" and hid its own credit timeouts.
+            const std::vector<uint32_t> zero_res(48, 0);
+            cluster.write_core(
+                zero_res.data(),
+                (uint32_t)(zero_res.size() * sizeof(uint32_t)),
+                tt_cxy_pair(device_id, ctx.drisc_virtual[d]),
+                ctx.drisc_l1_noc[d] + (ctx.results_addr[d] - ctx.drisc_l1_base[d]));
 
             ctx.drain_program[d] = std::make_unique<Program>(CreateProgram());
             const std::vector<uint32_t> cargs = {
@@ -1056,6 +1075,20 @@ void PerfDebugProfiler::writer_thread(uint32_t sock_idx) {
         if (any && ring_) {
             ring_->ring.writer().wake_readers();
         }
+        // TEST HOOK: stop acking after N successful reads, to reproduce "the host consumer went away while
+        // the device is mid-stream" on demand. That is the state the unbounded credit wait used to deadlock
+        // in; with the bounded wait the drainer should drop frames and the workload should still finish.
+        if (any && writer_die_after() != 0) {
+            static uint32_t reads_done = 0;
+            if (++reads_done >= writer_die_after()) {
+                log_warning(
+                    tt::LogMetal,
+                    "[perf-debug profiler] TEST HOOK: writer exiting after {} reads; the device will lose "
+                    "its credits from here on",
+                    reads_done);
+                break;
+            }
+        }
         if (all_done) {
             break;
         }
@@ -1380,7 +1413,7 @@ void PerfDebugProfiler::stop() {
             }
             // The drainer's own view of the run. Host-side page and marker counts cannot distinguish a
             // bandwidth wall from a latency one; sweeps/frames/cycles can.
-            std::vector<uint32_t> res(33, 0);
+            std::vector<uint32_t> res(35, 0);
             cluster.read_core(
                 res.data(),
                 res.size() * sizeof(uint32_t),
@@ -1403,6 +1436,17 @@ void PerfDebugProfiler::stop() {
                 res[7],
                 kernel_profiler::PROFILER_L1_VECTOR_SIZE,
                 res[8]);
+            // A bounded credit wait means a wedged consumer costs FRAMES, not the workload. Never let that
+            // trade happen quietly: without this line a dropped frame is indistinguishable from a clean run.
+            if (res[33] != 0 || res[34] != 0) {
+                log_warning(
+                    tt::LogMetal,
+                    "[perf-debug profiler] CREDIT WAIT TIMED OUT {}x -- dropped {} frames to keep the "
+                    "workload running. The host consumer stopped acking (see the writer WALL TIMEOUT above); "
+                    "capture for those frames is lost but the producers were never blocked.",
+                    res[33],
+                    res[34]);
+            }
             // Per-phase, so a lifetime average can never again hide that empty and loaded sweeps differ by
             // orders of magnitude. `reserve` is the host FIFO credit wait: if that dominates, the DRISC is not
             // the bottleneck at all -- the host consumer is.

@@ -73,6 +73,40 @@ inline void write_to_host_chunked(uint32_t pcie_xy_enc, uint32_t src_l1, uint64_
     }
 }
 
+// Bounded replacement for socket_reserve_pages (socket_api.h), which spins on `bytes_free < num_bytes`
+// with NO escape. That spin is a deadlock trap: the host writer gives up acking after its no-progress
+// watchdog, and `*stop` is only re-read at the top of the sweep loop, so a drainer parked here is both
+// unkillable and unfeedable -- and because the producers are lossless, the WORKLOAD hangs with it.
+//
+// Same credit test, three ways out: credit granted (true), host asked us to stop, or the deadline passed.
+// Returning false means "ship nothing this time"; the caller drops the frame. That is the right trade --
+// the heads have already been written back, so the producers keep running and only capture is lost.
+inline bool reserve_pages_bounded(
+    const SocketSenderInterface& socket,
+    uint32_t num_pages,
+    uint64_t deadline,
+    volatile tt_l1_ptr uint32_t* stop) {
+    const uint32_t num_bytes = num_pages * socket.page_size;
+    volatile tt_l1_ptr uint32_t* acked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
+    const uint32_t acked_end = socket.bytes_acked_base_addr + socket.num_downstreams * bytes_acked_size_bytes;
+    while (reinterpret_cast<uint32_t>(acked) < acked_end) {
+        for (;;) {
+            invalidate_l1_cache();
+            // bytes_acked is never ahead of bytes_sent, so this cannot underflow
+            const uint32_t bytes_free = socket.downstream_fifo_total_size - (socket.bytes_sent - *acked);
+            if (bytes_free >= num_bytes) {
+                break;
+            }
+            if (*stop != 0 || get_timestamp() >= deadline) {
+                return false;
+            }
+        }
+        acked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            reinterpret_cast<uint32_t>(acked) + bytes_acked_size_bytes);
+    }
+    return true;
+}
+
 void kernel_main() {
     constexpr uint32_t kStageBase = get_compile_time_arg_val(0);  // slot 0's PREFIX (not its span)
     constexpr uint32_t kNStage = get_compile_time_arg_val(1);     // cores per batch = max cores per push
@@ -191,6 +225,11 @@ void kernel_main() {
     uint32_t sweeps_idle = 0;
     uint32_t max_sweep = 0;
     uint32_t max_reserve = 0;
+    uint32_t credit_timeouts = 0;  // bounded credit wait expired -> frame dropped instead of deadlocking
+    uint32_t dropped_frames = 0;
+    // ~50 ms at 1.35 GHz. Enormously above anything healthy (worst observed credit wait is ~0.1 us), so it
+    // never fires in normal operation -- it exists purely to convert "wait forever" into "lose a frame".
+    constexpr uint64_t kCreditWaitCycles = 67500000ull;
 
     // Ship `count` adjacent slots as ONE contiguous write. They are already framed in place: nothing is
     // copied, nothing is assembled.
@@ -202,8 +241,17 @@ void kernel_main() {
         const uint32_t npages = count * kPagesPerSlot;
         const uint64_t t0 = get_timestamp();
         *phase = kPhaseReserve;  // if the host sees this stuck, the credit wait is the deadlock
-        socket_reserve_pages(sender, npages);
+        const bool credited = reserve_pages_bounded(sender, npages, t0 + kCreditWaitCycles, stop);
         *phase = kPhaseWrite;
+        if (!credited) {
+            // The consumer is gone or wedged. DROP this frame rather than block: the heads for these slots
+            // were already written back, so the producers stay unblocked and the workload runs to
+            // completion. Capture is best-effort; the workload is not.
+            credit_timeouts++;
+            dropped_frames += count;
+            c_reserve += get_timestamp() - t0;
+            return;
+        }
         const uint64_t t1 = get_timestamp();
         c_reserve += t1 - t0;
         if (static_cast<uint32_t>(t1 - t0) > max_reserve) {
@@ -423,9 +471,17 @@ void kernel_main() {
     out[30] = static_cast<uint32_t>(c_wr_push >> 32);
     out[31] = static_cast<uint32_t>(c_wr_notify & 0xFFFFFFFFu);
     out[32] = static_cast<uint32_t>(c_wr_notify >> 32);
+    out[33] = credit_timeouts;
+    out[34] = dropped_frames;
 
     *phase = kPhaseExit;
-    update_socket_config(sender);
+    // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same
+    // host FIFO the credit wait just gave up on, so on a dead consumer it blocks and the kernel never
+    // exits -- which strands a resident drainer on the core and forces a card reset before the next run.
+    // Skipping it costs nothing: the socket is being torn down anyway.
+    if (credit_timeouts == 0) {
+        update_socket_config(sender);
+    }
 
     // Published last, after the socket barrier, so the host only sees `done` once every page is out.
     volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr);
