@@ -214,10 +214,13 @@ class TtVoxtralGPT:
         # NOTES.md [gpt-22] -- w1 and w3 stay SEPARATE -- fusing them is 4x SLOWER, and why...
         g = ttnn.linear(h, w["w1"], activation="silu", compute_kernel_config=COMPUTE_CONFIG,
                         memory_config=mc)
-        u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
-                                         memory_config=mc), memory_config=mc)
-        return ttnn.add(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG,
-                                       memory_config=mc), memory_config=mc)
+        # NOTES.md [gpt-25] -- IN PLACE. g and x are both dead immediately after, and on Blackhole
+        # the allocation is ~12 us of a ~65 us op. Worth 0.929 ms/step with the two adds, and
+        # bit-identical. 6.37 measured this at +0.001 ms on the N150. STATUS.md 6.47.
+        u = ttnn.multiply_(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
+                                          memory_config=mc))
+        return ttnn.add_(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG,
+                                        memory_config=mc))
 
     def _layer(self, x, w, S, cos, sin, mask, cache=None):
         """x [1,S,3072] -> same. Pre-norm GQA with RoPE + causal mask, then SwiGLU.
@@ -259,8 +262,10 @@ class TtVoxtralGPT:
             compute_kernel_config=COMPUTE_CONFIG, program_config=_SDPA_PRG)
         # NOTES.md [gpt-03b] -- no memory_config move: L1 here measures 0.999x, see [gpt-03]...
         a = ttnn.reshape(o, [1, 1, Q_WIDTH])
-        x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
-                                    memory_config=_L1), memory_config=_L1)
+        # in place -- see NOTES.md [gpt-25]. Safe: `x` is the layer input and is dead the moment
+        # this returns, and _norm below is evaluated BEFORE _mlp mutates anything.
+        x = ttnn.add_(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
+                                     memory_config=_L1))
         return self._mlp(x, self._norm(x, w["fn"]), w, _L1)
 
     @torch.no_grad()
