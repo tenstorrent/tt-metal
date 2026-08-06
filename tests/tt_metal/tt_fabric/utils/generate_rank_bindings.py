@@ -529,6 +529,28 @@ def generate_loudbox_rank_binding_yaml(rank_bindings, mesh_graph_desc_path, outp
     return rank_config
 
 
+def generate_loudbox_rank_binding_yaml(rank_bindings, mesh_graph_desc_path, output_file, devices_per_host=8):
+    """Generate rank binding YAML for loudbox (all devices visible on each host)."""
+    rank_bindings = copy.deepcopy(rank_bindings)
+
+    # For loudbox, each rank sees all local devices
+    visible_devices = ",".join(map(str, range(devices_per_host)))
+
+    for binding in rank_bindings:
+        binding["env_overrides"] = {"TT_VISIBLE_DEVICES": visible_devices}
+
+    rank_config = {
+        "rank_bindings": rank_bindings,
+        "mesh_graph_desc_path": mesh_graph_desc_path,
+    }
+
+    with open(output_file, "w") as f:
+        yaml.dump(rank_config, f, default_flow_style=False, sort_keys=False)
+
+    logger.info(f"Generated loudbox rank configuration file: {output_file}")
+    return rank_config
+
+
 def validate_device_mapping(tray_to_pcie_device_mapping):
     if "arch" not in tray_to_pcie_device_mapping:
         logger.error("Tray to PCIe device mapping does not contain arch")

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <set>
 #include <string_view>
 #include <type_traits>
@@ -337,7 +338,6 @@ void Kernel::process_scratchpad_binding_handles(
         callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word);
     }
 }
-
 ////////////////////////////////////////////////////////////
 // Blaze-only experimental named args
 // Removal is tracked by issue #50953
@@ -682,14 +682,14 @@ void Kernel::validate_runtime_args_size(
 
     // The enforced ceiling is no longer the conservative public floor (kernel_types.hpp:max_runtime_args).
     // Large unique RTAs are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, so they are no longer
-    // bounded by a single dispatch page.
+    // bounded by a single dispatch page. The RTA/CRTA region offset is stored in a uint16_t launch-message
+    // field (dev_msgs.h rta_offset_t), which caps the region at uint16_t max bytes.
     switch (this->get_kernel_programmable_core_type()) {
         case HalProgrammableCoreType::TENSIX:
             // The TENSIX kernel-config L1 size is device-dependent (derived from the allocator at program
-            // finalize, not available from the HAL here), so bound by the dispatch-core-independent
-            // large-unicast cap (see max_runtime_args_tensix above). The actual L1 fit is enforced later
-            // against the kernel-config ring buffer.
-            expected_max_rt_args = max_runtime_args_tensix;
+            // finalize, not available from the HAL here), so bound only by the uint16_t RTA offset field.
+            // The actual L1 fit is enforced later against the kernel-config ring buffer.
+            expected_max_rt_args = std::numeric_limits<uint16_t>::max() / sizeof(uint32_t);
             break;
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH:

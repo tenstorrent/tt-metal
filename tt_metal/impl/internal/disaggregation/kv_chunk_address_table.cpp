@@ -88,7 +88,8 @@ void KvChunkAddressTable::validate_config_id(uint32_t config_id) const {
     TT_FATAL(config_id < configs_.size(), "config_id {} >= num_configs {}", config_id, configs_.size());
 }
 
-size_t KvChunkAddressTable::flat_index(uint32_t config_id, uint32_t layer, uint32_t position_chunk, uint32_t slot) const {
+size_t KvChunkAddressTable::flat_index(
+    uint32_t config_id, uint32_t layer, uint32_t position_chunk, uint32_t slot) const {
     return (static_cast<size_t>(slot) * num_layers_x_chunks_[config_id]) +
            (static_cast<size_t>(layer) * num_position_chunks_[config_id]) + static_cast<size_t>(position_chunk);
 }

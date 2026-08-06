@@ -18,11 +18,9 @@ import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM
 
-# transformers 5.x moved no_init_weights to transformers.initialization; fall back
-# to the old location for transformers < 5.x.
-try:
+try:  # transformers >= 5 moved no_init_weights to transformers.initialization
     from transformers.initialization import no_init_weights
-except ImportError:
+except ImportError:  # transformers < 5
     from transformers.modeling_utils import no_init_weights
 
 import ttnn
@@ -92,7 +90,7 @@ def test_mlp_2d_config_creation():
     assert config.topology is None  # Will be auto-detected
 
 
-def test_mlp_2d_config_rejects_1d_mesh():
+def test_mlp_2d_config_rejects_1d_mesh(expect_error):
     """Test that MLP2DConfig raises assertion error for 1D mesh (requires 2D mesh)."""
 
     # Mock 1D device
@@ -105,7 +103,7 @@ def test_mlp_2d_config_rejects_1d_mesh():
 
     config = MLP2DConfig(w1=w1, w2=w2, w3=w3)
 
-    with pytest.raises(AssertionError, match="MLP2D requires 2D mesh"):
+    with expect_error(AssertionError, "MLP2D requires 2D mesh"):
         _resolve_mlp2d_config(config)
 
 
@@ -150,7 +148,7 @@ def test_mlp_2d_optimization_config():
     [(1, 1), (1, 2), (1, 8), (2, 4)],  # Non-Galaxy shapes - should be rejected by from_model_args
     ids=["1x1", "1x2", "1x8", "2x4"],
 )
-def test_mlp_2d_rejects_non_galaxy_from_model_args(cluster_shape):
+def test_mlp_2d_rejects_non_galaxy_from_model_args(cluster_shape, expect_error):
     """
     Test that MLP2D.from_model_args() raises ValueError for non-Galaxy devices.
     """
@@ -161,7 +159,7 @@ def test_mlp_2d_rejects_non_galaxy_from_model_args(cluster_shape):
 
     model_args = _DummyArgs(cluster_shape)
 
-    with pytest.raises(ValueError, match="MLP2D requires Galaxy topology"):
+    with expect_error(ValueError, "MLP2D requires Galaxy topology"):
         MLP2D.from_model_args(
             mesh_device=None,
             tt_ccl=None,
