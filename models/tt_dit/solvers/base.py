@@ -5,28 +5,60 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import Any
 
 import ttnn
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
+from .schedule import Schedule
 
 
 class Solver(ABC):
-    def __init__(self) -> None:
-        self._sigmas = None
-        self._alphas = None
+    """On-device solver for one denoising trajectory.
 
-    def set_schedule(self, sigmas: Sequence[float], alphas: Sequence[float] | None = None) -> None:
-        """Set the noise and signal schedules.
+    A solver owns the scheduler defining its discretization (where it has one) and the
+    `Schedule` derived from it, so the schedule has a single owner across a run.
+    """
+
+    def __init__(self, *, scheduler: Any = None) -> None:
+        self._scheduler = scheduler
+        self._schedule = None
+
+    @property
+    def scheduler(self) -> Any:
+        """The scheduler this solver was built from, or `None` if it has none."""
+        return self._scheduler
+
+    @property
+    def schedule(self) -> Schedule:
+        if self._schedule is None:
+            msg = "schedule must be set before stepping"
+            raise ValueError(msg)
+        return self._schedule
+
+    @property
+    def sigmas(self) -> tuple[float, ...]:
+        return self.schedule.sigmas
+
+    @property
+    def alphas(self) -> tuple[float, ...]:
+        return self.schedule.alphas
+
+    @property
+    def timesteps(self) -> tuple[float, ...]:
+        return self.schedule.timesteps
+
+    @abstractmethod
+    def set_schedule(
+        self, num_inference_steps: int | None = None, *, shift: float | None = None, **kwargs: Any
+    ) -> None:
+        """Derive and adopt the schedule for one denoising run.
 
         Args:
-            sigmas: Full noise schedule (length = number of steps + 1).
-            alphas: Full signal schedule (length = number of steps + 1). Defaults to 1 - sigmas.
+            num_inference_steps: Number of denoising steps.
+            shift: Flow shift for this run only; the construction-time value is used when
+                omitted. Each solver maps this onto its own scheduler's spelling.
+            kwargs: Solver-specific schedule arguments.
         """
-        self._sigmas = list(sigmas)
-        self._alphas = list(alphas) if alphas is not None else [1.0 - s for s in self._sigmas]
 
     @abstractmethod
     def step(self, *, step: int, latent: ttnn.Tensor, velocity_pred: ttnn.Tensor) -> ttnn.Tensor:
@@ -40,8 +72,3 @@ class Solver(ABC):
         Returns:
             The predicted latent at the next step.
         """
-
-    def _assert_schedule(self) -> None:
-        if self._sigmas is None or self._alphas is None:
-            msg = "schedule must be set before stepping"
-            raise ValueError(msg)
