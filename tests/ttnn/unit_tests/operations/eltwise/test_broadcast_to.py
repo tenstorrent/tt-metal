@@ -198,17 +198,18 @@ def test_broadcast_to_profile(device, dtype_pt, dtype_tt, shape_and_broadcast_sp
         ttnn.synchronize_device(device)
 
 
+# error_msg must appear in the device TT_FATAL text so the CI triager masks it as expected.
 input_bcast_shape_pairs = [
-    ((1, 1, 1, 1), (1, 1, 1)),
-    ((1, 1, 1, 1), (1, 1, 1, 1, 1)),
-    ((1, 1, 1, 1, 1), (1, 1, 1, 1, 1)),
-    ((2, 1), (3, 1)),
+    ((1, 1, 1, 1), (1, 1, 1), "Input tensor shape"),
+    ((1, 1, 1, 1), (1, 1, 1, 1, 1), "Tensor shape and broadcast size"),
+    ((1, 1, 1, 1, 1), (1, 1, 1, 1, 1), "Tensor shape and broadcast size"),
+    ((2, 1), (3, 1), "Input dimension"),
 ]
 
 
 @pytest.mark.parametrize("dtype_pt, dtype_tt", ((torch.bfloat16, ttnn.bfloat16),))
-@pytest.mark.parametrize("input, bcast", input_bcast_shape_pairs)
-def test_broadcast_to_invalid(input, bcast, dtype_pt, dtype_tt, device):
+@pytest.mark.parametrize("input, bcast, error_msg", input_bcast_shape_pairs)
+def test_broadcast_to_invalid(input, bcast, error_msg, dtype_pt, dtype_tt, device, expect_error):
     torch.manual_seed(0)
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(input)
@@ -219,7 +220,7 @@ def test_broadcast_to_invalid(input, bcast, dtype_pt, dtype_tt, device):
         layout=ttnn.TILE_LAYOUT,
     )
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, error_msg):
         _ = ttnn.experimental.broadcast_to(a_tt, bcast)
 
 
@@ -229,7 +230,7 @@ input_bcast_shape_pairs = [
 
 
 @pytest.mark.parametrize("input, bcast", input_bcast_shape_pairs)
-def test_invalid_broadcast_to_sharding(input, bcast, device):
+def test_invalid_broadcast_to_sharding(input, bcast, device, expect_error):
     torch.manual_seed(0)
     dtype_pt, dtype_tt = [torch.bfloat16, ttnn.bfloat16]
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype_tt)(input)
@@ -248,7 +249,7 @@ def test_invalid_broadcast_to_sharding(input, bcast, device):
         memory_config=sharded_config,
     )
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "Input tensor sharding not supported"):
         _ = ttnn.experimental.broadcast_to(a_tt, bcast, memory_config=sharded_config)
 
 
