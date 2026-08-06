@@ -17,7 +17,12 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -65,31 +70,35 @@ void kernel_main() {
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
     constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
+    // group_row_offset is the signed difference encoded in uint32_t by the host. Modular
+    // addition reconstructs the original group size for both positive and negative offsets.
+    constexpr uint32_t full_group_size = (block_w_minus_one * tile_width) + group_row_offset;
+    constexpr uint32_t group_start_stride = full_group_size % tile_width;
 
     // dst regs
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
 
     // input cbs
-    constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t dfb_in_id = tt::CBIndex::c_1;
-    constexpr uint32_t dfb_scaler_id = tt::CBIndex::c_2;
-    constexpr uint32_t dfb_scaler_global_id = tt::CBIndex::c_4;
-    constexpr uint32_t dfb_eps_id = tt::CBIndex::c_3;
-    constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
-    constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
-    constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
+    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in_id = tt::CBIndex::c_1;
+    constexpr uint32_t cb_scaler_id = tt::CBIndex::c_2;
+    constexpr uint32_t cb_scaler_global_id = tt::CBIndex::c_4;
+    constexpr uint32_t cb_eps_id = tt::CBIndex::c_3;
+    constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
+    constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
+    constexpr uint32_t cb_input_mask_id = tt::CBIndex::c_7;
 
     // interm cbs
-    constexpr uint32_t dfb_repack_id = tt::CBIndex::c_11;
-    constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_12;
-    constexpr uint32_t dfb_x_id = tt::CBIndex::c_13;
-    constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
-    constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
-    constexpr uint32_t dfb_ex_external_id = tt::CBIndex::c_10;
-    constexpr uint32_t dfb_ex_global_id = num_cores_per_mcast_group == 1 ? dfb_ex_partial_id : tt::CBIndex::c_15;
-    constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
-    constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
+    constexpr uint32_t cb_repack_id = tt::CBIndex::c_11;
+    constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_12;
+    constexpr uint32_t cb_x_id = tt::CBIndex::c_13;
+    constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr uint32_t cb_ex_id = tt::CBIndex::c_9;
+    constexpr uint32_t cb_ex_external_id = tt::CBIndex::c_10;
+    constexpr uint32_t cb_ex_global_id = num_cores_per_mcast_group == 1 ? cb_ex_partial_id : tt::CBIndex::c_15;
+    constexpr uint32_t cb_ex2pe_id = tt::CBIndex::c_17;
+    constexpr uint32_t cb_ones_id = tt::CBIndex::c_26;
 
     // #50682 pad-correction CBs. dfb_k holds K from the writer; dfb_msq is transient scratch;
     // dfb_kmsq carries K*E[x]^2 across the centering loop.
@@ -98,14 +107,14 @@ void kernel_main() {
     constexpr uint32_t dfb_kmsq_id = tt::CBIndex::c_20;
 
     // output cb
-    constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
     // not used in cases of negative mask
-    constexpr uint32_t dfb_out_id = tt::CBIndex::c_30;
+    constexpr uint32_t cb_out_id = tt::CBIndex::c_30;
 #else
-    constexpr uint32_t dfb_out_id =
-        (do_gamma or do_beta) ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? dfb_in_id : dfb_out0_id)
-                              : dfb_out0_id;
+    constexpr uint32_t cb_out_id =
+        (do_gamma or do_beta) ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? cb_in_id : cb_out0_id)
+                              : cb_out0_id;
 #endif
 
     // tile offset
@@ -124,38 +133,36 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
 #ifndef FUSE_NEGATIVE_MASK
-    constexpr int dfb_outgamma_id = dfb_in_id;
-    constexpr int dfb_inbeta_id = do_gamma ? dfb_outgamma_id : dfb_out_id;
-    constexpr int dfb_outbeta_id = do_gamma ? dfb_out_id : dfb_in_id;
-    constexpr int dfb_untilize_in_id = (do_gamma and not do_beta) ? dfb_outgamma_id
-                                       : do_beta                  ? dfb_outbeta_id
-                                                                  : dfb_out_id;
-    constexpr int dfb_untilize_out_id =
+    constexpr int cb_outgamma_id = cb_in_id;
+    constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_out_id;
+    constexpr int cb_outbeta_id = do_gamma ? cb_out_id : cb_in_id;
+    constexpr int cb_untilize_in_id = (do_gamma and not do_beta) ? cb_outgamma_id : do_beta ? cb_outbeta_id : cb_out_id;
+    constexpr int cb_untilize_out_id =
 #ifdef READER_REPACK
-        dfb_repack_out_id;
+        cb_repack_out_id;
 #else
-        dfb_out0_id;
+        cb_out0_id;
 #endif
 #else
-    constexpr int dfb_outgamma_id = dfb_in_id;
-    constexpr int dfb_inbeta_id = dfb_in_id;
-    constexpr int dfb_outbeta_id = dfb_in_id;
-    constexpr int dfb_untilize_in_id = dfb_in_id;
-    constexpr int dfb_untilize_out_id =
+    constexpr int cb_outgamma_id = cb_in_id;
+    constexpr int cb_inbeta_id = cb_in_id;
+    constexpr int cb_outbeta_id = cb_in_id;
+    constexpr int cb_untilize_in_id = cb_in_id;
+    constexpr int cb_untilize_out_id =
 #ifdef READER_REPACK
-        dfb_repack_out_id;
+        cb_repack_out_id;
 #else
-        dfb_out0_id;
+        cb_out0_id;
 #endif
 #endif
 #else
-    constexpr int dfb_outgamma_id = do_beta ? dfb_in_id : dfb_out0_id;
-    constexpr int dfb_inbeta_id = do_gamma ? dfb_outgamma_id : dfb_out_id;
-    constexpr int dfb_outbeta_id = dfb_out0_id;
+    constexpr int cb_outgamma_id = do_beta ? cb_in_id : cb_out0_id;
+    constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_out_id;
+    constexpr int cb_outbeta_id = cb_out0_id;
 #endif
 
     // Used in cases of negative mask provided
-    constexpr uint32_t dfb_in_negative_mask_id = tt::CBIndex::c_14;
+    constexpr uint32_t cb_in_negative_mask_id = tt::CBIndex::c_14;
 
 #ifdef FUSE_NEGATIVE_MASK
     constexpr bool use_negative_mask = true;
@@ -163,67 +170,101 @@ void kernel_main() {
     constexpr bool use_negative_mask = false;
 #endif
 
-    DataflowBuffer dfb_beta(dfb_beta_id);
-    DataflowBuffer dfb_eps(dfb_eps_id);
-    DataflowBuffer dfb_ex(dfb_ex_id);
-    DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
-    DataflowBuffer dfb_ex_external(dfb_ex_external_id);
-    DataflowBuffer dfb_ex_global(dfb_ex_global_id);
-    DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
-    DataflowBuffer dfb_gamma(dfb_gamma_id);
-    DataflowBuffer dfb_in(dfb_in_id);
-    DataflowBuffer dfb_in_negative_mask(dfb_in_negative_mask_id);
-    DataflowBuffer dfb_inbeta(dfb_inbeta_id);
-    DataflowBuffer dfb_input_mask(dfb_input_mask_id);
-    DataflowBuffer dfb_ones(dfb_ones_id);
-    DataflowBuffer dfb_out(dfb_out_id);
-    DataflowBuffer dfb_outbeta(dfb_outbeta_id);
-    DataflowBuffer dfb_outgamma(dfb_outgamma_id);
-    DataflowBuffer dfb_scaler(dfb_scaler_id);
-    DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
-    DataflowBuffer dfb_x(dfb_x_id);
-    DataflowBuffer dfb_k(dfb_k_id);
-    DataflowBuffer dfb_msq(dfb_msq_id);
-    DataflowBuffer dfb_kmsq(dfb_kmsq_id);
+    constexpr auto strided_col_input = [](uint32_t cb) {
+        return ckl::input(
+            cb,
+            ckl::WaitPolicy::None,
+            ckl::PopPolicy::None,
+            ckl::OperandKind::Col,
+            ckl::DataFormatReconfig::Disabled,
+            ckl::TileOffset::Strided);
+    };
+    constexpr auto strided_block_input = [](uint32_t cb) {
+        return ckl::input(
+            cb,
+            ckl::WaitPolicy::None,
+            ckl::PopPolicy::None,
+            ckl::OperandKind::Block,
+            ckl::DataFormatReconfig::Disabled,
+            ckl::TileOffset::Strided);
+    };
+    constexpr auto strided_output = [](uint32_t cb) {
+        return ckl::output(
+            cb,
+            ckl::ReservePolicy::None,
+            ckl::PushPolicy::None,
+            ckl::DataFormatReconfig::Disabled,
+            ckl::PackRelu::Disabled,
+            ckl::L1Accumulation::Disabled,
+            ckl::DestAccumulation::Disabled,
+            ckl::TileOffset::Strided);
+    };
+
+    DataflowBuffer cb_beta(cb_beta_id);
+    DataflowBuffer cb_eps(cb_eps_id);
+    DataflowBuffer cb_ex(cb_ex_id);
+    DataflowBuffer cb_ex2pe(cb_ex2pe_id);
+    DataflowBuffer cb_ex_external(cb_ex_external_id);
+    DataflowBuffer cb_ex_global(cb_ex_global_id);
+    DataflowBuffer cb_ex_partial(cb_ex_partial_id);
+    DataflowBuffer cb_gamma(cb_gamma_id);
+    DataflowBuffer cb_in(cb_in_id);
+    DataflowBuffer cb_in_negative_mask(cb_in_negative_mask_id);
+    DataflowBuffer cb_inbeta(cb_inbeta_id);
+    DataflowBuffer cb_input_mask(cb_input_mask_id);
+    DataflowBuffer cb_ones(cb_ones_id);
+    DataflowBuffer cb_out(cb_out_id);
+    DataflowBuffer cb_outbeta(cb_outbeta_id);
+    DataflowBuffer cb_outgamma(cb_outgamma_id);
+    DataflowBuffer cb_scaler(cb_scaler_id);
+    DataflowBuffer cb_scaler_global(cb_scaler_global_id);
+    DataflowBuffer cb_x(cb_x_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_id);
+    compute_kernel_hw_startup(cb_in0_id, cb_in0_id, cb_in_id);
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
-    constexpr uint32_t dfb_in_rm_id = dfb_repack_id;
-    compute_kernel_lib::tilize<
+    constexpr uint32_t cb_in_rm_id = cb_repack_id;
+    ckl::tilize<
         per_core_N,
-        dfb_in_rm_id,
-        dfb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        cb_in_rm_id,
+        cb_in_id,
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::WaitBlock,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
-    constexpr uint32_t dfb_in_rm_id = dfb_in0_id;
-    compute_kernel_lib::tilize<
+    constexpr uint32_t cb_in_rm_id = cb_in0_id;
+    ckl::tilize<
         per_core_N,
-        dfb_in_rm_id,
-        dfb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        cb_in_rm_id,
+        cb_in_id,
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::NoWait,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
-    dfb_in.wait_front(per_core_MN);
+    cb_in.wait_front(per_core_MN);
 #else
-    compute_kernel_hw_startup(dfb_in0_id, dfb_input_mask_id, dfb_x_id);
+    compute_kernel_hw_startup(cb_in0_id, cb_input_mask_id, cb_x_id);
 #endif
 
     index_b_offset = 0;
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
+        uint32_t group_start_offset = 0;
         for (uint32_t g = 0; g < group; ++g) {
+            const uint32_t valid_block_w = (group_start_offset + full_group_size + tile_width - 1) / tile_width;
+            const uint32_t synchronized_block_w = ((valid_block_w + subblock_w - 1) / subblock_w) * subblock_w;
+            const uint32_t math_block_w = synchronized_block_w == block_w ? valid_block_w : block_w;
+            const auto valid_group_shape =
+                ckl::EltwiseShape::grid(block_h, math_block_w, ckl::BlockingSettings{subblock_w});
+
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
-            reconfig_data_format_srcb(dfb_in0_id, dfb_input_mask_id);
-            mul_init(dfb_in0_id, dfb_input_mask_id);
-            dfb_x.reserve_back(block_hw);
-            dfb_input_mask.wait_front(block_w);
+            reconfig_data_format_srcb(cb_in0_id, cb_input_mask_id);
+            mul_init(cb_in0_id, cb_input_mask_id);
+            cb_x.reserve_back(block_hw);
+            cb_input_mask.wait_front(block_w);
             for (uint32_t i = 0; i < block_h; ++i) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; ++j) {
@@ -238,275 +279,194 @@ void kernel_main() {
                         }
                         uint32_t index_mask = w + index_subblock_w_offset;
 #ifdef TILIZE_IN
-                        mul_tiles(dfb_in_id, dfb_input_mask_id, index, index_mask, w);
+                        mul_tiles(cb_in_id, cb_input_mask_id, index, index_mask, w);
 #else
-                        mul_tiles(dfb_in0_id, dfb_input_mask_id, index, index_mask, w);
+                        mul_tiles(cb_in0_id, cb_input_mask_id, index, index_mask, w);
 #endif
                     }
                     tile_regs_commit();
                     tile_regs_wait();
                     for (uint32_t i = 0; i < subblock_w; ++i) {
-                        pack_tile(i, dfb_x_id);
+                        pack_tile(i, cb_x_id);
                     }
                     tile_regs_release();
                     index_subblock_w_offset += subblock_w;
                 }
                 index_h_offset += per_core_N;
             }
-            dfb_x.push_back(block_hw);
-            reconfig_data_format_srcb(dfb_input_mask_id, dfb_ones_id);
-
+            cb_x.push_back(block_hw);
             // Partial-E[x]
-            index_h_offset = 0;
-            mul_init(dfb_x_id, dfb_ones_id);
-            dfb_ex2pe.reserve_back(1);
-            tile_regs_acquire();
-            dfb_x.wait_front(block_hw);
-            dfb_ones.wait_front(1);
-
-            index_h_offset = 0;
+            cb_x.wait_front(block_hw);
+            reconfig_data_format_srcb(cb_input_mask_id, cb_ones_id);
             // Accumulate into dest directly by using mul_tiles (tile * 1 is accumulated into dest)
             // Alternative is to use reduce_tile multiple times, but this showed to be more precise and faster.
-            for (uint32_t h = 0; h < block_h; ++h) {
-                for (uint32_t w = 0; w < block_w; ++w) {
-                    uint32_t index = index_h_offset + w;
-                    mul_tiles(dfb_x_id, dfb_ones_id, index, 0, dst0);
-                }
-                index_h_offset += block_w;
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, dfb_ex2pe_id);
-            tile_regs_release();
-            dfb_ex2pe.push_back(1);
+            ckl::eltwise_chain(
+                valid_group_shape,
+                ckl::BinaryFpu<
+                    strided_block_input(cb_x_id),
+                    ckl::input(
+                        cb_ones_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::None,
+                    ckl::Dst::D0,
+                    ckl::DestAccumulation::WholeShape>{ckl::StridedTileRange{0, block_w}},
+                ckl::PackTile<ckl::output(
+                    cb_ex2pe_id,
+                    ckl::ReservePolicy::PerOuter,
+                    ckl::PushPolicy::PerOuter,
+                    ckl::DataFormatReconfig::Disabled,
+                    ckl::PackRelu::Disabled,
+                    ckl::L1Accumulation::Disabled,
+                    ckl::DestAccumulation::WholeShape)>{});
 
             // reduce only one final tile
             //
             // Note that reader_mcast_sender_unary_sharded_gn_v2.cpp depends on the
             // documented behavior of REDUCE_SCALAR's packer to set every
-            // non-result datum of dfb_ex_partial to zero.
-            // If this `reduce<…, REDUCE_SCALAR>` pack into dfb_ex_partial is
+            // non-result datum of cb_ex_partial to zero.
+            // If this `reduce<…, REDUCE_SCALAR>` pack into cb_ex_partial is
             // ever replaced by something that does not have the same
-            // packer-zero contract (e.g. a `pack_tile` / `pack_tile_block`
+            // packer-zero contract (e.g. a `pack_tile` / `pack_block`
             // path like welford_groupnorm_sharded_v2.cpp uses), the sharded
             // reader's "single-tile-overwrite trick" must be adjusted accordingly
             // (e.g. use `zero_whole_cb` from groupnorm_zero_fill.hpp, mirroring the
             // mcast reader). Same applies to the second REDUCE_SCALAR pack into
-            // dfb_ex_partial later in this kernel (variance).
-            compute_kernel_lib::
-                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
-                    compute_kernel_lib::ReduceInputBlockShape::single());
+            // cb_ex_partial later in this kernel (variance).
+            ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id>(
+                ckl::ReduceInputBlockShape::single());
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                compute_kernel_lib::reduce<
+                ckl::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    dfb_ex_external_id,
-                    dfb_scaler_global_id,
-                    dfb_ex_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::single());
-                dfb_ex.reserve_back(1);
-                dfb_ex.push_back(1);
+                    cb_ex_external_id,
+                    cb_scaler_global_id,
+                    cb_ex_global_id,
+                    ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                    ckl::ReduceDataFormatReconfigMode::NONE>(ckl::ReduceInputBlockShape::single());
+                cb_ex.reserve_back(1);
+                cb_ex.push_back(1);
             }
-            dfb_ex_global.wait_front(1);
+            ckl::sub<
+                ckl::input(
+                    cb_x_id,
+                    ckl::WaitPolicy::PerChunk,
+                    ckl::PopPolicy::PerChunk,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_ex_global_id,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::output(
+                    cb_x_id,
+                    ckl::ReservePolicy::PerChunk,
+                    ckl::PushPolicy::PerChunk,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Scalar>(valid_group_shape);
 
-            // Stash K*E[x]^2 while cb_ex_global still holds E[x]; centering below consumes it.
-            if constexpr (has_pad_correction) {
-                dfb_k.wait_front(1);
-                // dfb_msq = E[x]^2
-                dfb_msq.reserve_back(1);
-                tile_regs_acquire();
-                mul_init(dfb_ex_global_id, dfb_ex_global_id);
-                mul_tiles(dfb_ex_global_id, dfb_ex_global_id, 0, 0, dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, dfb_msq_id);
-                tile_regs_release();
-                dfb_msq.push_back(1);
-                // dfb_kmsq = K * E[x]^2 (persists until the rsqrt step)
-                dfb_msq.wait_front(1);
-                dfb_kmsq.reserve_back(1);
-                tile_regs_acquire();
-                mul_init(dfb_msq_id, dfb_k_id);
-                mul_tiles(dfb_msq_id, dfb_k_id, 0, 0, dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, dfb_kmsq_id);
-                tile_regs_release();
-                dfb_msq.pop_front(1);
-                dfb_kmsq.push_back(1);
-            }
-
-            // x - E[x]
-            sub_bcast_scalar_init(dfb_x_id, dfb_ex_global_id);
-            for (uint32_t i = 0; i < block_h; i++) {
-                index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                    tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; w++) {
-                        uint32_t index = w + index_subblock_w_offset;
-                        sub_tiles_bcast_scalar(dfb_x_id, dfb_ex_global_id, index, 0, w);
-                    }
-                    tile_regs_commit();
-                    dfb_x.pop_front(subblock_w);
-                    dfb_x.reserve_back(subblock_w);
-                    tile_regs_wait();
-                    for (uint32_t k = 0; k < subblock_w; k++) {
-                        pack_tile(k, dfb_x_id);
-                    }
-                    dfb_x.push_back(subblock_w);
-                    tile_regs_release();
-                    dfb_x.wait_front(block_hw);
-                }
-            }
-            dfb_ex_global.pop_front(1);
-
-            reconfig_data_format_srcb(dfb_ex_global_id, dfb_input_mask_id);
-            mul_init(dfb_x_id, dfb_input_mask_id);
-            dfb_x.wait_front(block_hw);
-
-            for (uint32_t i = 0; i < block_h; i++) {
-                index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                    tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; ++w) {
-                        uint32_t index = w + index_subblock_w_offset;
-                        uint32_t index_mask = index;
-                        mul_tiles(dfb_x_id, dfb_input_mask_id, index, index_mask, w);
-                    }
-                    tile_regs_commit();
-
-                    dfb_x.pop_front(subblock_w);
-                    dfb_x.reserve_back(subblock_w);
-
-                    tile_regs_wait();
-                    for (uint32_t i = 0; i < subblock_w; ++i) {
-                        pack_tile(i, dfb_x_id);
-                    }
-                    dfb_x.push_back(subblock_w);
-                    tile_regs_release();
-                }
-            }
-            dfb_input_mask.pop_front(block_w);
-            reconfig_data_format_srcb(dfb_input_mask_id, dfb_x_id);
-
+            reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
+            ckl::mul<
+                ckl::input(
+                    cb_x_id,
+                    ckl::WaitPolicy::PerChunk,
+                    ckl::PopPolicy::PerChunk,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_input_mask_id,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Row,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::output(
+                    cb_x_id,
+                    ckl::ReservePolicy::PerChunk,
+                    ckl::PushPolicy::PerChunk,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::None>(valid_group_shape);
+            cb_input_mask.pop_front(block_w);
             // (x - E[x])^2
-            index_h_offset = 0;
-            mul_init(dfb_x_id, dfb_x_id);
-            dfb_x.wait_front(block_hw);
-
-            tile_regs_acquire();
-            dfb_ex2pe.reserve_back(1);
-
-            for (uint32_t i = 0; i < block_h; i++) {
-                index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                    for (uint32_t w = 0; w < subblock_w; w++) {
-                        uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                        mul_tiles(dfb_x_id, dfb_x_id, index, index, dst0);
-                    }
-
-                    index_subblock_w_offset += subblock_w;
-                }
-                index_h_offset += block_w;
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, dfb_ex2pe_id);
-            tile_regs_release();
-            dfb_ex2pe.push_back(1);
+            cb_x.wait_front(block_hw);
+            reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
+            ckl::eltwise_chain(
+                valid_group_shape,
+                ckl::BinaryFpu<
+                    strided_block_input(cb_x_id),
+                    strided_block_input(cb_x_id),
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::None,
+                    ckl::Dst::D0,
+                    ckl::DestAccumulation::WholeShape>{
+                    ckl::StridedTileRange{0, block_w}, ckl::StridedTileRange{0, block_w}},
+                ckl::PackTile<ckl::output(
+                    cb_ex2pe_id,
+                    ckl::ReservePolicy::PerOuter,
+                    ckl::PushPolicy::PerOuter,
+                    ckl::DataFormatReconfig::Disabled,
+                    ckl::PackRelu::Disabled,
+                    ckl::L1Accumulation::Disabled,
+                    ckl::DestAccumulation::WholeShape)>{});
 
             // If modifying this code, see the long comment at the first REDUCE_SCALAR
-            // pack into dfb_ex_partial earlier in this kernel.
+            // pack into cb_ex_partial earlier in this kernel.
             // The sharded reader's "single-tile-overwrite trick" depends on
-            // this pack also clearing every non-result datum of dfb_ex_partial
+            // this pack also clearing every non-result datum of cb_ex_partial
             // to exact zero (documented packer behavior for REDUCE_SCALAR).
-            compute_kernel_lib::
-                reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
-                    compute_kernel_lib::ReduceInputBlockShape::single());
+            ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id>(
+                ckl::ReduceInputBlockShape::single());
 
-            dfb_ex_partial.wait_front(1);
+            cb_ex_partial.wait_front(1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                compute_kernel_lib::reduce<
+                ckl::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    dfb_ex_external_id,
-                    dfb_scaler_global_id,
-                    dfb_ex_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::single());
-                dfb_ex.reserve_back(1);
-                dfb_ex.push_back(1);
+                    cb_ex_external_id,
+                    cb_scaler_global_id,
+                    cb_ex_global_id,
+                    ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                    ckl::ReduceDataFormatReconfigMode::NONE>(ckl::ReduceInputBlockShape::single());
+                cb_ex.reserve_back(1);
+                cb_ex.push_back(1);
             }
 
             // global reduce results
-
-            dfb_eps.wait_front(1);
-            dfb_ex_global.wait_front(1);
-            dfb_ex2pe.reserve_back(1);
-
-            // Var := Var - K*E[x]^2, staged through dfb_msq so (Var + eps) is unchanged when aligned.
-            constexpr uint32_t dfb_var_src_id = has_pad_correction ? dfb_msq_id : dfb_ex_global_id;
-            if constexpr (has_pad_correction) {
-                dfb_kmsq.wait_front(1);
-                dfb_msq.reserve_back(1);
-                tile_regs_acquire();
-                sub_init(dfb_ex_global_id, dfb_kmsq_id);
-                sub_tiles(dfb_ex_global_id, dfb_kmsq_id, 0, 0, dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, dfb_msq_id);
-                tile_regs_release();
-                dfb_kmsq.pop_front(1);
-                dfb_msq.push_back(1);
-                dfb_msq.wait_front(1);
-            }
-
-            // (Var + eps)
-            tile_regs_acquire();
-            add_init(dfb_var_src_id, dfb_eps_id);
-            add_tiles(dfb_var_src_id, dfb_eps_id, 0, 0, dst0);
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, dfb_ex2pe_id);
-            tile_regs_release();
-            dfb_ex2pe.push_back(1);
-            dfb_ex_global.pop_front(1);
-            if constexpr (has_pad_correction) {
-                dfb_msq.pop_front(1);
-            }
-            //  (x - Ex) * 1/[sqrt(Var + eps)]
-            index_h_offset = 0;
-            mul_bcast_scalar_init(dfb_x_id, dfb_ex2pe_id);
-
-            dfb_ex2pe.wait_front(1);
-            for (uint32_t i = 0; i < block_h; i++) {
-                index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                    tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; w++) {
-                        uint32_t index = w + index_subblock_w_offset;
-                        mul_tiles_bcast_scalar(dfb_x_id, dfb_ex2pe_id, index, 0, w);
-                    }
-                    tile_regs_commit();
-                    dfb_x.pop_front(subblock_w);
-                    dfb_x.reserve_back(subblock_w);
-                    tile_regs_wait();
-                    for (uint32_t i = 0; i < subblock_w; i++) {
-                        pack_tile(i, dfb_x_id);
-                    }
-                    dfb_x.push_back(subblock_w);
-                    tile_regs_release();
-                }
-            }
-            dfb_ex2pe.pop_front(1);
-            dfb_x.wait_front(block_hw);
+            cb_eps.wait_front(1);
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::BinaryFpu<
+                    ckl::input(
+                        cb_ex_global_id,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        cb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                    ckl::BinaryFpuOp::Add,
+                    ckl::BroadcastDim::None>{},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+                ckl::PackTile<ckl::output(
+                    cb_ex2pe_id,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled)>{});
+            ckl::mul<
+                ckl::input(
+                    cb_x_id,
+                    ckl::WaitPolicy::PerChunk,
+                    ckl::PopPolicy::PerChunk,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::DataFormatReconfig::Disabled),
+                ckl::output(
+                    cb_x_id,
+                    ckl::ReservePolicy::PerChunk,
+                    ckl::PushPolicy::PerChunk,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Scalar>(valid_group_shape);
+            cb_x.wait_front(block_hw);
             //  add or copy with previous output results
             uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
@@ -514,32 +474,22 @@ void kernel_main() {
             // buffers.
             if constexpr (use_negative_mask == false) {
                 for (uint32_t w = 0; w < block_w_curr; ++w) {
-                    index_h_offset = index_b_offset + index_g_offset;
-                    uint32_t index_h1_offset = 0;
-
-                    if (copy_or_add == true) {
-                        copy_tile_init(dfb_x_id);
+                    const ckl::StridedTileRange input_range{w, block_w};
+                    const ckl::StridedTileRange output_range{index_b_offset + index_g_offset + w, per_core_N};
+                    if (copy_or_add) {
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::col(block_h),
+                            ckl::CopyTile<strided_col_input(cb_x_id)>{input_range},
+                            ckl::PackTile<strided_output(cb_out_id)>{output_range});
                     } else {
-                        add_init(dfb_out_id, dfb_x_id);
-                    }
-
-                    for (uint32_t i = 0; i < block_h; ++i) {
-                        tile_regs_acquire();
-                        uint32_t index_x = w + index_h1_offset;
-                        uint32_t index = w + index_h_offset;
-
-                        if (copy_or_add == true) {
-                            copy_tile(dfb_x_id, index_x, dst0);
-                        } else {
-                            add_tiles(dfb_out_id, dfb_x_id, index, index_x, dst0);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile<true>(dst0, dfb_out_id, index);
-                        tile_regs_release();
-
-                        index_h_offset += per_core_N;
-                        index_h1_offset += block_w;
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::col(block_h),
+                            ckl::BinaryFpu<
+                                strided_col_input(cb_out_id),
+                                strided_col_input(cb_x_id),
+                                ckl::BinaryFpuOp::Add,
+                                ckl::BroadcastDim::None>{output_range, input_range},
+                            ckl::PackTile<strided_output(cb_out_id)>{output_range});
                     }
 
                     // update group tile offset
@@ -562,58 +512,39 @@ void kernel_main() {
                 }
             } else {
                 // zero out values in cb_tilized_in input by multiplying with negative mask for the current group
-                dfb_in_negative_mask.wait_front(block_w);
-                reconfig_data_format_srcb(dfb_x_id, dfb_in_negative_mask_id);
-                mul_init(dfb_in_id, dfb_in_negative_mask_id);
+                cb_in_negative_mask.wait_front(block_w);
+                const ckl::StridedTileRange output_range{index_b_offset + index_g_offset, per_core_N};
+                reconfig_data_format_srcb(cb_x_id, cb_in_negative_mask_id);
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(block_h, block_w_curr),
+                    ckl::BinaryFpu<
+                        strided_block_input(cb_in_id),
+                        ckl::input(
+                            cb_in_negative_mask_id,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::OperandKind::Row,
+                            ckl::DataFormatReconfig::Disabled),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None>{output_range},
+                    ckl::PackTile<strided_output(cb_in_id)>{output_range});
 
-                for (uint32_t w = 0; w < block_w_curr; w++) {
-                    index_h_offset = index_b_offset + index_g_offset;
-                    uint32_t index_h1_offset = 0;
-
-                    for (uint32_t i = 0; i < block_h; i++) {
-                        tile_regs_acquire();
-                        uint32_t index_in = w + index_h_offset;
-                        uint32_t index_mask = w;
-
-                        mul_tiles(dfb_in_id, dfb_in_negative_mask_id, index_in, index_mask, dst0);
-                        tile_regs_commit();
-
-                        tile_regs_wait();
-                        pack_tile<true>(dst0, dfb_in_id, index_in);
-                        tile_regs_release();
-
-                        index_h_offset += per_core_N;
-                    }
-                }
-
-                reconfig_data_format_srcb(dfb_in_negative_mask_id, dfb_x_id);
-                add_init(dfb_in_id, dfb_x_id);
                 // data in cb_x_id has valid data only for current group
                 // cb_in_id has cleared data for that group
                 // just add them together
-                for (uint32_t w = 0; w < block_w_curr; ++w) {
-                    index_h_offset = index_b_offset + index_g_offset;
-                    uint32_t index_h1_offset = 0;
-
-                    for (uint32_t i = 0; i < block_h; ++i) {
-                        tile_regs_acquire();
-                        uint32_t index_x = w + index_h1_offset;
-                        uint32_t index = w + index_h_offset;
-
-                        add_tiles(dfb_in_id, dfb_x_id, index, index_x, dst0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile<true>(dst0, dfb_in_id, index);
-                        tile_regs_release();
-
-                        index_h_offset += per_core_N;
-                        index_h1_offset += block_w;
-                    }
-                }
-                dfb_in_negative_mask.pop_front(block_w);
+                reconfig_data_format_srcb(cb_in_negative_mask_id, cb_x_id);
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(block_h, block_w_curr),
+                    ckl::BinaryFpu<
+                        strided_block_input(cb_in_id),
+                        strided_block_input(cb_x_id),
+                        ckl::BinaryFpuOp::Add,
+                        ckl::BroadcastDim::None>{output_range, ckl::StridedTileRange{0u, block_w}},
+                    ckl::PackTile<strided_output(cb_in_id)>{output_range});
+                cb_in_negative_mask.pop_front(block_w);
             }
 
-            dfb_x.pop_front(block_hw);
+            cb_x.pop_front(block_hw);
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
                 if (row_offset == tile_width) {
@@ -645,13 +576,18 @@ void kernel_main() {
                     index_g_offset += block_w_minus_two;
                 }
             }
+
+            group_start_offset += group_start_stride;
+            if (group_start_offset >= tile_width) {
+                group_start_offset -= tile_width;
+            }
         }
         index_b_offset += num_tiles_per_batch;
     }
 
     if constexpr (use_negative_mask == false) {
-        dfb_out.push_back(per_core_MN);
-        dfb_in.pop_front(per_core_MN);
+        cb_out.push_back(per_core_MN);
+        cb_in.pop_front(per_core_MN);
 
     } else {
         // nothing, for the negative mask implementation, cb_in_id is the only cb in use, and it already has the data
@@ -659,98 +595,89 @@ void kernel_main() {
     }
 
     if constexpr (do_gamma) {
-        index_h_offset = 0;
         if constexpr (use_negative_mask == false) {
-            mul_bcast_rows_init(dfb_out_id, dfb_gamma_id);
-            dfb_outgamma.reserve_back(per_core_MN);
-            dfb_gamma.wait_front(per_core_N);
-            for (uint32_t i = 0; i < per_core_M; ++i) {
-                for (uint32_t j = 0; j < per_core_N; ++j) {
-                    tile_regs_acquire();
-                    uint32_t index = j + index_h_offset;
-                    mul_tiles_bcast_rows(dfb_out_id, dfb_gamma_id, index, j, dst0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_outgamma_id);
-                    tile_regs_release();
-                }
-                index_h_offset += per_core_N;
-            }
-
-            dfb_outgamma.push_back(per_core_MN);
-            dfb_out.pop_front(per_core_MN);
-            dfb_outgamma.wait_front(per_core_MN);
+            ckl::mul<
+                ckl::input(
+                    cb_out_id,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_gamma_id,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Row,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::output(
+                    cb_outgamma_id,
+                    ckl::ReservePolicy::Upfront,
+                    ckl::PushPolicy::AtEnd,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
+            cb_outgamma.wait_front(per_core_MN);
         } else {
-            // cb in has data required for gamma, so we do it inplace
-            mul_bcast_rows_init(dfb_in_id, dfb_gamma_id);
-            dfb_gamma.wait_front(per_core_N);
-            dfb_in.wait_front(per_core_MN);
-            for (uint32_t i = 0; i < per_core_M; i++) {
-                for (uint32_t j = 0; j < per_core_N; j++) {
-                    tile_regs_acquire();
-                    mul_tiles_bcast_rows(dfb_in_id, dfb_gamma_id, 0, j, dst0);
-                    tile_regs_commit();
-                    dfb_in.pop_front(1);
-                    dfb_in.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_in_id);
-                    dfb_in.push_back(1);
-                    tile_regs_release();
-                }
-            }
+            ckl::mul<
+                ckl::input(
+                    cb_in_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_gamma_id,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Row,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::output(
+                    cb_in_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 
     if constexpr (do_beta) {
         if constexpr (use_negative_mask == false) {
-            index_h_offset = 0;
-            add_bcast_rows_init(dfb_inbeta_id, dfb_beta_id);
-            dfb_outbeta.reserve_back(per_core_MN);
-            dfb_beta.wait_front(per_core_N);
-            for (uint32_t i = 0; i < per_core_M; ++i) {
-                for (uint32_t j = 0; j < per_core_N; ++j) {
-                    tile_regs_acquire();
-                    uint32_t index = j + index_h_offset;
-                    add_tiles_bcast_rows(dfb_inbeta_id, dfb_beta_id, index, j, dst0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_outbeta_id);
-                    tile_regs_release();
-                }
-                index_h_offset += per_core_N;
-            }
-            dfb_outbeta.push_back(per_core_MN);
-            dfb_inbeta.pop_front(per_core_MN);
-            dfb_outbeta.wait_front(per_core_MN);
+            ckl::add<
+                ckl::input(
+                    cb_inbeta_id,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::OperandKind::Block,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_beta_id,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Row,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::output(
+                    cb_outbeta_id,
+                    ckl::ReservePolicy::Upfront,
+                    ckl::PushPolicy::AtEnd,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
+            cb_outbeta.wait_front(per_core_MN);
         } else {
-            // cb_in_id has data required for beta, so we do it inplace
-            add_bcast_rows_init(dfb_in_id, dfb_beta_id);
-            dfb_beta.wait_front(per_core_N);
-            dfb_in.wait_front(per_core_MN);
-            for (uint32_t i = 0; i < per_core_M; i++) {
-                for (uint32_t j = 0; j < per_core_N; j++) {
-                    tile_regs_acquire();
-                    add_tiles_bcast_rows(dfb_in_id, dfb_beta_id, 0, j, dst0);
-                    tile_regs_commit();
-                    dfb_in.pop_front(1);
-                    dfb_in.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_in_id);
-                    dfb_in.push_back(1);
-                    tile_regs_release();
-                }
-            }
+            ckl::add<
+                ckl::input(
+                    cb_in_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_beta_id,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Row,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::output(
+                    cb_in_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::BroadcastDim::Row>(ckl::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 
 #ifdef UNTILIZE_OUT
     // untilize - DEST capacity auto-detected
-    compute_kernel_lib::untilize<
+    ckl::untilize<
         per_core_N,
-        dfb_untilize_in_id,
-        dfb_untilize_out_id,
-        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        cb_untilize_in_id,
+        cb_untilize_out_id,
+        ckl::untilize_config::InitUninitMode::InitAndUninit,
+        ckl::untilize_config::WaitMode::WaitUpfront,
+        ckl::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
 }

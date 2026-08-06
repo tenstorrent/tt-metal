@@ -5,6 +5,8 @@
 #include "api/compute/matmul.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -20,7 +22,6 @@ void kernel_main() {
     constexpr auto cb_accum_dst = tt::CBIndex::c_24;
     DataflowBuffer dfb_accum_dst_obj(cb_accum_dst);
     constexpr auto cb_masked_input = tt::CBIndex::c_25;
-    DataflowBuffer dfb_masked_input_obj(cb_masked_input);
     constexpr auto cb_out = tt::CBIndex::c_16;
     DataflowBuffer dfb_out_obj(cb_out);
     constexpr uint32_t TILE_W = 32;
@@ -69,28 +70,19 @@ void kernel_main() {
             }
 
             if (do_mask_w) {
-                tile_regs_acquire();
-                DataflowBuffer(cb_input).wait_front(onetile);
-#if defined FP32_DEST_ACC_EN
-                reconfig_data_format_srca(cb_input);
-#endif
-                copy_tile_to_dst_init_short(cb_input);
-                copy_tile(cb_input, 0, reduce_dst_idx);
-                copy_tile(cb_mask_w, 0, mask_dst_idx);
-                mask_tile_init();
-                mask_tile(reduce_dst_idx, mask_dst_idx);
-                tile_regs_commit();
-
-                dfb_masked_input_obj.reserve_back(onetile);
-                tile_regs_wait();
-#if defined FP32_DEST_ACC_EN
-                pack_reconfig_data_format(cb_masked_input);
-#endif
-                pack_tile(reduce_dst_idx, cb_masked_input);
-                tile_regs_release();
-                dfb_masked_input_obj.push_back(onetile);
-
-                DataflowBuffer(cb_input).pop_front(onetile);
+                // CopyTile<input(c_0)> + CopyTile<input(cb_mask_w), D1> + Mask + PackTile.
+                // cb_input is always c_0 here (reset at line 46 before this conditional).
+                // Reconfig: chain Input+Output (fold elides no-op transitions); matches
+                // the FP32_DEST_ACC_EN-guarded reconfigs in the original.
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
+                    compute_kernel_lib::CopyTile<compute_kernel_lib::input(tt::CBIndex::c_0)>{},
+                    compute_kernel_lib::CopyTile<
+                        compute_kernel_lib::input(
+                            cb_mask_w, compute_kernel_lib::WaitPolicy::None, compute_kernel_lib::PopPolicy::None),
+                        compute_kernel_lib::Dst::D1>{},
+                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<compute_kernel_lib::output(cb_masked_input)>{});
                 cb_input = cb_masked_input;
             }
 

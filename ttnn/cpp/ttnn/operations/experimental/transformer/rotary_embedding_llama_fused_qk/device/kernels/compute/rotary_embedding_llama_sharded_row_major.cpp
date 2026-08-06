@@ -9,7 +9,11 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "api/dataflow/circular_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -21,11 +25,6 @@ ALWI void REL() {
 }
 
 void kernel_main() {
-    // TODO: Add back early return? Currently, running out of code size in TRISC2 by 4B
-    // const bool has_work = get_arg_val<uint32_t>(0);
-    // if (!has_work) {
-    //     return;
-    // }
     const bool is_q = get_arg_val<uint32_t>(0);
 
     // First 6 args for q and k heads
@@ -64,7 +63,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, out_cb);
     matmul_init(in_cb, trans_mat_cb);
-    compute_kernel_hw_startup(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+    compute_kernel_hw_startup(rotated_in_interm_cb, sin_cb, sin_interm_cb);
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
         rotated_in_interm_cb_obj.reserve_back(Wt);
@@ -88,16 +87,12 @@ void kernel_main() {
 
         REL();
         rotated_in_interm_cb_obj.push_back(Wt);
-        rotated_in_interm_cb_obj.wait_front(Wt);
 
-        mul_init(rotated_in_interm_cb, sin_cb);
-        ACQ();
-        // sin_interim = rotated * sin
-        mul_tiles(rotated_in_interm_cb, sin_cb, 0, 0, 0);
-        pack_tile(0, sin_interm_cb, 0);
-        REL();
-        sin_interm_cb_obj.push_back(Wt);
-        rotated_in_interm_cb_obj.pop_front(Wt);
+        ckl::mul<
+            ckl::input(rotated_in_interm_cb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::input(sin_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(sin_interm_cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd),
+            ckl::BroadcastDim::None>(ckl::EltwiseShape::single());
 
         mul_init(in_cb, cos_cb);
         ACQ();
