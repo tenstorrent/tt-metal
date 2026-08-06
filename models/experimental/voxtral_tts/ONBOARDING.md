@@ -261,3 +261,7 @@ Full detail and numbers in STATUS; this is the index so you do not spend a day o
 | permuting straight from `av` in the unfold | 1.77× faster and **returns garbage** |
 | project-then-duplicate instead of duplicate-then-project in `_solve` | 0.785× isolated. The redundant matmul is ~1 µs; duplicating a 3072-wide result instead of a 36-wide input costs +12 µs (`§6.34`) |
 | `ttnn.repeat` in place of `ttnn.concat` to duplicate | 1.8× worse |
+| **`sdpa` for Block 2's attention interior** | 5.9× on the op, **+0.816 ms/frame** on the block, codes unchanged on a synthetic frame — but 6.48× the error vs fp64 truth, and end-to-end it moved frame counts (461→445) and **cost one WER word**. Reverted (`§6.37`). Needs `scale=1.0` if retried, and a multi-seed 15-case study to settle worse-vs-different |
+| `ttnn.add_` / `ttnn.multiply_` in place | bit-exact, 1.14–1.20× isolated, **+0.001 ms** on the block over 6 rounds (`§6.37`) |
+| residual-as-bias in Block 2 | **not expressible** — ttnn `bias` is per-column, the residual differs per row |
+| `ttnn.swiglu` | `TT_THROW`s on a concatenated pair; would need w1/w3 fused, which is 4× slower |
