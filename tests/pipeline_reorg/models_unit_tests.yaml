@@ -245,6 +245,9 @@
   model: mistral-small-3.1-24b
   model_family: Mistral
   skus:
+    # Carried over unchanged from the legacy t3k_unit_tests.yaml entry, NOT re-measured
+    # on the tier runner. Tighten to measured + ~15% after the first tiered run and
+    # re-sync .github/time_budget.yaml to the new sum.
     wh_llmbox:
       timeout: 20
       tier: 2

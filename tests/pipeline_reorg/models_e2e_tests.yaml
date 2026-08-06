@@ -586,6 +586,10 @@
   model: mistral-small-3.1-24b
   model_family: Mistral
   skus:
+    # Carried over unchanged from the legacy blackhole_demo_tests.yaml entry, NOT
+    # re-measured on the tier runner. The mount and HF_HUB_OFFLINE behaviour differ
+    # here (see the comment above), so tighten this to measured + ~15% after the
+    # first tiered run and re-sync .github/time_budget.yaml to the new sum.
     bh_quietbox_2:
       timeout: 10
       tier: 2
@@ -893,6 +897,11 @@
   model: vit
   model_family: ViT
   skus:
+    # 18 min is inherited from the release_tests.yaml entries for this same
+    # run_vit_demo command, where it is a shared boilerplate value — NOT a measurement.
+    # The test itself is 100 warmup + 1000 measured iterations at ~5.4 ms, so the real
+    # wall-clock is far lower; tighten to measured + ~15% after the first tiered run and
+    # re-sync .github/time_budget.yaml to the new sums.
     wh_n150:
       timeout: 18
       tier: 2
