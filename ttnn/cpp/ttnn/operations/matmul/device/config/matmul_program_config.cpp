@@ -659,8 +659,9 @@ MatmulProgramConfig get_matmul_program_config(
             input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Input tensor B must have INTERLEAVED memory layout, got: {}",
             input_tensor_b.memory_config().memory_layout());
-        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or
-            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if ((input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or
+             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) and
+            (grid_size.x >= 1 and grid_size.y >= 1)) {
             TT_FATAL(
                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
                 "Input tensor A must have ROW_MAJOR shard orientation, got: {}",
