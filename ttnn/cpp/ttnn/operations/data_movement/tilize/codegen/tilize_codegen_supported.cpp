@@ -115,66 +115,24 @@ struct DemotedCase {
 // configuration rather than a condition. This is the floor when analysis finds no predicate, not a
 // preferred form.
 //
-// Every row here escapes both general predicates below, and the ledger forbids widening either one
-// to absorb it — each row has a sibling that differs only in dtype, in output placement, or in
-// total_Ht and WINS on codegen, so the losing set is not the trace of any condition over the
-// normalized attributes:
-//
-//   * dtype-split at one geometry: (2, 1, 3) loses for uint16 while the int32 and uint32 members of
-//     that same geometry ([1, 2, 32, 96]) win, so no Wt/total_Ht condition separates them; and while
-//     every integer entry at (1, 1, 2) / (1, 2, 2) loses, the ledger's float32 Wt-2 entries
-//     ([1, 3, 64, 64], [4, 4, 64, 64]) win, so "Wt == 2" cannot be widened into one either.
-//   * placement-split at the same geometry and dtype: (4, 3, 2), (5, 5, 3) lose on DRAM only;
-//     (10, 2, 3), (40, 2, 2), (24, 3, 2) lose on L1 only.
-//   * total_Ht-split at the same dtype, Ht and Wt: (4, 7, 2) at total_Ht 28 loses on both placements
-//     while (1, 7, 2) ([224, 64]) at total_Ht 7 wins on both; likewise (6, 7, 5) at total_Ht 42
-//     loses while the Wt-5 entries at total_Ht 21 and 28 ([7, 96, 160], [4, 224, 160]) win.
-//
 // Comments name the ledger shape each row came from; shapes that normalize to the same NC/Ht/Wt
-// (e.g. [1, 1, 64, 64] and [64, 64]) are one row, since they produce the same program.
+// are one row, since they produce the same program.
 constexpr DemotedCase kUngeneralizedDemotedCases[] = {
-    // [1, 32, 64] / [32, 64] — total_Ht 1, Wt 2. Integer dtypes only.
-    {1, 1, 2, DataType::INT32, BufferType::DRAM},
-    {1, 1, 2, DataType::UINT16, BufferType::DRAM},
-    {1, 1, 2, DataType::UINT32, BufferType::DRAM},
-    {1, 1, 2, DataType::INT32, BufferType::L1},
-    {1, 1, 2, DataType::UINT16, BufferType::L1},
-    {1, 1, 2, DataType::UINT32, BufferType::L1},
-    // [1, 1, 64, 64] / [64, 64] — total_Ht 2, Wt 2. Integer dtypes only.
-    {1, 2, 2, DataType::INT32, BufferType::DRAM},
-    {1, 2, 2, DataType::UINT16, BufferType::DRAM},
-    {1, 2, 2, DataType::UINT32, BufferType::DRAM},
-    {1, 2, 2, DataType::INT32, BufferType::L1},
-    {1, 2, 2, DataType::UINT16, BufferType::L1},
-    {1, 2, 2, DataType::UINT32, BufferType::L1},
-    // [1, 2, 32, 96] — total_Ht 2, Wt 3. uint16 only.
-    {2, 1, 3, DataType::UINT16, BufferType::DRAM},
-    {2, 1, 3, DataType::UINT16, BufferType::L1},
-    // [1, 10, 64, 64] — total_Ht 20, Wt 2.
-    {10, 2, 2, DataType::BFLOAT16, BufferType::DRAM},
-    {10, 2, 2, DataType::BFLOAT16, BufferType::L1},
-    // [1, 10, 64, 96] — total_Ht 20, Wt 3. DRAM twin wins.
-    {10, 2, 3, DataType::BFLOAT16, BufferType::L1},
-    // [4, 96, 64] — total_Ht 12, Wt 2. L1 twin wins.
-    {4, 3, 2, DataType::BFLOAT16, BufferType::DRAM},
-    // [4, 224, 64] — total_Ht 28, Wt 2.
-    {4, 7, 2, DataType::BFLOAT16, BufferType::DRAM},
-    {4, 7, 2, DataType::BFLOAT16, BufferType::L1},
-    // [4, 7, 32, 64] — total_Ht 28, Wt 2.
-    {28, 1, 2, DataType::BFLOAT16, BufferType::DRAM},
-    {28, 1, 2, DataType::BFLOAT16, BufferType::L1},
-    // [5, 160, 96] — total_Ht 25, Wt 3. L1 twin wins.
-    {5, 5, 3, DataType::BFLOAT16, BufferType::DRAM},
-    // [4, 12, 96, 96] — total_Ht 144, above the one-row-per-core window.
+    // [2, 12, 64, 96] — NC 24, Ht 2, Wt 3.
+    {24, 2, 3, DataType::BFLOAT16, BufferType::DRAM},
+    {24, 2, 3, DataType::BFLOAT16, BufferType::L1},
+    // [3, 7, 64, 96] — NC 21, Ht 2, Wt 3.
+    {21, 2, 3, DataType::BFLOAT16, BufferType::DRAM},
+    {21, 2, 3, DataType::BFLOAT16, BufferType::L1},
+    // [4, 12, 96, 96] — NC 48, Ht 3, Wt 3.
     {48, 3, 3, DataType::BFLOAT16, BufferType::DRAM},
     {48, 3, 3, DataType::BFLOAT16, BufferType::L1},
-    // [5, 8, 64, 64] — total_Ht 80, above the window. DRAM twin wins.
-    {40, 2, 2, DataType::BFLOAT16, BufferType::L1},
-    // [6, 4, 96, 64] — total_Ht 72, above the window. DRAM twin wins.
-    {24, 3, 2, DataType::BFLOAT16, BufferType::L1},
-    // [6, 224, 160] — total_Ht 42, Wt 5 (outside the window's Wt bound).
-    {6, 7, 5, DataType::BFLOAT16, BufferType::DRAM},
-    {6, 7, 5, DataType::BFLOAT16, BufferType::L1},
+    // [6, 10, 32, 64] — NC 60, Ht 1, Wt 2.
+    {60, 1, 2, DataType::BFLOAT16, BufferType::DRAM},
+    {60, 1, 2, DataType::BFLOAT16, BufferType::L1},
+    // [9, 160, 96] — NC 9, Ht 5, Wt 3.
+    {9, 5, 3, DataType::BFLOAT16, BufferType::DRAM},
+    {9, 5, 3, DataType::BFLOAT16, BufferType::L1},
 };
 
 }  // namespace
@@ -189,7 +147,7 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
         return true;
     }
 
-    // tilize_wt1_row_degenerate. Wt == 1: the padded last dimension is a single tile wide
+    // tilize-rm-single-tile-column. Wt == 1: the padded last dimension is a single tile wide
     // (supported_by_codegen already requires W % TILE_WIDTH == 0, so exactly W == 32).
     // choose_tilize_2d_ncol returns 1 for wt < 2, so the case can never reach the 2D-column path and
     // always lands on the row path with chunk_wt = 1, num_col_chunks = 1 — which also trips
@@ -201,33 +159,21 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
     // native's compute kernel takes the per-block tile count as a template parameter and picks its
     // fp32 mode at compile time (ttnn/cpp/ttnn/kernel/compute/tilize.cpp), while compute_tilize.cpp
     // receives chunk_Wt as a runtime arg and calls the unspecialized tilize_init/tilize_block.
-    // Structural, not payload-sized: holds for every dtype, both interleaved placements, and every
-    // total_Ht. Wt >= 2 is the winning side.
-    if (operation_attributes.Wt == 1) {
-        return true;
-    }
-
-    // tilize_row_narrow_one_row_per_core. A narrow tile-row on the ROW path with exactly one
-    // tile-row per core: Wt in {2, 3} and num_cores/2 < total_Ht <= num_cores. In that window the
-    // codegen row path has neither of its two possible advantages. It cannot use the column split
-    // (choose_tilize_2d_ncol returns floor(num_cores/total_Ht) == 1 once total_Ht > num_cores/2), so
-    // it runs on the same core count as native's TilizeMultiCoreDefaultProgramFactory with a reader
-    // and writer that are structural duplicates of native's; and with total_Ht <= num_cores each
-    // core owns a single tile-row of at most 3 tiles, so there is nothing to amortize the runtime-arg
-    // compute kernel's fixed per-core cost against (see the Wt == 1 note for that difference).
+    // Structural, not payload-sized: holds for every dtype and both interleaved placements. Wt >= 2
+    // is the winning side.
     //
-    // Both boundaries are the winning side: total_Ht <= num_cores/2 engages the 2D-column path, and
-    // total_Ht > num_cores gives each core several tile-rows behind one tilize_init. Wt >= 4 on the
-    // row path also reaches parity, hence the Wt bound.
+    // Bounded by total_Ht <= core count: above it, each core owns several tile-rows instead of one,
+    // which is a different (and separately unresolved) same-kernel parity gap, not this one — do not
+    // widen this predicate to cover that regime.
     //
     // Needs the device for the core count. A host tensor is never routed here (the free function only
     // reaches this with a device tensor); skipping the check for one keeps this from dereferencing a
     // null device, and correctness never depends on a perf gate's answer.
-    if (is_device_tensor(tensor_args.input_tensor) && (operation_attributes.Wt == 2 || operation_attributes.Wt == 3)) {
+    if (operation_attributes.Wt == 1 && is_device_tensor(tensor_args.input_tensor)) {
         const CoreCoord grid = tensor_args.input_tensor.device()->compute_with_storage_grid_size();
         const uint32_t num_cores = grid.x * grid.y;
         const uint32_t total_ht = operation_attributes.NC * operation_attributes.Ht;
-        if (total_ht > num_cores / 2 && total_ht <= num_cores) {
+        if (total_ht <= num_cores) {
             return true;
         }
     }
