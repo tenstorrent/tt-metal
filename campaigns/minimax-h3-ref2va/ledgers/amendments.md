@@ -453,3 +453,59 @@ not raising the value back, which is measured not to work.
 **Method note.** The sweep was worth four processes because the *shape* of the answer was unknown: a
 4 KB overlap could have meant "one parameter away" or "the blocking is wrong". Measuring the cheap
 parameter first is what kept a kernel change off the table.
+
+---
+
+## Amendment 127 (2026-08-06) — ref2va runs end to end; audio decode is fine at `l1_small_size=16384`, closing am. 126; and a LINE fabric config fails the DiT outright
+
+**Assumed** (am. 126, still open): that audio decode might need `l1_small_size=65536` and therefore
+conflict with the 16384 the taps=3 video-reference encoder requires, forcing a conv-blocking change or
+a second process.
+
+**Measured.** Mesh 4×8, `{**ring_params_req_exact_devices, "l1_small_size": 16384}`, commit
+`ffa0800618a`, `transformer_ref` partition, AdaLN precompute on, seed 0. Target 1344×768 / 124 frames /
+50 steps, one 2048×2048 image reference. Command:
+`scripts/run_safe_pytest.sh --run-all .../test_pipeline_ref2va_minimax_h3.py -k "end_to_end and one_image"`.
+**1 passed in 457 s.** Cold e2e, not warm — no `warmup()` was run, so these are not comparable to a
+warm latency figure:
+
+| stage | seconds |
+|---|---|
+| Encoder (device: conditioner + vision tower) | 83.4 |
+| Reference encode | 2.8 — video rows `(4096, 96)`, audio `None` |
+| Denoise, 49 forwards | 107.9 (≈ 2.2 s/forward) |
+| VAE decode | 8.4 |
+| Audio decode | **8.2** |
+| total compute | 210.7 |
+
+Packed sequence **45925 → 46080 padded, 5760 rows/device, 4096 condition rows** — the padded length
+matches am. 114's host-only prediction exactly, and the test asserts it so a drift cannot pass silently.
+Denoise at 2.2 s/forward is consistent with the probe's 2.11 s warm forward at this shape (am. 123).
+
+**am. 126's open question is closed: audio decode works at 16384**, in 8.2 s, with
+`check_audio_sanity` and `check_av_sync` both passing. So STATE.md's "mandatory 65536 for audio" is
+about `l1_small_size` being *set at all* rather than about that particular value — consistent with the
+failure it describes (`bank_manager.cpp:462`, "bank size is 0 B", which means *unallocated*). No
+conv-blocking change and no second process are needed.
+
+**A second finding, from a failure before this pass.** The first attempt died in 76 s with
+`TT_FATAL fabric.cpp:174: forwarding_direction.has_value()`. Cause: the ref2va test file had
+`fabric_config: FABRIC_1D` — a **line** config — while the DiT attends in a ring on the SP axis and the
+t2va/fl2va gates use `ring_params_req_exact_devices`. The Phase 3 encode gate had passed under the same
+line config because the VAE encoders use no ring CCL, so nothing had caught it. Both ref2va test files
+now use the ring params, differing from the shipping gates in `l1_small_size` alone.
+
+**Frames inspected** (`artifacts/round-6/`, frames 0/17/62/123). Frame 0 is a coherent photographic
+interior matching the prompt — window mullions, curtain folds, wood grain, a light patch on the floor —
+and frame 123 is the same room after a slow push-in, with the doorframe vignette of frame 0 gone. No
+seams at the tile boundaries, no flicker between the sampled frames. `check_spatial_seams` passes at the
+768/1344 tile boundaries.
+
+Also confirmed benign: the `DRAM Auto slice could not find valid slice configuration` messages logged at
+`critical` during decode are **pre-existing** — 72 occurrences in the t2va baseline and 144 in fl2va,
+both of which pass. A config search that falls back, not a ref2va defect.
+
+**Method note.** Three of this campaign's four device failures were the same class: a component green in
+a configuration production does not use (`SINGLE_DEVICE` with empty `device_params`, twice; a line
+fabric config, once). The cheapest guard is to copy the *whole* device-params dict from the gate that
+already ships the surrounding pipeline, and change only what a measurement forces you to change.
