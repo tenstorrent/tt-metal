@@ -35,6 +35,7 @@
 #include "circular_buffer.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
+#include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/device/device_impl.hpp"
@@ -74,6 +75,7 @@
 
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdev/rta_constants.h"
+#include "hostdev/cross_node_dfb_constants.h"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
@@ -350,6 +352,67 @@ void finalize_dfb_masks(
             kernel_config.local_cb_mask() = kg_dfb_mask;
         }
     }
+}
+
+// Compute cross_node_dfb_offset for all kernel groups and return the new base offset.
+// CrossNodeDFB region: word[0]=num_slots, then num_slots × 3-word entries.
+// If none are attached, launch-msg cross_node_dfb_offset is CROSS_NODE_DFB_OFFSET_NONE.
+uint32_t finalize_cross_node_dfbs(
+    std::vector<std::shared_ptr<KernelGroup>>& kernel_groups, ttsl::Span<ProgramImpl*> programs, uint32_t base_offset) {
+    using AttachmentMap = std::unordered_map<CoreCoord, std::vector<ProgramImpl::CrossNodeDFBAttachment>>;
+    AttachmentMap merged;
+    for (ProgramImpl* program : programs) {
+        for (const auto& [core, attachments] : program->get_per_core_cross_node_dfbs()) {
+            auto& v = merged[core];
+            v.insert(v.end(), attachments.begin(), attachments.end());
+        }
+    }
+
+    const bool any_cross_node_dfbs = !merged.empty() && !kernel_groups.empty();
+
+    if (!any_cross_node_dfbs) {
+        for (auto& kg : kernel_groups) {
+            kg->launch_msg.view().kernel_config().cross_node_dfb_offset() = CROSS_NODE_DFB_OFFSET_NONE;
+        }
+        return base_offset;
+    }
+
+    uint8_t max_num_cross_node_dfbs = 0;
+    for (const auto& [core, attachments] : merged) {
+        max_num_cross_node_dfbs = std::max(max_num_cross_node_dfbs, static_cast<uint8_t>(attachments.size()));
+    }
+
+    const uint32_t cross_node_dfb_offset = base_offset;
+    const uint32_t cross_node_dfb_region_words = cross_node_dfb_config_region_words(max_num_cross_node_dfbs);
+    const uint32_t cross_node_dfb_region_bytes = cross_node_dfb_region_words * sizeof(uint32_t);
+
+    TT_FATAL(
+        cross_node_dfb_offset <= std::numeric_limits<uint16_t>::max(),
+        "CrossNodeDFB config offset {} overflows uint16_t launch-msg field",
+        cross_node_dfb_offset);
+    TT_FATAL(
+        cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE,
+        "CrossNodeDFB config offset collides with CROSS_NODE_DFB_OFFSET_NONE (0x{:x})",
+        CROSS_NODE_DFB_OFFSET_NONE);
+
+    for (auto& kg : kernel_groups) {
+        uint8_t num_cross_node_dfbs = 0;
+        for (const CoreRange& cr : kg->core_ranges.ranges()) {
+            for (const auto& core : cr) {
+                auto it = merged.find(core);
+                if (it != merged.end()) {
+                    num_cross_node_dfbs = std::max(num_cross_node_dfbs, static_cast<uint8_t>(it->second.size()));
+                }
+            }
+        }
+
+        auto kernel_config = kg->launch_msg.view().kernel_config();
+        kernel_config.cross_node_dfb_offset() =
+            (num_cross_node_dfbs > 0) ? static_cast<uint16_t>(cross_node_dfb_offset) : CROSS_NODE_DFB_OFFSET_NONE;
+    }
+
+    return tt::align(
+        base_offset + cross_node_dfb_region_bytes, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 }
 
 uint32_t finalize_kernel_bins(
@@ -1431,6 +1494,98 @@ private:
     std::vector<std::vector<uint8_t>> dfb_config_payloads;
 };
 
+// Generates multicast write commands for CrossNodeDFB kernel-config entries.
+// Region: word[0]=num_slots, then dense [config_page_addr, entry_size, relay_dfb_id] slots
+// (slot index == remote_dfb_id). Starts at ProgramConfig::cross_node_dfb_offset.
+class CrossNodeDFBCommandGenerator {
+public:
+    void construct_commands(
+        IDevice* device,
+        const CommandConstants& constants,
+        ProgramImpl& program,
+        BatchedTransfers& batched_transfers,
+        BatchedTransfers& credit_reset_transfers) {
+        const auto& per_core_cross_node_dfbs = program.get_per_core_cross_node_dfbs();
+        if (per_core_cross_node_dfbs.empty()) {
+            return;
+        }
+
+        const auto& hal = MetalContext::instance().hal();
+        const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const auto& kernel_groups = program.get_kernel_groups(index);
+        const uint32_t cross_node_dfb_offset = program.get_program_config(index).cross_node_dfb_offset;
+        TT_FATAL(
+            cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE,
+            "CrossNodeDFBCommandGenerator: unexpected CROSS_NODE_DFB_OFFSET_NONE with attachments present");
+
+        for (const auto& kg : kernel_groups) {
+            for (const CoreRange& core_range : kg->core_ranges.ranges()) {
+                // Use the first core's attachments as representative for the range.
+                // In typical usage, all cores in a kernel group have identical CrossNodeDFB attachments.
+                const CoreCoord& first_core = core_range.start_coord;
+                auto it = per_core_cross_node_dfbs.find(first_core);
+                if (it == per_core_cross_node_dfbs.end() || it->second.empty()) {
+                    continue;
+                }
+
+                const uint32_t num_cross_node_dfbs = static_cast<uint32_t>(it->second.size());
+                const uint32_t payload_words = cross_node_dfb_config_region_words(num_cross_node_dfbs);
+                const uint32_t payload_bytes = payload_words * sizeof(uint32_t);
+
+                // Allocate payload buffer (one per range to keep lifetimes alive).
+                payloads_.emplace_back(payload_words, 0u);
+                auto& payload = payloads_.back();
+                payload[0] = num_cross_node_dfbs;
+
+                for (uint32_t slot = 0; slot < num_cross_node_dfbs; ++slot) {
+                    const auto& attachment = it->second[slot];
+                    TT_FATAL(
+                        attachment.remote_dfb_id == slot,
+                        "CrossNodeDFB slot {} expected dense remote_dfb_id {}, got {}",
+                        slot,
+                        slot,
+                        attachment.remote_dfb_id);
+                    const uint32_t base = CROSS_NODE_DFB_REGION_HEADER_WORDS + slot * CROSS_NODE_DFB_CONFIG_WORDS;
+                    payload[base + 0] = attachment.config_page_addr;
+                    payload[base + 1] = attachment.entry_size;
+                    payload[base + 2] = attachment.relay_dfb_id;
+                }
+
+                const CoreCoord virtual_start =
+                    device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+                const CoreCoord virtual_end =
+                    device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
+                CoreRange virtual_range(virtual_start, virtual_end);
+                auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+                const uint32_t start_addr = cross_node_dfb_offset;
+
+                // CrossNode state resets on every program launch. Reset credits in the
+                // actual config pages before GO; firmware only initializes its local
+                // interface and must not zero a counter after a peer has incremented it.
+                for (const auto& attachment : it->second) {
+                    credit_reset_payloads_.emplace_back(attachment.credit_reset_size, 0u);
+                    auto& reset_payload = credit_reset_payloads_.back();
+                    credit_reset_transfers[std::make_pair(noc_xy_addr, core_range.size())]
+                                          [attachment.credit_reset_addr] =
+                        std::vector<Transfer>{
+                            {.start = attachment.credit_reset_addr,
+                             .data = ttsl::Span<const uint8_t>(reset_payload.data(), reset_payload.size())}};
+                }
+
+                batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
+                    {.start = start_addr,
+                     .data =
+                         ttsl::Span<const uint8_t>(reinterpret_cast<const uint8_t*>(payload.data()), payload_bytes)}};
+            }
+        }
+    }
+
+private:
+    // Payload buffers kept alive until batched_transfers is consumed.
+    std::vector<std::vector<uint32_t>> payloads_;
+    std::vector<std::vector<uint8_t>> credit_reset_payloads_;
+};
+
 class ProgramBinaryCommandGenerator {
 public:
     // Generate kernel_bins_cmds (for multicast) and kernel_bins_unicast_cmds (for unicast) for the binaries in the
@@ -1802,7 +1957,9 @@ public:
 
     // Assemble the batched transfer commands into the device command sequence.
     void assemble_commands(
-        ProgramCommandSequence& program_command_sequence, HostMemDeviceCommand& device_command_sequence) {
+        ProgramCommandSequence& program_command_sequence,
+        HostMemDeviceCommand& device_command_sequence,
+        DispatchWriteOffsets write_offset = DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE) {
         const auto& hal = MetalContext::instance().hal();
         uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
         const std::vector<uint8_t> fill_data(l1_alignment, 0);
@@ -1856,7 +2013,7 @@ public:
                 batched_data,
                 &data_collection_location,
                 0,
-                DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
+                write_offset);
 
             last_end = cmd_data.front().start;
             size_t j = 0;
@@ -2237,6 +2394,7 @@ void assemble_device_commands(
     constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(mesh_device);
     BatchedTransfers batched_transfers =
         assemble_runtime_args_commands(program_command_sequence, program, mesh_device, constants);
+    BatchedTransfers cross_node_credit_reset_transfers;
 
     // Assemble config buffer
     DeviceCommandCalculator program_config_buffer_calculator;
@@ -2251,13 +2409,24 @@ void assemble_device_commands(
     DataflowBufferCommandGenerator dfb_command_generator;
     dfb_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
 
+    CrossNodeDFBCommandGenerator cross_node_dfb_command_generator;
+    cross_node_dfb_command_generator.construct_commands(
+        mesh_device, constants, program, batched_transfers, cross_node_credit_reset_transfers);
+
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(batched_transfers, program_config_buffer_calculator);
+    BatchedTransferGenerator cross_node_credit_reset_generator;
+    cross_node_credit_reset_generator.construct_commands(
+        cross_node_credit_reset_transfers, program_config_buffer_calculator);
 
     program_command_sequence.program_config_buffer_command_sequence =
         HostMemDeviceCommand(program_config_buffer_calculator.write_offset_bytes());
     batched_transfer_generator.assemble_commands(
         program_command_sequence, program_command_sequence.program_config_buffer_command_sequence);
+    cross_node_credit_reset_generator.assemble_commands(
+        program_command_sequence,
+        program_command_sequence.program_config_buffer_command_sequence,
+        DISPATCH_WRITE_OFFSET_ZERO);
     semaphore_command_generator.assemble_unicast_commands(
         program_command_sequence.program_config_buffer_command_sequence, program, constants);
     // Ensure that we use the correct amount of space for each command sequence

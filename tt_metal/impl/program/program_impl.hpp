@@ -14,6 +14,7 @@
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
 #include "tt-metalium/program.hpp"       // KernelGroup
+#include "hostdev/cross_node_dfb_constants.h"  // CROSS_NODE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"        // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
@@ -58,6 +59,7 @@ class MeshWorkloadImpl;
 
 namespace experimental {
 class GlobalCircularBuffer;
+class CrossNodeDFB;
 }
 
 namespace program_dispatch {
@@ -107,6 +109,9 @@ struct ProgramConfig {
     uint32_t dfb_offset;
     uint32_t dfb_size;
     uint32_t local_cb_size;
+    // CrossNodeDFB region byte offset from kernel_config_base, or CROSS_NODE_DFB_OFFSET_NONE
+    // when no CrossNodeDFBs are attached. Slot count lives in the region header word.
+    uint32_t cross_node_dfb_offset = CROSS_NODE_DFB_OFFSET_NONE;
     uint32_t kernel_text_offset;  // offset of first kernel bin
     uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
 };
@@ -137,6 +142,8 @@ struct ProgramOffsetsState {
     uint32_t local_cb_size = 0;
     uint32_t dfb_offset = 0;
     uint32_t dfb_size = 0;
+    // CrossNodeDFB offset from config base, or CROSS_NODE_DFB_OFFSET_NONE if none.
+    uint32_t cross_node_dfb_offset = CROSS_NODE_DFB_OFFSET_NONE;
     // Kernel binary offsets and sizes.
     uint32_t kernel_text_offset = 0;
     uint32_t kernel_text_size = 0;
@@ -294,6 +301,36 @@ public:
 
     // Declare an alias relationship: secondary shares primary's L1 address.
     void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);
+
+    // Per-core CrossNodeDFB attachment record.
+    struct CrossNodeDFBAttachment {
+        uint8_t remote_dfb_id;
+        uint32_t config_page_addr;
+        uint32_t credit_reset_addr;
+        uint32_t credit_reset_size;
+        uint32_t entry_size;
+        uint8_t relay_dfb_id;
+    };
+
+    // Read-only accessor for dispatch to iterate CrossNodeDFB attachments.
+    const std::unordered_map<CoreCoord, std::vector<CrossNodeDFBAttachment>>& get_per_core_cross_node_dfbs() const {
+        return per_core_cross_node_dfbs_;
+    }
+
+    // Wire a CrossNodeDFB onto its all_cores and store it under the new slot id.
+    uint8_t add_cross_node_dfb(experimental::CrossNodeDFB gdfb);
+
+    const experimental::CrossNodeDFB& get_cross_node_dfb(uint8_t remote_dfb_id) const;
+    experimental::CrossNodeDFB& get_cross_node_dfb(uint8_t remote_dfb_id);
+
+    // Mark a normal local DFB as the typed relay for an attached CrossNodeDFB.
+    // The local DFB borrows the CrossNode data buffer; its device_slot is emitted
+    // only on receiver cores and consumed by CrossNodeDFB::bind_relay().
+    void register_cross_node_relay_dfb(
+        const CoreRangeSet& receiver_cores, uint8_t remote_dfb_id, uint32_t relay_dfb_host_id);
+
+    // Retarget the data ring of an existing CrossNodeDFB slot to `buffer`.
+    void update_dynamic_cross_node_dfb_address(uint8_t remote_dfb_id, Buffer& buffer);
 
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled
@@ -491,6 +528,15 @@ private:
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
         dataflow_buffer_by_id_;
+
+    // CrossNodeDFB attachments: per-core list of (remote_dfb_id, config_page_addr, entry_size).
+    // 0-based ascending index space; separate from DFB index space.
+    std::unordered_map<CoreCoord, std::vector<CrossNodeDFBAttachment>> per_core_cross_node_dfbs_;
+    // Host objects owned by this program, keyed by remote_dfb_id.
+    std::unordered_map<uint8_t, experimental::CrossNodeDFB> cross_node_dfbs_;
+    // Optional typed relay: remote_dfb_id → local DFB host id (from CreateCrossNodeRelayDataflowBuffer).
+    std::unordered_map<uint8_t, uint32_t> cross_node_relay_host_ids_;
+    uint8_t next_cross_node_dfb_slot_ = 0;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;

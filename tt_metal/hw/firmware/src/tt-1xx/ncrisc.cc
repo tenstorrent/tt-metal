@@ -14,6 +14,8 @@
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
+#include "internal/cross_node_dfb_interface.h"
+#include "internal/cross_node_dfb_init.h"
 #include "internal/hw_thread.h"
 #include "tdma_xmov.h"
 
@@ -40,6 +42,8 @@ uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+
+CrossNodeDFBInterface g_cross_node_dfb_interface[MAX_CROSS_NODE_DFBS] __attribute__((used));
 
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
@@ -168,6 +172,12 @@ int main(int argc, char* argv[]) {
         uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
         // NOC argument is unused
         experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
+        if (launch_msg->kernel_config.cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE) {
+            uint32_t tt_l1_ptr* dfb_region =
+                (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.cross_node_dfb_offset);
+            const uint32_t num_cross_node_dfbs = dfb_region[0];
+            experimental::setup_cross_node_dfb_interfaces(dfb_region + 1, num_cross_node_dfbs);
+        }
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
