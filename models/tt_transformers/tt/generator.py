@@ -1612,7 +1612,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.prev_page_table = tuple(pt.clone() for pt in page_table)
         for i, trace_id in self.trace_ids_decode[on_device_sampling].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
-        return self.trace_output_decode[on_device_sampling]
+        # EXPERIMENT ONLY (#52176) — do not merge. Copy the trace's logits out of the
+        # trace-owned buffer before anything else reads them. On-device sampling consumes this
+        # tensor with a CCL all-gather; the clean host-argmax run instead reads it through
+        # get_device_tensors/to_torch. Tests whether a device op reading the trace output
+        # buffer directly is what corrupts on Blackhole.
+        outs = self.trace_output_decode[on_device_sampling]
+        if on_device_sampling:
+            copied = []
+            for out in outs:
+                t = out[0] if isinstance(out, tuple) else out
+                copied.append(ttnn.clone(t, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            return copied
+        return outs
 
     def sample_decode_on_device(
         self,
