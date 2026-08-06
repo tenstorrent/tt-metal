@@ -22,6 +22,8 @@ from models.common.models.llama32_3b import executor as llama32_3b_executor
 from models.common.models.llama32_3b import generator as llama32_3b_generator
 from models.common.models.mistral_7b import executor as mistral_executor
 from models.common.models.mistral_7b import generator as mistral_generator
+from models.common.models.phi4 import executor as phi4_executor
+from models.common.models.phi4 import generator as phi4_generator
 from models.common.models.qwen2_7b import executor as qwen2_executor
 from models.common.models.qwen2_7b import generator as qwen2_generator
 from models.common.models.qwen25_7b import executor as qwen25_executor
@@ -135,6 +137,25 @@ EXECUTOR_BINDINGS = {
         ),
         make_lane=lambda llm, config: _FakeLane(llm, config),
         hf_model="mistralai/Mistral-7B-Instruct-v0.3",
+    ),
+    "phi4": SimpleNamespace(
+        executor_module=phi4_executor,
+        executor_class=phi4_executor.Phi4Executor,
+        executor_config_class=phi4_executor.Phi4ExecutorConfig,
+        generator_module=phi4_generator,
+        generator_class=phi4_generator.Phi4Generator,
+        generator_config_class=phi4_generator.Phi4GeneratorConfig,
+        build_generator_name="build_phi4_generator",
+        build_executor_name="build_phi4_executor",
+        make_model=lambda **kwargs: _make_qwen2_model(**kwargs),
+        make_runtime_config=lambda: _make_qwen2_runtime_config(max_prefill_batch_size=8),
+        make_executor_config=lambda mode="none": _make_qwen2_executor_config(mode, module=phi4_executor),
+        make_recording_target=lambda **kwargs: _RecordingTarget(_make_qwen2_model(), **kwargs),
+        make_product=lambda mesh_device, max_batch_size: _make_qwen2_product(
+            mesh_device, max_batch_size, max_prefill_batch_size=8
+        ),
+        make_lane=lambda llm, config: _FakeLane(llm, config),
+        hf_model="microsoft/phi-4",
     ),
 }
 
@@ -251,7 +272,8 @@ def _make_qwen2_executor_config(mode="none", *, module=qwen2_executor):
         getattr(module, "Qwen2ExecutorConfig", None)
         or getattr(module, "Qwen25ExecutorConfig", None)
         or getattr(module, "DeepSeekR1Qwen14BExecutorConfig", None)
-        or module.Mistral7BExecutorConfig
+        or getattr(module, "Mistral7BExecutorConfig", None)
+        or module.Phi4ExecutorConfig
     )
     return config_class(
         trace=TraceConfig(mode),
@@ -288,6 +310,22 @@ def test_qwen2_binding_preserves_tp2_runtime_and_sampling_defaults():
     assert runtime.max_prefill_chunk_size == 2048
     assert runtime.max_prefill_batch_size == 32
     assert config.hf_revision == "test-revision"
+    assert config.device_sampling_enabled is False
+
+
+def test_phi4_binding_preserves_cap8_trace_buckets_and_pinned_revision():
+    runtime = _make_qwen2_runtime_config(max_prefill_batch_size=8)
+    config = phi4_generator.Phi4GeneratorConfig(
+        hf_model="microsoft/phi-4",
+        mesh_device=_Mesh2(),
+        max_batch_size=32,
+        max_seq_len=4096,
+    )
+
+    assert runtime.trace_prefill_supported_seq_lens == (128, 1024)
+    assert runtime.max_prefill_chunk_size == 2048
+    assert runtime.max_prefill_batch_size == 8
+    assert config.hf_revision == phi4_generator.DEFAULT_HF_REVISION
     assert config.device_sampling_enabled is False
 
 
