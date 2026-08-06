@@ -1155,11 +1155,26 @@ polling — moves by 2–13× with card state, and nothing in the run output ann
 probe first (~170 ns static / ~380 ns dynamic healthy, ~2.3–2.6 µs degraded) and only then compare runs.
 
 **A run does not have to be below the knee to leave the card degraded.** These runs were all at delay 500
-with 0 stalls. The one anomaly in the timeline is an **interrupted run**: the harness killed the background
-job running the sweep, tearing down its ssh and terminating a 200-iteration run mid-drain, and the
-degradation appeared immediately after. That is a hypothesis, not a proof (single occurrence), but it matches
-the earlier finding that a killed run leaves resident device state behind — and note this is not exotic bad
-luck, it is what happens every time a sweep is cancelled or times out. Let a run finish, or expect to reboot.
+with 0 stalls.
+
+**CORRECTED CAUSE — the box FROZE, it was not an interrupted run.** The first account here blamed a killed
+run (the sweep's background job died and its ssh dropped mid-drain). The box's own records say otherwise:
+`last -x` shows that login session ending in **`crash`**, and the next boot has **no preceding `shutdown`
+record**, unlike every deliberate reboot. So the sequence was: box hard-froze under the sweep → IRD watchdog
+rebooted it → **the card came up degraded**. The dropped ssh and the "killed" job were symptoms of the box
+going down, not the cause of anything. Causality was backwards.
+
+That is the same signature as the X280-era freezes: two processes stop together, the kernel logs nothing, and
+the physical host never reboots — a host CPU stalling on MMIO to a wedged card. Worth knowing it recurs on the
+DRISC perf-debug path, not just the X280 one.
+
+**How to tell the two apart, because the observable is identical** (your ssh dies, work stops):
+
+    last -x | head            # a session ending in "crash" and a boot with NO shutdown record = FROZE
+    cat /proc/uptime          # small value = the box went down, your run did not merely get killed
+
+Check this BEFORE theorizing about what your run did to the card. An hour was spent here writing an
+operational rule ("never cancel a sweep") for an event that was never a cancellation.
 
 ### `tt-smi -r` does not recover a degraded card (measured, 2026-08-06)
 
@@ -1185,3 +1200,18 @@ never touch that window at all.
 markers where a healthy card returns exactly 551,100 every single time — the host cannot ack fast enough, so
 the drainer drops frames rather than block the producers. Treat a short marker total as a reason to check card
 state, not automatically as a capture bug.
+
+### Warm reboot is NOT a reliable cure (3 data points, 2026-08-06)
+
+| boot | preceded by | card after |
+|---|---|---|
+| 11:18 clean reboot | deliberate `shutdown` | **healthy** (172 ns) |
+| 12:08 watchdog reboot | **freeze/crash**, no shutdown record | degraded |
+| 13:41 clean reboot | deliberate `shutdown` | degraded |
+| 13:49 clean reboot | deliberate `shutdown` | **degraded** (2313 ns) |
+
+One warm reboot recovered a degraded card; two later ones did not. So the "a plain `sudo reboot` restores the
+fast state" correction recorded earlier the same day was over-generalized from a single success — it *can*
+work and cannot be relied on. Post-freeze degradation looks stickier than post-hang degradation, though with
+one sample of each that is a shape, not a mechanism. A cold power cycle remains the only cure measured to work
+repeatedly (`tt-smi -r` is now measured NOT to work at all, and IRD reservation restarts did not either).
