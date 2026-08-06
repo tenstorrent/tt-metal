@@ -93,17 +93,6 @@ constexpr auto kSyncCostReportInterval = std::chrono::seconds(5);
 
 constexpr auto kDrainGapReportThreshold = std::chrono::milliseconds(5);
 
-// A floor on how often each device's clock is read, under the probe every read already takes. A chord is one probe gap
-// wide and a rate step inside it misplaces the records in it by step * span / 4, so probe spacing is accuracy: measured
-// under didt, where records are sparse enough that this floor is what sets the spacing, the bow ran 11us at p90 and
-// 30us at p99 with a 5ms floor against 486ns and 546ns with this one.
-//
-// It cannot replace the per-read probe. Reads outrun this floor under load -- ~110us against 500us -- so every batch
-// would be read before the next probe arrived, every record would sit past the newest probe, and every one of them
-// would be extrapolated rather than interpolated. Nothing then measures whether the clock stepped after that probe, so
-// the honest charge is the whole AICLK step over the distance, ~2.6us, not the baseline's noise.
-inline std::chrono::nanoseconds probe_interval() { return RealtimeProfilerClockSync::sync_interval(); }
-
 constexpr size_t kMaxConsumerBatchPerDevice =
     1u << 15;                                      // records one callback may be handed at a time, per attached device
 constexpr size_t kMaxConsumerBatchCap = 1u << 20;  // hard ceiling on the above
@@ -437,7 +426,7 @@ RealtimeProfilerReceiver::DeviceState::DeviceState(DeviceState&&) noexcept = def
 
 std::chrono::nanoseconds RealtimeProfilerReceiver::probe_device(
     DeviceState& dev_state, std::chrono::steady_clock::time_point now) {
-    dev_state.next_probe_due_at = now + probe_interval();
+    dev_state.next_probe_due_at = now + RealtimeProfilerClockSync::sync_interval();
     const auto before = dev_state.clock_sync->cost().busy;
     dev_state.clock_sync->resync();
     return dev_state.clock_sync->cost().busy - before;
@@ -538,7 +527,7 @@ bool RealtimeProfilerReceiver::publish_pages(
             ++rejected;
             continue;
         }
-        if (!chord.has_value() || start_timestamp > chord->batch_through_ticks) {
+        if (!chord.has_value() || start_timestamp > chord->close_ticks) {
             chord = dev_state.clock_sync->place(start_timestamp);
             // Only with no probe retained at all, so there is no host time to map onto and no later pass that would
             // help.

@@ -32,10 +32,15 @@ class IDevice;
 // shared and none of it needs a publication protocol.
 class RealtimeProfilerClockSync {
 public:
-    // The baseline a chord's own slope has to be measured across, as twice the floor: a pair closer together than half
-    // of this is refused and the near anchor is taken from further back. It no longer sets a probe cadence -- probes
-    // are taken by whoever reads records, right after reading them -- so it costs no PCIe traffic and buys only how
-    // well a local slope is resolved.
+    // A floor on how often each device's clock is read, under the probe every read already takes. This one number is
+    // the sync: a record is placed on the two probes either side of it, so probe spacing is the width of that pair, and
+    // a rate step inside it misplaces the record by step * width / 4. Measured under didt, where records are sparse
+    // enough that this floor is what sets the spacing, the departure ran 11us at p90 and 30us at p99 at a 5ms floor
+    // against 486ns and 570ns at this one.
+    //
+    // It cannot replace the per-read probe. Reads outrun it under load -- ~110us against 500us -- so every batch would
+    // be read before the next probe arrived, every record would sit past the newest probe, and every one would be
+    // extrapolated rather than interpolated, with nothing after it to measure whether the clock had stepped.
     //
     // AICLK only moves when the ARC firmware's DVFS loop runs, which is a 1ms timer (dvfs.c:DVFSChange in
     // tt-zephyr-platforms), so a chord spanning far below that resolves a clock that provably cannot have changed
@@ -117,22 +122,18 @@ public:
         experimental::ProgramRealtimeClockSync mapping;
         // Measured across kRateBaseline, not across this chord.
         double frequency = 0.0;
-        // This chord's own slope, published to nobody: placement rides it, so that a rate measured across a wider
-        // baseline cannot move where a record lands. See place_on_chord.
-        double chord_rate = 0.0;
-        // Uncertainty in `chord_rate`, as a fraction: the two brackets over the span they were measured across.
+        // Uncertainty in this chord's own slope, as a fraction: the two brackets over the span they were measured
+        // across. What a timestamp past either anchor is charged for, since only there does the slope carry.
         double chord_rate_noise = 0.0;
         // Enough to place a timestamp on the chord: its near anchor, and the reciprocal slope, inverted once here
         // because the alternative is a division per record on the drain thread.
         uint64_t open_ticks = 0;
         double open_host_ns = 0.0;
         double inv_chord_rate = 0.0;
-        // Not needed to place anything; it is what says whether a timestamp is being interpolated between the two
-        // measured points or extrapolated past them. See place_on_chord.
+        // Not needed to place anything. It says whether a timestamp is interpolated between the two measured points or
+        // extrapolated past them, which place_on_chord charges differently, and it is where a batch stops reusing this
+        // mapping: past it a tighter pair exists, so the next record resolves its own.
         uint64_t close_ticks = 0;
-        // The largest start timestamp this mapping may be reused for: past its far anchor a tighter pair exists, so the
-        // next record resolves its own.
-        uint64_t batch_through_ticks = 0;
     };
 
     // The offset that restates a record's own interpolated placement in terms of the published `frequency`. Anchoring

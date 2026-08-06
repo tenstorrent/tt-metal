@@ -242,13 +242,11 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
                 .sync_error = interpolation_error(open, closing) + measured_bow,
             },
         .frequency = published_rate,
-        .chord_rate = rate,
         .chord_rate_noise = rate_noise,
         .open_ticks = open.ticks,
         .open_host_ns = static_cast<double>(open.host.time_since_epoch().count()),
         .inv_chord_rate = 1.0 / rate,
         .close_ticks = closing.ticks,
-        .batch_through_ticks = closing.ticks,
     };
 }
 

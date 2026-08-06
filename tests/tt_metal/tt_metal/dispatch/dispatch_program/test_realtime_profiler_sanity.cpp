@@ -343,17 +343,16 @@ TEST(RealtimeProfilerChordMapping, LateServicedReadIsPlacedAndChargedForItsBrack
     EXPECT_GE(planned->mapping.sync_error, late_bracket / 2);
 }
 
-// A measured chord may be reused only up to its far anchor: past that the pair that brackets a timestamp is a
-// different, tighter one. The publish loop batches on this, and it has to admit the timestamp the chord was resolved
-// for or the loop makes no progress.
-TEST(RealtimeProfilerChordMapping, AMeasuredChordIsReusableUpToItsFarAnchor) {
+// A chord may be reused only up to its far anchor: past that the pair bracketing a timestamp is a different, tighter
+// one. The publish loop batches on this, and it has to admit the timestamp the chord was resolved for or the loop makes
+// no progress.
+TEST(RealtimeProfilerChordMapping, AChordIsReusableUpToItsFarAnchor) {
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
     const auto closing = chord_close(open);
 
     const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, {});
 
     ASSERT_TRUE(planned.has_value());
-    EXPECT_EQ(planned->batch_through_ticks, closing.ticks);
     EXPECT_EQ(planned->close_ticks, closing.ticks);
 }
 
@@ -452,7 +451,7 @@ TEST(RealtimeProfilerChordMapping, PublishedRateComesFromTheBaselineNotTheChord)
     EXPECT_NEAR(planned->frequency, kNominalRate, 1e-9);
     // The chord's own slope is still reported: it is the local rate, so it is what the next interval's curvature term
     // has to compare against.
-    EXPECT_GT(planned->chord_rate, kNominalRate);
+    EXPECT_GT(1.0 / planned->inv_chord_rate, kNominalRate);
 }
 
 // Publishing a baseline-wide rate must not move where a record lands: each record is anchored to its own placement on
@@ -472,7 +471,7 @@ TEST(RealtimeProfilerChordMapping, RecordLandsOnTheChordWhateverRateIsPublished)
     const int64_t offset = RealtimeProfilerClockSync::device_cycle_offset_for(*planned, start_ticks);
     const double mapped_host_ns = (static_cast<double>(start_ticks) - static_cast<double>(offset)) / planned->frequency;
     const double chord_host_ns = static_cast<double>(open.host.time_since_epoch().count()) +
-                                 static_cast<double>(start_ticks - open.ticks) / planned->chord_rate;
+                                 static_cast<double>(start_ticks - open.ticks) * planned->inv_chord_rate;
     EXPECT_NEAR(mapped_host_ns, chord_host_ns, 1.0);
     // And nothing beyond the two placements is charged for it.
     EXPECT_EQ(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
