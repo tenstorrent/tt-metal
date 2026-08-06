@@ -31,11 +31,12 @@ lever, opposite result, decided by shape.
 
 | shape | inst | us each | ms | cores | FLOPs % | DRAM % | fidelity |
 |---|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | 232.5 | 5.813 | 64 | 17.2 | 14.7 | HiFi2 |
+| 576 x 1024 x 4096 | 24 | 234.7 | 5.634 | 64 | 15.6 | 14.2 | HiFi2 |
 | 576 x 1024 x 3072 | 24 | 128.2 | 3.077 | 48 | 28.6 | 29.8 | HiFi2 |
 | 576 x 4096 x 1024 | 24 | 125.2 | 3.004 | 48 | 39.1 | 26.5 | HiFi2 |
 | 576 x 1024 x 1024 | 24 | 46.3 | 1.112 | 48 | 26.4 | 33.4 | HiFi2 |
 | 576 x 4096 x 4096 | 1 | 490.5 | 0.490 | 48 | 79.9 | 30.4 | HiFi4 |
+| 576 x 1024 x 4096 | 1 | 179.1 | 0.179 | 48 | 54.7 | 27.7 | HiFi4 |
 | 576 x 768 x 1024 | 1 | 44.2 | 0.044 | 48 | 20.8 | 28.6 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how

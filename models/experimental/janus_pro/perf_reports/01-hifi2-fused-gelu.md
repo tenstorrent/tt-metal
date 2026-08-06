@@ -35,11 +35,12 @@ config: passing `activation=` alongside an explicit config appends a **second** 
 
 | shape | inst | us each | ms | cores | FLOPs % | DRAM % | fidelity |
 |---|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | 270.1 | 6.752 | 48 | 19.3 | 18.5 | HiFi2 |
+| 576 x 1024 x 4096 | 24 | 273.8 | 6.570 | 48 | 17.9 | 18.1 | HiFi2 |
 | 576 x 1024 x 3072 | 24 | 128.7 | 3.090 | 48 | 28.5 | 29.7 | HiFi2 |
 | 576 x 4096 x 1024 | 24 | 125.1 | 3.003 | 48 | 39.1 | 39.6 | HiFi2 |
 | 576 x 1024 x 1024 | 24 | 46.9 | 1.125 | 48 | 26.1 | 33.0 | HiFi2 |
 | 576 x 4096 x 4096 | 1 | 490.4 | 0.490 | 48 | 79.9 | 30.4 | HiFi4 |
+| 576 x 1024 x 4096 | 1 | 181.1 | 0.181 | 48 | 54.1 | 27.4 | HiFi4 |
 | 576 x 768 x 1024 | 1 | 42.7 | 0.043 | 48 | 21.5 | 29.6 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how

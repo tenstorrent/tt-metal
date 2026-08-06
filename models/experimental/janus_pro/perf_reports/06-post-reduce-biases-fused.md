@@ -30,11 +30,12 @@ Changes 5 and 6 together took elementwise ops from 124 to 52.
 
 | shape | inst | us each | ms | cores | FLOPs % | DRAM % | fidelity |
 |---|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | 139.9 | 3.497 | 64 | 27.7 | 24.2 | HiFi2 |
+| 576 x 1024 x 4096 | 24 | 138.3 | 3.320 | 64 | 26.6 | 24.0 | HiFi2 |
 | 576 x 1024 x 3072 | 24 | 133.6 | 3.207 | 48 | 27.5 | 28.6 | HiFi2 |
 | 576 x 4096 x 1024 | 24 | 126.1 | 3.026 | 48 | 38.8 | 26.4 | HiFi2 |
 | 576 x 1024 x 1024 | 24 | 48.0 | 1.153 | 48 | 25.5 | 32.2 | HiFi2 |
 | 576 x 4096 x 4096 | 1 | 491.9 | 0.492 | 48 | 79.6 | 30.3 | HiFi4 |
+| 576 x 1024 x 4096 | 1 | 177.2 | 0.177 | 48 | 55.3 | 28.0 | HiFi4 |
 | 576 x 768 x 1024 | 1 | 43.5 | 0.044 | 48 | 21.1 | 29.0 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
