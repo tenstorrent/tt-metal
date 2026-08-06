@@ -1264,10 +1264,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         slot_remap=None,
         defer_device_sampling: bool = False,
         *,
-        reload_inputs: bool,
-        reload_page_table: bool,
-        reload_sampling_params: bool,
-        reset_sampling_state: bool,
+        reload_inputs: bool = True,
+        reload_page_table: bool = False,
+        reload_sampling_params: bool = False,
+        reset_sampling_state: bool = False,
         **kwargs,
     ):
         """Run one decode step, executing the caller's reload commands exactly.
@@ -1284,8 +1284,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             reload_sampling_params: Upload temperature/top-k/top-p/penalties.
             reset_sampling_state: Rebuild per-slot penalty history and seeds.
 
+        The commands default to the host-authoritative shape, which is what every
+        non-vLLM caller wants and the only shape that is safe without knowing the
+        scheduler's intent. vLLM always sends all four explicitly, and adapters that
+        cannot execute part of the contract reject the combination themselves.
+
         See ``models/common/decode_contract.py`` for the full contract.
         """
+        if "reset_batch" in kwargs:
+            # The legacy signal is gone, and a caller old enough to send it also omits
+            # the four commands, so its layout changes would silently take the defaults.
+            raise ValueError(
+                "reset_batch is not part of the decode input-update contract; a vLLM "
+                "build that sends it predates the contract and cannot drive this model"
+            )
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
 

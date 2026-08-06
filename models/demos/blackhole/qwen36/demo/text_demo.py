@@ -998,10 +998,6 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
             kv_cache=None,
             enable_trace=True,
             read_from_device=True,
-            reload_inputs=True,
-            reload_page_table=False,
-            reload_sampling_params=False,
-            reset_sampling_state=False,
         )
         dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
         next_token = int(dl.argmax())
@@ -1057,10 +1053,6 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
             kv_cache=None,
             enable_trace=False,
             read_from_device=True,
-            reload_inputs=True,
-            reload_page_table=False,
-            reload_sampling_params=False,
-            reset_sampling_state=False,
         )
         dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
         next_token = int(dl.argmax())

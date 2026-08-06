@@ -882,10 +882,6 @@ def test_gpt_oss_demo(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=None,
-                    reload_inputs=True,
-                    reload_page_table=False,
-                    reload_sampling_params=False,
-                    reset_sampling_state=False,
                 )
                 out_tok = torch.argmax(logits, dim=-1).view(-1)
 

@@ -430,10 +430,6 @@ def test_multimodal_demo_text(
                             next_token_tensor,
                             position_id,
                             enable_trace=enable_trace,
-                            reload_inputs=True,
-                            reload_page_table=False,
-                            reload_sampling_params=False,
-                            reset_sampling_state=False,
                         )
                         next_tokens, next_texts = sampler(logits)
                     # Update next token

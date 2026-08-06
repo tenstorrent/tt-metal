@@ -117,10 +117,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         sampling_params=None,
         slot_remap=None,
         *,
-        reload_inputs: bool,
-        reload_page_table: bool,
-        reload_sampling_params: bool,
-        reset_sampling_state: bool,
+        reload_inputs: bool = True,
+        reload_page_table: bool = False,
+        reload_sampling_params: bool = False,
+        reset_sampling_state: bool = False,
     ):
         return self._ttt_generator.decode_forward(
             tokens=tokens,

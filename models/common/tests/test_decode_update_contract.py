@@ -334,20 +334,39 @@ def test_every_marked_adapter_accepts_all_four_commands():
     adapters = _contract_v1_adapters()
     assert adapters, "no contract-v1 adapters found — did the marker move?"
 
+    # A command may carry a default, but only the host-authoritative value: a caller
+    # that omits one must get a full reload and no sampling update, never the reverse.
+    safe_defaults = {
+        "reload_inputs": True,
+        "reload_page_table": False,
+        "reload_sampling_params": False,
+        "reset_sampling_state": False,
+    }
     for label, adapter in adapters.items():
         params = inspect.signature(adapter.decode_forward).parameters
         accepts_kwargs = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
-        for command in (
-            "reload_inputs",
-            "reload_page_table",
-            "reload_sampling_params",
-            "reset_sampling_state",
-        ):
+        for command, safe in safe_defaults.items():
             named = params.get(command)
             assert named is not None or accepts_kwargs, f"{label}.decode_forward drops {command}"
-            if named is not None:
-                assert named.default is inspect.Parameter.empty, f"{label}.decode_forward defaults {command}"
+            if named is not None and named.default is not inspect.Parameter.empty:
+                assert named.default is safe, f"{label}.decode_forward defaults {command} unsafely"
         assert "reset_batch" not in params, f"{label}.decode_forward still takes reset_batch"
+
+
+def test_the_legacy_reset_batch_signal_is_rejected(expect_error):
+    from models.tt_transformers.tt.generator import Generator
+
+    fake = SimpleNamespace(mode=Mode.DECODE, model=[SimpleNamespace(switch_mode=lambda mode: None)], data_parallel=1)
+
+    # The commands carry defaults, so a pre-contract vLLM would otherwise be accepted
+    # with its layout changes silently reinterpreted as the default full reload.
+    with expect_error(ValueError, "predates the contract"):
+        Generator.decode_forward(
+            fake,
+            torch.zeros((1, 1), dtype=torch.int64),
+            torch.zeros((1,), dtype=torch.int64),
+            reset_batch=True,
+        )
 
 
 @pytest.mark.parametrize(

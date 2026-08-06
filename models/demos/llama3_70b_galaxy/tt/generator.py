@@ -1254,10 +1254,10 @@ class Generator(WarmupForwardMixin):
         slot_remap=None,
         defer_device_sampling: bool = False,
         *,
-        reload_inputs: bool,
-        reload_page_table: bool,
-        reload_sampling_params: bool,
-        reset_sampling_state: bool,
+        reload_inputs: bool = True,
+        reload_page_table: bool = False,
+        reload_sampling_params: bool = False,
+        reset_sampling_state: bool = False,
     ):
         """Run one decode step, executing the caller's reload commands exactly.
 
