@@ -28,6 +28,7 @@ using namespace ckernel::math;
 // SrcB register rows for a full 32x32 tile (16 rows per face):
 //     rows  0-15 = face 0 (used by COL)     rows 16-31 = face 1 (unused by COL)
 //     rows 32-47 = face 2 (used by COL)     rows 48-63 = face 3 (unused by COL)
+// A 16x32 tile is the first face-row of that layout: only rows 0-31 are populated and only face 0 is read.
 
 /**
  * @brief Init the math (FPU) thread for the SDPA blocked bcast-col SUB path (Quasar).
@@ -38,7 +39,7 @@ using namespace ckernel::math;
  *
  * @tparam eltwise_binary_type: FPU op (ELWSUB for the SDPA SUB path).
  * @tparam broadcast_type: Broadcast type (COL for this op).
- * @param tensor_shape: Operand tile shape. Full 32x32 tiles only.
+ * @param tensor_shape: Operand tile shape. 32x32 (2x2 faces) or 16x32 (1x2 faces).
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_sub_bcast_col_init_custom_ (T0); on pack, with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_sub_bcast_cols_reuse_custom_ runs the configured op on this thread.
  */
@@ -49,9 +50,9 @@ inline void _llk_math_eltwise_binary_init_custom_([[maybe_unused]] const ckernel
     static_assert(eltwise_binary_type == EltwiseBinaryType::ELWSUB, "custom sub bcast-col path supports ELWSUB only");
 
     LLK_ASSERT(
-        tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
-            tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
-        "custom sub bcast-col path supports full 32x32 tiles only");
+        tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
+            (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1),
+        "custom sub bcast-col path supports 32x32 and 16x32 tiles only");
 
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -66,7 +67,7 @@ inline void _llk_math_eltwise_binary_init_custom_([[maybe_unused]] const ckernel
  * held; SrcB dvalid is cleared only once, after the last tile of the block row.
  *
  * @param ct_dim: Number of column tiles written, into dest range [dst_index, dst_index + ct_dim).
- * @param tensor_shape: Operand tile shape (drives the face-row count).
+ * @param tensor_shape: Operand tile shape (drives the face-row count and the dest slot stride).
  * @param dst_index: First destination tile index.
  * @note Call @ref _llk_math_eltwise_binary_init_custom_ first.
  * @note Programs ADDR_MOD_5/6/7 itself (mirroring Blackhole) so no other init can leave them stale,
@@ -78,7 +79,7 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
-    // Two faces make up one face-row; a full 32x32 tile has two of them.
+    // Two faces make up one face-row; a full 32x32 tile has two of them, a 16x32 tile one.
     const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
 
     static_assert(
@@ -102,9 +103,22 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
     // End of an odd dest face: jump SrcB to the next face-row (face 0 -> face 2).
     addr_mod_t {.srca = {.incr = ELTWISE_MATH_ROWS}, .srcb = {.incr = SRCB_NEXT_FROW}, .dest = {.incr = ELTWISE_MATH_ROWS}}.set(ADDR_MOD_6);
 
+    // Dest slots are packed as densely as the tile is tall, matching what the packer reads back:
+    // 64 rows for a 4-face tile, 32 for a 2-face one (@ref _llk_pack_ scales its dest tile index by
+    // the face count for tiny tiles). DstTileShape selects that stride; Tile32x16 is the 2-face,
+    // 32-dest-row case that a 16x32 tile also lands in.
+    const bool full_tile = tensor_shape.total_num_faces() == ckernel::MAX_NUM_FACES;
+
     for (std::uint32_t i = 0; i < ct_dim; i++)
     {
-        _set_dst_write_addr_<DstTileShape::Tile32x32>(dst_index + i);
+        if (full_tile)
+        {
+            _set_dst_write_addr_<DstTileShape::Tile32x32>(dst_index + i);
+        }
+        else
+        {
+            _set_dst_write_addr_<DstTileShape::Tile32x16>(dst_index + i);
+        }
         _reset_counters_<p_setrwc::SET_D>();
 
         for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)

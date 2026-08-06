@@ -43,15 +43,18 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
         }
 
         // TODO: with multiple TCs are there multiple descriptors?
-        buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B = get_local_dfb_interface(i).tc_slots[0].base_addr;
-        bd_val.f.format = static_cast<std::uint8_t>(l1_data_format);
-        bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
-        bd_val.f.y_dim = pack_tile_face_r_dim[i];
-        bd_val.f.z_dim = pack_tile_num_faces[i];
+        // Same HW z_dim rule as the unpack side (see llk_unpack_hw_configure): 4 for a full 2x2 face
+        // grid, 1 otherwise, so a tiny tile is one HW tile per face, which is the granularity
+        // _llk_pack_ scales its L1 and dest tile indices to. Set using construct_tdma_desc helper.
+        const ckernel::TensorShape tensor_shape = get_output_tensor_shape(i);
+        const tdma_descriptor_t bd_td_val = ckernel::trisc::construct_tdma_desc(
+            tensor_shape,
+            get_local_dfb_interface(i).tc_slots[0].base_addr,
+            static_cast<std::uint8_t>(l1_data_format),
+            i,
+            pack_src_format[i]);
 
-        ckernel::trisc::validate_buffer_desc<ckernel::trisc::L1AccessMode::Continuous>(bd_val);
-        ckernel::trisc::_configure_buf_desc_table_(i, bd_val);
+        ckernel::trisc::_configure_buf_desc_table_(i, bd_td_val.buf_desc);
     }
 
     tdma_descriptor_t td_val;

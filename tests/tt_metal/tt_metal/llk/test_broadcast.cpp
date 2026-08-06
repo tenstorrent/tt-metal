@@ -916,6 +916,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb)
 //   - rt_dim>1 is the only shape that exercises nonzero srcA/srcB tile indices and a nonzero dest
 //     base, so a failure there (with the matching rt_dim=1 case green) points at the API wrappers'
 //     index arithmetic rather than the face walk.
+//   - the tiny-tile (16x32) cases come last: they only differ from their full-tile twins in the
+//     tile shape, so a red tiny-tile case with its full-tile twin green isolates the shape-driven
+//     parts (face-row count, dest slot stride, per-face unpack, buffer-descriptor z_dim).
 TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
     using unit_tests::compute::broadcast::SubBcastColCustomConfig;
 
@@ -938,9 +941,17 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
         {.ct_dim = 2, .rt_dim = 4, .num_blocks = 1},
         {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1},
         {.ct_dim = 2, .rt_dim = 2, .num_blocks = 2},
-        // No tiny-tile (16x32) cases: the op does not support that shape. Its srcB face traversal
-        // and dest walk assume a full 32-row tile, and the 16x32 case hangs the device. Both Quasar
-        // init LLKs now assert the full-tile shape, so an API caller gets an assert, not a hang.
+        // Tiny 16x32 tiles: one face-row, so the srcB walk runs its four-op face-row block once and
+        // dest slots are 32 rows apart instead of 64. ct_dim/rt_dim/num_blocks are re-swept because
+        // the tile shape changes the per-tile unpack (one UNPACR per face on Quasar), the dest slot
+        // stride and the pack granularity all at once.
+        {.ct_dim = 1, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 3, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 8, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 2, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 2, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 2, .rt_dim = 2, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
     };
 
     for (const auto& cfg : cases) {

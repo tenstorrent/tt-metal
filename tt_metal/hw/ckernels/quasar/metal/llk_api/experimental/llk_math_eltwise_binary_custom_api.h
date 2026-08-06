@@ -23,7 +23,7 @@
  *
  * @tparam math_fidelity: Accepted for API parity; SUB is LoFi-only on Quasar, so the value is unused.
  * @param operandA: DFB id of srcA; its format feeds the ALU format state and its tile shape is
- *        validated (full 32x32 tiles only).
+ *        validated (32x32 or 16x32 tiles).
  * @param operandB: DFB id of srcB (the bcast-col operand); its format feeds the ALU format state.
  * @note Run before @ref llk_math_eltwise_binary_sub_bcast_cols_custom on this thread.
  */
