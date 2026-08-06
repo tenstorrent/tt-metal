@@ -147,12 +147,7 @@ inline void llk_unpack_tilizeA_B_init(
         unpack_dst_format[operandA_id]);
     ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
 
-#ifndef REDUCE_OP
-    constexpr PoolType pool_type = neginf_srcA ? PoolType::MAX : PoolType::SUM;
-    _llk_unpack_reduce_col_tilizeA_strided_init_<pool_type>(operandA_id, operandB_id, ct_dim, tensor_shape_A);
-#else
     _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(operandA_id, operandB_id, ct_dim, tensor_shape_A);
-#endif
 }
 
 /**
