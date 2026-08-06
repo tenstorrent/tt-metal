@@ -115,29 +115,41 @@ DURATION = TARGET_FRAMES / p.MINIMAX_H3_FPS  # 5.1667 s
 IMAGE_1TO1 = dict(kind="image", source=(1024, 1024))
 IMAGE_16TO9 = dict(kind="image", source=(1920, 1080))
 VIDEO_SOUND = dict(kind="video", source=(1344, 768), audio_seconds=DURATION)
+# A 1:1 sounded video against the 16:9 target: its latent width differs from the
+# target's, so its soundtrack rows must pin to its OWN width grid. A soundtrack pinned
+# to the target grid instead keeps every length, tag and index correct.
+VIDEO_SOUND_1TO1 = dict(kind="video", source=(768, 768), audio_seconds=DURATION)
 VIDEO_SILENT = dict(kind="video", source=(1344, 768))
 AUDIO_ONLY = dict(kind="audio", audio_seconds=DURATION)
 
-# The last case is awkward by construction: an audio reference between two videos, a
+# `nine_mixed_awkward` is awkward by construction: an audio reference between two videos, a
 # video before an image, and a silent video beside a sounded one. That exercises the
 # per-modality label counters, the soundtrack-before-video row order and the shared rotary
 # clock out of their natural order. Nine references, inside the 9/3/3/12 limits.
+#
+# `nine_mixed_reversed` is the same nine in the opposite order. Reference order is
+# semantic -- it moves both the rotary clock and the row modalities -- so a layout
+# assembled order-blind matches the reference on neither ordering.
+_NINE_MIXED = [
+    VIDEO_SOUND,
+    AUDIO_ONLY,
+    VIDEO_SILENT,
+    IMAGE_1TO1,
+    AUDIO_ONLY,
+    IMAGE_16TO9,
+    VIDEO_SOUND,
+    IMAGE_1TO1,
+    AUDIO_ONLY,
+]
+
 CASES = {
     "one_image": [IMAGE_1TO1],
     "one_audio": [IMAGE_1TO1, AUDIO_ONLY],  # audio may never be the only reference
     "video_with_sound": [VIDEO_SOUND],
+    "video_with_sound_1to1": [VIDEO_SOUND_1TO1],
     "video_without_sound": [VIDEO_SILENT],
-    "nine_mixed_awkward": [
-        VIDEO_SOUND,
-        AUDIO_ONLY,
-        VIDEO_SILENT,
-        IMAGE_1TO1,
-        AUDIO_ONLY,
-        IMAGE_16TO9,
-        VIDEO_SOUND,
-        IMAGE_1TO1,
-        AUDIO_ONLY,
-    ],
+    "nine_mixed_awkward": _NINE_MIXED,
+    "nine_mixed_reversed": list(reversed(_NINE_MIXED)),
 }
 
 TEXT_LEN = 1024
@@ -213,150 +225,6 @@ def test_layout_matches_reference(case):
     assert torch.equal(got.text_indices, want.text_indices)
     assert got.num_condition_video_rows == want.num_condition_video_rows
     assert got.num_condition_audio_rows == want.num_condition_audio_rows
-
-
-@pytest.mark.parametrize("case", list(CASES), ids=list(CASES))
-def test_layout_structure(case):
-    """Structural invariants the reference comparison would not localise.
-
-    A parity failure above says "something moved"; these say *what*.
-    """
-    specs = CASES[case]
-    ours, _ = _both(specs)
-    num_latent_frames, latent_height, latent_width, num_audio_latents = _target()
-    layout = r.build_ref2va_packed_sequence(
-        _text_tags(), ours, num_latent_frames, latent_height, latent_width, num_audio_latents, PATCH_SIZE
-    )
-
-    # The three index sets partition the sequence: no overlap, no gap.
-    covered = torch.cat([layout.text_indices, layout.video_indices, layout.audio_indices]).sort().values
-    assert torch.equal(covered, torch.arange(layout.sequence_length))
-
-    # Reference rows come first within each modality's index list, which is what
-    # `build_row_timesteps` and the loop's write mask both slice on.
-    assert layout.num_condition_video_rows == sum(ref.num_video_rows for ref in ours if ref.kind != "audio")
-    assert layout.num_condition_audio_rows == sum(ref.num_audio_rows for ref in ours)
-    assert (layout.token_tags[layout.video_indices] == p.MINIMAX_H3_VIDEO_TAG).all()
-    assert (layout.token_tags[layout.audio_indices] == p.MINIMAX_H3_AUDIO_TAG).all()
-    # The vision block inside the text rows stays video-tagged; the rest text.
-    assert (layout.token_tags[VISION_BLOCK] == p.MINIMAX_H3_VIDEO_TAG).all()
-    assert (layout.token_tags[VISION_BLOCK.stop : TEXT_LEN] == p.MINIMAX_H3_TEXT_TAG).all()
-
-    # Every audio row carries no height coordinate and pins to two width extremes.
-    audio_positions = layout.position_ids[layout.audio_indices]
-    assert (audio_positions[:, 1] == 0).all()
-
-    # The generated rows are the TAIL, contiguous, audio then video -- which is what
-    # lets the transformer slice its two outputs without a gather.
-    target_audio_rows = num_audio_latents * p.MINIMAX_H3_AUDIO_CHANNELS
-    target_video_rows = num_latent_frames * (latent_height // 2) * (latent_width // 2)
-    audio_start = layout.sequence_length - target_video_rows - target_audio_rows
-    assert torch.equal(
-        layout.audio_indices[layout.num_condition_audio_rows :],
-        torch.arange(audio_start, audio_start + target_audio_rows),
-    )
-    assert torch.equal(
-        layout.video_indices[layout.num_condition_video_rows :],
-        torch.arange(audio_start + target_audio_rows, layout.sequence_length),
-    )
-
-
-def test_a_video_reference_packs_its_soundtrack_before_its_video_rows():
-    """The row order inside one video reference's block, which no whole-tensor check localises.
-
-    Getting this backwards keeps the sequence length, the tag counts and the index
-    partition all correct, and desynchronizes that reference's audio from its own
-    frames.
-    """
-    ours, _ = _both([VIDEO_SOUND])
-    num_latent_frames, latent_height, latent_width, num_audio_latents = _target()
-    layout = r.build_ref2va_packed_sequence(
-        _text_tags(), ours, num_latent_frames, latent_height, latent_width, num_audio_latents, PATCH_SIZE
-    )
-    reference = ours[0]
-
-    # Immediately after the text rows: this reference's audio, then its video.
-    assert torch.equal(
-        layout.audio_indices[: reference.num_audio_rows],
-        torch.arange(TEXT_LEN, TEXT_LEN + reference.num_audio_rows),
-    )
-    assert torch.equal(
-        layout.video_indices[: reference.num_video_rows],
-        torch.arange(
-            TEXT_LEN + reference.num_audio_rows,
-            TEXT_LEN + reference.num_audio_rows + reference.num_video_rows,
-        ),
-    )
-
-    # And they share one rotary origin, exactly as the generated pair does.
-    audio_origin = layout.position_ids[TEXT_LEN, 0]
-    video_origin = layout.position_ids[TEXT_LEN + reference.num_audio_rows, 0]
-    assert float(audio_origin) == float(video_origin) == float(TEXT_LEN)
-
-
-def test_a_soundtrack_pins_to_its_own_video_width_grid_not_the_targets():
-    """A soundtrack's width extremes come from its OWN video's grid.
-
-    Only visible when the reference video's latent width differs from the target's,
-    hence the 1:1 reference video against a 16:9 target.
-    """
-    square_video = dict(kind="video", source=(768, 768), audio_seconds=DURATION)
-    ours, theirs = _both([square_video])
-    num_latent_frames, latent_height, latent_width, num_audio_latents = _target()
-    args = (num_latent_frames, latent_height, latent_width, num_audio_latents, PATCH_SIZE)
-
-    assert ours[0].latent_width != latent_width, "this case needs a reference width unlike the target's"
-
-    got = r.build_ref2va_packed_sequence(_text_tags(), ours, *args)
-    want = reference_packing.build_ref2va_packed_sequence(_text_tags(), theirs, *args)
-    assert torch.equal(got.position_ids, want.position_ids)
-
-    # The reference block's own grid, not the target's.
-    own_grid, own_width = r._frame_position_grid(ours[0].latent_height, ours[0].latent_width, 2, 2)
-    _, target_width = r._frame_position_grid(latent_height, latent_width, 2, 2)
-    soundtrack_widths = got.position_ids[TEXT_LEN : TEXT_LEN + ours[0].num_audio_rows, 2].unique()
-    assert set(soundtrack_widths.tolist()) == {float(own_width[0]), float(own_width[-1])}
-    assert float(own_width[-1]) != float(target_width[-1]), "the two grids must differ for this to gate anything"
-
-
-def test_an_image_takes_one_integer_rotary_slot():
-    """An image advances the clock by 1.0, not by a latent frame's 5/3 units.
-
-    Two images therefore sit exactly one unit apart, which also means the clock a
-    later reference starts from depends on the *kinds* that came before it.
-    """
-    ours, _ = _both([IMAGE_1TO1, IMAGE_16TO9])
-    num_latent_frames, latent_height, latent_width, num_audio_latents = _target()
-    layout = r.build_ref2va_packed_sequence(
-        _text_tags(), ours, num_latent_frames, latent_height, latent_width, num_audio_latents, PATCH_SIZE
-    )
-
-    first = layout.position_ids[TEXT_LEN, 0]
-    second = layout.position_ids[TEXT_LEN + ours[0].num_video_rows, 0]
-    assert float(first) == float(TEXT_LEN)
-    assert float(second) - float(first) == 1.0
-    # One frame each, so every row of a block shares its time coordinate.
-    assert layout.position_ids[TEXT_LEN : TEXT_LEN + ours[0].num_video_rows, 0].unique().numel() == 1
-
-
-def test_reference_order_is_semantic():
-    """Reordering the same references is a different request.
-
-    The layout must actually change -- if it did not, the ordering rules in the
-    presentation would be the only thing carrying the order, and a reordering bug
-    in the row assembly would be invisible here.
-    """
-    forward = [IMAGE_1TO1, VIDEO_SOUND, AUDIO_ONLY]
-    backward = [AUDIO_ONLY, VIDEO_SOUND, IMAGE_1TO1]
-    num_latent_frames, latent_height, latent_width, num_audio_latents = _target()
-    args = (num_latent_frames, latent_height, latent_width, num_audio_latents, PATCH_SIZE)
-
-    a = r.build_ref2va_packed_sequence(_text_tags(), _both(forward)[0], *args)
-    b = r.build_ref2va_packed_sequence(_text_tags(), _both(backward)[0], *args)
-
-    assert a.sequence_length == b.sequence_length, "the same references occupy the same number of rows"
-    assert not torch.equal(a.position_ids, b.position_ids), "reordering must change the rotary clock"
-    assert not torch.equal(a.token_tags, b.token_tags), "reordering must change the row modalities"
 
 
 # ---------------------------------------------------------------- media preparation
@@ -577,53 +445,6 @@ def test_presentation_matches_reference(case):
     assert got_ids == want_ids
     assert got_tags == want_tags
     assert len(got_tags) == len(got_ids)
-
-
-def test_presentation_labels_audio_before_video_for_a_sounded_video():
-    """The label order mirrors the ROW order: "<Audio j>: " precedes "<Video k>: ".
-
-    Also pins the per-modality numbering: a silent video and a sounded one share
-    the video counter but only the sounded one advances the audio counter.
-    """
-    tokenizer = _tokenizer()
-    ours, _ = _both([VIDEO_SILENT, VIDEO_SOUND])
-    for reference in ours:
-        reference.block_timestamps = [0.25]
-    ids, _ = r.build_ref2va_presentation(tokenizer, "", ours, [], [16, 16])
-    text = tokenizer.decode(ids)
-
-    assert text.index("<Video 1>") < text.index("<Audio 1>") < text.index("<Video 2>"), text
-    assert "<Audio 2>" not in text, "only the sounded video advances the audio counter"
-    assert "<Picture" not in text
-
-
-def test_presentation_labels_audio_alone_and_numbers_per_modality():
-    """A waveform never reaches the conditioner: an audio reference is a label with no vision block."""
-    tokenizer = _tokenizer()
-    ours, _ = _both([AUDIO_ONLY, IMAGE_1TO1, AUDIO_ONLY])
-    ids, tags = r.build_ref2va_presentation(tokenizer, "prompt", ours, [16], [])
-    text = tokenizer.decode(ids)
-
-    assert text.index("<Audio 1>") < text.index("<Picture 1>") < text.index("<Audio 2>")
-    # One vision block only -- the image's. 16 pads plus two sentinels.
-    assert sum(tag == p.MINIMAX_H3_VIDEO_TAG for tag in tags) == 18
-    assert text.endswith("prompt"), "the prompt is appended verbatim, last"
-
-
-def test_presentation_tags_the_whole_vision_block_as_video():
-    """Including the sentinels -- which is where H3 differs from Qwen3-VL's own token type ids."""
-    tokenizer = _tokenizer()
-    ours, _ = _both([IMAGE_1TO1])
-    num_tokens = 8
-    ids, tags = r.build_ref2va_presentation(tokenizer, "x", ours, [num_tokens], [])
-
-    start = tokenizer.convert_tokens_to_ids("<|vision_start|>")
-    end = tokenizer.convert_tokens_to_ids("<|vision_end|>")
-    first, last = ids.index(start), ids.index(end)
-    assert last - first == num_tokens + 1
-    assert all(tag == p.MINIMAX_H3_VIDEO_TAG for tag in tags[first : last + 1])
-    assert tags[first - 1] == p.MINIMAX_H3_TEXT_TAG, "the label before it stays text"
-    assert tags[last + 1] == p.MINIMAX_H3_TEXT_TAG, "the prompt after it stays text"
 
 
 def _tokenizer():

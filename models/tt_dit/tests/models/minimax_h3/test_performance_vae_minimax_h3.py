@@ -452,7 +452,7 @@ def test_visual_data_parallel_throughput(mesh_device):
 
     The single-device baselines above are per *invocation*; this measures a whole mesh-sized
     **wave**, which is what the encode/decode paths now issue. Correctness of the
-    decomposition is gated in ``test_vae_data_parallel_minimax_h3.py`` (bit-exact); this only
+    decomposition is gated in ``test_vae_parallel_minimax_h3.py`` (bit-exact); this only
     times it.
     """
     from loguru import logger

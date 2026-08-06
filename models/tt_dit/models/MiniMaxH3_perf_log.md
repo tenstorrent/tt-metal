@@ -8,20 +8,20 @@ bringup commits were squashed, which rebased every later commit and changed its 
 this branch's history again, refresh it again -- a dangling hash makes the entry unbisectable.
 
 All numbers are **device time for one transformer block**, from
-`test_transformer_block_perf_minimax_h3.py` under `--profile`, analysed with
-`project_block_perf.py` (which reproduces `tt-perf-report`'s totals exactly). 768P (768x1344) on
+`test_performance_minimax_h3.py -k transformer_block` under `--profile`, analysed with
+`tools/project_block_perf.py` (which reproduces `tt-perf-report`'s totals exactly). 768P (768x1344) on
 4x8 Blackhole Galaxy, ring, 2 links, TP=4 / SP=8. Per-device sequence lengths 4768 / 9216 / 13632.
 
 Per denoise step = block x 50 layers. Per video = step x 50 denoise steps. Both cover the block stack
 only -- refiner, input projections, `norm_out` and the output heads are excluded, a few percent on top.
-Device time is a lower bound on wall clock; see the `device + op gap` note in `project_block_perf.py`.
+Device time is a lower bound on wall clock; see the `device + op gap` note in `tools/project_block_perf.py`.
 
 Reproduce:
 
 ```
 scripts/run_safe_pytest.sh --profile \
-    models/tt_dit/tests/models/minimax_h3/test_transformer_block_perf_minimax_h3.py -k 5s_768p
-python models/tt_dit/tests/models/minimax_h3/project_block_perf.py 5s=<csv>
+    models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py -k 5s_768p
+python models/tt_dit/tests/models/minimax_h3/tools/project_block_perf.py 5s=<csv>
 ```
 
 | # | date | change | 5s | 10s | 15s | commit |
