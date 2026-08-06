@@ -80,8 +80,11 @@ public:
     // interval, measured at 891ns, so 32 devices at 100us is a third of a core.
     //
     // AICLK only moves when the ARC firmware's DVFS loop runs, which is a 1ms timer (dvfs.c:DVFSChange in
-    // tt-zephyr-platforms), so probes spaced far below that re-measure a clock that provably cannot have changed.
-    // Overridable via TT_RT_PROFILER_SYNC_INTERVAL_US to sweep this against a part's actual throttling behaviour.
+    // tt-zephyr-platforms), so probes spaced far below that re-measure a clock that provably cannot have changed --
+    // measured on Blackhole under didt, p90 sync error is flat at 385-390ns from 100us all the way out to 500us and
+    // only breaks upward at the tick. 500us is where both parts sit comfortably: it is Wormhole that pins it, failing
+    // the 15us p99 limit at 1ms (17.6us) where Blackhole is still at 1.8us. Overridable via
+    // TT_RT_PROFILER_SYNC_INTERVAL_US.
     static std::chrono::nanoseconds sync_interval();
 
     // How wide a baseline the rate a record is published with is measured across. A chord's slope is uncertain by

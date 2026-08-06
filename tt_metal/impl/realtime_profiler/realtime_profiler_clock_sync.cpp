@@ -71,7 +71,7 @@ FrequencyCache& frequency_cache() {
 
 std::chrono::nanoseconds RealtimeProfilerClockSync::sync_interval() {
     static const std::chrono::nanoseconds interval =
-        std::chrono::microseconds(tt::parse_env<uint32_t>("TT_RT_PROFILER_SYNC_INTERVAL_US", 100));
+        std::chrono::microseconds(tt::parse_env<uint32_t>("TT_RT_PROFILER_SYNC_INTERVAL_US", 500));
     return interval;
 }
 

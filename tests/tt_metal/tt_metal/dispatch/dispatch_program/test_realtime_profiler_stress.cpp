@@ -508,8 +508,14 @@ TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
     constexpr uint32_t kPacedId = 0x6AC0;
     constexpr std::array<std::chrono::microseconds, 6> kGaps = {5us, 50us, 200us, 1000us, 5000us, 5us};
     constexpr uint32_t kOpsPerGap = 100;
-    constexpr double kMaxPacedLatencyP50Us = 300.0;
-    constexpr double kMaxPacedLatencyP99Us = 1'000.0;
+    // A record cannot be published until a probe has read past it, so most of its delivery latency is the staging wait
+    // -- up to a whole sync interval, averaging half of one. That is a deliberate cadence, not a delivery cost, so
+    // bounding the total against a fixed number would make this a test of kSyncInterval. What is worth holding is the
+    // part after a record becomes publishable: the ring hand-off and the consumer wake.
+    const double staging_wait_us =
+        std::chrono::duration<double, std::micro>{RealtimeProfilerClockSync::sync_interval()}.count() / 2.0;
+    const double kMaxPacedLatencyP50Us = staging_wait_us + 250.0;
+    const double kMaxPacedLatencyP99Us = staging_wait_us + 750.0;
 
     constexpr uint32_t num_gaps = static_cast<uint32_t>(kGaps.size());
     constexpr uint32_t total_paced = kOpsPerGap * num_gaps;
@@ -639,8 +645,8 @@ TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
         << "too few of the " << total_paced << " paced ops reached the callback; the latency percentiles "
         << "below are over a partial sample and unreliable";
     EXPECT_LT(worst_paced_latency_p50_us, kMaxPacedLatencyP50Us)
-        << "median delivery latency too high; the consumer is not waking promptly (a fixed "
-        << "backoff/oversleep would show up here)";
+        << "median delivery latency exceeds the staging wait by too much; the consumer is not waking promptly (a "
+        << "fixed backoff/oversleep would show up here)";
     EXPECT_LT(worst_paced_latency_p99_us, kMaxPacedLatencyP99Us)
         << "tail delivery latency too high; occasional long stalls in the delivery path";
     EXPECT_TRUE(mesh_device->close());
