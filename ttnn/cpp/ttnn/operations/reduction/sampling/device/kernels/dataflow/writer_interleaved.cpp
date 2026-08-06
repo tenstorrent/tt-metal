@@ -217,6 +217,10 @@ void kernel_main() {
 
     const auto s_out = TensorAccessor(tensor::output);
     // Write individual core result - output buffer should handle alignment
+    // Treat `output` as a plain SRAM window, not a FIFO: do not add reserve_back / push_back /
+    // pop_front. The fill above writes at get_write_ptr() and this send reads from get_read_ptr();
+    // they are the same address only while both cursors sit at the buffer base. A pop_front moves
+    // the read cursor, so this send would transmit the wrong bytes instead of the sampled index.
     noc.async_write(dfb_out, s_out, 4, {.offset_bytes = core_id * 4}, {.page_id = 0, .offset_bytes = core_id * 4});
     noc.async_write_barrier();
 }
