@@ -95,15 +95,57 @@ static TensorSpec reduce_scatter_direct_staging_spec(
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type)));
 }
 
+// Checks that must run on EVERY invocation, not just the cache miss that built the program. On a hit the
+// cached workload is reused and only buffer addresses are patched from these tensors, so anything that
+// would make a same-shaped tensor address differently -- page config, memory config, dtype, a different
+// mesh device, or an unallocated buffer -- has to be re-verified each time. Comparing the full
+// tensor_spec() is what the regular reduce-scatter cache-hit validator does
+// (reduce_scatter_device_operation.cpp:32-40), and for the persistent buffers it is also exactly the
+// documented contract: they are required to come from reduce_scatter_minimal_direct_create_persistent_buffers,
+// which builds them from this same compute_output_specs, so a conforming tensor matches byte for byte.
+static void validate_direct_tensors_every_invocation(
+    const ReduceScatterMinimalDirectDeviceOperation::operation_attributes_t& args,
+    const ReduceScatterMinimalDirectDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in a buffer on device!");
+    auto* mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Input tensor must be on a mesh device!");
+
+    const auto specs = ReduceScatterMinimalDirectDeviceOperation::compute_output_specs(args, tensor_args);
+    const auto check = [&](const std::optional<Tensor>& maybe, size_t idx, const char* what) {
+        if (!maybe.has_value()) {
+            return;
+        }
+        const auto& tensor = maybe.value();
+        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Persistent {} tensor must be on device!", what);
+        TT_FATAL(tensor.buffer() != nullptr, "Persistent {} tensor must be allocated in a buffer on device!", what);
+        TT_FATAL(
+            tensor.device() == mesh_device,
+            "Persistent {} tensor must live on the same mesh device as the input",
+            what);
+        TT_FATAL(
+            tensor.tensor_spec() == specs.at(idx),
+            "Persistent {} tensor spec {} does not match the computed spec {}; persistent buffers must come "
+            "from reduce_scatter_minimal_direct_create_persistent_buffers",
+            what,
+            tensor.tensor_spec(),
+            specs.at(idx));
+    };
+    check(tensor_args.persistent_output_tensor, 0, "output");
+    check(tensor_args.persistent_staging_tensor, 1, "staging");
+}
+
 void ReduceScatterMinimalDirectDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t&, const tensor_args_t&) {}
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_direct_tensors_every_invocation(args, tensor_args);
+}
 
 void ReduceScatterMinimalDirectDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in a buffer on device!");
+    validate_direct_tensors_every_invocation(args, tensor_args);
 
     const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
     TT_FATAL(args.dim >= 0 && args.dim < rank, "Resolved scatter dim {} out of range for {}D input", args.dim, rank);
@@ -127,34 +169,8 @@ void ReduceScatterMinimalDirectDeviceOperation::validate_on_program_cache_miss(
         input_tensor.logical_shape()[args.dim],
         args.num_devices);
 
-    auto specs = compute_output_specs(args, tensor_args);
-    if (tensor_args.persistent_output_tensor.has_value()) {
-        const auto& out = tensor_args.persistent_output_tensor.value();
-        TT_FATAL(out.storage_type() == StorageType::DEVICE, "Persistent output tensor must be on device!");
-        TT_FATAL(
-            out.dtype() == input_tensor.dtype(),
-            "Output dtype {} must match input {}",
-            out.dtype(),
-            input_tensor.dtype());
-        TT_FATAL(
-            out.logical_shape() == specs.at(0).logical_shape(),
-            "Persistent output shape {} must be {}",
-            out.logical_shape(),
-            specs.at(0).logical_shape());
-    }
-    if (tensor_args.persistent_staging_tensor.has_value()) {
-        const auto& staging = tensor_args.persistent_staging_tensor.value();
-        TT_FATAL(staging.storage_type() == StorageType::DEVICE, "Persistent staging tensor must be on device!");
-        TT_FATAL(
-            staging.logical_shape() == specs.at(1).logical_shape() &&
-                staging.memory_config() == specs.at(1).memory_config(),
-            "Persistent staging tensor must come from reduce_scatter_minimal_direct_create_persistent_buffers: "
-            "expected shape {} in {}, got shape {} in {}",
-            specs.at(1).logical_shape(),
-            specs.at(1).memory_config(),
-            staging.logical_shape(),
-            staging.memory_config());
-    }
+    // Persistent-buffer specs are checked by validate_direct_tensors_every_invocation above, which also
+    // runs on cache hits.
 }
 
 ReduceScatterMinimalDirectDeviceOperation::spec_return_value_t
@@ -222,6 +238,23 @@ static std::tuple<ReduceScatterMinimalDirectParams, ReduceScatterMinimalDirectIn
     TT_FATAL(mesh_device != nullptr, "Input tensor must be on a mesh device for reduce_scatter_minimal_direct");
 
     const auto mesh_shape = mesh_device->shape();
+    // A 2-element per-axis table is indexed by cluster_axis below, so an out-of-range axis has to be a
+    // controlled failure here rather than an out-of-bounds read on the way to device-op validation.
+    TT_FATAL(
+        !cluster_axis.has_value() || cluster_axis.value() < 2,
+        "reduce_scatter_minimal_direct cluster_axis {} is out of range; only axes 0 and 1 exist",
+        cluster_axis.value_or(0));
+    // An absent cluster_axis means "the one axis that wraps", which is only unambiguous on a line mesh.
+    // On a mesh with both extents > 1 the loop below would activate BOTH axes, making num_devices their
+    // product while active_axis (and hence the fabric connections the factory opens) covers only one --
+    // the kernels would then wait on contributions from devices they cannot route to, and hang. Require
+    // the caller to name the axis instead. reduce_scatter_minimal_direct_is_applicable declines the same
+    // case, so the ttnn.reduce_scatter dispatch stays on the ring op rather than reaching this TT_FATAL.
+    TT_FATAL(
+        cluster_axis.has_value() || mesh_shape[0] == 1 || mesh_shape[1] == 1,
+        "reduce_scatter_minimal_direct requires an explicit cluster_axis on a {} mesh: with both extents "
+        "greater than one there is no single implied ring axis",
+        mesh_shape);
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};

@@ -40,6 +40,10 @@ void kernel_main() {
     constexpr uint32_t block_stride = tile_granularity;
     constexpr uint32_t group_pages = num_devices * tile_granularity;
 
+    // Bring the compute hardware up first: everything it needs is compile-time, so there is no reason for
+    // any runtime-state access (arg reads, the L1 generation counter, CB objects) to precede it.
+    compute_kernel_hw_startup(cb_reduce_id, cb_reduce_id, cb_out_id);
+
     uint32_t arg_idx = 0;
     // This core's partition of every slice: chunk_count chunks / tile_count tiles.
     const uint32_t chunk_count = get_arg_val<uint32_t>(arg_idx++);
@@ -57,7 +61,6 @@ void kernel_main() {
     CircularBuffer cb_reduce(cb_reduce_id);
     CircularBuffer cb_out(cb_out_id);
 
-    compute_kernel_hw_startup(cb_reduce_id, cb_reduce_id, cb_out_id);
     if constexpr (num_devices % 2 == 0) {
         add_tiles_init(cb_reduce_id, cb_reduce_id, true);
     }

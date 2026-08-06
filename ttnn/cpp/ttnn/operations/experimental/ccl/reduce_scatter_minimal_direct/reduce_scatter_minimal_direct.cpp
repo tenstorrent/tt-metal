@@ -56,6 +56,14 @@ bool reduce_scatter_minimal_direct_is_applicable(
     if (input_tensor.layout() != ttnn::TILE_LAYOUT) {
         return false;
     }
+    // Twin of the two axis TT_FATALs in build_operation_args: only axes 0 and 1 exist, and an absent
+    // cluster_axis only names a unique ring axis on a line mesh. On a mesh with both extents > 1 an
+    // axis-less call would count devices on both axes while routing on one, so decline it here and let
+    // the caller stay on the ring op.
+    const auto mesh_shape = mesh_device->shape();
+    if (cluster_axis.has_value() ? cluster_axis.value() >= 2 : (mesh_shape[0] > 1 && mesh_shape[1] > 1)) {
+        return false;
+    }
     const uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     if (num_devices < 2) {
         return false;

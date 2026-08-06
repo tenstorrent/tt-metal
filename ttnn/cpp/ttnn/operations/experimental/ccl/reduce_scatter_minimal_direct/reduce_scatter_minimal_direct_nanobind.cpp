@@ -21,7 +21,10 @@ void bind_reduce_scatter_minimal_direct(nb::module_& mod) {
     ttnn::bind_function<"reduce_scatter_minimal_direct", "ttnn.experimental.">(
         mod,
         R"doc(
-        Experimental direct (one-shot) reduce-scatter across a 1D ring of devices.
+        Experimental direct (one-shot) reduce-scatter along a wrapping axis of devices: a Ring on a 1D
+        fabric, or a Torus axis on a 2D fabric. On a mesh with both extents greater than one, name the
+        wrapping axis explicitly with ``cluster_axis`` -- there is no implied axis and the op will reject
+        the call.
 
         Every device unicasts each destination's slice straight to that destination over the fabric (a
         multi-hop unicast; no intermediate device stages or accumulates it), then reduces the arrivals

@@ -71,7 +71,11 @@ def run_reduce_scatter_minimal_direct_impl(
     for _ in range(num_iters):
         rs_global_input_shape = rs_input_shape[:]
         rs_global_input_shape[dim] *= num_devices
-        rs_input_tensor = torch.rand(rs_global_input_shape).bfloat16()
+        # Match the torch dtype to the ttnn one. For float32 this matters: the op derives fp32_dest_acc_en
+        # from the input dtype, so feeding bf16-rounded data would hide a reducer compiled in the wrong
+        # destination-accumulator mode behind an already-bf16 golden.
+        torch_dtype = torch.float32 if rs_input_dtype == ttnn.float32 else torch.bfloat16
+        rs_input_tensor = torch.rand(rs_global_input_shape).to(torch_dtype)
         torch_input_tensor_list.append(torch.chunk(rs_input_tensor, num_devices, dim))
         tt_input_tensor_mesh_list.append(
             ttnn.from_torch(
@@ -235,4 +239,37 @@ def test_reduce_scatter_minimal_direct(
         num_iters=num_iters,
         enable_trace=enable_trace,
         persistent_mode=persistent_mode,
+    )
+
+
+# FLOAT32 regression: the geometry sets fp32_dest_acc_en from the input dtype (which halves max_dst_size
+# from 8 to 4 tiles per chunk), so the compute kernel MUST be built with the same flag. It previously took
+# a default-constructed ComputeConfigDescriptor, whose fp32_dest_acc_en is false, and reduced float32
+# inputs in bf16-precision destination registers. Kept as its own case rather than another axis on the
+# matrix above: one shape is enough to pin the dest-accumulator mode, and the rest of the coverage is
+# dtype-independent.
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("rs_input_shape, dim", [([1, 1, 32, 256], 3)], ids=["dim3_w256"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}],
+    indirect=True,
+    ids=["fabric_ring"],
+)
+def test_reduce_scatter_minimal_direct_float32(mesh_device, num_links, rs_input_shape, dim):
+    run_reduce_scatter_minimal_direct_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        rs_input_shape,
+        dim,
+        num_links,
+        ttnn.float32,
+        ttnn.TILE_LAYOUT,
+        RS_DIRECT_DRAM_MEM_CONFIG,
+        RS_DIRECT_DRAM_MEM_CONFIG,
+        num_iters=2,
+        enable_trace=False,
+        persistent_mode="none",
     )

@@ -28,8 +28,9 @@ ttnn::Tensor reduce_scatter_minimal_direct(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
-// Whether this op can run a given case AT ALL -- structural constraints only (ring topology, TILE
-// layout, a scatter dim that splits into whole pages, 1D fabric).
+// Whether this op can run a given case AT ALL -- structural constraints only (TILE layout, a scatter dim
+// that splits into whole pages, and a single WRAPPING axis: a Ring on a 1D fabric or a Torus axis on a 2D
+// one. On a mesh with both extents > 1 the wrapping axis must be named explicitly via cluster_axis).
 bool reduce_scatter_minimal_direct_is_applicable(
     const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis = std::nullopt);
 
