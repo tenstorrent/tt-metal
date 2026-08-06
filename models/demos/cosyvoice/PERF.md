@@ -6,10 +6,17 @@ measured on the hardware named in *Environment*, none is an estimate, and none i
 a target is missed the number is stated with the reason and the identified lever.
 
 ## Environment
-- Device: Blackhole `p150a`
-- Host: 16 cores, 62 GB
-- tt-metal: `b5e9cba196`
-- Date: `2026-08-06`
+
+Both architectures, same tt-metal commit. Headline figures below are Blackhole; the Wormhole
+side-by-side has its own section.
+
+| | Blackhole | Wormhole |
+|---|---|---|
+| Device | `p150a`, 32 GB | n300 (T3000, `TT_VISIBLE_DEVICES=0`), 12 GB |
+| Compute grid | **13 × 10 = 130 cores** | **8 × 8 = 64 cores** |
+| Host | 16 cores, 62 GB | 32 cores, 512 GB |
+| tt-metal | `b5e9cba196` | `b5e9cba196` |
+| Date | `2026-08-06` | `2026-08-06` |
 
 ## Benchmark commands
 ```bash
@@ -361,6 +368,88 @@ shape assertion catches it. `test_device_fixed_shape_cache_matches_the_growing_o
 hard part is negligible; the op standing in for a missing `ttnn.conv_transpose1d` dominates the
 stage.
 
+## Wormhole side by side
+
+Same commit, same tests, same utterance — 164 tokens producing 3.27 s of audio. Wormhole is the
+architecture the bounty names (*"N150 or N300"*), so it gets a first-class section rather than a
+footnote. The `explicit chain` row is the pre-fused-attention path, reached with
+`COSYVOICE_SDPA_DECODE=0`; the Blackhole figure for it is the `2026-08-05` measurement of the same
+code, since that box entered its daily reboot before a same-day re-run could be taken.
+
+### End-to-end RTF
+
+| | Blackhole | Wormhole | WH : BH |
+|---|---:|---:|---:|
+| explicit chain — `COSYVOICE_SDPA_DECODE=0` | `0.533` | `0.950` | 1.78× |
+| **fused decode attention** — default | **`0.477`** ✅ | `0.891` | 1.87× |
+| **+ in-place KV** — `COSYVOICE_KV_INPLACE=1` | **`0.449`** ✅ | **`0.736`** | 1.64× |
+
+**`RTF < 0.5` is met on Blackhole and missed on Wormhole.** At its best setting n300 lands at
+`0.736`, 47 % over the gate. Everything else in Stage 1 passes on both.
+
+### Where the time goes, at the best setting
+
+| stage | Blackhole | Wormhole | WH : BH |
+|---|---:|---:|---:|
+| LLM (164 tokens) | `0.817 s` | `1.302 s` | 1.59× |
+| Flow decoder (10 Euler steps) | `0.603 s` | `1.021 s` | 1.69× |
+| HiFT vocoder | `0.051 s` | `0.087 s` | 1.71× |
+| **Total** | **`1.470 s`** | **`2.411 s`** | **1.64×** |
+
+The ratio is close to flat across three stages of very different shape, and close to the **2.03×
+ratio in core count** (130 vs 64). Nothing here is disproportionately hurt by the smaller part.
+
+### Decode step, and what each change is worth
+
+| | Blackhole | Wormhole |
+|---|---:|---:|
+| untraced | `20.83 ms` (48.0 tok/s) | `20.10 ms` (49.7 tok/s) |
+| traced, moving cache @ 384 | `5.60 ms` (178.7) | `11.68 ms` (85.6) |
+| traced, moving cache @ 448 | `5.88 ms` | `10.12 ms` |
+| traced, in-place @ 448 | **`4.99 ms`** (200.4) | **`8.20 ms`** (122.0) |
+| trace speedup | **3.72×** | **1.72×** |
+| fused attention is worth | `−1.15 ms/token` (−17.1 %) | `−1.37 ms/token` (−11.0 %) |
+| in-place KV is worth | `+0.61 ms` (**1.12×**) | `+3.48 ms` (**1.42×**) |
+| cost of widening 384 → 448 | `+0.28 ms` | **`−1.55 ms`** — *faster* |
+
+Four things in that table are worth stating rather than leaving to be read off.
+
+**Untraced decode is the same speed on both — `20.83` vs `20.10 ms`.** Untraced, this model is
+host-dispatch-bound, and the two hosts are the same class of machine; the accelerator barely
+participates. The architecture gap appears only once tracing removes the dispatch overhead, which is
+also why trace capture is worth 3.72× on Blackhole and 1.72× on Wormhole. **A per-op cost measured
+untraced says almost nothing about the silicon.**
+
+**The in-place KV cache is worth 1.42× on Wormhole against 1.12× on Blackhole.** It ships opt-in
+because on Blackhole it buys 12 % for a 384 MB trace region and the loss of bit-exactness — a thin
+trade. On Wormhole the same trade buys 42 %, which is not thin. **Recommend it on n300; keep it
+optional on p150a.**
+
+**The tile-parity effect changes sign between architectures.** F45 measured that widening the key
+axis 384 → 448 costs `+0.28 ms` on Blackhole, and it does. On Wormhole the *wider* buffer is
+`1.55 ms` **faster**. Whatever the scheduling heuristic behind F45 is, its optimum is
+architecture-specific, and a width tuned on one part is not tuned on the other.
+
+**The fused attention pays more in absolute terms on Wormhole and less in relative terms.**
+`1.37 ms` against `1.15 ms`, but 11.0 % of a slower step against 17.1 % of a faster one. The
+prediction going in was that it would favour n300, because narrower memory is the one place
+`bfloat8_b` ever showed a gain (F42) and this kernel stops writing the score matrix. Half right: the
+milliseconds went the predicted way, the percentage did not.
+
+### Accuracy and tests
+
+| | Blackhole | Wormhole |
+|---|---:|---:|
+| traced vs untraced | `1.0000000000` | `1.0000000000` |
+| in-place, worst PCC over 72 steps | `0.9987379437` | `0.9991855486` |
+| moving-cache control at the same width | `0.9988754970` | `0.9991229346` |
+| test suite | **155 passed** | **154 passed, 1 failed** |
+
+Traced-vs-untraced is bit-exact on both. The single Wormhole failure is
+`test_device_streamed_matches_non_streamed` — mel-space PCC `0.218` against a `0.85` gate, the
+arch-specific streaming defect recorded in F42 and unrelated to anything here. It is why **R3
+(streaming) is Blackhole-only**.
+
 ## Accuracy
 
 | Module | PCC |
@@ -464,4 +553,5 @@ Source suites: `tests/perf/`, `tests/e2e/`, `tests/pcc/`
 | Tier | Count | Hardware |
 |---|---:|---|
 | host | 111 | none |
-| device | 44 | Blackhole `p150a` |
+| device | 44 | Blackhole `p150a` — **155 pass** |
+| device | 44 | Wormhole n300 — **154 pass, 1 fail** (F42 streaming, arch-specific) |
