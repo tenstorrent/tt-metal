@@ -24,9 +24,9 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Metric | Value | Target |
 |---|---:|---:|
-| End-to-end RTF | `0.648` | `< 0.5` ❌ |
+| End-to-end RTF | `0.611` | `< 0.5` ❌ |
 | LLM throughput (traced) | `121.3 tok/s` | `>= 60` ✅ |
-| LLM decode latency (traced) | `8.25 ms` | — |
+| LLM decode latency (traced) | `8.23 ms` | — |
 | Token agreement, teacher-forced | `98.56 %` | `> 95 %` ✅ |
 | Token agreement, through the KV cache | `95.83 %` | `> 95 %` ✅ |
 | WER (English) | `0.00 %` | `< 3.0` ✅ |
@@ -38,12 +38,12 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Stage | Cost | RTF | Share |
 |---|---:|---:|---:|
-| LLM (14-block AR decoder, traced) | `8.25 ms/token × 164` | `0.413` | 64 % |
-| Flow decoder (10 Euler steps, traced) | `0.719 s` | `0.220` | 34 % |
+| LLM (14-block AR decoder, traced) | `8.23 ms/token × 164` | `0.412` | 68 % |
+| Flow decoder (10 Euler steps, traced, SDPA) | `0.600 s` | `0.183` | 30 % |
 | HiFT vocoder | `0.050 s` | `0.015` | 2 % |
-| **Total** | `2.121 s` | **`0.648`** | |
+| **Total** | `2.001 s` | **`0.611`** | |
 
-RTF has come down **1.096 → 0.648** (and **2.120 → 0.648** since before either stage was traced),
+RTF has come down **1.096 → 0.611** (and **2.120 → 0.611** since before either stage was traced),
 but it still misses. The rest of this section is the account of where the time went and what is
 left, because "it is 30 % away" is only useful with the reason attached.
 
@@ -128,6 +128,26 @@ TTNN's default choice already reaches 65–168 GB/s on individual matmuls. More 
 linears total **201 µs per layer — 2.82 ms across 14 layers, only 34 % of the step**. The weights
 were never the bottleneck; the remaining ~280 non-linear ops are, at ~19 µs each against the 6.3 µs
 floor.
+
+### Flash attention, where the model allows it
+
+The estimator's self-attention is **plain SDPA** — no mask, no relative-position term —
+so unlike the AR decoder it takes `ttnn.transformer.scaled_dot_product_attention` as a
+drop-in. The score matrix it stops materialising is `[2, 8, 282, 282]`: ~2.5 MB written
+and read back per block, 64 blocks × 10 Euler steps.
+
+| | explicit chain | fused SDPA |
+|---|---:|---:|
+| flow decoder | `0.707 s` | **`0.600 s`** |
+| end-to-end RTF | `0.647` | **`0.611`** |
+| `solve_euler` PCC | `0.9992047752` | **`0.9993701398`** |
+| flow tokens → mel PCC | `0.9992029011` | **`0.9993962895`** |
+| CFM estimator, first / last step | `0.9998326979` / `0.9991904460` | **`0.9998480374` / `0.9994887951`** |
+
+Faster *and* more accurate on every gate, components included — which is the reason it
+ships on by default while the HiFi2 experiment below did not. `scale=1.0` because
+`1/sqrt(d_head)` is folded into the q half of the fused weight; SDPA's own default would
+scale twice. `COSYVOICE_SDPA=0` restores the explicit chain.
 
 ### The KV-cache shift costs what it does because of tile layout, not bytes
 
@@ -246,7 +266,7 @@ stage.
 | Module | PCC |
 |---|---:|
 | tokens → waveform (reference excitation) | `0.9951367159` |
-| flow: tokens → mel | `0.9992029011` |
+| flow: tokens → mel | `0.9993962895` |
 | whole HiFT vocoder | `0.9996373743` |
 | LLM AR prefill, 209 tokens | `0.9997530373` |
 | LLM AR decode step | `0.9989617190` |
@@ -305,7 +325,7 @@ input, so the `deallocate` after it freed the tensor being returned.
 
 Per-case RTFs from those sweeps are **cold-cache** figures — every distinct sequence
 length is a fresh JIT compile and the sweep path is not traced — and are not comparable
-to the `0.648` benchmark above.
+to the `0.611` benchmark above.
 
 ## Speech quality — 5 languages, 2 modes
 
