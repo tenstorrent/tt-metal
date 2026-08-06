@@ -44,15 +44,18 @@ attn/dense/shared/KV/LM-head, BFP4 routed experts, fp32/HiFi4 SDPA.
   ttnn-default(=0) 0.95 / 28.4, k128 0.58 / 28.7 (lossy), k32 0.010 / 19.26 (broken). Single-chip layer-PCC is
   NOT a valid discriminator (uniformly degraded by any program config); teacher top1 on the multichip full
   model is.
-- **Latency — COLD (APC off, single user, OSL 1024; measured E2EL):**
+- **Latency — COLD (APC off, single user, OSL 1024; warm-shape measured E2EL; 2026-08-06, k64 + PREFILL_FAST):**
   | ISL | E2EL | TTFT | decode t/s/u | agg tok/s |
   |---|---|---|---|---|
-  | 1,024 | 41.2 s | 0.7 s | 25.3 | 24.9 |
-  | 16,384 | 56.1 s | 12.9 s | 23.7 | 18.3 |
-  | 32,768 | 75.9 s | 29.8 s | 22.2 | 13.5 |
-  | 130,048 | 374 s | 299 s | 13.5 | 2.7 |
-  Decode t/s/u holds ~22–25 to 32k (`max_cores` win); E2EL is prefill-dominated at long context. **Warm/cached
-  (agent norm)** per-turn TTFT is far lower (~0.36 s @32k, ~1.05 s @131k prior measurement) — cold is worst case.
+  | 1,024 | 38.1 s | 0.7 s | 27.4 | 26.9 |
+  | 16,384 | 51.5 s | 12.8 s | 26.4 | 19.9 |
+  | 32,768 | 69.5 s | 29.4 s | 25.5 | 14.7 |
+  | 130,048 | 256.6 s | 207.9 s | 21.0 | 4.0 |
+  Decode t/s/u holds ~25–27 to 32k (`max_cores` win); E2EL is prefill-dominated at long context. **PREFILL_FAST
+  now actually applies** (via the `env_passthrough` fix) → 130k TTFT **299 s → 208 s (1.44×)**, E2EL 374→257 s;
+  decode-t/s/u lift vs the prior cold table is per-shape warmup (no W1 recompile in the measured window).
+  **Warm/cached (agent norm)** per-turn TTFT is far lower (~0.36 s @32k, ~1.05 s @131k prior) — cold is worst case.
+  Full C1+C8 report (HTML): https://claude.ai/code/artifact/cdf3a4ec-d11a-4883-99b0-1e95901a3023
 - **Concurrency:** aggregate scales at short ISL (agg 24.9→63→83 tok/s @ conc 1/8/16, ISL 1k); long-ISL
   all-at-once collapses (prefill saturation — a benchmark artifact, needs ramped arrival). Supported cap
   `--max-num-seqs 8`. Decode t/s/u is batch-flat.
