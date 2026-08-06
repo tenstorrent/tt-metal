@@ -34,7 +34,8 @@ N_DECODING_STEPS = 7
 SCALE = FM_HEAD_DIM**-0.5
 # Query heads per KV head (GQA 32/8). See the row fold in _block.
 REP = FM_N_HEADS // FM_N_KV_HEADS
-# Fused q++k++v width, GQA-aware; the sub-widths are the head split's slice offsets, [flow-10].
+# Fused q++k++v width, GQA-aware. (The sub-widths were the hand-rolled split's slice
+# offsets until 6.45 replaced it with the fused op; they now only build _QKV_WIDTH.)
 _Q_WIDTH = FM_N_HEADS * FM_HEAD_DIM
 _KV_WIDTH = FM_N_KV_HEADS * FM_HEAD_DIM
 _QKV_WIDTH = _Q_WIDTH + 2 * _KV_WIDTH
@@ -122,16 +123,12 @@ class TtVoxtralFlow:
         h = self._norm(x, w["an"])
         # q, k and v share one weight and one matmul -- see NOTES.md [flow-09] for the fusion.
         qkv = ttnn.linear(h, w["wqkv"], compute_kernel_config=COMPUTE_CONFIG)
-        # NOTES.md [flow-10] -- HAND-ROLLED HEAD SPLIT, worth 1.233 ms/frame over...
-        _cut = lambda a, b: ttnn.slice(qkv, [0, 0, a], [1, B * 3, b], memory_config=_L1)
-        qh = ttnn.permute(ttnn.reshape(_cut(0, _Q_WIDTH), [B, 3, FM_N_HEADS, FM_HEAD_DIM]),
-                          (0, 2, 1, 3), memory_config=_L1)
-        kh = ttnn.permute(ttnn.reshape(_cut(_Q_WIDTH, _Q_WIDTH + _KV_WIDTH),
-                                       [B, 3, FM_N_KV_HEADS, FM_HEAD_DIM]),
-                          (0, 2, 3, 1), memory_config=_L1)
-        vh = ttnn.permute(ttnn.reshape(_cut(_Q_WIDTH + _KV_WIDTH, _QKV_WIDTH),
-                                       [B, 3, FM_N_KV_HEADS, FM_HEAD_DIM]),
-                          (0, 2, 1, 3), memory_config=_L1)
+        # NOTES.md [flow-10] -- FUSED head split. 6.31 hand-rolled this into 9 ops and won
+        # 1.233 ms/frame on the N150; on Blackhole a small op costs 3.4x more (67.7 us against
+        # ~20), so trading 9 ops for 1 wins 3.836 ms/frame here at IDENTICAL accuracy. 6.45.
+        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
+            ttnn.reshape(qkv, [B, 1, 3, _QKV_WIDTH]), num_heads=FM_N_HEADS,
+            num_kv_heads=FM_N_KV_HEADS, transpose_k_heads=True, memory_config=_L1)
         # NOTES.md [flow-11] -- GQA BY ROW FOLD, NOT BY REPEAT -- the same lesson as the...
         s = ttnn.matmul(ttnn.reshape(qh, [B, FM_N_KV_HEADS, REP * 3, FM_HEAD_DIM]),
                         kh, compute_kernel_config=COMPUTE_CONFIG,   # kh already transposed
