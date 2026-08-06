@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::prim {
 
@@ -183,10 +184,9 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
     const uint32_t input0_stride = stride_tile_size * num_tiles_for_each_input_shard[0].second / groups;
     const uint32_t input1_stride = stride_tile_size * num_tiles_for_each_input_shard[1].second / groups;
 
-    // NOC_MAX_BURST_SIZE from noc_parameters.h: Wormhole = 8192, Blackhole = 16384, Quasar = 65536
-    const uint32_t noc_max_burst_size = (input_tensors[0].device()->arch() == tt::ARCH::BLACKHOLE) ? 16384
-                                        : (input_tensors[0].device()->arch() == tt::ARCH::QUASAR)  ? 65536
-                                                                                                   : 8192;
+    // NOC_MAX_BURST_SIZE from the architecture's noc_parameters.h, via the HAL:
+    // Wormhole = 8192, Blackhole = 16384, Quasar = 65536.
+    const uint32_t noc_max_burst_size = tt::tt_metal::hal::get_noc_max_burst_size_bytes();
     const bool use_single_packet_read = (input0_stride <= noc_max_burst_size && input1_stride <= noc_max_burst_size);
 
     KernelDescriptor::CompileTimeArgs compile_time_args = {

@@ -960,11 +960,9 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             dev_msgs::AddressableCoreType::UNKNOWN);
     }
     int non_worker_cores_idx = 0;
-    // Wormhole addresses its PCIE/DRAM non-worker cores physically; Blackhole and Quasar (and future
-    // arches) virtualize them and write them as virtual cores below. ETH is virtualized on every arch.
-    // GRAYSKULL is retired, so "not Wormhole" cleanly covers the virtualizing arches without enumerating
-    // each one, and picks up future arches automatically.
-    const bool virtualizes_non_worker_cores = cluster_.arch() != ARCH::WORMHOLE_B0;
+    // Whether PCIE/DRAM non-worker cores are addressed virtually (Blackhole, Quasar) or physically
+    // (Wormhole) is a per-arch HAL capability; ETH is virtualized on every arch.
+    const bool virtualizes_non_worker_cores = hal_.virtualizes_non_worker_cores();
     bool skip_physical = hal_.is_coordinate_virtualization_enabled() and virtualizes_non_worker_cores;
     if (not skip_physical) {
         for (tt::umd::CoreCoord core : pcie_cores) {
@@ -979,10 +977,18 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             set_addressable_core(
                 core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::ETH);
         }
-        for (tt::umd::CoreCoord core : dispatch_cores) {
-            set_addressable_core(
-                core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::DISPATCH);
-        }
+    }
+    // DISPATCH cores are never written into virtual_non_worker_cores below, so register them in the
+    // physical list unconditionally. This restores the mailbox content produced for Quasar before
+    // skip_physical became true for it; without it these cores appear in neither mailbox array and fall
+    // through to the permissive physical-Tensix range check in debug/sanitize.h, which returns TENSIX for
+    // any in-grid coordinate -- so the watcher mislabels them and a multicast covering a dispatch core is
+    // no longer flagged as touching a non-worker. Only Quasar registers a DISPATCH programmable core type,
+    // so dispatch_cores is empty on Wormhole and Blackhole and this loop is a no-op there. Bounded by the
+    // pcie+dram+eth+dispatch TT_ASSERT above (debug-only; capacity is MAX_PHYSICAL_NON_WORKER_CORES).
+    for (tt::umd::CoreCoord core : dispatch_cores) {
+        set_addressable_core(
+            core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::DISPATCH);
     }
 
     if (hal_.is_coordinate_virtualization_enabled()) {
