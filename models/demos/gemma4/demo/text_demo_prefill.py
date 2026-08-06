@@ -1071,6 +1071,11 @@ def test_prefill_kv_cache_covers_sequence(mesh_device, reset_seeds, request):
 LONG_CONTEXT_LENGTHS = [32768, 65536, 131072, 262144]
 LONG_CONTEXT_CHUNK = 4096
 
+# Chunks that pay a one-time program compile rather than steady-state cost: chunk 0 is
+# the first run of the mask CP path, chunk 1 the first run of the ring path. Both are
+# tens of seconds against a sub-second steady state, so every average excludes them.
+_N_WARMUP_CHUNKS = 2
+
 
 @parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
 @pytest.mark.parametrize("context_len", LONG_CONTEXT_LENGTHS, ids=[f"ctx_{c // 1024}k" for c in LONG_CONTEXT_LENGTHS])
@@ -1151,16 +1156,31 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
         device_s = time.time() - t_chunk
         chunk_device_s.append(device_s)
 
-        # Per-chunk perf. Cost per chunk is expected to RISE with ring depth: chunk k
-        # attends over k preceding chunks, so the full-attention layers do more work
-        # each time while the sliding layers stay flat. A flat curve at large depth
-        # would suggest the history read is not happening.
+        # Per-chunk perf. Cost per chunk RISES with ring depth: chunk k attends over k
+        # preceding chunks, so the full-attention layers do more work each time while
+        # the sliding layers stay flat. A flat curve at large depth would suggest the
+        # history read is not happening.
+        #
+        # The running figure deliberately excludes the warmup chunks. A cumulative
+        # average that includes them climbs monotonically for the whole run — 128 to
+        # 2028 tok/s at 256k — as the fixed ~67 s compile amortizes over more tokens.
+        # That reads as the model getting faster with context, which is the opposite of
+        # the real trend in the per-chunk column right next to it.
         done = chunk_start + chunk
-        cum_device = sum(chunk_device_s)
+        if chunk_idx < _N_WARMUP_CHUNKS:
+            running = "COMPILE (mask CP path), excluded from averages"
+            if chunk_idx == 1:
+                running = "COMPILE (ring path), excluded from averages"
+        else:
+            steady_so_far = chunk_device_s[_N_WARMUP_CHUNKS:]
+            running = (
+                f"steady avg {len(steady_so_far) * chunk / sum(steady_so_far):.0f} tok/s "
+                f"over {len(steady_so_far)} chunk(s)"
+            )
         logger.info(
             f"[long_ctx_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {done}) "
-            f"device={device_s * 1000:.0f}ms ({chunk / device_s:.0f} tok/s) | "
-            f"cumulative {cum_device:.1f}s ({done / cum_device:.0f} tok/s) | ring_depth={chunk_idx}"
+            f"device={device_s * 1000:.0f}ms ({chunk / device_s:.0f} tok/s) | {running} | "
+            f"ring_depth={chunk_idx}"
         )
 
         hidden = _cp_gather_torch(out, mesh_device, mesh_config)
@@ -1184,7 +1204,7 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
     # seconds against ~1.4 s steady state, so averaging them in would misreport
     # throughput by more than 2x and would make a last/first ratio look like a 30x
     # speedup rather than the cost curve it is meant to show.
-    n_warmup = min(2, len(chunk_device_s))
+    n_warmup = min(_N_WARMUP_CHUNKS, len(chunk_device_s))
     steady = chunk_device_s[n_warmup:] or chunk_device_s
     steady_tokens = len(steady) * chunk
     steady_s = sum(steady)
