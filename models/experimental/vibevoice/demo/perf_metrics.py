@@ -7,6 +7,13 @@ from __future__ import annotations
 
 from typing import Any
 
+# Audio codec constants (see README "Model description"): each AR frame is a fixed
+# 3200-sample chunk of 24 kHz mono audio → 7.5 frames/s. Rendered audio duration is
+# therefore ``ar_tokens / FRAME_RATE_HZ`` seconds.
+SAMPLE_RATE = 24000
+SAMPLES_PER_FRAME = 3200
+FRAME_RATE_HZ = SAMPLE_RATE / SAMPLES_PER_FRAME  # 7.5
+
 
 def crop_processor_inputs_to_isl(inputs: dict, isl: int) -> dict:
     """Crop a processor batch to the first ``isl`` tokens (post-tokenization ISL).
@@ -43,6 +50,12 @@ def summarize_generate_perf(
 
     TTFT equals prefill wall: the first AR token is taken from prefill logits, so
     time-to-first-token ends when LM prefill finishes.
+
+    RTF (real-time factor) = processing time / rendered audio duration, where the
+    rendered duration is ``ar_tokens / FRAME_RATE_HZ`` seconds. ``rtf`` is the
+    end-to-end figure (full ``generate()`` wall over the audio produced); ``rtf_decode``
+    isolates the sustained decode rate (``FRAME_RATE_HZ / decode_tok_s``). RTF < 1 means
+    faster than real time; ``rtf_x`` = 1/rtf is the "× real time" headline.
     """
     prefill_tok_s = (prefill_len / prefill_wall_s) if prefill_wall_s > 0 else 0.0
 
@@ -57,6 +70,11 @@ def summarize_generate_perf(
         ms_per_tok = (decode_wall_s * 1e3 / ar_tokens) if ar_tokens > 0 else 0.0
         decode_mode = "eager_loop"
 
+    audio_s = ar_tokens / FRAME_RATE_HZ
+    rtf = (generate_wall_s / audio_s) if audio_s > 0 else 0.0
+    rtf_decode = (FRAME_RATE_HZ / decode_tok_s) if decode_tok_s > 0 else 0.0
+    rtf_x = (1.0 / rtf) if rtf > 0 else 0.0
+
     return {
         "prefill_tokens": int(prefill_len),
         "ar_tokens_generated": int(ar_tokens),
@@ -67,6 +85,10 @@ def summarize_generate_perf(
         "decode_tok_s": round(decode_tok_s, 2),
         "ms_per_tok_steady": round(ms_per_tok, 3),
         "e2e_s": round(generate_wall_s, 4),
+        "audio_s": round(audio_s, 4),
+        "rtf": round(rtf, 4),
+        "rtf_x": round(rtf_x, 3),
+        "rtf_decode": round(rtf_decode, 4),
         "decode_mode": decode_mode,
         "steady_decode_frames": int(steady_decode_frames),
     }
@@ -83,6 +105,8 @@ def format_perf_line(metrics: dict[str, Any], *, prefix: str = "") -> str:
         f"TTFT={metrics['ttft_s']:.3f}s  "
         f"decode={metrics['decode_tok_s']:.2f} tok/s ({metrics['ms_per_tok_steady']:.2f} ms/tok)  "
         f"e2e={metrics['e2e_s']:.3f}s  "
+        f"audio={metrics.get('audio_s', 0.0):.2f}s  "
+        f"RTF={metrics.get('rtf', 0.0):.4f} ({metrics.get('rtf_x', 0.0):.2f}x, decode {metrics.get('rtf_decode', 0.0):.4f})  "
         f"ar_tokens={metrics['ar_tokens_generated']}  "
         f"isl={metrics['prefill_tokens']}{mode_s}"
     )
