@@ -60,7 +60,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .perf_wide_schema import DB_SCHEMA, MANDATORY, PROVENANCE, REDUNDANT_COLUMNS
+from .perf_wide_schema import DB_SCHEMA, DROPPED_COLUMNS, MANDATORY, PROVENANCE
 
 _BOOL_MAP = {
     True: True,
@@ -263,10 +263,10 @@ def convert_csvs_to_parquet(
     for path in csv_paths:
         name = _test_name_from_csv(path)
         df = pd.read_csv(path)
-        # Drop columns the published table intentionally omits (provably equal to
-        # a kept column — see perf_wide_schema.REDUNDANT_COLUMNS). Dropped before
-        # the unknown-column check so they are not flagged as accidental drift.
-        df = df.drop(columns=[c for c in REDUNDANT_COLUMNS if c in df.columns])
+        # Drop columns the published table intentionally omits (see
+        # perf_wide_schema.DROPPED_COLUMNS), before the unknown-column check so
+        # they are not flagged as accidental drift.
+        df = df.drop(columns=[c for c in DROPPED_COLUMNS if c in df.columns])
         unknown = sorted(set(df.columns) - set(schema_by_name))
         if unknown:
             diagnostics["unknown_columns"][name] = unknown
