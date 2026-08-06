@@ -776,6 +776,20 @@ def test_softmax_large_non_divisible_width(device, Wt):
 
 
 @pytest.mark.parametrize(
+    "Wt, fp32_acc_en",
+    [
+        (644, True),  # block_size 4
+        (648, False),  # block_size 8
+    ],
+)
+def test_softmax_large_kernel_odd_multiple_width(device, Wt, fp32_acc_en):
+    """Large-kernel Wt that block_size divides an odd number of times: out0 is sized 2*block_size,
+    so each row ends half-way through that fifo. Compute and writer must agree on the realignment
+    count for the divisible path too, or out0 fills and the compute kernel blocks forever."""
+    _run_softmax_non_divisible_width(device, Wt, fp32_acc_en, numeric_stable=True)
+
+
+@pytest.mark.parametrize(
     "batch, causal, Wt",
     [
         # broadcast mask: batch * Ht = 128 tile rows, so every core gets more than one row
