@@ -30,14 +30,14 @@ blocks of 96 fill all 64 cores but every block re-reads the whole of K and V, wh
 
 ## Matmul instances by shape
 
-| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | +0 | 123.8 | +0.2 | 3.094 | 64 | 30.0 | 15.6 | HiFi2 |
-| 576 x 4096 x 1024 | 24 | +0 | 87.0 | -0.1 | 2.087 | 48 | 56.3 | 19.1 | HiFi2 |
-| 576 x 1024 x 3072 | 24 | +0 | 83.2 | +0.3 | 1.997 | 48 | 44.1 | 25.4 | HiFi2 |
-| 576 x 1024 x 1024 | 24 | +0 | 31.5 | -0.3 | 0.757 | 48 | 38.8 | 24.5 | HiFi2 |
-| 576 x 4096 x 4096 | 1 | +0 | 314.6 | +2.0 | 0.315 | 48 | 62.3 | 28.9 | HiFi2 |
-| 576 x 768 x 1024 | 1 | +0 | 43.8 | +0.3 | 0.044 | 48 | 20.9 | 28.8 | HiFi2 |
+| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | +0 | 123.8 | +0.2 | 3.094 | 64 | 30.0 | 15.6 | HiFi2 |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 87.0 | -0.1 | 2.087 | 48 | 56.3 | 19.1 | HiFi2 |
+| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 83.2 | +0.3 | 1.997 | 48 | 44.1 | 25.4 | HiFi2 |
+| attn wo | 576 x 1024 x 1024 | 24 | +0 | 31.5 | -0.3 | 0.757 | 48 | 38.8 | 24.5 | HiFi2 |
+| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 314.6 | +2.0 | 0.315 | 48 | 62.3 | 28.9 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | +0 | 43.8 | +0.3 | 0.044 | 48 | 20.9 | 28.8 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

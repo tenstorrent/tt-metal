@@ -28,14 +28,14 @@ it was before SDPA was touched at all.
 
 ## Matmul instances by shape
 
-| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | +0 | 84.0 | -0.1 | 2.101 | 64 | 44.9 | 20.5 | HiFi2 |
-| 576 x 4096 x 1024 | 24 | +0 | 65.5 | -0.9 | 1.572 | 48 | 74.8 | 22.2 | HiFi2 |
-| 576 x 1024 x 3072 | 24 | +0 | 56.2 | +0.8 | 1.349 | 48 | 65.4 | 23.1 | HiFi2 |
-| 576 x 1024 x 1024 | 24 | +0 | 21.7 | +0.1 | 0.521 | 48 | 56.4 | 26.2 | HiFi2 |
-| 576 x 4096 x 4096 | 1 | +0 | 312.8 | +0.5 | 0.313 | 48 | 62.6 | 29.1 | HiFi2 |
-| 576 x 768 x 1024 | 1 | +0 | 43.4 | +0.0 | 0.043 | 48 | 21.2 | 29.1 | HiFi2 |
+| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | +0 | 84.0 | -0.1 | 2.101 | 64 | 44.9 | 20.5 | HiFi2 |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 65.5 | -0.9 | 1.572 | 48 | 74.8 | 22.2 | HiFi2 |
+| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 56.2 | +0.8 | 1.349 | 48 | 65.4 | 23.1 | HiFi2 |
+| attn wo | 576 x 1024 x 1024 | 24 | +0 | 21.7 | +0.1 | 0.521 | 48 | 56.4 | 26.2 | HiFi2 |
+| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 312.8 | +0.5 | 0.313 | 48 | 62.6 | 29.1 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | +0 | 43.4 | +0.0 | 0.043 | 48 | 21.2 | 29.1 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

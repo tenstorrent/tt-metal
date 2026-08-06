@@ -43,15 +43,15 @@ against its 0.9999 gate.
 
 ## Matmul instances by shape
 
-| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 24 | — | 78.2 | — | 1.877 | 48 | 35.4 | 18.6 | LoFi |
-| 576 x 4096 x 1024 | 24 | +0 | 55.5 | +0.4 | 1.332 | 48 | 49.9 | 26.3 | LoFi |
-| 576 x 1024 x 3072 | 24 | +0 | 48.2 | -0.6 | 1.157 | 48 | 43.0 | 22.7 | LoFi |
-| 576 x 1024 x 1024 | 24 | +0 | 18.3 | +0.1 | 0.440 | 48 | 37.8 | 31.1 | LoFi |
-| 576 x 4096 x 4096 | 1 | +0 | 327.5 | +13.6 | 0.327 | 48 | 59.8 | 27.8 | HiFi2 |
-| 576 x 1024 x 4096 | 1 | — | 236.1 | — | 0.236 | 48 | 20.7 | 13.1 | HiFi2 |
-| 576 x 768 x 1024 | 1 | +0 | 44.4 | +0.2 | 0.044 | 48 | 20.7 | 28.5 | HiFi2 |
+| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc | 576 x 1024 x 4096 | 24 | — | 78.2 | — | 1.877 | 48 | 35.4 | 18.6 | LoFi |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 55.5 | +0.4 | 1.332 | 48 | 49.9 | 26.3 | LoFi |
+| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 48.2 | -0.6 | 1.157 | 48 | 43.0 | 22.7 | LoFi |
+| attn wo | 576 x 1024 x 1024 | 24 | +0 | 18.3 | +0.1 | 0.440 | 48 | 37.8 | 31.1 | LoFi |
+| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 327.5 | +13.6 | 0.327 | 48 | 59.8 | 27.8 | HiFi2 |
+| aligner fc1 | 576 x 1024 x 4096 | 1 | — | 236.1 | — | 0.236 | 48 | 20.7 | 13.1 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | +0 | 44.4 | +0.2 | 0.044 | 48 | 20.7 | 28.5 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

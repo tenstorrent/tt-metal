@@ -38,14 +38,14 @@ that the compute/read balance had moved. It had not: larger (8/16/32) measured +
 
 ## Matmul instances by shape
 
-| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | +0 | 82.9 | -0.1 | 2.073 | 64 | 45.2 | 20.8 | HiFi2 |
-| 576 x 1024 x 3072 | 24 | +0 | 80.5 | -0.2 | 1.933 | 48 | 45.6 | 23.7 | HiFi2 |
-| 576 x 4096 x 1024 | 24 | +0 | 74.9 | -11.5 | 1.796 | 48 | 65.4 | 22.2 | HiFi2 |
-| 576 x 1024 x 1024 | 24 | +0 | 29.8 | -1.6 | 0.715 | 48 | 41.1 | 26.0 | HiFi2 |
-| 576 x 4096 x 4096 | 1 | +0 | 313.9 | +1.1 | 0.314 | 48 | 62.4 | 29.0 | HiFi2 |
-| 576 x 768 x 1024 | 1 | +0 | 44.6 | -0.2 | 0.045 | 48 | 20.6 | 28.3 | HiFi2 |
+| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | +0 | 82.9 | -0.1 | 2.073 | 64 | 45.2 | 20.8 | HiFi2 |
+| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 80.5 | -0.2 | 1.933 | 48 | 45.6 | 23.7 | HiFi2 |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 74.9 | -11.5 | 1.796 | 48 | 65.4 | 22.2 | HiFi2 |
+| attn wo | 576 x 1024 x 1024 | 24 | +0 | 29.8 | -1.6 | 0.715 | 48 | 41.1 | 26.0 | HiFi2 |
+| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 313.9 | +1.1 | 0.314 | 48 | 62.4 | 29.0 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | +0 | 44.6 | -0.2 | 0.045 | 48 | 20.6 | 28.3 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

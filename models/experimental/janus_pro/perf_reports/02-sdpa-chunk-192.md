@@ -28,15 +28,15 @@ The profiler pointed straight at this: SDPA was 14.9% of baseline at 182.6 us pe
 
 ## Matmul instances by shape
 
-| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 24 | +0 | 273.6 | -0.2 | 6.566 | 48 | 17.9 | 18.1 | HiFi2 |
-| 576 x 1024 x 3072 | 24 | +0 | 128.3 | -0.4 | 3.079 | 48 | 28.6 | 29.8 | HiFi2 |
-| 576 x 4096 x 1024 | 24 | +0 | 125.1 | +0.0 | 3.002 | 48 | 39.2 | 39.7 | HiFi2 |
-| 576 x 1024 x 1024 | 24 | +0 | 47.2 | +0.3 | 1.133 | 48 | 26.0 | 32.8 | HiFi2 |
-| 576 x 4096 x 4096 | 1 | +0 | 489.3 | -1.1 | 0.489 | 48 | 80.1 | 30.5 | HiFi4 |
-| 576 x 1024 x 4096 | 1 | +0 | 181.4 | +0.3 | 0.181 | 48 | 54.0 | 27.3 | HiFi4 |
-| 576 x 768 x 1024 | 1 | +0 | 44.6 | +1.9 | 0.045 | 48 | 20.6 | 28.3 | HiFi2 |
+| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc | 576 x 1024 x 4096 | 24 | +0 | 273.6 | -0.2 | 6.566 | 48 | 17.9 | 18.1 | HiFi2 |
+| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 128.3 | -0.4 | 3.079 | 48 | 28.6 | 29.8 | HiFi2 |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 125.1 | +0.0 | 3.002 | 48 | 39.2 | 39.7 | HiFi2 |
+| attn wo | 576 x 1024 x 1024 | 24 | +0 | 47.2 | +0.3 | 1.133 | 48 | 26.0 | 32.8 | HiFi2 |
+| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 489.3 | -1.1 | 0.489 | 48 | 80.1 | 30.5 | HiFi4 |
+| aligner fc1 | 576 x 1024 x 4096 | 1 | +0 | 181.4 | +0.3 | 0.181 | 48 | 54.0 | 27.3 | HiFi4 |
+| patch embed | 576 x 768 x 1024 | 1 | +0 | 44.6 | +1.9 | 0.045 | 48 | 20.6 | 28.3 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

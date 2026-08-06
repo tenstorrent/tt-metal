@@ -32,14 +32,14 @@ e2e PCC went *up*.
 
 ## Matmul instances by shape
 
-| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | +0 | 78.9 | +0.1 | 1.972 | 64 | 27.6 | 21.9 | LoFi |
-| 576 x 4096 x 1024 | 24 | +0 | 55.0 | +0.5 | 1.321 | 48 | 50.3 | 26.5 | LoFi |
-| 576 x 1024 x 3072 | 24 | +0 | 48.3 | +0.8 | 1.160 | 48 | 42.9 | 22.6 | LoFi |
-| 576 x 1024 x 1024 | 24 | +0 | 18.3 | +0.0 | 0.440 | 48 | 37.7 | 31.0 | LoFi |
-| 576 x 4096 x 4096 | 1 | +0 | 312.8 | +0.7 | 0.313 | 48 | 62.6 | 29.1 | HiFi2 |
-| 576 x 768 x 1024 | 1 | +0 | 42.1 | -2.6 | 0.042 | 48 | 21.8 | 30.0 | HiFi2 |
+| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | +0 | 78.9 | +0.1 | 1.972 | 64 | 27.6 | 21.9 | LoFi |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 55.0 | +0.5 | 1.321 | 48 | 50.3 | 26.5 | LoFi |
+| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 48.3 | +0.8 | 1.160 | 48 | 42.9 | 22.6 | LoFi |
+| attn wo | 576 x 1024 x 1024 | 24 | +0 | 18.3 | +0.0 | 0.440 | 48 | 37.7 | 31.0 | LoFi |
+| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 312.8 | +0.7 | 0.313 | 48 | 62.6 | 29.1 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | +0 | 42.1 | -2.6 | 0.042 | 48 | 21.8 | 30.0 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

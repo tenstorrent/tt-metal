@@ -109,16 +109,17 @@ def matmul_table(text):
         return {}
     header = [c.strip() for c in section.group(1).strip().strip("|").split("|")]
     try:
+        i_shape = header.index("shape")
         i_n, i_us, i_fid = header.index("inst"), header.index("us each"), header.index("fidelity")
     except ValueError:
         return {}
     rows = {}
     for line in section.group(2).strip().splitlines():
         cells = [c.strip() for c in line.strip("|").split("|")]
-        if len(cells) <= max(i_n, i_us, i_fid):
+        if len(cells) <= max(i_shape, i_n, i_us, i_fid):
             continue
         try:
-            rows.setdefault(cells[0], []).append((cells[i_fid], int(cells[i_n]), float(cells[i_us])))
+            rows.setdefault(cells[i_shape], []).append((cells[i_fid], int(cells[i_n]), float(cells[i_us])))
         except ValueError:
             continue
     return rows
@@ -140,6 +141,37 @@ def matmul_deltas(shape, fidelity, instances, us_each, before):
     # Same count at more than one fidelity is possible in principle; prefer the matching fidelity.
     _, prev_n, prev_us = next((c for c in candidates if c[0] == fidelity), candidates[0])
     return f"{instances - prev_n:+d}", f"{us_each - prev_us:+.1f}"
+
+
+# Janus-Pro-7B vision geometry: 1024 hidden, 4096 MLP and projection, 16x64 heads, 16x16 patches.
+VISION_DIM, MLP_DIM, QKV_DIM, PATCH_K = 1024, 4096, 3072, 768
+# Once per layer against once per image: the same shape means very different things at 24x and 1x,
+# and only the first kind is worth a config sweep.
+PER_LAYER, PER_IMAGE = 0, 1
+
+
+def matmul_layer(shape, instances):
+    """`(group, label)` naming which projection a matmul row is, from its shape and count."""
+    parts = [int(v) for v in re.findall(r"\d+", shape)]
+    if len(parts) != 3:
+        return PER_IMAGE, "?"
+    _, k, n = parts
+    if k == PATCH_K:
+        return PER_IMAGE, "patch embed"
+    if k == VISION_DIM and n == QKV_DIM:
+        return PER_LAYER, "attn qkv"
+    if k == VISION_DIM and n == VISION_DIM:
+        return PER_LAYER, "attn wo"
+    if k == MLP_DIM and n == VISION_DIM:
+        return PER_LAYER, "mlp c_proj"
+    if k == MLP_DIM and n == MLP_DIM:
+        return PER_IMAGE, "aligner hidden"
+    if k == VISION_DIM and n == MLP_DIM:
+        # Both live at this shape; the count tells them apart, and 25 means the report groups them.
+        if instances == 1:
+            return PER_IMAGE, "aligner fc1"
+        return PER_LAYER, "mlp c_fc" if instances == 24 else "mlp c_fc + aligner fc1"
+    return PER_IMAGE, "?"
 
 
 def _existing_prose(path):
@@ -265,17 +297,22 @@ def _render(csv_path, stage, sha, note, single_pass):
     mm_before = matmul_table(prev.read_text()) if prev else None
     if mm_before:
         lines += [
-            "| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+            "| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
         ]
     else:
         lines += [
-            "| shape | inst | us each | ms | cores | FLOPs % | DRAM % | fidelity |",
-            "|---|---:|---:|---:|---:|---:|---:|---|",
+            "| layer | shape | inst | us each | ms | cores | FLOPs % | DRAM % | fidelity |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---|",
         ]
+    rows = []
     for _, row in by_shape.iterrows():
         shape = row["shape"].replace("MatmulDeviceOperation ", "")
-        cells = [shape, f"{int(row.n)}"]
+        group, label = matmul_layer(shape, int(row.n))
+        rows.append((group, -row.ms, label, shape, row))
+    # Per-layer work first, then what runs once per image; heaviest first inside each group.
+    for group, _, label, shape, row in sorted(rows, key=lambda r: (r[0], r[1])):
+        cells = [label, shape, f"{int(row.n)}"]
         if mm_before:
             d_n, d_us = matmul_deltas(shape, row.fidelity, int(row.n), row.us_each, mm_before)
             cells += [d_n, f"{row.us_each:.1f}", d_us]

@@ -47,15 +47,15 @@ Numerically inert -- the mlp, block and transformer PCCs are all bit-identical t
 
 ## Matmul instances by shape
 
-| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 24 | +0 | 72.4 | -5.8 | 1.739 | 48 | 38.2 | 20.1 | LoFi |
-| 576 x 4096 x 1024 | 24 | +0 | 55.0 | -0.5 | 1.320 | 48 | 50.3 | 26.5 | LoFi |
-| 576 x 1024 x 3072 | 24 | +0 | 48.2 | +0.0 | 1.158 | 48 | 43.0 | 22.6 | LoFi |
-| 576 x 1024 x 1024 | 24 | +0 | 18.3 | +0.0 | 0.439 | 48 | 37.8 | 31.1 | LoFi |
-| 576 x 4096 x 4096 | 1 | +0 | 329.1 | +1.6 | 0.329 | 48 | 59.5 | 27.7 | HiFi2 |
-| 576 x 1024 x 4096 | 1 | +0 | 236.4 | +0.3 | 0.236 | 48 | 20.7 | 13.1 | HiFi2 |
-| 576 x 768 x 1024 | 1 | +0 | 43.9 | -0.5 | 0.044 | 48 | 20.9 | 28.8 | HiFi2 |
+| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc | 576 x 1024 x 4096 | 24 | +0 | 72.4 | -5.8 | 1.739 | 48 | 38.2 | 20.1 | LoFi |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 55.0 | -0.5 | 1.320 | 48 | 50.3 | 26.5 | LoFi |
+| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 48.2 | +0.0 | 1.158 | 48 | 43.0 | 22.6 | LoFi |
+| attn wo | 576 x 1024 x 1024 | 24 | +0 | 18.3 | +0.0 | 0.439 | 48 | 37.8 | 31.1 | LoFi |
+| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 329.1 | +1.6 | 0.329 | 48 | 59.5 | 27.7 | HiFi2 |
+| aligner fc1 | 576 x 1024 x 4096 | 1 | +0 | 236.4 | +0.3 | 0.236 | 48 | 20.7 | 13.1 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | +0 | 43.9 | -0.5 | 0.044 | 48 | 20.9 | 28.8 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

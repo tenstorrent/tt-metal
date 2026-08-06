@@ -38,14 +38,14 @@ measured flat and bit-identical. DST was not the constraint.
 
 ## Matmul instances by shape
 
-| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | +0 | 78.8 | -5.2 | 1.970 | 64 | 27.7 | 22.0 | LoFi |
-| 576 x 4096 x 1024 | 24 | +0 | 54.5 | -11.0 | 1.308 | 48 | 50.7 | 26.7 | LoFi |
-| 576 x 1024 x 3072 | 24 | +0 | 47.5 | -8.7 | 1.141 | 48 | 43.7 | 27.3 | LoFi |
-| 576 x 1024 x 1024 | 24 | +0 | 18.3 | -3.4 | 0.440 | 48 | 37.8 | 31.1 | LoFi |
-| 576 x 4096 x 4096 | 1 | +0 | 312.1 | -0.7 | 0.312 | 48 | 62.8 | 29.2 | HiFi2 |
-| 576 x 768 x 1024 | 1 | +0 | 44.7 | +1.3 | 0.045 | 48 | 20.6 | 28.3 | HiFi2 |
+| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | +0 | 78.8 | -5.2 | 1.970 | 64 | 27.7 | 22.0 | LoFi |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 54.5 | -11.0 | 1.308 | 48 | 50.7 | 26.7 | LoFi |
+| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 47.5 | -8.7 | 1.141 | 48 | 43.7 | 27.3 | LoFi |
+| attn wo | 576 x 1024 x 1024 | 24 | +0 | 18.3 | -3.4 | 0.440 | 48 | 37.8 | 31.1 | LoFi |
+| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 312.1 | -0.7 | 0.312 | 48 | 62.8 | 29.2 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | +0 | 44.7 | +1.3 | 0.045 | 48 | 20.6 | 28.3 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

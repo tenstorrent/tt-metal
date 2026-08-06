@@ -35,14 +35,14 @@ optimal for `c_fc` in isolation. Together they are the fastest configuration mea
 
 ## Matmul instances by shape
 
-| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | +0 | 81.6 | +2.7 | 2.041 | 48 | 35.2 | 18.6 | LoFi |
-| 576 x 4096 x 1024 | 24 | +0 | 55.1 | +0.1 | 1.324 | 48 | 50.2 | 26.4 | LoFi |
-| 576 x 1024 x 3072 | 24 | +0 | 48.8 | +0.5 | 1.170 | 48 | 42.6 | 22.4 | LoFi |
-| 576 x 1024 x 1024 | 24 | +0 | 18.2 | -0.1 | 0.438 | 48 | 37.9 | 31.2 | LoFi |
-| 576 x 4096 x 4096 | 1 | +0 | 313.9 | +1.1 | 0.314 | 48 | 62.4 | 29.0 | HiFi2 |
-| 576 x 768 x 1024 | 1 | +0 | 44.2 | +2.1 | 0.044 | 48 | 20.8 | 28.6 | HiFi2 |
+| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | +0 | 81.6 | +2.7 | 2.041 | 48 | 35.2 | 18.6 | LoFi |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 55.1 | +0.1 | 1.324 | 48 | 50.2 | 26.4 | LoFi |
+| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 48.8 | +0.5 | 1.170 | 48 | 42.6 | 22.4 | LoFi |
+| attn wo | 576 x 1024 x 1024 | 24 | +0 | 18.2 | -0.1 | 0.438 | 48 | 37.9 | 31.2 | LoFi |
+| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 313.9 | +1.1 | 0.314 | 48 | 62.4 | 29.0 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | +0 | 44.2 | +2.1 | 0.044 | 48 | 20.8 | 28.6 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

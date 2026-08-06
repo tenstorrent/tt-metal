@@ -32,14 +32,14 @@ and exp run on the SFPU and do not scale with matrix-engine fidelity.
 
 ## Matmul instances by shape
 
-| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | +0 | 84.1 | +0.1 | 2.103 | 64 | 44.8 | 20.5 | HiFi2 |
-| 576 x 4096 x 1024 | 24 | +0 | 66.4 | +0.1 | 1.593 | 48 | 73.8 | 22.0 | HiFi2 |
-| 576 x 1024 x 3072 | 24 | +0 | 55.4 | +0.0 | 1.330 | 48 | 66.3 | 23.4 | HiFi2 |
-| 576 x 1024 x 1024 | 24 | +0 | 21.6 | +0.0 | 0.519 | 48 | 56.6 | 26.3 | HiFi2 |
-| 576 x 4096 x 4096 | 1 | +0 | 312.3 | +0.1 | 0.312 | 48 | 62.7 | 29.1 | HiFi2 |
-| 576 x 768 x 1024 | 1 | +0 | 43.4 | +0.9 | 0.043 | 48 | 21.2 | 29.1 | HiFi2 |
+| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | +0 | 84.1 | +0.1 | 2.103 | 64 | 44.8 | 20.5 | HiFi2 |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 66.4 | +0.1 | 1.593 | 48 | 73.8 | 22.0 | HiFi2 |
+| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 55.4 | +0.0 | 1.330 | 48 | 66.3 | 23.4 | HiFi2 |
+| attn wo | 576 x 1024 x 1024 | 24 | +0 | 21.6 | +0.0 | 0.519 | 48 | 56.6 | 26.3 | HiFi2 |
+| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 312.3 | +0.1 | 0.312 | 48 | 62.7 | 29.1 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | +0 | 43.4 | +0.9 | 0.043 | 48 | 21.2 | 29.1 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why

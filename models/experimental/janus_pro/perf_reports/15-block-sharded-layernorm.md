@@ -79,14 +79,14 @@ end-to-end PCC for 0.555 ms, i.e. 0.0017 per ms, against gelu's 0.0078.
 
 ## Matmul instances by shape
 
-| shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 576 x 1024 x 4096 | 25 | +0 | 83.0 | -1.1 | 2.075 | 64 | 45.1 | 20.8 | HiFi2 |
-| 576 x 4096 x 1024 | 24 | +0 | 86.4 | -0.2 | 2.074 | 48 | 56.7 | 19.2 | HiFi2 |
-| 576 x 1024 x 3072 | 24 | +0 | 80.7 | -0.6 | 1.938 | 48 | 45.5 | 23.7 | HiFi2 |
-| 576 x 1024 x 1024 | 24 | +0 | 31.4 | +0.0 | 0.755 | 48 | 38.9 | 24.6 | HiFi2 |
-| 576 x 4096 x 4096 | 1 | +0 | 312.8 | +0.0 | 0.313 | 48 | 62.6 | 29.1 | HiFi2 |
-| 576 x 768 x 1024 | 1 | +0 | 44.8 | +2.5 | 0.045 | 48 | 20.5 | 28.2 | HiFi2 |
+| layer | shape | inst | Δ inst | us each | Δ us each | ms | cores | FLOPs % | DRAM % | fidelity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| mlp c_fc + aligner fc1 | 576 x 1024 x 4096 | 25 | +0 | 83.0 | -1.1 | 2.075 | 64 | 45.1 | 20.8 | HiFi2 |
+| mlp c_proj | 576 x 4096 x 1024 | 24 | +0 | 86.4 | -0.2 | 2.074 | 48 | 56.7 | 19.2 | HiFi2 |
+| attn qkv | 576 x 1024 x 3072 | 24 | +0 | 80.7 | -0.6 | 1.938 | 48 | 45.5 | 23.7 | HiFi2 |
+| attn wo | 576 x 1024 x 1024 | 24 | +0 | 31.4 | +0.0 | 0.755 | 48 | 38.9 | 24.6 | HiFi2 |
+| aligner hidden | 576 x 4096 x 4096 | 1 | +0 | 312.8 | +0.0 | 0.313 | 48 | 62.6 | 29.1 | HiFi2 |
+| patch embed | 576 x 768 x 1024 | 1 | +0 | 44.8 | +2.5 | 0.045 | 48 | 20.5 | 28.2 | HiFi2 |
 
 `FLOPs %` is achieved FLOPs over `peak_per_core(fidelity) x cores`, so **it is not a ranking of how
 well a matmul runs**. It rises when an op uses fewer cores and when fidelity goes up, which is why
