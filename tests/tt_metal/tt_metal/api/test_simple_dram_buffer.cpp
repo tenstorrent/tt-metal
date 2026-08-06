@@ -9,7 +9,6 @@
 #include <memory>
 #include <vector>
 
-#include "tt_metal/impl/buffers/memory_access.hpp"
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
