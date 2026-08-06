@@ -182,8 +182,11 @@ does. Harness: `scripts/generate_quality_set.py` then `scripts/score_quality_set
   F0 separates cleanly — males 110.6 / 106.7 Hz vs females 205.1 / 192.0 Hz, with the two male
   readings agreeing within 4 Hz on unrelated text.
 
-**Listening pass: done, informally — verdict "sounds ok".** The long-form clips in `generated/`
-were listened to by the author (2026-07-30). That clears the bar of "no audible defect the metrics
+**Listening pass: done, informally — verdict "sounds good".** Re-done on the POST-BLOCK-2-SWEEP build
+(2026-08-06, `82d04f977a1`, Block 2 at ~21 ms/frame after §6.30/§6.31) via
+`generated/SAMPLER_current_build.wav` — one 136 s file, 13 clips, both 37 s and 39 s long-form English
+cases first, then prosody, then eight languages. Verdict from the author: **"sounds good"**. The earlier
+pass was on the pre-sweep build (2026-07-30, verdict "sounds ok"). That clears the bar of "no audible defect the metrics
 missed", which is what it was for. Read it as exactly that and no further: **it is not evidence of
 listener-facing naturalness.** WER measures intelligibility, and one developer saying "ok" is not a
 substitute for a MOS-style eval with real raters and a side-by-side against the fp32 reference
