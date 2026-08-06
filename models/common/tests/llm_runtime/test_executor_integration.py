@@ -20,6 +20,8 @@ from models.common.models.llama32_1b import executor as llama32_executor
 from models.common.models.llama32_1b import generator as llama32_generator
 from models.common.models.llama32_3b import executor as llama32_3b_executor
 from models.common.models.llama32_3b import generator as llama32_3b_generator
+from models.common.models.llama33_70b import executor as llama33_70b_executor
+from models.common.models.llama33_70b import generator as llama33_70b_generator
 from models.common.models.mistral_7b import executor as mistral_executor
 from models.common.models.mistral_7b import generator as mistral_generator
 from models.common.models.phi4 import executor as phi4_executor
@@ -63,6 +65,23 @@ EXECUTOR_BINDINGS = {
         make_product=lambda mesh_device, max_batch_size: _make_llama32_product(mesh_device, max_batch_size),
         make_lane=lambda llm, config: _FakeLane(llm, config),
         hf_model="meta-llama/Llama-3.2-3B-Instruct",
+    ),
+    "llama33_70b": SimpleNamespace(
+        executor_module=llama33_70b_executor,
+        executor_class=llama33_70b_executor.Llama33_70BExecutor,
+        executor_config_class=llama33_70b_executor.Llama33_70BExecutorConfig,
+        generator_module=llama33_70b_generator,
+        generator_class=llama33_70b_generator.Llama33_70BGenerator,
+        generator_config_class=llama33_70b_generator.Llama33_70BGeneratorConfig,
+        build_generator_name="build_llama33_70b_generator",
+        build_executor_name="build_llama33_70b_executor",
+        make_model=lambda **kwargs: _make_llama32_model(**kwargs),
+        make_runtime_config=lambda: _make_llama32_runtime_config(),
+        make_executor_config=lambda mode="none": _make_llama32_executor_config(mode, module=llama33_70b_executor),
+        make_recording_target=lambda **kwargs: _RecordingTarget(_make_llama32_model(), **kwargs),
+        make_product=lambda mesh_device, max_batch_size: _make_llama32_product(mesh_device, max_batch_size),
+        make_lane=lambda llm, config: _FakeLane(llm, config),
+        hf_model="meta-llama/Llama-3.3-70B-Instruct",
     ),
     "qwen2_7b": SimpleNamespace(
         executor_module=qwen2_executor,
@@ -233,7 +252,15 @@ def _make_llama32_runtime_config():
 
 
 def _make_llama32_executor_config(mode="none", *, module=llama32_executor):
-    config_class = getattr(module, "Llama32_1BExecutorConfig", None) or module.Llama32_3BExecutorConfig
+    config_class = next(
+        getattr(module, name)
+        for name in (
+            "Llama32_1BExecutorConfig",
+            "Llama32_3BExecutorConfig",
+            "Llama33_70BExecutorConfig",
+        )
+        if hasattr(module, name)
+    )
     return config_class(
         trace=TraceConfig(mode),
         warmup=WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,)),

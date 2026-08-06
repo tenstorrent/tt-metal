@@ -13,6 +13,7 @@ import pytest
 from models.common.models.deepseek_r1_distill_qwen_14b import model as deepseek_model
 from models.common.models.llama32_1b import model as llama32_model
 from models.common.models.llama32_3b import model as llama32_3b_model
+from models.common.models.llama33_70b import model as llama33_70b_model
 from models.common.models.mistral_7b import model as mistral_model
 from models.common.models.phi4 import model as phi4_model
 from models.common.models.qwen2_7b import model as qwen2_model
@@ -50,6 +51,28 @@ MODEL_CONTRACTS = {
         make_config=lambda **kwargs: _make_llama32_config(module=llama32_3b_model, **kwargs),
         make_layer=lambda attention_config=None: _make_llama32_layer(attention_config),
         construct_model=lambda monkeypatch: _construct_llama32_model(monkeypatch, module=llama32_3b_model),
+        expected_module_names=(
+            "layer[0].attn_norm",
+            "layer[0].attention",
+            "layer[0].ff_norm",
+            "layer[0].mlp",
+            "layer[1].attn_norm",
+            "layer[1].attention",
+            "layer[1].ff_norm",
+            "layer[1].mlp",
+            "final_norm",
+            "lm_head",
+        ),
+    ),
+    "llama33_70b": SimpleNamespace(
+        module=llama33_70b_model,
+        model_class=llama33_70b_model.Llama33_70BTransformer1D,
+        config_class=llama33_70b_model.Llama33_70BTransformer1DConfig,
+        attention_config_class=llama33_70b_model.Attention1DConfig,
+        make_attention_config=lambda **kwargs: _make_llama32_attention_config(**kwargs),
+        make_config=lambda **kwargs: _make_llama32_config(module=llama33_70b_model, **kwargs),
+        make_layer=lambda attention_config=None: _make_llama32_layer(attention_config),
+        construct_model=lambda monkeypatch: _construct_llama32_model(monkeypatch, module=llama33_70b_model),
         expected_module_names=(
             "layer[0].attn_norm",
             "layer[0].attention",
@@ -210,7 +233,15 @@ def _make_llama32_config(*, module=llama32_model, n_layers=1, num_devices=2, n_k
     block_configs = [
         SimpleNamespace(attention_config=_make_llama32_attention_config(n_kv_heads=n_kv_heads)) for _ in range(n_layers)
     ]
-    config_class = getattr(module, "Llama32_1BTransformer1DConfig", None) or module.Llama32_3BTransformer1DConfig
+    config_class = next(
+        getattr(module, name)
+        for name in (
+            "Llama32_1BTransformer1DConfig",
+            "Llama32_3BTransformer1DConfig",
+            "Llama33_70BTransformer1DConfig",
+        )
+        if hasattr(module, name)
+    )
     return config_class(
         n_layers=n_layers,
         vocab_size=128256,
@@ -251,7 +282,15 @@ def _construct_llama32_model(monkeypatch, *, module=llama32_model):
             MagicMock(return_value=sentinels[sentinel_name]),
         )
     config = _make_llama32_config(module=module, num_devices=1, sampling_config=object())
-    model_class = getattr(module, "Llama32_1BTransformer1D", None) or module.Llama32_3BTransformer1D
+    model_class = next(
+        getattr(module, name)
+        for name in (
+            "Llama32_1BTransformer1D",
+            "Llama32_3BTransformer1D",
+            "Llama33_70BTransformer1D",
+        )
+        if hasattr(module, name)
+    )
     return model_class(config), config, sentinels
 
 
