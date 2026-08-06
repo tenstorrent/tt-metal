@@ -164,10 +164,14 @@ class TtVoxtralFlow:
                                layout=ttnn.TILE_LAYOUT, device=self.device)
 
     def _trunk(self, p0, p1, p2, B):
-        """three [B,*,3072] projections -> velocity [B,1,36]. The 3-token sequence, reference order.
+        """three [B,1,3072] projections -> velocity [B,1,36]. The 3-token sequence, reference order.
 
-        B here is the CFG-doubled batch: decode_frame passes 2*batch."""
-        seq = ttnn.concat([ttnn.reshape(p, [B, 1, FM_INPUT_DIM]) for p in (p0, p1, p2)], dim=1)
+        B here is the CFG-doubled batch: decode_frame passes 2*batch.
+
+        CALLER SUPPLIES [B,1,3072], not [B,3072] -- see NOTES.md [flow-19]. The reshapes used to live
+        here and cost 10.1 us a step for nothing: p0 arrives in that shape already, and p1 and p2
+        change far less often than this runs."""
+        seq = ttnn.concat([p0, p1, p2], dim=1)
         # NOTES.md [flow-13] -- FOLD THE CFG BATCH INTO ROWS -- worth 2.23x...
         seq = ttnn.reshape(seq, [1, B * 3, FM_INPUT_DIM])
         for w in self.layers:
@@ -199,8 +203,14 @@ class TtVoxtralFlow:
         if key not in self._sched:
             ts = torch.linspace(0, 1, n_steps + 1)
             self._sched[key] = (
-                [ttnn.linear(self._up(time_embedding(ts[i].view(1, 1).repeat(B, 1), self.inv_freq)),
-                             self.proj["time_projection"], compute_kernel_config=COMPUTE_CONFIG)
+                # already [B,1,3072]: _trunk wants that shape and these are constant for the life of
+                # the model, so the reshape is paid once here instead of n_steps times per frame.
+                [ttnn.reshape(
+                    ttnn.linear(self._up(time_embedding(ts[i].view(1, 1).repeat(B, 1),
+                                                        self.inv_freq)),
+                                self.proj["time_projection"],
+                                compute_kernel_config=COMPUTE_CONFIG),
+                    [B, 1, FM_INPUT_DIM])
                  for i in range(n_steps)],
                 [float(ts[i + 1] - ts[i]) for i in range(n_steps)],
             )
@@ -218,7 +228,8 @@ class TtVoxtralFlow:
                          compute_kernel_config=COMPUTE_CONFIG)
         p2 = ttnn.linear(self._up(llm_h), self.proj["llm_projection"],
                          compute_kernel_config=COMPUTE_CONFIG)
-        v = self._trunk(p0, p1, p2, B)
+        # _trunk wants [B,1,3072]; these three arrive 2D because the inputs here are 2D torch
+        v = self._trunk(*(ttnn.reshape(p, [B, 1, FM_INPUT_DIM]) for p in (p0, p1, p2)), B)
         return ttnn.to_torch(v).float().reshape(B, N_ACOUSTIC_CODEBOOK)
 
     # ----------------------------------------------------------------------------------
@@ -240,8 +251,11 @@ class TtVoxtralFlow:
         """
         B2 = 2 * B
         # llm conditioning is constant across the solve, so project it ONCE rather than per step
-        # (it was n_steps identical 3072x3072 matmuls).
-        p2 = ttnn.linear(h, self.proj["llm_projection"], compute_kernel_config=COMPUTE_CONFIG)
+        # (it was n_steps identical 3072x3072 matmuls). Reshaped once here for the same reason:
+        # _trunk wants [B,1,3072] and p2 changes once a frame, not once a step -- NOTES.md [flow-19].
+        p2 = ttnn.reshape(ttnn.linear(h, self.proj["llm_projection"],
+                                      compute_kernel_config=COMPUTE_CONFIG),
+                          [B2, 1, FM_INPUT_DIM])
         p1s, dts = self._schedule(B2, n_steps)
         for i, dt in enumerate(dts):
             # cond+uncond as ONE 2B forward, matching the reference exactly.
