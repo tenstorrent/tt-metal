@@ -310,6 +310,9 @@ def test_round_trip_random(device, dtype, shape, input_layout):
     assert_quality(y, x_in, pcc_threshold=0.999, rtol=0.1, atol=0.2, label=f"roundtrip {dtype} shape={shape}")
 
 
+# Each number inside the list is how much tokens does each expert on a single chip have
+# The length of the list is num_experts_per_chip
+# Example: [130, 74, 200, 96, 41] means that we have 5 experts per chip, where the first expert has 130 tokens, etc...
 TOKEN_COUNT_AWARE_CASES = [
     # dense - each expert has tokens
     ("dense", [130, 74, 200, 96, 41]),
