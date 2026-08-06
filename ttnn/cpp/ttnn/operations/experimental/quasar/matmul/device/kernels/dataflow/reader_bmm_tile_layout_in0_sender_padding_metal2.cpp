@@ -132,6 +132,21 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer cb_in0(dfb::cb_in0);
+#if defined(ARCH_QUASAR)
+    // [#48552 DIAG - remove after] see the in1 reader: print the Neo/counter id each cb_in0 tile-counter slot
+    // targets. neo!=0 on any slot => host-side wrong-Neo; all neo==0 => UNPACR overlay / tt-emule runtime.
+    {
+        auto& _i0 = cb_in0.dbg_local_dfb_interface();
+        DPRINT("[tc] cb_in0 ntc={} idx={}\n", (uint32_t)_i0.num_tcs_to_rr, (uint32_t)_i0.tc_idx);
+        for (uint8_t _i = 0; _i < _i0.num_tcs_to_rr; _i++) {
+            DPRINT(
+                "[tc] cb_in0 slot={} neo={} tc={}\n",
+                (uint32_t)_i,
+                (uint32_t)dfb::get_tensix_id(_i0.tc_slots[_i].packed_tile_counter),
+                (uint32_t)dfb::get_counter_id(_i0.tc_slots[_i].packed_tile_counter));
+        }
+    }
+#endif
     Semaphore sender_sem(sem::in0_sender);
     Semaphore receiver_sem(sem::in0_receiver);
 

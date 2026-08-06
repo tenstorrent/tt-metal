@@ -180,6 +180,32 @@ void kernel_main() {
         in1_mcast_dest_noc_end_y);
     DataflowBuffer cb_in1(dfb::cb_in1);
     DataflowBuffer cb_out(dfb::cb_out);
+#if defined(ARCH_QUASAR)
+    // [#48552 DIAG - remove after] Print the Neo id + counter id each cb_in1 / cb_out tile-counter slot targets.
+    // The fault is a Neo0-UNPACK tile-counter op resolving to Neo 1 (index 0x10000 = 1x NEO_TILE_COUNTERS_STRIDE).
+    // If ANY slot prints neo!=0 -> the wrong Neo is baked into the host DFB config for this streamed (DRAM,
+    // non-borrowed) cb_in1 (fix host-side). If all neo==0 -> the wrong Neo is injected at runtime by the UNPACR
+    // END_OP overlay routing (llk_unpack_unary_operand.h) / tt-emule, not the static config.
+    {
+        auto& _i1 = cb_in1.dbg_local_dfb_interface();
+        DPRINT("[tc] cb_in1 ntc={} idx={}\n", (uint32_t)_i1.num_tcs_to_rr, (uint32_t)_i1.tc_idx);
+        for (uint8_t _i = 0; _i < _i1.num_tcs_to_rr; _i++) {
+            DPRINT(
+                "[tc] cb_in1 slot={} neo={} tc={}\n",
+                (uint32_t)_i,
+                (uint32_t)dfb::get_tensix_id(_i1.tc_slots[_i].packed_tile_counter),
+                (uint32_t)dfb::get_counter_id(_i1.tc_slots[_i].packed_tile_counter));
+        }
+        auto& _io = cb_out.dbg_local_dfb_interface();
+        for (uint8_t _i = 0; _i < _io.num_tcs_to_rr; _i++) {
+            DPRINT(
+                "[tc] cb_out slot={} neo={} tc={}\n",
+                (uint32_t)_i,
+                (uint32_t)dfb::get_tensix_id(_io.tc_slots[_i].packed_tile_counter),
+                (uint32_t)dfb::get_counter_id(_io.tc_slots[_i].packed_tile_counter));
+        }
+    }
+#endif
     Semaphore sender_sem(sem::in1_sender);
     Semaphore receiver_sem(sem::in1_receiver);
 #ifdef FUSE_BIAS
