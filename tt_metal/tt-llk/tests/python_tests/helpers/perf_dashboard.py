@@ -18,6 +18,7 @@ from pathlib import Path
 import plotly.graph_objects as go
 import pyarrow.parquet as pq
 
+from .perf_parquet import safe_stem
 from .perf_wide_schema import DB_SCHEMA
 
 _SWEEP_CATEGORIES = {"formats", "flags", "key", "configuration"}
@@ -71,7 +72,7 @@ def dashboard_from_parquet(parquet_path, out_dir):
             legend_title="Run type / stat",
         )
 
-        path = out_dir / f"{test_name}.html"
+        path = out_dir / f"{safe_stem(test_name)}.html"
         fig.write_html(str(path))
         written[test_name] = path
     return written
