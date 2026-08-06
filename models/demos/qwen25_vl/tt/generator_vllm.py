@@ -318,4 +318,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             # move before decode uses them, including during host sampling.
             super().remap_rope_deltas(slot_remap)
 
-        return super().decode_forward(*args, **kwargs)
+        # RoPE deltas are one of two per-slot consumers; forward the remap so the
+        # wrapped generator's sampler state moves with it.
+        return super().decode_forward(*args, slot_remap=slot_remap, **kwargs)

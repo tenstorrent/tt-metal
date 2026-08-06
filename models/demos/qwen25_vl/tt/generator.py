@@ -115,6 +115,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
+        slot_remap=None,
         *,
         reload_inputs: bool,
         reload_page_table: bool,
@@ -129,6 +130,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
+            # The wrapped generator owns the sampler whose per-slot seed state also
+            # follows a condense, so the remap has to reach it too.
+            slot_remap=slot_remap,
             reload_inputs=reload_inputs,
             reload_page_table=reload_page_table,
             reload_sampling_params=reload_sampling_params,
