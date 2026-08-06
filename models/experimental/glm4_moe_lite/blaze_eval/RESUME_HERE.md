@@ -17,27 +17,30 @@ The second was the strongest remaining candidate — the layer's largest matmul,
 dispatches collapsed into one program, one boundary pair amortising over far more work — and it
 loses by *more*. It was measured with the chunked `TileRowReplicate` fix already in place.
 
-### Why, and why more work will not fix it
+### Why, quantified — and it is structural, not a tuning gap
 
-**blaze's `DRAMStreamingMatmul` runs on 8 DRAM-bank workers; ttnn spreads the same matmul over up
-to 80 cores.** On a 1x-harvested 120-core Blackhole part that is a 10x parallelism deficit, and it
-is structural, not a tuning bug. Larger K makes it worse, not better, because the activation must
-be replicated to every bank worker first: K=5120 needs 160 replicate pages against K=2048's 64.
-That is why the bigger cluster scored worse — the thing that was supposed to amortise the boundary
-also grows it.
+`dram_bank_worker_cores` (dram_streaming_matmul/common.py:34) pins **exactly one worker per DRAM
+bank** — 8 cores on Blackhole, no parameter, each owning a disjoint N slice. ttnn spreads the same
+matmul over up to 80. Verified by reading the source, not inferred.
 
-This is consistent with an earlier null that was never explained: `GLM4_MOE_LITE_DS_CORE_CAP=8`,
-which hands ttnn blaze's 8-core layout, measured 33.2 -> 33.4 ms. Restricting ttnn to 8 cores did
-not help either.
+The achieved bandwidth shows what that costs. `w_o` is 5120x2048 bf8 ~= 10.5 MB:
 
-Set against the two facts already established on this model — **op count is a 0.0 ms lever under
-trace** (removing 23% of all ops changed nothing, `18479ed4ad0`) and **the step is
-weight-bandwidth-bound**, which blaze does not change since it streams the same bf8 bytes — there
-is no measured path from these fused ops to an end-to-end gain. Integrating either would make the
-model slower by 2.2-5.6 ms/token.
+| | time | achieved | of 512 GB/s peak |
+|---|---:|---:|---:|
+| blaze (8 bank workers) | 187.8 µs | **56 GB/s** (~7 GB/s/core) | 11% |
+| ttnn (up to 80 cores) | 69.1 µs | **152 GB/s** | 30% |
 
-**What would change the answer:** a streaming matmul that uses more than the 8 bank-pinned
-workers. That is a blaze-side design change, not an integration task.
+**A single Tensix core cannot saturate a DRAM bank.** One worker per bank therefore strands most
+of the device's bandwidth, and no amount of kernel tuning inside that layout recovers it — the
+fix is more cores per bank, which is a `DRAMStreamingMatmul` redesign.
+
+It also explains why the *bigger* cluster scored worse: larger K needs the activation replicated
+to every bank worker first (K=5120 -> 160 pages vs K=2048 -> 64), so the work meant to amortise
+the boundary grows the boundary instead.
+
+Consistent with the earlier unexplained null: `GLM4_MOE_LITE_DS_CORE_CAP=8`, which hands ttnn
+blaze's 8-core layout, measured 33.2 -> 33.4 ms. Constraining ttnn the same way did not help
+either — what a structural parallelism limit looks like from the other side.
 
 ## HEADLINE: the boundary is closed, priced, and the q_kv_a cluster LOSES
 
