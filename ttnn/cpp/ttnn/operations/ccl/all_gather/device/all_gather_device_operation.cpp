@@ -108,7 +108,7 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
     for (auto& output_placement : output_placements) {
         if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placement)) {
             // Temp workaround for #52331:
-            // Rank-changing ops don't renumber Shard::dim, so skip over invalid shard dims.
+            // Rank-changing ops don't renumber Shard::dim, so skip over invalid shard dims
             if (shard->dim >= rank || shard->dim < -rank) {
                 continue;
             }
