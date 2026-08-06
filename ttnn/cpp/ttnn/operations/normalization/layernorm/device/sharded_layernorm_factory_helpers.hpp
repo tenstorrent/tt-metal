@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -15,6 +16,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::prim::sharded_layernorm_helpers {
@@ -106,6 +108,43 @@ struct KernelLayout {
     // This determines which kernels are present and their ordering in the program
     static KernelLayout compute(
         const GridParams& grid, const WorkerDistribution& workers, const CoreRanges& core_ranges);
+};
+
+// Host/kernel wire for the pre-allgather readiness channel. A whole-grid reduce has one
+// sender inside one rectangle; a two-stage reduce has one fixed sender on every row/column.
+class PreAllGatherMcast {
+public:
+    PreAllGatherMcast(
+        IDevice* device,
+        const CoreRangeSet& grid,
+        CoreCoord global_sender,
+        bool row_wise,
+        bool use_two_stage_reduce,
+        NOC noc,
+        uint32_t data_ready_sem_id,
+        uint32_t consumer_ready_sem_id);
+
+    std::vector<uint32_t> compile_time_args() const;
+    std::vector<uint32_t> runtime_args(const CoreCoord& core) const;
+    bool is_sender(const CoreCoord& core) const;
+    uint32_t num_active() const;
+    bool uses_two_stage_reduce() const { return use_two_stage_reduce_; }
+
+private:
+    using Channel = std::variant<ttnn::kernel_lib::host::Mcast1D, ttnn::kernel_lib::host::Mcast2D>;
+
+    static Channel build_channel(
+        IDevice* device,
+        const CoreRangeSet& grid,
+        CoreCoord global_sender,
+        bool row_wise,
+        bool use_two_stage_reduce,
+        NOC noc,
+        uint32_t data_ready_sem_id,
+        uint32_t consumer_ready_sem_id);
+
+    Channel channel_;
+    bool use_two_stage_reduce_ = false;
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -201,6 +240,7 @@ struct CompileTimeArgsContext {
     const GridParams* grid = nullptr;
     const WorkerDistribution* workers = nullptr;
     const CoreRanges* core_ranges = nullptr;
+    const PreAllGatherMcast* pre_allgather_mcast = nullptr;
 
     // Block dimensions
     uint32_t block_ht = 0;
@@ -429,6 +469,7 @@ struct RuntimeArgsContext {
     const GridParams& grid;
     const WorkerDistribution& workers;
     const CoreRanges& core_ranges;
+    const PreAllGatherMcast* pre_allgather_mcast = nullptr;
 
     // NOC coordinates for multicast
     std::vector<uint32_t> mcast_noc_x;

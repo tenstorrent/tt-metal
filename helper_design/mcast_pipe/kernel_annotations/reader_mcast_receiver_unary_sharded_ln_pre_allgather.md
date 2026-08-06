@@ -1,31 +1,41 @@
 # reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp (RECEIVE side)
 
-> Current v9 status: **blocked and exactly at `llk_helper_library`** with its
-> sender. The helper lacks acknowledged signal-only receive semantics.
+Status: **fully end-to-end migrated at API v10** as part of
+`layernorm-sharded-pre-allgather`.
 
-Path: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp
+Path: `ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp`
 
-API spelling: experimental OO wrapper, raw `RemoteCoord`.
-Role: pre-allgather receiver counterpart. Block in `global_reduce_receiver` lambda L121-204; called once L205.
+Role: receiver for the pre-allgather partial-statistics reduction. In two-stage
+mode the same binary also runs on non-global line coordinators, where it uses
+the helper sender face for that row or column.
 
-## Block map
+## Helper-owned wire
 
-### Phase-1 handshake (level flag + counter-up), EXCLUDE_SRC
-- L133 `cb_partial_obj.wait_front(...)` — local partial ready.
-- L135 `reduce_sender_sem.set(INVALID)` — clear flag.
-- L136 `reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1)` — COUNTER inc to sender.
-- L137 `reduce_sender_sem.wait(VALID)` — LEVEL FLAG wait.
-- L139-199 gather reads (HOLE), second-stage two-stage handling.
-- L201-202 `cb_reduce_first_stage_obj.wait_front(...)` then `reduce_second_stage_sem.up(...)` — second-stage combine-done counter-up.
-- L206 `noc.async_atomic_barrier()` at top level — **NEW SPELLING: atomic barrier** (drains the sem `up` atomic increments, not a write barrier).
+- Host binding: `PreAllGatherMcast` in `sharded_layernorm_factory_helpers.*`.
+- Whole-grid reduce: every non-global core uses the handshaked Flag `Mcast2D`
+  receiver face and calls `receive_signal()`.
+- Two-stage reduce: the first core on each row/column calls `send_signal()`;
+  the remaining line members call `receive_signal()` on the matching `Mcast1D`.
+- Existing semaphore descriptors are adopted without changing their host
+  initialization.
+- The complete six-word CT and four-word RT ranges are prepended as an opaque
+  block. Operation arguments start at `McastArgs::next_*_args_offset()`.
+- `receive_signal()` owns flag clear, consumer-ready increment, and ready wait.
 
-## Variant signature
-- **F1 = atomic barrier** (L206, `async_atomic_barrier`) — distinct from `async_write_barrier`. Receiver-side flush of outstanding semaphore atomics.
-- **F2 = phase-1 LEVEL FLAG + counter-up**. No phase-2 (no data receive; data mcast happens in post_allgather).
-- **F3 = EXCLUDE_SRC**.
-- **pre_handshake**: full handshake present (set INVALID → up → wait VALID). No data multicast received here.
+## Operation-owned behavior
 
-## Hazards / invariants
-- INV: set(INVALID) L135 → up L136 → wait(VALID) L137 ordering (same race window as sharded_ln receiver).
-- NEW SPELLING: `noc.async_atomic_barrier()` (L206) — Pipe must expose an atomic-barrier flush distinct from write-barrier (F1 has THREE values now: write-barrier, writes-flushed, atomic-barrier).
-- HOLE: gather reads dominate; only L133-137 + L201-202 + L206 are Pipe-relevant.
+- Partial-statistics gather reads and CB ownership.
+- `reduce_second_stage_semaphore_id` and second-stage completion.
+- The final atomic barrier that drains operation-owned semaphore atomics.
+
+## Validation and performance
+
+- Exact 8x4 BFLOAT8_B RMSNorm node passed under `--dev` from a fresh isolated
+  cache; both receiver variants produced ELF artifacts.
+- `LN-PRE-ALLGATHER`: 126 passed; `LN-POST-ALLGATHER`: 136 passed;
+  `LN-SHARDED`: 208 passed.
+- New offset whole-grid, row-wise, and column-wise host geometry cases passed
+  inside `McastHostFixture` 28/28; helper device suite passed 77/77.
+- Exact-node LayerNorm device-kernel durations were 2,583, 2,564, 2,563, and
+  2,656 ns (median 2,563.5 ns). Per-kernel delta is N/A because the profiler
+  cannot isolate this face from the other LayerNorm data-movement kernels.

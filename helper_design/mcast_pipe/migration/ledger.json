@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v10 status carries 15 migrated kernels and 13 host bindings on the self-describing six-word CT wire. TopK final readiness was migrated and verified on 2026-08-06 in production migration commit b5c99d43fd5; its build, exact fresh-cache node, complete mapped inventory, and helper suites passed. The earlier fully end-to-end migrations remain anchored by Conv2d single-sender rectangle commit 991b5b6b6386a90726d15007002fe1f5a77d8487, fixed-line commit 51dfb1f1ed61045ed10dc679269960b6d2ccac9e, width-sharded activation commit fe866a1d0c4c32b78aae8a76e875c0da109f51c8, matmul in1 commit aeeb28ff007807c71b1f60842cca85e5c41efa7f, GroupNorm v2 commit bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0, and sort single-row control commit 7337302b564. Historical v8/v9 commits and results remain in dated logs.",
+  "source_of_truth_note": "Current v10 status carries 17 migrated kernels and 14 host bindings on the self-describing six-word CT wire. Sharded LayerNorm pre-allgather was migrated and verified on 2026-08-06 in the same atomic code-and-ledger commit (`HEAD` in its commit fields); its separate builder-split prerequisite, build, exact fresh-cache node, complete mapped inventories, and helper suites passed. TopK final readiness remains anchored by production migration commit b5c99d43fd5. The earlier fully end-to-end migrations remain anchored by Conv2d single-sender rectangle commit 991b5b6b6386a90726d15007002fe1f5a77d8487, fixed-line commit 51dfb1f1ed61045ed10dc679269960b6d2ccac9e, width-sharded activation commit fe866a1d0c4c32b78aae8a76e875c0da109f51c8, matmul in1 commit aeeb28ff007807c71b1f60842cca85e5c41efa7f, GroupNorm v2 commit bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0, and sort single-row control commit 7337302b564. Historical v8/v9 commits and results remain in dated logs.",
   "host_bindings": [
     {
       "id": "weights-mcast:conv2d-sharded:single-sender-rect",
@@ -407,25 +407,29 @@
     {
       "id": "layernorm:sharded:pre-allgather-reduce",
       "factory": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp",
-      "dispatch": "is_pre_all_gather=true; shared helper builder must be split first",
+      "dispatch": "is_pre_all_gather=true; pre-allgather-specific reader arguments from the split shared builder",
       "kernels": [
         "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
         "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp"
       ],
       "migration_unit": "layernorm-sharded-pre-allgather",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 10,
+      "commit": "HEAD",
       "validation_set": [
-        "LN-PRE-ALLGATHER",
-        "LN-POST-ALLGATHER",
-        "LN-SHARDED",
-        "McastHostFixture: Gate 0 passed 25/25",
-        "test_mcast_pipe.py: Gate 0 passed 77/77"
+        "separate builder-split prerequisite 4ef7e9a57a6: build passed; LN-PRE-ALLGATHER 126 passed; LN-POST-ALLGATHER 136 passed; LN-SHARDED 208 passed",
+        "build_metal.sh: passed",
+        "exact 8x4 BFLOAT8_B RMSNorm pre-allgather node under --dev from fresh isolated cache: passed; sender and receiver JIT artifacts confirmed",
+        "LN-PRE-ALLGATHER: 126 passed, 74 deselected",
+        "LN-POST-ALLGATHER: 136 passed, 64 deselected",
+        "LN-SHARDED: 208 passed",
+        "McastHostFixture: 28 passed, including offset whole-grid and row/column two-stage geometry",
+        "test_mcast_pipe.py: 77 passed",
+        "exact-node profile: four LayerNorm device-kernel durations 2583, 2564, 2563, and 2656 ns (median 2563.5 ns); no operation-matched pre-migration bakeoff exists, so per-kernel delta is not comparable"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:3", "builder-split-prerequisite"]
+      "flags": ["tier:3", "atomic-unit:layernorm-sharded-pre-allgather", "fully-end-to-end", "builder-split-prerequisite:4ef7e9a57a6", "handshaked-flag-signal-only"]
     },
     {
       "id": "matmul-in0-mcast:reuse-1d:legacy",
@@ -1015,17 +1019,22 @@
       "op_family": "normalization",
       "role": "sender",
       "tag": "refactor",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 10,
+      "commit": "HEAD",
       "validation_set": [
-        "LN-PRE-ALLGATHER audit; historical partial port passed but was reverted"
+        "build_metal.sh: passed",
+        "exact fresh-cache 8x4 BFLOAT8_B RMSNorm node under --dev: passed; sender JIT artifact confirmed",
+        "LN-PRE-ALLGATHER: 126 passed; LN-POST-ALLGATHER: 136 passed; LN-SHARDED: 208 passed",
+        "McastHostFixture: 28 passed; test_mcast_pipe.py: 77 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "Pending migration: API-003 handshaked signal-only behavior is implemented at v10.",
+      "last_verified": "2026-08-06",
+      "census_note": "Fully end-to-end v10 migration: handshaked Flag signal-only sender uses whole-grid Mcast2D or per-line Mcast1D; gather reads and final write barrier remain operation-owned.",
       "flags": [
-        "acked-signal-only"
+        "acked-signal-only",
+        "fully-end-to-end",
+        "atomic-unit:layernorm-sharded-pre-allgather"
       ]
     },
     {
@@ -1033,17 +1042,22 @@
       "op_family": "normalization",
       "role": "receiver",
       "tag": "refactor",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 10,
+      "commit": "HEAD",
       "validation_set": [
-        "LN-PRE-ALLGATHER audit; historical partial port passed but was reverted"
+        "build_metal.sh: passed",
+        "exact fresh-cache 8x4 BFLOAT8_B RMSNorm node under --dev: passed; receiver JIT artifacts confirmed",
+        "LN-PRE-ALLGATHER: 126 passed; LN-POST-ALLGATHER: 136 passed; LN-SHARDED: 208 passed",
+        "McastHostFixture: 28 passed; test_mcast_pipe.py: 77 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "Pending migration: API-003 handshaked signal-only behavior is implemented at v10.",
+      "last_verified": "2026-08-06",
+      "census_note": "Fully end-to-end v10 migration: handshaked Flag signal-only receiver uses receive_signal; two-stage line coordinators use the sender face. Gather reads, second-stage semaphore, and final atomic barrier remain operation-owned.",
       "flags": [
-        "acked-signal-only"
+        "acked-signal-only",
+        "fully-end-to-end",
+        "atomic-unit:layernorm-sharded-pre-allgather"
       ]
     },
     {

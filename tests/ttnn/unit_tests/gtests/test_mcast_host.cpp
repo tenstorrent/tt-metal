@@ -21,6 +21,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_program_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 namespace ttnn::kernel_lib::host::test {
@@ -737,6 +738,81 @@ TEST_F(McastHostFixture, Mcast2DNumActiveTooLargeFatal) {
     const auto rect = make_grid(/*gc=*/4, /*gr=*/4);  // fan-out area-1 = 15
     McastConfig cfg;
     EXPECT_ANY_THROW({ Mcast2D mc(dev, rect, CoreCoord(0, 0), cfg, /*num_active=*/16); });
+}
+
+TEST_F(McastHostFixture, LayerNormPreAllGatherWholeGridOffset) {
+    auto* dev = device_;
+    const auto grid = make_grid(CoreCoord(1, 1), /*gc=*/4, /*gr=*/2);
+    ttnn::prim::sharded_layernorm_helpers::PreAllGatherMcast mc(
+        dev,
+        grid,
+        /*global_sender=*/CoreCoord(1, 1),
+        /*row_wise=*/true,
+        /*use_two_stage_reduce=*/false,
+        NOC::NOC_0,
+        /*data_ready_sem_id=*/7,
+        /*consumer_ready_sem_id=*/8);
+
+    EXPECT_FALSE(mc.uses_two_stage_reduce());
+    EXPECT_EQ(mc.num_active(), 7u);
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 7, 8, 7, 1, 0}));
+    EXPECT_TRUE(mc.is_sender(CoreCoord(1, 1)));
+    EXPECT_FALSE(mc.is_sender(CoreCoord(4, 2)));
+    EXPECT_EQ(mc.runtime_args(CoreCoord(1, 1)), expected_rect2d(dev, 1, 1, 4, 2, /*noc1=*/false));
+}
+
+TEST_F(McastHostFixture, LayerNormPreAllGatherTwoStageRowsOffset) {
+    auto* dev = device_;
+    const auto grid = make_grid(CoreCoord(1, 1), /*gc=*/4, /*gr=*/3);
+    ttnn::prim::sharded_layernorm_helpers::PreAllGatherMcast mc(
+        dev,
+        grid,
+        /*global_sender=*/CoreCoord(1, 1),
+        /*row_wise=*/true,
+        /*use_two_stage_reduce=*/true,
+        NOC::NOC_0,
+        /*data_ready_sem_id=*/7,
+        /*consumer_ready_sem_id=*/8);
+
+    EXPECT_TRUE(mc.uses_two_stage_reduce());
+    EXPECT_EQ(mc.num_active(), 3u);
+    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 7, 8, 3, 1, 0}));
+    EXPECT_TRUE(mc.is_sender(CoreCoord(1, 1)));
+    EXPECT_TRUE(mc.is_sender(CoreCoord(1, 2)));
+    EXPECT_FALSE(mc.is_sender(CoreCoord(3, 2)));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(1, 2)),
+        expected_bbox(dev, {CoreCoord(2, 2), CoreCoord(3, 2), CoreCoord(4, 2)}, NOC::NOC_0));
+    const auto sender = dev->worker_core_from_logical_core(CoreCoord(1, 2));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(3, 2)),
+        (std::vector<uint32_t>{static_cast<uint32_t>(sender.x), static_cast<uint32_t>(sender.y), 0, 0}));
+}
+
+TEST_F(McastHostFixture, LayerNormPreAllGatherTwoStageColumnsOffset) {
+    auto* dev = device_;
+    const auto grid = make_grid(CoreCoord(2, 1), /*gc=*/3, /*gr=*/4);
+    ttnn::prim::sharded_layernorm_helpers::PreAllGatherMcast mc(
+        dev,
+        grid,
+        /*global_sender=*/CoreCoord(2, 1),
+        /*row_wise=*/false,
+        /*use_two_stage_reduce=*/true,
+        NOC::NOC_0,
+        /*data_ready_sem_id=*/7,
+        /*consumer_ready_sem_id=*/8);
+
+    EXPECT_EQ(mc.num_active(), 3u);
+    EXPECT_TRUE(mc.is_sender(CoreCoord(2, 1)));
+    EXPECT_TRUE(mc.is_sender(CoreCoord(3, 1)));
+    EXPECT_FALSE(mc.is_sender(CoreCoord(3, 3)));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(3, 1)),
+        expected_bbox(dev, {CoreCoord(3, 2), CoreCoord(3, 3), CoreCoord(3, 4)}, NOC::NOC_0));
+    const auto sender = dev->worker_core_from_logical_core(CoreCoord(3, 1));
+    EXPECT_EQ(
+        mc.runtime_args(CoreCoord(3, 3)),
+        (std::vector<uint32_t>{static_cast<uint32_t>(sender.x), static_cast<uint32_t>(sender.y), 0, 0}));
 }
 
 // The `flags` CT word (5th) encodes pre_handshake (bit0 = cfg.handshake) and the data-ready signal

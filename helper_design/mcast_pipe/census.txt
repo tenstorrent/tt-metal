@@ -32,8 +32,8 @@ ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_
 ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp — role: receiver | tag: clean | C1
 ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp — role: sender | tag: refactor | C2 multi-rect; raw-L1 src
 ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp — role: receiver | tag: clean | C2
-ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp — role: sender | tag: refactor | status: pending | C2 flag-only; atomic-barrier; API-003 implemented
-ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp — role: receiver | tag: refactor | status: pending | C2; atomic-barrier; API-003 implemented
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp — role: sender | tag: refactor | MIGRATED API v10: handshaked Flag signal-only; whole-grid Mcast2D or per-line Mcast1D; gather/barrier operation-owned
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp — role: receiver/hybrid | tag: refactor | MIGRATED API v10: receive_signal; two-stage line coordinators use sender face; gather/second-stage semaphore/atomic barrier operation-owned
 ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp — role: sender | tag: refactor | C2 multi-rect
 ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp — role: sender | tag: refactor | C2 multi-rect
 ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp — role: receiver | tag: refactor | C2
