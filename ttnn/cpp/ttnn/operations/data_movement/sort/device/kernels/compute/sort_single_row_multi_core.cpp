@@ -13,6 +13,8 @@
 #include "api/compute/pack_untilize.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+#include "sort_common.hpp"
+
 void kernel_main() {
     // Compile time args
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
@@ -168,6 +170,9 @@ void kernel_main() {
                                 }
                             }
 
+                            // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
+                            prepare_uint16_fp32_dest_value_tiles_for_pack(tile_input_low, tile_input_high);
+
                             tile_regs_commit();
 
                             input_tensor_dfb.pop_front(2 * one_tile);
@@ -203,6 +208,8 @@ void kernel_main() {
                                 transpose_init(input_tensor_transposed_cb_id);
                                 transpose_tile(input_tensor_transposed_cb_id, 0, input_dest_start);
                                 transpose_tile(input_tensor_transposed_cb_id, 1, input_dest_end);
+                                // UInt16-in-32b-DEST: transpose re-unpacks into low 16; fix up before pack (#50215).
+                                prepare_uint16_fp32_dest_value_tiles_for_pack(input_dest_start, input_dest_end);
                                 tile_regs_commit();
 
                                 input_tensor_transposed_dfb.pop_front(2 * one_tile);
