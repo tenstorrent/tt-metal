@@ -319,10 +319,20 @@ def test_depthwise_mac_is_more_accurate_than_conv1d(mesh_device, monkeypatch):
         errors[prefer_mac] = float((actual.double() - golden).pow(2).mean().sqrt() / golden.std())
 
     logger.info(f"depthwise filter rel_rmse: conv1d={errors['0']:.3e} mac={errors['1']:.3e}")
-    # Measured 1.5e-03 vs 5.3e-08. Gated as a wide inequality rather than at the absolute values, which
-    # are hardware-dependent, but the two are ~4 orders apart so the margin is enormous.
+    # This gate used to assert MAC beat conv1d by >100x, which was true when conv1d measured 1.5e-03
+    # against MAC's 5.3e-08. It is not true any more, and the reason is the point of the gate: the
+    # depthwise kernel now accumulates taps on the SFPU with UnpackToDestFp32 operands, so conv1d is
+    # bit-equal to the elementwise form -- both measure ~8e-08 here -- while running 5-26x faster.
+    #
+    # So the property worth protecting is no longer "MAC wins", it is "neither loses". Asserting the
+    # old inequality would now fail *because* the defect is fixed, and asserting equality would be too
+    # tight to survive a legitimate kernel change; both being fp32-grade is the real contract.
     assert errors["1"] <= 1e-6, f"MAC form should be fp32-grade, got {errors['1']:.3e}"
-    assert errors["1"] < errors["0"] / 100, f"MAC should dominate conv1d: {errors}"
+    assert errors["0"] <= 1e-6, (
+        f"conv1d should be fp32-grade now that the depthwise kernel uses SFPU tap accumulation, "
+        f"got {errors['0']:.3e}. A regression here means the SFPU branch or the UnpackToDestFp32 "
+        f"operands stopped taking effect -- check `sfpu_fp32_enabled` and the conv2d program factory."
+    )
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
