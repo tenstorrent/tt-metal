@@ -346,6 +346,8 @@ class Gemma4Model:
         # Empty and inactive unless a caller opts in, so the untraced path is unchanged.
         self._rope_prefill_buffers = {}
         self._rope_prefill_pinned = False
+        self._rope_prefill_positions = None
+        self._rope_prefill_gathered = {}
         # When True the caller refreshes the ring metadata itself, outside any trace.
         self._ring_metadata_external = False
         self.max_seq_len = max_seq_len
@@ -860,6 +862,8 @@ class Gemma4Model:
         if isinstance(start_pos, ttnn.Tensor):
             return (cos, sin)
         if seq_len is not None:
+            if self._rope_prefill_gathered:
+                return self._rope_prefill_gathered[layer_type]
             if self._rope_prefill_pinned:
                 # Traced chunked prefill: hand back a buffer at a FIXED address whose
                 # contents were refreshed for this chunk (see _refresh_rope_prefill).
@@ -870,6 +874,22 @@ class Gemma4Model:
             cos = cos[:, :, start_pos : start_pos + seq_len, :]
             sin = sin[:, :, start_pos : start_pos + seq_len, :]
         return (cos, sin)
+
+    def set_prefill_rope_positions(self, position_idx):
+        """Point traced prefill RoPE at this chunk's absolute positions.
+
+        ``position_idx`` is a CP-sharded [1, chunk] uint32 device tensor of GLOBAL token
+        positions, refreshed by the caller out-of-trace with a ~4 KB write. The gather
+        itself then happens on-device inside the trace (see __call__), which is what
+        removes the per-chunk RoPE copies: _refresh_rope_prefill issued four eager
+        slice+copy dispatches per chunk, ~155 ms at 256k, purely because a trace records
+        a slice's address rather than its rows. ttnn.embedding indexes the same
+        row-major 2D caches decode already uses, so the HF NeoX convention is preserved
+        (rotary_embedding_indexed would not: it reuses the rotary_embedding_llama
+        compute kernel, a different rotation pairing).
+        """
+        self._rope_prefill_positions = position_idx
+        self._rope_prefill_pinned = True
 
     def _refresh_rope_prefill(self, seq_len, start_pos):
         """Point the pinned RoPE buffers at ``[start_pos, start_pos+seq_len)``.
@@ -1022,6 +1042,20 @@ class Gemma4Model:
                 sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
                 decode_rope_presliced[lt] = (cos_pos, sin_pos)
 
+        # Prefill RoPE by on-device gather, once per layer_type rather than per layer —
+        # mirroring the decode path below/above. Runs inside a captured trace and reads
+        # the position tensor, so a replay picks up whatever positions the host staged.
+        prefill_rope_presliced = {}
+        if not is_decode and self._rope_prefill_positions is not None and self.rope_caches_2d:
+            for lt in {self.hf_config.layer_types[i] for i in range(len(self.layers))}:
+                if lt not in self.rope_caches_2d:
+                    continue
+                cos_2d, sin_2d = self.rope_caches_2d[lt]
+                prefill_rope_presliced[lt] = (
+                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT)),
+                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT)),
+                )
+
         # Publish this chunk's per-chunk scalars once, before any layer runs. Every layer
         # reads the same two metadata tensors, and they must be written from the host
         # outside any traced region — a trace captures addresses, not values, which is the
@@ -1046,6 +1080,8 @@ class Gemma4Model:
 
             if _cp_degree(self.mesh_config) > 1:
                 self.ccl_manager.set_ring_metadata(slot_idx=user_id or 0, kv_actual_global=int(chunk_start_idx))
+
+        self._rope_prefill_gathered = prefill_rope_presliced
 
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
