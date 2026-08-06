@@ -4361,7 +4361,9 @@ class UntilizeGolden:
     ):
         from helpers.tilize_untilize import untilize_block
 
-        operand = quantize_input_to_unpack_format(operand, input_format)
+        operand = quantize_input_to_unpack_format(
+            operand, input_format, all_mx_formats=True
+        )
 
         result = untilize_block(
             operand,
@@ -4553,6 +4555,25 @@ class TopKGolden:
         )
 
         return result
+
+
+@register_golden
+class TopKXLGolden:
+    """Golden generator for the TopK-XL LLKs (K = 512/1024/2048).
+
+    TopK-XL takes row-major values and returns row-major indices, so the golden
+    is a plain per-row torch.topk.
+
+    Args:
+        rows: float tensor [num_rows, search_len] of the per-row values.
+        K: number of top elements per row.
+    Returns:
+        indices: sorted int64 tensor [num_rows, K] of the top-K row-major positions.
+    """
+
+    def __call__(self, rows, K):
+        _, indices = torch.topk(rows.float(), K, dim=-1, largest=True, sorted=True)
+        return indices
 
 
 @register_golden

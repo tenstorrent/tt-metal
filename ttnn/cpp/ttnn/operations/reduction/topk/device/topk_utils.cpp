@@ -94,16 +94,18 @@ std::optional<TopKCoreConfig> find_topk_core_config(
         const uint32_t rem = width % split_size;                      // Remainder after even division
         const uint32_t num_cores = (width / split_size) + (rem > 0);  // Cores needed (extra for remainder)
 
-        // Gather cost: memory for collecting results from all cores.
-        // Factor of 2 accounts for intermediate storage during gather phase.
-        // c_4 (gathered values) is allocated with transposed_tile_size (bf16 when input is
-        // bfp8/bfp4) to avoid shared-exponent corruption on inter-core transfer; c_5
-        // (gathered indices) remains index_tile_size.
-        const uint32_t memory_cost_gather = 2 * num_cores * (transposed_tile_size + index_tile_size);
-
-        // Local cost: memory each core needs for its width chunk.
-        // Uses transposed_tile_size (bf16 when input is bfp8/bfp4) for the transposed CB.
-        const uint32_t memory_cost_local = (split_size / tile_width) * (transposed_tile_size + index_tile_size);
+        // Per-core L1 footprint mirroring the multi-core factory's CBs: charge the gather/output
+        // buffers to a single core (they live on one core), not amortised across all cores.
+        const uint32_t Wt_final = (num_cores * std::max(k, tile_width)) / tile_width;
+        const uint32_t Wt_local = split_size / tile_width;
+        const uint32_t shared_cost = 4 * (value_tile_size + index_tile_size) +              // c_0,c_1 input
+                                     Wt_final * (transposed_tile_size + index_tile_size) +  // c_4,c_5 gathered
+                                     2 * index_tile_size;                                   // c_9 local-index out
+        const uint32_t final_core_cost =  // + c_8 value, c_6/c_7 workspace
+            shared_cost + 2 * value_tile_size + Wt_final * (transposed_tile_size + index_tile_size);
+        const uint32_t local_core_cost =  // + c_2/c_3 transposed, c_8 value
+            shared_cost + Wt_local * (transposed_tile_size + index_tile_size) + 2 * transposed_tile_size;
+        const uint32_t per_core_cost = std::max(final_core_cost, local_core_cost);
 
         // Extract core grid dimensions from the available range
         const uint32_t max_x = core_range.end_coord.x - core_range.start_coord.x;
@@ -133,12 +135,12 @@ std::optional<TopKCoreConfig> find_topk_core_config(
             }
         }
         // Comprehensive validation: check all requirements for a valid configuration
-        if (num_cores <= max_cores &&                                                        // Core count feasible
-            memory_cost_gather + (memory_cost_local * num_cores) < (l1_size * num_cores) &&  // Memory fits
-            num_cores > 1 &&                                                                 // Multi-core beneficial
-            split_size >= min_dim &&                                                         // Hardware minimum met
-            contiguous_cores_available &&                                                    // Can arrange cores
-            rem == 0) {  // Perfect division (no remainder)
+        if (num_cores <= max_cores &&      // Core count feasible
+            per_core_cost < l1_size &&     // Memory fits
+            num_cores > 1 &&               // Multi-core beneficial
+            split_size >= min_dim &&       // Hardware minimum met
+            contiguous_cores_available &&  // Can arrange cores
+            rem == 0) {                    // Perfect division (no remainder)
 
             // Create configuration with all the calculated parameters
             TopKCoreConfig config{};
@@ -239,8 +241,10 @@ bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool 
     const uint32_t value_tile_size = tt::tile_size(value_cb_data_format);
     const uint32_t index_tile_size = tt::tile_size(index_cb_data_format);
 
-    // Transposed (c_2) and result-prep (c_4) CBs use bf16 when input is bfp8/bfp4 to
-    // preserve precision during the sort.  Use the larger bf16 tile size for those buffers.
+    // Transposed (c_2) and result-prep (c_4) CBs use bf16 only when input is bfp8/bfp4 (those
+    // are upcast to bf16 for the sort). fp32 is kept at full width for the exact fp32 sort, so
+    // its compute buffers are fp32-sized — modeling that here lets large-K fp32 be rejected
+    // cleanly instead of overflowing L1 at CB-allocation time.
     const uint32_t compute_tile_size =
         (value_cb_data_format == tt::DataFormat::Bfp8_b || value_cb_data_format == tt::DataFormat::Bfp4_b)
             ? tt::tile_size(tt::DataFormat::Float16_b)

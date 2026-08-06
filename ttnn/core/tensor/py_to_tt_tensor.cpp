@@ -9,6 +9,7 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt_stl/unreachable.hpp>
 
 #include <tracy/Tracy.hpp>
@@ -52,6 +53,8 @@ bool can_exec_ops_on_device(DataType type) {
             // Tilize doesn't support uint16.
         case DataType::UINT8:
             // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
+        case DataType::INT8:
+            // https://github.com/tenstorrent/tt-metal/issues/50401 (int8 device typecast/tilize not yet supported)
         case DataType::FP8_E4M3:
             // https://github.com/tenstorrent/tt-metal/issues/43909 (typecast uses TILE, but FP8_E4M3 is RM-only)
             return false;
@@ -66,7 +69,18 @@ bool can_construct_on_device(
     DataType dst_dtype,
     const std::optional<Tile>& optional_tile,
     bool enable_device_typecast,
-    bool preserve_nan_values) {
+    bool preserve_nan_values,
+    const MemoryConfig& memory_config) {
+    // Constructing on device builds the tensor in the *source* layout and converts it with ttnn
+    // ops (tilize / typecast). Those ops rebuild the output MemoryConfig from a handful of named
+    // fields and drop the experimental per-core allocation bit, so the caller would silently get
+    // a lockstep-allocated buffer (#51133). No op understands per-core allocation today (#51354),
+    // so there is nothing to preserve the bit through. Build on host instead: the subsequent
+    // to_device() applies the caller's memory_config directly, with no op in between.
+    if (experimental::per_core_allocation::is_per_core_allocation(memory_config)) {
+        return false;
+    }
+
     bool res = device != nullptr && !device->is_remote_only() &&
                (device->get_active_sub_device_manager_id() == device->get_default_sub_device_manager_id()) &&
                tensor_shape.volume() > 0 && can_exec_ops_on_device(src_dtype) && can_exec_ops_on_device(dst_dtype) &&
@@ -96,8 +110,12 @@ bool can_construct_on_single_device(
     // Logical shape must match physical shape for the tensor to be constructed on the device(no padding
     // required). tt::tt_metal::TensorSpec creation must follow after memory_config.is_sharded() check to avoid fatal
     // error
-    if (!tt::tt_metal::logical_matches_physical(tt::tt_metal::TensorSpec(tensor_shape, src_tensor_layout))) {
-        return false;
+    {
+        const auto candidate_spec = tt::tt_metal::TensorSpec(tensor_shape, src_tensor_layout);
+        if (!(candidate_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+              candidate_spec.logical_2d_shape() == candidate_spec.physical_shape())) {
+            return false;
+        }
     }
 
     // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
@@ -105,11 +123,7 @@ bool can_construct_on_single_device(
     // default alignment is used, the tensors of rank 5 and above are squeezed down to the rank 4 in
     // `build_ndiml_tilize`, which causes the padding loss, and subqequently the failure to validate
     // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
-    if (tensor_shape.rank() > 4) {
-        return false;
-    }
-
-    return true;
+    return tensor_shape.rank() <= 4;
 }
 
 // Estimates peak per-bank memory during the on-device conversion path and returns true when it
@@ -238,7 +252,14 @@ Tensor create_tt_tensor_from_host_data(
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
 
         const bool construct_on_device = can_construct_on_device(
-            device, tensor_shape, src_dtype, dst_dtype, optional_tile, enable_device_typecast, preserve_nan_values);
+            device,
+            tensor_shape,
+            src_dtype,
+            dst_dtype,
+            optional_tile,
+            enable_device_typecast,
+            preserve_nan_values,
+            memory_config);
 
         if (mesh_mapper != nullptr) {
             const auto device_shard_shape =
@@ -310,6 +331,7 @@ Tensor create_tt_tensor_from_host_data(
         case DataType::UINT32: return create_tensor_from_host_buffer.operator()<uint32_t>();
         case DataType::INT32: return create_tensor_from_host_buffer.operator()<int32_t>();
         case DataType::UINT8: return create_tensor_from_host_buffer.operator()<uint8_t>();
+        case DataType::INT8: return create_tensor_from_host_buffer.operator()<int8_t>();
         case DataType::UINT16: return create_tensor_from_host_buffer.operator()<uint16_t>();
         case DataType::FLOAT32: return create_tensor_from_host_buffer.operator()<float>();
         case DataType::BFLOAT16: return create_tensor_from_host_buffer.operator()<bfloat16>();
@@ -323,6 +345,7 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
             case ttnn::PyDType::FLOAT32: return DataType::FLOAT32;
             case ttnn::PyDType::BFLOAT16: return DataType::BFLOAT16;
             case ttnn::PyDType::INT32: return DataType::INT32;
+            case ttnn::PyDType::INT8: return DataType::INT8;
             case ttnn::PyDType::UINT32: return DataType::UINT32;
             case ttnn::PyDType::UINT8: return DataType::UINT8;
             case ttnn::PyDType::UINT16: return DataType::UINT16;
@@ -332,7 +355,6 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
             case ttnn::PyDType::FLOAT16:
             case ttnn::PyDType::INT64:
             case ttnn::PyDType::INT16:
-            case ttnn::PyDType::INT8:
             default: return DataType::INVALID;
         }
         ttsl::unreachable();

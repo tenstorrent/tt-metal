@@ -25,7 +25,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
@@ -101,14 +101,14 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
     const uint32_t epc_a = (num_entries_a + num_consumers - 1) / num_consumers;
     const uint32_t epc_b = (num_entries_b + num_consumers - 1) / num_consumers;
 
-    MeshTensor in_a  = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a), TensorTopology{});
-    MeshTensor in_b  = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b), TensorTopology{});
-    MeshTensor out_a = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a), TensorTopology{});
-    MeshTensor out_b = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b), TensorTopology{});
+    MeshTensor in_a =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a));
+    MeshTensor in_b =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b));
+    MeshTensor out_a =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a));
+    MeshTensor out_b =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b));
 
     // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
     DataMovementHardwareConfig producer_cfg;
@@ -312,16 +312,15 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     const uint32_t epp = num_entries;
     const uint32_t epc = num_entries;
 
-    MeshTensor in_a  = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries), TensorTopology{});
-    MeshTensor in_b  = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries), TensorTopology{});
-    MeshTensor out_a = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries), TensorTopology{});
-    MeshTensor out_b = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries), TensorTopology{});
-    MeshTensor ring  = MeshTensor::allocate_on_device(
-        *mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries), TensorTopology{});
+    MeshTensor in_a =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+    MeshTensor in_b =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+    MeshTensor out_a =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+    MeshTensor out_b =
+        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+    MeshTensor ring = MeshTensor::allocate_on_device(*mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries));
 
     DataMovementHardwareConfig producer_cfg;
     DataMovementHardwareConfig consumer_cfg;
@@ -470,6 +469,171 @@ TEST_F(MeshDeviceFixture, AliasDFBDataFlow1Sx1S) {
         devices_.at(0), NodeCoord{0, 0},
         /*entry_size_a=*/512, /*num_entries_a=*/8,
         /*entry_size_b=*/256, /*num_entries_b=*/16);
+}
+
+// Two WorkUnits on disjoint halves, each with its own aliased DFB pair. Slot packing must reuse
+// low slots across halves on WH/BH, and each half's alias pair must still share L1 and round-trip.
+TEST_F(MeshDeviceFixture, AliasDFBDisjointHalvesDataFlow) {
+    auto& mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+    if (device->compute_with_storage_grid_size().x < 2) {
+        GTEST_SKIP() << "Needs at least two worker nodes in a row";
+    }
+
+    const NodeCoord node_a{0, 0};
+    const NodeCoord node_b{1, 0};
+    constexpr uint32_t kEntryA = 512;
+    constexpr uint32_t kEntriesA = 8;
+    constexpr uint32_t kEntryB = 256;
+    constexpr uint32_t kEntriesB = 16;
+
+    auto left = make_alias_dfb_program_spec(
+        mesh_device, node_a, kEntryA, kEntriesA, kEntryB, kEntriesB, /*num_producers=*/1, /*num_consumers=*/1);
+    auto right = make_alias_dfb_program_spec(
+        mesh_device, node_b, kEntryA, kEntriesA, kEntryB, kEntriesB, /*num_producers=*/1, /*num_consumers=*/1);
+
+    // Rename right-half entities so the combined ProgramSpec has unique ids.
+    auto rename_dfb = [](DataflowBufferSpec& dfb, const std::string& new_name, const std::string& alias_name) {
+        dfb.unique_id = DFBSpecName{new_name};
+        dfb.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{alias_name}}};
+    };
+    auto rename_kernel = [](KernelSpec& k,
+                            const std::string& new_name,
+                            const std::string& dfb_a,
+                            const std::string& dfb_b,
+                            const std::string& in_tensor_a,
+                            const std::string& in_tensor_b,
+                            const std::string& out_tensor_a,
+                            const std::string& out_tensor_b) {
+        k.unique_id = KernelSpecName{new_name};
+        for (auto& b : k.dfb_bindings) {
+            if (b.dfb_spec_name.get() == "dfb_a") {
+                b.dfb_spec_name = DFBSpecName{dfb_a};
+            } else if (b.dfb_spec_name.get() == "dfb_b") {
+                b.dfb_spec_name = DFBSpecName{dfb_b};
+            }
+        }
+        for (auto& b : k.tensor_bindings) {
+            const auto& n = b.tensor_parameter_name.get();
+            if (n == "in_tensor_a") {
+                b.tensor_parameter_name = TensorParamName{in_tensor_a};
+            } else if (n == "in_tensor_b") {
+                b.tensor_parameter_name = TensorParamName{in_tensor_b};
+            } else if (n == "out_tensor_a") {
+                b.tensor_parameter_name = TensorParamName{out_tensor_a};
+            } else if (n == "out_tensor_b") {
+                b.tensor_parameter_name = TensorParamName{out_tensor_b};
+            }
+        }
+    };
+
+    // Left keeps dfb_a/dfb_b; right becomes dfb_c/dfb_d.
+    rename_dfb(right.spec.dataflow_buffers[0], "dfb_c", "dfb_d");
+    rename_dfb(right.spec.dataflow_buffers[1], "dfb_d", "dfb_c");
+    rename_kernel(
+        right.spec.kernels[0],
+        "producer_b",
+        "dfb_c",
+        "dfb_d",
+        "in_tensor_c",
+        "in_tensor_d",
+        "out_tensor_c",
+        "out_tensor_d");
+    rename_kernel(
+        right.spec.kernels[1],
+        "consumer_b",
+        "dfb_c",
+        "dfb_d",
+        "in_tensor_c",
+        "in_tensor_d",
+        "out_tensor_c",
+        "out_tensor_d");
+    right.spec.work_units[0].name = "wu_b";
+    right.spec.work_units[0].kernels = {KernelSpecName{"producer_b"}, KernelSpecName{"consumer_b"}};
+    right.spec.tensor_parameters[0].unique_id = TensorParamName{"in_tensor_c"};
+    right.spec.tensor_parameters[1].unique_id = TensorParamName{"in_tensor_d"};
+    right.spec.tensor_parameters[2].unique_id = TensorParamName{"out_tensor_c"};
+    right.spec.tensor_parameters[3].unique_id = TensorParamName{"out_tensor_d"};
+
+    left.spec.work_units[0].name = "wu_a";
+    left.spec.name = "alias_dfb_disjoint_halves";
+    left.spec.kernels.push_back(right.spec.kernels[0]);
+    left.spec.kernels.push_back(right.spec.kernels[1]);
+    left.spec.dataflow_buffers.push_back(right.spec.dataflow_buffers[0]);
+    left.spec.dataflow_buffers.push_back(right.spec.dataflow_buffers[1]);
+    left.spec.tensor_parameters.push_back(right.spec.tensor_parameters[0]);
+    left.spec.tensor_parameters.push_back(right.spec.tensor_parameters[1]);
+    left.spec.tensor_parameters.push_back(right.spec.tensor_parameters[2]);
+    left.spec.tensor_parameters.push_back(right.spec.tensor_parameters[3]);
+    left.spec.work_units.push_back(right.spec.work_units[0]);
+
+    // Point tensor_parameters specs at the right-half MeshTensors' layouts (already set from right).
+    Program program = MakeProgramFromSpec(*mesh_device, left.spec);
+
+    const bool is_quasar = device->arch() == ARCH::QUASAR;
+    // Each half has two aliased DFBs that conflict with each other → slots 0 and 1, reused across halves.
+    EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"))->device_slot, 0u);
+    EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"))->device_slot, 1u);
+    EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_c"))->device_slot, 0u);
+    EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_d"))->device_slot, 1u);
+
+    auto rtas = [&](const NodeCoord& node, uint32_t epc_a, uint32_t epc_b) {
+        return MakeRuntimeArgsForSingleNode(
+            node,
+            {
+                {"chunk_offset_a", 0u},
+                {"chunk_offset_b", 0u},
+                {"entries_per_core_a", epc_a},
+                {"entries_per_core_b", epc_b},
+            });
+    };
+
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        {.kernel = KernelSpecName{"producer"}, .runtime_arg_values = rtas(node_a, kEntriesA, kEntriesB)},
+        {.kernel = KernelSpecName{"consumer"}, .runtime_arg_values = rtas(node_a, kEntriesA, kEntriesB)},
+        {.kernel = KernelSpecName{"producer_b"}, .runtime_arg_values = rtas(node_b, kEntriesA, kEntriesB)},
+        {.kernel = KernelSpecName{"consumer_b"}, .runtime_arg_values = rtas(node_b, kEntriesA, kEntriesB)},
+    };
+    run_params.tensor_args = {
+        {TensorParamName{"in_tensor_a"}, TensorArgument{left.in_a}},
+        {TensorParamName{"in_tensor_b"}, TensorArgument{left.in_b}},
+        {TensorParamName{"out_tensor_a"}, TensorArgument{left.out_a}},
+        {TensorParamName{"out_tensor_b"}, TensorArgument{left.out_b}},
+        {TensorParamName{"in_tensor_c"}, TensorArgument{right.in_a}},
+        {TensorParamName{"in_tensor_d"}, TensorArgument{right.in_b}},
+        {TensorParamName{"out_tensor_c"}, TensorArgument{right.out_a}},
+        {TensorParamName{"out_tensor_d"}, TensorArgument{right.out_b}},
+    };
+    SetProgramRunArgs(program, run_params);
+
+    const uint32_t words_a = kEntriesA * kEntryA / sizeof(uint32_t);
+    const uint32_t words_b = kEntriesB * kEntryB / sizeof(uint32_t);
+    auto input_la = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_a);
+    auto input_lb = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_b);
+    auto input_ra = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_a);
+    auto input_rb = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_b);
+
+    detail::WriteToBuffer(*left.in_a.mesh_buffer().get_reference_buffer(), input_la);
+    detail::WriteToBuffer(*left.in_b.mesh_buffer().get_reference_buffer(), input_lb);
+    detail::WriteToBuffer(*right.in_a.mesh_buffer().get_reference_buffer(), input_ra);
+    detail::WriteToBuffer(*right.in_b.mesh_buffer().get_reference_buffer(), input_rb);
+    if (is_quasar) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+
+    std::vector<uint32_t> out_la, out_lb, out_ra, out_rb;
+    detail::ReadFromBuffer(*left.out_a.mesh_buffer().get_reference_buffer(), out_la);
+    detail::ReadFromBuffer(*left.out_b.mesh_buffer().get_reference_buffer(), out_lb);
+    detail::ReadFromBuffer(*right.out_a.mesh_buffer().get_reference_buffer(), out_ra);
+    detail::ReadFromBuffer(*right.out_b.mesh_buffer().get_reference_buffer(), out_rb);
+
+    EXPECT_EQ(out_la, input_la) << "left half DFB_A round-trip mismatch";
+    EXPECT_EQ(out_lb, input_lb) << "left half DFB_B (alias) round-trip mismatch";
+    EXPECT_EQ(out_ra, input_ra) << "right half DFB_C round-trip mismatch";
+    EXPECT_EQ(out_rb, input_rb) << "right half DFB_D (alias) round-trip mismatch";
 }
 
 TEST_F(MeshDeviceFixture, AliasDFBDataFlow2Sx4S) {

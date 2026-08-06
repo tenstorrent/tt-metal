@@ -189,6 +189,25 @@ void kernel_main() {
     constexpr uint32_t transpose_b = get_compile_time_arg_val(6);
     constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(7));
 
+    // Circular-buffer indices (compile-time). Declared up-front so the one-time HW startup below
+    // runs before ANY circular-buffer or Compute API activity, per the compute_kernel_hw_startup
+    // contract (its MMIO config writes require idle execution units).
+    constexpr uint32_t in0_cb = tt::CBIndex::c_0;
+    constexpr uint32_t in1_cb = tt::CBIndex::c_1;
+    constexpr uint32_t out_cb = tt::CBIndex::c_2;
+    constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
+
+    // When transpose_a is set, the dataflow writes the raw [K, M]-stored block into in0_cb,
+    // and the compute kernel transposes each tile into in0_transposed_cb (c_7), which is
+    // what the matmul actually consumes. `in0_cb_for_matmul` selects the right one.
+    constexpr uint32_t in0_transposed_cb = tt::CBIndex::c_7;
+    constexpr uint32_t in0_cb_for_matmul = transpose_a ? in0_transposed_cb : in0_cb;
+
+    // One-time HW startup, before any other Compute API or circular-buffer operation. Matmul maps
+    // in0 -> SrcB and in1 -> SrcA, hence SrcOrder::Reverse. Per-block matmul init is done via
+    // matmul_block_init below.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_for_matmul, in1_cb, intermediate_cb);
+
     uint32_t argidx = 0;
     // OFFSET_ROW_MODE overrides M_start/M_end/M_blocks_per_core via cb_ctrl below.
     uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -219,23 +238,10 @@ void kernel_main() {
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
 
-    constexpr uint32_t in0_cb = tt::CBIndex::c_0;
-    constexpr uint32_t in1_cb = tt::CBIndex::c_1;
-    constexpr uint32_t out_cb = tt::CBIndex::c_2;
-    constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
-
-    // When transpose_a is set, the dataflow writes the raw [K, M]-stored block into in0_cb,
-    // and the compute kernel transposes each tile into in0_transposed_cb (c_7), which is
-    // what the matmul actually consumes. `in0_cb_for_matmul` selects the right one.
-    constexpr uint32_t in0_transposed_cb = tt::CBIndex::c_7;
-    constexpr uint32_t in0_cb_for_matmul = transpose_a ? in0_transposed_cb : in0_cb;
-
     CircularBuffer cb_in0_mm(in0_cb_for_matmul);
     CircularBuffer cb_in1(in1_cb);
     CircularBuffer cb_out(out_cb);
     CircularBuffer cb_interm(intermediate_cb);
-
-    mm_init(in0_cb_for_matmul, in1_cb, intermediate_cb);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -263,14 +269,14 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            mm_block_init_short(
+            matmul_block_init(
                 in0_cb_for_matmul,
                 in1_cb,
                 transpose_b /*transpose*/,
                 current_subblock_w /*ct_dim*/,
                 current_subblock_h /*rt_dim*/,
                 K_block_tiles /*kt_dim*/);
-            reconfig_data_format(in1_cb, in0_cb_for_matmul);
+            reconfig_data_format<SrcOrder::Reverse>(in0_cb_for_matmul, in1_cb);
             pack_reconfig_data_format(intermediate_cb);
             // Disable L1 packer accumulator before k=0 pack so matmul packs cleanly over
             // intermediate_cb instead of adding onto any leftover state from a prior program.
@@ -298,12 +304,13 @@ void kernel_main() {
                         transpose_wh_init_short(in0_cb);
                         pack_reconfig_data_format(in0_transposed_cb);
                         transpose_in0_block_streamed<in0_block_num_tiles>(in0_cb, in0_transposed_cb);
-                        // Restore matmul state. The "_with_dt" variant handles the srcA data
-                        // format switch from in0_cb to in0_cb_for_matmul in one go.
-                        mm_block_init_short_with_dt(
+                        // Restore matmul state. reconfig_data_format_srca switches SrcA off the
+                        // transpose source (in0_cb) back to the matmul operand (in1 feeds SrcA),
+                        // then matmul_block_init re-programs the matmul MOP.
+                        reconfig_data_format_srca(in0_cb, in1_cb);
+                        matmul_block_init(
                             in0_cb_for_matmul,
                             in1_cb,
-                            in0_cb,
                             transpose_b,
                             current_subblock_w,
                             current_subblock_h,

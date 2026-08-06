@@ -254,10 +254,10 @@ def workflow_job_label(job: RecentJob) -> str:
 def slack_runner_table_header() -> list[dict[str, str]]:
     return [
         slack_raw_text_cell("Job"),
+        slack_raw_text_cell("Failures"),
         slack_raw_text_cell("Status"),
         slack_raw_text_cell("Started"),
         slack_raw_text_cell("Scanned?"),
-        slack_raw_text_cell("Failures"),
         slack_raw_text_cell("Workflow / job"),
     ]
 
@@ -284,10 +284,10 @@ def slack_runner_table_row(result: JobScanResult) -> list[dict[str, Any]]:
     job = result.job
     return [
         slack_link_cell(job.html_url, job.job_id or "open"),
+        slack_raw_text_cell(failure_summary_for_slack_cell(result)),
         slack_raw_text_cell(job.conclusion or job.status or "unknown"),
         slack_raw_text_cell(compact_started_at(job.started_at)),
         slack_flag_cell("Y" if result.log_checked else "N"),
-        slack_raw_text_cell(failure_summary_for_slack_cell(result)),
         slack_raw_text_cell(workflow_job_label(job)),
     ]
 
@@ -364,10 +364,10 @@ def slack_runner_table_block(rows: list[list[dict[str, Any]]]) -> dict[str, Any]
         "type": "table",
         "column_settings": [
             {"is_wrapped": False},
+            {"is_wrapped": True},
             {"is_wrapped": False},
             {"is_wrapped": False},
             {"align": "center"},
-            {"is_wrapped": True},
             {"is_wrapped": True},
         ],
         "rows": [slack_runner_table_header(), *rows],

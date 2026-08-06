@@ -44,15 +44,13 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Recalibrated 2026-07-30 on BH LoudBox 8x1 after routed expert optimization with removing prezeroing
-        # Was 17_151_588.
-        expected_ns_8x1=15_506_174,
+        # Recalibrated 2026-07-27 on BH LoudBox 8x1 after routed expert optimization with removing prezeroing
+        # Was 15_506_174.
+        expected_ns_8x1=14_549_108,
         model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Recalibrated 2026-07-26 on BH LoudBox 2x4 for the same in-place direct-write
-        # change (no full-buffer device fill per layer): 35.13 ms -> 32.31 ms. UP_SPLIT
-        # was already baked in (39_194_517 -> 35_127_772). Was 35_127_772.
-        expected_ns_2x4=23_956_009,
+        # Recalibrated 2026-07-27 on BH LoudBox 2x4 for. Was 23_956_009.
+        expected_ns_2x4=15_954_784,
         model_name_2x4="deepseek_v3_moe_lb_2x4_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
@@ -91,7 +89,7 @@ def test_deepseek_v3_moe_perf_galaxy_pad50():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad50,
-        expected_device_perf_ns_per_iteration=15_719_590,  # Recalibrated 2026-07-26 (perf improvement, was 27_159_208).
+        expected_device_perf_ns_per_iteration=14_107_228,  # Recalibrated 2026-07-27 (perf improvement, was 15_719_590).
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4_pad50",
         num_iterations=1,

@@ -317,7 +317,7 @@ inline void _update_dest_register_offset_()
 // Semaphores mapping and trisc space -> tensix space conversion
 struct semaphore
 {
-    // The math thread is always the middleman, for regular unpack and for unpack_to_dest.
+    // The math thread is the middleman, for regular unpack and for unpack_to_dest.
     // When unpacking to dest, math thread doesn't produce data, it just bridges UNPACK_MATH -> MATH_PACK.
     // Packer only listens on MATH_PACK, so something has to translate the unpack completion into a
     // pack-visible event. Math being the forwarder is also what makes future fused ops cheap:
@@ -326,8 +326,10 @@ struct semaphore
     // Keep pairwise naming with producer_consumer direction:
     // - MATH_PACK = math->pack
     // - UNPACK_MATH = unpack->math
+    // - PACK_UNPACK = pack->unpack
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
+    constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {

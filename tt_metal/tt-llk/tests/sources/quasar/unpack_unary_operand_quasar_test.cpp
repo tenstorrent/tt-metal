@@ -37,9 +37,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        if (unpack_to_dest)
+        if constexpr (unpack_to_dest)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+            {
+                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+            }
+            else
+            {
+                // CFG persists across run types, so non-L1_TO_L1 runs must not
+                // inherit the unpack-to-dest handshake.
+                set_up_zero_dest_dvalid_handshake_for_unpack();
+            }
             _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
         }
         else
@@ -47,8 +56,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        const auto tensor_shape_A   = tensor_shape_from_params(params);
-        constexpr bool TRANSPOSE_EN = UNPACK_TRANSPOSE_FACES && UNPACK_TRANSPOSE_WITHIN_FACE;
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
+        constexpr bool TRANSPOSE_EN               = UNPACK_TRANSPOSE_FACES && UNPACK_TRANSPOSE_WITHIN_FACE;
 
         unsigned l1_addr_16B;
         if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_A || UNPACKER_ENGINE_SEL == p_unpacr::UNP_DEST)
@@ -63,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc(tensor_shape_A, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
 
         _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
-        if (is_fp32_dest_acc_en && !unpack_to_dest)
+        if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
             _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
         }
@@ -77,7 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -86,19 +95,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
             {
-                _perf_unpack_loop_set_valid<true, false>(LOOP_FACTOR);
+                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(LOOP_FACTOR);
             }
             else
             {
-                _perf_unpack_loop_set_valid<false, true>(LOOP_FACTOR);
+                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(LOOP_FACTOR);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, tensor_shape_A);
-                if (unpack_to_dest)
+                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, tensor_shape_A);
+                if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_unpack_dest_dvalid_section_done_<dest_sync>();
                 }
@@ -139,8 +148,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         {
             ZONE_SCOPED("INIT")
-            // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
-            if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+            // Only end-to-end and math-isolate runs use the FPU→PACK
+            // dest-dvalid handshake.
+            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
             }
@@ -161,11 +171,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
                 {
-                    _perf_math_loop_clear_valid<true, false>(LOOP_FACTOR * TILE_CNT);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
                 else
                 {
-                    _perf_math_loop_clear_valid<false, true>(LOOP_FACTOR * TILE_CNT);
+                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT);
                 }
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -217,15 +227,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
+        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
-        else
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            if (unpack_to_dest)
+            if constexpr (unpack_to_dest)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
             }
@@ -235,7 +245,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         tdma_descriptor_t tdma_desc =
             ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
@@ -247,7 +257,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const auto tensor_shape_A = tensor_shape_from_params(params);
+        const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
@@ -257,14 +267,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(0, 0, tensor_shape_A);
+                _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, tensor_shape_A);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(0, 0, tensor_shape_A);
+                _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, tensor_shape_A);
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }

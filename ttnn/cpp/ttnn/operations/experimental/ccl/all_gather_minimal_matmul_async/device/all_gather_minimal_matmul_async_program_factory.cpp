@@ -575,6 +575,7 @@ all_gather_minimal_matmul_async_factory_helper(
     };
 
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(num_mux_cores);
     for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
         uint32_t dir = mux_id % 2;  // 2 being the number of directions
         if (mux_connection_valid(dir)) {
@@ -723,6 +724,7 @@ all_gather_minimal_matmul_async_factory_helper(
         }
 
         std::vector<CoreRange> fsdp_mux_core_ranges;
+        fsdp_mux_core_ranges.reserve(num_mux_cores);
         for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
             uint32_t dir = mux_id % 2;
             if (fsdp_mux_connection_valid(dir)) {
