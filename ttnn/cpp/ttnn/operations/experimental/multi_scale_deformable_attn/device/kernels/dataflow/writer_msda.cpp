@@ -3,14 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Writer kernel for fused multi-scale deformable attention (FPU path,
-// 32-query batched). Each output tile from compute carries up to 32
-// query outputs stacked vertically. For each tile, copy v_rows rows out
-// of the tile faces and NoC-write each as one output stick (D=32 bf16).
+// 32-query batched). Each output block from compute carries up to 32
+// query outputs stacked vertically across N_D_TILES tiles laid side by
+// side (32 D-values per tile). For each block, gather each query row's
+// D values across the d-tiles and NoC-write them as one output stick.
 //
 // Tile face layout (bf16, 32x32 = 4 faces of 16x16, 2048 B):
 //   row r ∈ [0, 16): TL[r*32..r*32+31] + TR[512+r*32..512+r*32+31]
 //   row r ∈ [16, 32): BL[1024+(r-16)*32..] + BR[1536+(r-16)*32..]
-// One row = 32 bf16 = D values laid out as the two 32-byte halves above.
+// D-tile k holds value columns [k*32, k*32+31] of each query row.
 //
 // Per-tile runtime args (2 per tile): (start_stick_id, v_rows).
 // start_stick_id_t = n_t * Q + q_start_t; rows 0..v_rows-1 are written
@@ -27,11 +28,19 @@
 constexpr uint32_t output_tile_cb_index = get_compile_time_arg_val(0);
 constexpr uint32_t output_scratch_cb_index = get_compile_time_arg_val(1);
 constexpr uint32_t output_stick_nbytes = get_compile_time_arg_val(2);
+constexpr uint32_t D = get_compile_time_arg_val(3);
 
-constexpr auto output_args = TensorAccessorArgs<3>();
+constexpr auto output_args = TensorAccessorArgs<4>();
 
 constexpr uint32_t HALF_STICK_NBYTES = 32;
 constexpr uint32_t HALF_WORDS = HALF_STICK_NBYTES / sizeof(uint32_t);
+constexpr uint32_t TILE_NBYTES = 2048;  // bf16 32x32 tile
+
+// Derived from D (not output_stick_nbytes, which is alignment-padded).
+constexpr uint32_t STICK_WORDS = D / 2;
+constexpr uint32_t WORDS_PER_TILE_ROW = 2 * HALF_WORDS;
+constexpr uint32_t N_D_TILES = (STICK_WORDS + WORDS_PER_TILE_ROW - 1) / WORDS_PER_TILE_ROW;
+static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
 
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -51,22 +60,27 @@ void kernel_main() {
         const uint32_t start_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t v_rows = get_arg_val<uint32_t>(arg_idx++);
 
-        output_tile_cb.wait_front(1);
+        output_tile_cb.wait_front(N_D_TILES);
         const uint32_t tile_l1 = output_tile_cb.get_read_ptr();
 
         for (uint32_t r = 0; r < v_rows; ++r) {
             const auto off = msda_tile_layout::tile_row_offsets(r);
-            const uint32_t src_lo = tile_l1 + off.lo;
-            const uint32_t src_hi = tile_l1 + off.hi;
-
             CoreLocalMem<volatile uint32_t> dst(scratch_l1);
-            CoreLocalMem<volatile uint32_t> sl(src_lo);
-            CoreLocalMem<volatile uint32_t> sh(src_hi);
-            for (uint32_t i = 0; i < HALF_WORDS; ++i) {
-                dst[i] = sl[i];
-            }
-            for (uint32_t i = 0; i < HALF_WORDS; ++i) {
-                dst[HALF_WORDS + i] = sh[i];
+            for (uint32_t k = 0; k < N_D_TILES; ++k) {
+                const uint32_t base = k * WORDS_PER_TILE_ROW;
+                const uint32_t words_k =
+                    (STICK_WORDS - base < WORDS_PER_TILE_ROW) ? (STICK_WORDS - base) : WORDS_PER_TILE_ROW;
+                const uint32_t lo_words = words_k < HALF_WORDS ? words_k : HALF_WORDS;
+                const uint32_t hi_words = words_k - lo_words;
+                const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
+                CoreLocalMem<volatile uint32_t> sl(ktile_l1 + off.lo);
+                CoreLocalMem<volatile uint32_t> sh(ktile_l1 + off.hi);
+                for (uint32_t i = 0; i < lo_words; ++i) {
+                    dst[base + i] = sl[i];
+                }
+                for (uint32_t i = 0; i < hi_words; ++i) {
+                    dst[base + HALF_WORDS + i] = sh[i];
+                }
             }
 
             CoreLocalMem<uint32_t> src(scratch_l1);
@@ -74,6 +88,6 @@ void kernel_main() {
             noc.async_writes_flushed();
         }
         noc.async_write_barrier();
-        output_tile_cb.pop_front(1);
+        output_tile_cb.pop_front(N_D_TILES);
     }
 }
