@@ -593,7 +593,12 @@ bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
     size_t ready = 0;
     while (ready < dev_state.staged.size()) {
         const ProgramRealtimeRecord& first = dev_state.staged[ready];
-        const auto bracketing = dev_state.clock_sync->probes_bracketing(first.start_timestamp, first.end_timestamp);
+        // Two separate questions: has the clock been read past this record yet, and which probes place its start.
+        const auto covered_through = dev_state.clock_sync->coverage_past(first.end_timestamp);
+        if (!covered_through.has_value()) {
+            break;
+        }
+        const auto bracketing = dev_state.clock_sync->probes_bracketing(first.start_timestamp);
         if (!bracketing.has_value()) {
             break;
         }
@@ -603,8 +608,10 @@ bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
             break;
         }
 
-        // Records are produced in order, so everything else this pair covers is contiguous.
-        while (ready < dev_state.staged.size() && dev_state.staged[ready].end_timestamp <= closing.ticks) {
+        // Records are produced in order, so everything this pair places and this coverage completes is contiguous. A
+        // record whose start the pair no longer brackets goes back around for a tighter one.
+        while (ready < dev_state.staged.size() && dev_state.staged[ready].end_timestamp <= *covered_through &&
+               dev_state.staged[ready].start_timestamp <= closing.ticks) {
             dev_state.staged[ready].frequency = chord->frequency;
             dev_state.staged[ready].clock_sync = chord->mapping;
             dev_state.staged[ready].clock_sync.device_cycle_offset =

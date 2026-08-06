@@ -135,10 +135,15 @@ public:
         std::chrono::nanoseconds bracket{};
     };
 
-    // The tightest pair of probes around [start_ticks, end_ticks], or nullopt while no probe has yet read past the
-    // record.
-    [[nodiscard]] std::optional<std::pair<Anchor, Anchor>> probes_bracketing(
-        uint64_t start_ticks, uint64_t end_ticks) const;
+    // The device timestamp of the oldest probe that has read past `ticks`, or nullopt while none has. A record is only
+    // publishable once its end is covered: that is what says the clock is known on both sides of it. Receiver thread.
+    [[nodiscard]] std::optional<uint64_t> coverage_past(uint64_t ticks) const;
+
+    // The tightest pair of probes surrounding `ticks` that is still wide enough to take a slope from. Keyed on the one
+    // timestamp being placed, not on the record as a whole: a chord wide enough to bracket a whole record is as wide as
+    // that record, and the curvature a DVFS step leaves scales with the span, so placing a 1.3ms program's start on a
+    // 1.8ms chord charges it for a rate change that happened nowhere near it. Receiver thread.
+    [[nodiscard]] std::optional<std::pair<Anchor, Anchor>> probes_bracketing(uint64_t ticks) const;
 
     // A rate measured across the whole retained history rather than across one chord.
     struct BaselineRate {

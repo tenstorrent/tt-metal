@@ -249,8 +249,25 @@ std::optional<RealtimeProfilerClockSync::BaselineRate> RealtimeProfilerClockSync
     };
 }
 
+std::optional<uint64_t> RealtimeProfilerClockSync::coverage_past(uint64_t ticks) const {
+    uint64_t lo = oldest_probe();
+    uint64_t hi = probes_end_;
+    while (lo < hi) {
+        const uint64_t mid = lo + (hi - lo) / 2;
+        if (probe_at(mid).ticks < ticks) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if (lo == probes_end_) {
+        return std::nullopt;
+    }
+    return probe_at(lo).ticks;
+}
+
 std::optional<std::pair<RealtimeProfilerClockSync::Anchor, RealtimeProfilerClockSync::Anchor>>
-RealtimeProfilerClockSync::probes_bracketing(uint64_t start_ticks, uint64_t end_ticks) const {
+RealtimeProfilerClockSync::probes_bracketing(uint64_t ticks) const {
     const uint64_t probes_begin_ = oldest_probe();
     if (probes_end_ - probes_begin_ < 2) {
         return std::nullopt;
@@ -269,23 +286,22 @@ RealtimeProfilerClockSync::probes_bracketing(uint64_t start_ticks, uint64_t end_
         return lo;
     };
 
-    // Far side: the oldest probe that still reads past the record, which keeps the chord as short as it can be.
-    uint64_t close_index = first_at_or_past(probes_begin_, probes_end_, end_ticks);
+    // Far side: the oldest probe at or past the timestamp, which keeps the chord as short as it can be.
+    uint64_t close_index = first_at_or_past(probes_begin_, probes_end_, ticks);
     if (close_index == probes_end_) {
-        // No probe has read past this record yet. It waits, which is the one thing worth waiting for.
         return std::nullopt;
     }
     if (close_index == probes_begin_) {
-        // The record predates everything retained; the two oldest are the closest thing to a chord around it.
+        // The timestamp predates everything the ring still holds; the two oldest are the closest thing to a chord
+        // around it.
         close_index = probes_begin_ + 1;
     }
 
-    // Near side: the newest probe at or before the record that is also far enough from the far side to take a slope
-    // from. The span requirement is applied here so a pair is never offered that plan_chord_mapping would refuse.
+    // Near side: the newest probe before the far side that is far enough from it to take a slope from. The span
+    // requirement is applied here so a pair is never offered that plan_chord_mapping would refuse.
     const Anchor& close_anchor = probe_at(close_index);
-    const uint64_t start_index = first_at_or_past(probes_begin_, close_index, start_ticks + 1);
     uint64_t open_index = probes_begin_;
-    for (uint64_t i = start_index; i-- > probes_begin_;) {
+    for (uint64_t i = close_index; i-- > probes_begin_;) {
         if (close_anchor.host - probe_at(i).host >= sync_interval() / 2) {
             open_index = i;
             break;
