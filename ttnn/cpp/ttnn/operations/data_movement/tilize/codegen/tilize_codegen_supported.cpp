@@ -113,41 +113,29 @@ struct DemotedCase {
 
 // UNGENERALIZED exact matches: no mechanism was identified for these, so each row is one measured
 // configuration rather than a condition. This is the floor when analysis finds no predicate, not a
-// preferred form.
+// preferred form. A row leaves this table only when a measurement on the ported kernel clears it —
+// a demoted case still runs under implementation=codegen, so verify keeps measuring every row here.
+//
+// Every row here has Wt >= 2; the whole Wt == 1 class is covered by the predicate in is_demoted()
+// below rather than enumerated, which is why several measured Wt == 1 shapes are absent.
 //
 // Comments name the ledger shape each row came from; shapes that normalize to the same NC/Ht/Wt
-// are one row, since they produce the same program.
-// Rows whose Wt is 1 are here only because their total_Ht exceeds the core count, which puts them
-// outside the general Wt == 1 predicate below (that one is deliberately bounded to one tile-row per
-// core); every Wt == 1 case at or under the bound is covered there and is absent here.
+// are one row, since they produce the same program. Placement is part of the key because the
+// ledger splits on it: [32, 64] uint16 is demoted on a DRAM output and cleared the gate on an L1
+// one, so the DRAM row cannot be widened to both.
 constexpr DemotedCase kUngeneralizedDemotedCases[] = {
-    // [1, 32, 64] and [32, 64] — NC 1, Ht 1, Wt 2. Same tile geometry, one row per placement.
+    // [1, 32, 64] and [32, 64] — NC 1, Ht 1, Wt 2. Same tile geometry, one row.
     {1, 1, 2, DataType::UINT16, BufferType::DRAM},
-    {1, 1, 2, DataType::UINT16, BufferType::L1},
-    // [1, 1, 64, 64] — NC 1, Ht 2, Wt 2. Only the L1 output placement is a demoted ledger entry.
-    {1, 2, 2, DataType::UINT16, BufferType::L1},
-    // [1, 10, 64, 64] — NC 10, Ht 2, Wt 2.
-    {10, 2, 2, DataType::BFLOAT16, BufferType::DRAM},
-    // [2, 12, 64, 96] — NC 24, Ht 2, Wt 3.
+    // [2, 12, 64, 96] — NC 24, Ht 2, Wt 3. DRAM only: the L1 twin is an open perf item, not a
+    // demotion, so it must keep reaching codegen under `auto`.
     {24, 2, 3, DataType::BFLOAT16, BufferType::DRAM},
     // [3, 7, 64, 96] — NC 21, Ht 2, Wt 3.
     {21, 2, 3, DataType::BFLOAT16, BufferType::DRAM},
     {21, 2, 3, DataType::BFLOAT16, BufferType::L1},
-    // [3, 8, 96, 32] and [4, 6, 96, 32] — NC 24, Ht 3, Wt 1, total_Ht 72.
-    {24, 3, 1, DataType::BFLOAT16, BufferType::DRAM},
-    {24, 3, 1, DataType::BFLOAT16, BufferType::L1},
     // [4, 12, 96, 96] — NC 48, Ht 3, Wt 3.
     {48, 3, 3, DataType::BFLOAT16, BufferType::DRAM},
     {48, 3, 3, DataType::BFLOAT16, BufferType::L1},
-    // [4, 224, 64] — NC 4, Ht 7, Wt 2.
-    {4, 7, 2, DataType::BFLOAT16, BufferType::DRAM},
-    {4, 7, 2, DataType::BFLOAT16, BufferType::L1},
-    // [4, 7, 32, 64] — NC 28, Ht 1, Wt 2. Only the L1 output placement is a demoted ledger entry.
-    {28, 1, 2, DataType::BFLOAT16, BufferType::L1},
-    // [4, 9, 64, 32] — NC 36, Ht 2, Wt 1, total_Ht 72.
-    {36, 2, 1, DataType::BFLOAT16, BufferType::DRAM},
-    {36, 2, 1, DataType::BFLOAT16, BufferType::L1},
-    // [5, 160, 96] — NC 5, Ht 5, Wt 3.
+    // [5, 160, 96] — NC 5, Ht 5, Wt 3. DRAM only, as for [2, 12, 64, 96].
     {5, 5, 3, DataType::BFLOAT16, BufferType::DRAM},
     // [5, 8, 64, 64] — NC 40, Ht 2, Wt 2.
     {40, 2, 2, DataType::BFLOAT16, BufferType::L1},
@@ -166,7 +154,10 @@ constexpr DemotedCase kUngeneralizedDemotedCases[] = {
 
 }  // namespace
 
-bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs& tensor_args) {
+// tensor_args is unnamed here only because every surviving demotion is expressible in the normalized
+// cache-key attributes; it stays in the signature because that is the context a predicate over the
+// real shape or placement would need.
+bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCodegenInputs&) {
     // A caller-forced single-core route. tilize_codegen_dispatch's RowSingleCore condition, asked
     // directly so this needs no device: use_multicore=false / use_low_perf leave one worker, where
     // codegen's pipelining has nothing to overlap, and native has a route built for that request.
@@ -176,35 +167,25 @@ bool is_demoted(const TilizeCodegenParams& operation_attributes, const TilizeCod
         return true;
     }
 
-    // tilize-rm-single-tile-column. Wt == 1: the padded last dimension is a single tile wide
-    // (supported_by_codegen already requires W % TILE_WIDTH == 0, so exactly W == 32).
-    // choose_tilize_2d_ncol returns 1 for wt < 2, so the case can never reach the 2D-column path and
-    // always lands on the row path with chunk_wt = 1, num_col_chunks = 1 — which also trips
-    // compute_row_shape's minimal_work clamp (cb_depth 1, cb_out depth 1, write_batch 1: no double
-    // buffering and no write batching). The resulting reader/writer are then structural equivalents
-    // of native's reader_unary_stick_layout_split_rows_multicore / writer_unary_interleaved_start_id
-    // on the same core count (native's nblocks is also total_Ht), so there is no data-movement or
-    // parallelism advantage left to offset the one remaining difference, which is a pure deficit:
-    // native's compute kernel takes the per-block tile count as a template parameter and picks its
-    // fp32 mode at compile time (ttnn/cpp/ttnn/kernel/compute/tilize.cpp), while compute_tilize.cpp
-    // receives chunk_Wt as a runtime arg and calls the unspecialized tilize_init/tilize_block.
-    // Structural, not payload-sized: holds for every dtype and both interleaved placements. Wt >= 2
-    // is the winning side.
+    // GENERAL PREDICATE — a single tile per compute block leaves the codegen pipeline nothing to
+    // overlap, so all of its extra per-core setup is unamortized.
     //
-    // Bounded by total_Ht <= core count: above it, each core owns several tile-rows instead of one,
-    // which is a different same-kernel parity gap, not this one — do not widen this predicate to
-    // cover that regime. The measured points from it sit in the table above instead.
+    // Wt == 1 forces the row path (uses_block_path needs Wt > 32, uses_2d_column_path needs Wt >= 2,
+    // both in tilize_codegen_program_factory.cpp), and there chunk_wt == 1 with num_col_chunks == 1,
+    // which drives write_batch to 1 through compute_row_shape's force_single — either via
+    // `minimal_work` when total_Ht <= num_cores, or via the total_Ht > num_cores clause otherwise. So
+    // on EVERY Wt == 1 program the batched writer — the one thing writer_tilize_interleaved.cpp does
+    // that native's per-page writer_unary_interleaved_start_id.cpp does not — is switched off, and
+    // each compute invocation tilizes one tile. What is left is codegen's per-core setup against
+    // native's, which is spec.py's own reading of this shape class ("ttnn single-buffers both CBs
+    // here; our double-buffer + BATCH>1 writer priming only adds fixed per-core setup with nothing to
+    // overlap").
     //
-    // Needs the device for the core count. A host tensor is never routed here (the free function only
-    // reaches this with a device tensor); skipping the check for one keeps this from dereferencing a
-    // null device, and correctness never depends on a perf gate's answer.
-    if (operation_attributes.Wt == 1 && is_device_tensor(tensor_args.input_tensor)) {
-        const CoreCoord grid = tensor_args.input_tensor.device()->compute_with_storage_grid_size();
-        const uint32_t num_cores = grid.x * grid.y;
-        const uint32_t total_ht = operation_attributes.NC * operation_attributes.Ht;
-        if (total_ht <= num_cores) {
-            return true;
-        }
+    // The ledger agrees on every Wt == 1 configuration it covers — bfloat16, float32, uint32, int32
+    // and uint16, DRAM and L1 outputs, total_Ht both under and over the core count — and holds no
+    // Wt == 1 counterexample, so this is a condition rather than another block of exact rows.
+    if (operation_attributes.Wt == 1) {
+        return true;
     }
 
     // supported_by_codegen has already rejected a dtype-cast call, so input_dtype is the case's

@@ -20,6 +20,9 @@ _NATIVE = "native"  # forced-native golden leg
 _CODEGEN = "codegen"  # forced-codegen leg
 _ROUTED = "auto"
 
+_DRAM = {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)}
+_L1 = {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)}
+
 
 def _make_input(shape, dtype):
     if dtype in (ttnn.int32, ttnn.uint32):
@@ -27,202 +30,11 @@ def _make_input(shape, dtype):
     return torch.rand(shape, dtype=torch.bfloat16)
 
 
-_DEMOTED = [
-    (
-        [1, 1, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 10, 64, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 32, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 32, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 4, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [1, 4, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 1, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 12, 64, 96],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [2, 96, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [224, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [224, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-    (
-        [3, 2, 128, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.float32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
-]
-_DEMOTED_IDS = [
-    "[1, 1, 64, 64]|memory_config=l1|uint16|row_major",
-    "[1, 10, 64, 64]|memory_config=dram|bfloat16|row_major",
-    "[1, 32, 64]|memory_config=dram|uint16|row_major",
-    "[1, 32, 64]|memory_config=l1|uint16|row_major",
-    "[1, 4, 96, 32]|memory_config=dram|bfloat16|row_major",
-    "[1, 4, 96, 32]|memory_config=l1|bfloat16|row_major",
-    "[2, 1, 96, 32]|memory_config=dram|int32|row_major",
-    "[2, 1, 96, 32]|memory_config=dram|uint16|row_major",
-    "[2, 1, 96, 32]|memory_config=dram|uint32|row_major",
-    "[2, 1, 96, 32]|memory_config=l1|int32|row_major",
-    "[2, 1, 96, 32]|memory_config=l1|uint16|row_major",
-    "[2, 1, 96, 32]|memory_config=l1|uint32|row_major",
-    "[2, 12, 64, 96]|memory_config=dram|bfloat16|row_major",
-    "[2, 32, 32]|memory_config=dram|int32|row_major",
-    "[2, 32, 32]|memory_config=dram|uint16|row_major",
-    "[2, 32, 32]|memory_config=dram|uint32|row_major",
-    "[2, 32, 32]|memory_config=l1|int32|row_major",
-    "[2, 32, 32]|memory_config=l1|uint16|row_major",
-    "[2, 32, 32]|memory_config=l1|uint32|row_major",
-    "[2, 96, 32]|memory_config=dram|float32|row_major",
-    "[2, 96, 32]|memory_config=l1|float32|row_major",
-    "[224, 32]|memory_config=dram|bfloat16|row_major",
-    "[224, 32]|memory_config=l1|bfloat16|row_major",
-    "[3, 2, 128, 32]|memory_config=dram|float32|row_major",
-]
-
-
-@pytest.mark.parametrize("shape,kwargs,dtype,layout", _DEMOTED, ids=_DEMOTED_IDS)
-def test_tilize_codegen_demotion(device, shape, kwargs, dtype, layout):
-    x = _make_input(shape, dtype)
-    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
-    golden = ttnn.to_torch(ttnn.tilize(xt, **kwargs, implementation=_NATIVE))
-    entries_before = device.num_program_cache_entries()
-    out = ttnn.tilize(xt, **kwargs, implementation=_ROUTED)
-    assert_equal(golden, ttnn.to_torch(out))
-    msg = "auto routed a perf-demoted case to codegen (program cache grew); expected native fallback"
-    assert device.num_program_cache_entries() == entries_before, msg
-
-
 _ACCEPTED = [
-    (
-        [1, 32, 64],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
+    ([4, 7, 32, 64], _L1, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 _ACCEPTED_IDS = [
-    "[1, 32, 64]|memory_config=dram|int32|row_major",
+    "[4, 7, 32, 64]|memory_config=l1|bfloat16|row_major",
 ]
 
 
@@ -242,15 +54,10 @@ def test_tilize_codegen_routes_accepted_to_codegen(device, shape, kwargs, dtype,
 
 
 _CACHE_HIT = [
-    (
-        [32, 32],
-        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-        ttnn.int32,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ),
+    ([4, 7, 32, 64], _L1, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 _CACHE_HIT_IDS = [
-    "[32, 32]|memory_config=dram|int32|row_major",
+    "[4, 7, 32, 64]|memory_config=l1|bfloat16|row_major",
 ]
 
 
@@ -270,12 +77,120 @@ def test_tilize_codegen_program_cache_hit(device, shape, kwargs, dtype, layout):
     assert device.num_program_cache_entries() == entries_after_miss, msg
 
 
-_SELECTOR_CASE = (
-    [32, 32],
-    {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-    ttnn.int32,
-    ttnn.ROW_MAJOR_LAYOUT,
-)
+# Perf-demoted ledger cases: in scope for codegen (so forced `codegen` still runs them and verify
+# keeps measuring them), but routed to native under `auto`. One row per is_demoted() branch — the
+# Wt == 1 predicate and the enumerated Wt >= 2 table.
+_DEMOTED = [
+    ([32, 32], _DRAM, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+    ([2, 12, 64, 96], _DRAM, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ([6, 224, 160], _DRAM, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+]
+_DEMOTED_IDS = [
+    "[32, 32]|memory_config=dram|int32|row_major",
+    "[2, 12, 64, 96]|memory_config=dram|bfloat16|row_major",
+    "[6, 224, 160]|memory_config=dram|bfloat16|row_major",
+]
+
+
+@pytest.mark.parametrize("shape,kwargs,dtype,layout", _DEMOTED, ids=_DEMOTED_IDS)
+def test_tilize_codegen_demoted_case_stays_native(device, shape, kwargs, dtype, layout):
+    x = _make_input(shape, dtype)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
+    golden = ttnn.to_torch(ttnn.tilize(xt, **kwargs, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.tilize(xt, **kwargs, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    # The golden already warmed this exact native program, so a routed dispatch that stays on
+    # native is a cache hit and cannot grow the count. Growth means `auto` compiled the codegen
+    # program for a case measured slower there.
+    msg = "auto routed a perf-demoted case to codegen (program cache grew past the native golden)"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+
+@pytest.mark.parametrize("shape,dtype", [([64, 64], ttnn.bfloat16)], ids=["[64, 64]|bfloat16"])
+def test_tilize_codegen_rejected_case_falls_back_to_native(device, expect_error, shape, dtype):
+    # Sharded input: rejected by supported_by_codegen() (TilizeCodegenParams has no shard fields and
+    # no codegen builder for the shard-backed CBs is ported), while native serves it from its own
+    # sharded factory. The ledger's own vectors are interleaved, so this leg has to be built here.
+    core = ttnn.CoreCoord(0, 0)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core)})
+    shard_spec = ttnn.ShardSpec(shard_grid, shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    xt = ttnn.from_torch(
+        _make_input(shape, dtype), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded
+    )
+    golden = ttnn.to_torch(ttnn.tilize(xt, memory_config=sharded, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.tilize(xt, memory_config=sharded, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = "auto routed an out-of-scope (sharded) case to codegen instead of falling back to native"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+    # Forced codegen must refuse the same inputs rather than silently degrading to native.
+    with expect_error(RuntimeError, "not supported by the codegen implementation"):
+        ttnn.tilize(xt, memory_config=sharded, implementation=_CODEGEN)
+
+
+# ---------------------------------------------------------------------------
+# Hand-added off-grid regressions (not emitter-generated).
+#
+# Execution controls: parameters of ttnn::tilize that decide WHERE work lands or with what tile
+# geometry. Every codegen builder places work over the full compute_with_storage_grid_size() with the
+# standard 32x32 tile, so accepting such a call on codegen would land work on cores the caller
+# reserved, or produce the wrong tile geometry. `auto` must stay on native and forced `codegen` must
+# refuse, naming the control (unsupported_execution_control() in tilize_codegen_supported.cpp). The
+# ledger cannot reach these: sweep vectors vary tensors, never execution controls.
+# ---------------------------------------------------------------------------
+
+# In scope and not demoted (NC 28, Ht 1, Wt 2), so only the control can move it off codegen.
+_CONTROL_SHAPE = [4, 7, 32, 64]
+_CONTROL_DTYPE = ttnn.bfloat16
+
+
+def _control_kwargs(name):
+    if name == "sub_core_grids":
+        return {
+            "sub_core_grids": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        }
+    # Tiny tile: native supports a tile height below 32 (tilize_device_operation.cpp), the codegen
+    # kernels hardcode TILE_HEIGHT/TILE_WIDTH.
+    return {"tile": ttnn.Tile([16, 32])}
+
+
+@pytest.mark.parametrize("control", ["sub_core_grids", "tile"])
+def test_tilize_codegen_execution_control_stays_native(device, control):
+    xt = ttnn.from_torch(
+        _make_input(_CONTROL_SHAPE, _CONTROL_DTYPE),
+        dtype=_CONTROL_DTYPE,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    kwargs = {**_DRAM, **_control_kwargs(control)}
+    golden = ttnn.to_torch(ttnn.tilize(xt, **kwargs, implementation=_NATIVE))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.tilize(xt, **kwargs, implementation=_ROUTED)
+    assert_equal(golden, ttnn.to_torch(out))
+    # Same args as the golden, so a native dispatch is a cache hit; growth means `auto` accepted the
+    # call on codegen and ignored the control.
+    msg = f"auto routed a call with {control} set to codegen, which cannot honour it"
+    assert device.num_program_cache_entries() == entries_before, msg
+
+
+@pytest.mark.parametrize("control", ["sub_core_grids", "tile"])
+def test_tilize_codegen_execution_control_rejects_forced_codegen(device, expect_error, control):
+    xt = ttnn.from_torch(
+        _make_input(_CONTROL_SHAPE, _CONTROL_DTYPE),
+        dtype=_CONTROL_DTYPE,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    kwargs = {**_DRAM, **_control_kwargs(control)}
+    with expect_error(RuntimeError, f"cannot honour '{control}'"):
+        ttnn.tilize(xt, **kwargs, implementation=_CODEGEN)
+
+
+_SELECTOR_CASE = ([32, 32], _DRAM, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
 
 @pytest.mark.parametrize("selector", ["", "Codegen", "codgen", "default"])
@@ -286,60 +201,3 @@ def test_tilize_codegen_rejects_an_unknown_implementation(device, expect_error, 
     # otherwise answer without dispatching, so an unknown value never passes silently.
     with expect_error(RuntimeError, "unknown implementation selector"):
         ttnn.tilize(xt, **kwargs, implementation=selector)
-
-
-# --- hand-added, off-grid: execution controls -------------------------------
-# The emitter is ledger-driven and every leg above varies only tensors/memory_config, so no
-# generated case can reach these: they are call parameters that control WHERE work lands and with
-# what tile geometry, not what the result contains. None of the codegen builders honours either one
-# (they all place work over the full compute_with_storage_grid_size() with the standard 32x32 tile,
-# and TilizeCodegenParams carries neither a core set nor a tile shape), so `auto` must leave them to
-# native and forced `codegen` must refuse by name rather than accept the call and ignore the
-# control — which would land work on cores the caller reserved.
-#
-# The base case is the _ACCEPTED one above, i.e. a shape that provably DOES reach codegen under
-# `auto` without a control set; that is what makes an unchanged program cache here evidence of the
-# control, not of the shape.
-_CONTROL_CASE = (
-    [1, 32, 64],
-    {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
-    ttnn.int32,
-    ttnn.ROW_MAJOR_LAYOUT,
-)
-
-
-def _sub_core_grids():
-    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
-
-
-def test_tilize_codegen_sub_core_grids_falls_back_to_native(device):
-    shape, kwargs, dtype, layout = _CONTROL_CASE
-    x = _make_input(shape, dtype)
-    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
-    control = {"sub_core_grids": _sub_core_grids()}
-    golden = ttnn.to_torch(ttnn.tilize(xt, **kwargs, **control, implementation=_NATIVE))
-    entries_before = device.num_program_cache_entries()
-    out = ttnn.tilize(xt, **kwargs, **control, implementation=_ROUTED)
-    assert_equal(golden, ttnn.to_torch(out))
-    msg = "auto routed a sub_core_grids call to codegen (program cache grew); the codegen builders ignore the restriction and would use the whole grid"
-    assert device.num_program_cache_entries() == entries_before, msg
-
-
-@pytest.mark.parametrize(
-    "control,named",
-    [
-        (
-            {"sub_core_grids": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})},
-            "sub_core_grids",
-        ),
-        ({"tile": ttnn.Tile([16, 32])}, "tile"),
-    ],
-    ids=["sub_core_grids", "tile"],
-)
-def test_tilize_codegen_rejects_unhonourable_execution_controls(device, expect_error, control, named):
-    shape, kwargs, dtype, layout = _CONTROL_CASE
-    xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
-    # Naming the control in the message is the contract: a bare "unsupported" would let a caller
-    # believe the restriction was applied on some other path.
-    with expect_error(RuntimeError, f"cannot honour '{named}'"):
-        ttnn.tilize(xt, **kwargs, **control, implementation=_CODEGEN)

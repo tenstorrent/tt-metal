@@ -62,6 +62,23 @@ constexpr const char* kReaderTilizeBlockCt =
     "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/reader_tilize_block_ct.cpp";
 constexpr const char* kComputeTilizeCt =
     "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/compute_tilize_ct.cpp";
+// Native's own row-path kernels, referenced in place. ops/tilize/spec.py's native-content row class
+// names three templates (reader_tilize_row_native.cpp, compute_tilize_native.cpp,
+// writer_tilize_row_native.cpp) that are verbatim copies of these in-tree files — the same sources
+// TilizeMultiCoreDefaultProgramFactory compiles. Pointing at the originals is the same program with
+// no second copy that can drift away from the native kernel it is supposed to reproduce.
+constexpr const char* kReaderRowNative =
+    "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
+    "reader_unary_stick_layout_split_rows_multicore.cpp";
+constexpr const char* kComputeRowNative = "ttnn/cpp/ttnn/kernel/compute/tilize.cpp";
+constexpr const char* kWriterRowNative =
+    "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+// Native's row reader walks one input page per stick. That is the whole row only because an
+// interleaved RM tensor pages by its last dimension; the >1 case in that kernel is ND-sharded only.
+constexpr uint32_t kNativeRowPagesInRow = 1;
+// Compile-time per-core block count for the native compute kernel. The native row class exists only
+// where every core owns exactly one tile-row, which is what makes this a constant.
+constexpr uint32_t kNativeRowBlocksPerCore = 1;
 
 uint32_t align_up(uint32_t value, uint32_t alignment) { return ((value + alignment - 1) / alignment) * alignment; }
 
@@ -394,6 +411,10 @@ struct RowShape {
     uint32_t num_col_chunks = 0;
     uint32_t write_batch = 0;
     bool minimal_work = false;
+    // Full-width tile-rows: the reader moves whole sticks, never a byte range of one.
+    bool full_width = false;
+    // Full-width AND one tile-row per core: native's reader, compute and writer all apply verbatim.
+    bool native_row = false;
     uint32_t requested_in_depth = 0;
     uint32_t requested_out_depth = 0;
 };
@@ -427,6 +448,20 @@ RowShape compute_row_shape(uint32_t l1, uint32_t num_cores, const Geometry& g, c
     // double-buffering would be pure per-core setup cost — spec.py's `minimal_work` clamp.
     s.minimal_work = (s.num_col_chunks == 1 && s.chunk_wt == 1 && g.total_ht <= num_cores);
     if (s.minimal_work) {
+        s.cb_depth = 1;
+    }
+
+    // Kernel-content classes for the row path (spec.py build_tilize_row). Chunked rows are the only
+    // ones that need the unified MODE_TILEROW reader, because only it reads a byte range of a stick;
+    // an unchunked row is a whole-stick read, which native's row reader already does with a
+    // compile-time page size instead of the unified template's mode/sequencer dispatch. Where the
+    // split additionally gives each core exactly one tile-row, native's compute and writer apply too:
+    // the per-core block count becomes a compile-time 1, and a single tile-row leaves the codegen
+    // writer's batching nothing to overlap.
+    s.full_width = (s.num_col_chunks == 1 && !attrs.use_low_perf);
+    s.native_row = s.full_width && g.total_ht <= num_cores;
+    if (s.native_row) {
+        // Native single-buffers its input CB at one tile-row of pages.
         s.cb_depth = 1;
     }
     // spec.py _select_write_batch: the batch is the fixed default whenever the batched writer is
@@ -520,55 +555,94 @@ ProgramDescriptor build_row(
         }}},
     });
 
-    // reader_stick_interleaved_unified.cpp is a single shared template compiled for every mode
-    // that uses it; the MODE_TILEROW_PAD named CT args below are dead code under MODE_TILEROW
-    // but must still be defined or JIT compilation fails ("Invalid named compile time argument").
-    // Values are builder_utils.py's own injected defaults (_TILEROW_PAD_DEFAULTS), not invented.
-    KernelDescriptor::NamedCompileTimeArgs reader_named_ct = {
-        {"mode", kModeTilerow},
-        {"cb_id", kCbInId},
-        {"stick_bytes", stick_size_bytes},
-        {"aligned_page_size", aligned_ps},
-        {"seq_id", 0},
-        {"batch", 1},
-        {"nabatch", 4},
-        {"elem_size", 2},
-        {"tile_height", 32},
-        {"tile_row_shift_bits", 0},
-        {"num_pages_in_row", 1},
-        {"unpadded_X_bytes", 0},
-        {"valid_last_page_bytes", 0},
-        {"page_size", 32},
-    };
-
-    KernelDescriptor::CompileTimeArgs reader_ct;
-    TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct);
+    // One unchunked tile-row is chunk_wt whole tiles wide, so this is both the per-stick transfer
+    // size and native's block width.
+    const uint32_t row_bytes = chunk_wt * elem_w_bytes;
+    if (shape.native_row) {
+        // The class exists only where split_work_to_cores hands out one tile-row per core, which is
+        // what lets the native compute kernel take the per-core block count as a compile-time arg.
+        TT_FATAL(
+            per1 == kNativeRowBlocksPerCore && per2 <= kNativeRowBlocksPerCore,
+            "tilize codegen: native row class expects one tile-row per core, got {} and {}",
+            per1,
+            per2);
+    }
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kReaderStickUnified;
     reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_ct);
-    reader_desc.named_compile_time_args = std::move(reader_named_ct);
     reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor::CompileTimeArgs writer_ct{kCbOutId, out_page};
-    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
-    writer_ct.push_back(write_batch);
+    if (shape.full_width) {
+        // Native reader CT: [tile_height, num_pages_in_row, size_of_valid_data_in_last_page_in_row].
+        // With one page per row the third arg is the width of every stick read, not just the last.
+        KernelDescriptor::CompileTimeArgs reader_ct{constants::TILE_HEIGHT, kNativeRowPagesInRow, row_bytes};
+        TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct);
+        reader_desc.kernel_source = kReaderRowNative;
+        reader_desc.compile_time_args = std::move(reader_ct);
+    } else {
+        // reader_stick_interleaved_unified.cpp is a single shared template compiled for every mode
+        // that uses it; the MODE_TILEROW_PAD named CT args below are dead code under MODE_TILEROW
+        // but must still be defined or JIT compilation fails ("Invalid named compile time argument").
+        // Values are builder_utils.py's own injected defaults (_TILEROW_PAD_DEFAULTS), not invented.
+        KernelDescriptor::NamedCompileTimeArgs reader_named_ct = {
+            {"mode", kModeTilerow},
+            {"cb_id", kCbInId},
+            {"stick_bytes", stick_size_bytes},
+            {"aligned_page_size", aligned_ps},
+            {"seq_id", 0},
+            {"batch", 1},
+            {"nabatch", 4},
+            {"elem_size", 2},
+            {"tile_height", 32},
+            {"tile_row_shift_bits", 0},
+            {"num_pages_in_row", 1},
+            {"unpadded_X_bytes", 0},
+            {"valid_last_page_bytes", 0},
+            {"page_size", 32},
+        };
+        KernelDescriptor::CompileTimeArgs reader_ct;
+        TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct);
+        reader_desc.kernel_source = kReaderStickUnified;
+        reader_desc.compile_time_args = std::move(reader_ct);
+        reader_desc.named_compile_time_args = std::move(reader_named_ct);
+    }
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kWriterTilizeInterleaved;
     writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_ct);
     writer_desc.config = WriterConfigDescriptor{};
+    if (shape.native_row) {
+        // Native writer CT is [cb_id] plus the accessor: it takes its page size from the CB interface
+        // and writes one page per transaction, so it carries neither an output page pitch nor a batch.
+        KernelDescriptor::CompileTimeArgs writer_ct{kCbOutId};
+        TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
+        writer_desc.kernel_source = kWriterRowNative;
+        writer_desc.compile_time_args = std::move(writer_ct);
+    } else {
+        KernelDescriptor::CompileTimeArgs writer_ct{kCbOutId, out_page};
+        TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
+        writer_ct.push_back(write_batch);
+        writer_desc.kernel_source = kWriterTilizeInterleaved;
+        writer_desc.compile_time_args = std::move(writer_ct);
+    }
 
     const bool fp32 = (attrs.input_dtype == DataType::FLOAT32 || attrs.output_dtype == DataType::FLOAT32);
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = kComputeTilizeCt;
     compute_desc.core_ranges = all_cores;
-    // compute_row_shape resolves ONE chunk_wt/num_col_chunks for the whole program, so the row path
-    // is uniform by construction and always takes the compile-time-width compute variant.
-    compute_desc.compile_time_args = {
-        kCbInId, kCbOutId, tilize_use_fast(attrs.input_dtype, attrs.output_dtype, chunk_wt), num_col_chunks, chunk_wt};
+    if (shape.native_row) {
+        // Native compute CT: [per_core_block_cnt, per_core_block_tile_cnt]. The kernel picks its
+        // fp32 mode from the input CB's format itself, so there is no fast/standard selector here.
+        compute_desc.kernel_source = kComputeRowNative;
+        compute_desc.compile_time_args = {kNativeRowBlocksPerCore, chunk_wt};
+    } else {
+        // compute_row_shape resolves ONE chunk_wt/num_col_chunks for the whole program, so the row
+        // path is uniform by construction and always takes the compile-time-width compute variant.
+        compute_desc.kernel_source = kComputeTilizeCt;
+        compute_desc.compile_time_args = {
+            kCbInId,
+            kCbOutId,
+            tilize_use_fast(attrs.input_dtype, attrs.output_dtype, chunk_wt),
+            num_col_chunks,
+            chunk_wt};
+    }
     ComputeConfigDescriptor compute_cfg;
     compute_cfg.fp32_dest_acc_en = fp32;
     if (attrs.input_dtype == DataType::FLOAT32) {
@@ -579,16 +653,37 @@ ProgramDescriptor build_row(
     uint32_t start = 0;
     for (const auto& core : cores) {
         const uint32_t n = group1.contains(core) ? per1 : per2;
-        reader_desc.emplace_runtime_args(
-            core,
-            {input_tensor.buffer(),
-             n,
-             start * constants::TILE_HEIGHT,
-             constants::TILE_HEIGHT,
-             chunk_wt,
-             num_col_chunks,
-             elem_w_bytes});
-        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{n});
+        if (shape.full_width) {
+            // Native reader RT. Only slots 0, 1, 3, 4, 5 and 8 are read; 2, 6 and 7 are the
+            // ND-sharded leftover-width slots, kept at the native factory's own values so the two
+            // emissions stay comparable. num_rows is a stick count, hence n tile-rows of TILE_HEIGHT.
+            reader_desc.emplace_runtime_args(
+                core,
+                {input_tensor.buffer(),
+                 n * constants::TILE_HEIGHT,
+                 row_bytes,
+                 chunk_wt,
+                 row_bytes,
+                 1u,
+                 0u,
+                 0u,
+                 start * constants::TILE_HEIGHT});
+        } else {
+            reader_desc.emplace_runtime_args(
+                core,
+                {input_tensor.buffer(),
+                 n,
+                 start * constants::TILE_HEIGHT,
+                 constants::TILE_HEIGHT,
+                 chunk_wt,
+                 num_col_chunks,
+                 elem_w_bytes});
+        }
+        // The native compute kernel takes its whole schedule at compile time and reads no runtime
+        // args; emitting any would go unread.
+        if (!shape.native_row) {
+            compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{n});
+        }
         writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), n * g.wt, start * g.wt});
         start += n;
     }
