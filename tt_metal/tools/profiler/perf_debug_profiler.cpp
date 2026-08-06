@@ -32,6 +32,8 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>  // MeshCoreCoord
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <umd/device/types/tlb.hpp>
 
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -88,6 +90,17 @@ uint32_t drisc_gap_cycles() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_GAP");
         return (s == nullptr || *s == '\0') ? 0u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_NO_STATIC_TLB: skip configuring a static TLB window for the DRISC drainer, leaving the
+// socket's ack write on UMD's dynamic (reconfigure-per-access) path. Exists so static-vs-dynamic can be A/B'd
+// on ONE binary -- rebuilding between arms makes every difference suspect.
+bool no_static_tlb() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_NO_STATIC_TLB");
+        return s != nullptr && *s != '\0' && *s != '0';
     }();
     return v;
 }
@@ -604,9 +617,43 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             set_drisc_niu_mode(ctx.device, ctx.drisc_logical[d], 1);
         }
 
+        // Give the DRISC drainer a STATIC TLB window, so the socket's per-read ack write skips UMD's
+        // per-access TLB reconfigure -- the same path the Tensix drainer already gets for free. Measured on
+        // bh-05: 171 ns/write static vs 382 ns dynamic, i.e. ~210 ns of pure reconfigure per socket read().
+        //
+        // Metal maps static windows at device init for workers/eth/dispatch and, on Blackhole, one 4 GB
+        // window per DRAM channel -- but only on that channel's PREFERRED WORKER ENDPOINT port
+        // (ll_api::configure_static_tlbs -> blackhole::ddr_to_noc0 takes the channel's last of 3 NoC ports).
+        // The drainer deliberately sits on the *unused* port (pick_unused_dram_logical_core), so its core is
+        // NOT in that map and the socket would otherwise have no window to find. Configure one here: 2 MB at
+        // address 0 spans the DRISC's whole 128 KB L1 (MEM_DRISC_L1_BASE = 0), and Strict ordering matches
+        // what workers get, so both drainers end up on an identical host write path.
+        //
+        // Best-effort: a window is a finite device resource, and losing this race only costs the ~210 ns.
+        if (!tensix_drain && !no_static_tlb() && !cluster.is_mock_or_emulated()) {
+            auto* tlb_manager = cluster.get_driver()->get_chip(device_id)->get_tlb_manager();
+            const tt_xy_pair tlb_core(ctx.drisc_virtual[d].x, ctx.drisc_virtual[d].y);
+            if (!tlb_manager->is_tlb_mapped(tlb_core)) {
+                try {
+                    tlb_manager->configure_tlb(
+                        tlb_core, /*tlb_size=*/2 * 1024 * 1024, /*address=*/0, tt::umd::tlb_data::Strict);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] could not configure a static TLB for DRISC core ({}, {}): {} "
+                        "-- the socket ack write stays on the dynamic path",
+                        tlb_core.x,
+                        tlb_core.y,
+                        e.what());
+                }
+            }
+        }
+
         try {
             // sender_is_l2cpu switches the socket between "physical NoC coord + full L1 address" (DRISC,
-            // X280) and the normal worker path (logical coord, worker-L1 semantics, static TLB write-back).
+            // X280) and the normal worker path (logical coord, worker-L1 semantics). The socket picks the
+            // static-vs-dynamic write path by ASKING UMD whether this core has a window (see init_sender_tlb),
+            // so the window configured just above is what puts the DRISC on the static path.
             ctx.sockets[d] = std::make_unique<distributed::D2HSocket>(
                 mesh_device,
                 distributed::MeshCoreCoord{

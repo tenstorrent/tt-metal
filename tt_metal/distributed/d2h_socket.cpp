@@ -274,13 +274,23 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
         sender_virtual_core = sender_is_l2cpu_ ? cluster.get_virtual_coordinate_from_physical_coordinates(
                                                      sender_device_id, sender_core_.core_coord)
                                                : mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-        // The L2CPU (X280) has no static TLB window (those exist for workers/PCIe/DRAM); use the
-        // dynamic cluster.write_core path below instead.
-        if (!sender_is_l2cpu_ && !cluster.is_mock_or_emulated()) {
-            sender_core_tlb_ = cluster.get_driver()
-                                   ->get_chip(sender_device_id)
-                                   ->get_tlb_manager()
-                                   ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+        // ASK whether this core has a static window; do not infer it from the sender kind. Metal maps
+        // static TLBs at device init for workers/eth/dispatch and, on Blackhole, one 4 GB window per DRAM
+        // channel (ll_api::configure_static_tlbs). The X280 L2CPU is not among them -- but a DRAM core
+        // (DRISC sender) may be, and a caller that wants one can configure it before constructing the
+        // socket. Keying off sender_is_l2cpu_ conflated two unrelated things: the addressing semantics
+        // above (which a non-worker sender genuinely needs) and static-TLB availability (which is a
+        // property of the core, and which UMD will answer directly). is_tlb_mapped() takes the same
+        // TRANSLATED coord we just computed, and the address overload also proves the window actually
+        // spans the config buffer -- notify_sender() writes bytes_acked inside it on every read().
+        // Only Blackhole takes the static path below, so do not record a window we will not use --
+        // has_static_tlb() reports which write path is live and must not claim static on Wormhole.
+        if (!cluster.is_mock_or_emulated() && MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+            auto* tlb_manager = cluster.get_driver()->get_chip(sender_device_id)->get_tlb_manager();
+            const tt_xy_pair tlb_core(sender_virtual_core.x, sender_virtual_core.y);
+            if (tlb_manager->is_tlb_mapped(tlb_core, config_buffer_address_, required_config_buffer_size())) {
+                sender_core_tlb_ = tlb_manager->get_tlb_window(tlb_core);
+            }
         }
     } else {
         sender_device_id = device_id.value();
@@ -289,10 +299,11 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     }
 
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device && !sender_is_l2cpu_ && !cluster.is_mock_or_emulated()) {
-        // This process owns a mesh_device and hence has statically initialized TLBs.
-        // Entire device address space for Blackhole is statically mapped.
-        // Safe to use static TLBs without requiring the driver to do a reconfig.
+    if (arch == tt::ARCH::BLACKHOLE && mesh_device && sender_core_tlb_ != nullptr) {
+        // This process owns a mesh_device and the sender core has a static window covering the config
+        // buffer, so writes need no driver reconfig. Gate on the window we actually obtained rather than
+        // on the sender kind -- that keeps the L2CPU (no static window) on the dynamic path while letting
+        // a DRAM/DRISC sender use the static one.
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_tlb_->write_block(device_addr, data, num_bytes);
         };
