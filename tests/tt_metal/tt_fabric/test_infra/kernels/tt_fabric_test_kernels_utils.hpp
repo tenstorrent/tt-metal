@@ -801,6 +801,41 @@ constexpr uint32_t SYNC_DBG_TAG_GLOBAL_CLOSED = 0xBA;
 constexpr uint32_t SYNC_DBG_TAG_NOC_PRE = 0xBC;
 constexpr uint32_t SYNC_DBG_TAG_NOC_POST = 0xBD;
 
+// [WRITE-POINTER PROBE] Which slot does the sync core actually write into?
+//
+// The router reads from ITS read pointer (recorded in debug word[20]); the worker writes to ITS write
+// pointer. These are separate pieces of state, and the round-1 connection is REOPENED after the
+// retrain -- open_finish() resyncs the write counter from the router's stored value:
+//     buffer_slot_write_counter.counter = *worker_teardown_addr;
+//     buffer_slot_index = counter % num_buffers;
+// If that resync lands on the wrong slot, the write still succeeds and is still acked, but the router
+// is looking somewhere else and never sees it.
+//
+// Encoding is different from the other tags: [31:24] tag, [23:0] the L1 slot address (addresses here
+// are ~0x16ad0, well inside 24 bits). Compare directly against word[20] from the same core:
+//   equal    -> pointers agree; if the packet still isn't sent the failure is the credit/stream write
+//   differ   -> write-pointer desync; the packet is in a slot the router never reads
+constexpr uint32_t SYNC_DBG_TAG_WRADDR = 0xBE;
+
+// [STREAM-ID PROBE, worker side] Which register does the sync core DECREMENT to announce its packet?
+//
+// Resolved at connection-open time as
+//     edm_buffer_remote_free_slots_update_addr = get_stream_reg_write_addr(sender_channel_credits_stream_id)
+// and the sync core rebuilds its connection for round 1, after the retrain. The router polls
+// sender_channel_free_slots_stream_id (logged in debug word[20], upper 16 bits). Compare the two:
+//   same register    -> the decrement genuinely vanished; the bug is in the write path
+//   different        -> the rebuilt connection announces on a register nobody reads. That explains
+//                       both writes being acked, localfree stuck at num_buffers, and round 0 working
+//                       (its connection predates the teardown).
+// [23:0] holds the register ADDRESS; convert to a stream id host-side via the STREAM_REG_ADDR layout,
+// or just compare round 0's value against round 1's on the same core -- a change across rounds is
+// itself the finding.
+constexpr uint32_t SYNC_DBG_TAG_CREDITREG = 0xBF;
+
+FORCE_INLINE void sync_dbg_push_addr([[maybe_unused]] uint32_t tag, [[maybe_unused]] uint32_t addr) {
+    WATCHER_RING_BUFFER_PUSH((tag << 24) | (addr & 0xFFFFFF));
+}
+
 // POLL pacing. The ring buffer holds only DEBUG_RING_BUFFER_ELEMENTS (32) entries, so an unbounded
 // poll is self-defeating: the sync core legitimately sits in local_sync(1) for the WHOLE run (it is
 // waiting for every sender to finish its 100M packets), and a fixed-interval poll fills all 32 slots
@@ -904,6 +939,16 @@ struct LineSyncConfig {
 
     void global_sync_start(uint8_t sync_iter = 0) {
         connection_manager_->template wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
+        // [WRITE-POINTER PROBE] Capture the slot we are ABOUT to write into, before the send advances
+        // the pointer. Compared against the router's read slot (debug word[20]) to detect a desync.
+        // current_buffer_slot_l1_addr() is private, so read the public member it returns. With
+        // EDM_NUM_BUFFER_SLOTS == 0 (USER_DEFINED_NUM_BUFFER_SLOTS false, which is this build)
+        // that accessor is exactly `return this->edm_buffer_addr;`.
+        sync_dbg_push_addr(SYNC_DBG_TAG_WRADDR, static_cast<EdmSenderT*>(connection_ptr_)->edm_buffer_addr);
+        // [STREAM-ID PROBE] The credit register this connection will decrement to announce the packet.
+        sync_dbg_push_addr(
+            SYNC_DBG_TAG_CREDITREG,
+            static_cast<uint32_t>(static_cast<EdmSenderT*>(connection_ptr_)->edm_buffer_remote_free_slots_update_addr));
         connection_manager_->template send_header_non_blocking<false>(
             connection_ptr_, connection_idx_, (uint32_t)packet_header);
         // [NOC-DELIVERY PROBE] The send above is fire-and-forget (NON_BLOCKING: no flush, no barrier).
@@ -911,12 +956,28 @@ struct LineSyncConfig {
         // actually acked by the router's L1. NOTE: this flush is a behaviour change, not a pure
         // observation -- it makes the send synchronous. If it also makes the hang disappear, that is
         // itself the finding.
+        // NOTE on what these two markers do and do NOT prove:
+        //
+        // The (issued - acked) value is USELESS as an outstanding-count. ncrisc_noc_fast_write bumps
+        // BOTH software shadows together at issue time:
+        //     noc_nonposted_writes_num_issued[noc] += 1;
+        //     noc_nonposted_writes_acked[noc]      += num_dests;
+        // so the difference is always zero by construction. It is kept only as a cheap sanity value.
+        //
+        // The load-bearing part is the barrier between them. We use noc_async_write_barrier(), NOT
+        // noc_async_writes_flushed():
+        //     writes_flushed -> NIU_MST_NONPOSTED_WR_REQ_SENT == num_issued   ("request left the NIU")
+        //     write_barrier  -> NIU_MST_WR_ACK_RECEIVED       == acked        ("destination ACKED it")
+        // Only the latter proves the bytes actually reached the router's L1. The earlier probe used
+        // the weaker one, so "NOC_POST reached" only ever meant the request departed.
+        //
+        // NOC_PRE with no NOC_POST now means the destination never acked -> the write did not land.
         const uint8_t noc = get_fabric_worker_noc();
         sync_dbg_push(
             SYNC_DBG_TAG_NOC_PRE,
             sync_iter,
             noc_get_nonposted_writes_issued(noc) - noc_get_nonposted_writes_acked(noc));
-        noc_async_writes_flushed(noc);
+        noc_async_write_barrier(noc);
         sync_dbg_push(
             SYNC_DBG_TAG_NOC_POST,
             sync_iter,

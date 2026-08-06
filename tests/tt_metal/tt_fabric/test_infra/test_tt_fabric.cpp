@@ -145,11 +145,11 @@ private:
     // Dump the debug slot every ~30s (kPollIntervalMs * 150).
     static constexpr int kSlotDumpEveryRounds = 150;
     static constexpr uint64_t kDbgSlotBase =
-        0x6F210;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the region grows
+        0x6F208;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the region grows
                   // DOWNWARD from MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so changing
                   // MEM_AERISC_RESUME_PHASE_SIZE MOVES this base.
     // 18 words: 16 original + words 16/17 for the per-channel send-gate probe.
-    static constexpr std::size_t kDbgSlotWords = 20;
+    static constexpr std::size_t kDbgSlotWords = 22;
     static constexpr uint64_t kErisc0Heartbeat = 0x7CC70;
 
     void dump_slots(const std::vector<MonitoredCore>& cores) {
@@ -184,10 +184,10 @@ private:
 // (no second process needed). Emits the same "SLOT <dev> <chan> w0..w15 hb0 hb1" lines the external
 // `run_link_control dump_dbg_slot` produces, so one parser handles both.
 void dump_erisc_debug_slots_from_host() {
-    constexpr uint64_t DBG_SLOT_BASE = 0x6F210;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the
+    constexpr uint64_t DBG_SLOT_BASE = 0x6F208;  // dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE -- MUST track it: the
                                                  // region grows DOWNWARD from MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so
                                                  // changing MEM_AERISC_RESUME_PHASE_SIZE MOVES this base.
-    constexpr std::size_t DBG_SLOT_WORDS = 20;   // incl. words 16/17 send-gate probe
+    constexpr std::size_t DBG_SLOT_WORDS = 22;   // incl. words 16/17 send-gate probe
     constexpr uint64_t ERISC0_HEARTBEAT = 0x7CC70;
 
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -230,6 +230,55 @@ void dump_erisc_debug_slots_from_host() {
             }
             line += fmt::format(" 0x{:x} 0x{:x}", hb[0], hb[1]);
             log_info(tt::LogTest, "{}", line);
+        }
+    }
+}
+
+// [L1 SCAN] Where did the sync packet's bytes actually land?
+//
+// The single-slot probe (debug word[21]) can only answer "is it in THIS slot". The sender channel is a
+// ring of ~32 slots at 4400-byte stride, and the round-1 connection is rebuilt after the retrain, so
+// the packet could be anywhere in the ring -- or in another channel's buffer. This scans the whole
+// region instead and prints ONLY hits, so the output stays small.
+//
+// Signature: the packet header packs payload_size | noc_send_type at offset 40 into one word.
+//     0x00020000 = sync packet (size 0, NOC_UNICAST_ATOMIC_INC)
+//     0x00001000 = data packet (size 4096, NOC_UNICAST_WRITE)
+// Scanning for 0x00020000 finds every sync header present in the region regardless of which slot or
+// channel it sits in. No hits anywhere == the bytes never landed, which the NoC ack alone cannot tell
+// us. Emits "L1HIT <dev> <chan> <addr>" per match, plus a per-core count.
+void scan_eth_l1_for_sync_headers() {
+    constexpr uint64_t SCAN_BASE = 0x15000;  // just below the observed channel buffers / credit addrs
+    constexpr uint64_t SCAN_END = 0x38000;   // covers ~32 slots x 4400B plus slack
+    constexpr uint32_t SYNC_HDR_SIG = 0x00020000;
+    constexpr std::size_t CHUNK_WORDS = 1024;  // 4KB reads
+
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    log_info(
+        tt::LogTest, "L1 scan for sync headers (sig 0x{:X}) over [0x{:X},0x{:X})", SYNC_HDR_SIG, SCAN_BASE, SCAN_END);
+    for (auto chip_id : cluster.all_chip_ids()) {
+        for (const auto& logical_core : control_plane.get_active_ethernet_cores(chip_id)) {
+            const auto virtual_core =
+                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, tt::CoreType::ETH);
+            std::size_t hits = 0;
+            for (uint64_t addr = SCAN_BASE; addr < SCAN_END; addr += CHUNK_WORDS * sizeof(uint32_t)) {
+                std::vector<uint32_t> buf(CHUNK_WORDS, 0);
+                try {
+                    cluster.read_core(buf, CHUNK_WORDS * sizeof(uint32_t), tt_cxy_pair(chip_id, virtual_core), addr);
+                } catch (...) {
+                    break;  // core unreachable (e.g. link still down) -- skip the rest of this core
+                }
+                for (std::size_t i = 0; i < buf.size(); ++i) {
+                    if (buf[i] == SYNC_HDR_SIG) {
+                        log_info(
+                            tt::LogTest, "L1HIT {} {} 0x{:X}", chip_id, logical_core.y, addr + i * sizeof(uint32_t));
+                        hits++;
+                    }
+                }
+            }
+            log_info(tt::LogTest, "L1SCAN {} {} hits={}", chip_id, logical_core.y, hits);
         }
     }
 }
@@ -569,6 +618,10 @@ int main(int argc, char** argv) {
                     const auto& smm = test_context.get_sender_memory_map();
                     dump_sync_semaphores_from_host(smm.get_local_sync_address(), smm.get_global_sync_address());
                 }
+
+                // [L1 SCAN] Where the sync packet's bytes actually are, independent of any pointer or
+                // ack. Prints only matches, so it stays compact.
+                scan_eth_l1_for_sync_headers();
 
                 if (test_context.did_last_test_hang()) {
                     log_error(
