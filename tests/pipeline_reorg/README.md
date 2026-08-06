@@ -94,6 +94,17 @@ Common optional keys (arbitrary extra keys are allowed if your pipeline needs th
 | `category` / `subcategories` | Coarser grouping than `id` (`tt-train-tests.yaml`). |
 | `{key}` in `cmd` | Any other key on the entry is substituted into `cmd` as `{key}` (e.g. per-SKU cache paths). |
 
+**These tables aren't exhaustive for every pipeline.** `prepare_test_matrix.py` passes through any
+key it doesn't recognize, and an impl workflow can read `matrix.test-group.<key>` directly — so
+individual pipelines grow their own extra keys, parsed only by that pipeline's impl workflow.
+Check the impl workflow (and existing entries in the same test yaml) before assuming a key is
+either required everywhere or unsupported. Examples already in the repo: `coverage: false` in
+`llk_pr_gate_tests.yaml` (opts a job out of coverage aggregation); `weights-cache-mode` on
+Blackhole demo SKUs (picks which cache volume `blackhole-demo-tests-impl.yaml` mounts); `arch`
+read directly in `ops-unit-tests-impl.yaml` to set `ARCH_NAME`/perf-throttle env vars; SKU names
+prefixed `sim_`, special-cased in `ttnn-smoke-tests-impl.yaml` to route to a simulator runner
+instead of real hardware.
+
 ```yaml
 - name: my_model_tests
   cmd: pytest models/demos/my_model/tests/
