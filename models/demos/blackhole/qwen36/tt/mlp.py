@@ -317,6 +317,14 @@ class Qwen36MLP:
         # gate * up (skipped when _fused_gu already produced `hidden` with SwiGLU in-kernel).
         if not _fused_gu:
             mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
+            # MEASURED (N300, 2026-08): putting `hidden` in L1 on WH prefill does NOT work, and the
+            # reason is not the one the note above gives. On WH the two are never both L1 anyway --
+            # prefill_out_memory_config's 8MB budget already sends the [2048,4096] down-proj OUTPUT to
+            # DRAM -- but `hidden` ALONE is too big: [1,2048,6144] bf16 = 25.2MB = ~393KB/core, and the
+            # down-proj then cannot place its own circular buffers ("clash with L1 buffers ... L1 buffer
+            # allocated at 1080192 and static circular buffer region ends at 1162432",
+            # test_mlp_tp_prefill at T=2048). No smaller budget helps: 2048 IS the production
+            # chunk-outer length, so anything that excludes it wins nothing. Keep DRAM.
             # Standalone silu only on DRAM-sharded decode path (SILU not fused there).
             if _silu_fused:
                 hidden = ttnn.mul(w1_out, w3_out, memory_config=mc_out)

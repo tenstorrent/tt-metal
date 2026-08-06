@@ -35,10 +35,16 @@ evolves. Wormhole is the only caller of the body below.
 
 MAINTENANCE
 -----------
-The body below is a verbatim copy of upstream at the commit this was written against, with exactly
-one change (marked "THE ONE CHANGE vs upstream"): x_padded is ROW_MAJOR, and correspondingly every
-tap -- not just k>=1 -- tilizes its own slice. ``_check_fork_is_current()`` asserts the upstream
-anchor still exists so drift fails loudly instead of silently running stale code.
+The body below is a verbatim copy of upstream at the commit this was written against, with two
+changes, each marked in-line:
+
+1. "THE ONE CHANGE vs upstream" -- x_padded is built in ROW_MAJOR instead of TILE, and
+   correspondingly each tap tilizes its own slice instead of untilizing the whole tensor.
+2. "SECOND CHANGE vs upstream" -- the last tap reuses ``x`` directly instead of slicing
+   x_padded[K-1 : K-1+T], which is the same rows by construction. Saves a slice + a tilize.
+
+``_check_fork_is_current()`` asserts the upstream anchor still exists so drift fails loudly instead
+of silently running stale code.
 """
 import inspect
 
@@ -52,6 +58,13 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet i
 # The TILE-layout concat this file exists to replace. If upstream restructures it (e.g. adopts the
 # ROW_MAJOR form itself), this copy is stale -- fail loudly rather than run old layout logic.
 _UPSTREAM_ANCHOR = "x_padded = ttnn.concat([pad, x], dim=1, memory_config=mc)"
+
+# Largest per-tap tilized window (bytes) we are willing to place in L1; above this the tap falls back
+# to the caller's memory config. 16MB == exactly one [1, 2048, 4096] bf16 window, i.e. the production
+# chunk-outer prefill length. Sized to the transient window ALONE, which is the whole reason it can be
+# this large: it is freed within the loop iteration and never coexists with the chunk kernel's CBs
+# (contrast the 8MB threshold on the long-lived norm tensors in gdn/tp.py).
+_TAP_L1_BUDGET = 16 << 20
 
 
 def _check_fork_is_current():
@@ -205,12 +218,33 @@ def _causal_conv1d_fir_wh(
 
     total_len = (kernel_size - 1) + T
     _dram = ttnn.DRAM_MEMORY_CONFIG
-    # Depthwise K-tap FIR via multiply + addcmul. x_padded is ROW_MAJOR (see THE ONE CHANGE), so
-    # EVERY tap tilizes its own slice -- 4 slice-sized tilizes instead of upstream's 3 whole-tensor
-    # untilize+tilize round trips.
+    # Depthwise K-tap FIR via multiply + addcmul. x_padded is ROW_MAJOR (see THE ONE CHANGE), so each
+    # tap tilizes its own slice rather than untilizing the whole tensor.
+    #
+    # SECOND CHANGE vs upstream: the LAST tap needs no slice and no tilize at all. Its window is
+    #   x_padded[K-1 : K-1+T] == x
+    # by construction (x_padded is [carry(K-1) | x(T)]), and `x` is still live in TILE layout -- it is
+    # what we untilized to build x_padded in the first place. So feed `x` straight in. At T=2048,
+    # D=4096 on N300 that drops a 211us ROW_MAJOR slice and a 192us tilize, both moving 33.6MB, for
+    # ~400us/layer. Accumulation order is untouched (still k = 0,1,..,K-1), so the result is unchanged.
+    # THIRD CHANGE vs upstream: land each tap's tilized window in L1 rather than `mc` (DRAM on WH).
+    # The window is transient — produced, consumed by the multiply/addcmul, and freed inside one
+    # iteration — so unlike the long-lived tensors that forced DRAM here it never coexists with the
+    # chunk kernel's circular buffers. Measured at T=2048, D=4096 on N300: Tilize 565->454us (it
+    # writes L1 instead of DRAM) and the addcmuls 948->843us (they read L1), together -206us.
+    # Guarded by size: only when one window fits _TAP_L1_BUDGET, else fall back to `mc`. At D=4096 bf16
+    # that covers chunks up to T=2048 (the production chunk-outer length) and declines gracefully above.
+    _tap_mc = ttnn.L1_MEMORY_CONFIG if (T * D * 2) <= _TAP_L1_BUDGET else mc
     out = None
     for k in range(kernel_size):
-        x_slice = ttnn.to_layout(x_padded[:, k : k + T], ttnn.TILE_LAYOUT)
+        if k == kernel_size - 1:
+            x_slice = x  # == x_padded[K-1 : K-1+T], already TILE
+        else:
+            # The ROW_MAJOR window itself stays in `mc` (DRAM). MEASURED: also placing it in L1 (via an
+            # explicit ttnn.slice with memory_config) makes the slice 262us cheaper but the tilize 249us
+            # dearer -- an L1->L1 tilize is slower than DRAM->L1 here -- for a net -38us, i.e. noise.
+            # Not worth the extra slice+deallocate, so only the tilize OUTPUT is L1 (see _tap_mc).
+            x_slice = ttnn.to_layout(x_padded[:, k : k + T], ttnn.TILE_LAYOUT, memory_config=_tap_mc)
         if out is None:
             out = ttnn.multiply(x_slice, weight_taps[k], memory_config=mc)
         else:
