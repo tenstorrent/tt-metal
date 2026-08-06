@@ -134,16 +134,19 @@ class TtVoxtralFlow:
             qh, kh, vh, is_causal=False, scale=1.0, compute_kernel_config=COMPUTE_CONFIG)
         # back to folded rows so wo and the MLP get the single-weight-read layout too
         a = ttnn.reshape(ttnn.permute(a, (0, 2, 1, 3)), [1, B * 3, FM_N_HEADS * FM_HEAD_DIM])
-        x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
-                                    memory_config=_L1), memory_config=_L1)
+        # NOTES.md [flow-22] -- in place. Only safe because the residual stream is born in L1
+        # in _trunk: add_ writes where x already lives, so a DRAM x would silently undo
+        # [flow-02]'s L1 residency and move a code. STATUS.md 6.48.
+        x = ttnn.add_(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
+                                     memory_config=_L1))
         h = self._norm(x, w["fn"])
         # NOTES.md [flow-12] -- SiLU rides along on the w1 matmul instead of being its...
         g = ttnn.linear(h, w["w1"], compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1,
                         activation="silu")
-        u = ttnn.multiply(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
-                                         memory_config=_L1), memory_config=_L1)
-        return ttnn.add(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG,
-                                       memory_config=_L1), memory_config=_L1)
+        u = ttnn.multiply_(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
+                                          memory_config=_L1))
+        return ttnn.add_(x, ttnn.linear(u, w["w2"], compute_kernel_config=COMPUTE_CONFIG,
+                                        memory_config=_L1))
 
     def _up(self, t, dtype=None):
         return ttnn.from_torch(t.contiguous(), dtype=dtype or self.dtype,
@@ -154,7 +157,9 @@ class TtVoxtralFlow:
 
         B is the CFG-doubled batch; the caller supplies [B,1,3072]. See NOTES.md [flow-19].
         """
-        seq = ttnn.concat([p0, p1, p2], dim=1)
+        # memory_config is load-bearing, not tidiness: it puts the RESIDUAL STREAM in L1 so
+        # _block's add_ inherits it. Drop it and in-place silently reverts [flow-02]. [flow-22].
+        seq = ttnn.concat([p0, p1, p2], dim=1, memory_config=_L1)
         # NOTES.md [flow-13] -- FOLD THE CFG BATCH INTO ROWS -- worth 2.23x...
         seq = ttnn.reshape(seq, [1, B * 3, FM_INPUT_DIM])
         for w in self.layers:

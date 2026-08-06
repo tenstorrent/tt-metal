@@ -1110,6 +1110,36 @@ Long-form WER over 3 seeds: **1 wrong of 894 with sdpa against 4 without**, 15/1
         # No `multiply(s, SCALE)` here: 1/sqrt(head_dim) is folded into wqkv's q rows at load time.
 ```
 
+### [flow-22] `_block` / `_trunk` — in-place elementwise, and the L1 trap in it
+
+The two residual adds and the SwiGLU multiply run in place: **+0.790 ms/frame, codes unmoved**
+(0 of 36 against the previous build, 1 of 36 against the fp32 reference either way). Frame counts
+reproduce 68/452/493 on cases 0/2/3.
+
+**THE TRAP, AND IT IS THE WHOLE REASON `_trunk`'s concat CARRIES A `memory_config`.** `add_`
+writes wherever `x` ALREADY lives. The shipped `add(x, r, memory_config=_L1)` placed the residual
+in L1 deliberately ([flow-02], worth 1.049x); `add_` inherits whatever it is given instead. With
+`x` arriving from `_trunk` in DRAM, in-place silently reverts that decision — and per [flow-10]
+an L1-vs-DRAM operand makes the downstream matmul pick a different program config, so it also
+**moved a code**: 1 of 36 against the previous build and 2 of 36 against fp32, where shipped is 1.
+
+Starting the stream in L1 instead — one kwarg on `_trunk`'s concat, no extra op — fixes both:
+
+```text
+    mul + resid, concat -> L1   21.104 ms/frame   +0.790   0/36 vs ship   1/36 vs fp32
+    mul + resid, x in DRAM      21.262            +0.631   1/36           2/36
+    mul only                    21.711            +0.183   0/36           1/36
+    shipped                     21.894             --      --             1/36
+```
+
+So the L1 version is both FASTER and accuracy-neutral. **If that `memory_config=_L1` is ever
+removed from the concat, the in-place adds silently change the model** — there is no error, only
+a moved code.
+
+**Measured and NOT taken: in-place in `_solve`.** The CFG combine and the Euler update are only
+7 calls a frame against `_block`'s 21, and all three arms landed inside the noise floor
+(+0.055 / −0.013 / −0.073 against 0.015 ms). Left alone. STATUS.md §6.48.
+
 ### [flow-12] `_block` — SiLU rides along on the w1 matmul instead of being its...
 
 ```text

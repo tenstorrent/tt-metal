@@ -3184,6 +3184,39 @@ be folded into either matmul: it is an elementwise product of two separate matmu
 only op that eliminates it is `ttnn.swiglu`, which requires w1|w3 fused, and §6.42 measured that
 at 21–23 µs/layer worse at this exact shape. The multiply can only be made cheaper, not removed.
 
+### 6.48 — p150: in-place in Block 2 too, +0.790 ms/frame — and the L1 trap inside it
+
+§6.47 shipped in-place in Block 1. The same treatment for every remaining elementwise site, five
+of them, measured cumulatively on the whole Block 2 frame:
+
+| arm | ms/frame | vs shipped | ≠ shipped | ≠ fp32 |
+|---|---|---|---|---|
+| **`_block` mul + resid, concat→L1 ← SHIPS** | **21.104** | **+0.790** | **0/36** | **1/36** |
+| `_block` mul + resid, x in DRAM | 21.262 | +0.631 | **1/36** | **2/36** |
+| `_block` mul only | 21.711 | +0.183 | 0/36 | 1/36 |
+| shipped | 21.894 | — | — | 1/36 |
+| `_solve` cfg / euler / both | 21.05–21.18 | ±0.07 | 0/36 | 1/36 |
+
+**THE TRAP IS WORTH MORE THAN THE MS.** `add_` writes wherever its first operand ALREADY lives.
+The shipped `add(x, r, memory_config=_L1)` put the residual in L1 on purpose ([flow-02], 1.049x);
+`add_` cannot be told where to write, so with `x` arriving from `_trunk` in DRAM the rewrite
+**silently reverted that decision** — and per [flow-10] an L1-vs-DRAM operand changes the
+downstream matmul's program config, so it moved a code as well: 1/36 against the previous build,
+2/36 against fp32 where shipped is 1.
+
+Fixing it needs one kwarg — `_trunk`'s concat gains `memory_config=_L1`, so the residual stream is
+BORN in L1 and `add_` inherits it. That version is both faster (+0.790 vs +0.631) and
+accuracy-neutral. **`memory_config` on that concat is now load-bearing: remove it and the in-place
+adds change the model with no error.**
+
+**`_solve` in-place is not taken.** Its CFG combine and Euler update run 7x a frame against
+`_block`'s 21, and every arm landed inside the 0.015 ms noise floor.
+
+**The generalisable point:** in-place is not a free syntactic swap on this chip. It removes an
+allocation (§6.47, ~12 µs) but it also **surrenders control of where the result lands**, and this
+port has spent real effort deciding exactly that (§6.10, [flow-02], [gpt-03]). Check the operand's
+memory config before assuming the rewrite is neutral.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
