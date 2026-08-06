@@ -420,27 +420,40 @@ def fabric_config_for_mesh(mesh_shape):
     return ttnn.FabricConfig.FABRIC_1D if (rows == 1 or cols == 1) else ttnn.FabricConfig.FABRIC_2D
 
 
+# True between a successful _apply_fabric_config and its matching reset. Gates the reset so we
+# only ever clear a fabric WE configured -- ccl_common manages its own and must not be disturbed.
+_FABRIC_APPLIED = False
+
+
 def _apply_fabric_config(mesh_shape) -> None:
     """Set the fabric for an imminent open. DISABLED first, mirroring ccl_common: metal
     rejects a transition straight from one live config to another."""
+    global _FABRIC_APPLIED
     cfg = fabric_config_for_mesh(mesh_shape)
     if cfg is None:
         return
     logger.info(f"SWEEPS: setting fabric {cfg} for mesh {tuple(mesh_shape)} before open")
     _orig_set_fabric_config(ttnn.FabricConfig.DISABLED)
     _orig_set_fabric_config(cfg)
+    _FABRIC_APPLIED = True
 
 
 def _reset_fabric_config() -> None:
-    """The reset_fabric() half of the model fixture's contract. Uses the UNGUARDED setter:
-    this runs from close_job_device, after the device is already closed, and the guard
-    would call back into close_job_device."""
-    if _orig_set_fabric_config is None or _fabric_mode() in ("", "off", "0", "false", "no", "disabled"):
+    """The reset_fabric() half of the model fixture's contract: leave the process with the
+    fabric DISABLED so nothing inherits a configuration it never asked for.
+
+    No-ops unless we are the ones who set it (_FABRIC_APPLIED), so a fabric configured by
+    ccl_common survives. Uses the UNGUARDED setter: callers run after the device is already
+    closed, and the guarded one would call back into close_job_device."""
+    global _FABRIC_APPLIED
+    if not _FABRIC_APPLIED or _orig_set_fabric_config is None:
         return
     try:
         _orig_set_fabric_config(ttnn.FabricConfig.DISABLED)
     except Exception:
-        logger.exception("SWEEPS: failed to reset the fabric config after closing the job device")
+        logger.exception("SWEEPS: failed to reset the fabric config after closing the mesh device")
+    finally:
+        _FABRIC_APPLIED = False
 
 
 _orig_open_mesh_device = ttnn.open_mesh_device
@@ -566,13 +579,23 @@ def _close_mesh_and_parent(device, *args, **kwargs):
     always quiesced before closing a carved parent."""
     entry = _SUBMESH_PARENTS.pop(id(device), None)
     if entry is None:
-        return _orig_close_mesh_device(device, *args, **kwargs)
+        result = _orig_close_mesh_device(device, *args, **kwargs)
+        # Reset here, not only in close_job_device: create_mesh_device deliberately bypasses
+        # the job-device cache (caching disabled, or an unkeyable config), and those devices are
+        # closed straight through this path -- close_job_device would early-return on
+        # _JOB_DEVICE is None and never reset, leaving the process-global fabric enabled for
+        # whatever opens next. _reset_fabric_config only acts if WE set it, so a fabric
+        # configured by ccl_common is left alone.
+        _reset_fabric_config()
+        return result
     parent = entry[1]
     try:
         parent.quiesce_devices()
     except Exception:
         logger.exception("SWEEPS: quiesce_devices before closing the carved parent mesh failed")
-    return _orig_close_mesh_device(parent, *args, **kwargs)
+    result = _orig_close_mesh_device(parent, *args, **kwargs)
+    _reset_fabric_config()
+    return result
 
 
 def _guarded_open_mesh_device(*args, **kwargs):
@@ -640,7 +663,21 @@ def close_job_device() -> bool:
     return True
 
 
-def _create_mesh_device_uncached(
+def _create_mesh_device_uncached(*args, **kwargs) -> ttnn.MeshDevice:
+    """Open a mesh device, resetting the fabric if the open fails.
+
+    Wraps _open_mesh_device_configured so a fabric we set on the way in never outlives a failed
+    open: without this, an exception between _apply_fabric_config and a returned device would
+    leave the process-global fabric enabled for whatever opens next (the same leak as an
+    uncached close, see _close_mesh_and_parent)."""
+    try:
+        return _open_mesh_device_configured(*args, **kwargs)
+    except BaseException:
+        _reset_fabric_config()
+        raise
+
+
+def _open_mesh_device_configured(
     mesh_shape: Tuple[int, int],
     device_ids: Optional[list] = None,
     l1_small_size: int = 79104,
