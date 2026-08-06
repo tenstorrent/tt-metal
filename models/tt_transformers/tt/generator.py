@@ -1285,8 +1285,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             reload_inputs: Host token/position/page-table inputs are authoritative for
                 this step; restage all of them. Subsumes ``reload_page_table``.
             reload_page_table: Copy only the page-table trace input, preserving
-                device-produced token and position state. Ignored when
-                ``reload_inputs`` is set.
+                device-produced token and position state. Rejected together with
+                ``reload_inputs``, which already restages page tables: the two
+                encode one three-valued decision, not two switches.
             reload_sampling_params: Upload temperature/top-k/top-p/penalties.
             reset_sampling_state: Rebuild per-slot penalty history and seeds.
 

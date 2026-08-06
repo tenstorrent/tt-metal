@@ -13,7 +13,9 @@ own. Every decode call carries four independent commands:
     all of them. Subsumes ``reload_page_table``.
 ``reload_page_table``
     Copy only the page-table trace input, preserving device-produced token and
-    position state. Meaningful only when ``reload_inputs`` is false.
+    position state. Rejected together with ``reload_inputs``: the two encode one
+    three-valued decision, so branch on ``decode_input_staging`` rather than on the
+    pair.
 ``reload_sampling_params``
     Upload temperature/top-k/top-p/penalty parameters, **and register each request's
     explicit seed**. The seed half is easy to miss from the name: parameters carry
@@ -38,8 +40,10 @@ which is what stops vLLM from planning the combination it cannot run.
 
 Declare the version on the generator that implements the commands, not on each leaf
 adapter, so a subclass cannot silently drop to the legacy call shape. Every subclass
-therefore inherits the assertion, and one that overrides ``decode_forward`` must
-re-establish it for itself.
+therefore inherits the assertion. A subclass that overrides ``decode_forward`` no
+longer inherits the implementation the marker attests to: re-declaring the marker is
+not what makes it conformant, so the override must itself execute every command, or
+the subclass must set ``decode_input_update_contract = 0``.
 
 vLLM sends all four commands on every contract decode, so an adapter needs no
 defaults. Where it declares one, the only safe value is the host-authoritative one:

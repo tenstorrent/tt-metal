@@ -63,8 +63,9 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
       decode overlap eligible for each of them that advertises
       `supports_async_decode`; audit existing subclasses before moving a marker
       up. A subclass that overrides `decode_forward` no longer inherits the
-      implementation the marker attests to and must re-establish conformance
-      itself.
+      implementation the marker attests to; re-declaring the marker does not make
+      it conformant, so either the override executes every command or the subclass
+      declares version `0`.
 
       | Version | Meaning |
       | --- | --- |

@@ -16,23 +16,40 @@ penalties with optional trace capture.
 
 ## Quick Start
 ```python
-from models.common.sampling import SamplingGenerator, format_sampling_params
+from models.common.sampling import (
+    SamplingGenerator,
+    chunk_sampling_params,
+    format_sampling_params,
+)
 
 sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=tt_ccl)
 
-params = format_sampling_params(user_params, max_batch_size=32)
-sampling.reset_sampling_params(params)
+# Prefill: one call sets params, seeds and penalty history for these slots.
+sampling.apply_prefill_state(
+    sampling_params=format_sampling_params(user_params, max_batch_size=32),
+    prompt_tokens=prompt_tokens,    # torch tensor shaped [B, S]
+    empty_slots=[0, 1, 2],
+)
 
-sampling.reset_seed(seed)
-
-sampling.reset_prompt_tokens(prompt_tokens)   # torch tensor shaped [B, S]
-sampling.reset_output_state(output_tokens)
+# Decode: apply_decode_update owns the ordering the contract requires. Do not
+# drive reset_sampling_params / the seed manager directly from a generator.
+sampling.apply_decode_update(
+    chunk_sampling_params(user_params, sampling_dp),
+    reload_sampling_params=True,
+    reset_sampling_state=True,
+    seeds=format_sampling_params(user_params, sampling.tt_sampling.max_batch_size).seed,
+    active_slots=[0, 1, 2],
+)
 
 tt_tokens = sampling.sample(
     tt_logits,
     tt_out_tok=tt_out_buffer,
 )
 ```
+
+`reset_seed` and `reset_seed_from_slots` live on `SeedManager`, not on
+`SamplingGenerator`, and differ in whether their `seeds` argument is in request
+order or device-slot order. Reach for them only from inside the sampling module.
 
 `SamplingGenerator.sample()` accepts `enable_trace=True` to record/replay
 sampling traces.
@@ -81,7 +98,7 @@ For `sampling_dp > 1`:
 - those flattened host tensors are then row-sharded onto the device
 
 Decode already follows this contract by using `chunk_sampling_params(...)`
-plus `apply_decode_state(...)`.
+plus `apply_decode_update(...)`, which chunks through to `apply_decode_state`.
 
 ## Param Distribution API
 
@@ -212,9 +229,15 @@ cannot drive a contract adapter.** What it does depends on the tier:
   with a `ValueError` naming the fix. They cannot simply accept the call: their
   commands carry host-authoritative defaults, so an old vLLM's layout changes
   would be silently reinterpreted as a full reload on every step.
-- The wrapper-tier adapters with required keyword-only commands (DeepSeek,
-  Qwen2.5-VL, Qwen3-VL, T3000 Llama, Mllama) raise `TypeError` for the missing
-  arguments.
+- The three wrapper-tier adapters that declare the commands as required
+  keyword-only arguments (DeepSeek, T3000 Llama, Mllama) raise `TypeError` for the
+  missing arguments.
+- The remaining wrappers, including Qwen2.5-VL and Qwen3-VL, absorb `**kwargs` and
+  forward to a model-tier generator, so they fail the same way it does: by name on
+  `reset_batch`, or not at all on a host-sampling step that sends neither
+  `reset_batch` nor the commands. Such a step takes the host-authoritative
+  defaults, which is the conservative shape, so it is accepted rather than
+  rejected.
 
 Update the vLLM pin along with tt-metal. In the plugin the pin lives in the
 deployment's vLLM checkout, not in this repo.
@@ -262,7 +285,7 @@ without a stated reason someone will flip it back.
 
 **Padded vocab logits**: If the LM head pads output weights beyond the real tokenizer vocabulary, the sampler must mask those padded token IDs before force-argmax or local top-k. Zero-padded LM-head weights are useful for legal sharded matmul shapes, but they are not a sampling mask.
 
-**`sampling_dp`**: When >1, k/p/temp tensors must have length `max_batch_size * sampling_dp` and are row-sharded via `ShardTensor2dMesh(dims=(0, None))`. Use `chunk_sampling_params` + `apply_decode_state` to distribute params across mesh rows.
+**`sampling_dp`**: When >1, k/p/temp tensors must have length `max_batch_size * sampling_dp` and are row-sharded via `ShardTensor2dMesh(dims=(0, None))`. Use `chunk_sampling_params` + `apply_decode_update` to distribute params across mesh rows.
 
 **Batched prefill + on-device sampling**: This path is only valid when the
 runtime prefill compute layout matches the sampling-group layout. If a model

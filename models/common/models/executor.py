@@ -72,6 +72,14 @@ def _apply_decode_sampling_state(model, sampling_params, batch_size, *, rng_need
     sampling_module = model.sampling
     # Raw, not pre-formatted: ``apply_decode_state`` formats once, and
     # ``format_sampling_params`` inverts temperature, so a second pass inverts it back.
+    #
+    # Broadcasting slot 0's temperature/top-k/top-p across the batch holds only because
+    # every caller that reaches here shares one parameter set: the demos pass scalars,
+    # and vLLM cannot reach it at all, since this family advertises no
+    # ``supports_sample_on_device`` so the platform refuses device sampling and
+    # ``sampling_params`` arrives as None. Converting this executor to the contract has
+    # to replace this with the real per-slot arrays: vLLM sends genuine per-request
+    # values, and index 0 would silently win for the whole batch.
     per_slot_params = broadcast_sampling_params(sampling_params, 0, slot_len=batch_size)
     # Seeds come from the real per-request values. Taking them from the broadcast above
     # would give every slot user 0's seed, so a seeded batch would sample identically.
