@@ -105,13 +105,6 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
         uint8_t ew_hops = 0;
         uint8_t ns_direction = 0;
         uint8_t ew_direction = 0;
-        // Z (intra-mesh skip link) is a dedicated dimension carrying at most one hop per route. Rather
-        // than pin it to a specific axis, z_before records how many cardinal hops (NS then EW, in
-        // dimension order) precede the Z hop. This lets the skip sit anywhere in the route: inside the
-        // NS run (NS-axis skip) or inside the EW run (EW-axis skip, e.g. a wide 8x16 mesh). z_present
-        // marks that the route contains a single Z hop.
-        uint8_t z_present = 0;
-        uint8_t z_before = 0;
 
         auto make_node = [mesh_id](uint16_t chip) { return tt::tt_fabric::FabricNodeId(mesh_id, chip); };
         auto next_dir = [&](uint16_t from_chip, uint16_t to_chip) {
@@ -120,7 +113,6 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
 
         bool seen_ns = false;
         bool seen_ew = false;
-        bool seen_z = false;
         uint16_t prev_chip = src_chip_id;
         for (uint16_t curr_chip : best_chip_sequence) {
             auto dir_opt = next_dir(prev_chip, curr_chip);
@@ -138,12 +130,9 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
                 } else {
                     TT_ASSERT(
                         ns_direction == bit,
-                        "Non-monotone NS traversal (with skip) is not supported: chip {} -> {}",
+                        "Non-monotone NS traversal is not supported: chip {} -> {}",
                         prev_chip,
                         curr_chip);
-                }
-                if (!seen_z) {
-                    ++z_before;
                 }
                 ++ns_hops;
             } else if (d == RoutingDirection::E || d == RoutingDirection::W) {
@@ -158,32 +147,23 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
                         prev_chip,
                         curr_chip);
                 }
-                if (!seen_z) {
-                    ++z_before;
-                }
                 ++ew_hops;
-            } else if (d == RoutingDirection::Z) {
-                TT_ASSERT(!seen_z, "More than one Z (skip) hop per route is not supported: chip {}", curr_chip);
-                z_present = 1;
-                seen_z = true;
             } else {
                 TT_ASSERT(false, "Unexpected routing direction between chips {} and {}", prev_chip, curr_chip);
             }
             prev_chip = curr_chip;
         }
 
-        // turn_point marks the NS->EW turn position in the emitted route. A Z hop only shifts the turn
-        // when it is spliced inside (or right after) the NS run, i.e. z_before <= ns_hops; an EW-axis
-        // skip sits after the turn and does not move it.
-        const uint8_t turn_point = (uint8_t)(ns_hops + ((z_present && z_before <= ns_hops) ? 1 : 0));
-        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_point, z_present, z_before);
+        // turn_point marks the NS->EW turn position in the emitted route.
+        const uint8_t turn_point = ns_hops;
+        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_point);
     }
 }
 
 // Indexed (destination-keyed) 2D routing table generation: consumes routing generation's first-hop
 // facade (get_forwarding_direction) and packs it with the codec packer. Axis decomposition follows
 // DOR (Y completes before X): while rows differ the first hop is a Y move (N/S/Z), probed
-// same-column — which is also how the columnar skip-link chords surface; once rows match the first
+// same-column — which is also how the columnar express chords surface; once rows match the first
 // hop is an X move (E/W), probed same-row. Row/column uniformity makes the answers independent of
 // the representative column/row; a DOR or representational violation makes the packer return false
 // and is asserted here, never silently packed.
