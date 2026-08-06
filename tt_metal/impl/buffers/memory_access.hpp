@@ -34,26 +34,12 @@ inline IDevice* physical_device_from_unit_mesh(distributed::MeshDevice& unit_mes
 // detail::WriteToBuffer/ReadFromBuffer on MeshBuffer::get_reference_buffer().
 template <typename DType>
 inline void WriteToBuffer(const distributed::MeshBuffer& mesh_buffer, const std::vector<DType>& host_buffer) {
-    auto* unit_mesh = mesh_buffer.device();
-    unit_mesh->mesh_command_queue().enqueue_write_shard_to_sub_grid(
-        mesh_buffer,
-        host_buffer.data(),
-        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0)),
-        /*blocking=*/true);
+    WriteToBuffer(*mesh_buffer.get_reference_buffer(), host_buffer);
 }
 
 template <typename DType>
 inline void ReadFromBuffer(const distributed::MeshBuffer& mesh_buffer, std::vector<DType>& host_buffer) {
-    auto* unit_mesh = mesh_buffer.device();
-    // ReadShard requires shared_ptr; alias without transferring ownership.
-    std::shared_ptr<distributed::MeshBuffer> alias(
-        const_cast<distributed::MeshBuffer*>(&mesh_buffer), [](distributed::MeshBuffer*) {});
-    distributed::ReadShard(
-        unit_mesh->mesh_command_queue(),
-        host_buffer,
-        alias,
-        distributed::MeshCoordinate(0, 0),
-        /*blocking=*/true);
+    ReadFromBuffer(*mesh_buffer.get_reference_buffer(), host_buffer);
 }
 
 inline bool WriteToL1(
