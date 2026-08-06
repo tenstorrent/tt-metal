@@ -1026,6 +1026,19 @@ class Gemma4Model:
         # reads the same two metadata tensors, and they must be written from the host
         # outside any traced region — a trace captures addresses, not values, which is the
         # whole point of routing these through DRAM instead of runtime args.
+        # GEMMA4_PIN_ROPE exercises the traced path's pinned-RoPE buffers in EAGER mode.
+        # A probe: pinning must be a no-op numerically, so if eager results change under
+        # it, the refresh is wrong rather than anything about tracing.
+        import os as _os
+
+        if not is_decode and chunk_start_idx is not None and _os.environ.get("GEMMA4_PIN_ROPE"):
+            from models.demos.gemma4.tt.ccl import cp_degree as _cpd
+
+            _cp = _cpd(self.mesh_config)
+            self._refresh_rope_prefill(
+                seq_len // batch_size if batch_size > 1 else seq_len, int(chunk_start_idx) // _cp
+            )
+
         # Skipped when a traced caller owns the update: copy_host_to_device_tensor has to
         # run outside the captured region, or the trace would replay a stale write.
         if not is_decode and chunk_start_idx is not None and not self._ring_metadata_external:

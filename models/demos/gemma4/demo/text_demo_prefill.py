@@ -1714,6 +1714,12 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
         )
         ttnn.copy_host_to_device_tensor(staged, device_input)
         model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
+        # Probe: ring attention's CCL semaphores persist across replays. Eager dispatch
+        # may leave them in a state each call re-establishes; a replay re-runs identical
+        # commands against whatever the previous replay left behind.
+        if os.environ.get("GEMMA4_TRACE_SEM_RESET"):
+            for _sem in model.ccl_manager.ring_attention_ccl_semaphore_handles:
+                ttnn.reset_global_semaphore_value(_sem, 0)
         # Under CP the prefill RoPE cache is chunk-major per rank, so the local slice
         # advances by the per-rank slab, matching _get_rope_mats' start_pos // cp.
         model._refresh_rope_prefill(rope_local_seq, (chunk_start // cp))
@@ -1750,7 +1756,11 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
     out_first = _forward(start0)
     ttnn.end_trace_capture(mesh_device, tid_first, cq_id=0)
 
-    start1 = _stage(1)
+    # Which chunk the ring trace is captured at. A probe: replays must be independent of
+    # this, so if correctness tracks the capture point then per-chunk state is still baked
+    # into the recorded commands somewhere.
+    cap_idx = int(os.environ.get("GEMMA4_TRACE_CAPTURE_CHUNK", "1"))
+    start1 = _stage(cap_idx)
     tid_ring = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     out_ring = _forward(start1)
     ttnn.end_trace_capture(mesh_device, tid_ring, cq_id=0)
@@ -1769,7 +1779,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, requ
     )
 
     # Warm replay of each, so the measured pass excludes one-off dispatch setup.
-    for tid, idx in ((tid_first, 0), (tid_ring, 1)):
+    for tid, idx in ((tid_first, 0), (tid_ring, cap_idx)):
         _stage(idx)
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
     ttnn.synchronize_device(mesh_device)
