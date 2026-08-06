@@ -171,10 +171,16 @@ class TtConditionalCFM:
         )
         self._fill_x(x)
 
+        # `mu`, `spks` and `cond` are fixed for the utterance, so the estimator's input
+        # assembly -- broadcasting `spks` over time and concatenating the three constant
+        # blocks -- is loop-invariant across all ten Euler steps. Built here, before
+        # capture, so the traced body is left with one two-way concat against `x`.
+        self._packed_const = self.estimator.pack_const(mu2, spks2, cond2, t_len)
+
         def body():
             """One complete Euler step: CFG pair, estimator, guidance, update."""
             x2 = ttnn.concat([self._x_buf, self._x_buf], dim=0)
-            d = self.estimator(x2, mu2, self._t_buf, spks=spks2, cond=cond2, batch=2)
+            d = self.estimator(x2, None, self._t_buf, batch=2, packed_const=self._packed_const)
             ttnn.deallocate(x2)
             c = ttnn.slice(d, [0, 0, 0], [1, t_len, ch])
             u = ttnn.slice(d, [1, 0, 0], [2, t_len, ch])
@@ -223,7 +229,9 @@ class TtConditionalCFM:
         # region; `release_trace` reclaims it and deallocating it here would be a
         # double free. Dropping the reference is all that is wanted.
         self._next_x = None
-        for name in ("_x_buf", "_t_buf", "_dt_buf"):
+        # `_packed_const` is allocated *outside* the capture, so it is ours to free --
+        # unlike `_next_x`, and after `release_trace` so nothing is reading it.
+        for name in ("_x_buf", "_t_buf", "_dt_buf", "_packed_const"):
             t = getattr(self, name, None)
             if t is not None:
                 ttnn.deallocate(t)
