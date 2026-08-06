@@ -67,6 +67,9 @@ python3 models/tt_dit/tools/dit_analyzer/tests/test_dryrun.py         # dry run,
 # or: pytest models/tt_dit/tools/dit_analyzer/
 # on a device: shape conformance vs real ttnn (phase 7b / 11)
 python3 models/tt_dit/tools/dit_analyzer/conform.py --mesh 2 4
+# on a device: conform a *finding* — the H3 encoder's SP-replicated output,
+# read back per-device, is bit-for-bit identical across SP rows (max|Δ|=0)
+python3 models/tt_dit/tools/dit_analyzer/conform_encoder.py --mesh 2 4
 ```
 
 ## The dry run
