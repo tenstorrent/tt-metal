@@ -11,7 +11,7 @@ Assumes the model is already integrated — adapter registered, golden trace sta
 | Gate | What it exercises | Needs |
 |------|-------------------|-------|
 | **1 — mock migration** | Prefill writes correct KV (precondition for everything) and the KV-chunk address table is correct, read device-lessly | tt-metal tree only |
-| **2 — loopback migration** | The real DRAM → transport → DRAM copy, and migrated-KV accuracy | + tt-llm-engine binaries |
+| **2 — loopback migration** | The real DRAM → transport → DRAM copy completes (transport only — no destination read-back) | + tt-llm-engine binaries |
 
 Gate 2 covers the same ground as the harness's own prefill-loopback stage. The difference is only that the
 harness drives it end to end instead of three terminals.
@@ -70,9 +70,8 @@ migration is not implemented). Gate 2 therefore uses a 1-rank binding.
 { "env": { "PREFILL_MODEL": "my_model", "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32" } }
 ```
 
-The `env:` map is applied verbatim by `setdefault`, so a rank binding's `global_env` still wins. A manifest
-may also carry a `users[]` + `migration{}` block for the pairwise-validation path; a plain model-config
-manifest omits it.
+The `env:` map is applied verbatim by `setdefault`, so a rank binding's `global_env` still wins. It is the
+only block the runner reads.
 
 ## Rank binding
 
@@ -99,12 +98,6 @@ global_env:
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
   PREFILL_MIGRATION_CLIENT_DIR: "<tt-llm-engine>/disaggregation/migration/build_RelWithDebInfo/python"
-
-  PREFILL_VALIDATE_MIGRATION: "1"
-  PREFILL_MIGRATE_PAIRWISE: "1"                    # dst == src; omit for burst (vs golden)
-  PREFILL_STANDALONE_CHUNKED_NCHUNKS: "22"         # = num_users x chunks the producer pushes
-  MIGRATION_DONE_FILE: "/tmp/migration_done.sentinel"
-  PREFILL_MIGRATE_WAIT_S: "1200"
 ```
 
 ---
@@ -158,7 +151,7 @@ workload:
   chunks: "11"
   max_requests: 2                 # one resident request per slot
   interleave: round_robin
-  check_pcc: false                # the RUNNER validates migrated KV on-device
+  check_pcc: true                 # the only KV accuracy signal — nothing PCCs the migrated dst slot
 
 migration:
   issue: true                     # attach the client and migrate after prefill
@@ -260,7 +253,7 @@ python -m models.demos.common.prefill.runners.prefill_producer --manifest $MANIF
 **not** use `migration_driver`.
 
 Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default
-`0.93` — note this differs from the runner's `0.88` default for the same variable).
+`0.93`).
 
 This gate is not a prerequisite for the producer's golden PCC on the real-migration path, because the runner
 serialises the device map there too — `serialize_device_map` is called from **both** the
@@ -304,21 +297,16 @@ python -m models.demos.common.prefill.runners.migration_driver --manifest $MANIF
 
 `migration_driver`, not `prefill_producer` — this gate migrates. See "Two producer entry points" above.
 
-The driver prefills, drains the acks, migrates each pair, then writes the DONE sentinel; the runner is
-polling for it and validates on-device. **PCC is logged by the runner (terminal B), not the driver** — the
-driver only reports the transport (the `MIGRATE slot … complete` lines). Accuracy lives in the runner's
-post-loop `[kv-migrate-validate]` output.
+The driver prefills, drains the acks, migrates each pair, then writes the DONE sentinel. Everything this
+gate reports is transport: the `MIGRATE slot … complete` lines and the sentinel's pair list. **The migrated
+destination slot is never read back**, so a copy that lands in the wrong slot, layer or position range
+still passes — `check_pcc: true` only proves the SOURCE KV was written correctly before the migrate.
+Verifying a destination means reading it from outside the runner (`read_dram_umd` against the published
+table, the way `check_pcc` reads a source).
 
-**2a — pairwise** (`PREFILL_MIGRATE_PAIRWISE=1`). Each destination is asserted bit-equal to its source,
-golden-free and length-agnostic. Also catches cross-talk between concurrent migrations. Expect, in terminal
-B, `[kv-migrate-validate] AFTER pairwise src=0 dst=2 min_pcc=…` per pair, then `ALL <N> pair(s) dst==src
-PASSED` at or above `PREFILL_MIGRATE_PAIRWISE_PCC` (default `0.99`).
-
-**2b — burst** (omit `PREFILL_MIGRATE_PAIRWISE`). Source and destination are both PCC'd against the same
-golden. Expect `BEFORE src_slot=0 …` and `AFTER dst_slot=2 …`, then `ALL <N> migrated pair(s) PASSED`.
-
-The two are either/or per run; run twice for both signals. Pairwise is the cheaper fidelity check — burst
-anchors both slots to the golden but reads the cache twice.
+The runner's request loop is unbounded and the driver's chunks are not a shutdown, so set
+`PREFILL_SEND_SHUTDOWN=1` on the driver to close the stream once it is done — otherwise terminal B sits in
+`recv` until you SIGTERM it.
 
 For a multi-config cache (a sparse model publishes its index cache alongside the KV cache in one merged
 table), **config-id order is the src↔dst contract**. Loopback is self-consistent by construction, but a real
@@ -328,19 +316,16 @@ prefill→decode run needs the decode endpoint to publish its configs in the sam
 
 ## Runtime hooks each gate requires
 
-Validation is driven by the optional runtime hooks in `ADDING_A_PREFILL_MODEL.md` §2. Implement only what the
+Both gates run off the optional runtime hooks in `ADDING_A_PREFILL_MODEL.md` §2. Implement only what the
 gates you intend to run require.
 
 | Gate | Hook | Signature requirement |
 |------|------|-----------------------|
-| 0 | `kv_cache_pcc_check` | accepts `trace_dir`, `first_layer_idx` |
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
-| 2a pairwise | `read_slot_kv` | returns bare host tensors, `[num_layers, heads(or 1), seq_cache, head_dim]` |
-| 2b burst | `kv_cache_pcc_check` | **also** accepts `real_len=` |
-| 2a + golden anchor | `kv_cache_pcc_check` | **also** accepts `pt_path_override=` |
+| 2 | `kv_migration_base_address` | this rank's KV base DRAM address, for the cross-stage table merge |
 
-`runners/validation.py` calls these by keyword, so a runtime missing `real_len` or `pt_path_override` raises
-`TypeError` before any PCC runs. It presents as a crash rather than a validation failure.
+The KV read-back both gates PCC against golden is the producer's own device-less `read_dram_umd` path, so a
+new model also needs its cache layout handled in `prefill_producer.py`.
 
 ## Values that must agree across the three processes
 
@@ -351,15 +336,14 @@ gates you intend to run require.
 | chunk size | `PREFILL_CHUNK_SIZE` | same var, exported | — |
 | mesh | `PREFILL_SP` / `PREFILL_TP` | `transport.sp` / `.tp` | — |
 | KV table | `PREFILL_MIGRATION_TABLE_PATH` | `migration.table_path` | — |
-| sentinel | `MIGRATION_DONE_FILE` | `migration.done_file` | — |
+| sentinel | — (driver-side only) | `migration.done_file` | — |
 | queues | `PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE` | `migration.{cmd,table,resp}_queue` | `--prefill-{cmd,table,resp}-queue` |
 | client `.so` | `PREFILL_MIGRATION_CLIENT_DIR` | exported (not in the manifest) | — |
-| chunk budget | `PREFILL_STANDALONE_CHUNKED_NCHUNKS` | `num_users` × `chunks` | — |
+| cache depth | `PREFILL_MAX_SEQ_LEN` | ≥ `chunks` × `PREFILL_CHUNK_SIZE` | — |
 | slot count | `PREFILL_NUM_USERS` | ≥ max dst slot + 1 | — |
 
-`PREFILL_STANDALONE_CHUNKED_NCHUNKS` is the one worth double-checking: the driver never sends a shutdown
-push, so the runner uses that count to know prefill is done before it polls the DONE sentinel. Too low and
-the runner exits mid-prefill; too high and it blocks on chunks that never come, printing no PCC either way.
+`PREFILL_MAX_SEQ_LEN` is the one worth double-checking: too small and the runner asserts mid-prefill when a
+chunk overruns the per-user cache.
 
 Deriving every row of this table from a single place is the main thing the harness buys. It also rejects
 attempts to set any of them by hand.
