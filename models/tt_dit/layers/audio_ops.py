@@ -1616,7 +1616,11 @@ class SnakeBeta(Module):
         return 1
 
     def _folded_ab(self, fold: int):
-        """alpha/beta repeated `fold` times along C, cached per fold factor."""
+        """alpha/beta repeated `fold` times along C, cached per repeat count.
+
+        Serves both the tile-fold (`_fold_factor`) and `channel_repeat`, since both need exactly the
+        same thing: the per-channel parameters tiled so they line up with a widened channel axis.
+        """
         cached = self._ab_folded.get(fold)
         if cached is None:
             a, b = self._ab_shard

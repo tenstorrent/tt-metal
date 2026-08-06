@@ -15,6 +15,7 @@ window, single-device).
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -31,6 +32,18 @@ from .audio_ops import (
     depthwise_tap_filter,
 )
 from .module import Module
+
+
+def fuse_band_enabled() -> bool:
+    """Whether `Activation1d` runs as one fused band, from ``MINIMAX_H3_AUDIO_FUSE_BAND`` (default on).
+
+    The band is ``up2 -> activation -> down2``. Run literally, the 2x upsampled tensor is written to
+    DRAM and read back by the interleave concat, the activation's layout round trip, the downsampler's
+    replicate pad and the downsampler itself. Since the activation is pointwise, none of that is
+    necessary: see `Activation1d._forward_fused`. Off restores the literal form, which is what the
+    fused path is checked against.
+    """
+    return os.environ.get("MINIMAX_H3_AUDIO_FUSE_BAND", "1") == "1"
 
 
 def _make_hann_sinc_kernel_1d(*, ratio: int) -> tuple[torch.Tensor, int, int, int, int]:
@@ -327,7 +340,99 @@ class Activation1d(Module):
             ccl_manager=ccl_manager,
         )
 
+    def _can_fuse(self) -> bool:
+        """Whether the band can run without ever materialising the 2x upsampled tensor.
+
+        Requires the ratio-2 polyphase upsampler, a ratio-2 even-kernel downsampler with the standard
+        ``(K//2 - 1, K//2)`` replicate pad, and no T-sharding (the halo exchange owns the padding
+        there, and duplicating that invariant is how it gets wrong).
+        """
+        up, low = self.upsample, self.downsample.lowpass
+        return (
+            fuse_band_enabled()
+            and up._use_polyphase
+            and up.ratio == 2
+            and up.pad >= 2
+            and low.stride == 2
+            and low.padding
+            and low.padding_mode == "replicate"
+            and low.kernel_size % 2 == 0
+            and low.pad_left == low.kernel_size // 2 - 1
+            and low.pad_right == low.kernel_size // 2
+            and (up.parallel_config is None or up.parallel_config.factor <= 1)
+            and (low.parallel_config is None or low.parallel_config.factor <= 1)
+        )
+
+    def _forward_fused(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
+        """``up2 -> act -> down2`` computed on half-length phase signals.
+
+        The upsampler's output is ``z[2m] = ph0[m]``, ``z[2m+1] = ph1[m]``, and the activation is
+        pointwise, so ``act(z)`` interleaves ``act(ph0)`` and ``act(ph1)``. Splitting the downsample
+        sum by the parity of the tap index then gives
+
+            y[t] = sum_a tap[2a] * P0[t+a] + sum_a tap[2a+1] * P1[t+a]
+
+        with ``P0[m] = s_pad[2m]``, ``P1[m] = s_pad[2m+1]`` -- two stride-1 depthwise FIRs over
+        half-length signals. The interleave concat and every op that would have run at 2x length
+        disappear; nothing is approximated (verified exact against the unfused form).
+
+        The one trap: replicate padding does **not** decompose into per-phase replicate padding. The
+        pad region is the constant ``s[0]`` (or ``s[-1]``) whose parity alternates, so P0's left pad is
+        built from ``s0[0]`` -- the first sample of the *other* phase -- not from ``s1[0]``.
+        """
+        up, low = self.upsample, self.downsample.lowpass
+        B, T, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
+
+        # --- upsample phases, without interleaving them ---
+        crop = 2
+        x_pad = _replicate_pad_t(x_BTC, up.pad - crop, up.pad - crop, up.mesh_device)
+        scaled = [t * up.ratio for t in up._taps_cpu]
+        sub0 = [scaled[2 * j + 0] for j in range(up._poly_K_sub)] + [0.0]
+        sub1 = [0.0] + [scaled[2 * j + 1] for j in range(up._poly_K_sub)]
+        fir = lambda src, taps: depthwise_tap_filter(
+            src, taps, 1, mesh_device=up.mesh_device, dtype=up.dtype, cache=up._conv1d_cache
+        )
+        ph0, ph1 = fir(x_pad, sub0), fir(x_pad, sub1)
+        ttnn.deallocate(x_pad)
+
+        # --- pointwise activation, per phase ---
+        #
+        # Stacking the phases along C to halve the activation count was tried and reverted: it did not
+        # get faster, and it moved s6 (C=8) from 8.6e-08 to 4.8e-04, so `channel_repeat` combined with
+        # the tile-fold is wrong somewhere. Two separate activations are exact.
+        def activate(v):
+            v = self.act(v)
+            return v if v.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT)
+
+        s0, s1 = activate(ph0), activate(ph1)
+        M = int(s0.shape[1])
+
+        # --- even/odd samples of the replicate-padded interleaved signal ---
+        needed = M + low.kernel_size // 2 - 1
+        l0, l1 = (low.pad_left + 1) // 2, low.pad_left // 2
+        r0, r1 = needed - M - l0, needed - M - l1
+        assert r0 >= 0 and r1 >= 0, f"pad split negative: {l0=} {l1=} {r0=} {r1=} {needed=} {M=}"
+        first = ttnn.slice(s0, [0, 0, 0], [B, 1, C])
+        last = ttnn.slice(s1, [0, M - 1, 0], [B, M, C])
+        p0 = ttnn.concat([first] * l0 + [s1] + [last] * r0, dim=1)
+        p1 = ttnn.concat([first] * l1 + [s0] + [last] * r1, dim=1)
+        ttnn.deallocate(first)
+        ttnn.deallocate(last)
+
+        half = low.kernel_size // 2
+        even = [low._taps_cpu[2 * a] for a in range(half)]
+        odd = [low._taps_cpu[2 * a + 1] for a in range(half)]
+        dfir = lambda src, taps: depthwise_tap_filter(
+            src, taps, 1, mesh_device=low.mesh_device, dtype=low.dtype, cache=low._conv1d_cache
+        )
+        out = ttnn.add(dfir(p0, even), dfir(p1, odd))
+        ttnn.deallocate(p0)
+        ttnn.deallocate(p1)
+        return out
+
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
+        if self._can_fuse():
+            return self._forward_fused(x_BTC)
         y = self.upsample(x_BTC)
         y = self.act(y)
         if y.layout != ttnn.ROW_MAJOR_LAYOUT:
