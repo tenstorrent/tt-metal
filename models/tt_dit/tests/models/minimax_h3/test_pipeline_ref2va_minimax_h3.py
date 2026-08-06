@@ -66,16 +66,38 @@ FPS = 24
 
 PROMPT = "a slow push-in through a quiet room as afternoon light moves across the floor"
 
-# Quality bars for REFERENCE-DRIVEN content, derived from this campaign's own measurements and not
-# inherited from t2va (am. 131). `None` means "recorded this run, not yet a bar" -- which is the
-# honest state before the first measurement exists, and is what the first run leaves in the log.
-REF2VA_CLIP_THRESHOLD = None
+# Quality bars for REFERENCE-DRIVEN content, derived from this campaign's own measurements and NOT
+# inherited from t2va (am. 131). Measured across all three shapes, against t2va's own numbers:
+#
+#   dimension               one_image  video+sound  mixed  | min     t2va    t2va bar
+#   CLIP prompt alignment      29.05      29.97     29.38  | 29.05   37.38   33.0
+#   subject_consistency       0.9631     0.9344    0.9587  | 0.9344  0.9804  0.95
+#   background_consistency    0.9569     0.9249    0.9397  | 0.9249  0.9812  0.95
+#   motion_smoothness         0.9957     0.9952    0.9959  | 0.9952  0.9914  0.97
+#   dynamic_degree            1.0000     1.0000    1.0000  | 1.0     1.0000  1.0
+#   imaging_quality           0.4826     0.6575    0.5826  | 0.4826  0.6925  0.64
+#
+# THREE of t2va's six bars would fail here, and none of the three failures is a defect:
+#
+# - CLIP 29.05-29.97 against a 33.0 bar. Prompt-dependent, not quality-dependent: t2va's bar was
+#   calibrated on a long dialogue-rich prompt and ref2va's is one short clause. Same pipeline.
+# - subject/background consistency 0.9249-0.9631 against 0.95. These *penalise change over time*,
+#   and `dynamic_degree` is 1.0 in every case -- i.e. real motion. The lowest pair belongs to the
+#   video-reference case, which is conditioned on a moving clip. Lower consistency with confirmed
+#   motion is the expected trade, not a regression.
+# - imaging_quality 0.4826-0.6575, a 0.17 spread on ONE pipeline and ONE prompt. It is no-reference
+#   IQA and it is content-sensitive: am. 87 already recorded 0.4884 on a visually perfect night
+#   scene. The frames behind the 0.4826 were inspected and are excellent.
+#
+# Bars are set below the minimum observed, with the same headroom convention t2va used (its 33.0 sits
+# ~4 points under a measured 37.05). They exist to catch a collapse, not to police the last digit.
+REF2VA_CLIP_THRESHOLD = 25.0
 REF2VA_VBENCH_THRESHOLDS = {
-    "subject_consistency": None,
-    "background_consistency": None,
-    "motion_smoothness": None,
-    "dynamic_degree": None,
-    "imaging_quality": None,
+    "subject_consistency": 0.90,
+    "background_consistency": 0.89,
+    "motion_smoothness": 0.97,  # t2va's, and ref2va measures *better* than t2va on it
+    "dynamic_degree": 1.0,  # binary over one video: 1.0 or the clip is frozen
+    "imaging_quality": 0.44,
 }
 
 # `l1_small_size` 16384 rather than the 65536 the t2va/fl2va gates use. Measured, not chosen: a video
