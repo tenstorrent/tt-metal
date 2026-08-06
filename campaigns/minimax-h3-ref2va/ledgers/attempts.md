@@ -16,4 +16,4 @@ One row per round, win or loss. Answers "what has been tried?"
 | r8 | 2026-08-06 | 440bd05c058 | seam-bar-and-consolidation | separate seam bars per axis on measured evidence; confirm the whole ref2va file green in one process | 5 passed, 1435 s | 8/8 gates green | kept |
 | r9 | 2026-08-06 | e10e6dda34e | quality-bars | record CLIP + VBench on all three shapes, then set bars from the measurements | 3 passed, 1383 s | 3 of t2va's 6 bars would fail, none a defect | kept |
 | r10 | 2026-08-06 | e10e6dda34e | warm-perf-baseline | warm ref2va latency with the padded_len validity gate | 73.6 / 193.3 / 216.1 s | 3 passed | kept |
-| r11 | 2026-08-06 | PENDING | hoist-invariant-upload | hoist the provably-redundant per-step conditioning upload | -0.8 / -0.1 / -0.3 % | inside the +-8 % noise floor: NOT a win | kept, forensic |
+| r11 | 2026-08-06 | e23dd3e98f6 | hoist-invariant-upload | hoist the provably-redundant per-step conditioning upload | -0.8 / -0.1 / -0.3 % | inside the +-8 % noise floor: NOT a win | kept, forensic |
