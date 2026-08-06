@@ -128,18 +128,34 @@ Design, in the order to build it:
      compute_output_specs, the conv2d and conv1d invoke chains, pybind, the program factory and the
      reader -- six-plus files before anything can be compiled once.
 
-4. **Carrying them: extend the weights CB.** The weights CB is already
+4. **The weights CB sizes itself from the weight tensor's shape, so no op-signature change is
+   needed.** `conv2d_op_sharded_program_factory.cpp:260-262` takes
+
+       weight_matrix_height = b.padded_shape()[2];
+       weight_matrix_width  = b.padded_shape()[3];
+
+   from the tensor, not from the conv dimensions, and the CB and the reader's fetch count follow from
+   those. A longer prepared weight therefore flows through allocation on its own. That reduces the
+   work to: Python builds the longer weight, one compile-time arg tells the kernel how many trailing
+   tiles are parameters rather than taps, and the kernel consumes them.
+
+   The real risk is **CB bookkeeping**: the kernel must pop exactly what the reader pushed or the op
+   desyncs, and the two accumulate paths pop differently (see below). Expect to need a compile-and-run
+   cycle or two purely on that. Also check whether any TT_FATAL validates weight_matrix_height against
+   the conv dimensions -- if one does, it has to learn about the appended tiles.
+
+5. **Carrying them: extend the weights CB.** The weights CB is already
    indexed per channel-tile in exactly the pattern needed, and the reader already fills it. Appending
    the two parameter tiles per channel-tile to the prepared weight avoids a new CB, a new reader
    stream, and a second indexing scheme that could disagree with the first. Note the non-coalesced
    path consumes in1 with `wait_front(1)` / `pop_front(1)` per tap (kernel lines 59/100, 141/179) while
    the coalesced path takes the whole block (216/258), so the two consume differently and the append
    must respect that. A separate CB is the fallback if that proves awkward.
-5. **Kernel, on the last tap only**, with the accumulator in DST_ACC:
+6. **Kernel, on the last tap only**, with the accumulator in DST_ACC:
    `copy alpha -> DST_A; mul_binary_tile(ACC, A, A); sin_tile(A); mul_binary_tile(A, A, A);
     copy inv_beta -> DST_B; mul_binary_tile(A, B, A); add_binary_tile(ACC, A, ACC)`.
    That is 4 DST slots; check against the fp32 DST budget in half-sync before assuming it fits.
-6. **Gate it** the way the existing activation is, so nothing changes unless requested.
+7. **Gate it** the way the existing activation is, so nothing changes unless requested.
 
 Verify with `fused_activation.py` extended to snake: the bar is rel_rmse ~1e-07 against a float64
 golden, matching what GELU achieved, and cost within a few percent of the unfused conv.
