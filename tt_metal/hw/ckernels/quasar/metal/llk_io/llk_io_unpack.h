@@ -36,6 +36,15 @@ inline void llk_pop_tiles(const std::int32_t dfb_id, const std::int32_t num_tile
 
     // Wait until selected unpackers are reading from L1
     TT_POP_TILES(UNPACK_SEL, num_tiles, tc_id);
+    // [TEN-4746 / #48552] Fence the UNPACK-side TDMA tile-counter mutation before any following
+    // counter op (WAIT_TILES / pop_front) on the same tc_id can read it. Same race as the pack side
+    // (see llk_io_pack.h): a SYNC-class counter read racing the TDMA-class POP_TILES retire latches a
+    // wrong-Neo counter address. UNPACK_SEL defaults to 0x3 (unpackers 0+1), so drain both plus THCON.
+    TTI_STALLWAIT(
+        ckernel::p_stall::STALL_TDMA | ckernel::p_stall::STALL_SYNC,
+        ckernel::p_stall::THCON,
+        ckernel::p_stall::UNPACK1,
+        ckernel::p_stall::UNPACK0);
 
     dfb_advance_slot(local_dfb_interface, slot, num_tiles);
 }
