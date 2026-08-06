@@ -1413,12 +1413,15 @@ class resnet50:
         if os.environ.get("TT_METAL_QSR_RESNET_STOP_AFTER_LAYER3") == "1":
             return x
 
-        # [#48552] Quasar: layer4 conv2 STAYS block-sharded (fused conv / LLK path). Unlike layer3, layer4's
-        # full per-core weights (K=144 x N=16 = 2304 tiles ~= 4.7 MB) EXCEED Quasar's ~4 MB unreserved L1, so
-        # even with f6b15a's uint32 ring they don't physically fit the single-K-block height split
-        # (dataflow_buffer.cpp:812 FATAL ring_bytes <= unreserved_l1_size). Needs N-split (block) to fit.
-        reshard = is_quasar()
-        height_shard = False
+        # [#48552] Quasar: layer4 runs HEIGHT_SHARDED through the SPLIT path (Program A gather+tilize ->
+        # Program B plain K-spill matmul), NOT the fused conv_bmm. The old block-shard rationale (full per-core
+        # weights K=144 x N=16 = 2304 tiles ~= 4.7 MB exceed ~4 MB L1) is resolved by K-SPILLING the split-path
+        # matmul: weights stream from DRAM in K-blocks (in0_block_w << full_K) so only ~256 KB is resident.
+        # Every layer4 conv (conv1/conv2/conv3 + the s2 downsample via force_1x1_nonmm_split) then rides the
+        # plain matmul, dodging the fused block-sharded 0x19 AND the full-N HEIGHT_SHARDED weights overflow.
+        # Validated standalone by test_conv2d_layer4_l1_fit.py (all 6 convs pass). WH/BH keep their block path.
+        reshard = is_blackhole() or is_quasar()
+        height_shard = is_quasar()
 
         if is_wormhole_b0():
             block_mem_config = ttnn.create_sharded_memory_config(
@@ -1458,6 +1461,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] height-sharded split path (else defaults block-sharded -> fused 0x19)
             layer_module="layer4_module2",
         )
 
@@ -1468,6 +1472,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] height-sharded split path
             layer_module="layer4_module3",
         )
 
