@@ -42,13 +42,13 @@ import pytest
 from loguru import logger
 
 from models.demos.gemma4.demo.text_demo import _maybe_xfail_batch_prefill_dram
+from models.demos.gemma4.tt.common import get_gemma4_padded_prefill_len
 from models.demos.gemma4.tt.generator_trace import (
     GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS,
     GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
     GEMMA4_TRACE_PREFILL_SEQ_LENS,
     can_gemma4_enable_prefill_trace,
 )
-from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 
 from ..test_factory import (
@@ -108,7 +108,7 @@ def test_prefill_single_layer_tracy_csv(layer_type, prefill_len, mesh_device, re
     if int(getattr(hf_config, "num_kv_shared_layers", 0) or 0) > 0:
         pytest.skip("kv-shared variants cannot have their layer stack truncated")
 
-    kernel_len = get_padded_prefill_len(prefill_len)
+    kernel_len = get_gemma4_padded_prefill_len(prefill_len)
     if kernel_len not in GEMMA4_TRACE_PREFILL_SEQ_LENS:
         pytest.skip(f"kernel_len={kernel_len} not in trace ISL buckets {GEMMA4_TRACE_PREFILL_SEQ_LENS}")
 

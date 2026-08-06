@@ -51,7 +51,7 @@ from models.demos.gemma4.demo.sampling_utils import (
     model_can_sample_on_device,
 )
 from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
-from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.common import create_tt_model, get_gemma4_padded_prefill_len
 from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import (
     resolve_gemma4_bounded_sliding,
@@ -60,12 +60,7 @@ from models.demos.gemma4.tt.generator_trace import (
 )
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import (
-    PagedAttentionConfig,
-    get_padded_prefill_len,
-    preprocess_inputs_prefill,
-    sample_host,
-)
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 from models.tt_transformers.tt.model_config import determine_device_name
 
@@ -309,7 +304,7 @@ def _maybe_xfail_batch_prefill_dram(mesh_device, model_path, batch_size, prefill
 
 def _batch_prefill_hits_ceiling(batch_size, prompt_len):
     """True when ``batch_size × padded prefill length`` meets/exceeds the 128k cap."""
-    kernel_len = get_padded_prefill_len(prompt_len)
+    kernel_len = get_gemma4_padded_prefill_len(prompt_len)
     return batch_size * kernel_len >= GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN
 
 
@@ -460,7 +455,7 @@ def run_batch_generation(
         target_prefill_len=prefill_len,
         instruct=True,
     )
-    prefill_seq_len = get_padded_prefill_len(decoding_pos[0])
+    prefill_seq_len = get_gemma4_padded_prefill_len(decoding_pos[0])
     logger.info(
         f"Batch prefill: users={batch_size}, prompt_len={decoding_pos[0]}, "
         f"kernel_seq_len={prefill_seq_len}, tensor_shape={tuple(input_tokens_prefill_pt.shape)}"
@@ -1560,7 +1555,7 @@ def test_demo_batch_prefill(mesh_device, model_path, prefill_len, request):
     )
 
     prefilled_tokens = result["prefilled_tokens"]
-    expected_kernel_len = get_padded_prefill_len(result["prompt_lens"][0])
+    expected_kernel_len = get_gemma4_padded_prefill_len(result["prompt_lens"][0])
 
     assert prefilled_tokens.shape[0] == batch_size
     assert result["prefill_seq_len"] == expected_kernel_len
@@ -1646,7 +1641,7 @@ def test_demo_batch_prefill_4096_ceiling(mesh_device, model_path, request):
         pytest.skip(f"prefill_len={prefill_len} > --max-prefill={max_prefill}")
 
     batch_size = _BATCH32_DRAM_OOM_SIZE
-    kernel_len = get_padded_prefill_len(prefill_len)
+    kernel_len = get_gemma4_padded_prefill_len(prefill_len)
     total_tokens = batch_size * kernel_len
 
     assert _batch_prefill_hits_ceiling(batch_size, prefill_len)

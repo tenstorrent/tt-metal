@@ -18,7 +18,7 @@ Forward flow (matching HF exactly):
   residual = x
   x = input_layernorm(x)                  # S2I out — QKV wants interleaved
   x = self_attn(x)                        # TP all-reduce may gather width-sharded
-  x = post_attention_layernorm(x)         # keep width-sharded (dense, short ISL)
+  x = post_attention_layernorm(x)         # keep width-sharded (decode, dense)
   x = residual + x                        # residual I2S onto LN layout when needed
 
   residual = x
@@ -35,14 +35,14 @@ Forward flow (matching HF exactly):
     x = x_1 + x_2
 
   x = post_feedforward_layernorm(x)       # keep width-sharded after MLP AR
-  x = residual + x
-  x *= layer_scalar                       # stays width-sharded when possible
+  x = (residual + x) * layer_scalar       # fused BinaryNg when no PLI path
 """
 
 import torch
 
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4.tt.attention.operations import prefill_matmul_in0_memcfg
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
 from models.demos.gemma4.tt.moe import MoEBlock
 from models.demos.gemma4.tt.rms_norm import (
@@ -59,7 +59,7 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
 
-def _residual_add(residual, other):
+def _residual_add(residual, other, *, scale=None):
     """Residual add that preserves a width-sharded L1 island when possible.
 
     If ``other`` (typically a keep-sharded LN output) is width-sharded, bring
@@ -67,6 +67,9 @@ def _residual_add(residual, other):
     matmul. Mirrors the AR→LN→MLP layout island: one I2S of the residual beats
     S2I→DRAM on every LN output. Callers still deallocate the original
     ``residual`` / ``other``; any layout temps are freed here.
+
+    Optional ``scale`` fuses ``(a + b) * scale`` via BinaryNg post-activations
+    (drops a separate layer_scalar mul when there is no PLI path after the add).
     """
     a, a_owned = residual, False
     b, b_owned = other, False
@@ -74,12 +77,40 @@ def _residual_add(residual, other):
         a, a_owned = align_to_sharded(residual, other)
     elif residual.is_sharded() and not other.is_sharded():
         b, b_owned = align_to_sharded(other, residual)
-    out = ttnn.add(a, b)
+    kwargs = {}
+    if scale is not None and scale != 1.0:
+        kwargs["activations"] = [ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, float(scale))]
+    if a.is_sharded():
+        kwargs["memory_config"] = a.memory_config()
+    out = ttnn.add(a, b, **kwargs)
     if a_owned:
         a.deallocate(True)
     if b_owned:
         b.deallocate(True)
     return out
+
+
+def _prefill_park_l1_interleaved_only(tensor):
+    """Move *interleaved* L1 activations to DRAM before input_layernorm.
+
+    Width-sharded L1 from the prior layer's post-MLP island is consumed
+    in-place by input LN (``already_sharded`` → S2I to matmul L1). Parking
+    sharded L1 to DRAM first added S2I→DRAM then I2S→sharded then S2I again.
+
+    L1 *interleaved* (e.g. post-embed Tilize) still parks once so sharded-norm
+    CBs are not competing with a second L1 buffer before QKV.
+    """
+    if tensor is None:
+        return tensor
+    try:
+        buf = tensor.memory_config().buffer_type
+    except Exception:
+        return tensor
+    if buf != ttnn.BufferType.L1 or tensor.is_sharded():
+        return tensor
+    parked = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+    tensor.deallocate(True)
+    return parked
 
 
 class Gemma4DecoderLayer:
@@ -266,21 +297,20 @@ class Gemma4DecoderLayer:
             hidden_states: [1, 1, seq_len, hidden_size] on device
         """
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
-        # Width-sharded island (short ISL / decode): after attn all-reduce the
-        # gather may already be LN's width-shard layout. Keep post-attn LN,
-        # residual, pre-MLP LN, and (via SharedMLP) gate_up in that domain —
-        # drop the post-LN S2I→DRAM that otherwise runs on every sharded norm.
-        # input_layernorm still S2I's out: QKV needs interleaved. MoE routers /
-        # experts are not yet sharded-safe, so the island is dense-only.
-        #
-        # Prefetch residual onto the LN width-shard layout *before* input_LN so
-        # one I2S serves both the norm (already_sharded) and the post-attn
-        # residual add — otherwise we pay I2S in the norm and again for residual.
-        keep_island = norm_keep_sharded_enabled() and not self.enable_moe_block
+        # Width-sharded AR→LN→MLP island (decode, dense only): after the attn
+        # all-reduce the gather may already be LN's width-shard layout. Keep
+        # post-attn LN, residual, pre-MLP LN, and (via SharedMLP) gate_up in that
+        # domain — drops the post-LN S2I→DRAM that otherwise runs on every sharded
+        # norm. input_layernorm still S2I's out: QKV needs interleaved. MoE routers
+        # / experts are not yet sharded-safe, so the island is dense-only.
+        padded_h = ((int(hidden_states.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        keep_island_decode = norm_keep_sharded_enabled() and not self.enable_moe_block and is_decode
+        keep_island = keep_island_decode
         residual = hidden_states
-        # Batch>1 reshape of the residual is interleaved-only; skip prefetch there.
-        if keep_island and sharded_norm_enabled() and (is_decode or batch_size <= 1):
-            padded_h = ((int(hidden_states.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        # Prefetch the residual onto the LN width-shard layout *before* input_LN so
+        # one I2S serves both the norm (already_sharded) and the post-attn residual
+        # add. Batch>1 reshape of the residual is interleaved-only; skip it there.
+        if keep_island_decode and sharded_norm_enabled() and batch_size <= 1:
             ln_memcfg = width_shard_input_memcfg(self.mesh_device, int(hidden_states.shape[-1]), padded_h)
             if ln_memcfg is not None:
                 aligned, owned = align_to_memcfg(hidden_states, ln_memcfg)
@@ -288,7 +318,19 @@ class Gemma4DecoderLayer:
                     hidden_states.deallocate(True)
                 residual = aligned
                 hidden_states = aligned
-        normed = self.input_layernorm.forward(hidden_states, keep_sharded=False)
+        # Prefill: park L1 interleaved only (embed Tilize). Width-sharded L1 from
+        # the prior post-MLP island flows into input LN without a DRAM bounce.
+        if not is_decode:
+            parked = _prefill_park_l1_interleaved_only(hidden_states)
+            if parked is not hidden_states:
+                residual = parked
+                hidden_states = parked
+        prefill_matmul_mc = prefill_matmul_in0_memcfg(padded_h, self.hidden_size) if not is_decode else None
+        normed = self.input_layernorm.forward(
+            hidden_states,
+            keep_sharded=False,
+            interleaved_memory_config=prefill_matmul_mc,
+        )
         if not is_decode and batch_size > 1:
             attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
         else:
@@ -361,8 +403,18 @@ class Gemma4DecoderLayer:
         # post_feedforward_layernorm -> residual add
         # MLP all-reduce may gather into the LN width-shard layout; keep it
         # through the residual so the next layer's input_LN can skip I2S.
+        # Fuse layer_scalar into this add when there is no PLI path after
+        # (HF applies scalar after PLI; 31B dense has no PLI).
         hidden_states = self.post_feedforward_layernorm.forward(hidden_states, keep_sharded=keep_island)
-        combined = _residual_add(residual, hidden_states)
+        has_pli = (
+            self.hidden_size_per_layer_input and per_layer_input is not None and hasattr(self, "per_layer_input_gate")
+        )
+        fuse_layer_scalar = self.layer_scalar != 1.0 and not has_pli
+        combined = _residual_add(
+            residual,
+            hidden_states,
+            scale=self.layer_scalar if fuse_layer_scalar else None,
+        )
         residual.deallocate(True)
         hidden_states.deallocate(True)
 
@@ -370,21 +422,25 @@ class Gemma4DecoderLayer:
 
         # Per-layer input embeddings (E2B/E4B) — BEFORE layer_scalar (matching HF order)
         # PLI matmuls need interleaved activations.
-        if self.hidden_size_per_layer_input and per_layer_input is not None and hasattr(self, "per_layer_input_gate"):
+        if has_pli:
             hidden_states = maybe_interleave(hidden_states)
             residual_pli = hidden_states
             gated = ttnn.linear(hidden_states, self.per_layer_input_gate)
-            gated = ttnn.gelu(gated, fast_and_approximate_mode=True)
-            gated = ttnn.mul(gated, per_layer_input)
+            gated = ttnn.mul(
+                gated,
+                per_layer_input,
+                input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)],
+            )
             projected = ttnn.linear(gated, self.per_layer_projection)
             normed_pli = self.post_per_layer_input_norm.forward(projected)
             hidden_states = ttnn.add(residual_pli, normed_pli)
             if len(hidden_states.shape) > 4:
                 hidden_states = ttnn.reshape(hidden_states, (1, 1, hidden_states.shape[-2], self.hidden_size))
 
-        # Layer scalar — AFTER PLI (matching HF order). Keep width-sharded when
-        # possible so the next layer's input_LN can skip I2S (island across layers).
-        if self.layer_scalar != 1.0:
+        # Layer scalar — AFTER PLI (matching HF order). Dense/no-PLI already fused
+        # into the residual add above. Keep width-sharded when possible so the
+        # next layer's input_LN can skip I2S (island across layers).
+        if self.layer_scalar != 1.0 and not fuse_layer_scalar:
             if hidden_states.is_sharded():
                 hidden_states = ttnn.mul(
                     hidden_states,

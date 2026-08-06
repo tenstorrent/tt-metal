@@ -42,9 +42,10 @@ from models.demos.gemma4.demo.text_demo import (
     _prepare_batch_prefill_tokens,
     load_batch_demo_prompts,
 )
+from models.demos.gemma4.tt.common import get_gemma4_padded_prefill_len
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import skip_gemma4_full_prefill_warmup
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 from ..test_factory import TestFactory, _get_model_path, parametrize_mesh_with_fabric
 
@@ -144,7 +145,7 @@ def _measure_batched_vs_sequential_prefill(
         instruct=True,
     )
     prompt_len = int(prompt_lens[0])
-    kernel_len = get_padded_prefill_len(prompt_len)
+    kernel_len = get_gemma4_padded_prefill_len(prompt_len)
 
     batched_s = _timed_prefill(generator, tokens, page_table, kv_cache, prompt_lens, batched=True)
     sequential_s = _timed_prefill(generator, tokens, page_table, kv_cache, prompt_lens, batched=False)

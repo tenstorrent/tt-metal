@@ -25,7 +25,7 @@ from tracy import signpost
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
-from models.demos.gemma4.tt.attention.operations import prefill_tensor_memcfg, prefill_tilize_memcfg
+from models.demos.gemma4.tt.attention.operations import prefill_tilize_memcfg
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
@@ -662,8 +662,11 @@ class Gemma4Model:
         z = self._tt_slice_start_zeros_4
         tt_slice_starts = ttnn.concat([z[0:2], chunk_start_idx, z[3:4]], dim=0)
         ends = self._tt_seq_len_buffer_by_hd[head_dim]
-        # Short ISL cos/sin slices fit L1; long ones stay DRAM (see prefill_tensor_memcfg).
-        slice_mc = prefill_tensor_memcfg(int(seq_len) * head_dim)
+        # Keep RoPE slices in DRAM. Short-ISL L1 slices were a small win for
+        # rotary_embedding alone, but they stay live through prefill SDPA and
+        # clash with its static CBs on the full worker grid (same class of
+        # failure as an L1 residual held across attention).
+        slice_mc = ttnn.DRAM_MEMORY_CONFIG
         rot_cos_slice = ttnn.slice(
             input_tensor=full_rot_cos,
             starts=tt_slice_starts,
@@ -1066,13 +1069,18 @@ class Gemma4Model:
             k = self.hidden_size
             n = self.lm_head_weight.shape[-1]
             program_config, out_memcfg, compute_kernel_config = lm_head_decode_config(self.mesh_device, m, k, n)
+            from models.demos.gemma4.tt.attention.operations import hoist_prefill_matmul_in0_if_needed
+
+            act, act_l1 = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
             logits = ttnn.linear(
-                hidden_states,
+                act,
                 self.lm_head_weight,
                 program_config=program_config,
                 memory_config=out_memcfg,
                 compute_kernel_config=compute_kernel_config,
             )
+            if act_l1 is not None:
+                act_l1.deallocate(True)
             hidden_states.deallocate(True)
         else:
             logits = hidden_states
@@ -1095,24 +1103,36 @@ class Gemma4Model:
 
         return logits
 
-    def embed_tokens(self, tokens):
+    def embed_tokens(self, tokens, layout=None, memory_config=None):
         """Embed input tokens with sqrt(hidden_size) scale already baked into weights.
 
         Device ``embedding_weight`` is pre-multiplied by ``embed_scale`` at load
         so this path is a single embedding op (plus TP all-gather) — no BinaryNg
         mul. Embedding is column-parallel (hidden dim sharded across TP devices);
         all-gather reconstructs the full hidden dim after lookup.
+
+        ``layout=ttnn.TILE_LAYOUT`` tilizes inside the embedding kernel instead of
+        emitting ROW_MAJOR for a separate ``to_layout``. Every consumer wants TILE,
+        and dropping the standalone ``TilizeDeviceOperation`` measured 1.64x on the
+        embed+all-gather path at ISL 128 / TP=8, bit-identical output — the same
+        pattern the RoPE cache lookups already use. ``memory_config`` lands the
+        result (and the gather output) where the old ``to_layout`` put it.
         """
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")
-        embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
+        embed_kwargs = {}
+        if layout is not None:
+            embed_kwargs["layout"] = layout
+        if memory_config is not None:
+            embed_kwargs["memory_config"] = memory_config
+        embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16, **embed_kwargs)
 
         # All-gather sharded hidden dim back to full hidden
         if self.mesh_config is not None and self.mesh_config.tp > 1:
             embeds = ttnn.unsqueeze_to_4D(embeds)
             from models.demos.gemma4.tt.ccl import ccl_allgather
 
-            embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
+            embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager, memory_config=memory_config)
         return embeds
 
     def raw_embed(self, tokens):
@@ -1169,10 +1189,9 @@ class Gemma4Model:
             it-assistant drafter's recurrent seed.
         """
         if x.dtype in (ttnn.uint32, ttnn.int32):
-            input_embeds = self.embed_tokens(x)
+            input_embeds = self.embed_tokens(x, layout=ttnn.TILE_LAYOUT)
             if len(input_embeds.shape) == 3:
                 input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
-            input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
         else:
             input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
@@ -1238,10 +1257,9 @@ class Gemma4Model:
             (logits [1,1,P,vocab], hidden [1,1,P,hidden]) — same contract as
             ``ttnn_verify_forward``.
         """
-        input_embeds = self.embed_tokens(x)
+        input_embeds = self.embed_tokens(x, layout=ttnn.TILE_LAYOUT)
         if len(input_embeds.shape) == 3:
             input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
-        input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
 
         # Pre-gather RoPE once per layer type (identical for all layers of a
         # type — saves 2 embedding gathers per layer).
@@ -1597,17 +1615,17 @@ class Gemma4Model:
         if trace_enabled:
             return tt_tokens, None, None, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
-        tt_embeds = self.embed_tokens(tt_tokens)
+        # TILE straight out of the embedding kernel — no separate Tilize op.
+        tt_embeds = self.embed_tokens(
+            tt_tokens,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=prefill_tilize_memcfg(per_user_seq_len, self.hidden_size),
+        )
         if batch_size > 1:
             if len(tt_embeds.shape) == 3:
                 tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
         else:
             tt_embeds = ttnn.reshape(tt_embeds, (1, 1, per_user_seq_len, self.hidden_size))
-        tt_embeds = ttnn.to_layout(
-            tt_embeds,
-            ttnn.TILE_LAYOUT,
-            memory_config=prefill_tilize_memcfg(per_user_seq_len, self.hidden_size),
-        )
 
         return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
 
@@ -1639,13 +1657,12 @@ class Gemma4Model:
             tokens = ttnn.reshape(tokens, (1, seq_len))
         else:
             seq_len = tokens.shape[-1]
-        tt_embeds = self.embed_tokens(tokens)
-        tt_embeds = self._reshape_prefill_embeds(tt_embeds, seq_len)
-        tt_embeds = ttnn.to_layout(
-            tt_embeds,
-            ttnn.TILE_LAYOUT,
+        tt_embeds = self.embed_tokens(
+            tokens,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=prefill_tilize_memcfg(seq_len, self.hidden_size),
         )
+        tt_embeds = self._reshape_prefill_embeds(tt_embeds, seq_len)
         return tt_embeds, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
     def ttnn_prefill_forward(
@@ -1718,6 +1735,13 @@ class Gemma4Model:
 
         Under TP, Gemma4 all-gathers logits inside the model so a single
         device tensor already holds the full vocab.
+
+        Do not try to drop the preceding ``ttnn.untilize`` (``tt_transformers/tt/
+        generator.py``): on the [1,1,32,262144] bf16 logits its 264 us of device
+        time saves ~690 us of host readback, and slicing the needed row first is
+        worse still (a TILE-layout height slice alone costs 778 us). The real fix
+        is to not read full-vocab logits at all — with ``sampling_params`` set the
+        generator samples on device and skips both the untilize and the readback.
         """
         if self.mesh_config is not None and self.mesh_config.tp > 1:
             torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
@@ -1909,10 +1933,9 @@ class Gemma4Model:
             if len(x_embed.shape) == 4:
                 # embed_tokens expects a compact [1, B] (or [B]) id tensor.
                 x_embed = ttnn.reshape(x_embed, (1, int(x_embed.shape[-1])))
-            input_embeds = self.embed_tokens(x_embed)
+            input_embeds = self.embed_tokens(x_embed, layout=ttnn.TILE_LAYOUT)
             if len(input_embeds.shape) == 3:
                 input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
-            input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
         else:
             input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 

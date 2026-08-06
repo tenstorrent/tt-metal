@@ -10,7 +10,7 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.common.sampling import slice_sampling_params
-from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.common import create_tt_model, get_gemma4_padded_prefill_len
 from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
     chunked_prefill_trace_enabled,
@@ -21,12 +21,7 @@ from models.demos.gemma4.tt.generator_trace import (
     should_auto_enable_chunked_bounded,
     warmup_gemma4_model_prefill,
 )
-from models.tt_transformers.tt.common import (
-    get_block_size,
-    get_max_prefill_chunk_size,
-    get_padded_prefill_len,
-    num_blocks_in_seq,
-)
+from models.tt_transformers.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
@@ -1058,7 +1053,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             num_cached_per_user = align_num_cached_tokens_to_sdpa(num_cached_per_user)
             start_pos = num_cached_per_user
         prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached)
+            get_gemma4_padded_prefill_len(seq_len - num_cached)
             for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
         ]
         is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
@@ -1132,6 +1127,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
                         start_pos=num_cached_per_user[chunk_start:chunk_end] if start_pos is not None else None,
                         return_hidden_states=return_hidden_states,
                         warmup_prefill=warmup_prefill and chunk_start == 0,
+                        prefill_seq_lens=[prefill_seq_lens[0]] * chunk_size,
                         **kwargs,
                     )
 
@@ -1204,6 +1200,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             start_pos=start_pos,
             return_hidden_states=return_hidden_states,
             warmup_prefill=warmup_prefill,
+            prefill_seq_lens=prefill_seq_lens,
             **kwargs,
         )
 

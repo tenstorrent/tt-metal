@@ -27,13 +27,33 @@ from .operations import (
     effective_block_size,
     interleave_qkv_if_sharded,
     o_proj_input_memcfg,
+    prefill_sdpa_act_memcfg,
     prefill_sdpa_program_config,
-    prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
 
 TILE_HEIGHT = 32
+
+
+def _ensure_dram_interleaved(tensor):
+    """Park an activation in DRAM interleaved before SDPA (L1 CBs need the room)."""
+    if tensor is None:
+        return tensor
+    try:
+        mem = tensor.memory_config()
+        is_l1 = mem.buffer_type == ttnn.BufferType.L1
+        is_sharded = tensor.is_sharded()
+    except Exception:
+        return tensor
+    if not is_l1 and not is_sharded:
+        return tensor
+    if is_sharded:
+        out = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        out = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+    tensor.deallocate(True)
+    return out
 
 
 def _resolve_valid_seq_len_tensor(config, valid_seq_len, padded_seq_len, mesh_device):
@@ -317,12 +337,17 @@ def _prefill_forward_single(
         fill_page_table = chunk_page_table if is_chunked else page_table
 
     xqkv = apply_qkv_projection(hidden_states, weights)
+    # Free the QKV in0 (often L1 interleaved from input_layernorm S2I / hoist)
+    # before SDPA. Leaving it resident clashes with SDPA's static circular
+    # buffers on the full worker grid (same pattern as the batched path below).
+    ttnn.deallocate(hidden_states)
 
     # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
     # #48861). The allreduce input stays DRAM (CCL path); the o_proj matmul writes
     # L1 block-sharded under its tuned config and is interleaved back before CCL.
-    # Fused QKV may land L1 block-sharded (sweep winner); head-split needs interleaved.
-    act_mc = prefill_short_lived_memcfg()
+    # The tuned prefill QKV already writes DRAM interleaved; the guard stays for
+    # callers/paths that hand back a sharded projection (head-split needs interleaved).
+    act_mc = prefill_sdpa_act_memcfg()
     xqkv = interleave_qkv_if_sharded(xqkv, memory_config=act_mc)
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
         xqkv,
@@ -332,6 +357,9 @@ def _prefill_forward_single(
         kv_replicated=weights.kv_replicated,
         memory_config=act_mc,
     )
+    # Free the fused projection buffer once the heads are materialized so it is
+    # not still resident under SDPA.
+    ttnn.deallocate(xqkv)
 
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
 
@@ -492,6 +520,11 @@ def _prefill_forward_single(
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
 
     # 6. SDPA (causal prefill, scale=1.0)
+    # Prefill SDPA's static CBs fill Wormhole L1; any L1 Q/K/V (or residue from
+    # an L1 QKV out) clashes. Force DRAM interleaved heads before the op.
+    tt_q = _ensure_dram_interleaved(tt_q)
+    tt_k = _ensure_dram_interleaved(tt_k)
+    tt_v = _ensure_dram_interleaved(tt_v)
     # The non-chunked SDPA silently returns WRONG results at seq_len >= 32768
     # (2^15) — generation degrades to garbage. The cliff is INCLUSIVE of 32768:
     # a power-of-2-padded prompt that lands exactly on 32768 is already broken
@@ -830,7 +863,7 @@ def prefill_forward(
     ttnn.deallocate(hidden_states)
 
     # Block-sharded QKV (tuned prefill path) must be interleaved before reshape/split.
-    act_mc = prefill_short_lived_memcfg()
+    act_mc = prefill_sdpa_act_memcfg()
     xqkv = interleave_qkv_if_sharded(xqkv, memory_config=act_mc)
     xqkv = ttnn.reshape(xqkv, [batch_size, 1, seq_len // batch_size, -1])
     seq_len_per_user = seq_len // batch_size
@@ -906,6 +939,9 @@ def prefill_forward(
                 ttnn.fill_cache(v_cache, tt_v[slot_idx : slot_idx + 1], batch_idx=slot_idx)
 
     sliding_window = config.sliding_window if config.is_sliding else None
+    tt_q = _ensure_dram_interleaved(tt_q)
+    tt_k = _ensure_dram_interleaved(tt_k)
+    tt_v = _ensure_dram_interleaved(tt_v)
     # HiFi4 + FP32 dest-acc SDPA: restore softmax-reduce precision lost after #47311
     # (forced-FP32 reduce accumulation removed).
     sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(

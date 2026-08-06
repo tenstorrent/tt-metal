@@ -308,8 +308,12 @@ class SharedMLP:
         # intermediate is [seq, intermediate_size/tp] — at tp=1/tp=2 that is
         # 4-8x wider than tp=8 and OOMs L1 (176 MB at tp=1 seq=4096). Leave it
         # in DRAM; the op default follows the input.
-        gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
-        hidden = ttnn.mul(gate, up)
+        # Fuse gelu(gate)*up into one BinaryNg: GELU param 1.0 == fast tanh approx.
+        hidden = ttnn.mul(
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)],
+        )
         gate.deallocate(True)
         up.deallocate(True)
 
