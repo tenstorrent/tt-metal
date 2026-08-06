@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cmath>
+
 #include "all_gather_device_operation.hpp"
 #include "all_gather_device_operation_types.hpp"
 
@@ -245,11 +247,11 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 break;
             }
             case tt::ARCH::BLACKHOLE: {
-                // Multicast only wins the small-volume + large-page corner; unicast is
-                // bandwidth-optimal and wins outright once ~4MB cross a link (at any page size).
-                // Between, the multicast-favorable per-link-byte ceiling scales with the actual page
-                // size squared, up to that 4MB floor. The boundary errs toward unicast: its downside
-                // (up to ~40% at scale) dwarfs multicast's ~5-17% upside.
+                // Measured 2026-08-06 over ~300 head-to-head configs (8 devices, 2 links, ring *and*
+                // line, tile and row-major, page sizes 64 B - 8 KB, 16 KB - 50 MB gathered). Multicast
+                // only wins the small-volume corner, and where it wins its margin is <= ~10%, while
+                // unicast is 25-33% faster at scale -- so this boundary deliberately errs toward
+                // unicast: being early costs a few percent, being late costs tens.
                 const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
                 const uint64_t out_page = args.output_spec.compute_page_size_bytes();
                 const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
@@ -259,11 +261,22 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 const uint64_t per_link_bytes =
                     input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
 
-                // Page^2 ceiling, anchored so a 2KB page permits multicast up to 1MB/link, capped at
-                // unicast's 4MB bandwidth floor. (2KB/1MB are the anchor; txn is the real page size.)
-                constexpr uint64_t anchor_page = 2048, anchor_ceiling = 1'000'000, unicast_bw_floor = 4'000'000;
-                const uint64_t mcast_ceiling =
-                    std::min(unicast_bw_floor, (txn * txn * anchor_ceiling) / (anchor_page * anchor_page));
+                uint64_t mcast_ceiling;
+                if (tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
+                    // Ring: the crossover grows ~linearly with page size, then saturates once a page
+                    // fills a fabric packet. Measured per-link crossover: 96 KB @512 B page, 220 KB
+                    // @1 KB, 580 KB @2 KB, 602 KB @4 KB, 605 KB @8 KB (row-major). Tile sits a little
+                    // higher at the same page size (665 KB @2 KB), so the constants split the
+                    // difference rather than fitting row-major exactly.
+                    mcast_ceiling = std::min<uint64_t>(650'000, 300 * txn);
+                } else {
+                    // Line: unicast relays ~1.7x more data than on a ring (no wrap-around, and the
+                    // middle links carry the most), so multicast stays ahead ~3x longer and the
+                    // crossover grows ~sqrt(page). Measured per-link crossover: 156 KB @64 B page,
+                    // 539 KB @256 B, 900 KB @1 KB, 1133 KB @2 KB, 1713 KB @4 KB.
+                    const auto sqrt_txn = static_cast<uint64_t>(std::sqrt(static_cast<double>(txn)));
+                    mcast_ceiling = std::min<uint64_t>(1'700'000, 27'000 * sqrt_txn);
+                }
                 use_unicast = per_link_bytes >= mcast_ceiling;
                 break;
             }
