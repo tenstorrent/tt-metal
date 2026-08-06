@@ -231,6 +231,26 @@ def test_unknown_op_taints_confidence():
     assert all(f.confidence == "suspicious" for f in report.findings), [(f.rule, f.confidence) for f in report.findings]
 
 
+def test_fused_gated_matmul_covers_the_doubled_k_without_tainting():
+    """The MiniMax-H3 feedforward ff2 is a fused SwiGLU matmul: its activation carries [gate|up],
+    so the activation's K axis is exactly twice the weight's, and the op contracts silu(gate)*up.
+    K-sharded matchingly, that 2:1 ratio lines up (kx spans twice the weight's K) and must NOT
+    raise a K_COVERAGE taint — otherwise every finding downstream of the FFN reads as suspicious.
+    A non-2:1 activation width is a genuine contraction mismatch and still taints.
+    """
+    gated = GraphBuilder("glu", MESH)
+    x = gated.input("x", [1, 512, 4096], shard={TP: 2})  # activation K = 4096 = 2 * 2048 ([gate|up])
+    w = gated.param("w", [2048, 1024], shard={TP: 0})  # weight K (rows) = 2048, sharded on TP
+    rep = analyze_graph(gated.finish([gated.matmul(x, w, label="ff2")]))
+    assert not any(d.code == "K_COVERAGE" for d in rep.diagnostics), [d.code for d in rep.diagnostics]
+
+    bad = GraphBuilder("bad", MESH)
+    xb = bad.input("xb", [1, 512, 6144], shard={TP: 2})  # K = 6144 = 3 * 2048, not a gate|up pair
+    wb = bad.param("wb", [2048, 1024], shard={TP: 0})
+    repb = analyze_graph(bad.finish([bad.matmul(xb, wb, label="mm")]))
+    assert any(d.code == "K_COVERAGE" for d in repb.diagnostics)
+
+
 def test_gqa_split_qkv_gives_each_device_its_grouped_kv_heads():
     """Per-device fused QKV with kv_heads < heads (Qwen3-VL / MiniMax-H3).
 

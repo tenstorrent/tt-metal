@@ -449,26 +449,35 @@ def _matmul_apply(c: ApplyCtx) -> None:
             )
             dist = dist.with_partial(m, True)
 
+    # A fused gated matmul (SwiGLU) carries [gate|up] in its activation, so the activation's
+    # K axis is exactly twice the weight's: the op contracts silu(gate)*up over the weight's K.
+    # ff2 in the MiniMax-H3 feedforward is one (ff1 emits 2*ffn_dim; ff2's minimal_matmul gates
+    # then contracts ffn_dim). Recognise that 2:1 ratio so the coverage check compares the gated
+    # K, not the doubled activation width.
+    gated = xs.shape[k_axis_x] == 2 * ws.shape[k_axis_w]
     regions = {}
     k_mismatch = False
     for dev in c.mesh.devices():
         rows = x.regions[dev].bounds(_rows_axis(xs))
         cols = w.regions[dev].bounds(n_axis_w)
         regions[dev] = _cross(ys, rows, cols)
-        # requirement check: the local K range of x must be matched by w
+        # requirement check: each device's activation must cover the weight's local K. For a
+        # plain matmul that is kx == kw; for a gated matmul the activation holds both halves, so
+        # kx spans exactly twice the weight's local K range.
         kx = x.regions[dev].bounds(k_axis_x)
         kw = w.regions[dev].bounds(k_axis_w)
-        if kx is not None and kw is not None and kx != kw:
+        covered = kx == kw or (gated and kw is not None and kx == (2 * kw[0], 2 * kw[1]))
+        if kx is not None and kw is not None and not covered:
             c.warn(
                 "K_COVERAGE",
                 "device %d holds K%s of the activation but K%s of the weight" % (dev, list(kx), list(kw)),
             )
             k_mismatch = True
-    # A K-coverage mismatch means the spec cannot line up the contraction -- e.g. a
-    # batched activation×activation attention matmul (q@kᵀ) whose K assumption
-    # (K = rows of a 2D weight) does not hold. Taint the result so no finding
-    # downstream of it is emitted as provable; better honestly-suspicious than
-    # confidently wrong (the phase-7 failure mode).
+    # A *surviving* K-coverage mismatch means the spec still cannot line up the contraction --
+    # a batched activation×activation attention matmul (q@kᵀ), or a fused activation whose K
+    # ratio is not the recognised 2:1 gate|up. Taint the result so no finding downstream of it
+    # is emitted as provable; better honestly-suspicious than confidently wrong (the phase-7
+    # failure mode).
     c.define(
         0,
         dist,
