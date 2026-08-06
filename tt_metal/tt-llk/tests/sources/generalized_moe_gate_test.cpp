@@ -163,16 +163,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-#define DST_SYNC_MODE  dest_sync
-#define DST_ACCUM_MODE is_fp32_dest_acc_en
+#include "experimental/llk_math_generalized_moe_gate_eltwise_binary.h"
+#include "experimental/llk_math_generalized_moe_gate_transpose_dest_single_face.h"
 #include "experimental/llk_sfpu/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
-#undef DST_SYNC_MODE
-#undef DST_ACCUM_MODE
-
-#include "experimental/llk_math_generalized_moe_gate_eltwise_binary.h"
-#include "experimental/llk_math_generalized_moe_gate_transpose_dest_single_face.h"
 
 // step2 ends on a SETRWC CLR_AB and is the only op here that does. The paths that skip it have to
 // hand the Src banks back themselves, or the next kernel launched on this core stalls on its first
