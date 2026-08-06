@@ -58,14 +58,26 @@ from .encoder import _linear_fused  # same [out, in] -> [in, out] convention as 
 # matmul/softmax/matmul chain for A/B. See `TtAttention.__call__`.
 COSY_SDPA = os.environ.get("COSYVOICE_SDPA", "1") == "1"
 
+# `bfloat8_b` measured 1.00x on the AR decoder, twice, because that stage is bound by
+# per-op latency rather than weight traffic. The flow decoder is a different regime --
+# real tensors, batch 2, 64 blocks x 10 Euler steps -- so it is worth its own
+# measurement rather than inheriting the decoder's verdict. `COSYVOICE_FLOW_BF8=1`.
+FLOW_WEIGHTS_BF8 = os.environ.get("COSYVOICE_FLOW_BF8", "0") == "1"
+
 
 # --------------------------------------------------------------------------
 # small pieces
 # --------------------------------------------------------------------------
 def _linear(device, bag, name, dtype):
-    """torch stores Linear weights as [out, in]; ttnn.linear wants [in, out]."""
+    """torch stores Linear weights as [out, in]; ttnn.linear wants [in, out].
+
+    The weight may be stored narrower than the activations that flow through it; the
+    bias stays at `dtype`, since it is one row against a full matrix and narrowing it
+    buys no bandwidth while costing accuracy.
+    """
     sub = bag.sub(name)
-    w = ttnn.from_torch(sub.tensor("weight").t().contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    wdt = ttnn.bfloat8_b if FLOW_WEIGHTS_BF8 else dtype
+    w = ttnn.from_torch(sub.tensor("weight").t().contiguous(), dtype=wdt, layout=ttnn.TILE_LAYOUT, device=device)
     b = None
     if sub.has("bias"):
         b = ttnn.from_torch(sub.tensor("bias").reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -200,7 +212,12 @@ class TtAttention:
         # concatenated weight. This block runs 64 times per Euler step and there are
         # ten steps at batch 2, so four ops saved here are 5 120 ops off the stage.
         self.wqkv, self.bqkv = _linear_fused(
-            device, bag, ("to_q", "to_k", "to_v"), dtype, scales=(self.scale, 1.0, 1.0)
+            device,
+            bag,
+            ("to_q", "to_k", "to_v"),
+            dtype,
+            weights_dtype=ttnn.bfloat8_b if FLOW_WEIGHTS_BF8 else None,
+            scales=(self.scale, 1.0, 1.0),
         )
         self.wo, self.bo = _linear(device, bag, "to_out.0", dtype)
 
