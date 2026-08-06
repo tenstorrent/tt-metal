@@ -157,14 +157,18 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCIntFactory
         compute_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
 
-    // No unpack_modes entry: legacy left unpack_to_dest_mode all-Default, which is exactly an empty
-    // table. The DFBs here carry the Int32 output format, not Float32, so Metal 2.0's
-    // explicit-entry requirement (Float32-only today) does not fire either.
     auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
     if (auto* compute_gen1 = std::get_if<ComputeGen1Config>(&compute_hw); compute_gen1) {
         // This factory overrides the caller's fp32_dest_acc_en above (integer sum requires a 32-bit
         // dest); carry the *forced* value rather than the one the attributes came in with.
         compute_gen1->enable_32_bit_dest = fp32_dest_acc_en;
+        // Every DFB here carries the Int32 output format and the dest register is 32-bit, so the
+        // Src-vs-Dest choice is real for each one the compute kernel consumes. Issue #49936 extends
+        // the choice to Int32/UInt32, where an unspecified consumer becomes a hard error.
+        compute_gen1->unpack_modes = ComputeUnpackModes{
+            {INPUT_DFB, UnpackMode::UnpackToSrc},
+            {INTERMED0_DFB, UnpackMode::UnpackToSrc},
+        };
     }
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
