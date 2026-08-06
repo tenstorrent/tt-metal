@@ -12,6 +12,8 @@ no reference back to ttMLA (and no MLA weights) and runs its own TP/SP collectiv
 v3.1 (no indexer weights → ttMLA never builds it).
 """
 
+import os
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,6 +26,23 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
 # module-level INDEXER_WEIGHT_NAMES alias is defined at the bottom of this file for back-compat.
+
+
+# Opt-in diagnostic for the chunked-prefill end-to-end timer. The ring-indexer call is asynchronous,
+# so this measures host operation setup / program-cache handling / command submission, not device completion.
+# The test driver resets and reads the counters once per chunk.
+_FUSED_RING_HOST_TIMING_ENABLED = os.environ.get("TT_FUSED_RING_HOST_TIMING") == "1"
+_fused_ring_host_timing = {"calls": 0, "seconds": 0.0}
+
+
+def reset_fused_ring_host_timing() -> None:
+    if _FUSED_RING_HOST_TIMING_ENABLED:
+        _fused_ring_host_timing["calls"] = 0
+        _fused_ring_host_timing["seconds"] = 0.0
+
+
+def get_fused_ring_host_timing() -> tuple[int, float]:
+    return _fused_ring_host_timing["calls"], _fused_ring_host_timing["seconds"]
 
 
 class TtIndexer:
@@ -623,6 +642,7 @@ class TtIndexer:
         # cache_batch_idx into the batch-1 scratch and moves only the complete block-cyclic slabs touched
         # by kv_len; the score reader addresses its own shard directly in the original ND cache.
         k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=index_kv_cache, sp_axis=self.sp_axis)
+        host_start = time.perf_counter() if _FUSED_RING_HOST_TIMING_ENABLED else None
         logits = ttnn.experimental.ring_indexer_score_dsa(
             q_dev,
             k_full,
@@ -640,6 +660,9 @@ class TtIndexer:
             block_cyclic_chunk_local=seq_len,
             kv_len=end_pos,
         )
+        if host_start is not None:
+            _fused_ring_host_timing["calls"] += 1
+            _fused_ring_host_timing["seconds"] += time.perf_counter() - host_start
         # wq_b replicated -> each chip already holds the COMPLETE head-summed logit, so there is NO
         # partial-logit all-reduce over tp. This is the win: the removed step was a 2-CCL (RS+AG) all-reduce
         # spanning the full end_pos-wide logit (+ a TILE<->ROW_MAJOR round-trip), the indexer's dominant cost.
