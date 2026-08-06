@@ -162,12 +162,33 @@ void kernel_main() {
 
         // Reload page_table row only on batch boundary.
         if (batch_idx != cached_batch) {
-            noc.async_read(
-                page_table_gen,
-                CoreLocalMem<uint32_t>(page_table_cb_wr_ptr),
-                page_table_stick_size,
-                {.page_id = batch_idx},
-                {});
+            // WORKAROUND (tenstorrent/tt-xla#5897): issuing the whole page-table row as a
+            // single noc.async_read intermittently never completes once the row
+            // is wide enough (~14 KB+), and async_read_barrier() then wedges the
+            // device with no error. Splitting it into smaller transfers avoids
+            // the hang. Same bytes, same destination addresses -- only the
+            // transfer granularity changes.
+            //
+            // Root cause is NOT understood: NOC_MAX_BURST_SIZE on Blackhole is
+            // 16,384 B and rows of 14,336 B also hang, so the nominal burst
+            // limit does not by itself explain it. This may be masking rather
+            // than fixing the underlying problem.
+            {
+                constexpr uint32_t PT_CHUNK = 2048;
+                uint32_t pt_off = 0;
+                uint32_t pt_remaining = page_table_stick_size;
+                while (pt_remaining > 0) {
+                    uint32_t curr = (pt_remaining > PT_CHUNK) ? PT_CHUNK : pt_remaining;
+                    noc.async_read(
+                        page_table_gen,
+                        CoreLocalMem<uint32_t>(page_table_cb_wr_ptr + pt_off),
+                        curr,
+                        {.page_id = batch_idx, .offset_bytes = pt_off},
+                        {});
+                    pt_off += curr;
+                    pt_remaining -= curr;
+                }
+            }
             noc.async_read_barrier();
             cached_batch = batch_idx;
         }
