@@ -766,6 +766,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // this id must be well-formed (an inactive id would constexpr-fault on unpack_tile_size[-1]).
     tt::tt_metal::Buffer* cu_window_buffer = nullptr;
     uint32_t cu_window_seqlens_eles = 0;
+    // Global row index of Q row 0. Non-zero only when Q is a sequence-parallel shard of a longer
+    // sequence: Q and the output are addressed locally, while cu_window_seqlens and K/V stay global,
+    // so the writer's mask generator needs the shard's origin to find the right windows.
+    uint32_t windowed_q_token_offset = 0;
     cb_ids.cu_window_seqlens = cb_ids.q_in;
     if (is_windowed) {
         const auto& cu = tensor_args.cu_window_seqlens.value();
@@ -773,6 +777,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
         cu_window_buffer = cu.buffer();
         cu_window_seqlens_eles = cu.logical_shape()[-1];
+        windowed_q_token_offset = operation_attributes.windowed_q_token_offset;
     }
 
     cb_ids.identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
@@ -1440,7 +1445,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              global_q_start,                                   // 8
              global_q_count,                                   // 9
              cu_window_buffer,                                 // 10: windowed mask src (nullptr if unused)
-             cu_window_seqlens_eles});                         // 11: window count + 1
+             cu_window_seqlens_eles,                           // 11: window count + 1
+             windowed_q_token_offset});                        // 12: global origin of this Q shard
 
         compute_desc.emplace_runtime_args(
             core,

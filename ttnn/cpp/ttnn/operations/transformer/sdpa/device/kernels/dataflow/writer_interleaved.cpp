@@ -66,6 +66,10 @@ void kernel_main() {
     const uint32_t global_q_count = get_arg_val<uint32_t>(9);
     const uint32_t cu_window_seqlens_addr = get_arg_val<uint32_t>(10);
     const uint32_t cu_window_seqlens_eles = get_arg_val<uint32_t>(11);
+    // Global row index of this tensor's first Q row. Non-zero when Q is a sequence-parallel shard:
+    // Q/output are addressed locally, but cu_window_seqlens and K/V are global, so the mask generator
+    // needs the shard's global origin. Zero for an unsharded Q, which is the only case today.
+    const uint32_t q_tok_offset = get_arg_val<uint32_t>(12);
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
@@ -184,7 +188,8 @@ void kernel_main() {
                 valid_Sqt,
                 windowed_valid_Skt,
                 k_num_chunks,
-                cu_window_seqlens_eles);
+                cu_window_seqlens_eles,
+                q_tok_offset);
 
             // Determine how many rows of OUT will be written. Both start and end rows are
             // capped by valid_Sqt, since Sq padding is independent of Sk padding.
