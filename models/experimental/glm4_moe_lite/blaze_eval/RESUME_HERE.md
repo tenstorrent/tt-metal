@@ -3,35 +3,57 @@
 Written at a context checkpoint. Everything below is measured on the 32-chip BH Galaxy unless
 marked otherwise. Full context: [`../BLAZE_EVALUATION.md`](../BLAZE_EVALUATION.md).
 
-## HEADLINE: the boundary blocker is CLOSED; the boundary cost is still unmeasured
+## HEADLINE: the boundary is closed, priced, and the q_kv_a cluster LOSES
 
-A second agent added `TileRowReplicate` (input) and `GatherRowToDRAM` (output) and wired them into
-`GLMQKVAProjection`, so it now consumes the model's native 32x32 TILE DRAM tensor and writes DRAM
-outputs. **This closes the one open blocker described below** — the section that follows is kept
-for its findings but its conclusion is superseded. Gated on hardware:
-**q_a PCC 0.999916, kv_a PCC 0.999910**.
+The blocker described further down is **CLOSED** — a second agent added `TileRowReplicate` (input)
+and `GatherRowToDRAM` (output) and wired them into `GLMQKVAProjection`, so it now consumes the
+model's native 32x32 TILE DRAM activation and writes DRAM outputs. Gated on hardware:
+**q_a PCC 0.999916, kv_a PCC 0.999910**. The section below is kept for its findings; its
+conclusion is superseded.
 
-The boundary *cost* is NOT yet known. A first A/B read 47.4 us ttnn vs 89.5 us blaze (0.53x), but
-that measurement is **invalid**: `blaze_fn` rebuilt the `FusedProgram` and re-ran `emit()` inside
-the timed callable, while the ttnn side paid no equivalent cost because ttnn caches programs. The
-bench skill warns about exactly this. Do not cite 0.53x.
+With the boundary closed it could finally be *priced* instead of estimated, and the answer is
+negative. `blaze_eval/boundary_decompose.py`, single BH device, profiler on, builds hoisted:
 
-Corrected bench: `blaze_eval/native_boundary_ab.py`. Two fixes are already in it, both verified:
+| variant | µs | |
+|---|---:|---|
+| A core only (blaze-native in, L1 out) | **36.5** | |
+| B A + `TileRowReplicate` | 76.2 | input boundary **39.7** |
+| C A + 2x `GatherRowToDRAM` | 77.0 | output boundary **40.6** |
+| D both — what integration pays | **117.1** | additivity holds: B+C−A = 116.8 |
+| ttnn fused `q_kv_a` (shipping path) | **47.4** | **blaze is 0.40x** |
 
-- the `FusedProgram` build is hoisted out of the timed callable, and **repeated `run()` on one
-  program is confirmed stable** (3 runs bit-identical) — so hoisting is legitimate here even
-  though `run()` mutates `_prepare_for_build`/`_compaction_applied` state;
-- `ab_harness.set_profiler_env()` now runs **before** the ttnn import. It did not, and without it
-  `_measure()` returns `None` rather than raising — a silent no-samples result, not an error.
+**The verdict does not depend on the core.** The two boundary halves alone are 39.7 + 40.6 =
+**80.3 µs, already more than the entire ttnn path at 47.4 µs**. Even with a hypothetically free
+matmul this cluster loses as a drop-in. No core tuning rescues it.
 
-**The re-measurement has not completed yet**, blocked only by the concurrent-edit note below.
+The one escape hatch — keep outputs in L1 and adapt the downstream consumers — reaches B =
+76.2 µs, still **0.62x**. Only removing *both* boundaries, i.e. a fully blaze-native neighbourhood
+where the activation arrives already replicated, reaches A = 36.5 µs for **1.30x**: about
+**0.5 ms of a 33.2 ms token (1.6%)**, and only if the whole surrounding chain is converted.
 
-### Blocked on a concurrent edit in the tt-blaze tree
+**Do not integrate this cluster as a drop-in.** That is a settled negative result, not a pending
+task.
 
-`blaze/ops/glm_oproj_residual/__init__.py` exists without its `op.py`. `blaze/ops/__init__.py`
-imports every op package eagerly at `import blaze`, so this one partial package breaks **all**
-blaze imports tree-wide, not just that op. It is another agent mid-write on a new o_proj+residual
-fused op; leave it alone and re-run when their file lands.
+### Two measurement corrections that invalidate earlier numbers
+
+1. **0.53x is retracted.** The first boundary A/B rebuilt the `FusedProgram` and re-ran `emit()`
+   inside the timed callable, while ttnn paid nothing equivalent because it caches programs. The
+   corrected bench hoists the build and **verifies repeated `run()` is bit-identical across 3
+   runs** — necessary, since `run()` mutates `_prepare_for_build`/`_compaction_applied` state.
+2. **`ab_harness.set_profiler_env()` must precede the ttnn import.** It did not. `_measure()`
+   returns `None` on zero profiler samples instead of raising, so the misordering degraded
+   silently into a missing result rather than an error.
+
+### Unresolved: 36.5 µs vs the 9.5 µs this evaluation was built on
+
+Variant A is the *same configuration* that was recorded at 9.5 µs and produced the headline
+**4.76x**. It now measures 36.5 µs, which would make the core only ~1.3x. Candidates: the
+profiler-env ordering bug above (undercounts silently), or the op's new default `subblock_k=2`
+(its comment says 1 deadlocks on a *mesh*; this is a single device). A sweep is wired into
+`boundary_decompose.py` behind `GLM_SWEEP_SUBBLOCK_K=1`, left **opt-in** because four fresh JIT
+compiles ran past 15 min of Galaxy time without finishing — and because the verdict above is
+insensitive to the answer. **Treat every per-op speedup in this document as suspect until
+re-measured under the corrected harness.**
 
 ## State of the two GLM fused ops
 

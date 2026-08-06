@@ -256,9 +256,14 @@ authoritative"). Easy silent precision loss.
 
 ### F1 — `DRAMStreamingMatmul` is numerically wrong at m=32
 
-At GLM's o_proj shape (5120x2048): **PCC 0.0074** at m=32; m=1 and m=8 pass. Reproduced with
-blaze's own `_run_and_compare`, not a custom harness. The shipped tests only cover
-m ∈ {1,4,8}, so m=32 is untested territory. **Worth filing upstream.**
+At GLM's o_proj shape (5120x2048): **PCC 0.0074** at m=32; m=1 and m=8 pass at 0.9999. Reproduced
+with blaze's own `_run_and_compare`, not a custom harness. The shipped tests only cover
+m ∈ {1,4,8} — `test_dram_streaming_matmul.py:440`, and no test in the file goes above 8 — so m=32
+is untested territory. m=32 is a full tile of rows and is the shape a batched decode step needs,
+which is why the bs=1 wins in section 2 do not extend to batched throughput.
+
+Coverage patch (an xfail case, not a fix — root cause not investigated) at
+[`blaze_eval/upstream/05-dram-streaming-matmul-m32-coverage.patch`](blaze_eval/upstream/05-dram-streaming-matmul-m32-coverage.patch).
 
 ### F2 — `ab_harness` cannot import its PCC helper
 
@@ -266,8 +271,13 @@ m ∈ {1,4,8}, so m=32 is untested territory. **Worth filing upstream.**
 `from tests.blaze.utils.torch_golden import comp_pcc`. That can never resolve: `tt-blaze/tests`
 has no `__init__.py` (namespace portion only), while `tt-blaze/tt-metal/tests` **does** and is
 also on `PYTHONPATH` — a regular package terminates the namespace search and shadows it.
-The harness is unusable out of the box. Fix upstream is adding `tests/__init__.py` and
-`tests/blaze/__init__.py`; we worked around it by registering the module by path.
+The harness is unusable out of the box, and reordering `sys.path` does not help — a namespace
+portion is never merged with a regular package, so the regular one wins wherever it sits. Pytest
+is unaffected because it collects rootdir-relative rather than through this import, which is
+presumably how it survived. Fix upstream is adding `tests/__init__.py` and
+`tests/blaze/__init__.py`; we worked around it by registering the module by path. Confirmed
+empirically off-device with a minimal directory pair. Patch at
+[`blaze_eval/upstream/06-tt-blaze-tests-namespace-packages.patch`](blaze_eval/upstream/06-tt-blaze-tests-namespace-packages.patch).
 
 ### F3 (resolved, rewritten) — GLM's 20 heads do fit; the original finding blamed the wrong file
 
@@ -524,6 +534,213 @@ is in the decode trace-capture path, so it needs a real model change rather than
 optimizations (`FUSE_DOWN_ROUTING_SCALE`, `FUSED_COLLECTIVE_EPILOGUE`, `FUSED_ROUTER`), so a
 step time measured in blaze's tree is **not** comparable to our 33.2 ms. The valid experiment is
 same-tree, same-flags, with and without the blaze op swapped in.
+
+### F14 — the MoE gate ranked uninitialised L1 as an expert
+
+This is the whole of the PCC 0.0235 that replaced F11's hang, and the mechanism is worth reading
+in full because every step of it is a legal operation.
+
+**The bookkeeping error.** The gate face is assembled by a `Gather` that writes one 32-wide page
+per gate-MM core, so it fills `ceil(num_experts/32)*32` lanes. The SFPU top-k ranks
+`num_total_experts` lanes, and it must be a multiple of 128 —
+`ckernel_sfpu_generic_moe_gate_topk.h:176-177` static_asserts `>= 128 && % 128 == 0`
+(`..._top8.h:178-179` likewise), so 64 experts are ranked as **128 lanes**. `glm_moe_router` then
+passed `num_total_experts=256` as a literal (`glm_moe_router/op.py:137` at HEAD). Either way, at
+GLM's 64 experts over 2 gate cores, lanes 64 upward were never written: the destination was
+`f.cb_scratch`, a **shared arena slot** with documented temporal reuse, so those lanes held
+whatever last occupied that L1.
+
+**Why the existing sentinel could not save it.** blaze's own reference tensor builder pads *both*
+halves — `generic_moe_gate/op.py:92-93` fills the act face with `0.0` and the bias face with
+`-100.0`. That pairing is the contract, and it is a pair for a reason: the gate ranks `act + bias`
+per lane, so bounding one side bounds nothing. The router path had **no act pad at all**, and its
+gathered logits are post-sigmoid, hence in (0,1) and scoring at most ~1. Any stale bf16 word above
+~100 outranks every real expert even with `-100.0` in the bias. The contract was documented all
+along and only half-followed.
+
+**Why it returned finite garbage instead of faulting.** A winning padding lane yields an expert id
+in `[num_experts, num_total_experts)`, which has no weights behind it. The reader applies that id
+with **no bounds check**: `dram_streaming_matmul/kernels/op.hpp:182-191` reads
+`index_ptr[index_offset]` and computes `expert_offset_bytes = expert_idx * expert_size_bytes`. At
+these dims the per-bank expert stride is such that the bad offset lands *inside a different real
+weight tensor* — a legal DRAM read of real bytes. That is precisely why the symptom changed from a
+hang to **PCC 0.0235**: a hang is a synchronisation failure, and this was not one. Inferred from
+the arithmetic and the absence of a check, not instrumented.
+
+**The fix** pins a zero-filled tensor-backed face whenever the gather cannot fill what the kernel
+ranks. `gate_face_padding_plan()` separates lanes written from lanes ranked;
+`make_gate_gather_dst()` returns the unchanged `f.cb_scratch` when they agree and an
+`f.named_tensor`-backed zero face when they do not. Three properties make the zeros hold where a
+scratch slot's would not: named tensors are pinned in the compiled program's `lifetime_tensors`
+(`blaze/compiler.py:317-329`) so the buffer is never re-let; the gather writes only
+`sender_idx * data_size_bytes` from the base (`gather/kernels/op.hpp:108`); and the one-page CB is
+popped every iteration (`generic_moe_gate/kernels/op.hpp:92`) so the write pointer returns to base.
+Configs whose experts fill the ranked block — GLM-5 and DeepSeek-V4 at 256 — take a byte-identical
+path.
+
+**VERIFIED on silicon:** the device then selected expert **44**, a real lane. Additionally
+**CPU-only, 36/36 pass**, `tests/blaze/micro_ops/moe/test_gate_tail_padding_contract.py` and
+`test_moe_router_gate_wiring.py` — they reproduce the half-padded configuration through
+`GenericMoeGate.golden` and show the sentinel failing, then passing once the act tail is zeroed,
+over tail values of 1e4, bf16 max, NaN, 1.0 and 0.51.
+
+**The lesson that generalises.** Nothing in the existing suite could have caught this: every
+device test in this family runs 128 or 256 experts, where the rounding is a no-op and the tail does
+not exist, and the micro-op tests hand the gate a fully populated face. A defect that only appears
+below a kernel block size is invisible to a suite that only tests at and above it.
+
+### F15 — `full_sort=False` promises a set; the golden asserted an order
+
+With F14 fixed, the remaining failure was a **tie**. Experts 44 and 35 both scored exactly
+`1.0234375` — the bf16 value sitting at the k-th rank cutoff. Torch's `topk` broke it one way, the
+SFPU the other. **Both are correct.** `GLMMoERouter` runs `GenericMoeGate` with
+`full_sort=False`, and that mode promises the top-k *set* — neither an order across output lanes
+nor a tie-break rule. `GLMRoutedExpert.golden` read `top_indices[0, lane]`, i.e. assumed lane `i`
+holds the i-th largest.
+
+This is a **golden defect, not a device defect**. Nothing was wrong on hardware.
+
+Three things make it worth stating rather than patching around:
+
+- The rest of the family already knows. `test_generic_moe_gate.py:252-258` compares **sorted sets**
+  for exactly this reason, and only the `full_sort=True` branch (`:229-241`) asserts descending
+  order. The routed-expert golden is the one place that forgot.
+- **Exact ties are the expected case here, not a freak event.** bf16 carries ~8 mantissa bits and
+  the gate ranks 64 post-sigmoid scores in (0,1). Any future numerics gate on this op will hit
+  this, and the natural reaction — loosening the PCC threshold until it passes — hides real errors
+  while not fixing the tie.
+- The obvious cheap comparison is unsound in a second way. PCC is **scale-invariant**, so comparing
+  the device against a single candidate cannot tell whether it paired the right routing weight with
+  the right expert. `golden_lane_candidates()` therefore returns each legal candidate *with the
+  score that expert would have earned*, which restores that check. Not hypothetical: it is how we
+  found that the test passed `"routing_scaling_factor"` while `GLMRoutedExpert.compose` reads
+  `"scaling_factor"` — the key was never consumed, so the device ran the 2.5 default against a
+  golden using GLM-5's real factor, and scale invariance hid it for the life of the test. That is a
+  fifth instance of F16.
+
+**VERIFIED on silicon:** this is the change that took the GLM-4.7-Flash routed-expert probe from
+failing on the 44-vs-35 tie to passing.
+
+### F16 — a bug class: a parameter accepted, threaded, and then dropped at the call
+
+**The single most valuable thing in this document to raise upstream**, and it should be filed as a
+class rather than as four bugs. The shape is always identical: a parameter is threaded through the
+public surface, carries a default that is correct for the model the op was written against, and is
+then ignored or replaced by a literal at the inner call. Nothing fails. The model runs with the
+default. Line numbers at HEAD, all under `blaze/ops/`:
+
+| # | site | what happens | consequence |
+|---|---|---|---|
+| 1 | `glm_moe_router/op.py:137` | `num_total_experts=256` literal, while `num_experts` is accepted at `:94`, read at `:63` and passed at `:71` | F14 — 64 experts ranked over 256 lanes |
+| 2 | `glm_moe_router/op.py:138` | `pop_act=True` literal at the gate call, while `pop_act` is a *live* parameter for the gate MM at `:103` | none — the arg is inert (below) |
+| 3 | `glm_moe/op.py` | never accepted `num_experts` at all, in `compose()` or `emit()` | no caller could set it; the 256 default always won |
+| 4 | `glm_moe_no_shared/op.py` | accepted in **both** `compose()` and `emit()`, then omitted at the `GLMRoutedExpert.emit` call | the most legible instance: plumbing complete except the last hop |
+| 5 | `tests/blaze/glm5_1/test_glm5_routed_expert.py` | passed `"routing_scaling_factor"`; `GLMRoutedExpert.compose` reads `"scaling_factor"` | device ran the 2.5 default; PCC's scale invariance hid it (F15) |
+
+On #2: the gate's `pop_act` is **inert**. `generic_moe_gate/kernels/op.hpp:47` is its only
+occurrence in the kernel — act and bias are popped unconditionally at `:92-93`. A comment claiming
+it controlled popping the gathered CB was wrong. A parameter that looks live and is not is exactly
+how #1 survived, so the recommendation upstream is to delete it from both sides rather than repair
+its plumbing.
+
+**Three further call sites carry the same defect and fail loudly instead**, which is the part that
+makes this a class: `gptoss_moe_router/op.py:162`, `ffn_interleaved/op.py:476` and
+`deepseekv4_moe_large_router/op.py:156` all pass `num_total_experts=num_experts` — the raw,
+unrounded model count. Below 128, or at anything not a multiple of 128, that is a JIT
+static_assert failure at build time. So the identical mistake is safe when it trips a bound and
+unsafe when it hits a default, and which one you get is incidental to the mistake. All three also
+pass the inert `pop_act=True` (`:163`, `:477`, `:157`). We did not otherwise change them — no
+numerics gate for those models, **NOT RUN**.
+
+Patches: [`blaze_eval/upstream/`](blaze_eval/upstream/) 01 and 02, with a CPU-only `ast`-based
+wiring test that asserts the derivation directly and would have failed on all four op instances.
+
+### F17 — `DRAMStreamingMatmul` stalls under multi-device mesh execution
+
+**The current critical-path blocker.** It works single-device and stalls on a mesh, which blocks
+every fused op built on it — including all three GLM clusters — at the 32-device model boundary.
+Everything below is read from the investigating agent's session logs; the eliminations are the
+valuable part.
+
+**The stall, on the stock unmodified op.** `blaze/ops/dram_streaming_matmul/` is unmodified in the
+working tree; only the test file and the DPRINT-emitting `kernel_codegen.py` are. Driving the op's
+own Graph API test on a **4×2 submesh** of the Galaxy fixture with no fabric, at GLM's q_a
+geometry (k=2048, n=768, bf16 weights, `subblock_k=1`): **EXIT 124 — hung**, killed at 90 s. The
+`BLAZE_DEBUG_KERNELS=1` phase markers on DRAM worker core (0,9) are identical on **all 8 devices**
+of the submesh (0, 1, 4, 5, 8, 9, 12, 13):
+
+| RISC | `DRAM_STREAMING_MATMUL start` | `done` |
+|---|---:|---:|
+| NCRISC (DM1, the weight streamer) | 8 | **0** |
+| TRISC0 | 8 | **0** |
+| TRISC1 | 8 | **0** |
+| TRISC2 | 8 | 8 |
+| BRISC | 8 | 8 |
+
+TRISC0/1 get past the activation wait (`[CB] matmul act=0 after_wait`) and then stop; NCRISC never
+completes the phase. Under `GLMQKVAProjection` the same signature appears with the phase named:
+NCRISC/TRISC0/TRISC1 stall at `GLM_QKV_A__Q_A_PROJ start` on all 8 devices, `KV_A_PROJ` is never
+reached, and BRISC/TRISC2 complete. So this is **not** a `GLMQKVAProjection` bug — the base op
+does it, and the earlier reading that blamed the fused op was wrong.
+
+**Eliminated, each by a run that still stalled (all EXIT 124):**
+
+| hypothesis | test | result |
+|---|---|---|
+| weight distribution / per-device addresses | replicated full-K weights, lockstep addresses on all 32 devices | still stalls |
+| our harness, not blaze's | production `BlazeCompiler`, 4×2 submesh, `FABRIC_2D`, Galaxy mesh graph descriptor | still stalls |
+| fabric involvement | same submesh with fabric *off* | still stalls |
+| per-device harvesting | 13 distinct raw Tensix masks across the 32 chips, but identical logical-to-physical maps, and the pinned bank-to-worker assignment matches TTNN's actual assignment on every device | eliminated |
+
+*Caveat on the last row:* that is recorded from the investigating agent's session. **We did not
+re-derive the masks**, and it is the one elimination in this table not backed by a log we read.
+
+**A correction to an earlier reading.** An earlier note called this a "selective failure" because
+core (11,9) completed every phase while (0,9) stalled. **That was wrong.** (11,9) is not a DRAM
+worker — the eight are `(0,9), (0,0), (0,7), (0,3), (7,9), (7,1), (7,6), (7,4)`
+(`blaze_eval/glm4_flash_blaze_config.py:50`); (11,9) is the **sender** (`:82`). Its
+`DRAM_STREAMING_MATMUL` phases are no-ops, so completing them is not evidence of anything. Beware
+this shape of mistake with DPRINT: a core that has nothing to do always looks healthy.
+
+**Why nobody caught it.** The focused tests cover **one device only**.
+`test_dram_streaming_matmul_graph_api` is parametrised `mesh_device=[1]`
+(`test_dram_streaming_matmul.py:601`), and every other test in the file takes the single-`device`
+fixture. The 89/89 pass recorded in section 3 is 89 single-device passes. The multi-device cases
+(`..._graph_api_mesh`, `..._bh_submesh_no_fabric`, `..._bh_submesh_with_fabric`) are new, opt-in
+behind env vars, and are the ones that fail.
+
+**Open, and being worked right now.** Root cause is not established: NCRISC stalling immediately
+after phase start on every device simultaneously is consistent with a global synchronisation or
+address-resolution difference between the single-device and mesh program descriptors, but that is a
+**hypothesis, not a measurement**. The investigation was live when this was written, including an
+in-flight end-to-end substitution attempt, so treat this section as the state at the checkpoint
+rather than the last word.
+
+### F18 — `index_offset >= k` blocks production, and the fix is a modelling decision
+
+`glm_moe/op.py:170` derives the routed-expert output lane from **mesh position**:
+
+    index_offset = (row * cols + col) // routed_expert_tp + routed_index_offset
+
+That ranges over `[0, num_devices / routed_expert_tp)` — **0..31** on a 4×8 mesh at tp=1. But the
+gate only fills lanes `[0, num_selected_experts)`, and `zero_tail=True` blanks `[k, 16)`. A device
+whose lane is beyond k therefore reads **expert id 0 with score 0**: it recomputes expert 0 and
+multiplies the result by zero. At GLM-4.7-Flash's **k=4 that is 28 of 32 devices doing silent
+no-op work**; at GLM-5's k=8 it is 24 of 32. Nothing raises.
+
+**VERIFIED by reading the derivation and the `zero_tail` semantics; not measured** — it is not
+observable as a failure, which is the problem.
+
+The validity condition is `num_devices / routed_expert_tp <= k`. Satisfying it is an
+**expert-parallel mapping decision, not a local patch**: it needs either k devices per expert group
+with the group id folded into the offset, or a lane-to-device assignment the router emits rather
+than one derived from mesh position. We deliberately did not patch it and instead marked both
+`glm_moe.emit` and `GLMRoutedExpert.emit` UNRESOLVED in source so the next reader does not have to
+rediscover it. `GLMRoutedExpert.golden` now raises on `device_id >= k` rather than returning a
+reference the device cannot produce.
+
+This is why the single-device routed-expert tests pass while the path is not production-ready: at
+one device `index_offset` is 0 and always valid.
 
 ## 5. Reproducing
 
