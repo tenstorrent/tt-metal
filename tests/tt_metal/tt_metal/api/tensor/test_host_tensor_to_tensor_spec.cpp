@@ -181,8 +181,8 @@ TEST(HostTensorToTensorSpec, PerCoreOnlyMismatchFullRewrite) {
     auto dest_spec = TensorSpec(
         shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), dest_memory, Alignment({32, 32})));
 
-    // Spec equality ignores per_core, but exact-spec predicate must not early-out.
-    EXPECT_TRUE(source.tensor_spec() == dest_spec);
+    // Spec equality must include per_core_allocation because it changes allocator semantics.
+    EXPECT_FALSE(source.tensor_spec() == dest_spec);
     EXPECT_FALSE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(source.tensor_spec(), dest_spec));
 
     auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/77.f);
