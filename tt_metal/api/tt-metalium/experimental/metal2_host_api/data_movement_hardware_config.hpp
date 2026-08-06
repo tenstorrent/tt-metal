@@ -32,8 +32,8 @@ namespace tt::tt_metal::experimental {
 // NOC a kernel uses. This selection is performance-critical.
 //
 // The common case is handled for you by role-specific factory functions:
-//  - For a DM kernel that reads from DRAM: CreateReader1xxDataMovementConfig()
-//  - For a DM kernel that writes to DRAM:  CreateWriter1xxDataMovementConfig()
+//  - For a DM kernel that reads from DRAM: CreateReaderGen1DataMovementConfig()
+//  - For a DM kernel that writes to DRAM:  CreateWriterGen1DataMovementConfig()
 //
 // Power users can override these conventions by constructing a
 // DataMovementGen1Config directly.
@@ -55,7 +55,7 @@ struct DataMovementGen1Config {
 
 // Factory helper:
 // Default config for a reader DM kernel (i.e. that reads from DRAM)
-inline DataMovementGen1Config CreateReader1xxDataMovementConfig() noexcept {
+inline DataMovementGen1Config CreateReaderGen1DataMovementConfig() noexcept {
     return DataMovementGen1Config{
         // On Wormhole, RISCV_1 runs faster than RISCV_0 due to its dedicated
         // instruction memory. Since DM reader kernels are usually more complex than
@@ -85,7 +85,7 @@ inline DataMovementGen1Config CreateReader1xxDataMovementConfig() noexcept {
 
 // Factory helper:
 // Default config for a writer DM kernel (i.e. that writes to DRAM)
-inline DataMovementGen1Config CreateWriter1xxDataMovementConfig() noexcept {
+inline DataMovementGen1Config CreateWriterGen1DataMovementConfig() noexcept {
     return DataMovementGen1Config{
         // DM kernels on the same node must be assigned to different RISC-V cores.
         // Since RISCV_1 is preferred for readers, place writers on RISCV_0.

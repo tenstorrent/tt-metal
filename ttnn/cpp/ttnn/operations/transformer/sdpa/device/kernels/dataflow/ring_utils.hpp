@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "../../ring_id_sequencer.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
 
 #include <cstdint>
 

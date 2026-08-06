@@ -49,7 +49,7 @@ void bind_outbound_socket_service_sync(nb::module_& mod) {
         doc,
         ttnn::overload_t(
             static_cast<ttnn::Tensor (*)(
-                const tt::tt_metal::D2DStreamServiceSender&, const ttnn::Tensor&, const std::optional<ttnn::Tensor>&)>(
+                const ttnn::D2DStreamServiceSender&, const ttnn::Tensor&, const std::optional<ttnn::Tensor>&)>(
                 &ttnn::experimental::outbound_socket_service_sync),
             nb::arg("service"),
             nb::arg("input"),

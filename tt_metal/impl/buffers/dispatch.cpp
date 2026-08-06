@@ -698,7 +698,9 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
 
     // Build sub-commands on the fly with coalescing
     std::vector<CQDispatchWritePackedLargeUnicastSubCmd> write_sub_cmds;
+    write_sub_cmds.reserve(CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
     std::vector<CQPrefetchRelayLinearPackedSubCmd> relay_sub_cmds;
+    relay_sub_cmds.reserve(CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS);
     uint32_t relay_stream_offset = 0;
 
     const CoreCoord virtual_core = buffer.device()->virtual_core_from_logical_core(core, buffer.core_type());
@@ -728,7 +730,8 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                dispatch_params.expected_num_workers_completed[offset_index]);
+                dispatch_params.expected_num_workers_completed[offset_index],
+                dispatch_params.cq_id);
         }
 
         TT_ASSERT(
@@ -975,7 +978,8 @@ void issue_buffer_dispatch_command_sequence(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                dispatch_params.expected_num_workers_completed[offset_index]);
+                dispatch_params.expected_num_workers_completed[offset_index],
+                dispatch_params.cq_id);
         }
     }
     if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
@@ -1488,14 +1492,16 @@ void issue_read_buffer_dispatch_command_sequence(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
             MetalContext::instance(context_id).dispatch_mem_map().get_dispatch_stream_index(offset_index),
-            dispatch_params.expected_num_workers_completed[offset_index]);
+            dispatch_params.expected_num_workers_completed[offset_index],
+            dispatch_params.cq_id);
     }
     auto offset_index = *sub_device_ids[last_index];
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
         MetalContext::instance(context_id).dispatch_mem_map().get_dispatch_stream_index(offset_index),
-        dispatch_params.expected_num_workers_completed[offset_index]);
+        dispatch_params.expected_num_workers_completed[offset_index],
+        dispatch_params.cq_id);
 
     // Select write op once, then unify relay
     if (use_pinned_transfer) {

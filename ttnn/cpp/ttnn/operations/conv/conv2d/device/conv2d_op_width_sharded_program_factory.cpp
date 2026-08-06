@@ -204,13 +204,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
 
     // Device compatibility checks
     TT_FATAL(
-        a.storage_type() == tt::tt_metal::StorageType::DEVICE && b.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        a.storage_type() == ttnn::StorageType::DEVICE && b.storage_type() == ttnn::StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
     TT_FATAL(
         a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
-        TT_FATAL(bias.value().storage_type() == tt::tt_metal::StorageType::DEVICE, "Bias should be on device");
+        TT_FATAL(bias.value().storage_type() == ttnn::StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");
     }
 
@@ -466,12 +466,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // override needed.
     const CoreRangeSet all_reader_cores_set(all_reader_cores);
     emit_cb_descriptors(cb_info, desc, all_reader_cores_set, a.buffer(), output.buffer(), conv_reader_indices_buffer);
-    // partials_cb_uses_output is still consumed by compute_kernel_args below; the
-    // CB-on-output wiring is handled inline by emit_cb_descriptors (MATMUL_PARTIALS
-    // is mapped to output_buffer when is_globally_allocated is true), so we no
-    // longer need to call UpdateDynamicCircularBufferAddress on cache hit.
-    const bool partials_cb_uses_output = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
-
     std::vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,                         // in0_block_w
         act_num_subblocks,                          // in0_num_sublocks
@@ -503,7 +497,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
         get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
-        partials_cb_uses_output,
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
         false,            // check_skip_compute; not used in width sharded
         pack_relu,
@@ -566,7 +559,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
 
     if (config_tensors_in_dram) {
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
-        activation_kernel_compile_args.push_back(conv_reader_indices_buffer->address());
+        activation_kernel_compile_args.push_back(conv_reader_indices_buffer->address());  // smuggled-rta-ok
         activation_kernel_compile_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(activation_kernel_compile_args);
     }

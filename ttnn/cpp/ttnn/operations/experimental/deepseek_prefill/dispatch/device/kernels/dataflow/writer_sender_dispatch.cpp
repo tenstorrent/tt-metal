@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
 #include "api/debug/assert.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -165,7 +166,8 @@ void kernel_main() {
     uint32_t ring_route_base[num_workers];
     uint32_t ring_payload_base[num_workers];
     uint32_t ring_meta_base[num_workers];
-    uint32_t addr_ready_sem_l1_offset = get_semaphore(addr_ready_semaphore_id);
+    Noc noc;
+    Semaphore<> addr_ready_sem(addr_ready_semaphore_id);
     uint32_t cross_addr_sem_l1_offset = get_semaphore(cross_addr_semaphore_id);
     for (uint32_t s = 0; s < num_workers; s++) {
         ring_route_base[s] = get_write_ptr(ring_route_cb[s]);
@@ -176,7 +178,7 @@ void kernel_main() {
         noc_inline_dw_write(mailbox + 1 * sizeof(uint32_t), ring_payload_base[s]);
         noc_inline_dw_write(mailbox + 2 * sizeof(uint32_t), ring_meta_base[s]);
         noc_async_write_barrier();  // all three addresses must land before addr_ready wakes worker s
-        noc_semaphore_inc(get_noc_addr(ring_noc_x[s], ring_noc_y[s], addr_ready_sem_l1_offset), 1);
+        addr_ready_sem.up(noc, ring_noc_x[s], ring_noc_y[s], 1);
         noc_async_atomic_barrier();
         DPRINT_DISPATCH("Sender writer: addr handshake done ring={} u=({},{})\n", s, ring_noc_x[s], ring_noc_y[s]);
     }
@@ -332,6 +334,17 @@ void kernel_main() {
             if (done[s]) {
                 continue;
             }
+            // On Blackhole the RISC caches L1 reads (write-through cache), so a remote NoC write into
+            // this core's L1 does not invalidate a cached copy. Both *ring_data_avail_ptr[s] and the
+            // route_info slot read below are written REMOTELY by the untilizer, so without a fresh L1
+            // read each iteration we can spin forever on a stale data_avail==0 (deadlock) or read
+            // stale route_info and forward garbage route/dst over the fabric. Mirrors the sibling
+            // reader_combine.cpp poll loop.
+            // On Wormhole this is unnecessary: the baby RISCV has no L0 data cache over L1 (that
+            // cache and its set_l1_data_cache() control exist only on Blackhole), so L1 reads always
+            // observe the latest NoC write -- there is nothing to invalidate, and invalidate_l1_cache()
+            // (which compiles to a `fence`, itself a no-op on Wormhole) does nothing there.
+            invalidate_l1_cache();
             if (*ring_data_avail_ptr[s] >= consumed[s] + 1) {
                 uint32_t slot = consumed[s] % writer_cb_size;
                 volatile tt_l1_ptr uint32_t* route_info =

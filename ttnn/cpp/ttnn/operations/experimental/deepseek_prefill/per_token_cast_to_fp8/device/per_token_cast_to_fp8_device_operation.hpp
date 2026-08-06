@@ -16,7 +16,7 @@ namespace ttnn::experimental::prim::per_token_cast_to_fp8 {
 struct PerTokenCastToFp8DeviceOperation {
     using operation_attributes_t = PerTokenCastToFp8Params;
     using tensor_args_t = PerTokenCastToFp8Inputs;
-    using spec_return_value_t = std::tuple<TensorSpec, TensorSpec>;
+    using spec_return_value_t = std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor>;
     using program_factory_t = std::variant<PerTokenCastToFp8ProgramFactory>;
 

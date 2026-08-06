@@ -52,14 +52,13 @@ using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::PageConfig;
-using ::tt::tt_metal::Tensor;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
-using ::tt::tt_metal::TensorSpec;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
 using ::tt::tt_metal::distributed::MeshDevice;
 using ::tt::tt_metal::distributed::MeshMapperConfig;
 using ::tt::tt_metal::distributed::MeshWorkload;
+using ttnn::Tensor;
 
 constexpr uint32_t kMinWarmupIters = 4;
 constexpr uint32_t kWarmupSettlingIters = 2;
@@ -359,7 +358,7 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(global_shape, tensor_layout);
 
     tt::tt_metal::D2HStreamService::Config cfg{
         .global_spec = global_spec,

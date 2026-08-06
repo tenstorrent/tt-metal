@@ -1078,7 +1078,7 @@ See [MEMORY_TRACKING.md](./MEMORY_TRACKING.md) for detailed memory tracking guid
 Track training performance:
 
 ```python
-from ttml.common.utils import PerformanceMeter
+from ttml.common.performance import PerformanceMeter
 
 meter = PerformanceMeter(cfg)
 # ... training loop ...
