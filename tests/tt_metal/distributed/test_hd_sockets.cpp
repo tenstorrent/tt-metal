@@ -502,7 +502,7 @@ TEST_F(L2CpuSocketFixture, DramBankTableMatchesAllocatorAndSocDescriptor) {
     auto* device = mesh_device_->get_device(MeshCoordinate(0, 0));
     const ChipId device_id = device->id();
 
-    const auto table = get_dram_bank_table(device_id);
+    const auto table = experimental::get_dram_bank_table(device_id);
 
     const auto& allocator = *device->allocator();
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
@@ -589,17 +589,17 @@ TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
     const uint32_t data_addr = kLimBase + 0x10000;
 
     // Zero addresses are never valid -- 0 is not in LIM at all.
-    EXPECT_ANY_THROW(H2DSocket(mesh_device_, l2cpu, kFifoSize, /*config=*/0, data_addr, H2DMode::HOST_PUSH));
-    EXPECT_ANY_THROW(H2DSocket(mesh_device_, l2cpu, kFifoSize, config_addr, /*data=*/0, H2DMode::HOST_PUSH));
-    EXPECT_ANY_THROW(D2HSocket(mesh_device_, l2cpu, kFifoSize, /*config=*/0));
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, /*config=*/0, data_addr, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, /*data=*/0, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(D2HSocket(*mesh_device_, l2cpu, kFifoSize, /*config=*/0));
 
     // Misaligned addresses would corrupt the wire structs.
-    EXPECT_ANY_THROW(H2DSocket(mesh_device_, l2cpu, kFifoSize, config_addr + 1, data_addr, H2DMode::HOST_PUSH));
-    EXPECT_ANY_THROW(H2DSocket(mesh_device_, l2cpu, kFifoSize, config_addr, data_addr + 1, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr + 1, data_addr, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, data_addr + 1, H2DMode::HOST_PUSH));
 
     // A non-PCIe-aligned or zero FIFO breaks the ring arithmetic.
-    EXPECT_ANY_THROW(H2DSocket(mesh_device_, l2cpu, /*fifo_size=*/0, config_addr, data_addr, H2DMode::HOST_PUSH));
-    EXPECT_ANY_THROW(H2DSocket(mesh_device_, l2cpu, pcie_alignment + 1, config_addr, data_addr, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, /*fifo_size=*/0, config_addr, data_addr, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, pcie_alignment + 1, config_addr, data_addr, H2DMode::HOST_PUSH));
 
     // HOST_PUSH keeps the data ring in LIM and reaches it through the single
     // 2 MiB static TLB window, so a ring that runs past 0x08200000 must be
@@ -609,14 +609,14 @@ TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
     // window grounds -- but we cannot construct that socket here without
     // writing to LIM, so only the HOST_PUSH rejection is asserted.
     EXPECT_ANY_THROW(H2DSocket(
-        mesh_device_,
+        *mesh_device_,
         l2cpu,
         /*fifo_size=*/0x200000,
         /*config=*/kLimBase + 0x100000,
         kLimBase + 0x180000,
         H2DMode::HOST_PUSH));
     // A ring below the LIM window entirely is also invalid in HOST_PUSH.
-    EXPECT_ANY_THROW(H2DSocket(mesh_device_, l2cpu, kFifoSize, config_addr, /*data=*/0x1000, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, /*data=*/0x1000, H2DMode::HOST_PUSH));
 }
 
 }  // namespace tt::tt_metal::distributed

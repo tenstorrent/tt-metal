@@ -58,7 +58,7 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             nb::init<
-                const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
+                tt::tt_metal::distributed::MeshDevice&,
                 const tt::tt_metal::distributed::MeshCoreCoord&,
                 uint32_t,
                 uint32_t,
@@ -301,7 +301,7 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             nb::init<
-                const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
+                tt::tt_metal::distributed::MeshDevice&,
                 const tt::tt_metal::distributed::MeshCoreCoord&,
                 uint32_t,
                 uint32_t>(),

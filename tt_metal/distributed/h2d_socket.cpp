@@ -15,12 +15,14 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "tt_metal/llrt/tlb_config.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 #ifdef TT_METAL_USE_EMULE
 #include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
 #endif
 #include <tt-metalium/tt_align.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <sys/mman.h>
@@ -497,20 +499,22 @@ H2DSocket::H2DSocket(
 }
 
 H2DSocket::H2DSocket(
-    const std::shared_ptr<MeshDevice>& mesh_device,
+    MeshDevice& mesh_device,
     const MeshCoreCoord& recv_l2cpu,
     uint32_t fifo_size,
     uint32_t config_buffer_address,
     uint32_t data_fifo_address,
     H2DMode h2d_mode) :
     recv_core_(recv_l2cpu),
-    buffer_type_(BufferType::L1),
     fifo_size_(fifo_size),
     pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
-    mesh_device_(mesh_device.get()),
+    mesh_device_(&mesh_device),
     is_l2cpu_(true) {
+    // Helpers below still take a shared_ptr; the socket itself stores only a raw
+    // MeshDevice* and does not extend the device's lifetime.
+    const auto mesh_device_ptr = mesh_device.shared_from_this();
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
 
@@ -532,34 +536,81 @@ H2DSocket::H2DSocket(
         config_buffer_address,
         pcie_alignment);
 
-    // HOST_PUSH only: the L2CPU static TLB is a single 2 MiB window
-    // anchored at LIM base 0x08000000 (see tlb_config.cpp). The H2D FIFO
-    // writes are issued through that window via pcie_writer, so the FIFO
-    // must end strictly inside [0x08000000, 0x08200000). Going past that
-    // boundary would surface later as TlbWindow::validate() throwing
-    // "Out of bounds access" on the first wrapping write -- catch it
-    // here instead.
-    //
-    // DEVICE_PULL doesn't hit the L2CPU TLB for data (the host writes
-    // payloads into pinned RAM with memcpy and the X280 firmware pulls
-    // from PCIe via socket_pull_payload), so the data ring can be any
-    // size; data_fifo_address is just a LIM-resident logical anchor for
-    // ring offset arithmetic on the firmware side.
-    if (h2d_mode_ == H2DMode::HOST_PUSH) {
-        constexpr uint64_t l2cpu_tlb_window_end = 0x08200000ULL;
+    // The caller-supplied coordinate is taken as an already-TRANSLATED L2CPU NOC
+    // coord, so a wrong value would silently write the socket blob to another
+    // core and pick up that core's TLB base. Check membership rather than trust it.
+    {
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const uint32_t device_id = mesh_device_ptr->get_device(recv_core_.device_coord)->id();
+        const auto l2cpu_cores =
+            cluster.get_soc_desc(device_id).get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED);
+        const bool is_l2cpu_core = std::any_of(l2cpu_cores.begin(), l2cpu_cores.end(), [this](const auto& c) {
+            return c.x == recv_core_.core_coord.x && c.y == recv_core_.core_coord.y;
+        });
         TT_FATAL(
-            static_cast<uint64_t>(data_fifo_address) + static_cast<uint64_t>(fifo_size_) <= l2cpu_tlb_window_end,
-            "L2CPU H2D data FIFO [0x{:x}, 0x{:x}) does not fit in the 2 MiB static "
-            "TLB window [0x08000000, 0x{:x}). Reduce fifo_size or move data_fifo_address "
+            is_l2cpu_core,
+            "({}, {}) is not an L2CPU tile on device {}. recv_l2cpu.core_coord must be the TRANSLATED NOC coord of "
+            "an L2CPU tile.",
+            recv_core_.core_coord.x,
+            recv_core_.core_coord.y,
+            device_id);
+    }
+
+    // The receiver_socket_md is written through the L2CPU static TLB, and
+    // notify_receiver() later routes config_buffer_address_ + bytes_sent through
+    // the same window (subtracting its base). An address outside the window is
+    // accepted by the alignment checks above but underflows or trips
+    // TlbWindow::validate() on the first notification, so reject it up front.
+    const uint64_t config_end = static_cast<uint64_t>(config_buffer_address) + sizeof(receiver_socket_md);
+    TT_FATAL(
+        config_buffer_address >= ll_api::kL2cpuLimBase && config_end <= ll_api::kL2cpuLimTlbEnd,
+        "L2CPU H2D config buffer [0x{:x}, 0x{:x}) must lie inside the LIM window [0x{:x}, 0x{:x}) covered by the "
+        "static TLB.",
+        config_buffer_address,
+        config_end,
+        ll_api::kL2cpuLimBase,
+        ll_api::kL2cpuLimTlbEnd);
+
+    // HOST_PUSH only: the H2D FIFO writes are issued through the same window via
+    // pcie_writer, so the FIFO must end inside it. Going past that boundary would
+    // surface later as TlbWindow::validate() throwing "Out of bounds access" on
+    // the first wrapping write -- catch it here instead.
+    //
+    // DEVICE_PULL doesn't hit the L2CPU TLB for data (the host writes payloads
+    // into pinned RAM with memcpy and the X280 firmware pulls from PCIe via
+    // socket_pull_payload), so the data ring can be any size; data_fifo_address
+    // is just a LIM-resident logical anchor for ring offset arithmetic on the
+    // firmware side.
+    if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        const uint64_t fifo_end = static_cast<uint64_t>(data_fifo_address) + static_cast<uint64_t>(fifo_size_);
+        TT_FATAL(
+            fifo_end <= ll_api::kL2cpuLimTlbEnd,
+            "L2CPU H2D data FIFO [0x{:x}, 0x{:x}) does not fit in the {} MiB static "
+            "TLB window [0x{:x}, 0x{:x}). Reduce fifo_size or move data_fifo_address "
             "earlier in LIM. (HOST_PUSH only; DEVICE_PULL has no such limit.)",
             data_fifo_address,
-            static_cast<uint64_t>(data_fifo_address) + static_cast<uint64_t>(fifo_size_),
-            l2cpu_tlb_window_end);
+            fifo_end,
+            ll_api::kL2cpuLimTlbSize / (1024 * 1024),
+            ll_api::kL2cpuLimBase,
+            ll_api::kL2cpuLimTlbEnd);
         TT_FATAL(
-            data_fifo_address >= 0x08000000ULL,
+            data_fifo_address >= ll_api::kL2cpuLimBase,
             "L2CPU H2D data FIFO address 0x{:x} must lie inside the LIM region "
-            "[0x08000000, 0x08200000) covered by the static TLB.",
-            data_fifo_address);
+            "[0x{:x}, 0x{:x}) covered by the static TLB.",
+            data_fifo_address,
+            ll_api::kL2cpuLimBase,
+            ll_api::kL2cpuLimTlbEnd);
+        // In HOST_PUSH the payload ring lives in LIM alongside the metadata, so an
+        // overlapping reservation would let advancing writes scribble over
+        // receiver_socket_md and corrupt the socket's own counters.
+        TT_FATAL(
+            fifo_end <= static_cast<uint64_t>(config_buffer_address) || data_fifo_address >= config_end,
+            "L2CPU H2D data FIFO [0x{:x}, 0x{:x}) overlaps the config buffer [0x{:x}, 0x{:x}); the caller-reserved "
+            "LIM regions must be disjoint.",
+            data_fifo_address,
+            fifo_end,
+            config_buffer_address,
+            config_end);
     }
 
     // Cache the externally-supplied LIM addresses; the existing
@@ -583,7 +634,7 @@ H2DSocket::H2DSocket(
         // base. The X280 firmware's create_h2d_socket_receiver_device_pull
         // reads h2d.data_addr_* and h2d.bytes_acked_addr_* out of the
         // receiver_socket_md and uses both.
-        data_info = init_host_data_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
+        data_info = init_host_data_buffer(mesh_device_ptr, recv_device_range_set, pcie_alignment, shm_name);
         bytes_acked_info = data_info;
         auto bytes_acked_addr = (static_cast<uint64_t>(data_info.addr_hi) << 32 | data_info.addr_lo) + fifo_size_;
         bytes_acked_info.addr_hi = static_cast<uint32_t>(bytes_acked_addr >> 32);
@@ -597,11 +648,11 @@ H2DSocket::H2DSocket(
         // same bytes_acked-only allocation Phase 1 used. data_info stays
         // zeroed because the data lives in LIM at aligned_data_buf_start_
         // and the X280 firmware reads it via plain LIM loads.
-        bytes_acked_info = init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
+        bytes_acked_info = init_bytes_acked_buffer(mesh_device_ptr, recv_device_range_set, pcie_alignment, shm_name);
         bytes_acked_ptr_ = host_buffer_.get();
     }
-    write_socket_metadata(mesh_device, bytes_acked_info, data_info);
-    init_receiver_tlb(mesh_device);
+    write_socket_metadata(mesh_device_ptr, bytes_acked_info, data_info);
+    init_receiver_tlb(mesh_device_ptr);
 
     // Stamp the connector-state struct so a future cross-process attach
     // path (not exposed for L2CPU in Phase 1, but harmless to populate)

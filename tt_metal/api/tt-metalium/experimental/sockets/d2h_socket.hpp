@@ -181,10 +181,7 @@ public:
      *                               at least @ref required_config_buffer_size().
      */
     D2HSocket(
-        const std::shared_ptr<MeshDevice>& mesh_device,
-        const MeshCoreCoord& sender_l2cpu,
-        uint32_t fifo_size,
-        uint32_t config_buffer_address);
+        MeshDevice& mesh_device, const MeshCoreCoord& sender_l2cpu, uint32_t fifo_size, uint32_t config_buffer_address);
 
     /**
      * @brief Connects to an existing D2HSocket from another process.

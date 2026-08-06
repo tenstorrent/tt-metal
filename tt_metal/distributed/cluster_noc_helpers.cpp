@@ -21,25 +21,26 @@
 // MetalContext (impl/) and tt_cluster (llrt/) out of the ttnn-nanobind
 // include path. See cluster_noc_helpers.hpp for the rationale.
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal::experimental {
 
-void noc_write(std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr, std::string_view data) {
+void noc_write(
+    std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr, ttsl::Span<const std::byte> data) {
     const auto& cluster = MetalContext::instance().get_cluster();
     tt_cxy_pair target(device_id, x, y);
     cluster.write_core(data.data(), static_cast<std::uint32_t>(data.size()), target, addr);
 }
 
-std::vector<std::uint8_t> noc_read(
+std::vector<std::byte> noc_read(
     std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr, std::uint32_t size) {
     const auto& cluster = MetalContext::instance().get_cluster();
     tt_cxy_pair target(device_id, x, y);
-    std::vector<std::uint8_t> buf(size);
+    std::vector<std::byte> buf(size);
     cluster.read_core(buf.data(), size, target, addr);
     return buf;
 }
 
 void noc_write_immediate(
-    std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr, std::string_view data) {
+    std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr, ttsl::Span<const std::byte> data) {
     const auto& cluster = MetalContext::instance().get_cluster();
     tt_cxy_pair target(device_id, x, y);
     cluster.write_core_immediate(data.data(), static_cast<std::uint32_t>(data.size()), target, addr);
@@ -109,4 +110,4 @@ std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id) {
     return out;
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal::experimental

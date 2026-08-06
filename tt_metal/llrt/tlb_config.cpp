@@ -128,10 +128,15 @@ void configure_static_tlbs(
     // at PCIe-limited throughput on this socket so a Posted relaxation
     // would not help.
     if (arch == tt::ARCH::BLACKHOLE) {
-        constexpr uint64_t l2cpu_lim_base = 0x08000000ULL;
+        TT_FATAL(
+            get_static_tlb_size() == kL2cpuLimTlbSize,
+            "L2CPU LIM aperture ({} B) must match the static TLB size ({} B); consumers validate LIM addresses "
+            "against kL2cpuLimTlbEnd.",
+            kL2cpuLimTlbSize,
+            get_static_tlb_size());
         for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED)) {
             device_driver.configure_tlb(
-                mmio_device_id, core, get_static_tlb_size(), l2cpu_lim_base, tt::umd::tlb_data::Strict);
+                mmio_device_id, core, get_static_tlb_size(), kL2cpuLimBase, tt::umd::tlb_data::Strict);
         }
     }
 

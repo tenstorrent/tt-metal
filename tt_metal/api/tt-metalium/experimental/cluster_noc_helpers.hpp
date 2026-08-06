@@ -4,11 +4,23 @@
 
 #pragma once
 
+#include <tt_stl/span.hpp>
+
+#include <cstddef>
 #include <cstdint>
-#include <string_view>
 #include <vector>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal::experimental {
+
+/**
+ * @warning EXPERIMENTAL. Everything declared in this header lives under
+ * @c tt-metalium/experimental and is subject to change or removal without a
+ * deprecation period. Do not depend on it from stable code.
+ *
+ * These are raw NOC accessors with no bounds checking beyond what the Watcher
+ * host sanitizer applies; callers are responsible for targeting a valid core
+ * and address range.
+ */
 
 /**
  * Thin shims over @c Cluster::write_core / @c Cluster::read_core /
@@ -37,14 +49,15 @@ namespace tt::tt_metal::distributed {
  * @param addr Device-side address (64-bit).
  * @param data Bytes to write.
  */
-void noc_write(std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr, std::string_view data);
+void noc_write(
+    std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr, ttsl::Span<const std::byte> data);
 
 /**
  * @brief NOC read via @c Cluster::read_core (counterpart to @ref noc_write).
  *
  * @return @p size bytes read from the target tile.
  */
-std::vector<std::uint8_t> noc_read(
+std::vector<std::byte> noc_read(
     std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr, std::uint32_t size);
 
 /**
@@ -60,7 +73,7 @@ std::vector<std::uint8_t> noc_read(
  * @see Cluster::write_core_immediate in tt_metal/llrt/tt_cluster.cpp
  */
 void noc_write_immediate(
-    std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr, std::string_view data);
+    std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr, ttsl::Span<const std::byte> data);
 
 /**
  * @brief Single-u32 UC-path register read via @c Cluster::read_reg
@@ -105,4 +118,4 @@ struct DramBankInfo {
  */
 std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id);
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal::experimental

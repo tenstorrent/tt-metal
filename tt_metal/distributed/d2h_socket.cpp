@@ -13,6 +13,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "tt_metal/llrt/tlb_config.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 #ifdef TT_METAL_USE_EMULE
 #include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
 #endif
@@ -21,6 +22,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <sys/mman.h>
@@ -418,15 +420,15 @@ D2HSocket::D2HSocket(
 }
 
 D2HSocket::D2HSocket(
-    const std::shared_ptr<MeshDevice>& mesh_device,
-    const MeshCoreCoord& sender_l2cpu,
-    uint32_t fifo_size,
-    uint32_t config_buffer_address) :
+    MeshDevice& mesh_device, const MeshCoreCoord& sender_l2cpu, uint32_t fifo_size, uint32_t config_buffer_address) :
     sender_core_(sender_l2cpu),
     fifo_size_(fifo_size),
     pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
-    mesh_device_(mesh_device.get()),
+    mesh_device_(&mesh_device),
     is_l2cpu_(true) {
+    // Helpers below still take a shared_ptr; the socket itself stores only a raw
+    // MeshDevice* and does not extend the device's lifetime.
+    const auto mesh_device_ptr = mesh_device.shared_from_this();
     TT_FATAL(
         MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE,
         "L2CPU D2H sockets are only supported on Blackhole architectures.");
@@ -438,10 +440,45 @@ D2HSocket::D2HSocket(
         "L2CPU config buffer LIM address 0x{:x} must be L1-aligned ({} B).",
         config_buffer_address,
         l1_alignment);
+
+    // The caller-supplied coordinate is taken as an already-TRANSLATED L2CPU NOC
+    // coord, so a wrong value would silently write the socket blob to another
+    // core and pick up that core's TLB base. Check membership rather than trust it.
+    {
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const uint32_t device_id = mesh_device_ptr->get_device(sender_core_.device_coord)->id();
+        const auto l2cpu_cores =
+            cluster.get_soc_desc(device_id).get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED);
+        const bool is_l2cpu_core = std::any_of(l2cpu_cores.begin(), l2cpu_cores.end(), [this](const auto& c) {
+            return c.x == sender_core_.core_coord.x && c.y == sender_core_.core_coord.y;
+        });
+        TT_FATAL(
+            is_l2cpu_core,
+            "({}, {}) is not an L2CPU tile on device {}. sender_l2cpu.core_coord must be the TRANSLATED NOC coord of "
+            "an L2CPU tile.",
+            sender_core_.core_coord.x,
+            sender_core_.core_coord.y,
+            device_id);
+    }
+
+    // The sender_socket_md blob is written through the L2CPU static TLB, and
+    // notify_sender() later routes config_buffer_address_ + bytes_acked_device_offset_
+    // through the same window (subtracting its base). An address outside the window
+    // passes the alignment check above but then underflows or trips
+    // TlbWindow::validate() on the first acknowledgement, so reject it up front.
+    const uint64_t config_end = static_cast<uint64_t>(config_buffer_address) + required_config_buffer_size();
+    TT_FATAL(
+        config_buffer_address >= ll_api::kL2cpuLimBase && config_end <= ll_api::kL2cpuLimTlbEnd,
+        "L2CPU D2H config buffer [0x{:x}, 0x{:x}) must lie inside the LIM window [0x{:x}, 0x{:x}) covered by the "
+        "static TLB.",
+        config_buffer_address,
+        config_end,
+        ll_api::kL2cpuLimBase,
+        ll_api::kL2cpuLimTlbEnd);
     TT_FATAL(fifo_size_ > 0 && fifo_size_ % pcie_alignment_ == 0, "FIFO size must be non-zero and PCIe-aligned.");
 
     config_buffer_address_ = config_buffer_address;
-    init_common(mesh_device);
+    init_common(mesh_device_ptr);
 }
 
 uint32_t D2HSocket::required_config_buffer_size() {

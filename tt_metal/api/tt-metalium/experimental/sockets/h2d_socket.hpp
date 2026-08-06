@@ -180,7 +180,7 @@ public:
      *                             Phase 1 socket_echo firmware.
      */
     H2DSocket(
-        const std::shared_ptr<MeshDevice>& mesh_device,
+        MeshDevice& mesh_device,
         const MeshCoreCoord& recv_l2cpu,
         uint32_t fifo_size,
         uint32_t config_buffer_address,
