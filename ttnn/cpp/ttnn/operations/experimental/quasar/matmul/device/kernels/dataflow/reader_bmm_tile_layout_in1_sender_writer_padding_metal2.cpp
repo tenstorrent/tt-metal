@@ -289,7 +289,12 @@ void kernel_main() {
                         }
 #if !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
-                        cb_in1.reserve_back(in1_block_num_tiles);
+                        // [#48552 DIAG - REVERT AFTER] cb_in1 PRODUCE credit disabled to test whether cb_in1's
+                        // tile-counter flow-control is the TILE_COUNTERS/hang culprit. The DRAM read + mcast sem
+                        // handshake below stay intact (get_write_ptr still returns a valid L1 base), so no
+                        // receiver-VALID or reserve-fill side-hang is introduced; only the cb_in1 credit traffic
+                        // is removed. Paired with the compute's wait_front/pop_front (also disabled).
+                        // cb_in1.reserve_back(in1_block_num_tiles);
                         uint32_t in1_write_offset = 0;
                         uint64_t in1_start_address =
                             cb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
@@ -363,7 +368,8 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
 #ifndef IN1_SHARDED
-                        cb_in1.push_back(in1_block_num_tiles);
+                        // [#48552 DIAG - REVERT AFTER] cb_in1 PRODUCE credit disabled (see reserve_back above).
+                        // cb_in1.push_back(in1_block_num_tiles);
 #endif  // IN1_SHARDED
                     }
 #ifdef FUSE_BIAS
