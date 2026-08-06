@@ -1,7 +1,15 @@
 # MiniMax-H3 on Blackhole Galaxy — state
 
-**Status: t2va and all three fl2va modes green end to end**, re-gated after the merge onto
-`cglagovich/minimax-h3`. Denoise is 92 % of e2e.
+**Status: t2va, all three fl2va modes, and `ref2va` green end to end.** Denoise is 92 % of e2e.
+
+`ref2va` (omni-reference conditioning) is brought up in its own campaign run root,
+`campaigns/minimax-h3-ref2va/` — read its `CAMPAIGN.md` for the working point and gate status.
+**Amendments 114–130 live in `campaigns/minimax-h3-ref2va/ledgers/amendments.md`, not here**, per
+`tt-dit-loop`'s split of bounded checkpoint from append-only ledger. Four of them correct claims in
+this file's own pitfalls: `l1_small_size` 65536 is not universal (the video VAE's taps=3 encoder needs
+≤ 16384, am. 124/126), the seam ratio yields false *failures* as well as false passes (am. 130), and
+two components that were green under `SINGLE_DEVICE` with empty `device_params` failed on the
+production mesh (am. 124/125).
 
 Latency: **fully warm 63–74 s was measured before that merge and is not yet re-measured on this base.**
 cglagovich's fused FF matmul and AdaLN precompute both land in the hot path, so treat that range as
