@@ -244,9 +244,31 @@ def test_convert_stringifies_bool_valued_string_column(tmp_path):
     assert list(back["unpack_to_dest"]) == ["True", "False"]
 
 
-def test_convert_drops_redundant_columns_strict_safe(tmp_path):
-    # input_/output_num_blocks are provably == num_blocks (DROPPED_COLUMNS): the
-    # converter drops them and does NOT trip the strict unknown-column guard.
+def test_convert_drops_dropped_columns_strict_safe(tmp_path):
+    # TEXT_SIZE(...) columns are in DROPPED_COLUMNS (per-stage ELF code size, not
+    # used by the gate): the converter drops them and does NOT trip the strict
+    # unknown-column guard.
+    df = pd.DataFrame(
+        {
+            "marker": ["INIT"],
+            "num_blocks": [4],
+            "TEXT_SIZE(MATH_ISOLATE)": [2048],
+            "tile_cnt": [2],
+        }
+    )
+    p = _write_csv(tmp_path, "perf_x.csv", df)
+
+    diag = convert_csvs_to_parquet([p], tmp_path / "out.parquet", **_RUN_PROV)
+
+    assert diag["unknown_columns"] == {}  # not flagged as drift
+    names = pq.read_table(tmp_path / "out.parquet").schema.names
+    assert "num_blocks" in names
+    assert "TEXT_SIZE(MATH_ISOLATE)" not in names
+
+
+def test_convert_keeps_num_blocks_columns(tmp_path):
+    # input_/output_num_blocks are real schema columns now: they must survive the
+    # round-trip, not be dropped.
     df = pd.DataFrame(
         {
             "marker": ["INIT"],
@@ -260,11 +282,10 @@ def test_convert_drops_redundant_columns_strict_safe(tmp_path):
 
     diag = convert_csvs_to_parquet([p], tmp_path / "out.parquet", **_RUN_PROV)
 
-    assert diag["unknown_columns"] == {}  # not flagged as drift
+    assert diag["unknown_columns"] == {}
     names = pq.read_table(tmp_path / "out.parquet").schema.names
-    assert "num_blocks" in names
-    assert "input_num_blocks" not in names
-    assert "output_num_blocks" not in names
+    assert "input_num_blocks" in names
+    assert "output_num_blocks" in names
 
 
 # ── Parquet -> CSV (reverse conversion) ───────────────────────────────────────
