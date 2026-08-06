@@ -683,7 +683,7 @@ class TtPrefillRuntime:
         PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module.
         `real_len` caps the compared extent to the real (non-pad) tokens — a partial last chunk makes
         n_chunks * chunk_size overshoot the prompt; `pt_path_override` selects a per-slot .pt golden
-        (both are used by the migration validators in prefill/runners/validation.py)."""
+        (both are for out-of-tree callers; nothing in-tree passes either)."""
         from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import kv_cache_pcc_check
 
         return kv_cache_pcc_check(
