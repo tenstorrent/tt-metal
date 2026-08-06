@@ -16,7 +16,7 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
-from models.common.utility_functions import hf_cache_layer_kv
+from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -39,7 +39,9 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     single_trace,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -548,6 +550,32 @@ ROTATED_VALID_LISTS = [
 ]
 ROTATED_VALID_IDS = ["aligned_min", "midchip_straddle", "lastchip", "rot_partial", "multislab", "allfull"]
 
+# Determinism gate, same contract as test_prefill_block / test_prefill_transformer: repeats must be
+# bit-identical, so the threshold is exactly 1.0. Rep 0 is the baseline, hence >= 2.
+DETERMINISM_PCC_THRESHOLD = 1.0
+DETERMINISM_REPS = 3
+
+# Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
+# subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build (PR #49840).
+# Measured 2026-08-05 on bh_sc1_high_power (run 31010521345): 12.073 ms. Reads 4.4% above the Tracy
+# path's 11_562_468 as expected -- Tracy averages collectives across chips, this takes the max.
+K3_CHUNKED_RT_PERF_NS = 12_073_303
+K3_CHUNKED_RT_PERF_MARGIN = 0.03
+
+
+def _rt_profile_forward_ns(mesh_device, run_fn):
+    """Profile one region; return (result, total_ns) where each program contributes its MAX duration
+    across chips (slowest chip gates that program) -- the sparse-MLA/PR #49840 convention."""
+    result, records = profile_realtime_program(mesh_device, run_fn, collect_all=True)
+    per_program = {}
+    for record in records:
+        runtime_id = record["runtime_id"]
+        if not runtime_id:  # 0 is the profiler's own sentinel
+            continue
+        duration_ns = float(record["duration_ns"])
+        per_program[runtime_id] = max(per_program.get(runtime_id, 0.0), duration_ns)
+    return result, sum(per_program.values())
+
 
 def _run_chunked_prefill(
     request,
@@ -561,6 +589,8 @@ def _run_chunked_prefill(
     use_pretrained=False,
     topology=ttnn.Topology.Linear,
     use_metadata_tensor=False,
+    determinism_check=False,
+    profile=False,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -574,6 +604,15 @@ def _run_chunked_prefill(
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
     """
     assert reference in ("cpu", "trace", None), f"reference must be 'cpu'|'trace'|None, got {reference!r}"
+    # Mutually exclusive like determinism_check vs pcc_validation in test_prefill_block: a reference
+    # comparison measures accuracy, the repeats measure device determinism. Pick one.
+    if determinism_check and reference is not None:
+        pytest.skip("determinism_check needs reference=None (func) -- accuracy is the cpu/trace path's job")
+    # Same exclusion, same reason: a reference run pays a CPU torch pass this measurement does not want.
+    if profile and reference is not None:
+        pytest.skip("profile needs reference=None (func) -- accuracy is the cpu/trace path's job")
+    if profile and not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
     sp_axis, tp_axis = 0, 1
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
@@ -592,6 +631,16 @@ def _run_chunked_prefill(
                 "reference='trace' requires MLA_CHUNKED_TRACE_DIR (root) or "
                 "MLA_CHUNKED_TRACE_PATH (single trace) -- trace-only scenario"
             )
+        # Must ASSERT, not skip: discover_traces filters siblings on a "kimi" substring, so Kimi-K3
+        # would be handed Kimi-K2.6's traces silently. Checked here -- the one point both the
+        # TRACE_DIR and TRACE_PATH routes cross.
+        trace_variant = request.getfixturevalue("variant")
+        assert getattr(trace_variant, "supports_pretrained", True), (
+            f"reference='trace' is not supported for variant '{trace_variant.name}': it has no "
+            "reachable pretrained checkpoint, so no GPU trace was ever recorded for it, and trace "
+            "resolution would silently substitute another variant's traces. Use reference='cpu' "
+            "(CPU torch reference, random or real weights) or reference='func' (no reference)."
+        )
         # The trace is a DENSE token sequence; iters_isl just chunks it variably. Partial iters pad
         # the device's fixed-width chunk (masked by causality) -- they are not pad in the sequence --
         # so any iters_isl / prefill works exactly like the CPU ref. The only trace constraint is
@@ -734,6 +783,8 @@ def _run_chunked_prefill(
     out_accum = [torch.zeros(1, 1, users[u]["total_len"], hidden_size, dtype=torch.bfloat16) for u in range(num_users)]
 
     # ---- iterate: interleave users by local iter index (exercises cross-user isolation) ----
+    det_failures = []
+    profiled_ns = 0.0
     n_iters = max(len(u["group"]) for u in users)
     logger.info(f"Starting DEVICE chunked prefill: up to {n_iters} iters x {num_users} user(s)")
     for i in range(n_iters):
@@ -784,23 +835,49 @@ def _run_chunked_prefill(
             # inbound_socket_service_sync) -- actual_start/actual_end are read on-device, so leave them
             # None to prove forward needs no host per-chunk scalars. cache_user_id is unused on this path
             # (slot comes from metadata[0]).
-            tt_out = mla_tt.forward(
-                hidden_states=tt_h,
-                rope_tensors=indexed_rope,
-                kvpe_cache=tt_kvpe_cache,
-                actual_start=None if use_metadata_tensor else kv_actual,
-                cache_user_id=u,
-                metadata=kv_pad_metadata,
-            )
+            # Determinism re-issues the SAME forward on the same device inputs. forward takes
+            # actual_start/cache_user_id from the caller, so a repeat rewrites the same cache slots
+            # with the same data -- idempotent, like the repeated block() in test_prefill_block.
+            det_baseline = None
+            for rep in range(DETERMINISM_REPS if determinism_check else 1):
+
+                def _forward():
+                    return mla_tt.forward(
+                        hidden_states=tt_h,
+                        rope_tensors=indexed_rope,
+                        kvpe_cache=tt_kvpe_cache,
+                        actual_start=None if use_metadata_tensor else kv_actual,
+                        cache_user_id=u,
+                        metadata=kv_pad_metadata,
+                    )
+
+                if profile:
+                    tt_out, fwd_ns = _rt_profile_forward_ns(mesh_device, _forward)
+                    profiled_ns += fwd_ns
+                    logger.info(f"  user {u} iter {i}: forward {fwd_ns / 1e6:.3f} ms (realtime profiler)")
+                else:
+                    tt_out = _forward()
+                out_flat = ttnn.to_torch(
+                    tt_out,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
+                    ),
+                ).to(torch.bfloat16)[0, 0]
+                if not determinism_check:
+                    continue
+                if rep == 0:
+                    det_baseline = out_flat.clone()
+                    continue
+                # Collect rather than assert: one report listing every non-deterministic (user, iter,
+                # rep) beats aborting on the first, same as the prefill-block/transformer checks.
+                _, pcc = comp_pcc(det_baseline.float(), out_flat.float())
+                status = "PASS" if pcc >= DETERMINISM_PCC_THRESHOLD else "FAIL"
+                logger.info(f"  user {u} iter {i} rep {rep} vs rep0: PCC = {pcc:.6f}  {status}")
+                if pcc < DETERMINISM_PCC_THRESHOLD:
+                    det_failures.append((u, i, rep, pcc))
             if kv_pad_metadata is not None:
                 for meta_tensor in kv_pad_metadata:
                     ttnn.deallocate(meta_tensor)
-            out_flat = ttnn.to_torch(
-                tt_out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
-                ),
-            ).to(torch.bfloat16)[0, 0]
 
             assert torch.isfinite(out_flat).all(), f"user {u} iter {i}: non-finite output"
             valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < valid_end]
@@ -818,6 +895,19 @@ def _run_chunked_prefill(
                 logger.info(f"  user {u} iter {i} (kv_actual={kv_actual} isl={isl} {rot}): out PCC {msg}")
         ttnn.synchronize_device(mesh_device)
         ttnn.distributed_context_barrier()
+
+    if profile:
+        return profiled_ns
+
+    if determinism_check:
+        if det_failures:
+            msg = "; ".join(f"user {u} iter {i} rep {rep}: {pcc:.6f}" for u, i, rep, pcc in det_failures)
+            pytest.fail(f"Determinism PCC below {DETERMINISM_PCC_THRESHOLD}: {msg}")
+        logger.success(
+            f"✓ Chunked prefill determinism: {DETERMINISM_REPS} reps of every forward bit-identical "
+            f"({n_iters} iter(s) x {num_users} user(s))"
+        )
+        return
 
     if reference is None:
         logger.success(f"✓ Functional chunked prefill ran ({num_users} user(s), finite output)")
@@ -875,6 +965,9 @@ _CHUNKED_SCENARIOS = (
     # NOTE: ids must not nest as substrings, else `-k <id>` can't isolate one (pytest -k is substring).
     # Convention: "-Nu" = N users. "maxedge"/"deep" are intentional families (single- + multi-user).
     + [("maxedge-1u", dict(iters_isl=[2560, 2592, 5120]))]
+    # One aligned full chunk, no padding and no rotation -- the determinism baseline, where a repeat
+    # diff can only come from the device, not from the pad/rotate bookkeeping maxedge exercises.
+    + [("plain-5k", dict(iters_isl=[5120]))]
     + [
         ("production-50k+5k", dict(iters_isl=[5120] * 11)),
         ("fullchunk-2u", dict(iters_isl=[5120] * 4, num_users=2)),
@@ -910,10 +1003,20 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize("reference", ["cpu", "trace", None], ids=["cpu", "trace", "func"])
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k2_6"], indirect=True, ids=["dsv3", "kimi"])
+@pytest.mark.parametrize(
+    "variant",
+    ["deepseek_v3_d_p", "kimi_k2_6", "kimi_k3"],
+    indirect=True,
+    # "k3", not "kimi_k3": pytest -k is substring-based, so a "kimi_k3" id would silently widen every
+    # existing `-k kimi` selector (CI yaml, tests/perf/test_mla_perf.py) to include K3.
+    ids=["dsv3", "kimi", "k3"],
+)
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.timeout(0)
-def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_params, variant, use_metadata_tensor):
+def test_mla_chunked_prefill(
+    request, mesh_device, kwargs, reference, device_params, variant, use_metadata_tensor, determinism_check
+):
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
     and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', skips without
@@ -929,7 +1032,29 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
     scenarios that the cpu path covers. Without the env var, fall back to random (mirroring
     test_kimi_mla). kimi_k2_6 also runs the trace path (loader + k_pe re-interleave are arch-agnostic; needs kimi
     GPU traces in MLA_CHUNKED_TRACE_DIR). It otherwise runs the same
-    config-driven driver on any arch/mesh."""
+    config-driven driver on any arch/mesh.
+
+    kimi_k3 (NoPE + output gate, 96 heads) runs 'cpu' and 'func' only, and 'scalar' only -- 'trace'
+    and 'metadata' are both skipped explicitly below. Random weights only (supports_pretrained=False).
+    Its rotation scenarios still matter: rotation comes from the block-cyclic cache write and the
+    causal offset, not from RoPE."""
+    # Per-variant, not module-level: two CI selectors for this test are variant-unqualified, so
+    # without this a kimi_k3 case would run on Wormhole T3K where it has never been validated.
+    if variant.name == "kimi_k3" and not is_blackhole():
+        pytest.skip("kimi_k3 is validated on Blackhole only")
+    # The metadata contract serves the trace-safe runtime (inbound_socket_service_sync feeds forward
+    # tt_metadata directly). K3 has no runtime -- build_runtime/allocate_kv_cache deliberately raise
+    # -- so the path is unreachable for it and passes only via the shared arch-agnostic ttMLA.forward.
+    # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
+    if variant.name == "kimi_k3" and use_metadata_tensor:
+        pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
+    # No K3 checkpoint is reachable, so no GPU trace was ever recorded for it. _run_chunked_prefill
+    # already asserts on supports_pretrained, but only once a trace root is configured -- so on a box
+    # with MLA_CHUNKED_TRACE_DIR set these cases would hard-fail instead of being cleanly out of
+    # scope. Skip up front; the assert stays as the backstop for any future supports_pretrained=False
+    # variant and for the silent K2.6-trace-substitution it was written to catch.
+    if variant.name == "kimi_k3" and reference == "trace":
+        pytest.skip("kimi_k3 has no reachable checkpoint, so no GPU trace exists for it")
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
     # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
     # fixture skips the test if the env var is set but the checkpoint is incomplete.
@@ -941,5 +1066,59 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
         else ttnn.Topology.Linear
     )
     _run_chunked_prefill(
-        request, mesh_device, reference=reference, topology=topology, use_metadata_tensor=use_metadata_tensor, **kwargs
+        request,
+        mesh_device,
+        reference=reference,
+        topology=topology,
+        use_metadata_tensor=use_metadata_tensor,
+        determinism_check=determinism_check,
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        }
+    ],
+    ids=["fabric2d"],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["k3"])
+@pytest.mark.skipif(not is_blackhole(), reason="kimi_k3 and the realtime profiler are Blackhole-only")
+@pytest.mark.skipif(
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
+)
+@pytest.mark.timeout(0)
+def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
+    """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k cached prefix + one fresh 5k chunk,
+    timed with the realtime (lightweight) profiler instead of Tracy.
+
+    NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's 11_562_468: that number comes from the
+    Tracy merge path, which averages collectives across chips, while this takes the max for every
+    program. K3's forward is ~7% CCL, so the two disagree by construction."""
+    total_ns = _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference=None,
+        topology=ttnn.Topology.Linear,
+        profile=True,
+        iters_isl=[5120],
+        prefill_len=50 * 1024,
+    )
+    lower = K3_CHUNKED_RT_PERF_NS * (1 - K3_CHUNKED_RT_PERF_MARGIN)
+    upper = K3_CHUNKED_RT_PERF_NS * (1 + K3_CHUNKED_RT_PERF_MARGIN)
+    logger.info(
+        f"kimi_k3 chunked 50k+5k realtime perf: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), "
+        f"expected {K3_CHUNKED_RT_PERF_NS:,} ns, band [{lower:,.0f}, {upper:,.0f}]"
+    )
+    assert lower <= total_ns <= upper, (
+        f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
+        f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
     )
