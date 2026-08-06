@@ -249,3 +249,5 @@ Full detail and numbers in STATUS; this is the index so you do not spend a day o
 | one-op interleaved `rms_norm` in Block 2 | 2.4× **slower** than three sharded ops — sharding is the fast path |
 | folding CFG + Euler into a weighted reduce | 1.543× isolated, **zero** whole-block, flips an FSQ boundary |
 | permuting straight from `av` in the unfold | 1.77× faster and **returns garbage** |
+| project-then-duplicate instead of duplicate-then-project in `_solve` | 0.785× isolated. The redundant matmul is ~1 µs; duplicating a 3072-wide result instead of a 36-wide input costs +12 µs (`§6.34`) |
+| `ttnn.repeat` in place of `ttnn.concat` to duplicate | 1.8× worse |

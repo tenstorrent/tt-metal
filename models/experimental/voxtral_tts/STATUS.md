@@ -2347,6 +2347,47 @@ thing measuring it (5.8-27.6 us), so the isolated comparison could not have reso
 direction. Always report the spread next to the mean; a single number with no spread is not a
 measurement. The decision was right only because it was taken on the whole block.
 
+### 6.34 — project THEN duplicate, instead of duplicate THEN project: rejected
+
+A natural question, so it is recorded to stop it being re-asked. `_solve` builds p0 as
+
+    x2 = concat([x, x], dim=0)                  [B,1,36] -> [2B,1,36]
+    p0 = linear(typecast(x2), input_projection) [2B,1,36] -> [2B,1,3072]
+
+**and the premise is correct: `x` is byte-identical in both CFG halves** -- guidance differs in the
+CONDITIONING (p2 is llm_hidden over zeros), never in the state -- so that matmul runs twice on the same
+input. Projecting once and duplicating the result is mathematically identical for any B.
+
+**It is still slower.** Isolated, 400 reps x 4 alternating rounds:
+
+| variant | mean us | spread | vs shipped | numerics |
+|---|---|---|---|---|
+| **shipped: concat -> typecast -> linear** | **43.9** | 3.4 | 1.000x | -- |
+| linear -> concat (project first) | 56.0 | 4.3 | **0.785x** | bit-exact |
+| linear -> `ttnn.repeat` | 78.8 | 2.0 | 0.557x | bit-exact |
+| typecast -> linear -> concat | 60.7 | 3.6 | 0.723x | bit-exact |
+
+Whole Block 2 frame, interleaved A/B, 200 frames x 4 rounds: shipped 21.232 ms (spread 0.084),
+project-first 21.279 (spread 0.057). Gap -0.047 ms, under the spread, so INCONCLUSIVE on the block and
+clearly worse isolated. Codes identical either way -- the rewrite is correct, just unprofitable.
+
+**WHY, and it generalises.** The redundant matmul is nearly free: input_projection measures 17.5 us
+against a **1.1 us byte floor**, so the duplicated WORK is about 1 us and the rest is launch cost, which
+both forms pay equally (3 ops either way). Moving the duplication downstream makes it operate on a 48x
+wider tensor:
+
+    duplicate the INPUT    [1,1,36]   tile-padded 32x64    =  16 KB
+    duplicate the OUTPUT   [1,1,3072] tile-padded 32x3072  = 384 KB
+
+That cost **+12 us**, an order of magnitude more than the ~1 us of redundant matmul it removed.
+
+**The rule: redundant work is only worth removing if it is expensive relative to what removing it
+costs.** At these tensor sizes almost nothing is expensive except launching ops, so a restructuring that
+keeps the op count the same and moves data to a WIDER point in the graph will usually lose. Same shape of
+reasoning as §6.24's fusion rule -- fusion pays only when an operand is too narrow to earn its launch.
+
+Incidental: **`ttnn.repeat` is 1.8x worse than `ttnn.concat`** for the same duplication.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
