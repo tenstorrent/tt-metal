@@ -239,9 +239,7 @@ def _rms_norm_dram(tensor, *, weight=None, epsilon: float, chunk_size: int = 32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         chunks.append(
-            _width_sharded_rms_norm(
-                chunk, weight=weight, epsilon=epsilon, compute_kernel_config=compute_kernel_config
-            )
+            _width_sharded_rms_norm(chunk, weight=weight, epsilon=epsilon, compute_kernel_config=compute_kernel_config)
         )
         chunk.deallocate(True)
     out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)

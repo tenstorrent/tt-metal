@@ -381,9 +381,7 @@ def prefill_prompt_tokens(
         if not getattr(tt_model, "_dg_model_owned_hybrid_kv", False):
             raise RuntimeError("prefill buckets above 32K require DG model-owned hybrid KV")
         host_page_tables = getattr(tt_model, "_dg_hybrid_host_page_tables_per_layer", None)
-        device_page_tables = page_tables_per_layer or getattr(
-            tt_model, "_dg_hybrid_page_tables_per_layer", None
-        )
+        device_page_tables = page_tables_per_layer or getattr(tt_model, "_dg_hybrid_page_tables_per_layer", None)
         if host_page_tables is None or device_page_tables is None:
             raise RuntimeError("bounded chunked prefill requires attached hybrid page tables")
 

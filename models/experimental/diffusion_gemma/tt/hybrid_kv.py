@@ -93,13 +93,9 @@ def attach_model_owned_hybrid_kv(
         )
     sliding_window = int(getattr(text_config, "sliding_window", 0) or 0)
     if sliding_window <= 0 or sliding_window % block_size != 0:
-        raise ValueError(
-            f"sliding_window must be a positive multiple of block_size={block_size}, got {sliding_window}"
-        )
+        raise ValueError(f"sliding_window must be a positive multiple of block_size={block_size}, got {sliding_window}")
     if len(tt_model.tt_kv_cache) != len(tt_model.layers):
-        raise ValueError(
-            f"hybrid KV cache/layer mismatch: {len(tt_model.tt_kv_cache)} != {len(tt_model.layers)}"
-        )
+        raise ValueError(f"hybrid KV cache/layer mismatch: {len(tt_model.tt_kv_cache)} != {len(tt_model.layers)}")
 
     sliding_mask = [layer_type == "sliding_attention" for layer_type in layer_types]
     unsupported = [

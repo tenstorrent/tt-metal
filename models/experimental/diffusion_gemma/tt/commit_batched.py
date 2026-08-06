@@ -459,8 +459,7 @@ def _paged_write_plan(
             raise ValueError(f"{name} must be non-negative, got {value}")
     if canvas_len <= 0 or block_size <= 0 or num_blocks <= 0:
         raise ValueError(
-            f"canvas_len, block_size, and num_blocks must be positive, got "
-            f"{canvas_len}, {block_size}, {num_blocks}"
+            f"canvas_len, block_size, and num_blocks must be positive, got " f"{canvas_len}, {block_size}, {num_blocks}"
         )
     if start_pos % TILE_SIZE != 0 or canvas_len % TILE_SIZE != 0 or block_size % TILE_SIZE != 0:
         raise ValueError(
@@ -554,12 +553,8 @@ def _write_canvas_kv_paged(
             f"model-owned hybrid commit expected effective block_size={block_size}, got {effective}; "
             "the cache is not in the attached per-layer view"
         )
-    k_staged, owns_k = _stage_paged_canvas(
-        k_cache, canvas_k, block_ids=block_ids, leading=leading, trailing=trailing
-    )
-    v_staged, owns_v = _stage_paged_canvas(
-        v_cache, canvas_v, block_ids=block_ids, leading=leading, trailing=trailing
-    )
+    k_staged, owns_k = _stage_paged_canvas(k_cache, canvas_k, block_ids=block_ids, leading=leading, trailing=trailing)
+    v_staged, owns_v = _stage_paged_canvas(v_cache, canvas_v, block_ids=block_ids, leading=leading, trailing=trailing)
     try:
         ttnn.experimental.paged_fill_cache(
             k_cache,

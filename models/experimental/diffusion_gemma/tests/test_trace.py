@@ -193,14 +193,9 @@ def test_coarse_prefill_buckets_cover_every_power_of_two_through_256k(monkeypatc
 
     monkeypatch.setenv("DG_UPFRONT_COARSE_PREFILL_BUCKETS", "1")
     for bucket in expected:
-        assert (
-            generator_vllm._resolve_prefill_execution_len(bucket, max_model_len=262144) == bucket
-        )
+        assert generator_vllm._resolve_prefill_execution_len(bucket, max_model_len=262144) == bucket
         if bucket > expected[0]:
-            assert (
-                generator_vllm._resolve_prefill_execution_len(bucket // 2 + 1, max_model_len=262144)
-                == bucket
-            )
+            assert generator_vllm._resolve_prefill_execution_len(bucket // 2 + 1, max_model_len=262144) == bucket
 
 
 def test_coarse_prefill_buckets_are_opt_in_and_capacity_bounded(monkeypatch, expect_error):
@@ -633,9 +628,7 @@ def test_session_prefill_rebinds_injected_adapter_instead_of_building(monkeypatc
     monkeypatch.setattr(
         serving,
         "prefill_prompt_tokens",
-        lambda *args, **kwargs: (
-            prefill_calls.append(kwargs) or SimpleNamespace(prompt_len=3, cache_len=32)
-        ),
+        lambda *args, **kwargs: (prefill_calls.append(kwargs) or SimpleNamespace(prompt_len=3, cache_len=32)),
     )
 
     assert session.prefill(torch.tensor([[1, 2, 3]], dtype=torch.long)) == 32

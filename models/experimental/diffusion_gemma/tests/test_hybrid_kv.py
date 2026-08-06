@@ -3,8 +3,6 @@
 
 from types import SimpleNamespace
 
-import pytest
-
 from models.experimental.diffusion_gemma.tt import hybrid_kv
 
 
@@ -30,8 +28,8 @@ def test_model_kwargs_enable_bounded_paged_cache():
     assert kwargs["paged_attention_config"].max_num_blocks == 4096
 
 
-def test_model_kwargs_reject_concurrent_model_owned_sequences():
-    with pytest.raises(ValueError, match="max_batch_size=1"):
+def test_model_kwargs_reject_concurrent_model_owned_sequences(expect_error):
+    with expect_error(ValueError, match="max_batch_size=1"):
         hybrid_kv.model_owned_hybrid_kv_model_kwargs(max_seq_len=4096, max_batch_size=2)
 
 
