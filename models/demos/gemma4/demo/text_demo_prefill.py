@@ -1613,3 +1613,235 @@ def test_prefill_long_context_prefix_pcc(mesh_device, context_len, request, rese
             f"signatures are 9-11%, correct is ~0.15%. Per-chunk: "
             f"{', '.join(f'{100 * f:.2f}%' for f in bad_fracs)}"
         )
+
+
+# ── Test 9: traced long-context chunked prefill (production shape) ────────────
+
+
+@torch.no_grad()
+@parametrize_mesh_with_fabric([GALAXY_MESH], **_MESH_PARAMS)
+@pytest.mark.parametrize("context_len", LONG_CONTEXT_LENGTHS, ids=[f"ctx_{c // 1024}k" for c in LONG_CONTEXT_LENGTHS])
+def test_prefill_long_context_traced(mesh_device, context_len, reset_seeds, request):
+    """Chunked prefill driven entirely by two captured traces.
+
+    This is the deployment shape: warm the programs once, capture, then serve every
+    request by replaying traces. Eager dispatch costs ~74% of prefill wall time at this
+    size (1055.6 ms vs 272.6 ms on the 60-layer body), so the untraced numbers say very
+    little about production throughput.
+
+    Two traces, because there are exactly two distinct graphs. Chunk 0 has no history
+    and runs the mask CP path; chunks 1..N-1 all run the ring path over a fixed-size Q
+    slab against a fixed-capacity cache, so they share one graph. What differs between
+    them is only the per-chunk scalars, and those now live in metadata tensors the
+    kernels read on-device (see CCLManager.get_ring_metadata), which is what lets one
+    capture serve 63 chunks.
+
+    Everything that varies per chunk is refreshed on the host BETWEEN replays: the token
+    input, the ring metadata, and the pinned RoPE slice. A trace records addresses, not
+    values, so each of those had to be given a fixed address first.
+
+    XFAIL pending a ttnn change. ring_joint's ``logical_n`` is a host scalar that a trace
+    freezes at capture, and it controls two separate things. Measured at 32k, 8 chunks:
+
+      per-chunk logical_n: 0.946 0.989 0.947 0.932 0.917 0.913 0.910 0.884  (decays)
+      logical_n = max:     0.946 0.913 0.945 0.948 0.951 0.945 0.938 0.977  (inverted)
+
+    Per-chunk freezes the gather extent (compute_gather_valid_Ht = ceil(logical_n /
+    chunk_global) slabs, set at create time and re-patched per dispatch — a replay does
+    neither), so later chunks attend a truncated prefix and decay with depth. Sizing to
+    max fixes the gather but marks the not-yet-written tail valid: worst on chunk 1,
+    whose true logical_n is furthest below the override, and near-right on the last
+    chunk, where the two coincide. The two profiles bracket one root cause.
+
+    logical_n is redundant with metadata already on device — it is
+    kv_actual_isl + chunk_global, and chunk_global is fixed by the Q shape. Deriving it
+    on-device the way slot_id and kv_actual_isl already are makes one capture valid for
+    every chunk. That is a ring_joint program-factory/kernel change.
+
+    The perf half stands regardless: ~206 ms per replayed ring chunk vs ~1016 ms eager.
+    """
+    from models.demos.gemma4.tests import cpu_prefill_reference as cpu_ref
+    from models.demos.gemma4.tt.attention import ring_prefill
+    from models.demos.gemma4.tt.ccl import cp_degree
+
+    request.node.add_marker(
+        pytest.mark.xfail(
+            reason="ring_joint logical_n is a host scalar frozen by trace capture; see docstring",
+            strict=False,
+        )
+    )
+    chunk = LONG_CONTEXT_CHUNK
+    _guard_chunk(request, chunk)
+    mesh_config = _mesh_config(mesh_device)
+    cp = cp_degree(mesh_config)
+    if cp <= 1:
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+    assert context_len % chunk == 0
+
+    model_path = _model_path()
+    n_chunks = context_len // chunk
+    model_args, model, kv_cache, page_table_tt = _build_prefill_model(
+        mesh_device, model_path, chunk, context_len=context_len
+    )
+    tokens_all, _tok, _plen = cpu_ref.build_token_sequence(model_path, chunk, context_len, model_args.vocab_size)
+
+    rope_local_seq = chunk // cp
+    host_input = _host_tensor(
+        mesh_device,
+        tokens_all[:, :chunk].contiguous(),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_config=mesh_config,
+        seq_dim=-1,
+    )
+    device_input = ttnn.to_device(host_input, device=mesh_device)
+    model._ring_metadata_external = True
+    # Size the ring gather to the whole cache once, so one capture is valid for every
+    # chunk; per-chunk validity comes from the kv_actual_isl metadata tensor instead.
+    model.ccl_manager.ring_logical_n_override = context_len
+
+    def _stage(chunk_idx):
+        """Host-side refresh of everything that varies per chunk. Never inside a trace."""
+        chunk_start = chunk_idx * chunk
+        staged = _host_tensor(
+            mesh_device,
+            tokens_all[:, chunk_start : chunk_start + chunk].contiguous(),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_config=mesh_config,
+            seq_dim=-1,
+        )
+        ttnn.copy_host_to_device_tensor(staged, device_input)
+        model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
+        # Under CP the prefill RoPE cache is chunk-major per rank, so the local slice
+        # advances by the per-rank slab, matching _get_rope_mats' start_pos // cp.
+        model._refresh_rope_prefill(rope_local_seq, (chunk_start // cp))
+        return chunk_start
+
+    def _forward(chunk_start):
+        with _lm_head_deferred(model):
+            embeds, page_table, chunk_page_table, _ = model.transform_and_embed_prefill_inputs_device(
+                device_input, page_table_tt, None, None
+            )
+            return model.ttnn_prefill_forward(
+                x=embeds,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start,
+                kv_cache=kv_cache,
+                get_last_token=-1,
+                user_id=0,
+            )
+
+    # ── Warm up: compile both graphs eagerly ──────────────────────────────────
+    t0 = time.time()
+    for warm_idx in (0, 1):
+        out = _forward(_stage(warm_idx))
+        ttnn.synchronize_device(mesh_device)
+        out.deallocate(True)
+    warmup_s = time.time() - t0
+
+    # ── Capture: one trace per distinct graph ─────────────────────────────────
+    t0 = time.time()
+    ring_prefill.reset_ring_attention_calls()
+    start0 = _stage(0)
+    tid_first = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out_first = _forward(start0)
+    ttnn.end_trace_capture(mesh_device, tid_first, cq_id=0)
+
+    start1 = _stage(1)
+    tid_ring = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out_ring = _forward(start1)
+    ttnn.end_trace_capture(mesh_device, tid_ring, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    capture_s = time.time() - t0
+    logger.info(f"[traced] warmup(compile)={warmup_s:.1f}s capture={capture_s:.1f}s for 2 traces")
+
+    # Ring reads are counted in Python, and a replay runs no Python — so the counter can
+    # only be read at capture, where it confirms the ring graph really is inside the
+    # recorded trace. During replay it stays 0 by construction; correctness of the
+    # replays is established by PCC below, not by this.
+    captured_ring_calls = ring_prefill.ring_attention_calls()
+    assert captured_ring_calls >= len(model.layers), (
+        f"only {captured_ring_calls} ring calls recorded while capturing, expected >= {len(model.layers)} "
+        f"(one per layer) — the ring path is not in the captured trace"
+    )
+
+    # Warm replay of each, so the measured pass excludes one-off dispatch setup.
+    for tid, idx in ((tid_first, 0), (tid_ring, 1)):
+        _stage(idx)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+
+    try:
+        reference = cpu_ref.load_long(model_path, context_len)
+        ref_hidden = reference["hidden"] if reference is not None else None
+        if reference is not None:
+            assert cpu_ref.hash_tokens(reference["tokens"]) == cpu_ref.hash_tokens(
+                tokens_all
+            ), "CPU reference tokens differ from the traced run's tokens"
+        per_chunk, pccs, bad_fracs = [], [], []
+        t_run = time.time()
+        for chunk_idx in range(n_chunks):
+            chunk_start = _stage(chunk_idx)
+            tid = tid_first if chunk_idx == 0 else tid_ring
+            t_c = time.time()
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            per_chunk.append(time.time() - t_c)
+            out = out_first if chunk_idx == 0 else out_ring
+            hidden = _cp_gather_torch(out, mesh_device, mesh_config)
+            assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
+            if ref_hidden is not None:
+                ref_slice = ref_hidden[:, chunk_start : chunk_start + chunk, :].reshape(
+                    1, 1, chunk, model_args.hidden_size
+                )
+                _p, pcc = compare_tensors(hidden, ref_slice, pcc_threshold=0.0)
+                pccs.append(float(pcc))
+                bad_fracs.append(float((_per_token_pcc(hidden, ref_slice) < 0.80).float().mean()))
+            logger.info(
+                f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk}) "
+                f"device={per_chunk[-1] * 1000:.1f}ms ({chunk / per_chunk[-1]:.0f} tok/s) | "
+                f"{'mask-path trace' if chunk_idx == 0 else 'ring trace'} | ring_depth={chunk_idx}"
+            )
+        total_s = time.time() - t_run
+    finally:
+        ttnn.release_trace(mesh_device, tid_first)
+        ttnn.release_trace(mesh_device, tid_ring)
+
+    ring_chunks = per_chunk[1:]
+    logger.info(
+        f"[traced_perf] TOTAL {context_len} tokens in {total_s:.1f}s ({context_len / total_s:.0f} tok/s) "
+        f"| chunk0(mask)={per_chunk[0] * 1000:.1f}ms | ring chunks mean={sum(ring_chunks) / len(ring_chunks) * 1000:.1f}ms "
+        f"min={min(ring_chunks) * 1000:.1f}ms max={max(ring_chunks) * 1000:.1f}ms"
+    )
+    logger.info(
+        f"[traced_perf] ring-depth cost: first={ring_chunks[0] * 1000:.1f}ms -> last={ring_chunks[-1] * 1000:.1f}ms "
+        f"= {ring_chunks[-1] / ring_chunks[0]:.2f}x over {len(ring_chunks) - 1} extra chunks of history"
+    )
+
+    # The numerical check, and the whole reason this is trustworthy. A trace records the
+    # values live at capture, so if the per-chunk scalars were still baked, every replay
+    # would attend over chunk 1's prefix. That failure is invisible to timings and to the
+    # finiteness check above; it shows up here as a PCC collapse on chunks after the
+    # captured one. Runs whenever a reference exists for this length.
+    if pccs:
+        worst = min(pccs)
+        logger.info(
+            f"[traced_pcc] ctx={context_len} vs CPU reference: min={worst:.5f} max={max(pccs):.5f} "
+            f"per-chunk: {', '.join(f'{p:.5f}' for p in pccs)}"
+        )
+        assert worst >= get_pcc_threshold(request, default=0.93), (
+            f"traced replay PCC {worst:.5f} below threshold — replays are not reproducing the "
+            f"eager result, which points at a per-chunk scalar frozen at capture "
+            f"(per-chunk: {', '.join(f'{p:.5f}' for p in pccs)})"
+        )
+        assert max(bad_fracs[1:]) < 0.01, (
+            f"{100 * max(bad_fracs[1:]):.2f}% of token rows in a traced ring chunk fall below "
+            f"per-token PCC 0.80 — misordering signatures are 9-11%, correct is under 0.2%"
+        )
+    else:
+        logger.warning(
+            f"[traced_pcc] no CPU reference for ctx={context_len}; perf above is measured but "
+            f"replay correctness is NOT verified at this length"
+        )

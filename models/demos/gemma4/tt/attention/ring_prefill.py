@@ -141,6 +141,7 @@ def write_chunk_to_ring_cache(
     layer_idx=0,
     num_layers=1,
     slot_idx=0,
+    ccl_manager=None,
 ):
     """Write this chunk's per-rank K/V into the CP-sharded cache.
 
@@ -156,15 +157,31 @@ def write_chunk_to_ring_cache(
         # carries K/V in bf16, so cast on the way in.
         if chunk.dtype != cache.dtype:
             chunk = ttnn.typecast(chunk, cache.dtype)
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache,
-            chunk,
-            slot_idx=slot_idx,
-            layer_idx=layer_idx,
-            num_layers=num_layers,
-            kv_actual_global=kv_actual_global,
-            cluster_axis=mesh_config.sp_axis,
-        )
+        if ccl_manager is not None:
+            # Tensor form: the writer reads slot and prefix length on-device, so the write
+            # offset is not baked into runtime args and one captured trace serves every
+            # chunk. Same two tensors the ring read uses — they describe the chunk, not
+            # the layer, and the host refreshes them once per chunk.
+            slot_t, kv_t = ccl_manager.get_ring_metadata()
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache,
+                chunk,
+                slot_t,
+                kv_t,
+                layer_idx=layer_idx,
+                num_layers=num_layers,
+                cluster_axis=mesh_config.sp_axis,
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache,
+                chunk,
+                slot_idx=slot_idx,
+                layer_idx=layer_idx,
+                num_layers=num_layers,
+                kv_actual_global=kv_actual_global,
+                cluster_axis=mesh_config.sp_axis,
+            )
 
 
 def ring_prefill_attention(
