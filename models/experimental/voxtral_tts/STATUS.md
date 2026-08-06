@@ -2532,6 +2532,73 @@ combined), `multiply(g, w3)` (0.645), the scores matmul (0.696).
 how we know the true ceiling is ~202. All five weight matmuls are at the roofline; there is no matmul
 work left in Block 2.
 
+### 6.37 — sdpa for Block 2's attention: 5.9x on the op, +0.816 ms/frame, and it COSTS A WORD. Rejected.
+
+The first change this session that a gate caught at the WER level, so it is worth reading as a template
+for how far to take a promising number.
+
+**The idea.** Block 2's attention is bidirectional and unmasked over 3 tokens -- exactly what non-decode
+`scaled_dot_product_attention` is for. The shipped path is four ops (§6.36 lines 146/149/150/152):
+`matmul q@kT` 33.2 us + `softmax` 19.4 + `matmul a@v` 17.3 + `reshape` 16.6 = 86.5 us. sdpa also emits
+`[B,32,3,HD]` directly, so the reshape disappears too. It handles GQA 32/8 natively, which makes the row
+fold ([flow-11]) and the `REP` constant unnecessary.
+
+**`scale=1.0` is mandatory.** SCALE is folded into wqkv's q rows, so leaving sdpa's scale at its default
+applies 1/sqrt(d) a SECOND time: 3.8e-01 relative error against the shipped path, versus 2.2e-02 with
+scale=1.0. Anyone retrying this must pass it.
+
+**The speed is real, and confirmed on the whole block.** 6 rounds x 200 frames, interleaved both
+directions:
+
+| variant | ms/frame | spread | vs shipped | delta | codes vs shipped |
+|---|---|---|---|---|---|
+| A shipped | 21.238 | 0.179 | -- | -- | -- |
+| C `add_`/`multiply_` in place + L1 | 21.237 | 0.082 | 1.0000x | **+0.001** | 0 of 37 |
+| **D sdpa only** | **20.422** | 0.047 | **1.0399x** | **+0.816** | 0 of 37 |
+| E sdpa + in place | 20.478 | 0.071 | 1.0371x | +0.760 | 0 of 37 |
+
+**But it is measurably less accurate, gated against fp64 TRUTH rather than against the shipped path**
+(§6.25's rule), with the attention recomputed on the host in float64 from the device's own q/k/v:
+
+    shipped: 4 ops     max abs err 2.746e-03   rel 3.20e-03   PCC 0.9999964
+    sdpa(scale=1.0)    max abs err 1.780e-02   rel 2.07e-02   PCC 0.9998503
+
+6.48x the error. That is NOT a compare-against-the-default artifact; sdpa really is less accurate here.
+
+**AND THE END-TO-END GATE FOUND THE COST.** Frame counts moved -- case 0 66 -> 64, case 2 461 -> 445
+(1.3 s less audio), case 3 487 -> 488 -- so generation diverged, which the frame-count A/B (§6.32) is
+precisely designed to detect. Scored like-for-like on the same three cases:
+
+| | case 0 | case 2 | case 3 | long-form WER |
+|---|---|---|---|---|
+| **shipped** | 0.0% | 0.0% | 0.0% | **0 wrong of 274** |
+| **sdpa** | 0.0% | **0.8%** | 0.0% | **1 wrong of 274** |
+
+Generation is deterministic, so the dropped word is caused by sdpa. **REVERTED.** +0.816 ms/frame is
+1.7% of a frame; the project's headline quality claim is zero WER errors, and §6.16 already set the
+precedent by handing back 2.5 ms/frame rather than lose accuracy.
+
+**ONE HONEST QUALIFICATION.** One sample cannot separate "sdpa is systematically worse" from "sdpa is
+merely DIFFERENT and this draw was unlucky" -- a different-but-equally-valid generation can drop a word
+by chance. Settling that needs several seeds across all 15 cases. If 0.8 ms/frame ever matters enough,
+that is the experiment; the accuracy loss against truth (6.48x) means the prior should be "worse", not
+"different".
+
+**AND THE IN-PLACE CANDIDATES ARE DEAD, after three contradictory readings of my own.** `ttnn.add_` and
+`ttnn.multiply_` are bit-exact and looked like a win:
+  1. first measurement: BOTH SLOWER (37.1 vs 27.0) -- invalid, I wrapped them in `ttnn.clone` so the
+     input survived repeated iterations, and the clone costs more than the allocation it saves. In the
+     real `_block` the operand is dead immediately, so no clone is needed.
+  2. without the clone: 1.143x and 1.196x isolated, and +0.104 ms on the block over 3 rounds.
+  3. over 6 rounds: **+0.001 ms.** The +0.104 was inside the 0.179 ms spread. And variant E shows
+     in-place is marginally NEGATIVE when combined with sdpa.
+Three measurements, three different answers, and only the last had enough rounds to beat its own noise.
+`ttnn.swiglu` is also not applicable -- it `TT_THROW`s on a concatenated pair, and using it would require
+fusing w1/w3, which §6.24 measured at 4x slower.
+
+**Residual-as-bias is NOT EXPRESSIBLE here**, unlike in Block 1: ttnn's `bias` is added per output
+column, and the residual differs per row. Recorded so it is not attempted.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
