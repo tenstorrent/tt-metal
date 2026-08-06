@@ -1796,7 +1796,40 @@ STATUS.md 6.5 has the setup and the two findings it did corroborate.
  lserbedzija/xtts-gpt-ttnn, which does the same thing in xtts_v2/tt/ttnn_xtts_gpt.py.
 ```
 
-### [gpt-20] `_WO_PRG` — wo's decode program config, and the `in0_block_w` sweep
+### [gpt-20] `wo` — NO program config on Blackhole (p150 fork)
+
+**DELETED ON THIS FORK. STATUS.md §6.43; the N150 record is kept below.**
+
+§6.25 hand-tuned `_WO_PRG` for the N150 and it was worth +0.196 ms/frame there. On the p150 it
+is worth nothing any instrument here can find, so it is gone along with `_WO_GRID`.
+
+Removing it is **bit-exact**, which is what made the decision purely about speed: `torch.equal`
+on the 26-layer decode output, and — the strong form — **all 45 utterances of a 15-case x 3-seed
+run reproduced identical frame counts** (§6.32's exactness gate; free-running generation over
+~500 autoregressive steps landing on the same termination frame every time).
+
+On speed, two instruments and neither can see it:
+
+```text
+    isolated op          default 92.9 us / 144 GB/s   vs   8x4 ib=2  63.7 us / 210 GB/s
+                         -> predicts +0.76 ms/frame over 26 layers if the cost were real
+    whole 26-layer step  +0.174 ms  (spread 1.7-1.9, resolution ~0.3)   INCONCLUSIVE
+    pipeline, 15x3       -0.81 / +1.20 / -2.11 ms per seed, mean -0.40   signs flip
+```
+
+The isolated cost is entirely overlapped away, the same way §6.27 found isolated ops summing to
+29.9 ms against a 23.8 ms step. **A sweep also found configs far faster than either** — 12x2
+`in0_block_w=8` reaches 354 GB/s against the shipped 210 and a ~360 GB/s ceiling — and that too
+produced zero whole-step change. The isolated ranking of this op does not transfer at all.
+
+One thing worth keeping from §6.25's method: every config in that sweep sat at the **same
+2.854e-04 from an fp64 reference** as the default, several better, while none was bit-identical
+to it. The shipped `ib=2` was chosen on bit-equality-vs-default — the criterion §6.25 itself
+warns is not a correctness test.
+
+---
+
+**N150 RECORD BELOW — historical on this fork.**
 
 ```text
  wo's DECODE program config, and it is the only linear that needs one. Each decode linear splits

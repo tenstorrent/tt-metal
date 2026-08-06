@@ -2898,6 +2898,125 @@ interleaved here against §6.31's **20.8 ms on the N150** — so after §6.39 fi
 21.4 ms against the N150's 23.15, i.e. FASTER than Wormhole), essentially the whole remaining
 p150 deficit is Block 2.
 
+### 6.41 — p150: the DRAM ceiling is ~360 GB/s, not 194–202. Re-derive before ranking anything
+
+The floor method (`op time = bytes/ceiling + overhead`) is still right; its denominator was not.
+194–202 GB/s is an N150 number and §1–§6.38 rank every optimization against it. Measured here the
+way §6.24/§6.27 measured it there — effective GB/s = weight bytes / time for `[1,1,K] @ [K,N]`:
+
+| weight | shape | dtype | MB | µs | GB/s | % of ~360 |
+|---|---|---|---|---|---|---|
+| B2 semantic | 3072x8320 | fp32 | 102.2 | 275.3 | **372** | peak |
+| B1 w1 / w3 | 3072x9216 | BFP8 | 30.1 | 86.3 / 86.6 | 350 / 349 | 97% |
+| B1 / B2 wqkv | 3072x6144 | BFP8 | 20.1 | 72.1 / 72.5 | 279 / 277 | 78% |
+| B1 w2 | 9216x3072 | bf16 | 56.6 | 206.4 | 274 | 76% |
+| **B1 wo** | 4096x3072 | BFP8 | 13.4 | 94.1 | **142** | **39%** |
+| **B2 w2** | 9216x3072 | BFP8 | 30.1 | 206.6 | **146** | **41%** |
+
+**THREE RECORDED CONCLUSIONS DIE HERE.**
+
+**1. §6.24's fusion rule is void.** A width sweep at K=3072, BFP8:
+
+| N | 1024 | 3072 | 4096 | 6144 | 9216 | 12288 | 18432 | 24576 |
+|---|---|---|---|---|---|---|---|---|
+| GB/s | 73 | 142 | 154 | 277 | 348 | 356 | **359** | 349 |
+
+18432 is the FASTEST point measured. §6.24 recorded it at 48 GB/s and 0.250x on the N150 and
+generalised to *"assume any fusion past N~9216 collapses until measured"*. That rule is a
+Wormhole artifact. **The penalty here is for NARROW N**, which is the inverse — and it is why
+`wo` and `w2` (both N=3072) are slow: the shape, not the config.
+
+**2. §6.38's w2-BFP8 question is closed as "no gain".** Same 9216x3072 shape: bf16 reads 56.6 MB
+in 206.4 µs, BFP8 reads 30.1 MB in **206.6 µs**. Half the bytes, identical time — this shape is
+not bandwidth-bound at all. §6.38 called w2-BFP8 *"the largest single win left anywhere in this
+model"* at 2.644 ms/step and left it open. On the p150 it would cost §6.16's 0.24 pp of mean
+worst-sample for **zero** speed. This also explains §6.17's puzzle (BFP4 cut bytes 47% and
+returned 12% of the time) on the right terms.
+
+**3. Distance-from-roofline is NOT a ranking signal here.** `wo` at 39% looked like the largest
+headroom in the model. §6.43 shows it is entirely overlapped away and unreachable. Use the
+ceiling to decide what is IMPOSSIBLE, not what is profitable.
+
+Method caveat: a "pure read" proxy (`ttnn.sum` over 64/256 MB) gave 255/307 GB/s, BELOW the
+matmul figure — a reduction carries its own cost and is a poor bandwidth probe. The matmul
+numbers are the comparable ones, since that is what the N150 figure was.
+
+### 6.42 — p150: w1+w3 fusion re-tested. Still rejected, for an entirely different reason
+
+§6.24's rule is void (§6.41), so the fusion it forbade was re-measured. The matmul half reverses
+completely; the decision does not.
+
+| | N150 (§6.24) | p150 |
+|---|---|---|
+| 2 x `[3072,9216]` | 313.9 µs / 192 GB/s | 166.5 µs / 362 GB/s |
+| 1 x `[3072,18432]` | 1253.5 µs / **48 GB/s** | 161.6 µs / **372 GB/s** |
+| fused vs separate | **0.250x** | **1.03x** — fused is FASTER |
+
+But on the whole MLP, 10 rounds x 200 reps, interleaved:
+
+| | Block 1 `[1,1,3072]` | Block 2 `[1,6,3072]` |
+|---|---|---|
+| A separate + fused silu + multiply (ships) | **216.34 µs** | **214.95 µs** |
+| C fused + `ttnn.swiglu` (2 ops, one FEWER than A) | 237.57 | 237.83 |
+| A − C | **−21.24 µs/layer** | **−22.88 µs/layer** |
+
+Fusing would COST ~0.55 ms/frame in Block 1 (x26) and ~0.48 in Block 2 (x21). Two reasons, both
+downstream of the matmul: `activation="silu"` rides free on the separate w1 (§6.17 change A) and
+a fused output cannot apply it to half; and splitting an 18432-wide output costs ~26 µs against
+the 4.9 µs the launch saved.
+
+**The replacement rule for this chip: fusion pays only when the output does not need splitting.**
+That is why the qkv fusion still holds — its consumer slices anyway — and why this one does not:
+it ADDS a split. Two of §6.24's subsidiary objections also dissolve: the 5-op form measured
+**bit-exact** against A (maxabs 0.000e+00), and the memory objection was only true if both weight
+forms are kept.
+
+### 6.43 — p150: `_WO_PRG` deleted. Bit-exact, and no instrument can find a speed difference
+
+`wo` is the worst weight matmul in Block 1 by isolated bandwidth (§6.41), so it got the full
+grid x `in0_block_w` sweep. The sweep found large wins and **none of them exist on the step.**
+
+| config | isolated µs | GB/s | maxabs vs fp64 | == default |
+|---|---|---|---|---|
+| default | 92.9 | 144 | 2.854e-04 | yes |
+| **8x4 ib=2 (was shipped)** | 63.7 | 210 | 2.854e-04 | yes |
+| 8x4 ib=4 | 47.3 | 283 | 2.854e-04 | no |
+| **12x2 ib=8** | **37.8** | **354** | 2.854e-04 | no |
+| 12x4 ib=32 | 45.1 | 297 | **2.281e-04** | no |
+
+**Every config sits at the same distance from fp64 truth as the default, several closer**, while
+none is bit-identical to it — and bit-equality-vs-default is exactly the criterion `ib=2` was
+originally chosen on. §6.25 warned about this in as many words; had a real win been here, that
+criterion would have blocked it.
+
+**But the whole step says nothing is there.** 12x2 ib=8 is 1.69x on the op, predicting
++0.672 ms/frame over 26 layers:
+
+| config | ms/step | vs shipped |
+|---|---|---|
+| 8x4 ib=2 #control | 21.418 | +0.136 |
+| default | 21.449 | +0.105 |
+| 8x4 ib=2 (was shipped) | 21.554 | — |
+| 12x2 ib=8 | 21.563 | −0.009 |
+
+Noise floor 0.136 ms; every delta at or below it, and the ordering scrambles between rounds.
+~1.4 ms of isolated `wo` time is already overlapped away — §6.27's observation that isolated ops
+summed to 29.9 ms against a 23.8 ms step, in its sharpest form yet.
+
+**So the config was deleted.** Removing it is bit-exact: `torch.equal` on the 26-layer output,
+and **all 45 utterances of a 15-case x 3-seed run reproduced identical frame counts** (§6.32's
+gate at full strength). On speed, three instruments and none can resolve it: whole step +0.174 ms
+(spread 1.7–1.9, resolution ~0.3), pipeline −0.81 / +1.20 / −2.11 per seed with the signs
+flipping, mean −0.40. INCONCLUSIVE by rule 3, so it goes on the grounds that a hand-tuned
+constant whose recorded justification (§6.25's +0.196 ms/frame) does not reproduce is not worth
+carrying. If it is ever missed, it is one line.
+
+**A measurement-health note.** The microbenchmark's spread degraded ~40x mid-session — §6.39's
+harness ran at 0.005–0.049 ms and the same code later ran at 1.7–1.9 ms — with host load at 0.69,
+no other users, AICLK steady at 800 MHz and no thermal throttle. **Unexplained.** Numbers taken
+after that point resolve ~±0.3 ms at best, which is why this section leans on the frame-count
+gate and the pipeline rather than the step timing.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
