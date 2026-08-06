@@ -928,19 +928,15 @@ def test_sort_row_major_multi_core_correctness(descending, device):
 
     assert ttnn_values.get_layout() == ttnn.ROW_MAJOR_LAYOUT, "output layout must be ROW_MAJOR"
     assert ttnn_indices.get_layout() == ttnn.ROW_MAJOR_LAYOUT, "index layout must be ROW_MAJOR"
-    assert list(ttnn_values.shape) == shape
-    assert list(ttnn_indices.shape) == shape
+    assert list(ttnn_values.shape) == shape, f"values shape mismatch: got {list(ttnn_values.shape)}, expected {shape}"
+    assert (
+        list(ttnn_indices.shape) == shape
+    ), f"indices shape mismatch: got {list(ttnn_indices.shape)}, expected {shape}"
 
     torch_values, _ = torch.sort(input_t, dim=-1, descending=descending)
 
     out_vals = ttnn.to_torch(ttnn_values)
-    assert_equal(torch_values, out_vals), (
-        f"values mismatch: bug 2 (tilize_block block_ct_dim=2 on 1-tile-wide CB) "
-        f"produces scrambled tiles — max_diff={(out_vals - torch_values).abs().max():.4f}"
-    )
+    assert_equal(torch_values, out_vals)
 
     ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(ttnn_indices).to(torch.int64))
-    assert_equal(torch_values, ttnn_gathered), (
-        "index gather mismatch: bug 3 (pack_untilize_block<1>(cb, 2, ocb) untilizes "
-        "tile 0 twice, leaving the right tile of every pair as stale L1)"
-    )
+    assert_equal(torch_values, ttnn_gathered)

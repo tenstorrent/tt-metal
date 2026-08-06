@@ -295,9 +295,14 @@ void kernel_main() {
                                 input_tensor_output_dfb.pop_front(2);
                                 rm_output_value_dfb.push_back(TILE_H);
                                 pack_untilize_uninit(rm_output_value_cb_id);
+                                // Reconfig the packer to the index-output format before the index
+                                // untilize. The output operand must be the untilize DESTINATION
+                                // (rm_output_index_cb_id), not its source (index_tensor_output_cb_id):
+                                // those two happen to share a data format today, so passing the
+                                // source only works by coincidence.
                                 // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
                                 compute_kernel_hw_startup(
-                                    rm_input_index_cb_id, rm_input_index_cb_id, index_tensor_output_cb_id);
+                                    rm_input_index_cb_id, rm_input_index_cb_id, rm_output_index_cb_id);
 
                                 pack_untilize_init<2>(index_tensor_output_cb_id, rm_output_index_cb_id);
                                 index_tensor_output_dfb.wait_front(2);
