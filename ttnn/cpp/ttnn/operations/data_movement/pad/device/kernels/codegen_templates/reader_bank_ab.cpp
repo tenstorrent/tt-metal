@@ -1,0 +1,1 @@
+/localdev/ebanerjee/tt-dm-codegen/common/templates/reader_bank_ab.cpp
