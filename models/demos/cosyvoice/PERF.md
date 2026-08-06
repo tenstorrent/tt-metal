@@ -9,7 +9,7 @@ a target is missed the number is stated with the reason and the identified lever
 - Device: Blackhole `p150a`
 - Host: 16 cores, 62 GB
 - tt-metal: `b5e9cba196`
-- Date: `2026-08-05`
+- Date: `2026-08-06`
 
 ## Benchmark commands
 ```bash
@@ -24,13 +24,13 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Metric | Value | Target |
 |---|---:|---:|
-| End-to-end RTF | `0.533` | `< 0.5` ❌ |
-| End-to-end RTF, `COSYVOICE_KV_INPLACE=1` | `0.512` | `< 0.5` ❌ |
-| LLM throughput (traced) | `148.5 tok/s` | `>= 60` ✅ |
-| LLM throughput, `COSYVOICE_KV_INPLACE=1` | `160.5 tok/s` | `>= 60` ✅ |
-| LLM decode latency (traced) | `6.73 ms` | — |
-| Token agreement, teacher-forced | `98.56 %` | `> 95 %` ✅ |
-| Token agreement, through the KV cache | `95.83 %` | `> 95 %` ✅ |
+| End-to-end RTF | `0.477` | `< 0.5` ✅ |
+| End-to-end RTF, `COSYVOICE_KV_INPLACE=1` | `0.449` | `< 0.5` ✅ |
+| LLM throughput (traced) | `179.2 tok/s` | `>= 60` ✅ |
+| LLM throughput, `COSYVOICE_KV_INPLACE=1` | `200.8 tok/s` | `>= 60` ✅ |
+| LLM decode latency (traced) | `5.58 ms` | — |
+| Token agreement, teacher-forced | `99.04 %` | `> 95 %` ✅ |
+| Token agreement, through the KV cache | `100.00 %` | `> 95 %` ✅ |
 | WER (English) | `0.00 %` | `< 3.0` ✅ |
 | Speaker similarity (mean, 10 utterances) | `83–96` | `> 60` ✅ |
 | Streaming vs non-streamed, mel-space PCC | `0.9019` | content-equal ✅ |
@@ -40,22 +40,67 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Stage | Cost | RTF | Share |
 |---|---:|---:|---:|
-| LLM (14-block AR decoder, traced) | `6.73 ms/token × 164` | `0.337` | 63 % |
-| Flow decoder (10 Euler steps, traced, SDPA) | `0.589 s` | `0.180` | 34 % |
-| HiFT vocoder | `0.050 s` | `0.015` | 2 % |
-| **Total** | `1.743 s` | **`0.533`** | |
+| LLM (14-block AR decoder, traced, fused attention) | `5.58 ms/token × 164` | `0.280` | 59 % |
+| Flow decoder (10 Euler steps, traced, SDPA) | `0.589 s` | `0.180` | 38 % |
+| HiFT vocoder | `0.056 s` | `0.017` | 4 % |
+| **Total** | `1.561 s` | **`0.477`** | |
 
 **`COSYVOICE_KV_INPLACE=1`** writes the KV cache in place with `ttnn.update_cache` instead of
-rebuilding it, taking the decode step to `6.23 ms` (`160.5 tok/s`) and the total to `1.675 s`,
-**RTF `0.512`**. It is opt-in because it costs two things the default does not: a 384 MB trace
+rebuilding it, taking the decode step to `4.98 ms` (`200.8 tok/s`) and the total to `1.470 s`,
+**RTF `0.449`**. It is opt-in because it costs two things the default does not: a 384 MB trace
 region for the 65 traces it captures, and bit-exactness — worst PCC `0.9986` over 72 steps against
 the moving cache's exact `1.0`, non-accumulating. The width it needs has to keep the key axis on an
 **even tile count**; a one-tile scratch zone made it *slower*. Findings F45 and F46 in the notes
 carry that account.
 
-RTF has come down **1.096 → 0.533** (and **2.120 → 0.533** since before either stage was traced),
-but it still misses. The rest of this section is the account of where the time went and what is
-left, because "it is 30 % away" is only useful with the reason attached.
+RTF has come down **1.096 → 0.477** (and **2.120 → 0.477** since before either stage was traced),
+and **the `< 0.5` target is met**. The rest of this section is the account of where the time went,
+because the last step of it was the one that had been ruled out on a false premise.
+
+### The decode attention is expressible as flash attention
+
+The AR decoder composed its attention by hand — score matmul, positional bias add, masked softmax,
+context matmul — because ESPnet relative-position attention was taken to be outside what a fused
+kernel expresses. It is not. `ttnn.transformer.scaled_dot_product_attention_decode` accepts an
+`attn_mask` whenever `is_causal=False` (`sdpa_decode_device_operation.cpp:111`), shaped
+`[B, 1, heads, k_len]` and added to the scores before the softmax. **At `T = 1` the positional term
+`(q+v)P^T` has exactly that shape** — `rel_shift` is only a two-dimensional skew when there is more
+than one query — so it *is* an additive bias, and the padding mask folds into the same tensor.
+
+| | explicit chain | `sdpa_decode` | |
+|---|---:|---:|---:|
+| attention block, key width 384 | `1.563 ms` | **`0.460 ms`** | 3.39× |
+| attention block, key width 448 | `1.817 ms` | **`0.557 ms`** | 3.26× |
+| decode step, default path | `6.73 ms` | **`5.58 ms`** | `148.5 → 179.2 tok/s` |
+| decode step, `COSYVOICE_KV_INPLACE=1` | `6.23 ms` | **`4.98 ms`** | `160.5 → 200.8 tok/s` |
+| **end-to-end RTF** | `0.533` | **`0.477`** | `0.449` with both |
+
+The block figures charge the fused arm for the two `ttnn.permute`s it needs to move heads off dim 1
+into the decode layout; without them it is 4.75× and 4.35×.
+
+**It costs nothing on accuracy, which is what separates it from every other remaining lever.**
+Traced still matches untraced bit-for-bit (PCC `1.0000000000`), fused matches the explicit chain at
+`0.9988`–`0.9999` over six steps, and exact-token agreement through the KV cache went **`95.83 %` →
+`100.00 %`** (23/24 → 24/24 — one token, so read it as "did not regress" rather than as a gain).
+`COSYVOICE_SDPA_DECODE=0` restores the chain.
+
+Two things about the op are worth carrying:
+
+**`k_chunk_size` must be the largest power of two dividing the key width, capped at 128.** `32`
+divides every width this model uses, so `mask_shape[3] % k_chunk_size == 0` passes and nothing
+raises — and the result is wrong: PCC `0.016` at width 384, `0.737` at 448, against `0.99998` at the
+right value. A validated configuration that silently corrupts is worth reporting upstream.
+
+**The mask must be built per head on the host, not with a device `ttnn.repeat` inside the traced
+body.** The op is correct on its own and traces perfectly — four replays bit-identical to untraced —
+but a `repeat` as the per-step input to a replayed trace took traced-vs-untraced from `1.0` to
+`0.918`. The mask is rebuilt on the host every step anyway, so emitting it already expanded removes
+the op rather than working around it.
+
+**No `1/scale` pre-division, deliberately.** The kernel computes `softmax((QK^T + M) * scale)` —
+`sdpa_flash_decode.cpp:378` fuses `QK += MASK` into the matmul and `:435` scales after — so a term
+meant to land after the scale would need pre-dividing. This mask is binary, `0` or `NEG_INF`, and
+both survive scaling unchanged in effect. A *soft* bias would need the division.
 
 **Trace capture is worth 2.54× on the AR decoder** (20.96 → 8.26 ms/token) and **1.09× on the flow
 decoder** (1.151 → 1.053 s at the time it was measured). That gap was the first finding: tracing
@@ -231,11 +276,16 @@ bound. Accuracy is not flat: HiFi2 looked better on the two end-to-end flow numb
 **9 of 11** modules, including AR prefill (`0.9997530373` → `0.9987304709`); the flow's end-to-end
 gain was error cancellation over components that individually got worse. HiFi4 stays.
 
-Reaching `RTF < 0.5` needs 2.121 s → 1.635 s, a further 23 %; `RTF < 0.2` needs 0.654 s, which at
-164 tokens is under 4 ms per token for the LLM alone with nothing left for the flow. Neither is
-reachable by further op-level fusion on this decomposition. What would move it is a fused attention
-kernel (new C++, outside this bring-up's scope) or batching across utterances, which single-utterance
-TTS does not offer.
+This paragraph used to read: *"neither is reachable by further op-level fusion on this decomposition.
+What would move it is a fused attention kernel (new C++, outside this bring-up's scope)."* The first
+half was right and the second was wrong in a way worth leaving on the record — **the fused attention
+kernel existed already**, and the section above is what it was worth. `RTF < 0.5` is met at `0.477`,
+or `0.449` with the in-place cache.
+
+`RTF < 0.2` needs `0.654 s`, which at 164 tokens is under `1.5 ms` per token for the LLM with the
+flow's `0.589 s` already consuming `0.180` of the budget on its own. That one is **not** reachable by
+op-level work: it needs the flow decoder to cost a fraction of what it does, or batching across
+utterances, which single-utterance TTS does not offer.
 
 **The per-token tail outside the traced step is 0.352 ms — 2.7 %** — and its breakdown is what
 settled P4's on-device sampling item:
@@ -402,4 +452,4 @@ Source suites: `tests/perf/`, `tests/e2e/`, `tests/pcc/`
 | Tier | Count | Hardware |
 |---|---:|---|
 | host | 111 | none |
-| device | 41 | Blackhole `p150a` |
+| device | 44 | Blackhole `p150a` |

@@ -38,7 +38,7 @@ import torch
 
 import ttnn
 
-from ..flow.encoder import TtRelPosAttention, _layernorm_weights, _linear, espnet_rel_positional_encoding
+from ..flow.encoder import TtRelPosAttention, _layernorm_weights, _linear, decode_mask, espnet_rel_positional_encoding
 from ..hifigan.conv import accurate_compute_config
 
 NEG_INF = -1e9  # bfloat16-safe stand-in for -inf under softmax
@@ -232,6 +232,9 @@ class TtARDecoder:
         self.enable_pos_proj_cache()  # one window for the whole utterance -- see the method
         pos = self.positional(max_len)
         h = self.embed(xs)
+        # One conversion for all 14 layers -- see `decode_mask`. Only a one-token step
+        # can take the fused path; a prefill chunk has a real `[chunk, W]` skew.
+        mask, mask_owned = self._fused_mask(mask, chunk)
         new_caches = []
         for i, layer in enumerate(self.layers):
             ck, cv = caches[i]
@@ -253,7 +256,26 @@ class TtARDecoder:
             new_caches.append(new_cache)
         out = ttnn.layer_norm(h, weight=self.g_after, bias=self.bt_after, epsilon=self.meta["layer_norm_eps"])
         ttnn.deallocate(h)
+        if mask_owned:
+            ttnn.deallocate(mask)
         return out, new_caches
+
+    # ------------------------------------------------------------------
+    @property
+    def sdpa_decode(self) -> bool:
+        """Whether the layers will take the fused decode-attention path."""
+        return bool(self.layers) and self.layers[0].attn.sdpa_decode
+
+    def _fused_mask(self, mask, chunk: int):
+        """`(mask, we_allocated_it)` — the per-head form when the fused path applies.
+
+        Returned as a pair rather than assigned in place because the caller must not
+        free a mask it was handed. Everything downstream keys on the mask's shape, so
+        a `None` return here simply leaves the explicit chain in charge.
+        """
+        if mask is None or chunk != 1 or not self.sdpa_decode or mask.shape[-2] != 1:
+            return mask, False
+        return decode_mask(mask, self.meta["n_head"]), True
 
     def empty_cache(self, max_len: int, chunk: int):
         """Zeroed `[1, h, max_len - chunk, d_k]` k/v per layer.
@@ -316,8 +338,18 @@ class TracedDecodeStep:
         dev, dt = decoder.device, decoder.dtype
 
         self.x_buf = ttnn.from_torch(torch.zeros(1, 1, d_in), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
+        # Heads on dim 2 when the fused path is on, built on the **host**. Doing the
+        # expansion with a device `ttnn.repeat` inside the traced body is what took
+        # traced-vs-untraced from 1.0 to 0.918: the op is correct on its own (F48's
+        # controls) but not as the per-step input to a replayed trace. The mask is
+        # rebuilt on the host every step anyway, so emitting it already expanded costs
+        # nothing and removes the op from the trace entirely.
+        self.mask_heads = self.h if decoder.sdpa_decode else 1
         self.mask_buf = ttnn.from_torch(
-            right_aligned_bias(max_len, max_len, 1), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev
+            right_aligned_bias(max_len, max_len, 1, heads=self.mask_heads),
+            dtype=dt,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
         )
         # Time-major `[1, T, h, d_k]`, not `[1, h, T, d_k]`. `TILE_LAYOUT` tiles the last
         # two dims, so this puts the time axis on a *free* one -- appending a token then
@@ -403,7 +435,7 @@ class TracedDecodeStep:
         )
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(
-                right_aligned_bias(self.max_len, min(valid, self.max_len), 1),
+                right_aligned_bias(self.max_len, min(valid, self.max_len), 1, heads=self.mask_heads),
                 dtype=self.dec.dtype,
                 layout=ttnn.TILE_LAYOUT,
             ),
@@ -485,13 +517,19 @@ class TracedDecodeStepInPlace:
         decoder.enable_pos_proj_cache()
         meta = decoder.meta
         self.h, self.d_k, self.n_layers = meta["n_head"], meta["d_k"], meta["n_layers"]
+        # See `TracedDecodeStep.__init__`: the head expansion is a host concern, and
+        # it matters more here — this class captures 65 traces, not one.
+        self.mask_heads = self.h if decoder.sdpa_decode else 1
         dev, dt = decoder.device, decoder.dtype
 
         self.x_buf = ttnn.from_torch(
             torch.zeros(1, 1, meta["input_size"]), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev
         )
         self.mask_buf = ttnn.from_torch(
-            slot_bias(self.width, self.scratch, max_len, 0), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev
+            slot_bias(self.width, self.scratch, max_len, 0, heads=self.mask_heads),
+            dtype=dt,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
         )
         shape = (1, self.h, self.width, self.d_k)
         self.k_buf = [
@@ -607,7 +645,9 @@ class TracedDecodeStepInPlace:
         )
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(
-                slot_bias(self.width, self.scratch, valid, slot), dtype=self.dec.dtype, layout=ttnn.TILE_LAYOUT
+                slot_bias(self.width, self.scratch, valid, slot, heads=self.mask_heads),
+                dtype=self.dec.dtype,
+                layout=ttnn.TILE_LAYOUT,
             ),
             self.mask_buf,
         )
@@ -629,7 +669,7 @@ class TracedDecodeStepInPlace:
             ttnn.deallocate(t)
 
 
-def slot_bias(width: int, tile: int, valid: int, slot: int, dtype=torch.float32):
+def slot_bias(width: int, tile: int, valid: int, slot: int, heads: int = 1, dtype=torch.float32):
     """Additive `[1, 1, 1, width]` mask for an in-place cache at sub-step `slot`.
 
     The token just written sits at row `max_len + slot`, and the window is the
@@ -646,10 +686,15 @@ def slot_bias(width: int, tile: int, valid: int, slot: int, dtype=torch.float32)
     lo = hi - min(valid, max_len) + 1
     rows = torch.arange(width)
     live = (rows >= lo) & (rows <= hi)
-    return torch.where(live, 0.0, NEG_INF).reshape(1, 1, 1, width).to(dtype)
+    m = torch.where(live, 0.0, NEG_INF).reshape(1, 1, 1, width)
+    if heads > 1:  # the per-head form sdpa_decode wants -- see `decode_mask`
+        m = m.expand(1, 1, heads, width).contiguous()
+    return m.to(dtype)
 
 
-def right_aligned_bias(max_len: int, valid: int, chunk: int = 1, causal: bool = False, dtype=torch.float32):
+def right_aligned_bias(
+    max_len: int, valid: int, chunk: int = 1, causal: bool = False, heads: int = 1, dtype=torch.float32
+):
     """Additive `[1, 1, chunk, max_len]` mask for a right-aligned cache.
 
     Slots before `max_len - valid` are padding and are suppressed. When `causal`,
@@ -662,4 +707,6 @@ def right_aligned_bias(max_len: int, valid: int, chunk: int = 1, causal: bool = 
     if causal:
         q_slot = (max_len - chunk) + torch.arange(chunk)
         m = torch.where(slots.reshape(1, 1, 1, -1) <= q_slot.reshape(1, 1, -1, 1), m, NEG_INF)
+    if heads > 1:  # decode only: chunk is 1, so dim 2 is free to carry heads instead
+        m = m.expand(1, 1, heads, max_len).contiguous()
     return m.to(dtype)
