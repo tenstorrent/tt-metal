@@ -23,6 +23,11 @@ import torch
 
 import ttnn
 
+# Set by the Hunyuan mesh fixture when a genuinely disjoint 1x1 chip is
+# available. Never carve this from the resident DiT/VAE/Qwen mesh: overlapping
+# mesh contexts can deadlock even though the stages execute sequentially.
+HY_SIGLIP_SUBMESH = None
+
 
 def _remap_siglip_state_dict(sd):
     """Normalize a `SiglipVisionModel.state_dict()` to the `vision_model.*` checkpoint
@@ -51,15 +56,48 @@ def _pcc(a, b):
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
 
-def _single_device(device):
-    """A single-chip view for the small (0.428B, run-once) SigLIP: carve a 1x1
-    submesh off a multi-device mesh, else use the device as-is."""
+def _mesh_size(device):
     try:
-        if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
-            return device.create_submesh(ttnn.MeshShape(1, 1))
+        return int(device.get_num_devices())
     except Exception:
-        pass
-    return device
+        return 1
+
+
+def _build_blocks_replicated(cfg, w, device, SigLIPBlockTTNN):
+    """Build the pi0 SigLIP transformer blocks REPLICATED across the full mesh, shared
+    with the resident DiT (the way the VAE-decode / text-encode adapters run) rather than
+    carving a co-resident submesh -- an overlapping `create_submesh(1,1)` deadlocks against
+    the resident DiT. The pi0 blocks' __init__ does single-device `from_torch`/`to_torch`
+    weight-prep round-trips, so during construction we wrap those two ops to (a) replicate
+    every weight upload across the mesh and (b) read weights back from device 0 (all replicas
+    are identical). The blocks' forward already uses mesh-safe ops (layer_norm / matmul /
+    SDPA / nlp_*_heads)."""
+    n = _mesh_size(device)
+    num_layers = cfg.num_hidden_layers
+    if n <= 1:
+        return [SigLIPBlockTTNN(cfg, _layer_weights(w, i), device) for i in range(num_layers)]
+
+    orig_from, orig_to = ttnn.from_torch, ttnn.to_torch
+
+    def _from(t, *a, **k):
+        if k.get("device", None) is device and "mesh_mapper" not in k:
+            k["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
+        return orig_from(t, *a, **k)
+
+    def _to(t, *a, **k):
+        if isinstance(t, ttnn.Tensor):
+            try:
+                k.pop("mesh_composer", None)
+                return orig_to(ttnn.get_device_tensors(t)[0], *a, **k)
+            except Exception:
+                pass
+        return orig_to(t, *a, **k)
+
+    ttnn.from_torch, ttnn.to_torch = _from, _to
+    try:
+        return [SigLIPBlockTTNN(cfg, _layer_weights(w, i), device) for i in range(num_layers)]
+    finally:
+        ttnn.from_torch, ttnn.to_torch = orig_from, orig_to
 
 
 class TTSiglipImageEncoderAdapter:
@@ -85,14 +123,15 @@ class TTSiglipImageEncoderAdapter:
             layer_norm_eps=c.layer_norm_eps,
         )
         w = _remap_siglip_state_dict(real.state_dict())
-        dev = _single_device(device)
 
         self.__dict__["_real"] = real
+        self.__dict__["_device"] = device
+        self.__dict__["_n"] = _mesh_size(device)
         # transformers 5.x flattened SiglipVisionModel; embeddings/post_layernorm are direct.
         self.__dict__["_vm"] = getattr(real, "vision_model", real)
         self.__dict__["_hidden"] = c.hidden_size
         self.__dict__["_num_patches"] = (c.image_size // c.patch_size) ** 2
-        self.__dict__["_blocks"] = [SigLIPBlockTTNN(cfg, _layer_weights(w, i), dev) for i in range(c.num_hidden_layers)]
+        self.__dict__["_blocks"] = _build_blocks_replicated(cfg, w, device, SigLIPBlockTTNN)
         self.__dict__["_verify"] = verify_pcc
         self.__dict__["_thr"] = pcc_threshold
         self.__dict__["_checked"] = False
@@ -102,21 +141,35 @@ class TTSiglipImageEncoderAdapter:
 
     def _run_tt(self, pixel_values):
         vm = self.__dict__["_vm"]
+        dev = self.__dict__["_device"]
+        n = self.__dict__["_n"]
+        # Match the host embed/LN module dtype (bf16 in the real pipeline, fp32 in the PCC
+        # test) at the CPU boundaries; the on-device blocks run bf16 regardless.
+        emb_dtype = next(vm.embeddings.parameters()).dtype
+        ln_dtype = next(vm.post_layernorm.parameters()).dtype
         with torch.no_grad():
-            hs = vm.embeddings(pixel_values.float())  # host patch + position embed -> (B, P, C)
+            hs = vm.embeddings(pixel_values.to(emb_dtype))  # host patch + position embed -> (B, P, C)
+        # Replicate the activation across the mesh, run the 27 blocks (replicated -> every chip
+        # computes the same result alongside its DiT shard), then read one replica back.
+        mapper = ttnn.ReplicateTensorToMesh(dev) if n > 1 else None
         hs_tt = ttnn.from_torch(
-            hs,
+            hs.float(),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=self.__dict__["_blocks"][0].device,
+            device=dev,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
         )
         for blk in self.__dict__["_blocks"]:
             hs_tt = blk.forward(hs_tt)
         B = pixel_values.shape[0]
-        out = ttnn.to_torch(hs_tt).reshape(B, self.__dict__["_num_patches"], self.__dict__["_hidden"]).float()
+        if n > 1:
+            out = ttnn.to_torch(hs_tt, mesh_composer=ttnn.ConcatMeshToTensor(dev, dim=0))[:B]
+        else:
+            out = ttnn.to_torch(hs_tt)
+        out = out.reshape(B, self.__dict__["_num_patches"], self.__dict__["_hidden"])
         with torch.no_grad():
-            out = vm.post_layernorm(out)  # host post-LN -> last_hidden_state
+            out = vm.post_layernorm(out.to(ln_dtype))  # host post-LN -> last_hidden_state
         return out
 
     def __call__(self, pixel_values=None, **kw):

@@ -77,7 +77,6 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
     import numpy as np
     import torch
     from diffusers import HunyuanVideo15Pipeline
-    from diffusers.models.modeling_outputs import Transformer2DModelOutput
     from PIL import Image
 
     coerce_bf16()
@@ -154,131 +153,29 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
     tt = P.build_pipeline(device, real_tf)
     calls = {"n": 0, "device_runs": 0}
 
-    class TTTransformer:
-        """diffusers' Guider (`pipe.guider`) calls the transformer once PER
-        CONDITION (conditional, unconditional, ...) as separate batch=1 Python
-        calls within the same denoise step -- never as one pre-batched call.
-        `guider.num_conditions` (read live, since CFG can be step-range-gated
-        and so can vary across steps) says how many calls belong to the
-        current step's group. We defer every call but the last one in a group,
-        then run the WHOLE group as one real on-device batch and backfill the
-        earlier calls' already-returned tensors in place via `Tensor.set_`
-        (diffusers just stashed the reference; nothing reads it until after
-        the group's last call returns). `_build_attn_bias`/`_trim_to_valid` in
-        tt/pipeline.py were built for exactly this per-batch-item case.
-
-        The captured-trace + 2CQ write/replay path (tt/pipeline.py's
-        denoise_trace_setup/step/write_inputs/trace_execute), controlled by
-        the use_trace param below, can replace the eager per-step tt.run()
-        path. Defaults differ by caller (see _use_trace_single/_use_trace_qb2
-        near the bottom of this file): ON for test_stage2b_gen_qb2 (mesh,
-        verified correct on live QB2 hardware -- coherent video, same real-
-        on-device-run count), OFF for test_stage2b_gen (single device --
-        a 256MB trace region OOMs during plain weight loading there since the
-        full unsharded model has far less headroom than the mesh's per-chip
-        sharded weights; unverified even at the smaller 1MB size that does
-        get past weight loading). Where verified (mesh, 13 frames/50 steps),
-        traced measured NO speedup over eager: steady-state ~3.20s/it eager
-        vs ~3.25s/it traced, and the one-time setup+warmup+capture overhead
-        makes the total denoise loop slightly SLOWER (166s vs 187s) -- this
-        workload is compute/CCL-bound, not host-dispatch-bound, so skipping
-        repeated op dispatch has nothing to save here. Kept on for the mesh
-        case anyway as validated infrastructure in case a future compute-side
-        optimization shifts the bottleneck enough for this to start paying
-        off."""
-
-        def __init__(self, real, ttpipe, guider, use_trace=True):
-            self.__dict__["_real"], self.__dict__["_tt"], self.__dict__["_guider"] = real, ttpipe, guider
-            self.__dict__["_pending"] = []  # [(inp_dict, dtype, placeholder)] for the in-flight CFG group
-            # Command-3 trace+2CQ path (default varies by caller, see below): captured
-            # once on the first denoise step's batched group, then write+replay for
-            # every step after. None means "not captured yet".
-            self.__dict__["_use_trace"] = use_trace
-            self.__dict__["_trace_id"] = None
-            self.__dict__["_trace_out"] = None
-            self.config, self.dtype = real.config, real.dtype
-
-        def __getattr__(self, k):
-            return getattr(self.__dict__["_real"], k)
-
-        def __call__(
-            self,
-            hidden_states,
-            timestep,
-            encoder_hidden_states,
-            encoder_attention_mask,
-            timestep_r=None,
-            encoder_hidden_states_2=None,
-            encoder_attention_mask_2=None,
-            image_embeds=None,
-            attention_kwargs=None,
-            return_dict=True,
-            **kw,
-        ):
-            calls["n"] += 1
-            if trunc:  # smoke test: shrink text-stream activations to fit one chip
-                encoder_hidden_states = encoder_hidden_states[:, :trunc]
-                encoder_attention_mask = encoder_attention_mask[:, :trunc]
-                encoder_hidden_states_2 = encoder_hidden_states_2[:, : max(1, trunc // 4)]
-                encoder_attention_mask_2 = encoder_attention_mask_2[:, : max(1, trunc // 4)]
-            inp = dict(
-                hidden_states=hidden_states,
-                timestep=timestep,
-                encoder_hidden_states=encoder_hidden_states,
-                encoder_attention_mask=encoder_attention_mask,
-                encoder_hidden_states_2=encoder_hidden_states_2,
-                encoder_attention_mask_2=encoder_attention_mask_2,
-                image_embeds=image_embeds,
-                task=("i2v" if _i2v else "t2v"),
-            )
-            dtype = hidden_states.dtype
-            guider = self.__dict__["_guider"]
-            n = int(guider.num_conditions) if guider is not None else 1
-
-            if n <= 1:  # CFG disabled this step (or no guider) -- nothing to batch
-                calls["device_runs"] += 1
-                out = self.__dict__["_tt"].run(inp, granularity="composite").to(dtype)
-                return Transformer2DModelOutput(sample=out) if return_dict else (out,)
-
-            pending = self.__dict__["_pending"]
-            placeholder = torch.empty(0, dtype=dtype)
-            pending.append((inp, dtype, placeholder))
-            if len(pending) < n:  # more conditions still to arrive this step
-                return Transformer2DModelOutput(sample=placeholder) if return_dict else (placeholder,)
-
-            group, self.__dict__["_pending"] = pending, []
-            keys = group[0][0]
-            batched_inp = {
-                k: (torch.cat([g[0][k] for g in group], dim=0) if torch.is_tensor(keys[k]) else keys[k]) for k in keys
-            }
-            calls["device_runs"] += 1
-            tt = self.__dict__["_tt"]
-            if not self.__dict__["_use_trace"]:
-                batched_out = tt.run(batched_inp, granularity="composite")
-            elif self.__dict__["_trace_id"] is None:
-                # First step's group: encode once (text/image conditioning, RoPE,
-                # attn_bias -- all step-invariant, see tt/pipeline.py), warm up
-                # (compiles/caches kernels, untraced), then capture ONE step.
-                # This capture run's own execution IS step 0's real result.
-                tt.denoise_trace_setup(batched_inp)
-                tt.denoise_trace_step()
-                tid = ttnn.begin_trace_capture(tt.device, cq_id=0)
-                trace_out = tt.denoise_trace_step()
-                ttnn.end_trace_capture(tt.device, tid, cq_id=0)
-                self.__dict__["_trace_id"], self.__dict__["_trace_out"] = tid, trace_out
-                batched_out = tt._unpatchify(trace_out, tt._resident["out_shape"])
-            else:
-                # Every later step: write the new latent/timestep on CQ1, replay
-                # the captured trace on CQ0, read the (in-place refreshed) output.
-                tt.denoise_write_inputs(batched_inp["hidden_states"], batched_inp["timestep"])
-                tt.denoise_trace_execute(self.__dict__["_trace_id"], blocking=True)
-                batched_out = tt._unpatchify(self.__dict__["_trace_out"], tt._resident["out_shape"])
-            for (_, g_dtype, g_placeholder), row in zip(group[:-1], batched_out[:-1]):
-                g_placeholder.set_(row.unsqueeze(0).to(g_dtype).clone())
-            out = batched_out[-1].unsqueeze(0).to(dtype)
-            return Transformer2DModelOutput(sample=out) if return_dict else (out,)
-
-    pipe.transformer = TTTransformer(real_tf, tt, getattr(pipe, "guider", None), use_trace=use_trace)
+    # The reusable adapter owns diffusers' per-condition CFG grouping. The
+    # opt-in resident mode additionally coordinates with a scheduler wrapper:
+    # model outputs and the evolving SP latent stay on device; only the final
+    # latent is gathered for VAE handoff.
+    _resident = os.environ.get("HY_DEVICE_RESIDENT_DENOISE", "0") == "1"
+    tt_adapter = P.TTTransformerAdapter(
+        real_tf,
+        tt,
+        getattr(pipe, "guider", None),
+        use_trace=use_trace,
+        device_resident=_resident,
+        task=("i2v" if _i2v else "t2v"),
+        trunc=trunc,
+        counters=calls,
+    )
+    pipe.transformer = tt_adapter
+    if _resident:
+        pipe.scheduler = P.DeviceResidentFlowMatchScheduler(pipe.scheduler, tt_adapter, pipe.guider)
+        print(
+            f"[{label}] FlowMatch Euler + latent: DEVICE RESIDENT "
+            f"({'trace' if use_trace else 'eager'}, final gather only)",
+            flush=True,
+        )
 
     # Optional: run VAE decode on device too (HY_TT_VAE=1). Replaces the CPU
     # AutoencoderKLHunyuanVideo15.decode with the ttnn port, replicated across the
@@ -318,26 +215,16 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
             )
 
     # Optional: run the i2v SigLIP image-encoder on device (HY_TT_SIGLIP=1). The 27-layer
-    # vision transformer runs on a spare 1x1 submesh (patch-embed + post-LN stay on host);
-    # the adapter PCC-self-checks vs the host encoder on first call (see tt/siglip_encoder.py,
-    # validated by tests/pcc/test_siglip.py at PCC ~0.995). Like on-device Qwen this needs a
-    # SPARE chip: at sp=8xtp=4 the DiT fills all 32 chips (no free submesh -> a co-resident
-    # carve deadlocks against the resident DiT), so we require the same spare-submesh signal
-    # the fixture exposes and otherwise fall back to host.
+    # vision transformer runs REPLICATED on the full DiT mesh -- shared with the resident DiT,
+    # the same way the VAE-decode and text-encode adapters run -- so it needs no spare chip and
+    # works at sp=8xtp=4. (patch-embed + post-LN stay on host; the adapter PCC-self-checks vs
+    # the host encoder on first call. See tt/siglip_encoder.py, validated by
+    # tests/pcc/test_siglip.py at PCC ~0.995.)
     if _i2v and os.environ.get("HY_TT_SIGLIP", "0") == "1":
-        from models.demos.hf_eager.hunyuanvideo_1_5.tt import qwen_encoder as _qe
         from models.demos.hf_eager.hunyuanvideo_1_5.tt import siglip_encoder as _se
 
-        _spare = _qe.HY_QWEN_SUBMESH
-        if _spare is not None and os.environ.get("HY_TT_QWEN", "0") != "1":
-            pipe.image_encoder = _se.TTSiglipImageEncoderAdapter(pipe.image_encoder, _spare)
-            print(f"[{label}] SigLIP image-encode: ON DEVICE (ttnn, spare submesh)", flush=True)
-        else:
-            print(
-                f"[{label}] HY_TT_SIGLIP: no spare chips at this mesh (DiT fills it / Qwen holds the "
-                f"submesh); SigLIP stays on host. Validated standalone via tests/pcc/test_siglip.py.",
-                flush=True,
-            )
+        pipe.image_encoder = _se.TTSiglipImageEncoderAdapter(pipe.image_encoder, device)
+        print(f"[{label}] SigLIP image-encode: ON DEVICE (ttnn, replicated on full mesh)", flush=True)
 
     _prompt = os.environ.get("HY_PROMPT", "A cat walks on the grass, realistic")
     _neg = os.environ.get("HY_NEG_PROMPT") or None
@@ -437,11 +324,11 @@ def test_stage2b_gen(device):
     )
 
 
-# Mesh trace+2CQ defaults ON: verified end-to-end on live QB2 hardware (480x848,
-# 13 frames, 50 steps) -- coherent output, correct trace capture/replay across
-# the 4-device mesh with CCL all-reduce embedded in the trace. Set HY_TRACE=0
-# to fall back to the eager per-step path.
-_use_trace_qb2 = os.environ.get("HY_TRACE", "1") == "1"
+# Mesh trace+2CQ is validated but defaults OFF for best one-shot latency. On the
+# compute/CCL-bound real workload, steady-state was unchanged and capture/warmup
+# made a measured 13-frame/50-step run slower overall (166s eager vs 187s traced).
+# Set HY_TRACE=1 to exercise the resident-buffer trace infrastructure.
+_use_trace_qb2 = os.environ.get("HY_TRACE", "0") == "1"
 _QB2_DEVICE_PARAMS = {"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
 if _use_trace_qb2:
     # Only reserve a 2nd command queue + trace region when trace+2CQ is actually
