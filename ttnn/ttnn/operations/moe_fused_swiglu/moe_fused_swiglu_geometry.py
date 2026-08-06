@@ -300,10 +300,13 @@ class Blocking:
         # Hn — the hidden axis, split across grid COLUMNS. `hn_pad` is a PADDING choice, not
         # ceil(hid_t/hgroups): it must additionally decompose against the DEST budget and satisfy
         # the scatter plan's divisibility lattice, so it is searched.
-        self.hn_pad, self.gu_chunks, self.plan = self._choose_hn_pad()
+        self.hn_pad, self.gu_chunks, self.plan, self.balanced_hn = self._choose_hn_pad()
         self.gu_chunk_w = self.hn_pad // self.gu_chunks
-        self.hn_sizes = [max(0, min(self.hn_pad, self.hid_t - x * self.hn_pad)) for x in range(hgroups)]
-        self.hn_last = self.hid_t - (hgroups - 1) * self.hn_pad
+        if self.balanced_hn:
+            self.hn_sizes, self.hn_starts = split(self.hid_t, hgroups)
+        else:
+            self.hn_starts = [x * self.hn_pad for x in range(hgroups)]
+            self.hn_sizes = [max(0, min(self.hn_pad, self.hid_t - s)) for s in self.hn_starts]
         self.hn_block = self.gu_chunk_w
         self.gu_in1_subblocks = self.gu_chunk_w // self.hn_block
         self.wd_mrow_rounds = bool(WD_MROW_ROUNDS and kgroups == M_BLOCK)
@@ -366,6 +369,13 @@ class Blocking:
                 if nxt == self.depth_wd:
                     break
                 self.depth_wd = nxt
+        # Balanced hidden blocks are packed contiguously only for the resident payload. That is
+        # what lets the full-M row schedule retain its one K=HID_T matmul despite fixed-width CB
+        # flow-control slots. A non-resident stream cannot keep absolute packed offsets live while
+        # cycling a shallower FIFO, so it stays on the ordinary padded-block schedule.
+        self.wd_packed = bool(self.balanced_hn and self.wd_resident)
+        if self.balanced_hn and not self.wd_packed:
+            self.wd_mrow_rounds = False
         # The W_down NoC split needs BOTH: `depth_wd == hgroups` for the writer's address
         # derivation (K-block r at a fixed slot), and RESIDENCY, which is what confines every
         # W_down DRAM read to b == 0 where all slots are free from kernel start. Without residency
@@ -421,8 +431,25 @@ class Blocking:
         for hn_pad in range(floor, ceiling + 1):
             ok, why = self._hn_pad_legal(hn_pad)
             if ok:
-                return hn_pad, ok[0], ok[1]
+                return hn_pad, ok[0], ok[1], False
             reasons.append(f"  hn_pad {hn_pad}: {why}")
+        # Some useful grids cannot express a uniform-start split even though a balanced split is
+        # straightforward. Hidden=64 over 12 columns is the motivating case: six-wide uniform
+        # slots would leave column 11 empty, while split() gives 6/6/6/6/5/.../5. Gate/up already
+        # receives per-core (hstart, hn), and phase 2 keeps the fixed HN_PAD page stride while
+        # narrowing every block's FMA steps to its real balanced width.
+        if self.hgroups <= self.hid_t:
+            hn_pad = floor
+            for chunks in sorted(range(1, hn_pad + 1), key=lambda c: (abs(c - GU_CHUNKS), c)):
+                if hn_pad % chunks:
+                    continue
+                if OUT_SUBBLOCK_H_GU * (hn_pad // chunks) > DEST_AUTO_LIMIT_TILES:
+                    continue
+                plan, why = scatter_plan(M_BLOCK, self.m_eff_min, hn_pad, self.kgroups)
+                if plan is not None:
+                    return hn_pad, chunks, plan, True
+                reasons.append(f"  balanced hn_pad {hn_pad}: {why}")
+                break
         # Actionable, not just a refusal: report the column counts that WOULD work here.
         workable = []
         for h in range(2, self.hgroups + 1):

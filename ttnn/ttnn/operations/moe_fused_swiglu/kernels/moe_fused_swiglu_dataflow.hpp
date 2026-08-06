@@ -110,11 +110,6 @@ FORCE_INLINE void read_wd_rows(
     }
 }
 
-//: This K-block's real hidden height: HN_PAD except on the ragged last column group.
-FORCE_INLINE uint32_t wd_block_rows(uint32_t hbase, uint32_t hn_pad, uint32_t hid_t) {
-    return (hbase + hn_pad > hid_t) ? (hid_t - hbase) : hn_pad;
-}
-
 // ---------------------------------------------------------------------------
 // The reduce-scatter gather leg
 // ---------------------------------------------------------------------------

@@ -104,6 +104,8 @@ constexpr uint32_t M_EFF_MIN = CT(M_EFF_MIN);
 constexpr uint32_t W_RESIDENT = CT(W_RESIDENT);
 constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
 constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
+constexpr bool WD_PACKED = WD_RESIDENT && moe_fused_swiglu::hidden_blocks_are_balanced(HID_T, HGROUPS, HN_PAD);
+constexpr uint32_t HROW_T = HID_T;
 constexpr uint32_t GU_CHUNKS = CT(GU_CHUNKS);
 constexpr uint32_t XPRIO = CT(XPRIO);
 constexpr uint32_t HACK_AHEAD = CT(HACK_AHEAD);
@@ -265,6 +267,7 @@ void kernel_main() {
     const auto wd_acc = TensorAccessor(wd_args, w_down_addr, W_TILE);
     const auto cnt_acc = TensorAccessor(cnt_args, counts_addr, COUNTS_PAGE);
     const auto idx_acc = TensorAccessor(idx_args, idx_addr, IDX_PAGE);
+    const uint32_t wd_base = get_write_ptr(cb_w_down);
 
     // -----------------------------------------------------------------------
     // Phase 0 — the device-resident count. count = counts[ idx[local_expert_id] ].
@@ -535,8 +538,8 @@ void kernel_main() {
             const uint32_t wp = get_write_ptr(cb_w_down);
             (void)wp;
             for (uint32_t r = 0; r < nblocks; ++r) {
-                const uint32_t hbase = r * HN_PAD;
-                const uint32_t hn_r = moe_fused_swiglu::wd_block_rows(hbase, HN_PAD, HID_T);
+                const uint32_t hbase = moe_fused_swiglu::hidden_block_start(r, HID_T, HGROUPS, HN_PAD);
+                const uint32_t hn_r = moe_fused_swiglu::hidden_block_rows(r, HID_T, HGROUPS, HN_PAD);
 #ifndef ABLATE_NO_W_XFER
                 // The writer takes the TAIL rows on NOC_1; this is the head.
                 if (read_wd) {
@@ -549,7 +552,7 @@ void kernel_main() {
                         ec,
                         EC_MAX,
                         EMB_T,
-                        wp + r * WD_BLOCK_TILES * W_TILE,
+                        WD_PACKED ? wd_base + hbase * EC_MAX * W_TILE : wp + r * WD_BLOCK_TILES * W_TILE,
                         W_TILE);
                 }
 #endif
@@ -698,7 +701,7 @@ void kernel_main() {
                     if (ahead > KGROUPS - r) {
                         ahead = KGROUPS - r;
                     }
-                    cb_reserve_back(cb_h, ahead * HID_T);
+                    cb_reserve_back(cb_h, ahead * HROW_T);
                     const uint32_t hdst = get_write_ptr(cb_h);
                     while (next_ack < r + ahead && next_ack < KGROUPS) {
                         const uint32_t sidx = next_ack * HGROUPS + next_ack;
@@ -714,7 +717,7 @@ void kernel_main() {
 #ifndef ABLATE_NO_REDUCE_XFER
                         noc_semaphore_wait_min(sem_h_ptr, h_arrivals);
 #endif
-                        noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, HID_T * H_TILE);
+                        noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, HROW_T * H_TILE);
                         phase2_read_barrier();
 #ifndef ABLATE_NO_H_XFER
                         if constexpr (hmc.active) {
@@ -723,7 +726,7 @@ void kernel_main() {
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                                     static_cast<uint32_t>(get_semaphore(SEM_H_FREE))),
                                 h_free_expected);
-                            h_slot_send_posted(slot, hdst, HID_T * H_TILE);
+                            h_slot_send_posted(slot, hdst, HROW_T * H_TILE);
                         }
 #endif
                     } else {
@@ -737,13 +740,13 @@ void kernel_main() {
                         }
 #endif
                     }
-                    cb_push_back(cb_h, HID_T);
+                    cb_push_back(cb_h, HROW_T);
                 }
                 // Eight 64-tile pushes advance a 3x64-tile CB by two slots.  Publish one payload-
                 // free slot so both producer and consumer return to the CB base before a possible
                 // smaller tail block switches back to the HN_PAD-wide schedule.
-                cb_reserve_back(cb_h, HID_T);
-                cb_push_back(cb_h, HID_T);
+                cb_reserve_back(cb_h, HROW_T);
+                cb_push_back(cb_h, HROW_T);
             } else {
                 bool wd_pending = false;
                 // HACK_AHEAD — how many rounds' senders this core acks in one go. The all-gather costs
@@ -873,8 +876,8 @@ void kernel_main() {
                 // from this block (at 1 the block published here is the one this round consumes).
                 const uint32_t pre = r + WD_AHEAD;
                 if (pre < HGROUPS) {
-                    const uint32_t hbase = pre * HN_PAD;
-                    const uint32_t hn_r = moe_fused_swiglu::wd_block_rows(hbase, HN_PAD, HID_T);
+                    const uint32_t hbase = moe_fused_swiglu::hidden_block_start(pre, HID_T, HGROUPS, HN_PAD);
+                    const uint32_t hn_r = moe_fused_swiglu::hidden_block_rows(pre, HID_T, HGROUPS, HN_PAD);
                     cb_reserve_back(cb_w_down, WD_BLOCK_TILES);
                     const uint32_t wp = get_write_ptr(cb_w_down);
 #ifndef ABLATE_NO_W_XFER
@@ -882,7 +885,16 @@ void kernel_main() {
                     // K-block as one batch back in phase 1), so this reads only the head.
                     if (read_wd) {
                         moe_fused_swiglu::read_wd_rows<BRD>(
-                            wd_acc, hbase, 0, hn_r - wd_rows_writer(hn_r), jstart, ec, EC_MAX, EMB_T, wp, W_TILE);
+                            wd_acc,
+                            hbase,
+                            0,
+                            hn_r - wd_rows_writer(hn_r),
+                            jstart,
+                            ec,
+                            EC_MAX,
+                            EMB_T,
+                            WD_PACKED ? wd_base + hbase * EC_MAX * W_TILE : wp,
+                            W_TILE);
                     }
 #else
                     (void)wp;

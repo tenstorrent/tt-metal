@@ -58,6 +58,7 @@ constexpr uint32_t M_EFF_MIN = CT(M_EFF_MIN);
 // block after the first re-reads bytes still resident in cb_w_up's slot.
 constexpr uint32_t W_RESIDENT = CT(W_RESIDENT);
 constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
+constexpr bool WD_PACKED = WD_RESIDENT && moe_fused_swiglu::hidden_blocks_are_balanced(HID_T, HGROUPS, HN_PAD);
 constexpr uint32_t GU_CHUNKS = CT(GU_CHUNKS);
 constexpr uint32_t XPRIO = CT(XPRIO);
 constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
@@ -227,8 +228,8 @@ void kernel_main() {
                 return;
             }
             for (uint32_t r = 0; r < HGROUPS; ++r) {
-                const uint32_t hbase = r * HN_PAD;
-                const uint32_t hn_r = moe_fused_swiglu::wd_block_rows(hbase, HN_PAD, HID_T);
+                const uint32_t hbase = moe_fused_swiglu::hidden_block_start(r, HID_T, HGROUPS, HN_PAD);
+                const uint32_t hn_r = moe_fused_swiglu::hidden_block_rows(r, HID_T, HGROUPS, HN_PAD);
                 const uint32_t k_w = (hn_r * WD_SPLIT) / 8;  // the TAIL rows, read HERE
                 // ONE TRANSACTION ID PER K-BLOCK. Every block still goes to DRAM at once (that
                 // concurrency is the point of the batch); tagging lets the drain below release
@@ -243,7 +244,7 @@ void kernel_main() {
                     ec,
                     EC_MAX,
                     EMB_T,
-                    wd_base + r * WD_BLOCK_TILES * W_TILE,
+                    wd_base + (WD_PACKED ? hbase * EC_MAX : r * WD_BLOCK_TILES) * W_TILE,
                     W_TILE);
             }
             noc_async_read_set_trid(0);  // back to untagged for the output write-back's cmd buf

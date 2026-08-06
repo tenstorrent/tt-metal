@@ -153,6 +153,7 @@ KERNEL_CT_ORDER = {
         "M_EFF_MIN",
         "DEPTH_X",
         "HN_BLOCK",
+        "WD_RESIDENT",
         "WD_MROW_ROUNDS",
         "GU_CHUNKS",
         "ELTWISE_BLK",
@@ -562,7 +563,7 @@ def create_program_descriptor(
             core = ttnn.CoreCoord(x, y)
             i = y * hgroups + x
             kr, kstart = blk.kr_sizes[y], blk.kr_starts[y]
-            hn, hstart = blk.hn_sizes[x], x * blk.hn_pad
+            hn, hstart = blk.hn_sizes[x], blk.hn_starts[x]
             ec, jstart = blk.ec_sizes[i], blk.ec_starts[i]
 
             args = [

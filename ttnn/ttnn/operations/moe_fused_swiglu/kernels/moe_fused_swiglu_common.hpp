@@ -17,6 +17,33 @@
 
 namespace moe_fused_swiglu {
 
+// Hidden-block geometry. Most grids use the original uniform-start layout: block r begins at
+// r*HN_PAD and only the final block is ragged. If that would leave a worker column empty (for
+// example HID_T=64, HGROUPS=12, HN_PAD=6), the host selects a balanced split. The predicate is
+// derivable from the same compile-time constants in all three kernels, so no extra CT arg or
+// runtime table is needed. Fixed HN_PAD-sized CB slots remain uniform; only their real prefix is
+// read and multiplied.
+constexpr bool hidden_blocks_are_balanced(uint32_t hid_t, uint32_t hgroups, uint32_t hn_pad) {
+    return hn_pad * (hgroups - 1) >= hid_t;
+}
+
+constexpr uint32_t hidden_block_start(uint32_t block, uint32_t hid_t, uint32_t hgroups, uint32_t hn_pad) {
+    if (!hidden_blocks_are_balanced(hid_t, hgroups, hn_pad)) {
+        return block * hn_pad;
+    }
+    const uint32_t base = hid_t / hgroups;
+    const uint32_t rem = hid_t % hgroups;
+    return block * base + ((block < rem) ? block : rem);
+}
+
+constexpr uint32_t hidden_block_rows(uint32_t block, uint32_t hid_t, uint32_t hgroups, uint32_t hn_pad) {
+    if (!hidden_blocks_are_balanced(hid_t, hgroups, hn_pad)) {
+        const uint32_t start = block * hn_pad;
+        return (start + hn_pad > hid_t) ? (hid_t - start) : hn_pad;
+    }
+    return hid_t / hgroups + ((block < (hid_t % hgroups)) ? 1 : 0);
+}
+
 // L1 mailbox word layout. The reader fills 0..2 and then stamps MAGIC into word 3; every other
 // kernel spins on word 3 and only then reads 0..2. One page (64 B) per core, zeroed host-side so a
 // stale magic from a previous dispatch can never be mistaken for a fresh publish.

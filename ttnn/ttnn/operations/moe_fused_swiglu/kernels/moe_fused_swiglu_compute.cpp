@@ -66,6 +66,8 @@ constexpr uint32_t DEPTH_X = CT(DEPTH_X);
 // gate/up in1 sub-block WIDTH in hidden tiles — a sub-division of one chunk.
 constexpr uint32_t HN_BLOCK = CT(HN_BLOCK);
 constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
+constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
+constexpr bool WD_PACKED = WD_RESIDENT && moe_fused_swiglu::hidden_blocks_are_balanced(HID_T, HGROUPS, HN_PAD);
 // The hidden-axis chunk the gate/up weight stream is published and consumed in, so the matmul on
 // chunk c overlaps the DRAM read of c+1. Host-guaranteed to divide HN_PAD.
 constexpr uint32_t GU_CHUNKS = CT(GU_CHUNKS);
@@ -190,11 +192,18 @@ struct KrSteps {
     ALWI uint32_t operator()(uint32_t, uint32_t) const { return kr; }
 };
 
-// Per-K-block FMA step count for the `down` matmul: every h round carries HN_PAD hidden tiles,
-// except the last column-group, which owns fewer (HGROUPS * HN_PAD >= HID_T by construction).
+// Per-K-block FMA step count for the `down` matmul. Uniform-start grids narrow only their last
+// block; balanced grids may narrow several blocks, but the fixed HN_PAD CB stride is unchanged.
 struct HnSteps {
-    uint32_t last;
-    ALWI uint32_t operator()(uint32_t block, uint32_t block_k) const { return (block == HGROUPS - 1) ? last : block_k; }
+    ALWI uint32_t operator()(uint32_t block, uint32_t) const {
+        return moe_fused_swiglu::hidden_block_rows(block, HID_T, HGROUPS, HN_PAD);
+    }
+};
+
+struct PackedWdOffset {
+    ALWI uint32_t operator()(uint32_t block) const {
+        return moe_fused_swiglu::hidden_block_start(block, HID_T, HGROUPS, HN_PAD) * EC_MAX;
+    }
 };
 
 void kernel_main() {
@@ -239,8 +248,6 @@ void kernel_main() {
     // core's write pointer to the CB base and lets a contributor use its OWN pointer as the
     // destination address.
     constexpr uint32_t REDUCE_SLOT_TILES = M_BLOCK * HN_PAD;
-
-    const uint32_t hn_last = HID_T - (HGROUPS - 1) * HN_PAD;
 
     for (uint32_t b = 0; b < m_blocks; ++b) {
         // The RUNTIME token tile-rows this block works on — the same number the reader uses for its
@@ -529,6 +536,47 @@ void kernel_main() {
                 h_buf.wait_front(HID_T);
                 h_buf.pop_front(HID_T);  // payload-free alignment slot from the reader
                 wd_buf.pop_front(WD_RESIDENT_TILES);
+            } else if constexpr (WD_PACKED) {
+                // Balanced hidden slices live contiguously in the resident W_down payload while
+                // the producer still publishes fixed HN_PAD*EC_MAX blocks for CB flow control.
+                // Keep the read pointer at the CB base, wait cumulatively for each published
+                // block, and address its packed rows explicitly. This path is only used by a
+                // short tail; full M blocks take the one-shot K=HID_T row schedule above.
+                constexpr uint32_t WD_BLOCK_TILES = HN_PAD * EC_MAX;
+                constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * WD_BLOCK_TILES;
+                auto wait_packed_wd = [&](uint32_t block, uint32_t, bool) {
+                    wd_buf.wait_front((block + 1) * WD_BLOCK_TILES);
+                };
+                matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/true,
+                    LastBlockTarget::Out,
+                    OutputCBLayout::TileRowMajor,
+                    matmul_config::InitMode::Short,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    InputPolicy::NoWaitNoPop,
+                    NoPostCompute,
+                    decltype(wait_packed_wd),
+                    NoPostKBlock,
+                    /*untilize_block_ct_dim=*/0,
+                    HnSteps,
+                    NoIn0Source,
+                    PackedWdOffset,
+                    /*caller_owns_pack_target=*/true>(
+                    h_buf,
+                    wd_buf,
+                    out_tiles_buf,
+                    out_interm_buf,
+                    shape_dn,
+                    {},
+                    wait_packed_wd,
+                    /*in1_per_core_w=*/EC_MAX,
+                    /*out_row_width=*/EC_MAX,
+                    {},
+                    HnSteps{},
+                    {},
+                    PackedWdOffset{});
+                wd_buf.pop_front(WD_RESIDENT_TILES);
             } else {
                 matmul_block<
                     /*transpose=*/false,
@@ -556,7 +604,7 @@ void kernel_main() {
                     /*in1_per_core_w=*/EC_MAX,
                     /*out_row_width=*/EC_MAX,
                     {},
-                    HnSteps{hn_last});
+                    HnSteps{});
             }
             out_tiles_buf.push_back(out_block_tiles);
             // Leave a known packer state for the next M-block's gate/up path.
