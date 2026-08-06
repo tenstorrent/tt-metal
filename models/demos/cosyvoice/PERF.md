@@ -382,7 +382,12 @@ code, since that box entered its daily reboot before a same-day re-run could be 
 |---|---:|---:|---:|
 | explicit chain — `COSYVOICE_SDPA_DECODE=0` | `0.533` | `0.950` | 1.78× |
 | **fused decode attention** — default | **`0.477`** ✅ | `0.891` | 1.87× |
-| **+ in-place KV** — `COSYVOICE_KV_INPLACE=1` | **`0.449`** ✅ | **`0.736`** | 1.64× |
+| **+ in-place KV** — `COSYVOICE_KV_INPLACE=1` | **`0.449`** ✅ | `0.736` | 1.64× |
+| **+ cached CFM trace** — default | *pending re-measure* | **`0.628`** | — |
+
+The last row landed after the Blackhole box entered its daily reboot, so only the Wormhole figure
+is measured. On the capture/replay split below it should take Blackhole to roughly `0.36`; that is
+a projection and is labelled as one until it is run.
 
 **`RTF < 0.5` is met on Blackhole and missed on Wormhole.** At its best setting n300 lands at
 `0.736`, 47 % over the gate. Everything else in Stage 1 passes on both.
@@ -435,6 +440,47 @@ architecture-specific, and a width tuned on one part is not tuned on the other.
 prediction going in was that it would favour n300, because narrower memory is the one place
 `bfloat8_b` ever showed a gain (F42) and this kernel stops writing the score matrix. Half right: the
 milliseconds went the predicted way, the percentage did not.
+
+### Half the flow solve was trace capture
+
+Sweeping the solver depth (`probe_flow_steps.py`) shows the flow stage is **not linear in
+`n_timesteps`**, which the obvious arithmetic assumes it is:
+
+| steps | s | ms/step | vs 10 | PCC vs 10 steps |
+|---:|---:|---:|---:|---:|
+| 10 | `0.7081` | `70.8` | 1.00× | `1.00000000` |
+| 8 | `0.6297` | `78.7` | 1.12× | `0.98979415` |
+| 5 | `0.4942` | `98.8` | 1.43× | `0.98253800` |
+| 4 | `0.4557` | `113.9` | 1.55× | `0.96111237` |
+| 3 | `0.4181` | `139.4` | 1.69× | `0.73646301` |
+| 1 | `0.3861` | `386.1` | 1.83× | `0.22612770` |
+
+Fitting it gives **`T(n) ≈ 0.350 s + 35.8 ms per step`**. Halving the solver buys 1.43×, not 2×,
+and *deleting* it buys only 1.83× — so **solver depth is not the lever**. It is also not an
+acceptable trade: 5 steps costs PCC `0.9825` against the shipped 10-step result, below every gate
+this port holds, with a cliff to `0.7365` at 3 steps. `COSYVOICE_FLOW_STEPS` exists for anyone who
+wants to take that trade knowingly; nothing here does.
+
+The fixed `0.350 s` is where the finding is. `solve_euler` called `_capture()` and `_release()` on
+**every** call, so the estimator trace was recorded and thrown away each time. Timing the phases
+directly agrees with the fit to within 10 ms:
+
+| phase | s | share |
+|---|---:|---:|
+| trace capture | `0.3144` | **46.6 %** |
+| replay, 10 Euler steps | `0.3570` | 52.9 % |
+| release | `0.0032` | 0.5 % |
+
+**Keeping the trace across utterances of the same mel length is worth 1.67× on the solver**
+(`0.601 → 0.359 s` steady state) and takes Wormhole end-to-end from `0.736` to `0.628`.
+
+Reuse turns on one detail: the trace bakes `_packed_const`'s **address**, and that buffer holds the
+utterance's conditioning. Refilling it in place is correct; reassigning it would leave the replay
+reading the *previous* utterance's conditioning — fluent audio in the wrong voice, with no exception,
+no shape mismatch, and nothing a per-module PCC against a single golden would catch.
+`probe_cfm_reuse.py` is built to catch exactly that: three consecutive solves with different
+conditioning, cached against uncached, compared solve by solve. **PCC `1.0000000000` on all three.**
+`COSYVOICE_CFM_TRACE_CACHE=0` restores the old behaviour.
 
 ### Accuracy and tests
 
