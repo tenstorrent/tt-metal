@@ -86,14 +86,14 @@ ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #endif
 }
 
-template <bool ROUND_NEAREST = false>
+template <ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default>
 ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #ifdef ARCH_QUASAR
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::ADD, DST_ACCUM_MODE, ROUND_NEAREST),
+        (APPROX, ckernel::BinaryOp::ADD, DST_ACCUM_MODE, dst_rounding_mode),
         idst0,
         idst1,
         odst,
@@ -103,7 +103,7 @@ ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::ADD, 8 /* ITERATIONS */, DST_ACCUM_MODE, ROUND_NEAREST),
+        (APPROX, ckernel::BinaryOp::ADD, 8 /* ITERATIONS */, DST_ACCUM_MODE, dst_rounding_mode),
         idst0,
         idst1,
         odst,
@@ -111,14 +111,14 @@ ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #endif
 }
 
-template <bool ROUND_NEAREST = false>
+template <ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default>
 ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #ifdef ARCH_QUASAR
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::SUB, DST_ACCUM_MODE, ROUND_NEAREST),
+        (APPROX, ckernel::BinaryOp::SUB, DST_ACCUM_MODE, dst_rounding_mode),
         idst0,
         idst1,
         odst,
@@ -128,7 +128,7 @@ ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::SUB, 8 /* ITERATIONS */, DST_ACCUM_MODE, ROUND_NEAREST),
+        (APPROX, ckernel::BinaryOp::SUB, 8 /* ITERATIONS */, DST_ACCUM_MODE, dst_rounding_mode),
         idst0,
         idst1,
         odst,
@@ -137,13 +137,13 @@ ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }
 
 #ifndef ARCH_QUASAR
-template <bool ROUND_NEAREST = false>
+template <ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default>
 ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (APPROX, ckernel::BinaryOp::RSUB, 8 /* ITERATIONS */, DST_ACCUM_MODE, ROUND_NEAREST),
+        (APPROX, ckernel::BinaryOp::RSUB, 8 /* ITERATIONS */, DST_ACCUM_MODE, dst_rounding_mode),
         idst0,
         idst1,
         odst,

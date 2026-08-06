@@ -87,7 +87,7 @@ template <
     BinaryOp BINOP,
     int ITERATIONS = 8,
     bool is_fp32_dest_acc_en = false,
-    bool ROUND_NEAREST = false>
+    DstRoundingMode dst_rounding_mode = DstRoundingMode::Default>
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
@@ -123,7 +123,7 @@ inline void calculate_sfpu_binary(
 
         if constexpr (
             (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
-            ROUND_NEAREST) {
+            dst_rounding_mode == DstRoundingMode::NearestEven) {
             result = float32_to_bf16_rne(result);
         }
 
