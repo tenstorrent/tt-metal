@@ -31,6 +31,8 @@ from .llk_params import (
     StochasticRounding,
     Tilize,
     TopKSortDirection,
+    TopKXLChunkBaseMode,
+    TopKXLIndexOp,
     Transpose,
     UnpackerEngine,
     VectorMode,
@@ -527,6 +529,39 @@ class TOPK(TemplateParameter):
             "bool TOPK_STABLE_SORT;",
         ]
         return "\n".join(lines), "IIII?"
+
+
+@dataclass
+class TOPK_XL(TemplateParameter):
+    k: int = 512
+    num_chunks: int = 1
+    tail_elements: int = 512
+    num_rows: int = 1
+    index_op: TopKXLIndexOp = TopKXLIndexOp.RowMajor
+    group_id: int = 0
+    group_shift: int = 16
+    core_id: int = 0
+    sort_direction: TopKSortDirection = TopKSortDirection.Descending
+    fused_reduce: bool = False
+    chunk_base_mode: TopKXLChunkBaseMode = TopKXLChunkBaseMode.Static
+    chunk_base: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t TOPK_XL_K = {self.k};",
+            f"constexpr std::uint32_t TOPK_XL_NUM_CHUNKS = {self.num_chunks};",
+            f"constexpr std::uint32_t TOPK_XL_TAIL_ELEMENTS = {self.tail_elements};",
+            f"constexpr std::uint32_t TOPK_XL_NUM_ROWS = {self.num_rows};",
+            f"constexpr std::uint32_t TOPK_XL_INDEX_OP = {self.index_op.value};",
+            f"constexpr std::uint32_t TOPK_XL_GROUP_ID = {self.group_id};",
+            f"constexpr std::uint32_t TOPK_XL_GROUP_SHIFT = {self.group_shift};",
+            f"constexpr std::uint32_t TOPK_XL_CORE_ID = {self.core_id};",
+            f"constexpr bool TOPK_XL_ASCENDING = {str(self.sort_direction == TopKSortDirection.Ascending).lower()};",
+            f"constexpr bool TOPK_XL_FUSED_REDUCE = {str(self.fused_reduce).lower()};",
+            f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE_MODE = {self.chunk_base_mode.value};",
+            f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE = {self.chunk_base};",
+        ]
+        return "\n".join(lines)
 
 
 @dataclass

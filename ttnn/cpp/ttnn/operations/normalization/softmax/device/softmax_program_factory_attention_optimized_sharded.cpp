@@ -365,6 +365,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
     uint32_t num_cores_per_batch_index = 0;
 
     if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+        std::vector<std::variant<uint32_t, Buffer*>> reader_args;
+        reader_args.reserve(4);
         for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
                 CoreCoord core = {
@@ -372,7 +374,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
                     static_cast<std::size_t>(start_core_y) + core_idx_y};
 
                 // reader args
-                std::vector<std::variant<uint32_t, Buffer*>> reader_args;
+                reader_args.clear();
                 reader_args.push_back(scale_u);
                 reader_args.push_back(mask_buffer);
                 reader_args.push_back(mask_start_tile_id);
@@ -406,6 +408,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
             }
         }
     } else {
+        std::vector<std::variant<uint32_t, Buffer*>> reader_args;
+        reader_args.reserve(4);
         for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
             for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
                 CoreCoord core = {
@@ -413,7 +417,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
                     static_cast<std::size_t>(start_core_y) + core_idx_y};
 
                 // reader args
-                std::vector<std::variant<uint32_t, Buffer*>> reader_args;
+                reader_args.clear();
                 reader_args.push_back(scale_u);
                 reader_args.push_back(mask_buffer);
                 reader_args.push_back(mask_start_tile_id);

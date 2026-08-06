@@ -2118,6 +2118,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
+    non_idle_cores_vec.reserve(non_idle_cores.ranges().size());
     auto subdevice_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
@@ -2316,8 +2317,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
     std::vector<tt::tt_metal::CBHandle> cb_outputs;
+    cb_outputs.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> output_cb_indices;
+    output_cb_indices.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> interm_cb_indices;
+    interm_cb_indices.reserve(out_buffers.size());
 
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // interm0
@@ -2637,6 +2641,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
             std::vector<std::pair<uint32_t, uint32_t>> first_col_anchors;   // (y, bank_id)
             std::vector<std::pair<uint32_t, uint32_t>> second_col_anchors;  // (y, bank_id)
+            first_col_anchors.reserve(banks_in_first_col);
+            second_col_anchors.reserve(num_banks - banks_in_first_col);
 
             for (uint32_t bank = 0; bank < num_banks; ++bank) {
                 const auto& core = optimal_dram_workers[bank];
@@ -2685,6 +2691,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
@@ -2843,10 +2850,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
     return MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
         {mm_kernel_in1_sender_writer_id},
-        shared_cbs,
+        std::move(shared_cbs),
         false,
         CoreCoord{0, 0},
-        worker_cores_vec,
+        std::move(worker_cores_vec),
         0,
         ttnn::prim::Matmul1DType::GATHER_IN0};
 }

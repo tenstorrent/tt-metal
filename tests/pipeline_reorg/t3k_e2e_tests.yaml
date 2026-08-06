@@ -22,7 +22,7 @@
   skus:
     wh_llmbox:
       timeout: 10
-  owner_id: U013121KDH9 # Austin Ho
+  owner_id: U087S3K319A # Austin Ho
   team: scaleout
 
 - name: t3k_fabric_unit_tests
@@ -63,7 +63,7 @@
   skus:
     wh_llmbox:
       timeout: 40
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: models_tttv2_rope_modules_full_set_unit_tests
@@ -71,7 +71,7 @@
   skus:
     wh_llmbox:
       timeout: 5
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: models_tttv2_rmsnorm_modules_full_set_unit_tests
@@ -79,7 +79,7 @@
   skus:
     wh_llmbox:
       timeout: 10
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: models_tttv2_attention_full_set_unit_tests
@@ -87,7 +87,7 @@
   skus:
     wh_llmbox:
       timeout: 65
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: models_tttv2_embedding_modules_full_set_unit_tests
@@ -95,7 +95,7 @@
   skus:
     wh_llmbox:
       timeout: 20
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: models_tttv2_sampling_modules_full_set_unit_tests
@@ -103,7 +103,7 @@
   skus:
     wh_llmbox:
       timeout: 8
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: models_tttv2_lm_head_modules_full_set_unit_tests
@@ -111,7 +111,7 @@
   skus:
     wh_llmbox:
       timeout: 30
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: models_tttv2_llama31_8B_tests
@@ -119,7 +119,7 @@
   skus:
     wh_llmbox:
       timeout: 20
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
 - name: t3k_DeepSeek_PREFILL

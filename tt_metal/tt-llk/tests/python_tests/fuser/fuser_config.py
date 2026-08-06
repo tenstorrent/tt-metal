@@ -97,6 +97,8 @@ class FuserConfig(TestConfig):
             "pipeline",
             "global_config",
             "operand_registry",
+            # Host-side determinism-check opt-out; does not affect the compiled kernel.
+            "expected_nondeterministic",
         ]
 
         temp_str = [

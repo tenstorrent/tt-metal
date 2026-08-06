@@ -30,7 +30,7 @@ except ImportError:
 from framework.device_fixtures import default_device
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
-from framework.constants import parse_mesh_suffix
+from framework.constants import CCL_OP_TOKENS, parse_mesh_suffix
 from framework.statuses import TestStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
@@ -757,6 +757,36 @@ _FABRIC_INFRA_SIGNATURES = (
     "mapping_result.success",
     "inter-mesh mapping failed",
     "intra-mesh mapping failed",
+    # The host came up with fewer chips than the traced topology needs, so mesh open fails
+    # before any kernel runs. Seen on main run 30681057227 job 91319472767 (runner g03glx03):
+    #   TT_FATAL @ tt_metal/distributed/system_mesh.cpp:159: requested_size <= system_size
+    #   Requested mesh shape MeshShape([1, 32]) requires 32 devices, but only 16 devices are
+    #   available in the system mesh MeshShape([4, 4]).
+    # Every Galaxy-traced vector asks for 32 devices, so a half-populated box failed all 65
+    # of them identically and they were booked as FAIL_ASSERT_EXCEPTION -- 65 phantom test
+    # failures for one broken runner. Nothing was tested, so this is NOT_RUN + abort.
+    "devices are available in the system mesh",
+    "requested_size <= system_size",
+    # The fabric routers never reached the synced state, so the control plane never came up and
+    # no kernel ran. Seen on lead-models run 30696173498 job mesh4x4_col_2d_conv2d (a HEALTHY
+    # 32-chip runner, topology OK):
+    #   TT_THROW @ tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:271
+    #   Fabric Router Sync: Timeout after 10000 ms on Device 19: expected status 0xa2b2c2d2.
+    #   Master chan=4 got 0xa1b1c1d1
+    # followed by a cascade of "Read unexpected run_mailbox value from core 25-17" as the
+    # half-initialized device is reused. The run_mailbox wedge IS already a signature, but the
+    # exception that propagates to the sweep is this fabric-init throw, so 8 vectors were booked
+    # as FAIL_ASSERT_EXCEPTION. Nothing was tested -> NOT_RUN + abort.
+    #
+    # NOTE: unlike the half-populated-box signatures above, a router-sync timeout on a healthy
+    # box is a genuine fabric bring-up defect, not just a bad runner. Classifying it here stops
+    # the phantom test failures; it does NOT make the underlying timeout acceptable and it is
+    # being raised with the fabric owners separately.
+    #
+    # Keyed on the sync message itself, NOT on "fabric_firmware_initializer.cpp": that file
+    # raises for other conditions too, and a filename-only signature would reclassify any of
+    # them as a sticky infra abort (same trap as topology_mapper.cpp above).
+    "fabric router sync",
 )
 
 
@@ -1556,17 +1586,13 @@ def run_sweeps(
     job_child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     job_worker = None
     if job_child_mode and _is_galaxy_job():
-        # Prime the device-count cache in THIS (main) process before the worker
-        # opens the job device — result export's card-type fallback queries the
-        # count (constructs a cluster), which would collide with the worker's held
-        # device (CHIP_IN_USE) if queried live. No-op when RUNNER_LABEL is set (CI).
-        if not os.environ.get("RUNNER_LABEL"):
-            try:
-                from framework.result_destination import prime_device_count
-
-                prime_device_count()
-            except Exception:
-                pass
+        # NOTE: the main process deliberately does NOT touch the device here. A
+        # prime_device_count() call used to sit at this point to warm a device-count cache for
+        # a cosmetic results label; on Galaxy it constructed a MetalContext in the PARENT, and
+        # the child's subsequent mesh open then forced a MetalContext teardown + dispatch
+        # relaunch, hanging the first vector until the 300s timeout. See the removal note in
+        # result_destination.get_card_type(). Keep this path device-free: the whole
+        # one-device-per-job design rests on exactly one MetalContext existing per job.
         # Enable job-level device reuse in create_mesh_device (inherited by the
         # forked worker). Only vectors sharing a device config reach a given
         # process (two-pass splits by dispatch axis), so the cached device is
@@ -1813,8 +1839,7 @@ def _is_multidevice_ccl_module(module_name):
     profiler is safe to enable for the run -- see _should_skip_device_profiler."""
     if not module_name:
         return False
-    _ccl = ("all_gather", "all_reduce", "reduce_scatter", "all_to_all", "all_broadcast")
-    return any(any(c in m for c in _ccl) for m in str(module_name).split(",") if m)
+    return any(any(c in m for c in CCL_OP_TOKENS) for m in str(module_name).split(",") if m)
 
 
 def _should_skip_device_profiler(config):

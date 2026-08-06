@@ -1007,6 +1007,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
     const metal_SocDescriptor& soc_d = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id());
     std::vector<CoreCoord> dram_phy_coords;
+    dram_phy_coords.reserve(num_dram_banks);
     for (int i = 0; i < num_dram_banks; ++i) {
         auto dram_core = this->dram_core_from_dram_channel(i, noc);
         if (dram_is_virtualized) {

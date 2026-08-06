@@ -157,6 +157,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCTiledProgramFactory::create_descripto
 
     Buffer* src0_buffer = input_tensor.buffer();
     std::vector<uint32_t> reader_compile_time_args;
+    reader_compile_time_args.reserve(3);
     reader_compile_time_args.push_back(sub_tile_line_bytes);
     reader_compile_time_args.push_back(cb_data_format == tt::DataFormat::Float32 ? 1 : 0);
     reader_compile_time_args.push_back(alignment);

@@ -262,9 +262,9 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     CircularBuffer cb_in(in_cb);
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
+    reconfig_data_format_srca(in_cb);
     copy_tile_to_dst_init_short(in_cb);
     recip_tile_init();
-    reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(in_cb);
 
     cb_in.wait_front(num_tiles);
@@ -300,8 +300,11 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
-    sub_bcast_cols_init_short(in0_cb, in1_cb);
+    // llk_unpack_AB_init (inside sub_bcast_cols_init_short) validates the live
+    // unpacker configuration.  Reconfigure first: qk_im can be FP32 while the
+    // row maximum is BF16, notably after applying a windowed BF16 mask.
     reconfig_data_format(in0_cb, in1_cb);
+    sub_bcast_cols_init_short(in0_cb, in1_cb);
 
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
@@ -488,8 +491,8 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     constexpr uint32_t granularity = cols;
 #endif
 
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
     reconfig_data_format(in0_cb, in1_cb);
+    mul_bcast_cols_init_short(in0_cb, in1_cb);
     pack_reconfig_data_format(in0_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
@@ -598,8 +601,8 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
 
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
     reconfig_data_format(in0_cb, in1_cb);
+    mul_bcast_cols_init_short(in0_cb, in1_cb);
     pack_reconfig_data_format(in0_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
@@ -1085,13 +1088,15 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
      * Use matmul on Mx1 input to reduce rows within tile to produce Mx1 output.
      */
 
+    // matmul_block_init validates the live reverse-order unpacker setup
+    // (in1_cb -> SrcA, out_cb -> SrcB), so establish it before init.
+    reconfig_data_format(in1_cb, out_cb);
     matmul_block_init(
         out_cb, in1_cb, 0 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
-    reconfig_data_format(in1_cb, out_cb);
     pack_reconfig_data_format(out_cb);
     cb_in1.wait_front(N);
     cb_out.wait_front(M);

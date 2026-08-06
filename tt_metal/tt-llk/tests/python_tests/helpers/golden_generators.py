@@ -4558,6 +4558,25 @@ class TopKGolden:
 
 
 @register_golden
+class TopKXLGolden:
+    """Golden generator for the TopK-XL LLKs (K = 512/1024/2048).
+
+    TopK-XL takes row-major values and returns row-major indices, so the golden
+    is a plain per-row torch.topk.
+
+    Args:
+        rows: float tensor [num_rows, search_len] of the per-row values.
+        K: number of top elements per row.
+    Returns:
+        indices: sorted int64 tensor [num_rows, K] of the top-K row-major positions.
+    """
+
+    def __call__(self, rows, K):
+        _, indices = torch.topk(rows.float(), K, dim=-1, largest=True, sorted=True)
+        return indices
+
+
+@register_golden
 class WhereGolden:
     def __call__(self, operand1, true_value, false_value):
         # Element-wise select matching the C++ sfpu_ternary_function:

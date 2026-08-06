@@ -19,6 +19,7 @@ std::vector<RouterConnectionRecord> ConnectionRegistry::get_connections_from_sou
     FabricNodeId source_node,
     RoutingDirection source_direction) const {
     std::vector<RouterConnectionRecord> result;
+    result.reserve(connections_.size());
     std::copy_if(
         connections_.begin(),
         connections_.end(),
@@ -33,6 +34,7 @@ std::vector<RouterConnectionRecord> ConnectionRegistry::get_connections_to_dest(
     FabricNodeId dest_node,
     RoutingDirection dest_direction) const {
     std::vector<RouterConnectionRecord> result;
+    result.reserve(connections_.size());
     std::copy_if(
         connections_.begin(),
         connections_.end(),
@@ -45,6 +47,7 @@ std::vector<RouterConnectionRecord> ConnectionRegistry::get_connections_to_dest(
 
 std::vector<RouterConnectionRecord> ConnectionRegistry::get_connections_by_type(ConnectionType type) const {
     std::vector<RouterConnectionRecord> result;
+    result.reserve(connections_.size());
     std::copy_if(
         connections_.begin(),
         connections_.end(),
@@ -57,6 +60,7 @@ std::vector<RouterConnectionRecord> ConnectionRegistry::get_connections_by_type(
 
 std::vector<RouterConnectionRecord> ConnectionRegistry::get_connections_by_source_node(FabricNodeId source_node) const {
     std::vector<RouterConnectionRecord> result;
+    result.reserve(connections_.size());
     std::copy_if(
         connections_.begin(),
         connections_.end(),
@@ -69,6 +73,7 @@ std::vector<RouterConnectionRecord> ConnectionRegistry::get_connections_by_sourc
 
 std::vector<RouterConnectionRecord> ConnectionRegistry::get_connections_by_dest_node(FabricNodeId dest_node) const {
     std::vector<RouterConnectionRecord> result;
+    result.reserve(connections_.size());
     std::copy_if(
         connections_.begin(),
         connections_.end(),

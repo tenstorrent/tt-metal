@@ -380,6 +380,26 @@
   team: models
   sp_config: sc1
 
+- name: "Blaze - high_bw_all_gather CCL perf and accuracy"
+  # A full 8x4 Blackhole-Galaxy Fabric2D XY-torus gate. The test initializes
+  # the full Fabric, then runs one 8-rank KV ring at 55K and 512K global rows
+  # and validates gathered output exactly.
+  cmd: |
+    export MESH_DEVICE=TG
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q
+    '
+  test_type: high_bw_all_gather_perf
+  test_group: sdpa_perf
+  skus:
+    bh_sc1_high_power:
+      timeout: 10
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  sp_config: sc1
+
 - name: "Blaze - Chunked Kimi perf (code_debug 55k, no trace)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
@@ -556,6 +576,37 @@
     bh_sc1:
       # Warm tilized-cache + chunked prefill (5120) + KV PCC; cold weight-cache build will exceed this.
       timeout: 60
+  owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+  sp_config: sc1
+
+# MiniMax-M3 full-model chunked-prefill throughput regression (same harness as KV PCC, PCC skipped).
+# Gates whole-sequence tok/s against PREFILL_EXPECTED_TPS +/- PREFILL_PERF_MARGIN on high-power Galaxy.
+- name: "Blaze - MiniMax-M3 Prefill Perf"
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
+    export PREFILL_TRACE_DIR=/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_56320
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    export EXPERT_DTYPE=bf4
+    export PREFILL_CHUNKED=1
+    export PREFILL_CHUNK_SIZE=5120
+    export PREFILL_TPS_ITERS=5
+    export PREFILL_SKIP_PCC=1
+    export PREFILL_REQUIRE_HIGH_POWER=1
+    export PREFILL_EXPECTED_TPS=3600
+    export PREFILL_PERF_MARGIN=0.05
+    mpirun --pernode --tag-output bash -lc '
+      python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+    '
+  test_type: minimax_prefill_perf
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      # Warm tilized-cache + chunked prefill (5120) x5 timed iters, no PCC; cold cache build will exceed this.
+      timeout: 35
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
   sp_config: sc1

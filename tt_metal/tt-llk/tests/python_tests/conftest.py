@@ -471,6 +471,22 @@ def pytest_ignore_collect(collection_path, config):
     return None
 
 
+def _statically_skipped(definition) -> bool:
+    conds = []
+    for m in definition.iter_markers(name="skipif"):
+        conds.extend(m.args)
+        conds.append(m.kwargs.get("condition"))
+    return any(c for c in conds if c is not None and not isinstance(c, str))
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_generate_tests(metafunc):
+    if _statically_skipped(metafunc.definition):
+        metafunc.definition.own_markers = [
+            m for m in metafunc.definition.own_markers if m.name != "parametrize"
+        ]
+
+
 def _collapse_runtime_only_variants(config, items):
     """Keep only one test per unique compile key, dropping runtime only duplicates.
 
@@ -486,7 +502,7 @@ def _collapse_runtime_only_variants(config, items):
     deselected = []
     for item in items:
         marker = item.get_closest_marker(RUNTIME_AXES_MARK)
-        if marker is None:
+        if marker is None or not getattr(item, "callspec", None):
             keep.append(item)
             continue
         compile_key_fn = marker.kwargs["compile_key_fn"]

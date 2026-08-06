@@ -63,7 +63,11 @@ uint32_t allocate_per_core_semaphore(
     return sem_id_opt.value();
 }
 
-// Appends 17 runtime args for a fabric MUX client worker.
+// Number of runtime args appended per fabric MUX client worker. Kept in sync with the
+// pushes in fabric_mux_connection_rt_args() and its disconnected-connection counterpart.
+constexpr uint32_t kFabricMuxConnectionRtArgCount = 17;
+
+// Appends kFabricMuxConnectionRtArgCount runtime args for a fabric MUX client worker.
 // Allocates 5 per-core semaphores on worker_logical_core for the connection state.
 void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
@@ -1114,6 +1118,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             uint32_t ref_q_chunks;
         };
         std::vector<McastCandidate> candidates;
+        candidates.reserve(head_segments.size());
         bool all_eligible = true;
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
@@ -1123,6 +1128,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             }
 
             std::vector<uint32_t> chain_core_indices;
+            chain_core_indices.reserve(segments.size());
             for (const auto& seg : segments) {
                 if (seg.core_idx < core_chain_info.size() && core_chain_info[seg.core_idx].participates &&
                     core_chain_info[seg.core_idx].batch == (head_id / NH) &&
@@ -1208,6 +1214,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             mcast_chains = candidates.size();
             // Track injector physical X columns for DRAM channel spreading
             std::vector<uint32_t> injector_phys_x;
+            injector_phys_x.reserve(candidates.size());
             for (const auto& cand : candidates) {
                 const uint32_t chain_size = cand.core_indices.size();
                 const uint32_t num_receivers = chain_size - 1;
@@ -1590,6 +1597,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             // fabric_mux_connection_rt_args appends to a std::vector<uint32_t>; collect mux args
             // separately and then merge into the RTArgList so BufferBinding entries above are preserved.
             std::vector<uint32_t> mux_writer_args;
+            mux_writer_args.reserve(kFabricMuxConnectionRtArgCount);
             if (link_in_range) {
                 const CoreCoord& mux_core =
                     is_backward ? mux_backward_logical_cores[link] : mux_forward_logical_cores[link];
@@ -1697,6 +1705,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     // ---- Fabric MUX cores ----
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(2 * args.num_links);
     for (uint32_t link = 0; link < args.num_links; ++link) {
         if (backward_coord.has_value()) {
             mux_core_ranges.emplace_back(mux_backward_logical_cores[link]);

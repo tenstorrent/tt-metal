@@ -366,6 +366,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     }
     std::vector<std::vector<CoreCoord>> core_coords2D;
     if (shard_orientation == ShardOrientation::ROW_MAJOR) {
+        core_coords2D.reserve((num_cores_c / num_cores_per_group) * num_cores_r);
         for (uint32_t i = 0; i < num_cores_c / num_cores_per_group; ++i) {
             for (uint32_t j = 0; j < num_cores_r; ++j) {
                 std::vector<CoreCoord> temp;
@@ -374,10 +375,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                     const uint32_t idx = j * num_cores_c + i * num_cores_per_group + k;
                     temp.push_back(core_coords[idx]);
                 }
-                core_coords2D.push_back(temp);
+                core_coords2D.push_back(std::move(temp));
             }
         }
     } else {
+        core_coords2D.reserve((num_cores_r / num_cores_per_group) * num_cores_c);
         for (uint32_t i = 0; i < num_cores_r / num_cores_per_group; ++i) {
             for (uint32_t j = 0; j < num_cores_c; ++j) {
                 std::vector<CoreCoord> temp;
@@ -386,7 +388,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                     const uint32_t idx = j * num_cores_r + k + i * num_cores_per_group;
                     temp.push_back(core_coords[idx]);
                 }
-                core_coords2D.push_back(temp);
+                core_coords2D.push_back(std::move(temp));
             }
         }
     }
@@ -419,6 +421,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     CoreRangeSet mcast_receiver_cores = CoreRangeSet(mcast_receiver_core_ranges);
     // mcast groups
     std::vector<std::vector<CoreCoord>> mcast_groups;
+    mcast_groups.reserve(num_cores);
     int group_index = -1;
     if (is_height_sharding) {
         for (uint32_t i = 0; i < num_cores; ++i) {
@@ -1134,6 +1137,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                     std::swap(mcast_start, mcast_end);
                 }
                 std::vector<uint32_t> mcast_sender_args;
+                mcast_sender_args.reserve(17 + group.size() * 2);
                 mcast_sender_args.push_back(static_cast<uint32_t>(!mcast_group_first.empty()));
                 mcast_sender_args.push_back(static_cast<uint32_t>(!mcast_group_last.empty()));
                 mcast_sender_args.push_back(mcast_start.x);
@@ -1203,6 +1207,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
 
                 // add all coords within a group
                 std::vector<uint32_t> mcast_noc_xy;
+                mcast_noc_xy.reserve(group.size() * 2);
                 for (const auto& gcore : group) {
                     CoreCoord coord = device->worker_core_from_logical_core(gcore);
                     mcast_noc_xy.push_back(coord.x);
@@ -1230,6 +1235,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t input_mask_tile_start_id = 0;
     for (const auto& core : core_coords) {
         tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
+        writer_mcast_sender_args.reserve(8);
         writer_mcast_sender_args.push_back(eps_u);
         if (gamma.has_value()) {
             writer_mcast_sender_args.push_back(gamma.value().buffer());
