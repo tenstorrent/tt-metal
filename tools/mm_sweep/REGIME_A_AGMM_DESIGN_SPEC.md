@@ -101,10 +101,26 @@ implementation assigned each ring position a single direction by `ring_pos` pari
 `tp-1` hops from its origin instead of `tp/2`. Same bytes, worse latency, and it inflates `T_ready_max` —
 the leading term of the ring bound.
 
-**Terms.** `ppr = 8/tp` ring positions per source rank (`tp | 8`). Forward reach `f = tp/2`, backward reach
-`b = tp-1-f`. Position `p` has origin rank `r(p)`; on device `d`, `fd = (d-r) mod tp`, `bd = (r-d) mod tp`.
+**Terms.** `ppr = 8/tp` ring positions per source rank (`tp | 8`). A *stripe* is one core's cb0 slot 0,
+identified by `(kk, p)`; position `p` has origin rank `r = p / ppr`. On device `d`,
+`fd = (d-r) mod tp`, `bd = (r-d) mod tp`, so `fd + bd = tp`.
 
-**Per-core rule.** For core `(kk, p)`, exactly one case applies (`fd+bd = tp` and `f+b = tp-1` make the two
+**The antipode is split, per stripe.** At even `tp` the device at distance `tp/2` is equidistant both ways,
+so one direction must carry it — and if that is always the same direction, that link carries
+`tp/2 * K/tp` against the other's `(tp/2-1) * K/tp` (at tp=4: 2x). Split it at STRIPE granularity, never at
+byte granularity: give each stripe a flag deciding which direction owns its extra hop,
+
+```text
+via_fwd(kk, p) = ((p mod ppr) + kk) mod 2 == 0
+reach          = (f, b) = (tp/2, tp/2 - 1) if via_fwd else (tp/2 - 1, tp/2)      [f + b = tp-1 always]
+```
+
+alternating over the `ppr * preaders` stripes each rank owns, so half of every rank's payload reaches its
+antipode each way. `ppr == 1` at tp=8 makes this a per-`Pk`-group alternation, which is why the index
+includes `kk`. Because the split is per stripe, **a core still receives exactly one stripe and one credit** —
+no partial slot, no second arrival to reconcile.
+
+**Per-core rule.** For core `(kk, p)`, exactly one case applies (`fd+bd = tp` with `f+b = tp-1` makes the two
 arrival cases mutually exclusive and jointly exhaustive):
 
 | case | role | sends |
@@ -113,26 +129,28 @@ arrival cases mutually exclusive and jointly exhaustive):
 | `1 <= fd <= f` | arrives on the forward stream at depth `fd` | forward, iff `fd < f` |
 | `1 <= bd <= b` | arrives on the backward stream at depth `bd` | backward, iff `bd < b` |
 
-Arrival depth `w(p,d) = fd if fd <= f else bd`; max depth `f = tp/2`. Each core still receives **exactly
-one** stripe and relays it at most once, so relay source remains the consume destination and no relay
-buffer exists.
+Arrival depth `w = 0 if fd == 0 else (fd if fd <= f else bd)`; max depth `tp/2`. Relay source remains the
+consume destination, so no relay buffer exists.
 
-**Waves.** Depth `w > 0` delivers rank `d-w`'s positions via forward, plus rank `d+w`'s via backward when
-`w <= b`. So per device:
+**Waves.** Depth `w > 0` delivers rank `d-w`'s stripes via forward and rank `d+w`'s via backward; at
+`w = tp/2` those are the same (antipode) rank, arriving half each way. Per device:
 
 ```text
-wave 0            ppr positions  = K/tp    (local, no fabric)
-waves 1..b       2ppr positions  = 2K/tp   (one full shard from each direction)
-wave f (antipode) ppr positions  = K/tp    (forward only at even tp)
+wave 0                 ppr stripes = K/tp    (local, no fabric)
+waves 1..tp/2-1       2ppr stripes = 2K/tp   (one full shard from each direction)
+wave tp/2 (antipode)   ppr stripes = K/tp    (half on each direction)
 ```
 
 which sums to `K` and reproduces the device-level wave table above. tp=4: `K/4, K/2, K/4`. tp=8:
 `K/8, 2K/8 x3, K/8`.
 
-**Invariants preserved.** Sends per device are unchanged at `ppr*(tp-1)` per ring slice — origins send twice
-but two terminals now send nothing (`ppr*(2 + (f-1) + (b-1)) = ppr*(tp-1)`) — so total fabric bytes and total
-mux clients are identical, and no tile crosses fabric twice per destination. What changes is the split
-between the two muxes, from even to `f:b` (tp=4: `2ppr:ppr`), which per-direction mux sizing already handles.
+**Invariants preserved.** Every stripe crosses `tp-1` hops, exactly as today, so total fabric bytes are
+unchanged and no tile crosses fabric twice per destination. Sends per device stay at `ppr*(tp-1)` per ring
+slice: origins now send twice, but the two terminals send nothing. And with the antipode split the two
+directions carry **exactly half each**, so the mux client counts stay even — the same split the current
+implementation has, reached without its `tp-1` hop depth.
 
 **Scope.** Host-only: the direction/depth assignment in the direct-L1 stream plan. The kernel already
-supports a core driving two muxes (the LINE-origin case) and gates on a single arrival semaphore.
+supports a core driving two muxes (the LINE-origin case) and gates on a single arrival semaphore, and the
+stripe-granular antipode split is what keeps that true — a byte-level split would require two credits per
+slot and per-slot epochs.
