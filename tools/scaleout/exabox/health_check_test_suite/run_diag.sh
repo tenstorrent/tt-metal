@@ -14,7 +14,7 @@
 #
 # Designed to match tt-metal's run_upstream_tests_vanilla.sh shape.
 # Can be used as the ENTRYPOINT of a docker image
-# (TEST_COMMAND=tools/scaleout/exabox/healt_check_test_suite/run_diag.sh, CMD=light|medium|deploy).
+# (TEST_COMMAND=tools/scaleout/exabox/health_check_test_suite/run_diag.sh, CMD=light|medium|deploy).
 
 set -euo pipefail
 

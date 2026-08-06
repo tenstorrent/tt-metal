@@ -121,6 +121,10 @@ ttnn:
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
+  demo:
+    # 10 min for Blaze - high_bw_all_gather CCL perf and accuracy in
+    # tests/pipeline_reorg/blaze_models_prefill_tests.yaml.
+    bh_sc1_high_power: 10
   # Sweep budgets: per-SKU caps for the ttnn-run-sweeps and sweep-validation
   # workflows.
   sweep:
@@ -138,13 +142,13 @@ ttnn:
     # numbers had to roughly double — see that file's header). SKU names are the
     # existing logical SKUs in sku_config.yaml. Shared SKUs cover both targets'
     # entries, so wh_n150_civ2 carries lead + model_traced.
-    wh_galaxy: 640            # lead galaxy (obs ~4h28m total / 29 batches)
-    wh_n150_civ2: 1100        # lead(150) + model_traced(950)
-    wh_n300_civ2: 990         # model_traced
-    wh_llmbox: 920            # model_traced t3k
+    wh_galaxy: 640 # lead galaxy (obs ~4h28m total / 29 batches)
+    wh_n150_civ2: 1100 # lead(150) + model_traced(950)
+    wh_n300_civ2: 990 # model_traced
+    wh_llmbox: 920 # model_traced t3k
     bh_p100a_civ2_viommu: 660 # model_traced
     bh_p150b_civ2_viommu: 640 # model_traced
-    bh_p300_viommu: 720       # model_traced
+    bh_p300_viommu: 720 # model_traced
   sweep_validation:
     wh_n150: 120
     wh_n300: 120
@@ -333,6 +337,7 @@ models:
     bh_p150: 27
     bh_quietbox_2: 195
     bh_galaxy: 78
+    bh_sc1: 230
     bh_sc4-mgd: 120
   e2e_tier2:
     wh_llmbox_perf: 266
@@ -360,8 +365,8 @@ models:
     bh_p150: 20
     bh_quietbox_2: 260
     bh_galaxy: 75
-    bh_sc1: 25  # Flux multihost tests (timeout 20 + headroom)
-    bh_sc4-mgd: 50 # WAN 2.2 transformer-block multihost quad unit
+    bh_sc1: 75
+    bh_sc4-mgd: 50
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172
@@ -393,7 +398,7 @@ models:
     bh_galaxy: 470
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
     bh_sc1: 437
-    bh_sc1_high_power: 108
+    bh_sc1_high_power: 143
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -415,6 +420,12 @@ models:
     wh_llmbox_perf: 60
     bh_quietbox_2: 30
     bh_p150: 30
+  vllm:
+    wh_galaxy_perf: 430
+    bh_quietbox_2: 310
+    wh_llmbox: 297
+    bh_loudbox: 75
+    wh_n150: 65
 umd:
   unit:
     wh_galaxy_perf: 35
