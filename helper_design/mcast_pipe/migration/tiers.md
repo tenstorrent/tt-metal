@@ -21,6 +21,15 @@ readiness semaphore. Preserve the operation-owned arrival counter and value /
 index transfers. Validation: one fresh-cache W=8192 case, full
 `TOPK-MULTICORE`, host/helper suites, rebuild, and per-kernel perf.
 
+Outcome: **PASS — migrated at API v10** in the current atomic commit. The host
+build passed; the exact W=8192, k=50 BFLOAT16_B case passed under `--dev` from
+a fresh isolated cache with both JIT artifacts; `TOPK-MULTICORE` passed 14 with
+12 expected BFLOAT8_B pad xfails; host/helper suites passed 25/25 and 77/77.
+The exact-node device-kernel duration was 238,281 ns. Per-kernel delta is N/A:
+there is no operation-matched pre-migration TopK bakeoff and each DM processor
+envelope contains a second TopK kernel, so the generic F2 microbenchmark is not
+a comparable baseline.
+
 ### Tier 3 — Sharded LayerNorm pre-allgather
 
 Unit: `layernorm-sharded-pre-allgather`; one required binding and two kernels.

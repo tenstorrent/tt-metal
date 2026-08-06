@@ -3,7 +3,7 @@
   "helper_version": 10,
   "baseline": "4a1d6a97ca9bd4efabd0ad6115fcb30538851c90",
   "machine": "single-chip Blackhole p100a",
-  "updated": "2026-08-05",
+  "updated": "2026-08-06",
   "mapping_rules": [
     "Run one compile-focused parameter before the complete mapped inventory.",
     "A passing operation test counts as kernel coverage only when JIT evidence identifies the named kernel path.",
@@ -185,7 +185,7 @@
       "dispatch": "multicore TopK final coordinator and local workers",
       "migration_unit": "topk-multicore-final-readiness",
       "inventory": ["TOPK-MULTICORE"],
-      "coverage": "high; historical exact sender/receiver JIT evidence and complete mapped inventory"
+      "coverage": "high; exact fresh-cache sender/receiver JIT evidence on 2026-08-06 and complete mapped inventory (14 passed, 12 expected BFLOAT8_B pad xfails)"
     },
     {
       "id": "layernorm:sharded:pre-allgather-reduce",
@@ -636,17 +636,17 @@
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp",
-      "status": "blocked",
+      "status": "migrated",
       "inventory": "TOPK-MULTICORE",
-      "coverage": "audited",
-      "result": "API-008 resolves readiness through existing no-handshake Counter mode"
+      "coverage": "high; exact fresh-cache JIT artifact and complete mapped inventory",
+      "result": "v10 migrated; exact node passed and TOPK-MULTICORE passed 14 with 12 expected BFLOAT8_B pad xfails"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp",
-      "status": "pending",
+      "status": "migrated",
       "inventory": "TOPK-MULTICORE",
-      "coverage": "audited",
-      "result": "API-008 resolves readiness through existing no-handshake Counter mode"
+      "coverage": "high; exact fresh-cache JIT artifact and complete mapped inventory",
+      "result": "v10 migrated; exact node passed and TOPK-MULTICORE passed 14 with 12 expected BFLOAT8_B pad xfails"
     }
   ],
   "baseline_note": "Refreshed by apply-dm-helper verify-only pass 2026-08-03 (was 54d8dfb7bef78ff7f3f8060e85aeac1371c86347 / 2026-07-30). The map itself is API-independent and was reused as-is; only the baseline ref + date moved. MM-IN1-ALL reproduced 302 passed / 188 expected skips / 490 selected on this baseline, single-chip Blackhole p100a."

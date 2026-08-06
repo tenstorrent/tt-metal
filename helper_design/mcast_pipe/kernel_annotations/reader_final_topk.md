@@ -1,37 +1,36 @@
-# reader_final_topk.cpp (topk)
-
-> Current v9 status: **blocked and exactly at `llk_helper_library`** with
-> `writer_local_topk.cpp`. No-handshake receiver initialization can erase the
-> first sender signal.
+# reader_final_topk.cpp (TopK) — migrated API v10
 
 Path: `ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp`
-Role: **final/coordinator (RECEIVER) core** of topk aggregation. Multicasts a "ready to receive" flag to all local sender cores, then waits for their data. Iterated over `Ht` rows.
-API era: **modern** (`Noc`, `Semaphore<>`, `CircularBuffer`, mcast mode template).
 
-## Semaphores
-- `receiver_sem` (L26): final-core→senders readiness flag (mcast outbound).
-- `sender_sem` (L27): senders→final-core data-arrived counter (inbound).
+Role: final/coordinator core, and the **sender** face of the readiness-only
+multicast. The helper-facing role is intentionally different from the
+operation's final-reader name.
 
-## Block instance — per-row reception — lines 34-57
-- `final_values_cb.reserve_back(Wt_final)` / `final_indices_cb.reserve_back(Wt_final)` (L34-35): reserve dest CB space for all incoming tiles (set-up source/dest L1).
-- `sender_sem.set(INVALID)` (L39): **reset** inbound data flag.
-- `receiver_sem.set(VALID)` (L40): set local readiness flag (the value to be mcast).
-- mcast: `receiver_sem.set_multicast<Noc::McastMode::EXCLUDE_SRC>(noc, noc_start_x,y, noc_end_x,y, num_dests)` (L45-46): broadcast readiness to all sender cores (self excluded — final core is not a sender).
-- `noc.async_write_barrier()` (L47): flush the sem mcast.
-- `sender_sem.wait(Wt_final)` (L52): wait until all `Wt_final` tiles have arrived (each sender increments by Kt; sum = Wt_final).
-- `final_values_cb.push_back(Wt_final)` / `final_indices_cb.push_back(Wt_final)` (L56-57): commit received data.
-- trailing `noc.async_write_barrier()` (L61) once after the loop.
+## Helper formulation
 
-## Mapping to Pipe
-- **The cleanest receiver-side iterated block in the group.** It is a *receive-by-invitation* pattern: coordinator mcasts an invite flag, then waits on an inbound counter, with the dest CB reserved before and committed after.
-- `Pipe::receive()` here = `set(reset inbound) ; set(local ready) ; mcast(ready, EXCLUDE_SRC) ; barrier ; wait(counter)`. The CB reserve/push wraps it.
+- One sender-separate `Mcast2D` describes the local-worker rectangle; the final
+  core is outside that rectangle and the sender uses `EXCLUDE_SRC` semantics.
+- The adopted readiness semaphore is descriptor 1 and is explicitly
+  host-initialized to `INVALID` (`0`). The channel is no-handshake Counter mode,
+  so a sender cannot race a receiver-side kernel reset.
+- `McastArgs<0, 0>` owns the opaque helper CT/RT prefix. Every operation CT
+  field chains from `next_compile_time_args_offset()`.
+- Per row, `readiness_pipe.send_signal()` replaces raw `set(VALID)`, semaphore
+  multicast, and the readiness write barrier.
 
-## Forks
-- F1: **barrier** (`async_write_barrier`, L47).
-- F2: **flag for the outbound readiness** (`set(VALID)`, level) AND **counter for the inbound** (`sender_sem.wait(Wt_final)`); inbound reset via `set(INVALID)` (L39) each iteration. Both members.
-- F3: **EXCLUDE_SRC** (L45) — final core is not a data sender; loopback excluded, no self-fill.
-- KNOB pre_handshake: **fresh slot** — both `sender_sem` and `receiver_sem` reset at the top of every row (L39-40).
+The arrival semaphore (descriptor 0) remains operation-owned. Its per-row
+`set(INVALID)` and `wait(Wt_final)` pair is not part of the helper channel.
+Circular-buffer reserve/push and the final write barrier are also preserved.
 
-## HOLEs
-- Outbound flag value (`VALID`) is mcast while inbound completion uses a *count* (`Wt_final`) — two semaphore roles in one logical receive. Helper must model the invite-flag and the arrival-counter as separate slots.
-- The reciprocal sender is `writer_local_topk.cpp` — reset/polarity must be co-designed (sender resets its own local `receiver_sem` to INVALID, see that annotation).
+## Validation
+
+- Host build passed.
+- Exact W=8192, k=50, BFLOAT16_B node passed under `--dev` from a fresh
+  isolated cache; the `reader_final_topk` JIT artifact was confirmed.
+- `TOPK-MULTICORE`: 14 passed and 12 expected BFLOAT8_B pad xfails.
+- `McastHostFixture.*`: 25/25; `test_mcast_pipe.py`: 77/77.
+
+Current exact-node profile: TopK device-kernel duration 238,281 ns. The rollout
+contains no operation-matched pre-migration TopK bakeoff, so a per-kernel delta
+is not comparable; the generic F2 microkernel bakeoff is different work and
+geometry and is not used as a baseline.
