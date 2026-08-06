@@ -796,7 +796,13 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     #            all-gather; measured slower overall than "shard" — kept for comparison.
     #   "host"  - legacy: full [B,1,vocab] logits to host, then torch.argmax. Baseline.
     _mode = os.environ.get("QWEN36_BATCHED_DECODE_MODE", "shard")
-    if _mode == "sample" and model.sampling is None:
+    # Both "shard" and "sample" ask ttnn_decode_forward for on_device_logits, which asserts on
+    # model.sampling -- so BOTH must fall back, not just "sample". model.sampling is None whenever
+    # vocab/num_devices > 64K (model.py:44): a P150x4 gets 248320/4 = 62080 and keeps the sampler,
+    # but an N300 gets 248320/2 = 124160 and does not, so the default "shard" hit
+    # "on_device_logits=True but self.sampling is None". "host" is the universal path (the implicit
+    # else of every _mode branch below), so downgrading is always safe.
+    if _mode in ("shard", "sample") and model.sampling is None:
         _mode = "host"
     if _mode == "shard":
         _per_shard = vocab // model.num_devices
