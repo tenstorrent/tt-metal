@@ -164,9 +164,17 @@ def _time_trace(device, run_one, trace_repeats, executions=TRACE_EXECUTIONS):
 )
 @pytest.mark.parametrize("op_name,per_core_M_tiles,k_tiles,n_tiles,dtype", BENCH_SHAPES)
 @pytest.mark.parametrize("in0_block_w", [1, 2, 4, 8], ids=lambda w: f"bw{w}")
-def test_broadcast_mcast_in1_vs_plain(device, op_name, per_core_M_tiles, k_tiles, n_tiles, dtype, in0_block_w):
+@pytest.mark.parametrize("gcb_pages", [2, 8], ids=lambda n: f"depth{n}")
+def test_broadcast_mcast_in1_vs_plain(
+    device, op_name, per_core_M_tiles, k_tiles, n_tiles, dtype, in0_block_w, gcb_pages
+):
     if k_tiles % in0_block_w != 0:
         pytest.skip(f"K ({k_tiles} tiles) not divisible by in0_block_w={in0_block_w}")
+    # depth 2 is the minimum window and matches the baseline's double-buffered in1 CB byte for
+    # byte -- the equal-L1 point. Deeper trades L1 for round batching. Cap the total so the GCB
+    # cannot crowd out in0/out.
+    if gcb_pages * in0_block_w * n_tiles * _bytes_per_tile(dtype) > 256 * 1024:
+        pytest.skip("GCB would exceed the 256 KiB budget for this shape")
     (
         M,
         K,
@@ -220,7 +228,7 @@ def test_broadcast_mcast_in1_vs_plain(device, op_name, per_core_M_tiles, k_tiles
         [program_config],
         [tt_weight_bcast],
         bank_to_receivers=[(0, worker_cores)],
-        size=2 * page_bytes,
+        size=gcb_pages * page_bytes,
     )
     block_count = k_tiles // in0_block_w
 
@@ -256,7 +264,8 @@ def test_broadcast_mcast_in1_vs_plain(device, op_name, per_core_M_tiles, k_tiles
     gcb_us = gcb_elapsed / TRACE_REPEATS * 1e6
     flops = _flops(M, K, N)
     logger.info(
-        f"[bcast_bench][{op_name} bw={in0_block_w}] M={M} K={K} N={N} workers={NUM_WORKERS} "
+        f"[bcast_bench][{op_name} bw={in0_block_w} depth={gcb_pages}] M={M} K={K} N={N} "
+        f"workers={NUM_WORKERS} "
         f"weight={weight_bytes / 1024:.0f}KiB\n"
         f"    plain mcast_in1 : {plain_us:8.2f} us/matmul  "
         f"{flops * TRACE_REPEATS / plain_elapsed / 1e12:6.3f} TFLOP/s  "
@@ -283,7 +292,16 @@ def test_repeat_count_amortization(device, trace_repeats):
     op_name, per_core_M_tiles, k_tiles, n_tiles, dtype = "m2_k32_n8_bf16", 2, 32, 8, ttnn.bfloat16
     in0_block_w = 8
     (
-        M, K, N, worker_cores, pt_weight, pt_act, tt_act, out_mem_config, program_config, compute_kernel_config,
+        M,
+        K,
+        N,
+        worker_cores,
+        pt_weight,
+        pt_act,
+        tt_act,
+        out_mem_config,
+        program_config,
+        compute_kernel_config,
     ) = _build_common(device, per_core_M_tiles, k_tiles, n_tiles, in0_block_w, dtype, seed=7)
     expected = pt_act.float() @ pt_weight.float()
 
@@ -293,8 +311,13 @@ def test_repeat_count_amortization(device, trace_repeats):
 
     def plain_linear(out=None):
         return ttnn.linear(
-            tt_act, tt_weight_dram, program_config=program_config, memory_config=out_mem_config,
-            compute_kernel_config=compute_kernel_config, dtype=dtype, optional_output_tensor=out,
+            tt_act,
+            tt_weight_dram,
+            program_config=program_config,
+            memory_config=out_mem_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            optional_output_tensor=out,
         )
 
     plain_out = plain_linear()
@@ -306,18 +329,29 @@ def test_repeat_count_amortization(device, trace_repeats):
     tt_weight_bcast = _make_broadcast_weight(device, pt_weight, dtype=dtype)
     page_bytes = in0_block_w * n_tiles * _bytes_per_tile(dtype)
     gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
-        device, [program_config], [tt_weight_bcast], bank_to_receivers=[(0, worker_cores)], size=2 * page_bytes,
+        device,
+        [program_config],
+        [tt_weight_bcast],
+        bank_to_receivers=[(0, worker_cores)],
+        size=2 * page_bytes,
     )
 
     def gcb_linear(out=None):
         return ttnn.linear(
-            tt_act, tt_weight_bcast, program_config=program_config, global_cb=gcb, memory_config=out_mem_config,
-            compute_kernel_config=compute_kernel_config, dtype=dtype, optional_output_tensor=out,
+            tt_act,
+            tt_weight_bcast,
+            program_config=program_config,
+            global_cb=gcb,
+            memory_config=out_mem_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            optional_output_tensor=out,
         )
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.queue_tensor_prefetcher_request(
-            device, [(tt_weight_bcast, k_tiles // in0_block_w)] * (2 + (1 + TRACE_EXECUTIONS) * trace_repeats),
+            device,
+            [(tt_weight_bcast, k_tiles // in0_block_w)] * (2 + (1 + TRACE_EXECUTIONS) * trace_repeats),
             global_cb=gcb,
         )
         gcb_out = gcb_linear()
@@ -331,4 +365,73 @@ def test_repeat_count_amortization(device, trace_repeats):
         f"plain={plain_elapsed / trace_repeats * 1e6:8.2f} us/matmul  "
         f"prefetcher={gcb_elapsed / trace_repeats * 1e6:7.2f} us/matmul  "
         f"(trace totals: plain={plain_elapsed * 1e3:.2f}ms prefetcher={gcb_elapsed * 1e3:.2f}ms)"
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 90000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("gcb_pages", [2, 4, 8, 16], ids=lambda n: f"depth{n}")
+@pytest.mark.parametrize("n_tiles", [1, 8], ids=lambda n: f"n{n}")
+def test_gcb_depth_sensitivity(device, gcb_pages, n_tiles):
+    """How much of the small-in0_block_w deficit is just a shallow GCB?
+
+    The kernel batches B blocks per round, clamped by free space in the GCB. At the two-page
+    minimum B is 2, so a 32-block tensor costs 16 rounds -- and each round pays a poll, a write
+    barrier and a per-receiver credit update. A deeper window should collapse the round count.
+    """
+    per_core_M_tiles, k_tiles, in0_block_w, dtype = 2, 32, 1, ttnn.bfloat16
+    (
+        M,
+        K,
+        N,
+        worker_cores,
+        pt_weight,
+        pt_act,
+        tt_act,
+        out_mem_config,
+        program_config,
+        compute_kernel_config,
+    ) = _build_common(device, per_core_M_tiles, k_tiles, n_tiles, in0_block_w, dtype, seed=11)
+    expected = pt_act.float() @ pt_weight.float()
+
+    tt_weight_bcast = _make_broadcast_weight(device, pt_weight, dtype=dtype)
+    page_bytes = in0_block_w * n_tiles * _bytes_per_tile(dtype)
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+        device,
+        [program_config],
+        [tt_weight_bcast],
+        bank_to_receivers=[(0, worker_cores)],
+        size=gcb_pages * page_bytes,
+    )
+
+    def gcb_linear(out=None):
+        return ttnn.linear(
+            tt_act,
+            tt_weight_bcast,
+            program_config=program_config,
+            global_cb=gcb,
+            memory_config=out_mem_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            optional_output_tensor=out,
+        )
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device,
+            [(tt_weight_bcast, k_tiles // in0_block_w)] * (2 + (1 + TRACE_EXECUTIONS) * TRACE_REPEATS),
+            global_cb=gcb,
+        )
+        out = gcb_linear()
+        gcb_linear(out)
+        elapsed = _time_trace(device, lambda: gcb_linear(out), TRACE_REPEATS)
+        passing, out_str = comp_pcc(expected, ttnn.to_torch(out), 0.99)
+        assert passing, f"depth={gcb_pages} PCC failed: {out_str}"
+
+    logger.info(
+        f"[gcb_depth] n_tiles={n_tiles} pages={gcb_pages:3d} ({gcb_pages * page_bytes / 1024:.0f}KiB)  "
+        f"prefetcher={elapsed / TRACE_REPEATS * 1e6:7.2f} us/matmul"
     )

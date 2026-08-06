@@ -768,11 +768,15 @@ void kernel_main() {
                         PROF_DECL_TS(t_w1);
                         PROF_TICK(t_w0);
                         if (broadcast) {
-                            // One multicast per packet. There is no multicast set_state/with_state
-                            // pair and no posted multicast, so each packet reprograms the command
-                            // buffer and lands on the non-posted counters. Packets within a chunk
-                            // are linked so the reserved multicast path is held across the run and
-                            // released by the last one.
+                            // Multicast reserves a NoC path, and there is no multicast
+                            // set_state/with_state pair, so every transaction re-reserves it unless
+                            // it is linked to the previous one. (noc_async_write_multicast's
+                            // any-length form is no help: it forwards one `linked` value to every
+                            // burst, so it can hold the path or release it, but not "hold, then
+                            // release on the last".)
+                            // Link within the chunk and release on its last packet. Linking across
+                            // chunks measured neutral and would hold the path reservation across the
+                            // DMA wait between chunks, where we have nothing to send.
                             for (uint32_t p = 0; p < num_packets; ++p) {
                                 noc_async_write_multicast_one_packet</*enable_noc_tracing=*/false>(
                                     src_addr,
