@@ -341,7 +341,12 @@ models:
     bh_sc4-mgd: 120
   e2e_tier2:
     wh_llmbox_perf: 266
-    wh_n150: 30
+    # +15 / new wh_n300 for the ViT e2e job (18 min per SKU) ported off the
+    # (Single-card) Demo tests pipeline. That pipeline builds its matrix inline in
+    # single-card-demo-tests-impl.yaml and runs no verify_time_budget step, so it
+    # holds no per-SKU budget line to move the time out of — this is net-new here.
+    wh_n150: 45
+    wh_n300: 20
     bh_p150: 26
     bh_p300: 42
     bh_quietbox_2: 196 # +10 moved from models.demo (Mistral-Small-3.1-24B e2e ported off blackhole_demo_tests)

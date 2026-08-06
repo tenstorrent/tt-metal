@@ -86,6 +86,7 @@ it is classified differently on different systems.
 | Gemma-4-26B-A4B | WH LLMBox |
 | Gemma-4-31B | WH LLMBox |
 | Stable Diffusion XL | WH N150, WH N300, BH P150 |
+| ViT | WH N150, WH N300 |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
