@@ -20,11 +20,12 @@ jobs:
           days-before-pr-close: 0
           days-before-issue-stale: -1
           days-before-issue-close: -1
+          # With days-before-pr-close: 0 the PR is marked stale and closed in the
+          # same run, so setting both stale-pr-message and close-pr-message would
+          # post two identical comments. There is no warning period to announce,
+          # so only the stale message is set; omitting close-pr-message means
+          # actions/stale does not comment again when it closes.
           stale-pr-message: >
-            **AUTOMATION**: This PR has been automatically closed because it has
-            had no activity for 32 days. If you still need this change, feel free
-            to reopen it or open a new PR whenever you're ready to continue.
-          close-pr-message: >
             **AUTOMATION**: This PR has been automatically closed because it has
             had no activity for 32 days. If you still need this change, feel free
             to reopen it or open a new PR whenever you're ready to continue.
