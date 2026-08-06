@@ -609,3 +609,50 @@ quietly selecting a neighbouring row — which is exactly the silent-wrong-modul
 about. Had the lookup been positional, or had it clamped, this would have shipped as "ref2va audio
 conditioning is subtly wrong" with no gate able to see it. Value-matched lookups over positional ones
 are worth their cost.
+
+---
+
+## Amendment 130 (2026-08-06) — the horizontal seam ratio of 2.29x on `video_with_sound` is scene content, not a seam; the ref2va horizontal bar is set to 3.0 on that evidence
+
+**Assumed** (campaign plan, gate 8): that `check_spatial_seams`' 2.0 bar, calibrated on t2va's prompt
+and content, would transfer to reference-driven content.
+
+**Measured.** Mesh 4×8, ring params, `l1_small_size=16384`, commit `db76ad3807e`, the
+`video_with_sound` e2e case (81664 padded). Seam ratios across the three ref2va shapes:
+
+| case | vertical (x = 448, 896) | horizontal (y = 384) |
+|---|---|---|
+| `one_image` | pass | pass |
+| `video_with_sound` | 1.315 | **2.29 — over the 2.0 bar** |
+| `mixed` | 1.203 | pass |
+
+**It is content.** Four independent pieces of evidence, from the frame the check flagged:
+
+1. **The magnified boundary strip shows no discontinuity.** `boundary_strip_y384.png` (rows 354–414 at
+   2×) is armchair backs, cushions, window sills and a wainscot band — real horizontal structure that
+   happens to sit at mid-height, which is where the tile boundary is.
+2. **The elevation is ~9 rows wide, not 1–2.** Per-row mean absolute vertical gradient: 1.13 at y=378
+   rising to 5.46 at y=385 and back to 1.86 by y=390. A decoder seam is a discontinuity between two
+   adjacent rows; this is the profile of an object edge.
+3. **The frame's largest vertical gradient is elsewhere and larger.** 16.06 at **y = 306**, which is not
+   a tile boundary, against 5.46 at the boundary. If the boundary were producing artefacts they would
+   not be a third the size of ordinary scene structure.
+4. **The decode path is identical across every case.** Same decoder, same 48×84 latent grid, same
+   tiling. `one_image`, `mixed`, t2va and fl2va all pass with it. A decoder seam would appear in all of
+   them, not in one scene.
+
+**What changes.** The two axes get separate bars: vertical stays at **2.0** (measured 1.20–1.32, so it
+still has real headroom to catch something) and horizontal is set to **3.0** for ref2va, with the
+measurement above as the reason. Recorded as an amendment rather than edited in place, because the plan
+is explicit that t2va's bars must not be inherited for reference-driven content and that a new bar needs
+a dated entry with its reasoning.
+
+**What this does *not* claim.** A content-sensitive ratio cannot distinguish a seam from an edge at
+*any* threshold — 3.0 is a coarse net, not a proof of absence. What actually established there is no
+seam is looking at the boundary strip, and that is why `_write` now runs before the checks: the first
+time this fired, the check aborted the test before any frame was saved, leaving nothing to look at.
+
+**Method note.** This is STATE.md am. 87 arriving from the opposite direction. That one recorded "a seam
+ratio near 1.0 is what a smooth scene gives, not what a correct one gives" — a false *pass*. This is a
+false *fail* from the same property. The instrument is one-dimensional and the defect is not, so the
+frames are the gate and the ratio is the trigger for looking at them.

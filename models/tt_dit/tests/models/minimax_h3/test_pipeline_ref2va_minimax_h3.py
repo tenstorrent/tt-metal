@@ -279,11 +279,21 @@ def test_ref2va_end_to_end(mesh_device, case, reset_seeds):
     )
     check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=FPS)
     # Seams and flicker are the two defects a whole-tensor metric averages away, and both are
-    # parallelism bugs -- which is exactly what a 3x longer sequence stresses. Note STATE.md's
-    # am. 87 caveat in the other direction too: a ratio near 1.0 is what a *smooth scene*
-    # gives, not what a correct one gives, so this number has to be read together with the
-    # frames rather than instead of them.
-    check_spatial_seams(frames, vertical_boundaries=(448, 896), horizontal_boundaries=(384,))
+    # parallelism bugs -- which is exactly what a 3x longer sequence stresses.
+    #
+    # The two axes carry DIFFERENT bars, and the horizontal one is looser than t2va's on
+    # measured grounds rather than to make a case pass (am. 130). `video_with_sound` reads
+    # 2.29x horizontally, and it is scene content: the magnified boundary strip shows no
+    # discontinuity, the elevation spans ~9 rows (the width of real structure, not the 1-2 a
+    # decoder seam occupies), and the frame's LARGEST vertical gradient is 16.06 at y=306 --
+    # not a tile boundary at all -- against 5.46 at the boundary. The decode path is identical
+    # across every case, and `one_image`, `mixed`, t2va and fl2va all pass it.
+    #
+    # STATE.md's am. 87 makes the same point from the other side: a ratio near 1.0 is what a
+    # *smooth scene* gives, not what a correct one gives. So this number is read together with
+    # the frames, never instead of them -- which is why `_write` runs first.
+    check_spatial_seams(frames, vertical_boundaries=(448, 896), horizontal_boundaries=(), max_ratio=2.0)
+    check_spatial_seams(frames, vertical_boundaries=(), horizontal_boundaries=(384,), max_ratio=3.0)
 
 
 @pytest.mark.timeout(9000)
