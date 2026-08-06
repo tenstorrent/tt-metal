@@ -515,7 +515,8 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     # Note: Mllama doesn't support prefix caching (it's V0 only)
     # decode_forward calls decode_forward_llama_vision and discards anything
     # but logits, so sampling_params never reach a sampler — explicitly
-    # declare on-device sampling unsupported.
+    # declare on-device sampling unsupported. That also rules out async decode,
+    # which needs the sampled token written back into a device-resident input.
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,

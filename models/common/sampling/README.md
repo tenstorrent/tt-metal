@@ -97,64 +97,61 @@ plus `apply_decode_state(...)`.
 half of vLLM's explicit decode update contract. `reload_sampling_params=True`
 formats/merges and uploads parameters; `reset_sampling_state=True` rebuilds
 prompt/output penalty state. The flags are independent. The method does NOT
-advance seeds — callers apply slot remaps first, reset/align seeds when state is
+touch seeds — callers apply slot remaps first, reset/align seeds when state is
 reset, and call `seed_manager.get_new_values()` exactly once per sampled token.
 Both command flags are required at every decode call.
 
-This contract includes the unconditional first-decode reseed for `seed=None`
-also addressed by
-[tt-metal#51556](https://github.com/tenstorrent/tt-metal/pull/51556).
-It does not depend on that PR.
-`reset_sampling_state=True` calls `reset_seed_from_slots(...)` rather than the
-conditional helper, ensuring decode-only sampling actually initializes and
-uploads fresh device seeds when both the requested and cached seed are `None`.
+On `reset_sampling_state=True` the caller must use `reset_seed_from_slots(...)`
+rather than the conditional helper: when both the requested and the cached seed
+are `None`, the conditional helper sees no change and skips, leaving decode-only
+sampling with no device seed at all.
 
 ## vLLM Decode Update Contract
 
-Refactored vLLM model adapters advertise
-`decode_input_update_contract = 1`. The vLLM TT plugin sends these adapters
-four boolean commands on every decode:
+The command semantics live in
+[`models/common/decode_contract.py`](../decode_contract.py), next to the helper
+that adapters use to reject commands they cannot execute. The mode definitions,
+transition matrix, and negotiation table are owned by the paired vLLM plugin
+document `plugins/vllm-tt-plugin/docs/decode-reload-contract.md`. This section
+records only what a tt-metal generator author has to honor.
 
-- `reload_inputs`: copy every forward trace input.
-- `reload_page_table`: copy only page-table inputs while preserving
-  device-produced token/position state.
-- `reload_sampling_params`: upload sampling configuration.
-- `reset_sampling_state`: rebuild mutable penalty/RNG state for the layout.
+Adapters advertise support with `decode_input_update_contract = 1`, declared on
+the base generator that implements the commands. The plugin then sends the four
+commands plus `slot_remap` on every decode, including host-sampling steps.
 
-The plugin also sends `slot_remap` as layout data on every version-1 decode,
-including host-sampling steps. `slot_remap[i] = j` means every persistent state
-owned by new slot `i` must take the continuing request state from old slot `j`
-before the forward reads it. This is broader than sampler state: recurrent or
-convolution state indexed by decode slot must be remapped too. Stateless
-adapters accept and may ignore the value.
+`slot_remap[i] = j` means every persistent state owned by new slot `i` must take
+the continuing request state from old slot `j` before the forward reads it. This
+is broader than sampler state: recurrent, convolution, and RoPE state indexed by
+decode slot must be remapped too. Stateless adapters accept and may ignore the
+value.
 
-There are two distinct ways to implement this incompletely:
-
-1. Sending `slot_remap` only on device-sampling decodes leaves model-owned
-   recurrent/conv/RoPE state in the old slot when host sampling changes the
-   layout.
-2. Sending it on every decode but consuming it only inside the active device
-   sampling call leaves dormant seed/RNG/penalty state in the old slot during
-   host sampling. A later switch back to device sampling then resumes the wrong
-   request's state.
-
-Every slot-owning subsystem must therefore consume the remap exactly once on
-every accepted version-1 decode. State read by the forward is remapped before
-that read. A dormant sampler may consume it after successful decode/readback,
-which preserves retry safety because slot remaps are non-idempotent. An
-authoritative rebuild may replace the remap for that subsystem; inactivity may
-not. Version-0 adapters retain their historical remap behavior unchanged.
+Every slot-owning subsystem consumes the remap exactly once on every accepted
+version-1 decode. State read by the forward is remapped before that read. A
+dormant sampler may consume it after successful decode/readback, which preserves
+retry safety because slot remaps are non-idempotent. An authoritative rebuild may
+replace the remap for that subsystem; inactivity may not. Version-0 adapters
+retain their historical remap behavior unchanged.
 
 Generators execute these commands without adding page-table comparisons,
-sampling-mode checks, or model-specific forced reloads. The corresponding
-vLLM plugin falls back to the legacy `reset_batch` interface for adapters that
-do not advertise the contract, preserving their existing reload and overlap
-behavior. vLLM warns that correctness is not guaranteed on that compatibility
-path. This lets vLLM land first and adapters opt in as they are refactored. The
-marker is negotiation metadata on vLLM-facing adapters only; all refactored
-generator APIs require direct callers, including demos and warmup code, to
-provide all four commands. No model-side fallback heuristics are restored. Any
-demo-side decision to retain traced inputs is made at the call site.
+sampling-mode checks, or model-specific forced reloads. `models/common/models/
+executor.py` is a deliberate version-0 holdout: it still infers reloads from its
+own call history and does not advertise the marker, so vLLM keeps it on the
+legacy `reset_batch` path. An adapter that cannot execute part of the contract
+rejects those combinations loudly (`require_full_input_reload`) rather than
+silently degrading; advertising version 1 while quietly ignoring a command is an
+adapter bug.
+
+The plugin falls back to the legacy `reset_batch` interface for adapters that do
+not advertise the contract, preserving their existing reload and overlap
+behavior, and warns that correctness is not guaranteed on that path. This lets
+vLLM land first and adapters opt in as they are refactored. **A pre-#456 vLLM
+cannot drive these adapters at all**: it omits the four commands, so decode
+raises `TypeError`. Bump the vLLM pin along with tt-metal.
+
+All refactored generator APIs require direct callers, including demos and warmup
+code, to provide all four commands. No model-side fallback heuristics are
+restored. Any demo-side decision to retain traced inputs is made at the call
+site.
 
 `model_capabilities["supports_async_decode"]` is separate from contract
 versioning. It certifies that a vLLM wrapper supports split async readback and
@@ -175,7 +172,10 @@ A model wrapper may opt in only if all of the following hold:
 - Page tables can be refreshed without copying or rebinding token, position, or
   RoPE trace inputs.
 - All four reload commands are honored independently, without model-local
-  heuristics escalating page-table-only refresh into a full reload.
+  heuristics escalating page-table-only refresh into a full reload. An adapter
+  that rejects a command combination (see `require_full_input_reload`) must not
+  advertise this capability, since that is what stops vLLM from planning the
+  combination in the first place.
 - Slot remap applies before the forward to every persistent slot-indexed state
   that the forward reads, in both sampling modes. Dormant sampler state is also
   remapped exactly once after a successful host-sampling decode. For device
@@ -185,10 +185,9 @@ A model wrapper may opt in only if all of the following hold:
   explicit reload replaces them.
 
 If any item is unsupported, leave the capability absent or `False`. vLLM will
-disable async scheduling and issue a full input reload for every decode. The
-authoritative mode definitions, transition matrix, and correctness invariant
-live in the paired vLLM plugin document
-`plugins/vllm-tt-plugin/docs/decode-reload-contract.md`.
+disable async scheduling and issue a full input reload for every decode. Record
+the reason next to the capability: it is a deliberate throughput trade, and
+without a stated reason someone will flip it back.
 
 ## Pitfalls
 

@@ -136,6 +136,10 @@ class TT_Qwen3VLProcessingInfo(Qwen3VLProcessingInfo):
 class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     decode_input_update_contract = 1
 
+    # supports_async_decode=False: async decode assumes the sampled token and the
+    # advanced position stay resident in the traced decode inputs, but this model samples
+    # eagerly outside the trace (_tt_supports_decode_token_feedback=False), so every step
+    # needs its inputs restaged from host.
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,

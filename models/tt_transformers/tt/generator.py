@@ -1702,6 +1702,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         (gemma4's is rank-2; ``ttnn.sampling`` requires a rank-4 preallocated
         output). Returning None makes sampling allocate its own output instead
         of writing into ``device_inputs[0]``.
+
+        ``_tt_supports_decode_token_feedback`` is model-owned and defaults to True. It
+        governs this aliasing only; it does not force input reloads. A model that cannot
+        feed the token back also cannot support async decode, so its vLLM adapter must
+        leave ``supports_async_decode`` off, which is what makes vLLM send
+        ``reload_inputs=True`` every step.
         """
         if not getattr(model, "_tt_supports_decode_token_feedback", True):
             return None
