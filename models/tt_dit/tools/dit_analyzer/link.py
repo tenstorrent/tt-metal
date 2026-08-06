@@ -58,13 +58,18 @@ def link_stages(stages: Sequence[Tuple[str, Graph]], connect: bool = False) -> G
     if not stages:
         raise ValueError("link_stages needs at least one stage")
 
-    first_name, first = stages[0]
-    linked = Graph(name=" -> ".join(n for n, _ in stages), mesh=first.mesh, provenance=first.provenance)
+    first = stages[0][1]
+    linked = Graph(name=" -> ".join(s[0] for s in stages), mesh=first.mesh, provenance=first.provenance)
 
     prev_out: Optional[str] = None
     prev_mesh: Optional[str] = None
     outputs: List[str] = []
-    for i, (name, g) in enumerate(stages):
+    for i, entry in enumerate(stages):
+        # (name, graph) auto-wires the handoff by shape; (name, graph, in_sym) wires it
+        # explicitly -- needed when the pipeline reshapes between stages (DiT -> VAE
+        # unpatchify), so the previous output and this input have different shapes.
+        name, g = entry[0], entry[1]
+        in_override = entry[2] if len(entry) > 2 else None
         pfx = name + "/"
         mesh_id = None if i == 0 else name  # first stage is the primary mesh
         if mesh_id is not None:
@@ -79,19 +84,24 @@ def link_stages(stages: Sequence[Tuple[str, Graph]], connect: bool = False) -> G
             hs = pfx + "__enter"
             src = linked.symbols[prev_out]
             # when connected the handoff lands on this stage's mesh and carries the dist its
-            # matching entry expected, so this stage analyses exactly as it did standalone
-            wired = _primary_input(g, src.shape) if connect else None
+            # matching entry expected, so this stage analyses exactly as it did standalone. Its
+            # *shape* is the input's (a reshaping handoff differs from the previous output).
+            wired = (in_override or _primary_input(g, src.shape)) if connect else None
+            hshape = g.symbols[wired].shape if wired is not None else src.shape
             hmesh = mesh_id if connect else prev_mesh
-            linked.symbols[hs] = TensorSymbol(id=hs, shape=src.shape, dtype=src.dtype, value_id=hs, mesh=hmesh)
+            linked.symbols[hs] = TensorSymbol(id=hs, shape=hshape, dtype=src.dtype, value_id=hs, mesh=hmesh)
             if wired is not None and wired in g.placements:
                 linked.placements[hs] = Placement(dist=g.placements[wired].dist, region=g.placements[wired].region)
+            # connect=True: a demand-carrying readback+re-upload that reads each region from
+            # the fewest devices (so a replicated stage output is read once). Disconnected: a
+            # decorative device-0 readback that just marks the segment split.
             linked.nodes.append(
                 Node(
                     id=pfx + "__boundary",
-                    op="host_read",
+                    op="stage_boundary" if connect else "host_read",
                     inputs=[prev_out],
                     outputs=[hs],
-                    attrs={"devices": [0], "boundary": True},
+                    attrs={"boundary": True} if connect else {"devices": [0], "boundary": True},
                     label="stage boundary: %s" % name,
                     mesh=prev_mesh,
                 )
@@ -138,9 +148,9 @@ def link_stages(stages: Sequence[Tuple[str, Graph]], connect: bool = False) -> G
         prev_mesh = mesh_id
 
     if connect:  # only the final stage seeds demand; upstream stages are pulled through the boundaries
-        last_name, last_g = stages[-1]
+        last_name, last_g = stages[-1][0], stages[-1][1]
         outputs = [last_name + "/" + o for o in last_g.outputs]
     linked.outputs = outputs
-    linked.meta["stages"] = [n for n, _ in stages]
+    linked.meta["stages"] = [s[0] for s in stages]
     linked.meta["connected"] = connect
     return linked

@@ -320,7 +320,7 @@ class Graph:
         cur: List[Node] = []
         for n in self.nodes:
             cur.append(n)
-            if n.op == "host_read" and n.attrs.get("boundary"):
+            if n.op in ("host_read", "stage_boundary") and n.attrs.get("boundary"):
                 segs.append(cur)
                 cur = []
         if cur:

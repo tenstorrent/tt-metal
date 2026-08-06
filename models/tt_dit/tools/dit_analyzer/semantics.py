@@ -1622,6 +1622,68 @@ register(
 )
 
 
+def _stage_boundary_apply(c: ApplyCtx) -> None:
+    """A whole-pipeline stage boundary: read the previous stage's output back to host and
+    re-upload it as the next stage's input (phase 10c). The value survives the round trip;
+    the output takes the distribution the next stage's input expects (recorded on the
+    symbol's placement -- e.g. a replicated prompt), each device holding its shard of it."""
+    from .state import device_region
+
+    x = c.in_state(0)
+    ys = c.out_sym(0)
+    placed = c.graph.placements.get(ys.id)
+    dist = placed.dist if placed is not None else Dist.replicated(c.mesh)
+    regions = {d: device_region(c.mesh, ys, dist, d) for d in c.mesh.devices()}
+    c.define(0, dist, regions, x.value_id, x.tainted)
+
+
+def _stage_boundary_demand(c: DemandCtx) -> None:
+    """The host readback assembles whatever the next stage needs, reading each logical region
+    from **one** device that holds it (a minimal covering set), not a hard-coded device 0.
+
+    Replicated data is therefore read once -- so every other replica is exposed as redundant
+    (the `replicated_stage` finding) -- while a genuinely sharded output is read from every
+    shard (no false redundancy). This is what makes a stage's over-replication visible at the
+    boundary and keeps a sharded handoff honest.
+    """
+    xid = c.node.inputs[0]
+    xs = c.sym(xid)
+    ys = c.sym(c.node.outputs[0])
+    x = c.before.get(xid)
+    dem = c.demand_out(0)
+    if tuple(xs.shape) != tuple(ys.shape):
+        # a reshaping handoff (host unpatchify/reshape between stages) touches every element,
+        # so the whole previous output is read regardless of the next stage's demand
+        target = xs.full_region()
+    else:
+        target = RegionSet.empty(xs.ndim)
+        for dev in c.mesh.devices():
+            target = target.union(dem[dev])
+    if target.is_empty:
+        return
+    covered = RegionSet.empty(xs.ndim)
+    for dev in c.mesh.devices():
+        if covered.covers(target):
+            break
+        have = x.regions[dev] if x is not None else xs.full_region()
+        add = have.intersect(target).subtract(covered)
+        if not add.is_empty:
+            c.need(xid, dev, add)
+            covered = covered.union(add)
+
+
+register(
+    OpSpec(
+        "stage_boundary",
+        META,
+        _stage_boundary_apply,
+        _stage_boundary_demand,
+        preserves_value=True,
+        doc="Pipeline stage boundary: readback + re-upload, reading each region from one device (minimal covering).",
+    ),
+)
+
+
 # -----------------------------------------------------------------------------
 # fallback
 # -----------------------------------------------------------------------------

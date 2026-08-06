@@ -383,6 +383,42 @@ def test_connected_pipeline_reveals_a_cross_boundary_redundant_gather():
     assert "submesh" in repl[0].suggestion and repl[0].severity == "medium"
 
 
+def test_faithful_boundary_bridges_a_reshaping_handoff():
+    """A handoff can change shape — a host unpatchify/reshape between stages, as the pipeline
+    does DiT→VAE. Wired explicitly (`(name, graph, in_sym)`), the boundary reads the full
+    previous output, reshapes, and re-uploads; a replicated producer is still exposed as
+    over-replicated across the reshape.
+    """
+    from dit_analyzer.link import link_stages
+
+    enc = GraphBuilder("enc", MESH)
+    x = enc.input("x", [1, 256, 1024], shard={TP: 2})
+    enc_g = enc.finish([enc.all_gather(x, dim=2, mesh_axis=TP, label="g")])  # replicated [1,256,1024]
+    dec = GraphBuilder("dec", MESH)
+    y = dec.input("y", [1, 512, 512])  # reshape target: same volume, different shape
+    dec_g = dec.finish([dec.pointwise("act", [y], label="use")])
+    conn = analyze_graph(link_stages([("enc", enc_g), ("dec", dec_g, y.id)], connect=True))
+    assert any(f.rule == "replicated_stage" for f in conn.findings), [f.rule for f in conn.findings]
+
+
+def test_faithful_boundary_does_not_flag_a_sharded_handoff():
+    """The stage boundary reads back the full logical from a *minimal covering set* — a
+    replicated output is read once (exposing the replicas), but a genuinely sharded output
+    is read from every shard, so its gathers stay necessary. Here the encoder's output is
+    SP-sharded (TP-gathered), so both SP groups' data is consumed and there is no
+    replicated_stage — unlike the fully-replicated encoder, which is flagged.
+    """
+    from dit_analyzer.link import link_stages
+
+    enc = GraphBuilder("enc", MESH)
+    x = enc.input("x", [1, 256, 1024], shard={SP: 1, TP: 2})  # SP shards dim1, TP shards dim2
+    enc_g = enc.finish([enc.all_gather(x, dim=2, mesh_axis=TP, label="tp")])  # TP-gathered -> SP-sharded
+    dec = GraphBuilder("dec", MESH)
+    dec_g = dec.finish([dec.pointwise("act", [dec.input("y", [1, 256, 1024])], label="use")])
+    conn = analyze_graph(link_stages([("enc", enc_g), ("dec", dec_g)], connect=True))
+    assert not any(f.rule == "replicated_stage" for f in conn.findings), [f.title for f in conn.findings]
+
+
 def test_symmetric_halo_is_necessary_but_asymmetric_halo_shrinks():
     """participant_shrink compares needed (output frame) with local (input frame). A halo
     grows the frame by pad_left, so without reconciling the two a *symmetric* halo -- where
