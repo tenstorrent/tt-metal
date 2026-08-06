@@ -576,6 +576,7 @@ def _prefill_forward_single(
             kv_actual_global=chunk_offset,
             layer_idx=ring_layer_idx,
             num_layers=ring_num_layers,
+            ccl_manager=ccl_manager,
         )
     # Chunks after the first read history through the ring; the local shard alone holds
     # a strided subset of the prefix.
@@ -599,7 +600,14 @@ def _prefill_forward_single(
             num_local_kv_heads=num_local_kv_heads_ring,
             head_dim=config.head_dim,
             max_seq_len=ring_max_seq_len,
-            logical_n=chunk_offset + seq_len * cp,
+            # logical_n sizes the ring gather at program-create time
+            # (compute_gather_valid_Ht = ceil(logical_n / chunk_global) slabs) and is
+            # re-patched per dispatch. A trace replay does neither, so a per-chunk value
+            # freezes the gather at the capturing chunk's history and later replays
+            # silently attend over a truncated prefix. Under trace we therefore size the
+            # gather to the FULL cache once and let the on-device kv_actual_isl metadata
+            # mask the not-yet-written tail, which is per-chunk and read from DRAM.
+            logical_n=(getattr(ccl_manager, "ring_logical_n_override", None) or (chunk_offset + seq_len * cp)),
             kv_actual_global=chunk_offset,
             sliding_window=sliding_window,
             scale=1.0,
