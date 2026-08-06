@@ -435,7 +435,11 @@ ProgramDescriptor create_descriptor_rm_width_nway(
             .buffer_index = kCbScratch, .data_format = cb_data_format, .page_size = scratch_page}}},
     });
 
-    std::vector<uint32_t> reader_ct = {kCbIn, kCbScratch, n_inputs, out_page, kReadBatch};
+    // All N inputs share one memory configuration (enforced by
+    // supported_by_codegen()), so one buffer's transport alignment answers
+    // for every input's direct-write destination-offset check.
+    const uint32_t noc_alignment = static_cast<uint32_t>(input_tensors[0].buffer()->alignment());
+    std::vector<uint32_t> reader_ct = {kCbIn, kCbScratch, n_inputs, out_page, kReadBatch, noc_alignment};
     TensorAccessorArgs(*input_tensors[0].buffer()).append_to(reader_ct);
 
     KernelDescriptor reader_desc;

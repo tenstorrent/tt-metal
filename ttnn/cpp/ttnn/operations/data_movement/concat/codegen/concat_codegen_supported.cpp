@@ -41,6 +41,28 @@ bool nonwidth_cb_fits(const std::vector<Tensor>& input_tensors, const tt::tt_met
         .has_value();
 }
 
+// Mirrors reader_concat_rm_width_nway.cpp's runtime direct-write predicate: a
+// stick whose physical page pitch equals its logical size has no trailing pad
+// bytes to trim, and a destination offset that is a multiple of the shared
+// transport alignment is a legal NOC endpoint. Every input sits in the same
+// memory configuration (enforced above for N>2), so one buffer's alignment
+// answers for all. Only when every input satisfies both does the reader take
+// the batched-read fast path instead of the per-input scratch-staged byte copy.
+bool width_nway_all_direct(const std::vector<Tensor>& input_tensors) {
+    const uint32_t alignment = static_cast<uint32_t>(input_tensors[0].buffer()->alignment());
+    uint32_t offset = 0;
+    for (const auto& t : input_tensors) {
+        auto* buf = t.buffer();
+        const uint32_t stick_size = static_cast<uint32_t>(buf->page_size());
+        const uint32_t page_size = static_cast<uint32_t>(buf->aligned_page_size());
+        if (stick_size != page_size || offset % alignment != 0) {
+            return false;
+        }
+        offset += stick_size;
+    }
+    return true;
+}
+
 // Projected per-core CB fit for the width RM builders (build_concat_rm_width /
 // build_concat_rm_width_nway): the write-batched output CB plus a fixed-size
 // scratch CB. Mirrors concat_codegen_program_factory.cpp's
@@ -133,20 +155,22 @@ bool supported_by_codegen(
 }
 
 bool is_demoted(const std::vector<Tensor>& input_tensors, uint32_t dim) {
-    // General: reader_concat_rm_width_nway.cpp (build_concat_rm_width_nway) has
-    // no direct-write fast path -- every input's stick is staged through the
-    // scratch CB and copied out one byte at a time (kernel lines computing
-    // `target[byte] = src[byte]` per input, every output page), unlike the
-    // two-input width reader's aligned direct-write branch. This per-byte copy
-    // dominates regardless of shape or dtype, so any width-dim concat with
-    // more than two inputs is demoted unconditionally. Confirmed by measured
-    // regression across 2D/3D/4D shapes and all 3 in-scope dtypes (phase-7
-    // seeds: {32,32}/{32,64}/{32,96} dim=-1; {1,32,32}/{1,32,64}/{1,32,32}
-    // dim=2; {1,1,32,32}x3 dim=-1) -- no shape in that set was fast, so an
-    // exact-match list would only under-generalize the mechanism.
+    // reader_concat_rm_width_nway.cpp now carries the same aligned direct-write
+    // fast path as the two-input width reader (every read batched into the
+    // reserved output page, one barrier, no copy) whenever every input's stick
+    // fills its page exactly and lands at an offset that is a multiple of the
+    // shared transport alignment. Only the remaining per-input scratch-staged
+    // byte copy pays the measured regression (phase-7 seeds: {32,32}/{32,64}/
+    // {32,96} dim=-1; {1,32,32}/{1,32,64}/{1,32,32} dim=2; {1,1,32,32}x3
+    // dim=-1 -- all of them 64 B-aligned Blackhole sticks that, prior to the
+    // kernel fix, fell through to the byte-copy path unconditionally). Demote
+    // width-dim N-way concat only when that fallback would actually fire.
     const uint32_t ndim = input_tensors[0].logical_shape().rank();
     const bool is_width = (dim == ndim - 1);
-    return is_width && input_tensors.size() > 2;
+    if (!is_width || input_tensors.size() <= 2) {
+        return false;
+    }
+    return !width_nway_all_direct(input_tensors);
 }
 
 bool supported_execution_controls(unsigned int groups, const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
