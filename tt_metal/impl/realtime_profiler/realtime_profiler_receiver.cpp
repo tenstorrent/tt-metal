@@ -955,18 +955,36 @@ uint32_t RealtimeProfilerReceiver::drain_all_devices(
 uint64_t RealtimeProfilerReceiver::drain_on_shutdown(std::vector<uint32_t>& page_buf) {
     constexpr uint32_t kShutdownDrainQuietRounds = 10;
     constexpr auto kShutdownDrainQuietBackoff = std::chrono::milliseconds(1);
+    // The socket's own teardown barrier waits for the host to have acknowledged everything the device sent, so leaving
+    // this loop with pages outstanding turns into a barrier timeout in the D2H socket destructor rather than anything
+    // reported here. Bounded so a device that never goes quiet cannot hang teardown either.
+    constexpr auto kShutdownDrainDeadline = std::chrono::seconds(5);
+    const auto give_up_at = std::chrono::steady_clock::now() + kShutdownDrainDeadline;
+
     uint64_t num_pages_drained = 0;
     uint32_t quiet_rounds = 0;
-    while (quiet_rounds < kShutdownDrainQuietRounds) {
+    while (quiet_rounds < kShutdownDrainQuietRounds && std::chrono::steady_clock::now() < give_up_at) {
+        // Probed every round rather than once at the end: a staged record is not published until a probe has read past
+        // it, and with the drain loop stopped nothing else takes probes.
+        for (DeviceState& dev_state : devices_) {
+            dev_state.clock_sync->resync();
+        }
         const uint32_t num_pages = drain_all_devices(std::chrono::steady_clock::now(), page_buf);
-        if (num_pages != 0) {
-            num_pages_drained += num_pages;
+        num_pages_drained += num_pages;
+        // Asked of the socket rather than inferred from num_pages: a drain also reads zero pages when staging has no
+        // headroom, and treating that as quiet would leave the FIFO unread.
+        bool outstanding = false;
+        for (const DeviceState& dev_state : devices_) {
+            outstanding = outstanding || dev_state.socket->pages_available() != 0 || !dev_state.staged.empty();
+        }
+        if (num_pages != 0 || outstanding) {
             quiet_rounds = 0;
         } else {
             quiet_rounds++;
-            std::this_thread::sleep_for(kShutdownDrainQuietBackoff);
         }
+        std::this_thread::sleep_for(kShutdownDrainQuietBackoff);
     }
+
     // Nothing probes after this thread stops, so the last records need their far side now.
     bool published = false;
     for (auto& dev_state : devices_) {
@@ -975,6 +993,17 @@ uint64_t RealtimeProfilerReceiver::drain_on_shutdown(std::vector<uint32_t>& page
     }
     if (published) {
         realtime_profiler_service_->wake_consumers();
+    }
+
+    for (const DeviceState& dev_state : devices_) {
+        if (const uint32_t left = dev_state.socket->pages_available(); left != 0) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {} still had {} page(s) unread when the shutdown drain gave up; the D2H "
+                "socket's teardown barrier will wait for them",
+                dev_state.chip_id,
+                left);
+        }
     }
     return num_pages_drained;
 }

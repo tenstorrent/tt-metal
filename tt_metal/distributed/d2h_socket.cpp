@@ -570,8 +570,8 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
                     "Timeout waiting for host to acknowledge data over D2H socket. Bytes sent: {}, Bytes "
                     "acknowledged: {}. Barrier was potentially issued on host before all required reads were "
                     "completed.",
-                    bytes_sent_,
-                    bytes_sent_value);
+                    bytes_sent_value,
+                    bytes_acked_);
             }
         }
     }
