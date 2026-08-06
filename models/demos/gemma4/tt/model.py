@@ -342,6 +342,12 @@ class Gemma4Model:
         self.final_logit_softcapping = hf_config.final_logit_softcapping
         self.embed_scale = hf_config.hidden_size**0.5
         self.ccl_manager = ccl_manager
+        # Pinned RoPE slices for traced chunked prefill; see _refresh_rope_prefill.
+        # Empty and inactive unless a caller opts in, so the untraced path is unchanged.
+        self._rope_prefill_buffers = {}
+        self._rope_prefill_pinned = False
+        # When True the caller refreshes the ring metadata itself, outside any trace.
+        self._ring_metadata_external = False
         self.max_seq_len = max_seq_len
         self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
         # Host restage every step only when PLI must be recomputed from the token.
@@ -854,9 +860,37 @@ class Gemma4Model:
         if isinstance(start_pos, ttnn.Tensor):
             return (cos, sin)
         if seq_len is not None:
+            if self._rope_prefill_pinned:
+                # Traced chunked prefill: hand back a buffer at a FIXED address whose
+                # contents were refreshed for this chunk (see _refresh_rope_prefill).
+                # Slicing here would allocate a new tensor per chunk, and a trace records
+                # the address it saw at capture — every replay would then re-read chunk
+                # N's RoPE rows regardless of which chunk is running.
+                return self._rope_prefill_buffers[(layer_type, seq_len)]
             cos = cos[:, :, start_pos : start_pos + seq_len, :]
             sin = sin[:, :, start_pos : start_pos + seq_len, :]
         return (cos, sin)
+
+    def _refresh_rope_prefill(self, seq_len, start_pos):
+        """Point the pinned RoPE buffers at ``[start_pos, start_pos+seq_len)``.
+
+        Runs on the host side of a chunk, outside any traced region: it copies the
+        chunk's slice into buffers whose addresses stay put, so a captured trace reads
+        the right positions on every replay. Buffers are allocated on first use, one
+        pair per (layer_type, seq_len) — with two layer types and one prefill chunk
+        size that is two pairs for the whole model.
+        """
+        for layer_type, (cos, sin) in self.rope_caches.items():
+            key = (layer_type, seq_len)
+            if key not in self._rope_prefill_buffers:
+                self._rope_prefill_buffers[key] = (
+                    ttnn.clone(cos[:, :, 0:seq_len, :]),
+                    ttnn.clone(sin[:, :, 0:seq_len, :]),
+                )
+            cos_buf, sin_buf = self._rope_prefill_buffers[key]
+            ttnn.copy(cos[:, :, start_pos : start_pos + seq_len, :], cos_buf)
+            ttnn.copy(sin[:, :, start_pos : start_pos + seq_len, :], sin_buf)
+        self._rope_prefill_pinned = True
 
     def __call__(
         self,
@@ -992,7 +1026,9 @@ class Gemma4Model:
         # reads the same two metadata tensors, and they must be written from the host
         # outside any traced region — a trace captures addresses, not values, which is the
         # whole point of routing these through DRAM instead of runtime args.
-        if not is_decode and chunk_start_idx is not None:
+        # Skipped when a traced caller owns the update: copy_host_to_device_tensor has to
+        # run outside the captured region, or the trace would replay a stale write.
+        if not is_decode and chunk_start_idx is not None and not self._ring_metadata_external:
             from models.demos.gemma4.tt.ccl import cp_degree as _cp_degree
 
             if _cp_degree(self.mesh_config) > 1:
