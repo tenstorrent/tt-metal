@@ -134,10 +134,16 @@ Design, in the order to build it:
        weight_matrix_height = b.padded_shape()[2];
        weight_matrix_width  = b.padded_shape()[3];
 
-   from the tensor, not from the conv dimensions, and the CB and the reader's fetch count follow from
-   those. A longer prepared weight therefore flows through allocation on its own. That reduces the
-   work to: Python builds the longer weight, one compile-time arg tells the kernel how many trailing
-   tiles are parameters rather than taps, and the kernel consumes them.
+   from the tensor -- **but that is only half the story, and the optimistic reading of it is wrong.**
+   The CB's per-block content comes from the conv dimensions, not the tensor (same file, ~line 477):
+
+       weight_block_h_ntiles  = act_block_h_ntiles * (coalesce ? filter_w : 1)
+       weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles
+
+   So appending to the weight tensor grows the total height while the per-block fetch stays put, and
+   the appended tiles are simply never read. Extending the weights CB therefore **does** require
+   changing the host block sizing, which is most of the cost a separate CB would have carried. Weigh
+   the two again before choosing; the weights-CB route is no longer obviously cheaper.
 
    The real risk is **CB bookkeeping**: the kernel must pop exactly what the reader pushed or the op
    desyncs, and the two accumulate paths pop differently (see below). Expect to need a compile-and-run
