@@ -1,0 +1,4 @@
+{
+  "arch": "LagunaForCausalLM",
+  "main_class": "models.autoports.poolside_laguna_xs_2_1.tt.generator_vllm:LagunaForCausalLM"
+}

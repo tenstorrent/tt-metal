@@ -228,7 +228,10 @@ class LagunaForCausalLM:
         sliding_window = int(getattr(text_config, "sliding_window", 0) or 0)
         num_kv_heads = model_config.get_num_kv_heads(parallel_config)
         head_size = model_config.get_head_size()
-        from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
+        try:  # vLLM moved this constant across versions (fork 0.16 vs stock 0.24) — tolerate both.
+            from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
+        except ImportError:
+            from vllm.utils import STR_DTYPE_TO_TORCH_DTYPE
 
         dtype = (
             model_config.dtype
