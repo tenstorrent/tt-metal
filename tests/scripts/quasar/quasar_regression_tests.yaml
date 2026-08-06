@@ -3,7 +3,9 @@
 # Structure:
 #   <group>:              gtest binary under build/test/tt_metal/, or pytest file path
 #                         relative to TT_METAL_HOME
-#     - filter: <pattern> gtest filter glob, or pytest node id after :: (e.g. test_foo)
+#     - filter: <pattern> (optional) gtest filter glob, or pytest node id after ::
+#                         (e.g. test_foo). Omit or use "" to run all tests in the
+#                         gtest binary / pytest file.
 #       config: <config>  Simulator grid (emu-quasar-<config>): 1x3, 2x3, 2x3_DISPATCH
 #       runner: <type>    (optional) gtest (default) or pytest
 #       env:              (optional) Extra environment variables as key: value pairs
@@ -169,11 +171,11 @@ unit_tests_debug_tools:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  # - filter: "*TestWatcherTileCounterLogBypass*"
-  #   config: 1x3
-  #   back2back: true
-  #   env:
-  #     TT_METAL_SLOW_DISPATCH_MODE: 1
+  - filter: "*TestWatcherTileCounterLogBypass*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarMultiDMOutOfBoundsArgDetection*"
     config: 1x3
