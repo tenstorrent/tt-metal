@@ -160,7 +160,7 @@ n/a — one kernel set over the output shard grid; every core gets identical RTA
 
 | kernel source | relationship | `_metal2` fork beside it? | rung taken |
 |---|---|---|---|
-| `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` | *borrowed* — bound by 18 other op directories (`copy/typecast`, `data_movement/{bcast,concat,copy,permute,reshape_on_device,tilize,transpose}`, `embedding`, `kv_cache`, `reduction/{generic,prod}`, several `experimental/*`, …). **Not** `matmul` or `slice` — each has its own private same-named copy; **not** this op's block factory — it binds the `_wh` sibling. | none beside the original (`experimental/quasar/` has one, off-limits). A fork in a *consumer's* directory appeared later via rebase — see the port report. | **create the fork** beside the original |
+| `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` | *borrowed* — bound by 18 other op directories (`copy/typecast`, `data_movement/{bcast,concat,copy,permute,reshape_on_device,tilize,transpose}`, `embedding`, `kv_cache`, `reduction/{generic,prod}`, several `experimental/*`, …). **Not** `matmul` or `slice` — each has its own private same-named copy; **not** this op's block factory — it binds the `_wh` sibling. | **now yes** — #51771 (Gelu Backwards) landed one beside the original while this port was in review. None existed at planning time (only `experimental/quasar/`, off-limits), so the plan was written for *create*. | **reuse the existing fork** (was *create*; see the port report for how the rung changed on rebase) |
 | `ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp` | *borrowed* — bound by `sharded/interleaved_to_sharded`, `sharded_partial/interleaved_to_sharded_partial`, `data_movement/{tilize,transpose,untilize}`, `experimental/padded_slice`, `experimental/transformer/nlp_kv_cache_load_slice`, `reduction/generic` | no | **create the fork** beside the original |
 | `ttnn/cpp/ttnn/kernel/compute/tilize.cpp` | *borrowed* from the shared kernel pool `ttnn/cpp/ttnn/kernel/` — also bound by all three `data_movement/tilize` factories | no | **create the fork** beside the original |
 | `…/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_*.cpp` | *own*, not bound by any other op (`grep -rl` over `ttnn/cpp/ttnn/operations` returns only this op) | n/a | convert **in place** |
@@ -168,8 +168,10 @@ n/a — one kernel set over the output shard grid; every core gets identical RTA
 `data_movement/common/kernels/common.hpp` (`tt_memmove`) is called only from the block-interleaved
 reader, which this pass does not port — so no kernel-lib escape is exercised.
 
-Each fork gets a pointer comment in the legacy original per
-*Caution: Porting a shared kernel*; each is reported under "Open items for downstream".
+Each fork this port *creates* gets a pointer comment in the legacy original per
+*Caution: Porting a shared kernel*; each is reported under "Open items for downstream". For the
+reused fork, both sides already carried that comment — this port adds only the tracking-issue
+reference ([#52228](https://github.com/tenstorrent/tt-metal/issues/52228)).
 
 ### Flags
 
@@ -331,10 +333,11 @@ SingleCore and MultiCoreSharded have no work-split multiplicity.
   `dfb_run_overrides` entry is needed — the backing L1 address resolves from the `TensorArgument`.
 - **Preserved work-split multiplicity**: two same-source compute KernelSpecs in MultiCoreDefault over
   disjoint node sets, each keeping its own per-group CTA.
-- **Porting a shared kernel** (three instances, all on the *create the fork* rung): the two donor
-  writers and the pooled tilize compute kernel are forked `_metal2` beside their originals, with a
-  pointer comment added to each original. The `experimental/quasar/` copies of two of these are
-  off-limits and were not consulted.
+- **Porting a shared kernel** (three instances): the sharded donor writer and the pooled tilize
+  compute kernel are forked `_metal2` beside their originals, with a pointer comment added to each
+  original (*create the fork* rung). The interleaved donor writer ended up on the *reuse* rung
+  instead — #51771 landed an identical fork beside the original mid-review, so this port binds that
+  one. The `experimental/quasar/` copies of these kernels are off-limits and were not consulted.
 - **Runtime varargs for a genuine indexed collection**: the MultiCoreDefault reader's
   block-representation stream is a variable-count, loop-indexed run whose length is a runtime value
   (`n_block_reps`), so it stays a vararg block rather than being named. Because the length differs

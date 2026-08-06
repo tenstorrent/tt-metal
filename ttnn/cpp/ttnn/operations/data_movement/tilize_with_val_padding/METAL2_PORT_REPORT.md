@@ -107,16 +107,23 @@ running on silicon — commands in [Test set](#test-set).
    should own it as a small standalone change with its own before/after dispatch-size check, at which
    point this op stops blocking the removal.
 
-2. **Three shared kernels had to be forked because their only existing Metal 2.0 versions are in
-   `experimental/quasar/`.** *Owner: the shared-kernel owners (eltwise/unary, data_movement/sharded,
+2. **Two shared kernels had to be forked because their only existing Metal 2.0 versions are in
+   `experimental/quasar/`.** *Owner: the shared-kernel owners (data_movement/sharded and the
    `ttnn/cpp/ttnn/kernel/` pool).*
-   `writer_unary_interleaved_start_id_metal2.cpp`, `writer_unary_sharded_metal2.cpp` and
-   `tilize_metal2.cpp` are new forks created beside their originals (details under
-   [Open items for downstream](#open-items-for-downstream)). In each case a converted copy already
-   exists under `experimental/quasar/`, but that tree is off-limits to a production port, so the work
-   was redone from the recipe. Every subsequent porter of any of the ~30 co-borrowing ops will now
-   *reuse* these forks rather than fork again — but the duplication cost of the quasar tree is real and
-   worth quantifying for whoever plans the sunset.
+   `writer_unary_sharded_metal2.cpp` and `tilize_metal2.cpp` are new forks created beside their
+   originals (details under [Open items for downstream](#open-items-for-downstream)). For both, a
+   converted copy already exists under `experimental/quasar/`, but that tree is off-limits to a
+   production port, so the work was redone from the recipe. Every subsequent porter of the
+   co-borrowing ops will now *reuse* these forks rather than fork again — but the duplication cost of
+   the quasar tree is real and worth quantifying for whoever plans the sunset.
+
+   The third kernel, `eltwise/unary/.../writer_unary_interleaved_start_id.cpp`, was forked by this
+   port too, but **#51771 (Gelu Backwards) landed an identical fork at the same path first**, so on
+   rebase this port dropped its own copy and now *reuses* that one — the recipe's rung 1. Worth
+   recording as a positive signal rather than a handoff: two ports arrived independently at the same
+   file path *and* the same binding vocabulary (`dfb::out`, `tensor::dst`, `args::num_pages`,
+   `args::start_id`), with byte-identical kernel bodies. The beside-the-original convention converges
+   on its own when both sides follow it.
 
 3. **No compile/test verification possible in this environment.** *Owner: invoker.*
    See the verification note under [Outcome](#outcome). `clang-20` is absent from this shell, so
@@ -196,10 +203,17 @@ running on silicon — commands in [Test set](#test-set).
   under rung 1 as written, and rung 2 then manufactures a second copy. The only nearby provision is
   *"a fork you found unusable and handed off instead belongs under Handoff points"*, which does not
   fit either (the file is perfectly usable; it is just in the wrong place).
-  **This gap is the direct cause of the duplicate now in the tree.** The recipe needs (a) a stated
+  **This gap is the direct cause of the duplicate still in the tree.** The recipe needs (a) a stated
   rule that a fork lives beside its original, and (b) a rung for the mislocated case — most likely
   *relocate it beside the original, then reuse*, since that converges instead of multiplying. Filed as
   part of issue #52228.
+
+  A late data point that sharpens the recommendation: when #51771 (Gelu Backwards) and this port both
+  forked the *same* kernel **beside the original**, the collision resolved itself — identical path,
+  identical binding vocabulary, byte-identical bodies, so the rebase was a one-line-per-side comment
+  merge and one copy survived. When #51397 forked the same kernel into its *own* directory, the copy
+  persisted and still needs manual consolidation. Same situation, two conventions, opposite outcomes —
+  that is the argument for writing the rule down.
 
 - **`num_runtime_varargs_per_node` is undocumented in the recipe.** The recipe's vararg guidance
   (whitelist rule 4, *Caution: Avoid varargs*) covers *whether* something is a vararg but not the
@@ -247,16 +261,16 @@ running on silicon — commands in [Test set](#test-set).
 
 ### Shared kernel touches
 
-All three are the *create the fork* rung: a new `_metal2` file beside the original, plus a
-keep-in-sync comment in the original. Both sides of each pair now also carry the tracking issue,
-[#52228](https://github.com/tenstorrent/tt-metal/issues/52228), which holds the consumer lists and the
-sunset plan.
+One kernel lands on the *reuse an existing fork* rung, two on *create the fork* (a new `_metal2` file
+beside the original, plus a keep-in-sync comment in the original). Both sides of every pair now carry
+the tracking issue, [#52228](https://github.com/tenstorrent/tt-metal/issues/52228), which holds the
+consumer lists and the sunset plan.
 
-| # | kernel | fork created | sync comment landed | remaining unmigrated consumers |
+| # | kernel | rung taken | `_metal2` fork | remaining unmigrated consumers |
 |---|---|---|---|---|
-| 1 | `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` | `…/writer_unary_interleaved_start_id_metal2.cpp` | both sides | **18 op dirs** (~28 factories): `copy/typecast`, `data_movement/{bcast,concat,copy,permute,reshape_on_device,tilize,transpose}`, `eltwise/unary_backward/{gelu_bw,tanh_bw}`, `embedding`, `examples/example`, `experimental/matmul/attn_matmul`, `experimental/transformer/{nlp_concat_heads,nlp_concat_heads_boltz}`, `experimental/unary_backward/gelu_backward`, `kv_cache`, `reduction/{generic,prod}` |
-| 2 | `ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp` | `…/writer_unary_sharded_metal2.cpp` | both sides | **8 op dirs** (10 factories): `sharded/interleaved_to_sharded`, `sharded_partial/interleaved_to_sharded_partial`, `data_movement/{tilize,transpose,untilize}`, `experimental/padded_slice`, `experimental/transformer/nlp_kv_cache_load_slice`, `reduction/generic` |
-| 3 | `ttnn/cpp/ttnn/kernel/compute/tilize.cpp` (shared pool, not an op dir) | `ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp` | both sides | **1 op dir**: all three `data_movement/tilize` factories (`tilize_{single_core,multi_core_default,multi_core_sharded}_program_factory.cpp`) |
+| 1 | `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` | **reused** — no new file; the fork came from #51771 (Gelu Backwards). This port only adds the issue reference to the comments on both sides. | `…/writer_unary_interleaved_start_id_metal2.cpp` | **18 op dirs** (~28 factories): `copy/typecast`, `data_movement/{bcast,concat,copy,permute,reshape_on_device,tilize,transpose}`, `eltwise/unary_backward/{gelu_bw,tanh_bw}`, `embedding`, `examples/example`, `experimental/matmul/attn_matmul`, `experimental/transformer/{nlp_concat_heads,nlp_concat_heads_boltz}`, `experimental/unary_backward/gelu_backward`, `kv_cache`, `reduction/{generic,prod}` |
+| 2 | `ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp` | **created**, sync comment on both sides | `…/writer_unary_sharded_metal2.cpp` | **8 op dirs** (10 factories): `sharded/interleaved_to_sharded`, `sharded_partial/interleaved_to_sharded_partial`, `data_movement/{tilize,transpose,untilize}`, `experimental/padded_slice`, `experimental/transformer/nlp_kv_cache_load_slice`, `reduction/generic` |
+| 3 | `ttnn/cpp/ttnn/kernel/compute/tilize.cpp` (shared pool, not an op dir) | **created**, sync comment on both sides | `ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp` | **1 op dir**: all three `data_movement/tilize` factories (`tilize_{single_core,multi_core_default,multi_core_sharded}_program_factory.cpp`) |
 
 Two corrections to the consumer list for fork 1, both caught in review of this PR. `matmul` is **not**
 a consumer — it has its own private same-named copy at
@@ -266,16 +280,21 @@ either: it binds the `_wh` *sibling* source
 (`writer_unary_interleaved_start_id_wh.cpp`), a different file. Both were the recipe's
 "another op's same-named private copy is not a consumer" trap, missed on the first pass.
 
-**A second fork of kernel 1 already exists**, added by #51397 (typecast) at
+**How fork 1 became a reuse.** This port originally *created* it: at port time the only converted copy
+beside the original was in `experimental/quasar/`, which is off-limits. #51771 (Gelu Backwards) then
+merged the same fork at the same path, and the rebase surfaced it as an add/add conflict. Resolution
+was to take the merged file wholesale — safe because the kernel bodies are byte-identical and the
+binding vocabulary matches exactly (`dfb::out`, `tensor::dst`, `args::num_pages`, `args::start_id`,
+same `OUT_SHARDED` / `BACKWARDS` defines), so this op's `KernelSpec`s needed no change. Net effect on
+this pair: 11 added comment lines, zero code lines.
+
+**A third copy of kernel 1 still exists**, added by #51397 (typecast) at
 `copy/typecast/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp` — in the
-*consumer's* directory rather than beside the original. It is functionally identical to this port's
-fork; the whole substantive diff is the accessor name (`tensor::output` vs `tensor::dst`). It was not
-visible at port time (this branch predates #51397; the collision appeared on rebase), and the recipe's
-reuse rung is explicitly *"reuse the `_metal2` fork if one already exists **beside the original**"*
-(§Crossing the boundary; repeated in kernel-side rule 9 and the inventory step), which a
-consumer-directory fork does not satisfy — so *create beside the original* remained the correct rung.
-Consolidating the two is issue #52228's job; the fork's header comment points at the duplicate so a
-change to one is not silently missed on the other. See also the Friction gap below.
+*consumer's* directory rather than beside the original, and functionally identical apart from naming
+the accessor `tensor::output`. That one is now the sole outlier: the canonical fork beside the
+original is what both #51771 and this port converge on. Consolidating it is issue #52228's job; the
+canonical fork's header comment points at it so a change to one is not silently missed on the other.
+See also the Friction gap below.
 
 Binding vocabulary each fork now fixes for future reusers (documented in each fork's header comment):
 - fork 1: `dfb::out` (CONSUMER), `tensor::dst`, `args::num_pages`, `args::start_id`; optional defines
