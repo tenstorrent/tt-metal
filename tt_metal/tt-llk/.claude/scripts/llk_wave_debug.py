@@ -26,6 +26,7 @@ def main() -> int:
         )
         return 2
 
+    # Forward arguments as an argv vector, never through a shell or generated code.
     os.execv(
         sys.executable,
         [sys.executable, str(entrypoint), *sys.argv[1:]],

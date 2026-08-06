@@ -1,6 +1,10 @@
 ---
 name: llk-wave-debug
-description: Inspect VCS/FSDB waveforms to localize a Quasar LLK runtime failure. Use when a test hangs, times out, or mismatches and log/source debugging cannot pin the boundary. Quasar only; not for compile errors.
+description: >-
+  Inspect VCS/FSDB waveforms to localize a Quasar LLK runtime hang, timeout, or
+  mismatch when log/source debugging cannot pin the boundary. Use only after
+  the simulator reaches device-ready; not for compile, pre-device-ready
+  simulator, or confirmed environment failures. Quasar only.
 user_invocable: true
 ---
 
@@ -23,9 +27,6 @@ running the deterministic diagnosis.
 nothing else; `--arch blackhole` or `--arch wormhole` fails with
 `unsupported architecture ... currently available: quasar`. For a WH/BH runtime
 failure use `/debug-kernel` instead.
-
-Do not invoke this skill for compilation failures, simulator failures before the
-device-ready marker, or confirmed environment failures.
 
 ## Inputs
 
@@ -153,8 +154,8 @@ the evidence establishes that it is the earliest causal boundary. Include the
 
 Read the private command reference before reaching for a subcommand:
 
-```text
-$LLK_CODEGEN_PRIVATE_ROOT/tools/llk_wave_debug/codegen/llk_wave_debug/README.md
+```bash
+cat "${LLK_CODEGEN_PRIVATE_ROOT:-/proj_sw/user_dev/llk_code_gen}/tools/llk_wave_debug/codegen/llk_wave_debug/README.md"
 ```
 
 It documents every subcommand, the available signal profiles, and the
