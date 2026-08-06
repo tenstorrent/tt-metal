@@ -315,6 +315,15 @@ def sample_speech_latents(
     _use_precond = head_runner is diffusion_head and hasattr(diffusion_head, "forward_pre_cond")
     cond_proj = diffusion_head.project_condition(cond_combined) if _use_precond else None
 
+    # The adaLN modulations depend only on cond_proj (frame-constant) and t_embs (schedule-constant),
+    # so batch all num_steps of them into one matmul per head layer before the loop: each adaLN
+    # weight is read once per frame instead of once per step.  Byte-identical — see
+    # TTDiffusionHead.precompute_modulations.  Needs the precomputed t_embs (traced path supplies
+    # them); without t_embs the per-step path stays.
+    mod = None
+    if _use_precond and t_embs is not None and hasattr(diffusion_head, "precompute_modulations"):
+        mod = diffusion_head.precompute_modulations(cond_proj, list(t_embs)[:num_steps])
+
     for step_idx, t_val in enumerate(scheduler.timesteps):
         # Expand sample to CFG batch: [2, 1, 1, latent]
         sample_expanded = ttnn.concat([sample, sample], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -341,7 +350,9 @@ def sample_speech_latents(
 
         # Run diffusion head on CFG batch (hoisted cond_proj when using the TTDiffusionHead)
         if _use_precond:
-            eps_combined = diffusion_head.forward_pre_cond(sample_expanded, t_tensor, cond_proj, t_emb=t_emb)
+            eps_combined = diffusion_head.forward_pre_cond(
+                sample_expanded, t_tensor, cond_proj, t_emb=t_emb, mod=mod, step_idx=step_idx
+            )
         else:
             eps_combined = head_runner(sample_expanded, t_tensor, cond_combined)
 
