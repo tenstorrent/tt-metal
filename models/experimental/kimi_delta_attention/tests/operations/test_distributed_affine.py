@@ -39,6 +39,9 @@ def _serial_prefix(
     transform_b: torch.Tensor,
     initial_state: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    transform_a = transform_a.to(torch.float32)
+    transform_b = transform_b.to(torch.float32)
+    initial_state = initial_state.to(torch.float32)
     entries = [initial_state]
     prefix_a, prefix_b = transform_a[0], transform_b[0]
     for rank in range(1, transform_a.shape[0]):
@@ -51,10 +54,11 @@ def _to_device(
     tensor: torch.Tensor,
     mesh_device: ttnn.MeshDevice,
     mesh_dims: tuple[int | None, int | None],
+    dtype: ttnn.DataType = ttnn.float32,
 ) -> ttnn.Tensor:
     return ttnn.from_torch(
         tensor,
-        dtype=ttnn.float32,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -122,9 +126,13 @@ def _all_gather_oracle(
 
 
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+@pytest.mark.parametrize("affine_summary_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("recurrent_state_dtype", [ttnn.float32, ttnn.bfloat16])
 def test_distributed_affine_prefix_matches_serial_and_all_gather(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
+    affine_summary_dtype: ttnn.DataType,
+    recurrent_state_dtype: ttnn.DataType,
 ) -> None:
     sp_axis = 1 - tensor_parallel_axis
     sp_size = tuple(mesh_device.shape)[sp_axis]
@@ -142,9 +150,9 @@ def test_distributed_affine_prefix_matches_serial_and_all_gather(
     summary_dims[tensor_parallel_axis] = 1
     state_dims = [None, None]
     state_dims[tensor_parallel_axis] = 1
-    a_tt = _to_device(transform_a, mesh_device, tuple(summary_dims))
-    b_tt = _to_device(transform_b, mesh_device, tuple(summary_dims))
-    state_tt = _to_device(initial_state.unsqueeze(0), mesh_device, tuple(state_dims))
+    a_tt = _to_device(transform_a, mesh_device, tuple(summary_dims), affine_summary_dtype)
+    b_tt = _to_device(transform_b, mesh_device, tuple(summary_dims), affine_summary_dtype)
+    state_tt = _to_device(initial_state.unsqueeze(0), mesh_device, tuple(state_dims), recurrent_state_dtype)
 
     expected_entries, expected_final = _serial_prefix(transform_a, transform_b, initial_state)
     oracle_entries, oracle_final = _all_gather_oracle(
@@ -156,6 +164,8 @@ def test_distributed_affine_prefix_matches_serial_and_all_gather(
             b_tt,
             state_tt,
             sequence_parallel_axis=sp_axis,
+            affine_summary_dtype=affine_summary_dtype,
+            recurrent_state_dtype=recurrent_state_dtype,
         )
     cache_entries = mesh_device.num_program_cache_entries()
     with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -164,6 +174,8 @@ def test_distributed_affine_prefix_matches_serial_and_all_gather(
             b_tt,
             state_tt,
             sequence_parallel_axis=sp_axis,
+            affine_summary_dtype=affine_summary_dtype,
+            recurrent_state_dtype=recurrent_state_dtype,
         )
     ttnn.synchronize_device(mesh_device)
     assert mesh_device.num_program_cache_entries() == cache_entries
@@ -175,6 +187,8 @@ def test_distributed_affine_prefix_matches_serial_and_all_gather(
             b_tt,
             state_tt,
             sequence_parallel_axis=sp_axis,
+            affine_summary_dtype=affine_summary_dtype,
+            recurrent_state_dtype=recurrent_state_dtype,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     # Exercise the cached trace enough times to expose cross-rank CB reuse races.
@@ -189,6 +203,9 @@ def test_distributed_affine_prefix_matches_serial_and_all_gather(
     traced_entries = _partitioned_to_torch(traced_entry_tt, mesh_device, sp_axis, tensor_parallel_axis)
     traced_final = _replicated_sp_to_torch(traced_final_tt, mesh_device, sp_axis, tensor_parallel_axis)
     ttnn.release_trace(mesh_device, trace_id)
+
+    assert entry_tt.dtype == recurrent_state_dtype
+    assert final_tt.dtype == recurrent_state_dtype
 
     assert_accurate(expected_entries, oracle_entries, name=f"tp_axis={tensor_parallel_axis} oracle entries")
     assert_accurate(expected_final, oracle_final, name=f"tp_axis={tensor_parallel_axis} oracle final")

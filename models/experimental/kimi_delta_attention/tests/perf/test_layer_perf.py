@@ -31,15 +31,20 @@ from models.experimental.kimi_delta_attention.tests.utils import (
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.perf,
-    pytest.mark.timeout(0),
     pytest.mark.parametrize(
         "device_params",
         [
-            {
-                "l1_small_size": 24576,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "trace_region_size": 256 * 1024 * 1024,
-            }
+            # FABRIC_2D follow-up: SP1xTP8 hangs with a device timeout and failed
+            # Ethernet-core recovery. SP2xTP4/SP4xTP2 were correct but 0.05%/0.10%
+            # slower than FABRIC_1D; do not enable 2D until the SP1 failure is fixed.
+            pytest.param(
+                {
+                    "l1_small_size": 24576,
+                    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                    "trace_region_size": 256 * 1024 * 1024,
+                },
+                id="fabric_1d",
+            ),
         ],
         indirect=True,
     ),
@@ -247,6 +252,7 @@ def test_kimi_k3_layer_1_perf(
     reference_ms, max_regression_pct = _load_perf_target(layout, sequence=sequence, repetitions=repetitions)
     max_wall_ms = reference_ms * (1.0 + max_regression_pct / 100.0)
     result = {
+        "fabric_config": ttnn.get_fabric_config().name,
         "layout": layout,
         "sequence": sequence,
         "repetitions": repetitions,

@@ -5,7 +5,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -296,6 +297,7 @@ def make_kimi_k3_device_case(
     *,
     tensor_parallel_axis: int = 1,
     summary_group_chunks: int | None = None,
+    program_config: KDAProgramConfig | None = None,
     weights: KDAWeights | None = None,
 ) -> tuple[KimiDeltaAttention, ttnn.Tensor]:
     """Construct the real-weight layer and sequence-parallel device input."""
@@ -314,6 +316,31 @@ def make_kimi_k3_device_case(
             mesh_shape=tuple(mesh_device.shape),
         ),
     )
+    default_program_config = kimi_k3_program_config(
+        tp_ccl_topology=(
+            ttnn.Topology.Ring if tuple(mesh_device.shape)[sequence_parallel_axis] == 1 else ttnn.Topology.Linear
+        )
+    )
+    dtype_by_name = {"fp32": ttnn.float32, "bf16": ttnn.bfloat16}
+    affine_summary_dtype = os.getenv("KDA_AFFINE_SUMMARY_DTYPE")
+    recurrent_state_dtype = os.getenv("KDA_RECURRENT_STATE_DTYPE")
+    if affine_summary_dtype is not None or recurrent_state_dtype is not None:
+        try:
+            default_program_config = replace(
+                default_program_config,
+                affine_summary_dtype=(
+                    dtype_by_name[affine_summary_dtype]
+                    if affine_summary_dtype is not None
+                    else default_program_config.affine_summary_dtype
+                ),
+                recurrent_state_dtype=(
+                    dtype_by_name[recurrent_state_dtype]
+                    if recurrent_state_dtype is not None
+                    else default_program_config.recurrent_state_dtype
+                ),
+            )
+        except KeyError as error:
+            raise ValueError(f"unsupported KDA dtype override: {error.args[0]}") from error
     layer = KimiDeltaAttention(
         mesh_device,
         case.config,
@@ -324,11 +351,7 @@ def make_kimi_k3_device_case(
         tt_ccl=TT_CCL(mesh_device),
         tensor_parallel_axis=tensor_parallel_axis,
         summary_group_chunks=summary_group_chunks,
-        program_config=kimi_k3_program_config(
-            tp_ccl_topology=(
-                ttnn.Topology.Ring if tuple(mesh_device.shape)[sequence_parallel_axis] == 1 else ttnn.Topology.Linear
-            )
-        ),
+        program_config=program_config or default_program_config,
     )
     return layer, hidden
 

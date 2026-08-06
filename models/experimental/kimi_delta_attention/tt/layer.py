@@ -38,8 +38,8 @@ def _output_projection_program_config(
     input_width: int,
     output_width: int,
     out_block_w_cap: int | None,
+    grid: tuple[int, int],
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    grid = (8, 8)
     per_core_n = max(1, math.ceil(output_width / ttnn.TILE_SIZE / grid[0]))
     out_block_w_limit = max(1, per_core_n // 2)
     if out_block_w_cap is not None:
@@ -113,6 +113,8 @@ class KimiDeltaAttention:
         )
         self.summary_group_chunks = summary_group_chunks
         self.output_projection_out_block_w = program_config.output_projection_out_block_w
+        output_grid = mesh_device.compute_with_storage_grid_size()
+        self.output_projection_grid = (output_grid.x, output_grid.y)
         self.recurrent_state_dtype = program_config.recurrent_state_dtype
         self.tp_ccl_topology = program_config.tp_ccl_topology
         self.affine_summary_dtype = program_config.affine_summary_dtype
@@ -435,6 +437,7 @@ class KimiDeltaAttention:
             # Real-K3 component A/B: BF16 affine-summary storage retained PCC 0.999429/0.999545/0.999702
             # for SP1xTP8/SP2xTP4/SP4xTP2, with <=0.687% median and <=0.858% 95% UCB latency cost.
             affine_summary_dtype=self.affine_summary_dtype,
+            recurrent_state_dtype=self.recurrent_state_dtype,
             # Real-K3 component A/B: affine-prefix HiFi2 retained PCC 1.0 for every LoudBox layout;
             # median latency changed -0.228%/+0.299%/-0.276% for SP1xTP8/SP2xTP4/SP4xTP2.
             affine_prefix_compute_kernel_config=self.affine_prefix_compute_config,
@@ -484,8 +487,6 @@ class KimiDeltaAttention:
         output = ttnn.reshape(output, (batch, sequence, config.v_dim))
         if self.tensor_parallel_size > 1:
             assert self.tt_ccl is not None
-            # Real-K3 T=5120 full-layer A/B rejected fused MMRS: -3.84% SP2 and -1.56% SP4.
-            # Standalone matmul and RS already overlap; see perf_targets/bh_loudbox_fusion_ab.json.
             if output.dtype != ttnn.bfloat16:
                 output = ttnn.typecast(output, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             output = ttnn.reshape(output, (1, batch, sequence, config.v_dim))
@@ -498,6 +499,7 @@ class KimiDeltaAttention:
                     config.v_dim,
                     weights.output_projection.shape[-1],
                     self.output_projection_out_block_w,
+                    self.output_projection_grid,
                 ),
                 compute_kernel_config=self.output_projection_compute_config,
             )

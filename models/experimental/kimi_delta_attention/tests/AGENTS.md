@@ -18,7 +18,6 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
   unless `KDA_RUN_LONG_TESTS=1`.
 - Required performance acceptance is real Kimi-K3, B=1, T=5120 on SP1xTP8, SP2xTP4, and SP4xTP2.
 - LoudBox references and regression limits live in `perf/perf_targets/bh_loudbox.json`.
-- Fusion decisions and scoped historical evidence live in `perf/perf_targets/bh_loudbox_fusion_ab.json`.
 - Rebaseline only when the workload, hardware/runtime contract, or accepted baseline changes.
 - `model/test_real_weights.py` checks output and both states against the independent Torch reference
   and requires usable realtime program records.
@@ -70,8 +69,6 @@ tests/
     ├── perf_targets/
     │   ├── bh_loudbox.json             — T=5120 trace-wall references and provenance;
     │   │                                 and one-sided regression limits.
-    │   └── bh_loudbox_fusion_ab.json   — Historical MMRS, convolution, and gated-RMS A/B
-    │                                     decisions with scope and provenance.
     └── test_layer_perf.py              — T=5120 accuracy and trace-wall acceptance on
                                           SP1xTP8, SP2xTP4, and SP4xTP2.
 ```
@@ -110,8 +107,5 @@ KDA_RUN_LONG_TESTS=1 pytest -q -s \
   models/experimental/kimi_delta_attention/tests/reference/test_layer.py \
   -k reference_layer_determinism
 ```
-
-`perf/perf_targets/bh_loudbox_fusion_ab.json` is historical decision evidence. Its controls and
-raw Tracy captures are not part of the repository, so the historical A/B is not reproducible.
 
 Add `--profile` only for a specific Tracy investigation and use an exact node ID; `run_safe_pytest.sh --profile` does not preserve a spaced `-k` expression as one argument.

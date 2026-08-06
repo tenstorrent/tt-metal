@@ -83,6 +83,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     uint32_t summary_group_chunks = 8,
     const std::optional<uint32_t>& sequence_parallel_axis = std::nullopt,
     ttnn::DataType affine_summary_dtype = ttnn::DataType::FLOAT32,
+    ttnn::DataType recurrent_state_dtype = ttnn::DataType::FLOAT32,
     const std::optional<ttnn::DeviceComputeKernelConfig>& affine_prefix_compute_kernel_config = std::nullopt,
     ttnn::DataType grouped_scan_output_dtype = ttnn::DataType::FLOAT32,
     const std::optional<ttnn::DeviceComputeKernelConfig>& grouped_scan_compute_kernel_config = std::nullopt,
@@ -101,7 +102,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
     const ttnn::Tensor& initial_state,
     uint32_t sequence_parallel_axis,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    ttnn::DataType affine_summary_dtype = ttnn::DataType::FLOAT32,
+    ttnn::DataType recurrent_state_dtype = ttnn::DataType::FLOAT32);
 
 /** Exchange the three-row causal-convolution carry along the SP mesh axis. */
 std::tuple<ttnn::Tensor, ttnn::Tensor> kda_convolution_halo(

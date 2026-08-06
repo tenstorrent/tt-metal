@@ -55,6 +55,11 @@ def test_program_config_affine_summary_dtype() -> None:
     assert kimi_k3_program_config(tp_ccl_topology=ttnn.Topology.Linear).affine_summary_dtype == ttnn.bfloat16
 
 
+def test_program_config_recurrent_state_dtype() -> None:
+    assert KDAProgramConfig().recurrent_state_dtype == ttnn.float32
+    assert kimi_k3_program_config(tp_ccl_topology=ttnn.Topology.Linear).recurrent_state_dtype == ttnn.float32
+
+
 def test_program_config_affine_prefix_math_fidelity() -> None:
     assert KDAProgramConfig().affine_prefix_math_fidelity == ttnn.MathFidelity.HiFi4
     assert (

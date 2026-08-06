@@ -466,6 +466,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     uint32_t summary_group_chunks,
     const std::optional<uint32_t>& sequence_parallel_axis,
     DataType affine_summary_dtype,
+    DataType recurrent_state_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& affine_prefix_compute_kernel_config,
     DataType grouped_scan_output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& grouped_scan_compute_kernel_config,
@@ -492,6 +493,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     TT_FATAL(
         affine_summary_dtype == DataType::FLOAT32 || affine_summary_dtype == DataType::BFLOAT16,
         "affine_summary_dtype must be FLOAT32 or BFLOAT16");
+    TT_FATAL(
+        recurrent_state_dtype == DataType::FLOAT32 || recurrent_state_dtype == DataType::BFLOAT16,
+        "recurrent_state_dtype must be FLOAT32 or BFLOAT16");
     TT_FATAL(
         grouped_scan_output_dtype == DataType::FLOAT32 || grouped_scan_output_dtype == DataType::BFLOAT16,
         "grouped_scan_output_dtype must be FLOAT32 or BFLOAT16");
@@ -723,8 +727,20 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
             auto [partition_a, partition_b] = ttnn::prim::kda_affine_compose(
                 summary_a, summary_b, groups_per_head, prefix_mem, affine_prefix_kernel_cfg);
             auto [partition_entry_state, final_state] = kda_distributed_affine_prefix(
-                partition_a, partition_b, *s0, *sequence_parallel_axis, out_mem, affine_prefix_kernel_cfg);
+                partition_a,
+                partition_b,
+                *s0,
+                *sequence_parallel_axis,
+                out_mem,
+                affine_prefix_kernel_cfg,
+                affine_summary_dtype,
+                recurrent_state_dtype);
             distributed_final_state = final_state;
+            // The grouped affine-prefix kernel computes and returns FP32 states. The distributed
+            // carry remains in recurrent_state_dtype; promote only at this FP32 compute boundary.
+            if (partition_entry_state.dtype() != DataType::FLOAT32) {
+                partition_entry_state = ttnn::typecast(partition_entry_state, DataType::FLOAT32, prefix_mem);
+            }
             auto group_initial_states = ttnn::prim::kda_affine_prefix(
                 summary_a, summary_b, partition_entry_state, groups_per_head, prefix_mem, affine_prefix_kernel_cfg);
             grouped_scan = run_grouped_scan(group_initial_states);
@@ -806,7 +822,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_all_gather_affine_prefix(
     uint32_t sequence_parallel_axis,
     uint32_t sp_size,
     const ttnn::MemoryConfig& out_mem,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    DataType affine_summary_dtype,
+    DataType recurrent_state_dtype) {
     const auto shape = transform_a.logical_shape();
     TT_FATAL(
         shape.rank() == 3 || shape.rank() == 4,
@@ -816,23 +834,23 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_all_gather_affine_prefix(
     const uint32_t key_dim = shape[shape.rank() - 2];
     const uint32_t value_dim = transform_b.logical_shape()[shape.rank() - 1];
 
-    auto a_bf16 = ttnn::typecast(transform_a, DataType::BFLOAT16, ttnn::DRAM_MEMORY_CONFIG);
-    auto b_bf16 = ttnn::typecast(transform_b, DataType::BFLOAT16, ttnn::DRAM_MEMORY_CONFIG);
+    auto summary_a = ttnn::typecast(transform_a, affine_summary_dtype, ttnn::DRAM_MEMORY_CONFIG);
+    auto summary_b = ttnn::typecast(transform_b, affine_summary_dtype, ttnn::DRAM_MEMORY_CONFIG);
     if (!has_explicit_sp_dimension) {
-        a_bf16 = ttnn::reshape(a_bf16, ttnn::Shape({1, batch_heads, key_dim, key_dim}));
-        b_bf16 = ttnn::reshape(b_bf16, ttnn::Shape({1, batch_heads, key_dim, value_dim}));
+        summary_a = ttnn::reshape(summary_a, ttnn::Shape({1, batch_heads, key_dim, key_dim}));
+        summary_b = ttnn::reshape(summary_b, ttnn::Shape({1, batch_heads, key_dim, value_dim}));
     }
-    auto packed = ttnn::concat({a_bf16, b_bf16}, 3, ttnn::DRAM_MEMORY_CONFIG);
+    auto packed = ttnn::concat({summary_a, summary_b}, 3, ttnn::DRAM_MEMORY_CONFIG);
     auto gathered = ttnn::all_gather(packed, 0, sequence_parallel_axis, ttnn::DRAM_MEMORY_CONFIG);
 
-    auto carry = ttnn::typecast(initial_state, DataType::BFLOAT16, ttnn::L1_MEMORY_CONFIG);
+    auto carry = ttnn::typecast(initial_state, recurrent_state_dtype, ttnn::L1_MEMORY_CONFIG);
     if (!has_explicit_sp_dimension) {
         carry = ttnn::reshape(carry, ttnn::Shape({1, batch_heads, key_dim, value_dim}));
     }
     std::vector<ttnn::Tensor> entry_states;
     entry_states.reserve(sp_size);
     for (uint32_t rank = 0; rank < sp_size; ++rank) {
-        entry_states.push_back(ttnn::typecast(carry, DataType::FLOAT32, ttnn::DRAM_MEMORY_CONFIG));
+        entry_states.push_back(carry);
         const auto begin_a = ttnn::SmallVector<int32_t>{static_cast<int32_t>(rank), 0, 0, 0};
         const auto end_a = ttnn::SmallVector<int32_t>{
             static_cast<int32_t>(rank + 1),
@@ -848,22 +866,28 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_all_gather_affine_prefix(
             static_cast<int32_t>(key_dim + value_dim)};
         auto rank_a = ttnn::slice(gathered, begin_a, end_a, {1, 1, 1, 1}, ttnn::L1_MEMORY_CONFIG);
         auto rank_b = ttnn::slice(gathered, begin_b, end_b, {1, 1, 1, 1}, ttnn::L1_MEMORY_CONFIG);
+        if (rank_a.dtype() != recurrent_state_dtype) {
+            rank_a = ttnn::typecast(rank_a, recurrent_state_dtype, ttnn::L1_MEMORY_CONFIG);
+        }
         carry = ttnn::matmul(
             rank_a,
             carry,
             false,
             false,
             ttnn::L1_MEMORY_CONFIG,
-            DataType::BFLOAT16,
+            recurrent_state_dtype,
             std::nullopt,
             std::nullopt,
             compute_kernel_config);
+        if (rank_b.dtype() != recurrent_state_dtype) {
+            rank_b = ttnn::typecast(rank_b, recurrent_state_dtype, ttnn::L1_MEMORY_CONFIG);
+        }
         carry = ttnn::add(carry, rank_b, std::nullopt, ttnn::L1_MEMORY_CONFIG);
     }
 
     auto replicated_entries = ttnn::concat(entry_states, 0, ttnn::DRAM_MEMORY_CONFIG);
     auto entry_state = ttnn::mesh_partition(replicated_entries, 0, sequence_parallel_axis, out_mem);
-    auto final_state = ttnn::typecast(carry, DataType::FLOAT32, out_mem);
+    auto final_state = ttnn::typecast(carry, recurrent_state_dtype, out_mem);
     if (!has_explicit_sp_dimension) {
         entry_state = ttnn::reshape(entry_state, ttnn::Shape({batch_heads, key_dim, value_dim}));
         final_state = ttnn::reshape(final_state, ttnn::Shape({batch_heads, key_dim, value_dim}));
@@ -948,7 +972,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
     const ttnn::Tensor& initial_state,
     uint32_t sequence_parallel_axis,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    DataType affine_summary_dtype,
+    DataType recurrent_state_dtype) {
     TT_FATAL(sequence_parallel_axis < 2, "sequence_parallel_axis must be 0 or 1");
     TT_FATAL(
         transform_a.logical_shape() == transform_b.logical_shape() &&
@@ -958,8 +984,16 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
     TT_FATAL(
         transform_a.logical_shape()[-2] == transform_a.logical_shape()[-1],
         "distributed KDA affine prefix currently requires K == V");
+    TT_FATAL(
+        affine_summary_dtype == DataType::FLOAT32 || affine_summary_dtype == DataType::BFLOAT16,
+        "affine_summary_dtype must be FLOAT32 or BFLOAT16");
+    TT_FATAL(
+        recurrent_state_dtype == DataType::FLOAT32 || recurrent_state_dtype == DataType::BFLOAT16,
+        "recurrent_state_dtype must be FLOAT32 or BFLOAT16");
     for (const auto* tensor : {&transform_a, &transform_b, &initial_state}) {
-        TT_FATAL(tensor->dtype() == DataType::FLOAT32, "distributed KDA affine prefix requires FP32 tensors");
+        TT_FATAL(
+            tensor->dtype() == DataType::FLOAT32 || tensor->dtype() == DataType::BFLOAT16,
+            "distributed KDA affine prefix requires FP32 or BF16 tensors");
         TT_FATAL(tensor->layout() == Layout::TILE, "distributed KDA affine prefix requires TILE tensors");
         TT_FATAL(
             tensor->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -974,7 +1008,15 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
     TT_FATAL(sp_size > 1, "distributed KDA affine prefix requires SP > 1");
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     return kda_all_gather_affine_prefix(
-        transform_a, transform_b, initial_state, sequence_parallel_axis, sp_size, out_mem, compute_kernel_config);
+        transform_a,
+        transform_b,
+        initial_state,
+        sequence_parallel_axis,
+        sp_size,
+        out_mem,
+        compute_kernel_config,
+        affine_summary_dtype,
+        recurrent_state_dtype);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> kda_convolution_halo(

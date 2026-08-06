@@ -82,7 +82,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         beta [B,T,H], initial_state [B,H,K,V]. chunk_size is currently 32.
         summary_group_chunks counts 32-token chunks in each local affine-summary group.
         sequence_parallel_axis enables the all-gather-based cross-rank prefix.
-        affine_summary_dtype and grouped_scan_output_dtype select retained intermediate storage formats;
+        affine_summary_dtype selects affine transform storage and communication, while recurrent_state_dtype
+        selects retained cross-rank and returned recurrent-state storage. grouped_scan_output_dtype selects
+        the grouped scan output format;
         the corresponding compute-kernel configs control their prefix and final-scan math.
         use_bf16_prep_intermediates selects the measured BF16 storage for kd, q_decay, and dl.
         At 160 or more local chunks, the grouped affine-prefix path changes reduction order and rounding.
@@ -110,6 +112,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("summary_group_chunks") = 8,
         nb::arg("sequence_parallel_axis") = nb::none(),
         nb::arg("affine_summary_dtype") = ttnn::DataType::FLOAT32,
+        nb::arg("recurrent_state_dtype") = ttnn::DataType::FLOAT32,
         nb::arg("affine_prefix_compute_kernel_config") = nb::none(),
         nb::arg("grouped_scan_output_dtype") = ttnn::DataType::FLOAT32,
         nb::arg("grouped_scan_compute_kernel_config") = nb::none(),
@@ -129,7 +132,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("sequence_parallel_axis"),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("affine_summary_dtype") = ttnn::DataType::FLOAT32,
+        nb::arg("recurrent_state_dtype") = ttnn::DataType::FLOAT32);
 
     ttnn::bind_function<"kda_convolution_halo", "ttnn.transformer.">(
         mod,
