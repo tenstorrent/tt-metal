@@ -53,9 +53,11 @@ ALWI void pack_subblock_row_strided(
  * from fifo_rd_ptr and land at DST[r * w], so the matmul/pack sees the same row-major
  * layout the contiguous (SubblockMajor) reload produces.
  *
- * One copy_block_matmul_partials per row (reads at fifo_rd_ptr + src_base; does NOT advance
- * it). Caller waits the whole fronted row group (col_base + (h-1)*row_stride + w tiles) and
- * pops it when done. col_base / row_stride match the spill.
+ * When the sub-block spans the complete row width, all h*w source tiles are contiguous and one
+ * block copy reloads them. Otherwise one copy_block_matmul_partials per row gathers across the
+ * stride. Neither form advances fifo_rd_ptr. Caller waits the whole fronted row group
+ * (col_base + (h-1)*row_stride + w tiles) and pops it when done. col_base / row_stride match the
+ * spill.
  */
 ALWI void copy_subblock_row_strided(
     uint32_t src_cb_id,
@@ -63,6 +65,10 @@ ALWI void copy_subblock_row_strided(
     uint32_t row_stride,
     uint32_t h,
     uint32_t w) {
+    if (w == row_stride) {
+        copy_block_matmul_partials(src_cb_id, col_base, 0, h * w);
+        return;
+    }
     for (uint32_t r = 0; r < h; r++) {
         copy_block_matmul_partials(src_cb_id, r * row_stride + col_base, r * w, w);
     }
@@ -132,16 +138,20 @@ ALWI void matmul_block(
     // unrepresentable by construction.
     constexpr bool pack_last_to_interm = (last_block_target == LastBlockTarget::Interm);
     constexpr bool pack_relu = (last_block_target == LastBlockTarget::OutWithRelu);
+    constexpr bool caller_owned_plain_out = caller_owns_pack_target && (last_block_target == LastBlockTarget::Out);
 
-    // caller_owns_pack_target is only correct with TileRowMajor + packer_l1_acc + Interm: that is the
-    // sole config where the software-reload accumulation path (the per-K-block spill push paired with the
-    // reload wait_front below) is statically dead. The reload wait_front is NOT gated by caller_owns, but
-    // its matching spill push IS — so any other combination leaves an orphaned wait_front and deadlocks
-    // (SubblockMajor also corrupts output). See caller_owns_pack_target_supported for the shared contract.
+    // caller_owns_pack_target is correct for two fixed-address L1-accumulation lifecycles:
+    // Interm accumulates every K-block in place; plain Out accumulates non-last K-blocks in the
+    // unpushed interm scratch, reloads it without FIFO bookkeeping on the last K-block, and packs
+    // directly to caller-reserved output. See caller_owns_pack_target_supported for the contract.
     static_assert(
         caller_owns_pack_target_supported(
-            caller_owns_pack_target, tile_order == OutputCBLayout::TileRowMajor, packer_l1_acc, pack_last_to_interm),
-        "caller_owns_pack_target requires TileRowMajor + packer_l1_acc + last_block_target == Interm");
+            caller_owns_pack_target,
+            tile_order == OutputCBLayout::TileRowMajor,
+            packer_l1_acc,
+            pack_last_to_interm,
+            last_block_target == LastBlockTarget::Out),
+        "caller_owns_pack_target requires TileRowMajor + packer_l1_acc + Interm or plain Out");
     static_assert(
         in1_policy != InputPolicy::WaitAndRetainPerMSubblock,
         "WaitAndRetainPerMSubblock is an in0-only policy");
@@ -288,6 +298,19 @@ ALWI void matmul_block(
                 in1_buf.wait_front(in1_block_num_tiles);
             }
 
+            // A caller-owned plain-Out matmul deliberately leaves the fixed intermediate scratch
+            // unpushed so its address cannot walk when runtime M is smaller than the physical CB.
+            // That also removes the ordinary CB credit which orders PACK's final accumulated spill
+            // before UNPACK reloads it. Synchronize the two Tensix threads once, immediately before
+            // the only software reload (the last K-block); tile_regs_release alone protects DEST
+            // reuse, not an L1 PACK-write -> UNPACK-read dependency.
+            if constexpr (caller_owned_plain_out) {
+                if (enable_reload) {
+                    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                }
+            }
+
             // Pick the buffer the last K-block packs to. The reference here lets the
             // sync calls below dispatch through the right object regardless of branch.
             Buf& pack_target_buf = pack_last_to_interm ? interm_buf : out_buf;
@@ -348,22 +371,37 @@ ALWI void matmul_block(
                             // group on the first in1 sub-block, gather this sub-block's row-strided
                             // slice into contiguous DST, and pop the group after the last in1 sub-block
                             // — matching the producer's per-row-group reserve/push so increments balance.
-                            if (in1_subblock == 0) {
-                                interm_buf.wait_front(row_group_tiles);
+                            // Under caller_owns, the fixed intermediate is private scratch: it was
+                            // never pushed, so reload it directly without touching FIFO state.
+                            if constexpr (!caller_owns_pack_target) {
+                                if (in1_subblock == 0) {
+                                    interm_buf.wait_front(row_group_tiles);
+                                }
                             }
+                            // Ordinary FIFO reload advances the read pointer after each M row
+                            // group. Caller-owned scratch never pops, so fold that row-group base
+                            // into the absolute source offset just as the pack path does.
+                            const uint32_t reload_row_base =
+                                caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
                             copy_subblock_row_strided(
                                 interm_cb_id,
-                                in1_subblock * shape.out_subblock_w,
+                                reload_row_base + in1_subblock * shape.out_subblock_w,
                                 out_row_width,
                                 shape.out_subblock_h,
                                 shape.out_subblock_w);
-                            if (in1_subblock == shape.in1_num_subblocks - 1) {
-                                interm_buf.pop_front(row_group_tiles);
+                            if constexpr (!caller_owns_pack_target) {
+                                if (in1_subblock == shape.in1_num_subblocks - 1) {
+                                    interm_buf.pop_front(row_group_tiles);
+                                }
                             }
                         } else {
-                            interm_buf.wait_front(out_num_tiles);
+                            if constexpr (!caller_owns_pack_target) {
+                                interm_buf.wait_front(out_num_tiles);
+                            }
                             copy_block_matmul_partials(interm_cb_id, 0, 0, out_num_tiles);
-                            interm_buf.pop_front(out_num_tiles);
+                            if constexpr (!caller_owns_pack_target) {
+                                interm_buf.pop_front(out_num_tiles);
+                            }
                         }
                         mm_block_init_short_with_dt(
                             in0_cb_id, in1_cb_id, interm_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
@@ -526,6 +564,14 @@ ALWI void matmul_block(
                 }
 
                 in0_index_subblock_offset += in0_subblock_num_tiles;
+            }
+
+            if constexpr (caller_owned_plain_out) {
+                if (block == shape.num_k_blocks - 2) {
+                    // Publish only after every sub-block's tile_regs_release, so one semaphore
+                    // handshake covers the complete fixed-scratch region.
+                    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+                }
             }
 
             if constexpr (packer_l1_acc) {

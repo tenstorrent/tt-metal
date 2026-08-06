@@ -31,8 +31,10 @@ DEST_AUTO_LIMIT_TILES = 8
 OUT_SUBBLOCK_H_GU = 1
 
 #: Cap on the `down` sub-block height; the real value is derived against the DEST budget below.
-#: Raising it measured a consistent small regression, so the cap is the identity.
-OUT_SUBBLOCK_H_DN_MAX = 1
+#: Direct final-output packing reloads the bf16 partial before the last K-block. The host derives
+#: the uniform-safe height against ec_max (2 at 11x8 / emb=7168); device cores with narrower real
+#: ec may grow to this cap at runtime (4x2 exactly fills the eight-tile DEST).
+OUT_SUBBLOCK_H_DN_MAX = 4
 
 #: Eltwise DEST-window block size — tiles per acquire/commit/wait/release cycle. Worth 1.05-1.07x.
 ELTWISE_BLK = DEST_AUTO_LIMIT_TILES
@@ -43,11 +45,15 @@ DEPTH_W = 2
 DEPTH_X = 2
 DEPTH_H = 3
 DEPTH_OUT = 2
-DEPTH_XSTAGE = 1
 XSTICK_ROWS = 1
 
 #: W_down prefetch depth in phase-2 K-blocks. 1 measured best (227.8 us vs 228.7 at 4, 240.1 at 11).
 WD_AHEAD = 1
+
+#: Experimental full-size-M-slot W_down schedule.  For an 11x8 grid, the eight reduce rows each own one
+#: complete M tile-row after the reduce-scatter.  Gather those row fragments horizontally and run
+#: eight M=1, K=HID_T matmuls instead of eleven M=8, K=HN_PAD accumulating matmuls.
+WD_MROW_ROUNDS = True
 
 #: Cross-M-block weight residency: every weight read is a pure function of this core's
 #: kstart/hstart/jstart with no M-block index, so b > 0 re-reads bytes already in the CB slot.
@@ -104,7 +110,7 @@ MAILBOX_WORDS = 16
 # --------------------------------------------------------------------------------------------
 CB_X_IN = 0  # row-major x stick slices (bf16) or bfp8 tiles
 CB_X_TILES = 1  # resident bfp8 in0 block, filled by the row multicast
-CB_X_STAGE = 2  # tilized x tile-row awaiting its multicast turn
+CB_X_STAGE = 2  # legacy name: one-page compute->reader "x row packed" completion channel
 CB_W_GATE = 3
 CB_W_UP = 4
 CB_W_DOWN = 5
@@ -123,6 +129,12 @@ CB_GATE_SILU = 17  # SiLU(sum(gate)) on this worker's slice
 CB_H_LOCAL = 18  # column root: this column's assembled h block, awaiting its all-gather round
 CB_OUT_INTERM = 19  # phase-2 packer-L1 accumulation region
 
+# These three BFP8 views are live in strict phase order: reduce landing -> finished local h slice
+# -> final output. They share one physical allocation when the caller's output is BFP8. The
+# reader/writer phase-free semaphore below is the necessary cross-block edge: without it, a peer
+# could write block b+1's gather payload while block b's output DMA still reads the same SRAM.
+PHASE_CB_ALIAS = (CB_GATHER_GATE, CB_H_SLICE, CB_OUT_TILES)
+
 # --------------------------------------------------------------------------------------------
 # Semaphores. All but one are MONOTONE — never reset within a dispatch, always compared with
 # wait_min against a running total. The exception is SEM_H_RDY_BASE + s: those are the h
@@ -138,7 +150,9 @@ SEM_XSTAGED = 7  # reader -> writer, SAME core: "x is staged" (XPRIO)
 SEM_H_RDY_BASE = 8  # one VALID cell per cb_h slot
 SEM_H_FREE = SEM_H_RDY_BASE + DEPTH_H  # receiver -> sender window ack
 SEM_WDSPLIT = SEM_H_FREE + 1  # writer -> reader, SAME core: "my W_down share landed"
-SEM_COUNT = SEM_WDSPLIT + 1
+SEM_PHASE_FREE = SEM_WDSPLIT + 1  # writer -> reader, SAME core: aliased phase storage is reusable
+SEM_HROW_FREE = SEM_PHASE_FREE + 1  # row aggregator -> workers: cb_h_local row slot is reusable
+SEM_COUNT = SEM_HROW_FREE + 1
 NUM_DEVICE_SEMAPHORES = 16
 
 #: NOC_MAX_TRANSACTION_ID. The writer tags phase-2 W_down K-block r with transaction id r+1 so the
@@ -176,6 +190,10 @@ def gcd(a: int, b: int) -> int:
     while b:
         a, b = b, a % b
     return a
+
+
+def lcm(a: int, b: int) -> int:
+    return a * b // gcd(a, b)
 
 
 def largest_divisor_le(n: int, cap: int) -> int:
@@ -252,6 +270,8 @@ class Blocking:
         bf16_tile: int = 2048,
         x_stick: int = 0,
         l1_budget: int = 0,
+        out_tile: int = 0,
+        enable_phase_alias: bool = True,
     ):
         if kgroups < 2:
             raise ValueError(
@@ -286,6 +306,7 @@ class Blocking:
         self.hn_last = self.hid_t - (hgroups - 1) * self.hn_pad
         self.hn_block = self.gu_chunk_w
         self.gu_in1_subblocks = self.gu_chunk_w // self.hn_block
+        self.wd_mrow_rounds = bool(WD_MROW_ROUNDS and kgroups == M_BLOCK)
 
         # Ne — the emb output, split across ALL cores. EC_MAX is the phase-2 N *stride*: every
         # phase-2 CB reserves in EC_MAX-wide units, so its page count must be a multiple of it.
@@ -308,7 +329,6 @@ class Blocking:
         self.out_subblock_h_dn = h
         if M_BLOCK % OUT_SUBBLOCK_H_GU or M_BLOCK % h:
             raise ValueError(f"moe_fused_swiglu: M_BLOCK {M_BLOCK} must be a multiple of both sub-block heights")
-
         self.gather_pages = self.plan["gather_pages"]
         self.slice_pages = self.plan["slice_pages"]
 
@@ -325,13 +345,23 @@ class Blocking:
         # legal depth rather than throwing at program build.
         self.w_tile, self.bfp8_tile, self.bf16_tile = w_tile, bfp8_tile, bf16_tile
         self.x_stick = x_stick or bfp8_tile
+        self.out_tile = out_tile or bfp8_tile
+        self.enable_phase_alias = enable_phase_alias
         self.l1_budget = l1_budget or L1_CB_BUDGET
         self.wd_resident = WD_RESIDENT
         self.depth_wd = self._choose_depth_wd()
-        if self.l1_bytes(True) > self.l1_budget:
+        # The eight-row schedule needs both the complete resident W_down shard and its larger H
+        # row buffers.  If that combination does not fit, drop the experiment first and retry the
+        # established resident layout before sacrificing residency for every M-block.
+        if (
+            self.wd_mrow_rounds
+            and self.l1_bytes(True, self.out_tile, enable_phase_alias=self.enable_phase_alias) > self.l1_budget
+        ):
+            self.wd_mrow_rounds = False
+        if self.l1_bytes(True, self.out_tile, enable_phase_alias=self.enable_phase_alias) > self.l1_budget:
             self.wd_resident = False  # residency is what pins the depth to hgroups
             self.depth_wd = self._min_depth_wd()
-            while self.l1_bytes(True) > self.l1_budget:
+            while self.l1_bytes(True, self.out_tile, enable_phase_alias=self.enable_phase_alias) > self.l1_budget:
                 nxt = self._next_smaller_depth_wd(self.depth_wd)
                 if nxt == self.depth_wd:
                     break
@@ -460,22 +490,24 @@ class Blocking:
     def cb_layout(self, x_is_rm: bool, out_tile: int = 0, idx_page: int = 64, counts_page: int = 64):
         """(cb_index, pages, page_bytes, format_key) for EVERY circular buffer, in order.
 
-        THE one definition. The descriptor turns this into `CBDescriptor`s and `l1_bytes` sums it,
-        so the residency decision is priced on exactly the bytes that get allocated — the two used
-        to be separate arithmetic, and the copy undercounted by ~95 KB, which turned a clean
-        "does not fit" into an allocator throw at program build.
+        THE one definition of the LOGICAL views. `cb_allocations` groups phase-disjoint views into
+        physical allocations, and both the descriptor and `l1_bytes` consume those groups. Thus the
+        residency decision is still priced on exactly the bytes that get allocated — the two used
+        to be separate arithmetic, and the copy undercounted by ~95 KB, which turned a clean "does
+        not fit" into an allocator throw at program build.
         """
         b8, b16, w, out = self.bfp8_tile, self.bf16_tile, self.w_tile, (out_tile or self.bfp8_tile)
         gu = M_BLOCK * self.hn_pad
+        h_fast = self.hid_t if self.wd_mrow_rounds else gu
         outb = M_BLOCK * self.ec_max
         return [
             (CB_X_IN, XSTICK_ROWS * TILE if x_is_rm else 1, self.x_stick, "x_in"),
             (CB_X_TILES, self.depth_x * M_BLOCK * self.kr_pad, b8, "bfp8"),
-            (CB_X_STAGE, DEPTH_XSTAGE * self.kr_pad if x_is_rm else 1, b8, "bfp8"),
+            (CB_X_STAGE, 1, 64, "u32"),
             (CB_W_GATE, self.depth_w * self.kr_pad * self.hn_pad, w, "weight"),
             (CB_W_UP, self.depth_w * self.kr_pad * self.hn_pad, w, "weight"),
             (CB_W_DOWN, self.depth_wd * self.hn_pad * self.ec_max, w, "weight"),
-            (CB_H, DEPTH_H * gu, b8, "bfp8"),
+            (CB_H, DEPTH_H * h_fast, b8, "bfp8"),
             (CB_IDX_SCRATCH, 1, idx_page, "u32"),
             (CB_COUNTS_SCRATCH, 1, counts_page, "u32"),
             (CB_GATHER_GATE, self.gather_pages, b8, "bfp8"),
@@ -487,17 +519,70 @@ class Blocking:
             (CB_GATE_ACC, gu, b8, "bfp8"),
             (CB_UP_ACC, gu, b8, "bfp8"),
             (CB_GATE_SILU, self.slice_pages, b16, "bf16"),
-            (CB_H_LOCAL, gu, b8, "bfp8"),
+            (CB_H_LOCAL, max(gu, h_fast), b8, "bfp8"),
             (CB_OUT_INTERM, outb, b16, "bf16"),
         ]
 
-    def l1_bytes(self, x_is_rm: bool, out_tile: int = 0) -> int:
-        return sum(pages * page for _, pages, page, _ in self.cb_layout(x_is_rm, out_tile))
+    def phase_cb_alias(self, out_tile: int = 0) -> bool:
+        """Whether all three phase views can share one physical allocation.
+
+        The output view is caller-selectable, while gather and h-slice are always BFP8. Equal tile
+        bytes is the geometry-side predicate; the descriptor additionally requires the actual
+        output dtype to be bfloat8_b before constructing a multi-index CBDescriptor.
+        """
+        if (out_tile or self.bfp8_tile) != self.bfp8_tile:
+            return False
+        by_index = {entry[0]: entry for entry in self.cb_layout(True, out_tile)}
+        entries = [by_index[index] for index in PHASE_CB_ALIAS]
+        shared_pages = 1
+        for _, pages, _, _ in entries:
+            shared_pages = lcm(shared_pages, pages)
+        return shared_pages < sum(entry[1] for entry in entries)
+
+    def cb_allocations(
+        self,
+        x_is_rm: bool,
+        out_tile: int = 0,
+        idx_page: int = 64,
+        counts_page: int = 64,
+        *,
+        enable_phase_alias: bool = True,
+    ):
+        """(physical_bytes, logical_views) for every physical CB allocation.
+
+        Each logical view is one tuple from `cb_layout`. Aliased views get independent FIFO state
+        but the same base and capacity. The shared page count is therefore the LCM of the logical
+        capacities: every whole-buffer cycle returns each view to a legal boundary, even when a
+        future geometry stops making one capacity divide another.
+        """
+        layout = self.cb_layout(x_is_rm, out_tile, idx_page, counts_page)
+        by_index = {entry[0]: entry for entry in layout}
+        alias = PHASE_CB_ALIAS if enable_phase_alias and self.phase_cb_alias(out_tile) else ()
+        alias_entries = tuple(by_index[index] for index in alias)
+        alias_pages = 1
+        for _, pages, _, _ in alias_entries:
+            alias_pages = lcm(alias_pages, pages)
+
+        allocations = []
+        for entry in layout:
+            index, pages, page, _ = entry
+            if alias and index == alias[0]:
+                allocations.append((alias_pages * page, alias_entries))
+            elif index not in alias:
+                allocations.append((pages * page, (entry,)))
+        return allocations
+
+    def l1_bytes(self, x_is_rm: bool, out_tile: int = 0, *, enable_phase_alias: bool = True) -> int:
+        return sum(
+            physical_bytes
+            for physical_bytes, _ in self.cb_allocations(x_is_rm, out_tile, enable_phase_alias=enable_phase_alias)
+        )
 
     def describe(self) -> str:
         return (
             f"{self.hgroups}x{self.kgroups} grid, emb {self.emb}, hidden {self.hidden}: "
             f"kr_pad {self.kr_pad}, hn_pad {self.hn_pad} (floor "
             f"{(self.hid_t + self.hgroups - 1) // self.hgroups}), gu_chunks {self.gu_chunks}, "
-            f"ec_max {self.ec_max}, depth_wd {self.depth_wd}, wd_split {self.wd_split}"
+            f"ec_max {self.ec_max}, depth_wd {self.depth_wd}, wd_split {self.wd_split}, "
+            f"wd_mrow {self.wd_mrow_rounds and self.wd_resident}"
         )

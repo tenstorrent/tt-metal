@@ -4,15 +4,18 @@
 // moe_fused_swiglu — COMPUTE.
 //
 // Per M-block, on every one of the HGROUPS x KGROUPS worker cores:
-//   1. fused tilize of the row-major x slice this core injects (bf16 activation path only);
+//   1. fused tilize of the row-major x slice this core injects directly into the resident x slot
+//      (bf16 activation path only); a one-page CB signals completion to the reader without making
+//      compute a second producer of the resident CB;
 //   2. gate and up matmuls over the SAME resident x block, interleaved chunk by chunk over the
 //      hidden axis. For a full-size x slot, up consumes each progressively published M row-group,
 //      then gate reuses the resident x; compute pops the complete slot once at the end;
 //   3. the reduce-scatter + SwiGLU epilogue: every core folds only ITS OWN SLICE over all KGROUPS
 //      contributors and runs the epilogue on that slice, so the SFPU SiLU — the dominant cost —
 //      is parallelised KGROUPS ways and the bias walk collapses to one call;
-//   4. the `down` matmul over HGROUPS phase-2 K-blocks with packer L1 accumulation, then the one
-//      genuine dtype boundary (bf16 partials -> bfp8 output).
+//   4. the `down` matmul. Full-size runtime M slots use M_BLOCK independent M-row calls against one
+//      complete resident weight shard; ragged blocks retain the HGROUPS-K-block accumulation path.
+//      Both finish at the one genuine dtype boundary (bf16 partials -> bfp8 output).
 //
 // Everything here is a kernel_lib helper except `fold_dest`, which needs a runtime tile offset that
 // compile-time element specs cannot express. The ONE raw access is the L1 mailbox read of the token
@@ -51,16 +54,18 @@ constexpr uint32_t KGROUPS = CT(KGROUPS);  // column height == contributor count
 constexpr uint32_t HID_T = CT(HID_T);
 constexpr uint32_t INPUT_FORMAT = CT(INPUT_FORMAT);
 constexpr uint32_t OUT_SUBBLOCK_H_GU = CT(OUT_SUBBLOCK_H_GU);
-// `down` output sub-block HEIGHT. Separate from the gate/up height because down's width is `ec`
-// (2-3) against a DEST budget of 8, while gate/up's is already HN_PAD. Host-derived as the largest
-// power of two that fits; taken as min(.., m_eff) below so it never constrains the runtime shrink.
+// Uniform-safe `down` output sub-block HEIGHT, derived against EC_MAX. Narrower cores may grow it
+// further at runtime against their real `ec`; both choices stay powers of two dividing m_eff.
 constexpr uint32_t OUT_SUBBLOCK_H_DN = CT(OUT_SUBBLOCK_H_DN);
+constexpr uint32_t OUT_SUBBLOCK_H_DN_MAX = CT(OUT_SUBBLOCK_H_DN_MAX);
 constexpr uint32_t MAILBOX_MAGIC = CT(MAILBOX_MAGIC);
 // Smallest legal `m_eff` (= OUT_SUBBLOCK_H_GU rounded up to a power of two, so `m_eff /
 // OUT_SUBBLOCK_H_GU` is always exact). One host definition, identical in all three kernels.
 constexpr uint32_t M_EFF_MIN = CT(M_EFF_MIN);
+constexpr uint32_t DEPTH_X = CT(DEPTH_X);
 // gate/up in1 sub-block WIDTH in hidden tiles — a sub-division of one chunk.
 constexpr uint32_t HN_BLOCK = CT(HN_BLOCK);
+constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
 // The hidden-axis chunk the gate/up weight stream is published and consumed in, so the matmul on
 // chunk c overlaps the DRAM read of c+1. Host-guaranteed to divide HN_PAD.
 constexpr uint32_t GU_CHUNKS = CT(GU_CHUNKS);
@@ -72,7 +77,7 @@ constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in
 
 constexpr uint32_t cb_x_in = CT(CB_X_IN);
 constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
-constexpr uint32_t cb_x_stage = CT(CB_X_STAGE);
+constexpr uint32_t cb_x_ready = CT(CB_X_STAGE);  // legacy host/CT name; carries completion, not x payload
 constexpr uint32_t cb_w_gate = CT(CB_W_GATE);
 constexpr uint32_t cb_w_up = CT(CB_W_UP);
 constexpr uint32_t cb_w_down = CT(CB_W_DOWN);
@@ -214,6 +219,7 @@ void kernel_main() {
     const uint32_t m_blocks = mb.m_blocks;
 
     CircularBuffer x_buf(cb_x_tiles);
+    CircularBuffer x_ready(cb_x_ready);
     CircularBuffer wg_buf(cb_w_gate);
     CircularBuffer wu_buf(cb_w_up);
     CircularBuffer wd_buf(cb_w_down);
@@ -242,6 +248,7 @@ void kernel_main() {
         // shape and trip count below is derived from it, so count 128 does HALF the gate/up matmul,
         // reduce and `down` work of count 256 instead of the same amount.
         const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, b, M_BLOCK, M_EFF_MIN);
+        const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
         const uint32_t x_slot_tiles = m_eff * KR_PAD;
         const uint32_t gu_block_tiles = m_eff * HN_PAD;
         const uint32_t out_block_tiles = m_eff * EC_MAX;
@@ -268,9 +275,13 @@ void kernel_main() {
         // down: [m_eff, ec] = h[m_eff, HGROUPS*HN_PAD] @ W_down[.., ec], HGROUPS K-blocks.
         // The FMA width is the real `ec`, but the in1 read stride and the output row stride are the
         // uniform EC_MAX so every phase-2 CB increment is core-independent.
-        // Both heights are powers of two and m_eff is a power of two, so min(.,.) DIVIDES m_eff
-        // exactly — the `down` height never forces a larger m_eff (Refinement 1 stays intact).
-        const uint32_t sbh_dn = (OUT_SUBBLOCK_H_DN < m_eff) ? OUT_SUBBLOCK_H_DN : m_eff;
+        // Start from the height safe for the uniform EC_MAX stride, then let narrower cores use
+        // more of DEST: at 11x8, ec=3 stays 2x3 while ec=2 grows to 4x2. Every height considered is
+        // a power of two, so it still divides the power-of-two runtime m_eff exactly.
+        uint32_t sbh_dn = (OUT_SUBBLOCK_H_DN < m_eff) ? OUT_SUBBLOCK_H_DN : m_eff;
+        while (sbh_dn * 2 <= OUT_SUBBLOCK_H_DN_MAX && sbh_dn * 2 <= m_eff && sbh_dn * 2 * ec <= DEST_LIMIT) {
+            sbh_dn *= 2;
+        }
         // `down` STAYS ON m_eff — the `m_rows` shrink deliberately does not reach it. Its in0 is `h` under
         // `InputPolicy::WaitAndPopPerKBlock`, and the helper derives BOTH the wait and the pop from
         // the shape (`in0_block_num_tiles = in0_subblock_num_tiles * shape.in0_num_subblocks`,
@@ -286,11 +297,25 @@ void kernel_main() {
         // ---- 1. fused tilize of the x tile-rows this core injects (bf16 ROW_MAJOR only) ----
         if constexpr (INPUT_FORMAT == 0) {
             MaybeDeviceZoneScope("compute_tilize");
-            const uint32_t n_inject =
-                moe_fused_swiglu::inject_rows(m_eff, moe_fused_swiglu::inject_first(my_col), HGROUPS);
-            for (uint32_t i = 0; i < n_inject; ++i) {
-                // Asymmetric page mode: TILE_H row-major stick slices in -> KR_PAD bfp8 tiles out.
-                tilize<KR_PAD, cb_x_in, cb_x_stage>(1, TILE_H);
+            const uint32_t x_slot_offset = (b % DEPTH_X) * M_BLOCK * KR_PAD;
+            const uint32_t t_first = moe_fused_swiglu::inject_first(my_col);
+            for (uint32_t t = t_first; t < m_eff; t += HGROUPS) {
+                // The reader reserved the whole resident slot before publishing cb_x_in. Pack the
+                // converted row straight into its final multicast offset but leave cb_x_tiles'
+                // FIFO state untouched: the reader remains its only pusher. The tiny ready CB is
+                // the compute->reader completion edge that cb_x_stage's payload used to provide.
+                x_ready.reserve_back(1);
+                tilize<
+                    KR_PAD,
+                    cb_x_in,
+                    cb_x_tiles,
+                    tilize_config::InitUninitMode::InitAndUninit,
+                    tilize_config::WaitMode::WaitBlock,
+                    tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+                    tilize_config::Fp32Mode::Fast,
+                    tilize_config::RemapMode::Configure,
+                    tilize_config::OutputPolicy::CallerOwned>(1, TILE_H, x_slot_offset + t * KR_PAD);
+                x_ready.push_back(1);
             }
         }
 
@@ -451,50 +476,91 @@ void kernel_main() {
             }
         }
 
-        // ---- 4. down matmul: HGROUPS K-blocks, packer L1 accumulation into a caller-owned
-        // interm region (so every K-block accumulates at the SAME L1 address) ----
+        // ---- 4. down matmul: HGROUPS K-blocks. Non-last blocks packer-L1-accumulate in the
+        // fixed bf16 scratch; the last reloads that partial into DEST, adds its contribution,
+        // and packs straight to the caller-owned bfp8 output region. ----
         {
             MaybeDeviceZoneScope("compute_down");
-            out_interm_buf.reserve_back(out_block_tiles);
-            matmul_block<
-                /*transpose=*/false,
-                /*packer_l1_acc=*/true,
-                LastBlockTarget::Interm,
-                OutputCBLayout::TileRowMajor,
-                matmul_config::InitMode::Short,
-                InputPolicy::WaitAndPopPerKBlock,
-                InputPolicy::WaitAndPopPerKBlock,
-                NoPostCompute,
-                NoPreKBlock,
-                NoPostKBlock,
-                /*untilize_block_ct_dim=*/0,
-                HnSteps,
-                NoIn0Source,
-                NoIn1BaseOffset,
-                /*caller_owns_pack_target=*/true>(
-                h_buf,
-                wd_buf,
-                out_tiles_buf,
-                out_interm_buf,
-                shape_dn,
-                {},
-                {},
-                /*in1_per_core_w=*/EC_MAX,
-                /*out_row_width=*/EC_MAX,
-                {},
-                HnSteps{hn_last});
-            out_interm_buf.push_back(out_block_tiles);
-            // matmul_block leaves packer L1 accumulation ENABLED after its last K-block, and neither
-            // the eltwise chain (L1Accumulation::Disabled is a compile-time no-op) nor a
-            // packer_l1_acc=false matmul resets it. Without this the copy below — and the next
-            // M-block's gate matmul — would ACCUMULATE onto stale L1 instead of overwriting.
+            out_tiles_buf.reserve_back(out_block_tiles);
+            if (wd_mrow) {
+                // The reader publishes the complete resident W_down shard once, while cb_h carries
+                // eight consecutive 1xHID_T activation rows.  Each call has one K-block, so the
+                // result never leaves DEST for an intermediate BF16 accumulation spill.
+                constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * HN_PAD * EC_MAX;
+                wd_buf.wait_front(WD_RESIDENT_TILES);
+                reconfig_data_format(cb_w_down, cb_h);
+                pack_reconfig_data_format(cb_out_tiles);
+                mm_block_init_short(cb_h, cb_w_down, false, ec, 1, HID_T);
+                const MatmulBlockShape row_shape = MatmulBlockShape::of(1, 1, 1, ec, HID_T, 1);
+                for (uint32_t r = 0; r < KGROUPS; ++r) {
+                    matmul_block<
+                        /*transpose=*/false,
+                        /*packer_l1_acc=*/true,
+                        LastBlockTarget::Out,
+                        OutputCBLayout::TileRowMajor,
+                        matmul_config::InitMode::None,
+                        InputPolicy::WaitAndPopPerKBlock,
+                        InputPolicy::NoWaitNoPop,
+                        NoPostCompute,
+                        NoPreKBlock,
+                        NoPostKBlock,
+                        /*untilize_block_ct_dim=*/0,
+                        NoKBlockInnerDimFn,
+                        NoIn0Source,
+                        NoIn1BaseOffset,
+                        /*caller_owns_pack_target=*/true,
+                        NoneActivation,
+                        matmul_config::DataFormatReconfig::NONE>(
+                        h_buf,
+                        wd_buf,
+                        out_tiles_buf,
+                        out_tiles_buf,
+                        row_shape,
+                        {},
+                        {},
+                        /*in1_per_core_w=*/EC_MAX,
+                        /*out_row_width=*/EC_MAX,
+                        {},
+                        {},
+                        {},
+                        {},
+                        /*out_col_offset=*/r * EC_MAX);
+                }
+                h_buf.wait_front(HID_T);
+                h_buf.pop_front(HID_T);  // payload-free alignment slot from the reader
+                wd_buf.pop_front(WD_RESIDENT_TILES);
+            } else {
+                matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/true,
+                    LastBlockTarget::Out,
+                    OutputCBLayout::TileRowMajor,
+                    matmul_config::InitMode::Short,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    InputPolicy::WaitAndPopPerKBlock,
+                    NoPostCompute,
+                    NoPreKBlock,
+                    NoPostKBlock,
+                    /*untilize_block_ct_dim=*/0,
+                    HnSteps,
+                    NoIn0Source,
+                    NoIn1BaseOffset,
+                    /*caller_owns_pack_target=*/true>(
+                    h_buf,
+                    wd_buf,
+                    out_tiles_buf,
+                    out_interm_buf,
+                    shape_dn,
+                    {},
+                    {},
+                    /*in1_per_core_w=*/EC_MAX,
+                    /*out_row_width=*/EC_MAX,
+                    {},
+                    HnSteps{hn_last});
+            }
+            out_tiles_buf.push_back(out_block_tiles);
+            // Leave a known packer state for the next M-block's gate/up path.
             pack_reconfig_l1_acc(0);
-        }
-
-        {
-            // The one genuine dtype boundary: bf16 accumulation -> bfp8 output tiles.
-            MaybeDeviceZoneScope("compute_out_pack");
-            copy<blk_in(cb_out_interm), blk_out(cb_out_tiles)>(blk_shape(out_block_tiles));
         }
 
         // The resident x block was retained by both matmuls; release it now. A ragged full-size

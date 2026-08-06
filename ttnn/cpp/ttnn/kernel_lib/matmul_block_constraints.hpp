@@ -12,22 +12,23 @@ namespace compute_kernel_lib {
 // Validity contract for matmul_block's caller_owns_pack_target mode.
 //
 // Under caller_owns the helper skips its own per-K-block reserve/push/drain on the pack
-// target: the caller does ONE reserve before the K-loop and ONE push after, and each
-// K-block packs to absolute offsets in that fixed region with packer_l1_acc accumulating
-// in place. That is only correct when the helper's software-reload accumulation path (the
-// per-K-block spill push paired with the reload wait_front at the top of the K-loop) is
-// statically dead — otherwise the reload wait_front, which is NOT gated by caller_owns,
-// has no matching spill push (that push IS gated off) and the helper deadlocks.
+// targets and packs to absolute offsets in fixed regions. With Interm as the last target,
+// packer L1 accumulation stays in that region for every K-block. With plain Out as the
+// last target, non-last blocks accumulate in the fixed intermediate scratch, the final
+// block reloads it without FIFO waits/pops, and packs into the caller-reserved output.
 //
-// The reload path is dead iff last_block_target == Interm (the only branch that forces
-// enable_reload = false). It additionally requires TileRowMajor, whose absolute-offset
-// pack is the only one that places each subblock correctly into the caller's fixed region
-// (SubblockMajor would not deadlock but would corrupt output), and packer_l1_acc, since
-// in-place accumulation is the whole point of the fixed region. Hence: caller_owns is
-// supported iff TileRowMajor + packer_l1_acc + Interm.
+// Both forms require TileRowMajor, whose absolute-offset pack is the only one that places
+// each subblock correctly into the fixed region, and packer_l1_acc. OutWithRelu and
+// OutWithUntilize remain unsupported: their final-pack lifecycle is not the plain-Out one
+// audited here.
 constexpr bool caller_owns_pack_target_supported(
-    bool caller_owns_pack_target, bool is_tile_row_major, bool packer_l1_acc, bool last_block_is_interm) {
-    return !caller_owns_pack_target || (is_tile_row_major && packer_l1_acc && last_block_is_interm);
+    bool caller_owns_pack_target,
+    bool is_tile_row_major,
+    bool packer_l1_acc,
+    bool last_block_is_interm,
+    bool last_block_is_plain_out) {
+    return !caller_owns_pack_target ||
+           (is_tile_row_major && packer_l1_acc && (last_block_is_interm || last_block_is_plain_out));
 }
 
 }  // namespace compute_kernel_lib

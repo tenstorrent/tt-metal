@@ -76,6 +76,9 @@ constexpr uint32_t SEM_XSTAGED = CT(SEM_XSTAGED);
 constexpr uint32_t SEM_H_RDY_BASE = CT(SEM_H_RDY_BASE);
 constexpr uint32_t SEM_H_FREE = CT(SEM_H_FREE);
 constexpr uint32_t SEM_WDSPLIT = CT(SEM_WDSPLIT);
+constexpr uint32_t SEM_HROW_FREE = CT(SEM_HROW_FREE);
+constexpr uint32_t SEM_PHASE_FREE = CT(SEM_PHASE_FREE);
+constexpr uint32_t PHASE_CB_ALIAS = CT(PHASE_CB_ALIAS);
 
 // X_PAGE is the ACTIVATION TENSOR's own page (bf16: one full emb stick; bfp8: one tile) — what
 // TensorAccessor needs to place a page in a bank. X_SLICE is the cb_x_in page stride, i.e. only
@@ -100,6 +103,7 @@ constexpr uint32_t M_EFF_MIN = CT(M_EFF_MIN);
 // reserve/push handshake is untouched; only the DRAM read loops are skipped.
 constexpr uint32_t W_RESIDENT = CT(W_RESIDENT);
 constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
+constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
 constexpr uint32_t GU_CHUNKS = CT(GU_CHUNKS);
 constexpr uint32_t XPRIO = CT(XPRIO);
 constexpr uint32_t HACK_AHEAD = CT(HACK_AHEAD);
@@ -111,7 +115,7 @@ constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in
 
 constexpr uint32_t cb_x_in = CT(CB_X_IN);
 constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
-constexpr uint32_t cb_x_stage = CT(CB_X_STAGE);
+constexpr uint32_t cb_x_ready = CT(CB_X_STAGE);  // legacy host/CT name; carries completion, not x payload
 constexpr uint32_t cb_w_gate = CT(CB_W_GATE);
 constexpr uint32_t cb_w_down = CT(CB_W_DOWN);
 constexpr uint32_t cb_h = CT(CB_H);
@@ -254,6 +258,7 @@ void kernel_main() {
     // Column `x`'s reduce root is row `x % KGROUPS` — the core that injects this column's h into
     // the phase-2 all-gather. Derived, not passed: one rule, three kernels.
     const bool is_root = (my_row == my_col % KGROUPS);
+    const bool is_row_agg = (my_col == my_row);
 
     const auto x_acc = TensorAccessor(x_args, x_addr, X_PAGE);
     const auto wg_acc = TensorAccessor(wg_args, w_gate_addr, W_TILE);
@@ -358,8 +363,23 @@ void kernel_main() {
         // a pure function of the same mailbox words), which is what keeps the three collectives'
         // round counts and landing addresses in lockstep across the grid.
         const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, b, M_BLOCK, M_EFF_MIN);
+        const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
         const uint32_t x_slot_tiles = m_eff * KR_PAD;   // resident in0 block, one slot
         const uint32_t h_block_tiles = m_eff * HN_PAD;  // one phase-2 K-block of h
+
+        // The diagonal core in row r owns that row's HID_T-wide assembly slot.  Invite every
+        // hidden-column worker only after the preceding block's phase 2 has consumed the slot.
+        // The writer waits this monotone counter before depositing its reduced HN fragment.
+        if (wd_mrow && is_row_agg) {
+            const uint32_t sem = static_cast<uint32_t>(get_semaphore(SEM_HROW_FREE));
+            for (uint32_t x = 0; x < HGROUPS; ++x) {
+                const uint32_t sidx = my_row * HGROUPS + x;
+                const uint32_t vx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
+                const uint32_t vy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
+                noc_semaphore_inc(get_noc_addr(vx, vy, sem), 1);
+            }
+            noc_async_atomic_barrier();
+        }
 
         // REFINEMENT 3 — the weight DRAM read happens on M-block 0 only when the block is resident.
         // `cb_pop_front` advances a read pointer without touching the bytes, and each weight CB has
@@ -414,8 +434,9 @@ void kernel_main() {
                     row = M_T_MAX - 1;  // rows past the sized region are UNDEFINED; stay in bounds
                 }
                 if constexpr (INPUT_FORMAT == 0) {
-                    // bf16 ROW_MAJOR: read this row-group's emb slice of 32 sticks; compute tilizes
-                    // them to bfp8 in cb_x_stage; copy the tile-row into the resident slot.
+                    // bf16 ROW_MAJOR: read this row-group's emb slice of 32 sticks. Compute tilizes
+                    // it DIRECTLY into `dst`; cb_x_ready is only a one-page completion channel, so
+                    // the reader remains the sole owner of cb_x_tiles' push/write-pointer state.
                     if (!staged_early) {
                         cb_reserve_back(cb_x_in, TILE_H);
                         issue_x_row(row, get_write_ptr(cb_x_in));
@@ -423,10 +444,8 @@ void kernel_main() {
                         cb_push_back(cb_x_in, TILE_H);
                     }
 
-                    cb_wait_front(cb_x_stage, KR_PAD);
-                    noc_async_read(get_noc_addr(get_read_ptr(cb_x_stage)), dst, X_ROW_BYTES);
-                    noc_async_read_barrier();
-                    cb_pop_front(cb_x_stage, KR_PAD);
+                    cb_wait_front(cb_x_ready, 1);
+                    cb_pop_front(cb_x_ready, 1);
                 } else {
                     // bfp8_b TILE: the tiles land straight in the resident slot, no tilize.
                     if (!staged_early) {
@@ -510,11 +529,12 @@ void kernel_main() {
             noc_async_read_set_trid(P2_READ_TRID);
         }
         auto issue_wd_batch = [&]() {
-            cb_reserve_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
+            const uint32_t nblocks = wd_mrow ? HGROUPS : WD_AHEAD;
+            cb_reserve_back(cb_w_down, nblocks * WD_BLOCK_TILES);
             MaybeDeviceZoneScope("reader_wd_issue");
             const uint32_t wp = get_write_ptr(cb_w_down);
             (void)wp;
-            for (uint32_t r = 0; r < WD_AHEAD; ++r) {
+            for (uint32_t r = 0; r < nblocks; ++r) {
                 const uint32_t hbase = r * HN_PAD;
                 const uint32_t hn_r = moe_fused_swiglu::wd_block_rows(hbase, HN_PAD, HID_T);
 #ifndef ABLATE_NO_W_XFER
@@ -580,6 +600,16 @@ void kernel_main() {
             cb_reserve_back(cb_gather_gate, GATHER_PAGES);
             cb_reserve_back(cb_gather_up, GATHER_PAGES);
         }
+        // cb_gather_gate aliases cb_h_slice and cb_out_tiles for BFP8 output. Reserving changes
+        // only this logical view's FIFO state, but the invite below authorises PEERS to write its
+        // physical SRAM. Block b therefore cannot send the invite until this core's writer has
+        // drained block b-1's output DMA from that same SRAM. This target-local edge is required:
+        // a peer's own writer progress says nothing about this core's outstanding output read.
+        if constexpr (PHASE_CB_ALIAS) {
+            if (b != 0) {
+                moe_fused_swiglu::sem_wait_min(SEM_PHASE_FREE, b);
+            }
+        }
 #ifndef ABLATE_NO_REDUCE_XFER  // /perf-measure: drop the all-to-all, keep every CB cycle
         const uint32_t sem_go = static_cast<uint32_t>(get_semaphore(SEM_GO));
         for (uint32_t i = 0; i < KGROUPS; ++i) {
@@ -612,11 +642,11 @@ void kernel_main() {
             cb_push_back(cb_gather_up, GATHER_PAGES);
         }
 
-        // ---- Phase 2: round r of the h all-gather, W_down already in flight ----
-        // DEFERRED READ BARRIER: the round's W_down issue moves AFTER the send/receive and its
-        // barrier to the NEXT round, so the read lands under a grid-wide multicast instead of
-        // being drained on the spot. `wd_pending` carries the issued-but-unpublished block across
-        // the round boundary. See DESIGN_NOTES.md §4.
+        // ---- Phase 2: broadcast h and consume W_down ----
+        // Full M-blocks run one whole-H broadcast per M row against the complete resident W_down
+        // shard. Ragged blocks retain the hidden-slice rounds and their deferred read barrier:
+        // each W_down read lands under the next grid-wide multicast rather than being drained on
+        // the spot. `wd_pending` carries that issued-but-unpublished block between rounds.
         {
             MaybeDeviceZoneScope("reader_wd_wait");
             if (prefetch_next_x) {
@@ -626,15 +656,19 @@ void kernel_main() {
             }
             if constexpr (WD_SPLIT) {
                 // ...and NOC_1's half of the SAME blocks (see wd_split_gate).
-                wd_split_gate(wd_done, WD_AHEAD);
+                wd_split_gate(wd_done, wd_mrow ? HGROUPS : WD_AHEAD);
             }
         }
-        cb_push_back(cb_w_down, WD_AHEAD * WD_BLOCK_TILES);
+        cb_push_back(cb_w_down, (wd_mrow ? HGROUPS : WD_AHEAD) * WD_BLOCK_TILES);
         // PERF 2 — on the scatter path this column's h block is ASSEMBLED IN cb_h_local BY THE
         // WORKERS' NoC WRITES, not packed by compute, so the root's handshake is the SEM_HSLICE
         // counter rather than a CB front. `sl_w` slices land per M-block; the counter is monotone and
         // cumulative, like every other semaphore in this op.
-        if (is_root) {
+        if (wd_mrow) {
+            if (is_row_agg) {
+                h_arrivals += HGROUPS;
+            }
+        } else if (is_root) {
             h_arrivals += sl_w;
         }
         if (prefetch_next_x) {
@@ -651,69 +685,129 @@ void kernel_main() {
         };
         {
             MaybeDeviceZoneScope("reader_phase2");
-            bool wd_pending = false;
-            // HACK_AHEAD — how many rounds' senders this core acks in one go. The all-gather costs
-            // 3.12 us of FIXED per-round rendezvous against 2.06 us of work, so acking ahead is the
-            // round-cost lever; legal only because the VALID cells are per-slot. The real bound is
-            // runtime (`blocks_cap = DEPTH_H * M_BLOCK / m_eff`) because m_eff is, so it is clamped
-            // here rather than host-side. See DESIGN_NOTES.md §3.
-            const uint32_t blocks_cap = (DEPTH_H * M_BLOCK) / m_eff;
-            uint32_t hack_ahead = HACK_AHEAD;
-            if (hack_ahead > blocks_cap - 1) {
-                hack_ahead = blocks_cap - 1;  // never reserve the WHOLE CB: that forces 0 in flight
-            }
-            // ...and never ack more than DEPTH_H ahead, whatever the CB slack. There are only
-            // DEPTH_H flag cells, so sender g + A - 1 reuses the cell last written by global round
-            // g + A - 1 - DEPTH_H; only A <= DEPTH_H keeps that strictly in this core's PAST, i.e.
-            // already waited on and put back to INVALID. blocks_cap alone is NOT this bound (it is
-            // 6 at m_eff 4 and 24 at m_eff 1) and using it hangs.
-            if (hack_ahead > DEPTH_H) {
-                hack_ahead = DEPTH_H;
-            }
-            if (hack_ahead < 1) {
-                hack_ahead = 1;
-            }
-            uint32_t next_ack = 0;
-            for (uint32_t r = 0; r < HGROUPS; ++r) {
-                // Reserve this round's cb_h slot first so the sender can issue its self-copy
-                // before the barrier below, which then covers the self-copy AND the previous
-                // round's W_down block in one drain. The tail clamp (`HGROUPS - r`) matters:
-                // near the end, reserving blocks nobody will push into would hang here.
-                {
-                    // Per-round zones: 3 records/round = 33/M-block on top of the reader's 8,
-                    // against a 125-per-core cap — so these resolve ONE M-block (count <= 256) and
-                    // only the whole-kernel duration above that.
-                    MaybeDeviceZoneScope("p2_reserve");
-                    uint32_t ahead = hack_ahead;
-                    if (ahead > HGROUPS - r) {
-                        ahead = HGROUPS - r;
+            if (wd_mrow) {
+                // Eight M-row rounds.  Row r's diagonal aggregator owns one complete HID_T-wide
+                // activation row; broadcast it as a single K=HID_T operand.  W_down's complete
+                // resident weight shard was published above, so there is no per-round weight DMA.
+                uint32_t next_ack = 0;
+                for (uint32_t r = 0; r < KGROUPS; ++r) {
+                    uint32_t ahead = HACK_AHEAD;
+                    if (ahead > DEPTH_H) {
+                        ahead = DEPTH_H;
                     }
-                    cb_reserve_back(cb_h, ahead * h_block_tiles);
+                    if (ahead > KGROUPS - r) {
+                        ahead = KGROUPS - r;
+                    }
+                    cb_reserve_back(cb_h, ahead * HID_T);
+                    const uint32_t hdst = get_write_ptr(cb_h);
+                    while (next_ack < r + ahead && next_ack < KGROUPS) {
+                        const uint32_t sidx = next_ack * HGROUPS + next_ack;
+                        const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
+                        const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
+                        noc_semaphore_inc(get_noc_addr(svx, svy, static_cast<uint32_t>(get_semaphore(SEM_H_FREE))), 1);
+                        ++next_ack;
+                    }
+
+                    const bool i_send = is_row_agg && (my_row == r);
+                    const uint32_t slot = (b * KGROUPS + r) % DEPTH_H;
+                    if (i_send) {
+#ifndef ABLATE_NO_REDUCE_XFER
+                        noc_semaphore_wait_min(sem_h_ptr, h_arrivals);
+#endif
+                        noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, HID_T * H_TILE);
+                        phase2_read_barrier();
+#ifndef ABLATE_NO_H_XFER
+                        if constexpr (hmc.active) {
+                            h_free_expected += NUM_CORES;
+                            noc_semaphore_wait_min(
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                    static_cast<uint32_t>(get_semaphore(SEM_H_FREE))),
+                                h_free_expected);
+                            h_slot_send_posted(slot, hdst, HID_T * H_TILE);
+                        }
+#endif
+                    } else {
+#ifndef ABLATE_NO_H_XFER
+                        if constexpr (hmc.active) {
+                            volatile tt_l1_ptr uint32_t* hf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                static_cast<uint32_t>(get_semaphore(SEM_H_RDY_BASE + slot)));
+                            MaybeDeviceZoneScope("p2_hwait");
+                            noc_semaphore_wait(hf, VALID);
+                            noc_semaphore_set(hf, INVALID);
+                        }
+#endif
+                    }
+                    cb_push_back(cb_h, HID_T);
                 }
-                const uint32_t hdst = get_write_ptr(cb_h);
-                // ACK FIRST, then wait. `cb_reserve_back` above proves THIS core's slot is free,
-                // so tell round r's sender it may write before blocking on round r's arrival.
-                // Acking first is what makes this deadlock-free: every sender's window ack comes
-                // from a core that has already reserved, so no core waits on a core waiting on it.
-                while (next_ack < r + hack_ahead && next_ack < HGROUPS) {
-                    const uint32_t sidx = (next_ack % KGROUPS) * HGROUPS + next_ack;
-                    const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
-                    const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
-                    noc_semaphore_inc(get_noc_addr(svx, svy, static_cast<uint32_t>(get_semaphore(SEM_H_FREE))), 1);
-                    ++next_ack;
+                // Eight 64-tile pushes advance a 3x64-tile CB by two slots.  Publish one payload-
+                // free slot so both producer and consumer return to the CB base before a possible
+                // smaller tail block switches back to the HN_PAD-wide schedule.
+                cb_reserve_back(cb_h, HID_T);
+                cb_push_back(cb_h, HID_T);
+            } else {
+                bool wd_pending = false;
+                // HACK_AHEAD — how many rounds' senders this core acks in one go. The all-gather costs
+                // 3.12 us of FIXED per-round rendezvous against 2.06 us of work, so acking ahead is the
+                // round-cost lever; legal only because the VALID cells are per-slot. The real bound is
+                // runtime (`blocks_cap = DEPTH_H * M_BLOCK / m_eff`) because m_eff is, so it is clamped
+                // here rather than host-side. See DESIGN_NOTES.md §3.
+                const uint32_t blocks_cap = (DEPTH_H * M_BLOCK) / m_eff;
+                uint32_t hack_ahead = HACK_AHEAD;
+                if (hack_ahead > blocks_cap - 1) {
+                    hack_ahead = blocks_cap - 1;  // never reserve the WHOLE CB: that forces 0 in flight
                 }
-                const bool i_send = (is_root && r == my_col);
-                if (i_send) {
-                    // Self-copy cb_h_local -> this round's cb_h slot, so the send below is
-                    // `src == dst` and therefore EXCLUDE-source. A src != dst send is a LOOPBACK
-                    // multicast whose rotating-sender flag reset races this core's own in-flight
-                    // VALID: measured as PCC drifting 0.959-0.979 run to run on a fixed input.
-                    // cb_h_local needs no CB front — the workers' NoC writes assemble it.
+                // ...and never ack more than DEPTH_H ahead, whatever the CB slack. There are only
+                // DEPTH_H flag cells, so sender g + A - 1 reuses the cell last written by global round
+                // g + A - 1 - DEPTH_H; only A <= DEPTH_H keeps that strictly in this core's PAST, i.e.
+                // already waited on and put back to INVALID. blocks_cap alone is NOT this bound (it is
+                // 6 at m_eff 4 and 24 at m_eff 1) and using it hangs.
+                if (hack_ahead > DEPTH_H) {
+                    hack_ahead = DEPTH_H;
+                }
+                if (hack_ahead < 1) {
+                    hack_ahead = 1;
+                }
+                uint32_t next_ack = 0;
+                for (uint32_t r = 0; r < HGROUPS; ++r) {
+                    // Reserve this round's cb_h slot first so the sender can issue its self-copy
+                    // before the barrier below, which then covers the self-copy AND the previous
+                    // round's W_down block in one drain. The tail clamp (`HGROUPS - r`) matters:
+                    // near the end, reserving blocks nobody will push into would hang here.
+                    {
+                        // Per-round zones: 3 records/round = 33/M-block on top of the reader's 8,
+                        // against a 125-per-core cap — so these resolve ONE M-block (count <= 256) and
+                        // only the whole-kernel duration above that.
+                        MaybeDeviceZoneScope("p2_reserve");
+                        uint32_t ahead = hack_ahead;
+                        if (ahead > HGROUPS - r) {
+                            ahead = HGROUPS - r;
+                        }
+                        cb_reserve_back(cb_h, ahead * h_block_tiles);
+                    }
+                    const uint32_t hdst = get_write_ptr(cb_h);
+                    // ACK FIRST, then wait. `cb_reserve_back` above proves THIS core's slot is free,
+                    // so tell round r's sender it may write before blocking on round r's arrival.
+                    // Acking first is what makes this deadlock-free: every sender's window ack comes
+                    // from a core that has already reserved, so no core waits on a core waiting on it.
+                    while (next_ack < r + hack_ahead && next_ack < HGROUPS) {
+                        const uint32_t sidx = (next_ack % KGROUPS) * HGROUPS + next_ack;
+                        const uint32_t svx = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 0);
+                        const uint32_t svy = get_arg_val<uint32_t>(RT_HMCAST + 4 + 2 * sidx + 1);
+                        noc_semaphore_inc(get_noc_addr(svx, svy, static_cast<uint32_t>(get_semaphore(SEM_H_FREE))), 1);
+                        ++next_ack;
+                    }
+                    const bool i_send = (is_root && r == my_col);
+                    if (i_send) {
+                        // Self-copy cb_h_local -> this round's cb_h slot, so the send below is
+                        // `src == dst` and therefore EXCLUDE-source. A src != dst send is a LOOPBACK
+                        // multicast whose rotating-sender flag reset races this core's own in-flight
+                        // VALID: measured as PCC drifting 0.959-0.979 run to run on a fixed input.
+                        // cb_h_local needs no CB front — the workers' NoC writes assemble it.
 #ifndef ABLATE_NO_REDUCE_XFER  // the workers' sends are stubbed too, so this wait must go with them
                     noc_semaphore_wait_min(sem_h_ptr, h_arrivals);
 #endif
                     noc_async_read(get_noc_addr(get_write_ptr(cb_h_local)), hdst, h_block_tiles * H_TILE);
-                }
+                    }
 
                 if (i_send) {
                     // The SENDER must drain before it broadcasts (its self-copy has to have landed), so
@@ -796,7 +890,7 @@ void kernel_main() {
                     wd_pending = true;
                 }
                 cb_push_back(cb_h, h_block_tiles);
-            }
+                }
             // The last issue is at round HGROUPS-1-WD_AHEAD and is published at round
             // HGROUPS-WD_AHEAD <= HGROUPS-1, so nothing is ever left pending here. Kept as an
             // ASSERT-free safety drain for a future WD_AHEAD that changes that arithmetic.
@@ -806,6 +900,7 @@ void kernel_main() {
                     wd_split_gate(wd_done, 1);
                 }
                 cb_push_back(cb_w_down, WD_BLOCK_TILES);
+            }
             }
         }
         if (prefetch_next_x) {

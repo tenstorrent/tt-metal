@@ -4,7 +4,8 @@
 
 The op works `m_eff = m_tiles_eff(M_t, b, M_BLOCK, M_EFF_MIN)` token tile-rows per M-block — a
 power of two <= M_BLOCK, derived on device from the runtime token count — instead of a constant
-M_BLOCK. Shrinking the block shortens both collectives (fewer x-multicast rounds, smaller h
+M_BLOCK.
+Shrinking the block shortens both collectives (fewer x-multicast rounds, smaller h
 payload), which REMOVED the matmul latency that had been masking a real ordering bug in
 mcast_pipe's rotating-sender Flag protocol:
 

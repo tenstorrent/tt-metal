@@ -42,6 +42,9 @@ constexpr uint32_t SEM_DATA = CT(SEM_DATA);
 constexpr uint32_t SEM_HSLICE = CT(SEM_HSLICE);
 constexpr uint32_t SEM_XSTAGED = CT(SEM_XSTAGED);
 constexpr uint32_t SEM_WDSPLIT = CT(SEM_WDSPLIT);
+constexpr uint32_t SEM_PHASE_FREE = CT(SEM_PHASE_FREE);
+constexpr uint32_t SEM_HROW_FREE = CT(SEM_HROW_FREE);
+constexpr uint32_t PHASE_CB_ALIAS = CT(PHASE_CB_ALIAS);
 
 constexpr uint32_t W_TILE = CT(W_TILE_BYTES);  // weight tile stride: bfp4 576, bfp8 1088, bf16 2048
 constexpr uint32_t BFP8_TILE = CT(BFP8_TILE);
@@ -57,6 +60,7 @@ constexpr uint32_t W_RESIDENT = CT(W_RESIDENT);
 constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
 constexpr uint32_t GU_CHUNKS = CT(GU_CHUNKS);
 constexpr uint32_t XPRIO = CT(XPRIO);
+constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
 constexpr uint32_t WD_SPLIT = CT(WD_SPLIT);
 constexpr uint32_t WG_SHARD_W = CT(WG_SHARD_W);
 constexpr uint32_t WD_SHARD_W = CT(WD_SHARD_W);
@@ -112,7 +116,9 @@ void kernel_main() {
     // gathered into, since it injects this column's h into the phase-2 all-gather.
     const uint32_t root_row = get_arg_val<uint32_t>(12);
     const bool is_root = (my_row == root_row);
-    constexpr uint32_t RT_PEERS = 13;  // KGROUPS (vx, vy) pairs — the whole column, in row order
+    const uint32_t row_agg_vx = get_arg_val<uint32_t>(13);
+    const uint32_t row_agg_vy = get_arg_val<uint32_t>(14);
+    constexpr uint32_t RT_PEERS = 15;  // KGROUPS (vx, vy) pairs — the whole column, in row order
 
     const auto wu_acc = TensorAccessor(wu_args, w_up_addr, W_TILE);
     const auto out_acc = TensorAccessor(out_args, out_addr, OUT_TILE);
@@ -130,6 +136,8 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* sem_go_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_GO)));
+    volatile tt_l1_ptr uint32_t* phase_free_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_PHASE_FREE)));
     uint32_t invites = 0;
 #ifdef ABLATE_NO_REDUCE_XFER
     (void)sem_go_ptr;
@@ -148,6 +156,7 @@ void kernel_main() {
         // The RUNTIME token tile-rows this block works on — the SAME number the reader uses for its
         // multicast rounds and compute uses for its matmul shape (moe_fused_swiglu_common.hpp).
         const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, b, M_BLOCK, M_EFF_MIN);
+        const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
         const uint32_t gu_block_tiles = m_eff * HN_PAD;
         const uint32_t out_block_tiles = m_eff * EC_MAX;
 
@@ -161,6 +170,12 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(cb_out_tiles, out_pending);
             out_pending = 0;
+            // BFP8 phase alias: only after the DMA no longer reads cb_out_tiles may this core's
+            // reader invite peers to overwrite the same SRAM through cb_gather_gate. The value is
+            // the next block index and is monotone, like every other same-core publication here.
+            if constexpr (PHASE_CB_ALIAS) {
+                *phase_free_ptr = b;
+            }
         }
 
         // ---- W_up: NoC1 half of the gate/up weight stream, same bank-run coalescing ----
@@ -278,12 +293,28 @@ void kernel_main() {
             MaybeDeviceZoneScope("writer_hslice");
             cb_wait_front(cb_h_slice, sl_a);
 #ifndef ABLATE_NO_REDUCE_XFER
-            const uint32_t rvx = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 0);
-            const uint32_t rvy = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 1);
-            noc_async_write(
-                get_read_ptr(cb_h_slice),
-                get_noc_addr(rvx, rvy, get_write_ptr(cb_h_local) + my_row * slice_bytes),
-                slice_bytes);
+            uint32_t rvx;
+            uint32_t rvy;
+            uint32_t dst;
+            uint32_t bytes;
+            if (wd_mrow) {
+                // The full-M reduce gives row r exactly one HN_PAD-wide token tile-row in every
+                // hidden column.  Gather those eleven adjacent fragments horizontally onto the
+                // diagonal row aggregator, producing one contiguous HID_T-wide W_down operand.
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uint32_t>(get_semaphore(SEM_HROW_FREE))),
+                    b + 1);
+                rvx = row_agg_vx;
+                rvy = row_agg_vy;
+                dst = get_write_ptr(cb_h_local) + hstart * H_TILE;
+                bytes = hn * H_TILE;
+            } else {
+                rvx = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 0);
+                rvy = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 1);
+                dst = get_write_ptr(cb_h_local) + my_row * slice_bytes;
+                bytes = slice_bytes;
+            }
+            noc_async_write(get_read_ptr(cb_h_slice), get_noc_addr(rvx, rvy, dst), bytes);
             noc_async_write_barrier();
             noc_semaphore_inc(get_noc_addr(rvx, rvy, static_cast<uint32_t>(get_semaphore(SEM_HSLICE))), 1);
             noc_async_atomic_barrier();

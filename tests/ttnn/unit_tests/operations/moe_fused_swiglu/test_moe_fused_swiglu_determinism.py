@@ -118,6 +118,7 @@ _REPORTED_KNOBS = (
     "W_RESIDENT",
     "WD_RESIDENT",
     "WD_AHEAD",
+    "WD_MROW_ROUNDS",
     "GU_CHUNKS",
     "HACK_AHEAD",
     "XPRIO",
@@ -168,7 +169,7 @@ _SHIPPED = {
     "WD_SPLIT": 3,
     "ABLATE": "",
     "OUT_SUBBLOCK_H_GU": 1,
-    "OUT_SUBBLOCK_H_DN_MAX": 1,
+    "OUT_SUBBLOCK_H_DN_MAX": 4,
 }
 
 

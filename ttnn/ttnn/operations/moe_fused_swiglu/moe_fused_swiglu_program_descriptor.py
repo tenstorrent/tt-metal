@@ -61,6 +61,9 @@ KERNEL_CT_ORDER = {
         "SEM_H_RDY_BASE",
         "SEM_H_FREE",
         "SEM_WDSPLIT",
+        "SEM_HROW_FREE",
+        "SEM_PHASE_FREE",
+        "PHASE_CB_ALIAS",
         "X_PAGE",
         "X_SLICE",
         "COUNTS_PAGE",
@@ -72,6 +75,7 @@ KERNEL_CT_ORDER = {
         "M_EFF_MIN",
         "W_RESIDENT",
         "WD_RESIDENT",
+        "WD_MROW_ROUNDS",
         "GU_CHUNKS",
         "XPRIO",
         "HACK_AHEAD",
@@ -107,6 +111,9 @@ KERNEL_CT_ORDER = {
         "SEM_HSLICE",
         "SEM_XSTAGED",
         "SEM_WDSPLIT",
+        "SEM_PHASE_FREE",
+        "SEM_HROW_FREE",
+        "PHASE_CB_ALIAS",
         "W_TILE_BYTES",
         "BFP8_TILE",
         "OUT_TILE_BYTES",
@@ -116,6 +123,7 @@ KERNEL_CT_ORDER = {
         "WD_RESIDENT",
         "GU_CHUNKS",
         "XPRIO",
+        "WD_MROW_ROUNDS",
         "WD_SPLIT",
         "WG_SHARD_W",
         "WD_SHARD_W",
@@ -140,9 +148,12 @@ KERNEL_CT_ORDER = {
         "INPUT_FORMAT",
         "OUT_SUBBLOCK_H_GU",
         "OUT_SUBBLOCK_H_DN",
+        "OUT_SUBBLOCK_H_DN_MAX",
         "MAILBOX_MAGIC",
         "M_EFF_MIN",
+        "DEPTH_X",
         "HN_BLOCK",
+        "WD_MROW_ROUNDS",
         "GU_CHUNKS",
         "ELTWISE_BLK",
         "DEST_LIMIT",
@@ -312,11 +323,15 @@ def _virt(device, x, y):
     return int(c.x), int(c.y)
 
 
-def _cb(index, core_ranges, num_pages, page_size, data_format):
+def _cb_allocation(total_size, core_ranges, logical_views, formats):
+    """One physical allocation, exposed through one or more independent logical CB views."""
     return ttnn.CBDescriptor(
-        total_size=num_pages * page_size,
+        total_size=total_size,
         core_ranges=core_ranges,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=data_format, page_size=page_size)],
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=index, data_format=formats[key], page_size=page_size)
+            for index, _, page_size, key in logical_views
+        ],
     )
 
 
@@ -358,6 +373,8 @@ def create_program_descriptor(
     hidden = int(w_gate.shape[-1])
     x_is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     bfp8_tile = ttnn.tile_size(ttnn.bfloat8_b)
+    requested_out_tile = ttnn.tile_size(output_tensor.dtype)
+    enable_phase_alias = output_tensor.dtype == ttnn.bfloat8_b and not geo.ABLATE
     kr_pad_probe = -(-(emb // TILE) // kgroups)
     blk = Blocking(
         hgroups,
@@ -370,10 +387,13 @@ def create_program_descriptor(
         bf16_tile=ttnn.tile_size(ttnn.bfloat16),
         x_stick=(kr_pad_probe * TILE * input_tensor.element_size()) if x_is_rm else bfp8_tile,
         l1_budget=int(ttnn._ttnn.device.get_max_worker_l1_unreserved_size()) - geo.L1_CB_RESERVE,
+        out_tile=requested_out_tile,
+        enable_phase_alias=enable_phase_alias,
     )
     idx_page = max(int(global_expert_idx_table.buffer_aligned_page_size()), ttnn.get_dram_alignment())
     counts_page = max(int(counts.buffer_aligned_page_size()), ttnn.get_dram_alignment())
-    need = blk.l1_bytes(x_is_rm, ttnn.tile_size(output_tensor.dtype))
+    phase_cb_alias = enable_phase_alias and blk.phase_cb_alias(requested_out_tile)
+    need = blk.l1_bytes(x_is_rm, requested_out_tile, enable_phase_alias=phase_cb_alias)
     if need > blk.l1_budget:
         raise RuntimeError(
             f"moe_fused_swiglu: needs {need} B of L1 per core, device has {blk.l1_budget} B.\n"
@@ -454,8 +474,14 @@ def create_program_descriptor(
         "x_in": ttnn.bfloat16 if x_is_rm else ttnn.bfloat8_b,
     }
     cbs = [
-        _cb(idx, all_cores, pages, page, fmt[key])
-        for idx, pages, page, key in blk.cb_layout(x_is_rm, out_tile, idx_page, counts_page)
+        _cb_allocation(physical_bytes, all_cores, logical_views, fmt)
+        for physical_bytes, logical_views in blk.cb_allocations(
+            x_is_rm,
+            out_tile,
+            idx_page,
+            counts_page,
+            enable_phase_alias=phase_cb_alias,
+        )
     ]
 
     # ---- compile-time args --------------------------------------------------------------------
@@ -477,12 +503,14 @@ def create_program_descriptor(
         # depth_wd, and a kernel still told "resident" would skip every W_down read after M-block 0
         # while the shrunk CB no longer holds block r in slot r — stale weights, silently.
         "WD_RESIDENT": int(blk.wd_resident),
+        "WD_MROW_ROUNDS": int(blk.wd_mrow_rounds and blk.wd_resident),
         "GU_CHUNKS": blk.gu_chunks,
         "XPRIO": int(geo.XPRIO),
         "WD_SPLIT": blk.wd_split,
         "WG_SHARD_W": wg_shard_w,
         "WD_SHARD_W": wd_shard_w,
         "GATHER_PAGES": blk.gather_pages,
+        "PHASE_CB_ALIAS": int(phase_cb_alias),
         "W_TILE_BYTES": w_tile,
         "BFP8_TILE": bfp8_tile,
         "OUT_TILE_BYTES": out_tile,
@@ -493,11 +521,15 @@ def create_program_descriptor(
         "SEM_H_RDY_BASE": geo.SEM_H_RDY_BASE,
         "SEM_H_FREE": geo.SEM_H_FREE,
         "SEM_WDSPLIT": geo.SEM_WDSPLIT,
+        "SEM_PHASE_FREE": geo.SEM_PHASE_FREE,
+        "SEM_HROW_FREE": geo.SEM_HROW_FREE,
         "DEPTH_H": geo.DEPTH_H,
+        "DEPTH_X": blk.depth_x,
         "HACK_AHEAD": blk.hack_ahead,
         "WD_AHEAD": blk.wd_ahead,
         "OUT_SUBBLOCK_H_GU": geo.OUT_SUBBLOCK_H_GU,
         "OUT_SUBBLOCK_H_DN": blk.out_subblock_h_dn,
+        "OUT_SUBBLOCK_H_DN_MAX": geo.OUT_SUBBLOCK_H_DN_MAX,
         "HN_BLOCK": blk.hn_block,
         "ELTWISE_BLK": geo.ELTWISE_BLK,
         "DEST_LIMIT": geo.DEST_AUTO_LIMIT_TILES,
@@ -573,6 +605,9 @@ def create_program_descriptor(
                 y,
                 x % kgroups,
             ]
+            # Full-M eight-round W_down: row y gathers every hidden-column fragment onto the
+            # diagonal core (y, y).  Appended before the existing column peer table.
+            wargs.extend(_virt(device, y, y))
             for r in range(kgroups):
                 wargs.extend(_virt(device, x, r))
             writer_rt[x][y] = wargs
@@ -623,7 +658,15 @@ def create_program_descriptor(
     # ---- semaphores ----------------------------------------------------------------------------
     # Every one is monotone and zero-init; none is reset within a dispatch. See RACE_AUDIT.md.
     semaphores = list(x_mcast.owned_semaphores()) + list(h_mcast.owned_semaphores())
-    for sem in (geo.SEM_GO, geo.SEM_DATA, geo.SEM_HSLICE, geo.SEM_XSTAGED, geo.SEM_WDSPLIT):
+    for sem in (
+        geo.SEM_GO,
+        geo.SEM_DATA,
+        geo.SEM_HSLICE,
+        geo.SEM_XSTAGED,
+        geo.SEM_WDSPLIT,
+        geo.SEM_PHASE_FREE,
+        geo.SEM_HROW_FREE,
+    ):
         semaphores.append(ttnn.SemaphoreDescriptor(id=sem, core_ranges=all_cores, initial_value=0))
     for s in range(geo.DEPTH_H):
         semaphores.append(ttnn.SemaphoreDescriptor(id=geo.SEM_H_RDY_BASE + s, core_ranges=all_cores, initial_value=0))

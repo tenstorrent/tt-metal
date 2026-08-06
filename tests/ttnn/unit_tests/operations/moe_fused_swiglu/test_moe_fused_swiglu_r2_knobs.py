@@ -7,7 +7,7 @@ them parked at a byte-identical default because they did not pay TODAY:
 
     REDUCE_SLOTS_CAP      concurrent child landing slots in the reduce tree (lever 1) — parked at 1
     HN_BLOCK              gate/up in1 sub-block width (lever 2)                       — parked at HN_PAD
-    OUT_SUBBLOCK_H_DN_MAX `down` output sub-block height (lever 3)                    — parked at 1
+    OUT_SUBBLOCK_H_DN_MAX `down` output sub-block height (lever 3)                    — shipped at 4
     WD_AHEAD              phase-2 W_down prefetch depth                               — shipped at 1
 
 A parked knob is exactly the thing that ROTS: the shipped path never touches it, so the day a later
@@ -56,7 +56,7 @@ _FORMATS = {"bf16_rm": (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT), "bfp8_tile": (ttn
 # invite-wave depth and went with the tree; lever 2 (HN_BLOCK) sub-divided a gate/up weight chunk,
 # and the chunk width now IS the sub-block width. Neither has a knob left to turn.
 KNOB_SETTINGS = [
-    ({"OUT_SUBBLOCK_H_DN_MAX": 4}, "lever 3: `down` sub-block height 2 (emb 7168) / 4 (emb 6144)"),
+    ({"OUT_SUBBLOCK_H_DN_MAX": 1}, "lever 3 fallback: three-column cores use height 1"),
     ({"WD_AHEAD": 2}, "the deferred read barrier's `wd_pending` carried across a round boundary"),
     ({"WD_AHEAD": 3}, "same, two blocks of prefetch depth"),
 ]

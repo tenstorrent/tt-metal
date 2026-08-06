@@ -77,6 +77,15 @@ enum class RemapMode : uint8_t {
     AssumeConfigured  // Caller already configured remap for this kernel
 };
 
+// Output circular-buffer ownership. CallerOwned packs into a region reserved by another RISC but
+// leaves the output CB's write pointer and page counters untouched. The caller must provide a
+// non-wrapping reserved region, arrange a separate completion handoff, and remain the only thread
+// that pushes the output CB.
+enum class OutputPolicy : uint8_t {
+    ReserveAndPush,
+    CallerOwned,
+};
+
 }  // namespace tilize_config
 
 /**
@@ -133,6 +142,10 @@ enum class RemapMode : uint8_t {
  *       provided (asymmetric): Input CB has non-tile pages (e.g., one page per row).
  *                               Must be > 0. Each block waits for min(32, remaining_pages)
  *                               input pages. Use when the reader produces row-sized pages.
+ *   output_tile_offset — Tile offset from output_dfb's current write pointer (default: 0).
+ *                         Under CallerOwned, each successive block is placed block_width_tiles
+ *                         farther into the caller's reserved region. Under ReserveAndPush, the
+ *                         offset is relative to the write pointer advanced by each push.
  *
  * NOTE: Asymmetric CB page support (total_input_pages) exists only in the tilize helper.
  * The untilize helper always uses symmetric (tile-sized) pages for both input and output CBs.
@@ -193,8 +206,10 @@ template <
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
     tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast,
-    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure>
-ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
+    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure,
+    tilize_config::OutputPolicy output_policy = tilize_config::OutputPolicy::ReserveAndPush>
+ALWI void tilize(
+    uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt, uint32_t output_tile_offset = 0);
 
 }  // namespace compute_kernel_lib
 

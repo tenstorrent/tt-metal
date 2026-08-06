@@ -331,9 +331,12 @@ struct NoIn0BaseOffset {
  *                      Pairs with caller_owns_pack_target (one reserve/push around the chunk
  *                      loop) and out_row_width = the FULL block width. 0 = the classic single-call
  *                      layout, byte-identical.
- *   caller_owns_pack_target  caller does one reserve before + one push after; the helper
- *                            skips its own reserve/push/drain. Pairs with TileRowMajor +
- *                            packer_l1_acc + Interm.
+ *   caller_owns_pack_target  helper packs to absolute offsets and skips its own
+ *                            reserve/push/drain. Pairs with TileRowMajor + packer_l1_acc
+ *                            and either Interm or plain Out. For Interm, the caller reserves
+ *                            and publishes the fixed accumulation region. For Out, interm is
+ *                            unpushed scratch and the caller reserves/publishes the final out;
+ *                            the helper uses one PACK_DONE handshake before its final reload.
  *   Activation         fuse an SFPU activation on the PACKER thread at the last-block pack
  *                      (default none); independent of PostComputeFn (MATH thread) and
  *                      allowed with Interm. Build from the sfpu_activation_helpers.hpp

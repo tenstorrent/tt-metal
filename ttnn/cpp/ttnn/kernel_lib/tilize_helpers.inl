@@ -91,8 +91,10 @@ template <
     tilize_config::WaitMode wait_mode,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     tilize_config::Fp32Mode fp32_mode,
-    tilize_config::RemapMode remap_mode>
-ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
+    tilize_config::RemapMode remap_mode,
+    tilize_config::OutputPolicy output_policy>
+ALWI void tilize(
+    uint32_t num_blocks, std::optional<uint32_t> total_input_pages, uint32_t output_tile_offset) {
     // Compile-time validation
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
     static_assert(input_dfb != output_dfb, "Tilize cannot be done in-place: input_dfb and output_dfb must be different");
@@ -206,7 +208,13 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     } else {
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles));
     }
-    PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles));
+    if constexpr (output_policy == tilize_config::OutputPolicy::CallerOwned) {
+        PACK(ASSERT(get_dfb_num_pages(output_dfb) >= output_tile_offset + num_blocks * block_width_tiles));
+    } else {
+        // Each push advances the managed CB, so every block reuses the same offset relative to
+        // the new write pointer rather than requiring the whole multi-block output to fit at once.
+        PACK(ASSERT(get_dfb_num_pages(output_dfb) >= output_tile_offset + block_width_tiles));
+    }
 
     // Construct DataflowBuffer objects for sync operations
     DataflowBuffer in_dfb(input_dfb);
@@ -232,21 +240,29 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             in_dfb.wait_front(input_pages);
         }
 
-        out_dfb.reserve_back(block_width_tiles);
+        if constexpr (output_policy == tilize_config::OutputPolicy::ReserveAndPush) {
+            out_dfb.reserve_back(block_width_tiles);
+        }
+
+        const uint32_t block_output_offset =
+            output_tile_offset +
+            ((output_policy == tilize_config::OutputPolicy::CallerOwned) ? block * block_width_tiles : 0);
 
         if constexpr (use_fast) {
 #ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
-            fast_tilize_block(input_dfb, block_width_tiles, output_dfb);
+            fast_tilize_block(input_dfb, block_width_tiles, output_dfb, 0, block_output_offset);
 #else
             // Unreachable: can_use_fast_tilize() returns false on Quasar so use_fast is always false.
             // Trap (watcher/runtime assert) in case this path is ever reached.
             ASSERT(false);
 #endif
         } else {
-            tilize_block(input_dfb, block_width_tiles, output_dfb);
+            tilize_block(input_dfb, block_width_tiles, output_dfb, 0, block_output_offset);
         }
 
-        out_dfb.push_back(block_width_tiles);
+        if constexpr (output_policy == tilize_config::OutputPolicy::ReserveAndPush) {
+            out_dfb.push_back(block_width_tiles);
+        }
         in_dfb.pop_front(input_pages);
 
         if (asymmetric_dfb_pages) {

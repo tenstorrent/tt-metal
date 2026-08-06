@@ -1,3 +1,85 @@
+# BFP8 phase-buffer alias with an explicit cross-block lifetime edge
+
+`CB_GATHER_GATE`, `CB_H_SLICE`, and `CB_OUT_TILES` now use three logical CB views of one exact-size
+52,224-byte allocation when the output is bfp8. Their separate capacities totalled 110,976 bytes,
+so this frees 58,752 bytes/core and raises the measured free L1 budget from 46,272 to 105,024 bytes.
+The geometry owns the allocation grouping and uses the LCM of logical capacities to preserve every
+view's circular wrap; non-bfp8 output remains unaliased.
+
+A naïve alias exposed a cross-block race: the next reader gather could authorize remote writes
+before the local writer had drained the previous output DMA. A new writer-to-reader
+`SEM_PHASE_FREE` edge closes that lifetime boundary. Payload ablations disable aliasing because
+they can remove the ordinary within-block phase edges. Focused one- and twenty-block watcher runs,
+the full 16-case watcher/LLK runtime-M suite, and host allocation/CT-argument tests pass. Measured
+M=128/256/512/5120 performance is unchanged within run/session noise.
+
+# Direct W_down final pack, synchronized fixed scratch, and adaptive sub-blocks
+
+`W_down` no longer finishes all eight K-blocks in a bf16 CB and then runs a separate whole-block
+bf16-to-bfp8 copy. Non-final K-blocks still packer-L1-accumulate at fixed addresses in the bf16
+scratch; the final K-block reloads that partial into DEST, adds its own contribution, and packs
+directly to the caller-reserved bfp8 output. The bf16 scratch remains necessary, so this removes a
+compute pass but does not free its 49,152 bytes/core.
+
+The first direct version omitted the ordering normally supplied by a CB push/wait because the
+runtime-M scratch must remain unpushed at a fixed address. That is a real PACK-to-UNPACK race:
+ordinary tests passed, but watcher/LLK-assert timing made M=32 and M=64 nondeterministic in roughly
+1,000 output elements. `tile_regs_release` orders DEST reuse, not a later L1 UNPACK read. The helper
+now posts `PACK_DONE` after every sub-block of the penultimate spill has completed and consumes it
+before the sole final reload: one hardware handshake per W_down matmul/M-block, not per tile.
+
+The final reload also uses one contiguous block copy when the sub-block spans the complete output
+row. W_down starts from the uniform-safe 2x3 shape and grows only the `ec=2` cores to 4x2; both fit
+the eight-tile DEST. Same-session 21-repetition medians on Blackhole p150, 11x8, N=2048, bf16 RM
+input and bfp4 ND-sharded weights:
+
+| count | old final copy (us) | safe direct, uniform 2x3 (us) | + contiguous/adaptive (us) | final vs copy |
+|---:|---:|---:|---:|---:|
+| 256 | 119.035 | 118.354 | 118.533 | -0.502 us |
+| 512 | 198.627 | 198.880 | 197.932 | -0.695 us |
+| 1024 | 355.963 | 356.252 | 355.224 | -0.739 us |
+| 5120 | 1605.269 | 1600.853 | 1600.939 | -4.330 us |
+
+Thus contiguous/adaptive blocking is neutral at the endpoints and saves about 1 us at M=512/1024;
+the safe direct path retains a small net win over the copy. The changed final rounding boundary is
+not cross-revision bitwise-identical, but the numerical gates pass. The final code passed all 16
+M-tiles cases with watcher and LLK assertions and 500 interleaved dispatches over 24 shapes (plus
+19 zero-count calls), bitwise-stable within every shape.
+
+# Direct activation tilize into resident x
+
+The bf16 row-major path no longer tilizes into a `KR_PAD`-tile staging CB and then asks the reader
+to NoC-copy that row into `cb_x_tiles`. The reader reserves the final resident-x slot before it
+publishes the raw sticks; compute now packs directly into the corresponding row of that reservation.
+Compute deliberately does not reserve or push `cb_x_tiles`, so its FIFO still has exactly one owner
+(the reader). A one-page, 64-byte completion CB preserves the compute-to-reader handoff.
+
+This needed an explicit physical resident-slot offset, `(b % DEPTH_X) * M_BLOCK * KR_PAD`. A first
+version packed relative to compute's apparent `cb_x_tiles` write pointer and was correct for one M
+block but failed deterministically at M=512: CB pointer advancement by the reader is not reflected
+in compute's local CB-interface state, so block 1 overwrote slot 0. The explicit slot index keeps
+the two RISCs' pointer ownership separate.
+
+The generic tilize helper gained a `CallerOwned` output policy. It packs into a caller-supplied,
+non-wrapping tile region without touching the output CB's page counters; existing callers retain
+the default reserve-and-push behavior.
+
+For emb 7168, `KR_PAD=28`: replacing 28 bfp8 tiles (28 x 1088 = 30,464 bytes/core) with the 64-byte
+completion page frees **30,400 bytes/core**. Same-session 21-repetition medians on Blackhole p150,
+11x8, N=2048, bf16 RM input and bfp4 ND-sharded weights:
+
+| count | staging copy (us) | direct pack (us) | change |
+|---:|---:|---:|---:|
+| 512 | 198.661 | 197.919 | -0.742 us / -0.37 % |
+| 1024 | 356.890 | 356.515 | -0.375 us / -0.11 % |
+| 5120 | 1613.117 | 1605.656 | -7.461 us / -0.46 % |
+
+The large-M result is a small but repeatable win; most of the removed local-copy latency was already
+overlapped. Validation: the 18-case cross-revision bitwise gate matched exactly; all 35 real-M and
+M-tiles cases passed under watcher and LLK assertions, including ragged tails, both activation
+formats and the 20-block M=5120 wrap; 500 dispatches over 24 interleaved shapes (plus 19 zero-count
+dispatches) remained bitwise stable.
+
 # Cross-M-block activation prefetch
 
 For every non-final M block, the reader now reserves the next resident-x slot and starts its local
@@ -143,8 +225,9 @@ Device: **blackhole_p150**, `compute_with_storage_grid_size() = 11 x 10` (the p1
 | **h** over Ne | grid-wide multicast, `HGROUPS` rounds | `DEPTH_H` | 3 |
 
 Buffer depths: `depth_w=1`, `depth_wd=HGROUPS`, `DEPTH_X=2`, `DEPTH_H=3`, `DEPTH_OUT=2`,
-`DEPTH_XSTAGE=1`, `XSTICK_ROWS=1` (Refinement 3: the weight CBs are filled on M-block 0 and REUSED,
-so `DEPTH_W`'s second slot became dead and its 155 KB funds the resident-x double buffer).
+`XSTICK_ROWS=1`; the legacy-named `CB_X_STAGE` is a single 64-byte completion page (Refinement 3:
+the weight CBs are filled on M-block 0 and REUSED, so `DEPTH_W`'s second slot became dead and its
+155 KB funds the resident-x double buffer).
 Read knobs: `WRUN=8`, `WD_AHEAD=1`. Sub-block: `OUT_SUBBLOCK_H=1`, `out_subblock_w = HN_PAD` (gate/up)
 / `ec` (down). L1: **~1.35 MB** of the 1.43 MB budget.
 
@@ -162,7 +245,7 @@ a CB size.
 | per-sub-block reduce, pipelined against the next sub-block | ONE whole-block reduce | `in1_num_subblocks = 1` with `out_subblock_w = HN_PAD` makes the gate/up block a single sub-block, so there is no `off` loop to pipeline against. Costs the §4.3 overlap. |
 | reduce = 2 semaphores, one per level parity | 2 semaphores, `SEM_GO` (parent invites child) + `SEM_DATA` (child signals) | the parity scheme races: a level-`l+2` sender can arrive before the parent consumed level `l`. The invite is the flow control, and both counters are monotone so neither is ever reset. Same mechanism (unicast + counting semaphore), same 2-semaphore budget. |
 | `DataReadySignal::Counter` on both mcasts | `Flag` | **Counter HANGS** — see §4. |
-| `cb_x_tiles` producer = reader, tilize pushes elsewhere | same, via `cb_x_stage` | the design's table has compute's tilize and the reader's mcast both producing `cb_x_tiles`; `cb_x_stage` splits them so every CB keeps one producer and one consumer. |
+| `cb_x_tiles` producer = reader, tilize pushes elsewhere | reader reserves/pushes; compute packs into the reserved address without changing FIFO state | keeps one CB owner while avoiding the old staged-row self-copy; a one-page completion CB orders compute before reader. |
 | gate/up partial CBs consumed by the writer | `cb_*_acc` (compute->compute, in-place reduce adds) + `cb_*_send` (compute->writer) | the in-place `add` makes compute a consumer, so the writer cannot also consume the same CB. |
 | `add_bias_bcast_rows` once over the whole block | once per token tile-row, walked with `bias_offset` | the helper's bias index does not advance with `in0_subblock` (`bias_add_helpers.inl:141`), so an Elementwise bias spanning `M_BLOCK` tile-rows must be walked. Keeps the packer-thread SiLU. |
 | `FillScalar` zero pad for the ragged hidden column | `KBlockInnerDimFn` shrinks the phase-2 FMA loop | cheaper: the pad column is never read at all rather than made zero. Same trick retires the `KR_PAD` K padding. |

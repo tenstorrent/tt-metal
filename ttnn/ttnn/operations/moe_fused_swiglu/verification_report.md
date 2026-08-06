@@ -65,7 +65,7 @@ reduce tree, the h all-gather round order, the phase-2 K indexing and the Ne out
 | ONE device program per call, ONE expert | ✓ one `ProgramDescriptor`, one `generic_op` dispatch. |
 | `h` must not reach DRAM or be observable | ✓ `h` exists only in `cb_h_local` / `cb_h`; no tensor, no memory_config, not in the signature. |
 | Rows past `count` UNDEFINED: not zeroed, not contaminating a real row | ✓ writer breaks at `row >= m_t`; nothing reduces across tokens. The suite's `100.0` sentinel in the padding rows would collapse PCC on any leak — PCC sits at the format floor. |
-| ROW_MAJOR activation: tilize MUST be fused in-kernel; entry point must not call to_layout/tilize/pad/slice | ✓ `tilize<KR_PAD, cb_x_in, cb_x_stage>` inside the compute kernel; the entry point contains no manipulation op. |
+| ROW_MAJOR activation: tilize MUST be fused in-kernel; entry point must not call to_layout/tilize/pad/slice | ✓ compute calls `tilize<KR_PAD, cb_x_in, cb_x_tiles, ..., OutputPolicy::CallerOwned>` directly into the reader-reserved resident slot; the entry point contains no manipulation op. |
 | The SwiGLU MUST be fused | ✓ `add_bias_bcast_rows<..., SiluActivation>` (SiLU on the packer thread) + FPU `mul`, same program. |
 | gate and up MUST share one activation transport | ✓ one resident `cb_x_tiles`, `InputPolicy::WaitAndRetainOnLastBlock` on both matmuls, one explicit `pop_front` at the end of the M-block. Host-asserted (`num_k_blocks_gu != 1` raises). |
 | No internal config or geometry search | ✓ every knob is a host constant; the `MOE_SWIGLU_*` env vars are documented `/perf-measure` ablation hooks with fixed defaults. |
@@ -115,9 +115,9 @@ is fully occupied. `TensorAccessor` everywhere for addressing, `void kernel_main
 `api/dataflow/dataflow_api.h` includes: all correct.
 
 Deviations found. Those already documented in `changelog.md` §2 (grid from the device, `M_BLOCK = 8`,
-`num_k_blocks = 1`, `SEM_GO`/`SEM_DATA` instead of level parity, `cb_x_stage` splitting the two
-producers, `cb_*_acc`/`cb_*_send`, per-tile-row `add_bias_bcast_rows`, `KBlockInnerDimFn` instead of
-a zero-fill) I re-verified and accept. Three are **not** in that list:
+`num_k_blocks = 1`, `SEM_GO`/`SEM_DATA` instead of level parity, caller-owned direct tilize into the
+reader-reserved x slot, `cb_*_acc`/`cb_*_send`, per-tile-row `add_bias_bcast_rows`,
+`KBlockInnerDimFn` instead of a zero-fill) I re-verified and accept. Three are **not** in that list:
 
 1. **The runtime `m_tiles` shrink was never implemented — a performance-conformance bug.**
    `op_design.md` §3 specifies `m_tiles = min(M_BLOCK, M_t - b*M_BLOCK)`; all three kernels instead
@@ -161,10 +161,10 @@ page count is a function of `capacity` or `count`. Two exceptions found and **fi
 
   Shipped at 5: **60.8 KB of L1 freed for no measurable time** (the 7-vs-5 inversion sets the noise
   floor at ~0.4 %). `MOE_SWIGLU_DEPTH_WD` keeps it a live knob.
-- **48 KB of unreachable L1 on the `bfp8_tile` path.** `cb_x_in` and `cb_x_stage` serve the
-  row-major stage -> fused-tilize -> mcast path only; the tiled path lands tiles straight in the
-  resident slot and both CBs are behind `if constexpr (INPUT_FORMAT == 0)` in every kernel. They are
-  now 1 page each in that configuration.
+- **48 KB of unreachable L1 on the `bfp8_tile` path.** `cb_x_in` serves only the row-major
+  DRAM-read -> fused-tilize path; tiled input lands directly in the resident slot. It is one page in
+  the tiled configuration. The legacy-named `cb_x_stage` is now a format-independent 64-byte
+  compute-to-reader completion channel rather than a tile payload buffer.
 
 Per-core L1 after the fixes (measured by building the real descriptor, emb 7168 / capacity 5120):
 **1267.9 KB** (`bf16_rm`) and **1199.6 KB** (`bfp8_tile`) of the 1427.1 KB budget — 159 KB / 227 KB

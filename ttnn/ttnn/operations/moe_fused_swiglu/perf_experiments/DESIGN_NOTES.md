@@ -247,9 +247,9 @@ packer SiLU vs SFPU SiLU": SiLU is SFPU work either way. What changes is WHICH T
 on MATH (serialised with the adds). One L1 round-trip against some MATH/PACK overlap, and the trade
 cancels; the sign flipped between sessions.
 
-**Pack the last `down` K-block straight to the output (`DOWN_OUT`) — structurally blocked.** It
-needs `caller_owns_pack_target=false`, but that flag is precisely what holds a runtime-`m_eff`
-CB-wrap invariant.
+**Pack the last `down` K-block straight to the output (`DOWN_OUT`) — originally blocked.** The
+runtime-`m_eff` CB-wrap problem described here was real; the later fixed-address scratch protocol
+solves it without advancing the CB. See §12 for the required PACK-to-UNPACK synchronization.
 
 **bfp4 h (`H_DTYPE`) — precision failure, not a knob.** Phase 1's reconfigs are hoisted out of the
 loop, so the SwiGLU multiply inherits the `cb_gate_acc` pack format. That is correct only while
@@ -482,3 +482,158 @@ Blackhole p150, 11x8, emb 7168, N 2048, bf16 RM input, bfp4 ND-sharded weights:
 A temporary TRISC marker after the first W_up M row proved this is real overlap, not merely an
 earlier blocking wait: 71/88 cores completed that row before the reader's x-multicast zone ended,
 with a median lead of 5,546 cycles (4.108 us). The marker is not present in the shipped source.
+
+## 11. Pack bf16 activation rows directly into resident x
+
+The old row-major path had two L1 copies after the DRAM read: compute tilized 32 bf16 sticks into a
+`KR_PAD`-tile bfp8 staging CB, then the reader issued a local NoC copy from that CB to the final
+resident-x row. The second copy was not a format requirement. It existed to preserve the circular
+buffer ownership rule: compute could push the staging CB while the reader remained the sole pusher
+of `cb_x_tiles`.
+
+The reader already reserves the whole resident slot before publishing the raw-stick input. Compute
+can therefore pack to that reserved address without changing `cb_x_tiles`' write pointer or page
+counters. `tilize_config::OutputPolicy::CallerOwned` expresses exactly that contract; the old
+`CB_X_STAGE` allocation is now only a 64-byte ready channel, pushed after packing and popped before
+the reader begins the multicast chain.
+
+The destination is selected with `(b % DEPTH_X) * M_BLOCK * KR_PAD + t * KR_PAD`, not merely
+`t * KR_PAD`. CB-interface pointer advancement is local to the RISC which performs the push: the
+compute RISC never pushes resident x and therefore continues to observe its initial write pointer.
+The shorter expression overwrote slot 0 on block 1 and failed M=512 at PCC 0.491; the explicit
+physical slot passed the full 20-block wrap and the cross-revision bitwise gate.
+
+At emb 7168 this frees 30,400 bytes/core. Same-session 21-repetition medians for copy/direct were
+198.661/197.919 us at M=512, 356.890/356.515 us at M=1024, and 1613.117/1605.656 us at M=5120.
+Thus the direct path is retained: it is bitwise equivalent, saves substantial L1, and gives a small
+0.46 % large-M win. The modest time delta also answers why the obviously redundant copy survived
+for so long—its latency was largely hidden behind other work.
+
+## 12. Direct W_down final output without the bf16-to-bfp8 copy
+
+The runtime-M obstruction was CB pointer movement, not arithmetic. If the ordinary intermediate
+FIFO is pushed and popped by `m_eff * EC_MAX` on every K-block, a short runtime block walks through
+the physical `M_BLOCK * EC_MAX` allocation instead of returning to the same accumulation address.
+The solution is an unpushed, caller-owned bf16 scratch: every non-final K-block packer-accumulates
+at the same absolute offsets, and only the final K-block reloads the partial, adds its contribution,
+and packs bfp8 directly to the separately reserved output CB.
+
+An unpushed scratch has no CB credit edge. The first implementation incorrectly assumed
+`tile_regs_release` also ordered the later L1 read. It only orders reuse of DEST; under watcher
+timing, PACK was still finishing the scratch spill while UNPACK began the final reload. M=32 and
+M=64 differed between identical dispatches in about 1,000 elements, in both activation formats.
+Returning to the old final copy made all 16 assertion-enabled M-tiles cases pass, isolating the
+fault. The retained direct path posts Tensix `PACK_DONE` after the complete penultimate spill and
+waits once before the final reload. That is the same primitive used by other held-CB pack-to-unpack
+pipelines, and it preserves the fixed address.
+
+The reload is a single `h*w` block copy when `w == row_stride`. Runtime blocking is 2x3 on the 48
+cores owning three output columns and 4x2 on the 40 cores owning two columns. Against a synchronized
+uniform-2x3 direct path, the combination changed M=256/512/1024/5120 by +0.179/-0.948/-1.028/+0.086
+us: neutral at the endpoints and about 1 us better in the middle.
+
+The safe end-to-end medians versus the old final-copy path were 118.533/119.035 us at M=256,
+197.932/198.627 at M=512, 355.224/355.963 at M=1024, and 1600.939/1605.269 at M=5120. The one
+handshake per M-block costs roughly 10 us over 20 blocks at M=5120, but it is mandatory; the larger
+unsynchronized apparent win was a race, not performance. Final validation: the full watcher/LLK
+M-tiles suite passed and 500 interleaved dispatches over 24 shapes remained bitwise stable.
+
+## 13. Retaining two W_down K chunks in DEST: rejected block-matmul experiment
+
+The intended saving was to halve the bf16 scratch traffic: wait for two consecutive `h` and
+W_down chunks, accumulate both into one acquired output subblock, then spill once. The single-chunk
+control passed under watcher, but every two-chunk `matmul_block` variant hung deterministically at
+the first full `m_eff=8` block. Triage was uniform across the worker grid: TRISC0 waited in the
+unpack source handshake, TRISC1 remained inside the block matmul MOP, TRISC2 waited for the DEST
+commit, and the reader eventually filled `cb_h` and blocked reserving the next round.
+
+Neither a short block-matmul re-init at the chunk boundary, a 1xN output subblock, nor programming
+the pair as one logical `kt_dim=12` contraction changed the failure. `matmul_tiles` was explicitly
+excluded. The experiment was therefore removed rather than leaving a disabled or unsafe knob.
+With the present block-major `h` stream (`[chunk][M][K6]`), the viable block-matmul version would
+need the producer to form a true row-major `[M][K12]` pair (and W_down `[K12][N]`) before compute;
+that is a dataflow/layout change, not an easy compute-loop tweak.
+
+## 14. Alias phase-disjoint bfp8 circular buffers
+
+Three bfp8 CBs have disjoint payload lifetimes on each core: gate/up's gathered input, one gathered
+hidden slice, and W_down's final output. Their logical capacities at `M_BLOCK=8` are:
+
+| logical CB | pages | bytes |
+|---|---:|---:|
+| `CB_GATHER_GATE` | 48 | 52,224 |
+| `CB_H_SLICE` | 6 | 6,528 |
+| `CB_OUT_TILES` | 48 | 52,224 |
+
+They now share one 52,224-byte physical allocation with three logical CB views. The allocation is
+the least common multiple of the logical capacities, rather than simply their maximum; this keeps
+every view's whole-capacity wrap valid if the geometry changes. Separate storage consumed 110,976
+bytes, so the alias saves exactly 58,752 bytes/core. Total CB storage falls from 1,415,104 to
+1,356,352 bytes/core. Including the measured 111,488-byte program region, free L1 rises from
+46,272 to 105,024 bytes/core.
+
+The same-block order was already causal: gathered gate/up data is consumed before the hidden slice
+is packed, and completion of all hidden rounds precedes W_down output. The cross-block boundary was
+not causal. A target reader could invite peers to write block `b+1` while its own writer still had
+block `b` output DMA in flight. The writer now waits for that output DMA, pops the output view, and
+publishes `SEM_PHASE_FREE=b`; the reader waits for it before sending the next gather invites.
+Waiting before the invite is sufficient because reserving the logical gather CB does not itself
+write the aliased storage. Payload ablations disable the alias because they can remove the normal
+same-block causal edges.
+
+Blackhole p150, 11x8, emb 7168, N 2048, bf16 RM input, bfp4 ND-sharded weights, bfp8 output,
+five-repetition medians:
+
+| count | aliased (us) | fresh pre-alias baseline (us) | change |
+|---:|---:|---:|---:|
+| 128 | 84.871 | 84.739 | +0.16 % |
+| 256 | 120.019 | 118.734 | +1.08 % |
+| 512 | 199.247 | 198.007 | +0.63 % |
+| 5120 | 1594.546 | 1601.650 | -0.44 % |
+
+The changes are within the measured session/run spread, so the alias is retained for its L1 gain.
+It passed focused watcher runs at one and twenty full M blocks and the complete 16-case watcher/LLK
+runtime-M suite, including bf16 RM and bfp8 tiled inputs, ragged blocks, zero count, and both 11x8
+and full-device grids. bf16 output uses a different tile size and remains separately allocated.
+
+## 15. Eight full-size-M-slot W_down rounds on the 11x8 grid
+
+Changing the requested grid to 8x11 did not provide a useful eight-round schedule: the device
+clamped it to 8x10 (80 workers), and M=5120 regressed to 1891.179 us. The retained experiment keeps
+all 88 workers and changes only full-size runtime M slots (`m_eff == M_BLOCK`; the real prefix may
+still be ragged). After reduce-scatter, the eleven hidden-column
+fragments for token-tile row `r` gather horizontally onto diagonal core `(r,r)`. Those eight
+aggregators then broadcast one complete 64-tile hidden row apiece, giving eight phase-2 rounds rather
+than eleven 6-tile hidden-slice rounds.
+
+Each round computes a `1 x 64 x ec` matmul against the complete resident W_down shard. Consequently
+there is one K block and no intermediate bf16 accumulation spill/reload. Ragged and short blocks
+retain the established eleven-round hidden-slice path. The larger H FIFOs cost about 69 KiB/core;
+with phase-CB aliasing the focus shape uses 1,425,984 of 1,532,032 available bytes, leaving about
+106 KiB. If that allocation does not fit, geometry disables the M-row schedule before giving up
+W_down residency.
+
+Controlled same-tree measurements on Blackhole p150, 11x8, emb 7168, N 2048, bf16 RM input and bfp4
+weights:
+
+| count | 11 hidden rounds (us) | 8 M-row rounds (us) | change |
+|---:|---:|---:|---:|
+| 128 | 85.145 | 85.444 | +0.35 % |
+| 160 | 104.199 | 103.707 | -0.47 % |
+| 192 | 108.916 | 105.061 | -3.54 % |
+| 224 | 111.116 | 109.865 | -1.13 % |
+| 256 | 117.836 | 111.873 | -5.06 % |
+| 512 | 195.501 | 192.962 | -1.30 % |
+| 1024 | 355.503 | 341.486 | -3.94 % |
+| 5120 | 1588.984 | 1542.266 | -2.94 % |
+
+Repeated medians were 112.046 us at M=256 and 1540.708 us at M=5120. The implied following-full-
+block slope improves from `(1588.984 - 117.836) / 19 = 77.429 us` to
+`(1540.708 - 112.046) / 19 = 75.193 us`, a 2.236 us/block or 2.9 % improvement. Reader phase 2
+falls from about 32.5 to 29.2 us and W_down compute from about 30.5 to 28.7 us. The gain is real but
+smaller than the round-count ratio: eight wider multicasts and matmuls still carry the same total
+payload and arithmetic, while the reduction is only in per-round scheduling and accumulation cost.
+
+The complete runtime-M suite passed for bf16 RM and bfp8 tiled inputs, including a full block followed
+by a one-row tail. Six consecutive M=5120 dispatches were bitwise identical. The schedule is enabled
+only when `KGROUPS == M_BLOCK`, W_down is resident, and runtime `m_eff == M_BLOCK`.
