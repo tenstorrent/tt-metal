@@ -395,28 +395,36 @@ class TTDiffusionHead:
             ttnn.add(cond_all, t_all, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # Same configs as the per-step path with per_core_M raised from b to b*steps (M is now
-        # b*steps tiles).  in0_block_w is untouched, so the K reduction — and the output bits —
-        # are unchanged.
-        layer_cfg = _mod_batch_cfg(_DIFF_N4608_B2, b * steps) if b == 2 else None
-        final_cfg = _mod_batch_cfg(_DIFF_N3072_B2, b * steps) if b == 2 else None
-        layer_mod = [
-            ttnn.linear(
-                sc_all,
-                w.layer_adaLN_w[i],
+        # PACK the b*steps rows into tile ROWS before the matmul.  On the batch axis each of the 20
+        # (b=2, S=10) rows owns a whole 32-row tile, so M is 20 tiles and the matmul computes 640
+        # rows to use 20 — it is the one COMPUTE-bound matmul in the frame (29.2 TFLOPs, 29.3% of
+        # peak, at only 96 GB/s: the DRAM column reads low because compute, not bandwidth, is the
+        # wall).  As tile rows the same work is Mt=1 and the matmul becomes DRAM-bound like its
+        # siblings: 315 -> 45 µs for N=4608, 291 -> 45 µs for the final N=3072.
+        #
+        # One reshape per modulation restores the batch axis, so every per-step chunk slice below
+        # stays tile-aligned exactly as before — this is what makes the packing pay, unlike the two
+        # height-axis layouts described above which pushed unaligned slices into the DPM loop.  The
+        # reshapes cost ~60/44 µs and the one input-side reshape ~43 µs, against 1.27 ms of matmul
+        # saved: measured 1.552 -> 0.561 ms per frame for the five modulations.
+        rows = b * steps
+        mt = (rows + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+        sc_packed = ttnn.reshape(sc_all, [1, 1, rows, w.hidden_size])
+        layer_cfg = _mod_batch_cfg(_DIFF_N4608_B2, mt) if b == 2 else None
+        final_cfg = _mod_batch_cfg(_DIFF_N3072_B2, mt) if b == 2 else None
+
+        def _mod(weight, cfg, n_out):
+            out = ttnn.linear(
+                sc_packed,
+                weight,
                 compute_kernel_config=_COMPUTE_KERNEL_FP32,
-                program_config=layer_cfg,
+                program_config=cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            for i in range(len(w.layer_adaLN_w))
-        ]
-        final_mod = ttnn.linear(
-            sc_all,
-            w.final_adaLN_w,
-            compute_kernel_config=_COMPUTE_KERNEL_FP32,
-            program_config=final_cfg,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            return ttnn.reshape(out, [rows, 1, 1, n_out])
+
+        layer_mod = [_mod(w.layer_adaLN_w[i], layer_cfg, 3 * w.hidden_size) for i in range(len(w.layer_adaLN_w))]
+        final_mod = _mod(w.final_adaLN_w, final_cfg, 2 * w.hidden_size)
         return ModSchedule(layer_mod=layer_mod, final_mod=final_mod, steps=steps, batch=b)
 
     def _head_layer(
