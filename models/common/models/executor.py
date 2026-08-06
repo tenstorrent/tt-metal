@@ -391,7 +391,7 @@ class EagerLLMExecutor:
         self._iter_named_modules = iter_named_modules
         self.mode = None
         self._kv_cache: list | None = None
-        self._decode_seed_state_needs_reset = True
+        self._decode_rng_needs_reset = True
 
         # todo)) this could be a composed optional for debug!
         # Output specs captured during compile (for multi-CQ pre-allocation)
@@ -830,7 +830,7 @@ class EagerLLMExecutor:
             assert start_pos.dim() == 1, f"start_pos must be [batch_size], got {start_pos.dim()}D"
         self.mode = Mode.PREFILL
         self._assert_kv_cache_identity(kv_cache)
-        self._decode_seed_state_needs_reset = True
+        self._decode_rng_needs_reset = True
 
         batch_size, batch_seq_len = tokens.shape
         vocab_size = self.model.vocab_size
@@ -1274,12 +1274,12 @@ class EagerLLMExecutor:
             )
             seed_manager = self.model.sampling.seed_manager
             seed_slots = list(range(B))
-            if self._decode_seed_state_needs_reset:
+            if self._decode_rng_needs_reset:
                 seed_manager.reset_seed_from_slots(
                     per_request_params.seed,
                     seed_slots,
                 )
-                self._decode_seed_state_needs_reset = False
+                self._decode_rng_needs_reset = False
             else:
                 seed_manager.reset_seed_from_slots_if_needed(
                     per_request_params.seed,
@@ -1425,11 +1425,16 @@ class TracedLLMExecutor:
         self.trace_inputs_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
         self.trace_output_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
 
-        # Per sampling-mode flag: the next decode step must re-seed the persistent buffers from host
-        # (correct first token + start position). Set after every prefill and at init; cleared once
-        # the device has been seeded, after which steady-state steps carry state on device.
-        self._decode_needs_reseed: dict[bool, bool] = defaultdict(lambda: True)
-        self._decode_seed_state_needs_reset: dict[bool, bool] = defaultdict(lambda: True)
+        # Per sampling-mode flag: the next decode step must restage the persistent token and
+        # position buffers from host (correct first token + start position). Set after every
+        # prefill and at init; cleared once the device has been seeded, after which
+        # steady-state steps carry state on device.
+        self._decode_inputs_need_restage: dict[bool, bool] = defaultdict(lambda: True)
+        # Unrelated to the flag above, and about the sampler only: the first decode of a
+        # lifecycle must reset seed state unconditionally, because the conditional helper
+        # compares requested against cached seeds and skips when both are None, leaving
+        # decode-only sampling with no device seed.
+        self._decode_rng_needs_reset: dict[bool, bool] = defaultdict(lambda: True)
         # Keyed per sampling-mode (True=on-device sampling, False=host), matching the per-key
         # decode trace + device page_table buffer in trace_inputs_decode. A single shared tensor
         # would let one mode's page-table update mask a needed copy on the other mode's trace
@@ -1753,8 +1758,8 @@ class TracedLLMExecutor:
         # on-device buffers from host (correct first token + start position) before the device
         # can carry state on its own. Mark all sampling modes stale, and drop the cached page
         # tables so the first post-prefill step always re-copies (device buffers are reused).
-        self._decode_needs_reseed = defaultdict(lambda: True)
-        self._decode_seed_state_needs_reset = defaultdict(lambda: True)
+        self._decode_inputs_need_restage = defaultdict(lambda: True)
+        self._decode_rng_needs_reset = defaultdict(lambda: True)
         self._prev_decode_page_table = defaultdict(lambda: None)
 
         batch_size, batch_seq_len = tokens.shape
@@ -2202,12 +2207,12 @@ class TracedLLMExecutor:
             )
             seed_manager = self.model.sampling.seed_manager
             seed_slots = list(range(B))
-            if self._decode_seed_state_needs_reset[sampling_on_device]:
+            if self._decode_rng_needs_reset[sampling_on_device]:
                 seed_manager.reset_seed_from_slots(
                     per_request_params.seed,
                     seed_slots,
                 )
-                self._decode_seed_state_needs_reset[sampling_on_device] = False
+                self._decode_rng_needs_reset[sampling_on_device] = False
             else:
                 seed_manager.reset_seed_from_slots_if_needed(
                     per_request_params.seed,
@@ -2224,7 +2229,7 @@ class TracedLLMExecutor:
             self._capture_decode_trace(tokens, start_pos, page_table, kv_cache, sampling_on_device, sampling_params)
 
         loop_active = self._decode_loop_active(sampling_params)
-        if loop_active and not self._decode_needs_reseed[sampling_on_device]:
+        if loop_active and not self._decode_inputs_need_restage[sampling_on_device]:
             # Steady-state on-device loop: the captured trace advanced current_pos/rot_mat_idxs
             # (in-place plus_one) and wrote the sampled token back into the persistent token buffer
             # on the previous replay, so tokens/positions need NO host staging. Refresh only the
@@ -2244,7 +2249,7 @@ class TracedLLMExecutor:
             )
             self._prev_decode_page_table[sampling_on_device] = page_table.clone()
             if loop_active:
-                self._decode_needs_reseed[sampling_on_device] = False
+                self._decode_inputs_need_restage[sampling_on_device] = False
 
         ttnn.execute_trace(
             self.mesh_device,
