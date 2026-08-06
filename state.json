@@ -1,38 +1,42 @@
 {
-  "last_run": "2026-08-05T09:45:00Z",
-  "run_id": 31007662684,
+  "last_run": "2026-08-06T00:00:00Z",
+  "run_id": 31060781881,
   "open_prs": {
-    "51999": {"issue": 51420, "status": "action_required (maintainer approval needed on pr-gate.yaml); checks not individually re-verified this run"},
-    "52106": {"issue": 51660, "status": "check-runs green (RTL Sim CI, Cycode x4); pr-gate.yaml workflow run itself action_required"},
-    "51868": {"issue": 51866, "status": "check-runs green; pr-gate.yaml action_required after latest push; already had a full review-response cycle (fixed tail overflow, reverted quasar hunk, ULP fix); one perf/predication concern deferred by reviewer"}
+    "51999": {"issue": 51420, "status": "checks green; pr-gate.yaml action_required (maintainer approval gate), unchanged"},
+    "52106": {"issue": 51660, "status": "checks green; pr-gate.yaml action_required, unchanged"},
+    "51868": {"issue": 51866, "status": "checks green; pr-gate.yaml action_required after fix-commit push; full review cycle done, one perf/predication concern deliberately deferred"}
   },
-  "issues_labeled": ["52178:bug", "52174:bug"],
+  "issues_labeled": ["52178:bug", "52174:bug", "52233:bug", "52203:bug"],
   "issues_commented": ["52178"],
   "covered_no_duplicate": {
-    "52131": "PR #52136 already closes it (Closes #52131), numeric_stable=true for both named softmax ops",
-    "52174": "part of #52178 meta-issue; no existing fix PR found via search",
-    "52178": "meta-issue synthesizing 6 sub-issues; commented, no fix PR needed for the issue itself"
+    "52131": "PR #52136 already closes it",
+    "52174": "part of #52178 meta-issue",
+    "52178": "meta-issue, commented",
+    "52233": "root-caused by reporter jbaumanTT; fix already in open PR #52237 (draw packed-write payload in whole words); do not open duplicate fix PR",
+    "52203": "assignee abhullar-tt actively investigating (borrowed-DFB, quasar sharded tilize); no fix PR yet as of this run"
   },
   "dropped_fix_targets": {
-    "51845": "maintainer jasondavies explicitly rejected both proposed remedies (extend Cody-Waite splits; clamp output to [-1,1]) on 2026-08-05 -- do not attempt fix. PR #52124 may need reassessment."
+    "51845": "maintainer jasondavies explicitly rejected both proposed remedies on 2026-08-05 -- do not attempt fix"
   },
   "watch_prs": {
-    "52124": "Clamp sin/cos to [-1,1] - author unknown/not repo-assist; maintainer rejected this approach in #51845 discussion, may get closed or need rework",
-    "52126": "ttnn.i0 fix PR, uses I0_MAX_INPUT=88.5f -- per #52178 this would zero ~48% of bf16 domain, same defect class as i1",
-    "51843": "alternate ttnn.i0 fix PR, same I0_MAX_INPUT=88.5f concern as #52126"
+    "52124": "Clamp sin/cos to [-1,1] - maintainer rejected this approach in #51845 discussion",
+    "52126": "ttnn.i0 fix, I0_MAX_INPUT=88.5f concern per #52178",
+    "51843": "alternate ttnn.i0 fix, same concern",
+    "52237": "fixes #52233 zero-length NoC write (packed-write payload rounding); watch for merge"
   },
   "sfpu_clamp_family": {
-    "note": "Root-cause family documented in #52178 (community, kinginu). Sub-issues: i1 #52174 (fixed/measured), erfc #51137, digamma #51128, snake_beta #51116, sin/cos #51845 (blocked, see dropped_fix_targets), softplus #51866 (PR #51868 open, pending approval gate). erfc/digamma/snake_beta remain open with no PR as of this run -- potential future Task 3 candidates, need scoping."
+    "note": "Family in #52178 (kinginu). i1 #52174 fixed/measured. Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate."
   },
   "welcome_candidates_pending_verification": {
-    "thwaitsusa0316": "author of #52114, single data point, verification queries (merged PR count, prior issue count) not yet run",
-    "kinginu": "multiple recent issues (52178, 52174, 52155, 52141) -- likely established, not verified via query yet",
-    "EazyHood": "extensive history on #51845/#52131 -- clearly established, do NOT welcome"
+    "thwaitsusa0316": "author of #52114, not yet verified",
+    "kinginu": "multiple recent issues, likely established",
+    "EazyHood": "clearly established, do NOT welcome"
   },
   "backlog_cursor": {
-    "task1_labeling": "resume after 52178/52174; issues 52162, 52176 already had bug label; 52181 not yet read",
-    "task2_commenting": "resume from oldest-first open issues after this run's pass; 52178 handled this run",
-    "task6_stale_prs": "not run this session, needs a pass next run"
+    "task1_labeling": "resume after 52233/52203; next unreviewed candidates: 52260, 52231, 52229, 52228",
+    "task2_commenting": "52233 and 52203 reviewed this run (labels only, no comment needed -- both already have substantive reporter/assignee analysis, redundant Repo Assist comment would be noise); resume oldest-first next run",
+    "task3_fix": "52233 has open fix PR #52237 (not repo-assist) -- covered, no action. 52203 still under active investigation by assignee, not yet ready for a repo-assist fix attempt",
+    "task6_stale_prs": "surveyed #22649, #34933, #21584 (all stale, reviewer/author dependent) -- not yet nudged, needs a pass next run"
   },
-  "notes": "This run: verified i1 clamp claim in #52178/#52174 directly against tt_metal/hw/ckernels/blackhole/.../ckernel_sfpu_i1.h (I1_MAX_INPUT=88.5f, symmetric_clamp) -- confirmed accurate. Applied bug labels + substantive comment on #52178. Confirmed #52131 covered by #52136, no duplicate. Confirmed #51845 fix approaches rejected by maintainer -- dropped from fix backlog. Did NOT complete Task3 (new fix PR), Task4, Task6, Task7 (verification queries) this run due to time -- prioritize these next run. PR pr-gate.yaml action_required pattern across all 3 repo-assist PRs appears structural (bot-authored branch gating), not something repo-assist can resolve; keep reporting but stop re-commenting on it unless it changes."
+  "notes": "2026-08-06 run: Task 5 - all 3 repo-assist PRs unchanged (still pr-gate action_required, no new maintainer feedback, skipped duplicate comments). Task1/2 - reviewed #52233 (zero-length NoC write/watcher hang, root-caused with fix already in PR #52237) and #52203 (Quasar tilize corruption, active investigation) -- both well-researched by reporters/assignees already, so labeled bug but did not add a comment (would be redundant noise, per restraint principle). Reviewed #52252 bounty (already assigned, noted odd low-effort comment from unrelated account for maintainer awareness only, no action). Did not attempt Task 3/4/6/7 substantively this run due to time; prioritize Task 6 stale-PR nudges and Task 7 welcome-candidate verification next run. Task 8 monthly summary updated with this run's entry."
 }
