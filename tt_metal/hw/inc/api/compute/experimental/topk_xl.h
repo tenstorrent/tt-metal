@@ -218,11 +218,13 @@ ALWI void topk_xl_add_lsb_indices(uint32_t idst) {
 /**
  * Initializes the state for removing 16 MSB values from the topk_xl data.
  *
- * Programs ADDR_MOD_0 with the +2 hi16 / lo16 stride. Runs on PACK (TRISC2)
- * because in the extended 256K path the value half is packed out first, the
- * hi16 half is then overwritten with zero, and the indices are packed out
- * second; owning the overwrite on PACK lets the value-pack and the
- * zero-overwrite overlap with MATH's final merge tail.
+ * Programs ADDR_MOD_0 with the +2 stride of one 32-lane group. Runs on PACK
+ * (TRISC2) because in the extended 256K path the value half is packed out
+ * first, the hi16 half is then overwritten with zero, and the indices are
+ * packed out second.
+ *
+ * The kernel static_asserts DstSync::SyncFull as MATH and PACK would contend
+ * on LRegs otherwise.
  */
 ALWI void topk_xl_remove_msb_values_init() {
     PACK((llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values_init<false>()));
@@ -235,6 +237,8 @@ ALWI void topk_xl_remove_msb_values_init() {
  * (bf16 value | u16 index) format in FP32, leaving only the
  * indices in the lower 16 bits.
  *
+ * Requires the kernel to be built with DST_SYNC_MODE == DstSync::SyncFull.
+ *
  * | Argument   | Description                                                                | Type     | Valid Range |
  * Required |
  * |------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
@@ -244,7 +248,7 @@ ALWI void topk_xl_remove_msb_values_init() {
  */
 template <uint32_t K>
 ALWI void topk_xl_remove_msb_values(uint32_t idst) {
-    PACK((llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values<K, false>(idst)));
+    PACK((llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values<K, false, DST_SYNC_MODE>(idst)));
 }
 
 /**

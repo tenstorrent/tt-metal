@@ -816,6 +816,16 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTiledGeneric::c
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
                             cb_data_format == tt::DataFormat::UInt32;
 
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (cb_data_format == tt::DataFormat::Float32) {
+        // Keep both the tilize input (c_0) and its output (c_1, which feeds the
+        // transpose) in full Float32 on the unpack-to-dest path; otherwise the
+        // unpacker falls back to tf32 and drops the low mantissa bits.
+        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src1_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     KernelDescriptor compute_desc;
     compute_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_tiled.cpp";
@@ -824,6 +834,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTiledGeneric::c
     compute_desc.compile_time_args = std::move(compute_kernel_args);
     compute_desc.config = ComputeConfigDescriptor{
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
