@@ -428,7 +428,9 @@ class BuiltPipeline:
         self.infer_fwd.set_prefix(gpt.gpt_inference.cached_prefix_emb)
 
         # ── Stage A: speaker encoder -> d-vector g [1,512,1] (l2-norm on device) ──
-        wav16 = _tt(ins["wav_16k"], layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        wav16 = _tt(
+            ins["wav_16k"], dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )  # fp32: bf16 upload quantization was the d-vector accuracy floor (emb PCC 0.9710 -> 0.9996)
         g = _l2norm_device(self.se_fwd(wav16))  # ttnn [1,512,1]
 
         # ── Stage B: conditioning -> cond_latent [1,32,1024] ──────────────────
