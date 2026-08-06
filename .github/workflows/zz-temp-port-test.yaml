@@ -1,0 +1,36 @@
+# TEMPORARY — delete before this branch goes anywhere near main.
+#
+# `port-device.yaml` is reached through the workflow_dispatch API, which only resolves against the
+# default branch. Until these workflows land there, the only way to exercise them on real runners
+# is a push trigger on this branch, so this is a thin caller with the PR #50699 test case baked in.
+#
+# Staged: sync reports what has drifted and writes nothing to PR #50699.
+
+name: "[TEMP] codegen port test — PR 50699"
+
+on:
+  push:
+    branches: [ebanerjee/port-agent-test-50699]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  sync-pad:
+    uses: ./.github/workflows/port-device.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      op: pad
+      mode: sync
+      # Fixed rather than generated: the state artifact is named after it, so a rerun of this test
+      # overwrites its own state instead of littering a new one each push.
+      run_id: pr50699-sync-test
+      codegen_ref: main
+      # Blank means github.sha — this branch, which is PR #50699's head.
+      commit: ""
+      arch: wormhole_b0
+      staged: true
