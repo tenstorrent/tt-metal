@@ -8,12 +8,15 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ring_attention_all_gather_metadata.hpp"
 #include "ring_attention_prefetch_utils.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
 
 constexpr uint32_t my_ring_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
@@ -26,6 +29,18 @@ constexpr uint32_t prefetch_packets = 4;
 
 void kernel_main() {
     constexpr auto input_accessor_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
+    // Appended after the per-input accessors so existing compile-arg indices are untouched. When the
+    // flag is clear the accessor still has to name a VALID accessor offset -- TensorAccessorArgs<> is
+    // instantiated unconditionally and static_asserts on a non-accessor arg -- so fall back to the first
+    // input's.
+    // The tuple itself has no offset accessor; the last element's next offset is where the
+    // accessors end.
+    constexpr uint32_t halo_meta_flag_idx =
+        std::get<num_inputs - 1>(input_accessor_args).next_compile_time_args_offset();
+    constexpr bool has_halo_metadata = get_compile_time_arg_val(halo_meta_flag_idx) == 1;
+    constexpr uint32_t kv_meta_args_offset =
+        has_halo_metadata ? halo_meta_flag_idx + 1 : page_size_base_idx + num_inputs;
+    constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
 
     uint32_t arg_idx = 0;
     const size_t incoming_ready_sem = get_arg_val<uint32_t>(arg_idx++);
@@ -41,6 +56,29 @@ void kernel_main() {
         input_tile_start[input] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_end[input] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_base[input] = get_arg_val<uint32_t>(arg_idx++);
+    }
+
+    // Trace-safe metadata path. The halo's source group is linear in the chunk index, so on the scalar
+    // path the host rewrites these page ranges every dispatch; a replayed trace never runs that rewrite
+    // and would keep reading the capturing chunk's tail. Recompute the shift here instead. The block sits
+    // after the per-input descriptors so the host relocation's field offsets stay put.
+    if constexpr (has_halo_metadata) {
+        const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t q_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t baked_start_Ht = get_arg_val<uint32_t>(arg_idx++);
+        Noc meta_noc;
+        CircularBuffer cb_meta(cb_output_id);
+        const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
+            meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
+        const uint32_t tail_start_Ht = ring_attention_all_gather::compute_halo_tail_start_Ht(
+            kv_actual_isl, q_local_tile_rows, ring_size, halo_tile_rows, source_device);
+        for (uint32_t input = 0; input < num_inputs; ++input) {
+            const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
+            ring_attention_all_gather::relocate_halo_range(
+                tail_start_Ht * input_Wt, baked_start_Ht * input_Wt, input_tile_start[input], input_tile_end[input]);
+        }
     }
 
     auto input_accessors_tuple = make_tensor_accessor_tuple(input_accessor_args, arg_idx);
