@@ -1,4 +1,35 @@
-# writer_local_topk.cpp — mcast_pipe v7→v8 re-verify (receiver, NO code edit)
+# writer_local_topk.cpp — MIGRATED API v10 (verified 2026-08-06)
+
+Atomic unit: `topk-multicore-final-readiness`; helper-facing role: readiness
+receiver. The factory prepends the complete no-handshake Counter `Mcast2D`
+helper CT/RT block and explicitly initializes adopted readiness descriptor 1 to
+`INVALID` (`0`).
+
+`McastArgs<0, 0>` reports both opaque boundaries. The kernel chains operation CT
+fields from `next_compile_time_args_offset()`, reads `start_wt` from
+`next_runtime_args_offset()`, and replaces readiness wait/reset with
+`receive_signal()`. Value/index unicast, its data write barrier, the
+operation-owned arrival-counter increment, atomic barriers, and CB ownership
+are unchanged.
+
+Validation:
+
+- `./build_metal.sh`: passed.
+- Exact W=8192, k=50, BFLOAT16_B node under `--dev` from a fresh isolated
+  cache: passed; `reader_final_topk` and `writer_local_topk` artifacts confirmed.
+- `TOPK-MULTICORE`: 14 passed, 12 expected BFLOAT8_B pad xfails, 26 selected.
+- `McastHostFixture.*`: 25/25; `test_mcast_pipe.py`: 77/77.
+
+Current exact-node profiling reports a 238,281 ns TopK device-kernel duration.
+There is no operation-matched pre-migration TopK bakeoff, and the 238,280 ns
+writer/BRISC envelope also contains `writer_final_topk`; therefore the
+per-kernel delta is explicitly N/A.
+
+Production diff: kernel **+18 / -19**; atomic unit **+77 / -75**. The
+`ledger.json` commit field is `HEAD` because code and ledger write-back are in
+the same commit.
+
+## Historical v8 record
 
 > Historical v8 log. Current v9 status: **blocked and at baseline** because the
 > paired no-handshake receiver initialization is not race-free.

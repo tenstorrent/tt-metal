@@ -4,7 +4,7 @@
   "api_version_define": "MCAST_PIPE_API_VERSION",
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
-  "source_of_truth_note": "Current v10 status carries all 13 migrated kernels and 12 host bindings onto the self-describing six-word CT wire verified on 2026-08-05. The underlying fully end-to-end migrations remain anchored by Conv2d single-sender rectangle commit 991b5b6b6386a90726d15007002fe1f5a77d8487, fixed-line commit 51dfb1f1ed61045ed10dc679269960b6d2ccac9e, width-sharded activation commit fe866a1d0c4c32b78aae8a76e875c0da109f51c8, matmul in1 commit aeeb28ff007807c71b1f60842cca85e5c41efa7f, GroupNorm v2 commit bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0, and sort single-row control commit 7337302b564. Gate 4 revalidated every mapped inventory after the v10 wire change. Historical v8/v9 commits and results remain in dated logs.",
+  "source_of_truth_note": "Current v10 status carries 15 migrated kernels and 13 host bindings on the self-describing six-word CT wire. TopK final readiness was migrated and verified on 2026-08-06 in the same atomic code-and-ledger commit (`HEAD` in its commit fields); its build, exact fresh-cache node, complete mapped inventory, and helper suites passed. The earlier fully end-to-end migrations remain anchored by Conv2d single-sender rectangle commit 991b5b6b6386a90726d15007002fe1f5a77d8487, fixed-line commit 51dfb1f1ed61045ed10dc679269960b6d2ccac9e, width-sharded activation commit fe866a1d0c4c32b78aae8a76e875c0da109f51c8, matmul in1 commit aeeb28ff007807c71b1f60842cca85e5c41efa7f, GroupNorm v2 commit bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0, and sort single-row control commit 7337302b564. Historical v8/v9 commits and results remain in dated logs.",
   "host_bindings": [
     {
       "id": "weights-mcast:conv2d-sharded:single-sender-rect",
@@ -389,17 +389,20 @@
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp"
       ],
       "migration_unit": "topk-multicore-final-readiness",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 10,
+      "commit": "HEAD",
       "validation_set": [
-        "TOPK-MULTICORE",
-        "McastHostFixture: Gate 0 passed 25/25",
-        "test_mcast_pipe.py: Gate 0 passed 77/77"
+        "build_metal.sh: passed",
+        "exact W=8192,k=50 BFLOAT16_B node under --dev from fresh isolated cache: passed; reader_final_topk and writer_local_topk JIT artifacts confirmed",
+        "TOPK-MULTICORE: 14 passed, 12 expected BFLOAT8_B pad xfails, 26 selected",
+        "McastHostFixture: 25 passed",
+        "test_mcast_pipe.py: 77 passed",
+        "exact-node profile: TopK device kernel duration 238281 ns; no operation-matched pre-migration bakeoff exists, so per-kernel delta is not comparable"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:2", "counter-signal-only"]
+      "flags": ["tier:2", "atomic-unit:topk-multicore-final-readiness", "fully-end-to-end", "counter-signal-only"]
     },
     {
       "id": "layernorm:sharded:pre-allgather-reduce",
@@ -1290,17 +1293,23 @@
       "op_family": "data_movement + reduction",
       "role": "receiver",
       "tag": "clean",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 10,
+      "commit": "HEAD",
       "validation_set": [
-        "TOPK-MULTICORE audit; migration blocked before edit"
+        "build_metal.sh: passed",
+        "exact fresh-cache W=8192,k=50 BFLOAT16_B node under --dev: passed; reader_final_topk JIT artifact confirmed",
+        "TOPK-MULTICORE: 14 passed, 12 expected BFLOAT8_B pad xfails, 26 selected",
+        "McastHostFixture: 25 passed",
+        "test_mcast_pipe.py: 77 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "Pending migration: API-008 resolves readiness with the existing no-handshake Counter mode and host-zero initialization.",
+      "last_verified": "2026-08-06",
+      "census_note": "Fully end-to-end v10 migration: sender-side no-handshake Counter readiness uses an adopted, host-zeroed semaphore; the arrival counter remains operation-owned.",
       "flags": [
-        "race-free-no-handshake-init"
+        "race-free-no-handshake-init",
+        "fully-end-to-end",
+        "atomic-unit:topk-multicore-final-readiness"
       ]
     },
     {
@@ -1308,17 +1317,23 @@
       "op_family": "data_movement + reduction",
       "role": "sender",
       "tag": "refactor",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
+      "status": "migrated",
+      "migrated_api_version": 10,
+      "commit": "HEAD",
       "validation_set": [
-        "TOPK-MULTICORE audit; migration blocked before edit"
+        "build_metal.sh: passed",
+        "exact fresh-cache W=8192,k=50 BFLOAT16_B node under --dev: passed; writer_local_topk JIT artifact confirmed",
+        "TOPK-MULTICORE: 14 passed, 12 expected BFLOAT8_B pad xfails, 26 selected",
+        "McastHostFixture: 25 passed",
+        "test_mcast_pipe.py: 77 passed"
       ],
       "coverage_confidence": "high",
-      "last_verified": "2026-07-29",
-      "census_note": "Pending migration: API-008 resolves readiness with the existing no-handshake Counter mode and host-zero initialization.",
+      "last_verified": "2026-08-06",
+      "census_note": "Fully end-to-end v10 migration: receiver-side no-handshake Counter readiness is helper-owned; value/index unicast and the arrival counter remain operation-owned.",
       "flags": [
-        "race-free-no-handshake-init"
+        "race-free-no-handshake-init",
+        "fully-end-to-end",
+        "atomic-unit:topk-multicore-final-readiness"
       ]
     },
     {

@@ -1,4 +1,33 @@
-# mcast_pipe rollout report — API v10, self-describing wire verified 2026-08-05
+# mcast_pipe rollout report — API v10, TopK verified 2026-08-06
+
+## Tier 2 TopK final-readiness migration — PASS
+
+`topk-multicore-final-readiness` is fully end-to-end migrated at v10: one host
+binding and both kernel faces. The factory now owns one sender-separate
+no-handshake Counter `Mcast2D`, adopts readiness descriptor 1 with explicit
+`INVALID` (`0`) host initialization, and prepends the complete opaque helper
+CT/RT blocks. `reader_final_topk` uses `send_signal()` and
+`writer_local_topk` uses `receive_signal()`; value/index unicast, the arrival
+counter, CB ownership, and data/atomic barriers remain operation-owned.
+
+- `./build_metal.sh`: passed.
+- Exact W=8192, k=50, BFLOAT16_B case under `--dev` from a fresh isolated cache:
+  passed with both migrated JIT artifacts confirmed.
+- `TOPK-MULTICORE`: 14 passed, 12 expected BFLOAT8_B pad xfails, 26 selected.
+- `McastHostFixture.*`: 25/25; `test_mcast_pipe.py`: 77/77.
+- Production diff: +77 / -75 (reader -23 lines, writer -19 lines); net +2.
+
+The profiled exact node reports a 238,281 ns device-kernel duration, with a
+32,003 ns reader/NCRISC envelope and a 238,280 ns writer/BRISC envelope. A
+per-kernel delta is **N/A**: no operation-matched pre-migration TopK bakeoff
+exists, and each processor envelope includes another TopK data-movement kernel.
+The raw F2 helper bakeoff has different work and geometry and is not presented
+as a comparable baseline.
+
+The current ledger state is 15 migrated kernels and 13 current host bindings
+across seven atomic units, with four kernel rows and six bindings pending in
+the two remaining approved units. Code and ledger are paired in one atomic
+commit, represented as `HEAD` in the ledger's self-referential commit field.
 
 ## Final release gate — 2026-08-05
 
@@ -189,10 +218,12 @@ commit (`aeeb28ff007`) — its documented role is the revert/bisect anchor, not 
 | 4 — `groupnorm-sharded-v2-mcast-host` | 4 | 0 | 0 | +168 / −376 |
 | 5 — `sort-single-row-control` | 1 | 0 | 0 | +57 / −79 |
 | 6 — `conv2d-activation-width-sharded` | 1 | 0 | 0 | +48 / −150 |
-| Total | 12 | 0 | 0 | +557 / −822 |
+| re-entry Tier 2 — `topk-multicore-final-readiness` | 1 | 0 | 0 | +77 / −75 |
+| Total | 13 | 0 | 0 | +634 / −897 |
 
-Net reduction of 265 production lines. No in-context performance run was requested, so no performance
-delta is claimed.
+Net reduction of 263 production lines. The TopK run measured current
+performance but cannot claim a comparable delta because no operation-matched
+pre-migration baseline exists; prior units retain their recorded results.
 
 | Kernel | Status | Validation | File deletions |
 |---|---|---|---:|
@@ -209,6 +240,8 @@ delta is claimed.
 | Sort single-row coordinator | migrated, fully end-to-end | exact fresh-cache JIT; long 7/7; Ht=2 2/2 | 43 |
 | Sort single-row reader | migrated, fully end-to-end | exact fresh-cache JIT; long 7/7; Ht=2 2/2 | 21 |
 | Conv2D width-sharded activation | migrated, fully end-to-end | exact fresh-cache JIT; features 48/16 skips; DRAM 1/1 | 150 |
+| TopK final readiness sender | migrated, fully end-to-end | exact fresh-cache JIT; multicore 14/12 expected xfails | 23 |
+| TopK local readiness receiver | migrated, fully end-to-end | exact fresh-cache JIT; multicore 14/12 expected xfails | 19 |
 
 Conv2D and GroupNorm rows were **not** in this run's scope — their factories are byte-identical to the
 pre-rebase verified state, so they needed no recheck. Their evidence dates from 2026-07-30.
@@ -227,16 +260,16 @@ rebase, so the verify-only pass neither widened nor narrowed them:
   device-wire coverage, but no mapped operation test reaches the v2 sender-only route. The same sender
   kernels are JIT-verified through the multicast route.
 
-## Deferred kernel work
+## Deferred and pending kernel work
 
-The 78 deferred kernel rows remain outside this rollout. Principal production blockers:
+The 72 deferred and 4 pending kernel rows remain outside the completed units. Principal production
+blockers and prerequisites:
 
 - matmul in0 control channels needing typed/custom control values or independent data/signal loopback;
 - block-sharded Conv2D activation multicast, whose producer-overlapped chunked send the current helper
   cannot express;
 - LayerNorm channels needing acknowledged signal-only, mixed-mode streaming, or explicit
   include-source loopback;
-- TopK no-handshake receiver initialization hazards.
 
 The earlier reconcile listed ten deferred rows whose upstream churn touched protocol lines. The
 three sort rows were re-audited here: coordinator and reader migrated, while writer was explicitly
@@ -258,6 +291,7 @@ confirmed by patch-id).
 | GroupNorm v2 | `bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0` | `49e559dcb55` | `0a796a025c9` |
 | Sort single-row control | `7337302b5649b7cd169764cd95c0b0343e88950d` | `8479210e61e` | n/a |
 | Conv2D width-sharded activation | `fe866a1d0c4c32b78aae8a76e875c0da109f51c8` | `30927931918` | historical v8 only |
+| TopK final readiness | `HEAD` (same atomic code+ledger commit) | same commit | historical v8 only |
 
 Two on-branch commit *messages* still cite pre-rebase hashes (`baa86dc7116` "…for 75b977e1a04",
 `5320c2d69bd` "…for 261e322ed22") — history is immutable; this table is the key.
