@@ -14,6 +14,9 @@
 #
 # Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] <test_path> [extra_pytest_args...]
 #
+# Set SAFE_PYTEST_DISPATCH_TIMEOUT to override the five-second per-operation
+# watchdog for an instrumented test while retaining hang detection.
+#
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
 #               sanitization), lightweight ebreak asserts, and auto-triage
@@ -46,7 +49,7 @@ set -o pipefail
 # pytest's own stdout/stderr pass through unchanged.
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DISPATCH_TIMEOUT=5
+DISPATCH_TIMEOUT="${SAFE_PYTEST_DISPATCH_TIMEOUT:-5}"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 TRIAGE_LLM_DIR="${REPO_DIR}/generated/tt-triage"
@@ -97,6 +100,11 @@ fi
 
 TEST_PATH="$1"
 shift
+
+if ! [[ "$DISPATCH_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "SAFE_PYTEST_ERROR: SAFE_PYTEST_DISPATCH_TIMEOUT must be a positive integer (got: $DISPATCH_TIMEOUT)"
+    exit 3
+fi
 
 # --- Deferred warnings ---
 # Warnings raised during setup get buried under pytest/triage output, so the
@@ -193,6 +201,29 @@ if [[ "$SIM_MODE" == false ]]; then
 fi
 
 if [[ "$DEV_MODE" == true ]]; then
+    WATCHER_ENABLED="${SAFE_PYTEST_WATCHER:-1}"
+    if [[ "$WATCHER_ENABLED" != "0" && "$WATCHER_ENABLED" != "1" ]]; then
+        echo "SAFE_PYTEST_ERROR: SAFE_PYTEST_WATCHER must be 0 or 1 (got: $WATCHER_ENABLED)"
+        exit 3
+    fi
+
+    DISABLE_MULTI_AERISC="${SAFE_PYTEST_DISABLE_MULTI_AERISC:-1}"
+    if [[ "$DISABLE_MULTI_AERISC" != "0" && "$DISABLE_MULTI_AERISC" != "1" ]]; then
+        echo "SAFE_PYTEST_ERROR: SAFE_PYTEST_DISABLE_MULTI_AERISC must be 0 or 1 (got: $DISABLE_MULTI_AERISC)"
+        exit 3
+    fi
+
+    # Blackhole's dual-active-ERISC firmware cannot reliably return to base firmware
+    # after a lightweight-assert build. Use the established single-AERISC debug
+    # configuration so the watcher and ebreak/LLK checks can complete cleanly.
+    # Set SAFE_PYTEST_DISABLE_MULTI_AERISC=0 to retain dual-active-ERISC mode
+    # while isolating a debug-only failure.
+    if [[ "$DISABLE_MULTI_AERISC" == "1" ]]; then
+        export TT_METAL_DISABLE_MULTI_AERISC=1
+    else
+        unset TT_METAL_DISABLE_MULTI_AERISC
+    fi
+
     # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at the
     # exact instruction. The dispatch timeout then fires and runs triage, which
     # captures callstacks from ALL cores — showing both the assert site and any
@@ -202,7 +233,7 @@ if [[ "$DEV_MODE" == true ]]; then
     # LLK asserts: enables LLK_ASSERT() in the compute API / LLK layer.
     # Catches invalid hardware configurations, wrong unpack/pack parameters,
     # and API misuse deep in the compute pipeline. Also compiles as ebreak.
-    export TT_METAL_LLK_ASSERTS=1
+    export TT_METAL_LLK_ASSERTS="${SAFE_PYTEST_LLK_ASSERTS:-1}"
 
     # Polling watcher: enables all device-side instrumentation (NoC sanitizer,
     # waypoints, CB sanitization) with the host polling thread. Recent watcher
@@ -213,15 +244,17 @@ if [[ "$DEV_MODE" == true ]]; then
     # would conflict with the lightweight ebreak asserts above). We want ebreak
     # asserts to halt the core so triage can capture callstacks from all cores,
     # rather than having watcher handle asserts independently.
-    export TT_METAL_WATCHER=1
-    export TT_METAL_WATCHER_NOINLINE=1
-    export TT_METAL_WATCHER_DISABLE_ASSERT=1
-    export TT_METAL_WATCHER_DISABLE_DISPATCH=1
+    if [[ "$WATCHER_ENABLED" == "1" ]]; then
+        export TT_METAL_WATCHER=1
+        export TT_METAL_WATCHER_NOINLINE=1
+        export TT_METAL_WATCHER_DISABLE_ASSERT=1
+        export TT_METAL_WATCHER_DISABLE_DISPATCH=1
+    fi
 
     if [[ "$SIM_MODE" == true ]]; then
         echo "SAFE_PYTEST: [sim+dev] asserts=ebreak llk_asserts=ON watcher=polling (no hang detection on sim)"
     else
-        echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s"
+        echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=${TT_METAL_LLK_ASSERTS} watcher=${WATCHER_ENABLED} single_aerisc=${DISABLE_MULTI_AERISC} triage=ON timeout=${DISPATCH_TIMEOUT}s"
     fi
 elif [[ "$SIM_MODE" == true ]]; then
     echo "SAFE_PYTEST: [sim] no hang detection"
