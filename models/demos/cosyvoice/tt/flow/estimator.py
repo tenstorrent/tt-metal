@@ -49,6 +49,7 @@ import ttnn
 
 from ..hifigan.conv import TtConv1d, accurate_compute_config
 from ..hifigan.upsample import TtConvTranspose1d
+from .encoder import _linear_fused  # same [out, in] -> [in, out] convention as `_linear` below
 
 
 # --------------------------------------------------------------------------
@@ -188,9 +189,12 @@ class TtAttention:
     def __init__(self, device, bag, heads: int, dim_head: int, cc=None, dtype=ttnn.bfloat16):
         self.device, self.h, self.d, self.cc = device, heads, dim_head, cc
         self.scale = dim_head**-0.5
-        self.wq, _ = _linear(device, bag, "to_q", dtype)
-        self.wk, _ = _linear(device, bag, "to_k", dtype)
-        self.wv, _ = _linear(device, bag, "to_v", dtype)
+        # q, k and v project the same activation, so they are one matmul over a
+        # concatenated weight. This block runs 64 times per Euler step and there are
+        # ten steps at batch 2, so four ops saved here are 5 120 ops off the stage.
+        self.wqkv, self.bqkv = _linear_fused(
+            device, bag, ("to_q", "to_k", "to_v"), dtype, scales=(self.scale, 1.0, 1.0)
+        )
         self.wo, self.bo = _linear(device, bag, "to_out.0", dtype)
 
     def _heads(self, x, b, t):
@@ -199,24 +203,23 @@ class TtAttention:
 
     def __call__(self, x):
         b, t, _ = x.shape
-        q = self._heads(ttnn.linear(x, self.wq, compute_kernel_config=self.cc), b, t)
-        k = self._heads(ttnn.linear(x, self.wk, compute_kernel_config=self.cc), b, t)
-        v = self._heads(ttnn.linear(x, self.wv, compute_kernel_config=self.cc), b, t)
+        qkv = ttnn.linear(x, self.wqkv, bias=self.bqkv, compute_kernel_config=self.cc)
+        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=self.h, transpose_key=False)
+        ttnn.deallocate(qkv)
 
-        kt = ttnn.permute(k, (0, 1, 3, 2))
-        ttnn.deallocate(k)
-        scores = ttnn.matmul(q, kt, compute_kernel_config=self.cc)
+        # `transpose_b` folds the [B, h, T, d] -> [B, h, d, T] permute into the matmul.
+        # `1/sqrt(d)` is already baked into the q half of the fused weight, so the
+        # separate `multiply(scores, scale)` is gone -- see `_linear_fused(scales=)`.
+        scores = ttnn.matmul(q, k, transpose_b=True, compute_kernel_config=self.cc)
         ttnn.deallocate(q)
-        ttnn.deallocate(kt)
-        scores = ttnn.multiply(scores, self.scale)
+        ttnn.deallocate(k)
         attn = ttnn.softmax(scores, dim=-1)
         ttnn.deallocate(scores)
 
         ctx = ttnn.matmul(attn, v, compute_kernel_config=self.cc)
         ttnn.deallocate(attn)
         ttnn.deallocate(v)
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3))
-        ctx = ttnn.reshape(ctx, (b, t, self.h * self.d))
+        ctx = ttnn.transformer.concatenate_heads(ctx)  # [B, h, T, d] -> [B, T, h*d], one op
         out = ttnn.linear(ctx, self.wo, bias=self.bo, compute_kernel_config=self.cc)
         ttnn.deallocate(ctx)
         return out
