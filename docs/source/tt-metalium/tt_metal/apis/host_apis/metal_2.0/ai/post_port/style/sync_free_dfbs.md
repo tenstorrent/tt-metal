@@ -100,6 +100,11 @@ Work from the host spec outwards; it is the only place the complete picture exis
 An op with no sync-free DFBs is a legitimate zero-site pass, and most ops with a heavy FIFO
 pipeline will be exactly that.
 
+> **If the op also has a fake-FIFO DM self-loop, run [that pass](dm_self_loop_dfbs.md) first.** Both
+> passes end at a `Scratchpad` and one op can hold a site for each, so they meet in the same file.
+> That one rewrites control flow; this one is small and local, and reads more cleanly layered on top.
+> They never contend for the same buffer — a DFB either calls the FIFO machinery or it does not.
+
 ## Step 3 — Apply
 
 **Don't pattern-match on how the old code wrapped the address.** The examples below show the address
