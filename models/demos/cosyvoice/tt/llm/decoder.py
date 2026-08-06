@@ -108,6 +108,22 @@ class TtARDecoder:
         self.g_after, self.bt_after = _layernorm_weights(device, bag, "after_norm", dtype)
         self._pos_cache: dict[int, object] = {}
 
+    def enable_pos_proj_cache(self):
+        """Let every layer cache `linear_pos(pos_emb)`, head-split and transposed.
+
+        Safe only on the fixed-width paths, which is why it is a call rather than a
+        constructor default: they pass the *same* `positional(max_len)` tensor on
+        every step, so each layer's cache holds one entry for the whole utterance and
+        never evicts. `forward_chunk`'s growing cache asks for a new width per token
+        and must not turn this on.
+
+        Worth a call of its own because that projection is the single largest matmul
+        in the layer -- 511 rows through `[d_model, d_model]` against one row for each
+        of q, k and v -- and it does not depend on the token being decoded.
+        """
+        for layer in self.layers:
+            layer.attn.cache_pos_proj = True
+
     def positional(self, key_size: int):
         """The `[1, 2*key_size - 1, d_model]` window, cached per size.
 
@@ -194,6 +210,7 @@ class TtARDecoder:
         supplies `mask` suppressing the rest.
         """
         chunk = xs.shape[1]
+        self.enable_pos_proj_cache()  # one window for the whole utterance -- see the method
         pos = self.positional(max_len)
         h = self.embed(xs)
         new_caches = []
@@ -271,6 +288,9 @@ class TracedDecodeStep:
     def __init__(self, decoder, max_len: int):
         self.dec = decoder
         self.max_len = max_len
+        # Before the first `_body()`, so the projection is computed and cached during
+        # warm-up and the trace records only the read.
+        decoder.enable_pos_proj_cache()
         meta = decoder.meta
         self.h, self.d_k, self.n_layers = meta["n_head"], meta["d_k"], meta["n_layers"]
         d_in = meta["input_size"]

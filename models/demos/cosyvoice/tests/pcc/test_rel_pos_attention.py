@@ -214,6 +214,35 @@ def test_reference_math_reproduces_the_captured_layer():
 needs_l1_small = pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 
 
+@pytest.mark.parametrize("key_len", [7, 64, 128, 209, 256])
+def test_rel_shift_fast_path_only_holds_at_t1_1(key_len):
+    """One query row makes the skew a plain slice -- and only one query row.
+
+    `TtRelPosAttention.rel_shift` short-circuits to `x[..., : n // 2 + 1]` when
+    `t1 == 1`, which turns seven device ops into one on a path that runs per layer
+    per generated token. The justification is that at `t1 == 1` the pad-and-drop is
+    its own inverse: prepending a zero to a length-`n` row and dropping the first
+    element of the `(n + 1, 1)` reinterpretation gives back the same `n` elements in
+    the same order, leaving only the trailing slice.
+
+    The second half of this test is the important half. The identity is **false** for
+    `t1 >= 2`, where the skew genuinely permutes, so asserting only the `t1 == 1` case
+    would leave a guard that could be widened later without anything failing.
+    """
+    n = 2 * key_len - 1
+    torch.manual_seed(0)
+
+    x1 = torch.randn(1, 4, 1, n)
+    assert torch.equal(rel_shift(x1), x1[:, :, :, : n // 2 + 1])
+
+    for t1 in (2, 5):
+        xt = torch.randn(1, 4, t1, n)
+        skewed = rel_shift(xt)
+        sliced = xt[:, :, :, : n // 2 + 1]
+        assert skewed.shape == sliced.shape
+        assert not torch.equal(skewed, sliced), f"skew is a no-op at t1={t1}; the fast path would be unguarded"
+
+
 def _have_flow_weights():
     from models.demos.cosyvoice.tt.weights import default_weights_path
 
