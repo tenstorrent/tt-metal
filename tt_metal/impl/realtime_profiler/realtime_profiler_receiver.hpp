@@ -67,6 +67,8 @@ public:
     uint64_t num_published_batches() const { return num_published_batches_.load(std::memory_order_relaxed); }
     // Records dropped before publication because their end timestamp preceded their start
     uint64_t num_malformed_records() const { return num_malformed_records_.load(std::memory_order_relaxed); }
+    // Records dropped because no probe ever reached their end timestamp, so they could not be mapped at all
+    uint64_t num_unmappable_records() const { return num_unmappable_records_.load(std::memory_order_relaxed); }
     // Blocking device L1 read across every chip; not for a latency-sensitive path.
     uint32_t read_ring_full_wait_count();
     size_t num_active_devices() const { return devices_.size(); }
@@ -90,6 +92,11 @@ private:
         // Records decoded but not yet published, waiting for the anchor that closes the interval they ran in. Their
         // host-facing fields are unset until then.
         std::vector<ProgramRealtimeRecord> staged;
+        // Records publish in order, so a record whose end timestamp no probe will ever reach blocks every record behind
+        // it -- and with it this device's drain, its FIFO, and its probe retirement. These two watch the head so such a
+        // record can be dropped instead of stalling the device.
+        uint64_t staged_head_end_timestamp = 0;
+        std::chrono::steady_clock::time_point staged_head_since{};
 
         DeviceState();
         ~DeviceState();
@@ -143,8 +150,11 @@ private:
     std::atomic<uint64_t> num_published_records_{0};  // records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // batches published to the ring
     std::atomic<uint64_t> num_malformed_records_{0};  // dropped at decode for having end < start
+    std::atomic<uint64_t> num_unmappable_records_{0};  // dropped because no probe ever reached their end timestamp
 
     std::chrono::steady_clock::time_point last_malformed_warn_{};
+    std::chrono::steady_clock::time_point last_unmappable_warn_{};
+    std::chrono::steady_clock::time_point last_staging_full_warn_{};
     std::chrono::steady_clock::time_point last_probe_timeout_warn_{};
     std::chrono::steady_clock::time_point last_sync_cost_report_{};
     RealtimeProfilerClockSync::Cost sync_cost_at_last_report_;

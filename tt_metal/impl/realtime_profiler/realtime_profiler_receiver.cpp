@@ -101,6 +101,14 @@ constexpr uint32_t kResyncFailuresBeforeStalled = 16;
 // so reaching it means the drain has stalled -- at which point the D2H FIFO is the elastic buffer, not this.
 constexpr size_t kStagedCapacityRecords = 8192;
 
+// How long the record at the head of a device's staging buffer may fail to close before it is treated as unmappable.
+// A real record waits at most one sync interval for the probe that closes it; anything still stuck three orders of
+// magnitude past that has a timestamp no probe will ever reach -- a torn 64-bit read of the device counter decodes as a
+// plausible start/end pair, so the malformed check in stage_pages does not catch it. Dropping it is the only way
+// forward, because records publish in order: the alternative is that it blocks this device's staging, then its drain,
+// then its FIFO, then its probe retirement, permanently.
+constexpr auto kStagedHeadStallLimit = std::chrono::milliseconds(500);
+
 constexpr size_t kMaxConsumerBatchPerDevice =
     1u << 15;                                      // records one callback may be handed at a time, per attached device
 constexpr size_t kMaxConsumerBatchCap = 1u << 20;  // hard ceiling on the above
@@ -606,6 +614,35 @@ bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
         }
     }
 
+    // A head that has not moved for kStagedHeadStallLimit is not waiting for a probe any more; drop it so the records
+    // behind it, and this device's drain, can proceed.
+    if (ready == 0 && !dev_state.staged.empty()) {
+        const auto now = std::chrono::steady_clock::now();
+        const uint64_t head_end = dev_state.staged.front().end_timestamp;
+        if (head_end != dev_state.staged_head_end_timestamp) {
+            dev_state.staged_head_end_timestamp = head_end;
+            dev_state.staged_head_since = now;
+        } else if (now - dev_state.staged_head_since > kStagedHeadStallLimit) {
+            dev_state.staged.erase(dev_state.staged.begin());
+            dev_state.staged_head_end_timestamp = 0;
+            num_unmappable_records_.fetch_add(1, std::memory_order_relaxed);
+            TT_LOG_WARNING_THROTTLED(
+                last_unmappable_warn_,
+                now,
+                kWarnInterval,
+                "[Real-time profiler] Device {} dropped a record whose end timestamp ({}) no probe reached within "
+                "{}ms; "
+                "its timestamps cannot be mapped and it was blocking every record behind it ({} in total)",
+                dev_state.chip_id,
+                head_end,
+                kStagedHeadStallLimit.count(),
+                num_unmappable_records_.load(std::memory_order_relaxed));
+        }
+    } else if (!dev_state.staged.empty()) {
+        dev_state.staged_head_end_timestamp = dev_state.staged.front().end_timestamp;
+        dev_state.staged_head_since = std::chrono::steady_clock::now();
+    }
+
     // Retired even when nothing published: probes accrue whether or not records drain.
     dev_state.clock_sync->retire_probes_before(
         ready < dev_state.staged.size() ? dev_state.staged[ready].start_timestamp
@@ -857,6 +894,18 @@ uint32_t RealtimeProfilerReceiver::drain_device_pages(
     // ever growing past the capacity it was given. Pages left behind wait in the FIFO, which is sized for exactly that.
     const size_t staged_headroom = kStagedCapacityRecords - dev_state.staged.size();
     if (staged_headroom == 0) {
+        // Nothing can be read until staging drains, so the FIFO backs up behind it. Reported because it is otherwise
+        // indistinguishable from an idle device: both read zero pages.
+        TT_LOG_WARNING_THROTTLED(
+            last_staging_full_warn_,
+            now,
+            kWarnInterval,
+            "[Real-time profiler] Device {} staging is full ({} records) and none could be closed, so its FIFO is not "
+            "being drained; {} of {} pages are queued",
+            dev_state.chip_id,
+            dev_state.staged.size(),
+            available,
+            RealtimeProfilerRuntimeSizes::fifo_pages);
         return 0;
     }
     const uint32_t num_pages_to_read =
