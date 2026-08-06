@@ -55,10 +55,10 @@
 // ~492 push_back->wait_front). If this PASSES with all DPRINT off, the root cause is confirmed to be
 // back-to-back DFB API calls on mm_partials_cb with no instruction between (TEN-4746 class), NOT a print.
 #define MMPRE(...) ((void)0)
-#define MMSTALL()                                                         \
-    do {                                                                  \
-        for (volatile int _mm = 0; _mm < 256; ++_mm) asm volatile("nop"); \
-    } while (0)
+// [#48552] MMSTALL neutralized: the RISC nop-burst did NOT mask the race (backend reorders
+// independently of RISC issue). The real fix is now a backend STALLWAIT drain in llk_io_pack.h /
+// llk_io_unpack.h. Kept as no-op so the two call sites still compile while we validate the LLK fix.
+#define MMSTALL() ((void)0)
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
