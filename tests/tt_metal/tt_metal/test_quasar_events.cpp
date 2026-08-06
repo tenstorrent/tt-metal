@@ -53,12 +53,7 @@ distributed::MeshWorkload make_l1_write_workload(
     return wl;
 }
 
-class QuasarCrossCQEventFixture : public QuasarMultiCQUnitMeshFixture {
-protected:
-    void run_cross_cq_handoff(uint8_t producer_cq, uint8_t consumer_cq);
-};
-
-void QuasarCrossCQEventFixture::run_cross_cq_handoff(uint8_t producer_cq, uint8_t consumer_cq) {
+void run_cross_cq_handoff(distributed::MeshDevice& mesh_device, uint8_t producer_cq, uint8_t consumer_cq) {
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t producer_address = MetalContext::instance().hal().get_dev_addr(
@@ -68,15 +63,15 @@ void QuasarCrossCQEventFixture::run_cross_cq_handoff(uint8_t producer_cq, uint8_
     const uint32_t consumer_value = 0x2c110000u | consumer_cq;
 
     std::vector<uint32_t> zeros(2, 0);
-    detail::WriteToL1(this->device(), node, producer_address, zeros);
+    detail::WriteToL1(mesh_device, node, producer_address, zeros);
 
-    distributed::MeshCommandQueue& producer = this->device().mesh_command_queue(producer_cq);
-    distributed::MeshCommandQueue& consumer = this->device().mesh_command_queue(consumer_cq);
+    distributed::MeshCommandQueue& producer = mesh_device.mesh_command_queue(producer_cq);
+    distributed::MeshCommandQueue& consumer = mesh_device.mesh_command_queue(consumer_cq);
 
     auto producer_wl = make_l1_write_workload(
-        this->device(), node, producer_address, producer_value, "producer_cq" + std::to_string(producer_cq));
+        mesh_device, node, producer_address, producer_value, "producer_cq" + std::to_string(producer_cq));
     auto consumer_wl = make_l1_write_workload(
-        this->device(), node, consumer_address, consumer_value, "consumer_cq" + std::to_string(consumer_cq));
+        mesh_device, node, consumer_address, consumer_value, "consumer_cq" + std::to_string(consumer_cq));
 
     // Consumer's workload is ordered after the producer's via the cross-CQ event.
     distributed::EnqueueMeshWorkload(producer, producer_wl, false);
@@ -88,11 +83,11 @@ void QuasarCrossCQEventFixture::run_cross_cq_handoff(uint8_t producer_cq, uint8_
     distributed::Finish(consumer);
 
     std::vector<uint32_t> producer_out(1, 0);
-    detail::ReadFromL1(this->device(), node, producer_address, sizeof(uint32_t), producer_out);
+    detail::ReadFromL1(mesh_device, node, producer_address, sizeof(uint32_t), producer_out);
     ASSERT_EQ(producer_out[0], producer_value);
 
     std::vector<uint32_t> consumer_out(1, 0);
-    detail::ReadFromL1(this->device(), node, consumer_address, sizeof(uint32_t), consumer_out);
+    detail::ReadFromL1(mesh_device, node, consumer_address, sizeof(uint32_t), consumer_out);
     ASSERT_EQ(consumer_out[0], consumer_value);
 }
 
@@ -182,22 +177,22 @@ TEST_F(QuasarUnitMeshFixture, EventBetweenWorkloads) {
     ASSERT_EQ(out_2[0], value_2);
 }
 
-TEST_F(QuasarCrossCQEventFixture, CrossCQEventHandoffCQ0ToCQ1) {
+TEST_F(QuasarUnitMeshFixture, CrossCQEventHandoffCQ0ToCQ1) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
-    this->run_cross_cq_handoff(/*producer_cq=*/0, /*consumer_cq=*/1);
+    run_cross_cq_handoff(this->device(), /*producer_cq=*/0, /*consumer_cq=*/1);
 }
 
 // Reverse direction: issue_record_event_commands / issue_wait_for_event_commands branch on
 // cq_id == 0, so CQ1-produces-CQ0-consumes is a distinct code path worth its own case.
-TEST_F(QuasarCrossCQEventFixture, CrossCQEventHandoffCQ1ToCQ0) {
+TEST_F(QuasarUnitMeshFixture, CrossCQEventHandoffCQ1ToCQ0) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
-    this->run_cross_cq_handoff(/*producer_cq=*/1, /*consumer_cq=*/0);
+    run_cross_cq_handoff(this->device(), /*producer_cq=*/1, /*consumer_cq=*/0);
 }
 
 TEST_F(QuasarMultiCQUnitMeshFixture, RecordEventToHostFromBothCQs) {
