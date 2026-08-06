@@ -84,10 +84,10 @@ struct Connection {
     // of the eth chan (resolved via the control plane).
     FabricNodeId next_hop_dst{MeshId{0}, 0};
 
-    std::set<tt::tt_metal::CoreCoord> sender_cores;           // Data senders (full-size channels)
-    std::set<tt::tt_metal::CoreCoord> receiver_cores;         // Credit senders (header-only channels)
-    std::set<tt::tt_metal::CoreCoord> sync_cores;             // Sync senders (header-only channels)
-    std::map<tt::tt_metal::CoreCoord, uint32_t> channel_map;  // Core -> channel assignment
+    std::set<tt::tt_metal::CoreCoord> sender_cores;                       // Data senders (full-size channels)
+    std::set<tt::tt_metal::CoreCoord> receiver_cores;                     // Credit senders (header-only channels)
+    std::set<tt::tt_metal::CoreCoord> sync_cores;                         // Sync senders (header-only channels)
+    std::map<tt::tt_metal::CoreCoord, uint32_t> channel_map;              // Core -> channel assignment
     std::map<tt::tt_metal::CoreCoord, TestWorkerType> core_worker_types;  // Core -> worker type mapping
     bool needs_mux = false;
 };
@@ -143,7 +143,10 @@ public:
     // and is recorded once on the Connection on first registration (it must be invariant
     // for a given key).
     void register_client(
-        const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst);
+        const tt::tt_metal::CoreCoord& core,
+        TestWorkerType worker_type,
+        const ConnectionKey& key,
+        const FabricNodeId& next_hop_dst);
 
     // Processing: Call once at start of create_kernels()
     // local_alloc: allocator for on-demand mux core allocation
@@ -158,7 +161,8 @@ public:
     std::unordered_map<RoutingDirection, std::set<uint32_t>> get_used_fabric_links() const;
 
     // Get all connection keys for a specific core (fast lookup via reverse map)
-    std::vector<ConnectionKey> get_connection_keys_for_core(const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const;
+    std::vector<ConnectionKey> get_connection_keys_for_core(
+        const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const;
 
     // Get number of fabric connections for a specific core
     size_t get_connection_count_for_core(const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const;
@@ -197,7 +201,8 @@ private:
 
     // Mux state (populated during process())
     // One mux per connection key (each fabric link has its own mux)
-    std::unordered_map<ConnectionKey, tt::tt_metal::CoreCoord, ConnectionKeyHash> mux_cores_;  // connection key -> mux core location
+    std::unordered_map<ConnectionKey, tt::tt_metal::CoreCoord, ConnectionKeyHash>
+        mux_cores_;  // connection key -> mux core location
     std::unordered_map<tt::tt_metal::CoreCoord, std::unique_ptr<FabricMuxConfig>>
         mux_configs_;  // mux core -> mux config (1:1 with mux_cores_)
 
@@ -216,7 +221,8 @@ private:
 struct TestWorker {
 public:
     virtual ~TestWorker() = default;
-    TestWorker(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
+    TestWorker(
+        tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void set_kernel_src(const std::string_view& kernel_src);
     void create_kernel(
         const MeshCoordinate& device_coord,
@@ -240,7 +246,8 @@ protected:
 struct TestSender : TestWorker {
 public:
     ~TestSender() override = default;
-    TestSender(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
+    TestSender(
+        tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficSenderConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
@@ -257,7 +264,8 @@ public:
 
 struct TestReceiver : TestWorker {
 public:
-    TestReceiver(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
+    TestReceiver(
+        tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficReceiverConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
@@ -268,7 +276,8 @@ public:
 
 struct TestSync : TestWorker {
 public:
-    TestSync(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
+    TestSync(
+        tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficSyncConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
@@ -279,7 +288,8 @@ public:
 
 struct TestMux : TestWorker {
 public:
-    TestMux(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
+    TestMux(
+        tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void set_config(FabricMuxConfig* config, ConnectionKey connection_key, FabricNodeId next_hop_dst);
     bool validate_results(std::vector<uint32_t>& /*data*/) const override { return true; }  // Mux doesn't validate
 
@@ -310,7 +320,10 @@ public:
     void add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSyncConfig sync_config);
     void add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void add_mux_worker_config(
-        tt::tt_metal::CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key, FabricNodeId next_hop_dst);
+        tt::tt_metal::CoreCoord logical_core,
+        FabricMuxConfig* config,
+        ConnectionKey connection_key,
+        FabricNodeId next_hop_dst);
     void create_kernels();
 
     // Latency test kernel creation (called directly by TestContext)
@@ -344,6 +357,11 @@ public:
 
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     RoutingDirection get_forwarding_direction(const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const;
+    // True if the fabric has any intra-mesh Z (sub-torus "skip link") edge, e.g. BH galaxy skip-link
+    // meshes. On such meshes the routing table can prefer a shorter wrap/skip route whose direction
+    // disagrees with the displacement-based hop map, so 2D unicast must derive direction from the
+    // control plane rather than the hop map.
+    bool has_intra_mesh_skip_links() const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const;
