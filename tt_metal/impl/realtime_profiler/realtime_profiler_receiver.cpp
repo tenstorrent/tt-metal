@@ -95,7 +95,7 @@ constexpr auto kDrainGapReportThreshold = std::chrono::milliseconds(5);
 
 // How long a device may go without a successful clock read before its mapping is reported as aging. Stated as a
 // duration rather than a count of consecutive misses, because a miss is not a fixed amount of time any more: a device
-// is probed after every non-empty read, so misses arrive microseconds apart under load and kIdleProbeInterval apart
+// is probed after every non-empty read, so misses arrive microseconds apart under load and probe_interval() apart
 // when quiet, and the same count would mean anywhere from tens of microseconds to a second.
 //
 // The number that matters is what the gap costs a record. Past the last anchor a timestamp is extrapolated, and
@@ -103,11 +103,16 @@ constexpr auto kDrainGapReportThreshold = std::chrono::milliseconds(5);
 // ~0.6us a placed record normally carries. That is where the bound stops being the one the design promises.
 constexpr auto kMappingStaleAfter = std::chrono::milliseconds(10);
 
-// How often a device with nothing to drain is probed anyway. A batch is bracketed by the probe taken after its own read
-// and the one before it, so a busy device needs no cadence at all; this exists only so that the first batch after a
-// quiet period finds a near anchor from milliseconds ago rather than from whenever the workload last stopped, which
-// would put a needlessly wide chord under it. Nothing waits on it -- it buys bound tightness, not progress.
-constexpr auto kIdleProbeInterval = std::chrono::milliseconds(5);
+// A floor on how often each device's clock is read, under the probe every read already takes. A chord is one probe gap
+// wide and a rate step inside it misplaces the records in it by step * span / 4, so probe spacing is accuracy: measured
+// under didt, where records are sparse enough that this floor is what sets the spacing, the bow ran 11us at p90 and
+// 30us at p99 with a 5ms floor against 486ns and 546ns with this one.
+//
+// It cannot replace the per-read probe. Reads outrun this floor under load -- ~110us against 500us -- so every batch
+// would be read before the next probe arrived, every record would sit past the newest probe, and every one of them
+// would be extrapolated rather than interpolated. Nothing then measures whether the clock stepped after that probe, so
+// the honest charge is the whole AICLK step over the distance, ~2.6us, not the baseline's noise.
+inline std::chrono::nanoseconds probe_interval() { return RealtimeProfilerClockSync::sync_interval(); }
 
 constexpr size_t kMaxConsumerBatchPerDevice =
     1u << 15;                                      // records one callback may be handed at a time, per attached device
@@ -442,7 +447,7 @@ RealtimeProfilerReceiver::DeviceState::DeviceState(DeviceState&&) noexcept = def
 
 std::chrono::nanoseconds RealtimeProfilerReceiver::probe_device(
     DeviceState& dev_state, std::chrono::steady_clock::time_point now) {
-    dev_state.next_idle_probe_at = now + kIdleProbeInterval;
+    dev_state.next_probe_due_at = now + probe_interval();
     const auto before = dev_state.clock_sync->cost().busy;
     if (dev_state.clock_sync->resync()) {
         dev_state.last_probe_success_at = now;
@@ -474,10 +479,15 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
         total.resyncs += cost.resyncs;
         total.clock_reads += cost.clock_reads;
         total.busy += cost.busy;
+        total.chords_placed += cost.chords_placed;
+        total.chords_with_interior_probe += cost.chords_with_interior_probe;
     }
     const uint64_t resyncs = total.resyncs - sync_cost_at_last_report_.resyncs;
     const uint64_t reads = total.clock_reads - sync_cost_at_last_report_.clock_reads;
     const auto busy = total.busy - sync_cost_at_last_report_.busy;
+    const uint64_t chords = total.chords_placed - sync_cost_at_last_report_.chords_placed;
+    const uint64_t with_interior =
+        total.chords_with_interior_probe - sync_cost_at_last_report_.chords_with_interior_probe;
     const auto window = now - last_sync_cost_report_;
     sync_cost_at_last_report_ = total;
     last_sync_cost_report_ = now;
@@ -489,14 +499,17 @@ void RealtimeProfilerReceiver::report_sync_cost(std::chrono::steady_clock::time_
     log_info(
         tt::LogMetal,
         "[Real-time profiler] Sync cost over {}s across {} device(s): {} resyncs, {} clock reads ({:.4f} per resync), "
-        "{:.2f}us mean per resync, {:.2f}% of the receiver thread",
+        "{:.2f}us mean per resync, {:.2f}% of the receiver thread; {} chords placed, {:.1f}% with a probe inside to "
+        "measure the clock's departure against",
         std::chrono::duration<double>{window}.count(),
         devices_.size(),
         resyncs,
         reads,
         static_cast<double>(reads) / static_cast<double>(resyncs),
         std::chrono::duration<double, std::micro>{busy}.count() / static_cast<double>(resyncs),
-        100.0 * std::chrono::duration<double>{busy}.count() / std::chrono::duration<double>{window}.count());
+        100.0 * std::chrono::duration<double>{busy}.count() / std::chrono::duration<double>{window}.count(),
+        chords,
+        chords == 0 ? 0.0 : 100.0 * static_cast<double>(with_interior) / static_cast<double>(chords));
 }
 
 void RealtimeProfilerReceiver::report_stalled_syncs(std::chrono::steady_clock::time_point now) {
@@ -918,7 +931,7 @@ uint32_t RealtimeProfilerReceiver::drain_all_devices(
                 // Only re-read the clock after a drain that actually moved pages: an idle pass is too fast for the
                 // re-read to be worth its cost.
                 now = std::chrono::steady_clock::now();
-            } else if (now >= dev_state.next_idle_probe_at) {
+            } else if (now >= dev_state.next_probe_due_at) {
                 pass_sync_busy_ += probe_device(dev_state, now);
             }
         } catch (const std::exception& e) {

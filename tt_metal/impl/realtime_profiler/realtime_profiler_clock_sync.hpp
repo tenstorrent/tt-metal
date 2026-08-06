@@ -73,6 +73,12 @@ public:
         // what kResyncProbes exists for.
         uint64_t clock_reads = 0;
         std::chrono::nanoseconds busy{};
+        // Chords resolved, and how many of them had a probe inside to measure the clock's departure against. The bow
+        // term is silent on a settled clock, which is correct and indistinguishable from a term that never had any
+        // evidence to work with -- the failure the inferred curvature it replaced went unnoticed for. Reported so the
+        // difference is visible without a throttling workload.
+        uint64_t chords_placed = 0;
+        uint64_t chords_with_interior_probe = 0;
     };
 
     // `profiler_core` is the reserved tensix running the profiler kernels on `device`.
@@ -121,8 +127,8 @@ public:
         experimental::ProgramRealtimeClockSync mapping;
         // Measured across kRateBaseline, not across this chord.
         double frequency = 0.0;
-        // This interval's own slope. Published to nobody: it is the local rate, so it is what the next interval's
-        // curvature term has to be compared against, and a baseline rate would have smoothed the step away.
+        // This chord's own slope, published to nobody: placement rides it, so that a rate measured across a wider
+        // baseline cannot move where a record lands. See place_on_chord.
         double chord_rate = 0.0;
         // Uncertainty in `chord_rate`, as a fraction: the two brackets over the span they were measured across.
         double chord_rate_noise = 0.0;
@@ -171,14 +177,14 @@ public:
         };
     }
 
-    // Chooses what a closed interval publishes with, given its two probes and the previous interval's slope, or
-    // nullopt when the pair cannot be taken as a chord at all. Pure: no device, no clock, no state.
+    // Chooses what a chord publishes with, or nullopt when the pair cannot be taken as a chord at all. `measured_bow`
+    // is how far the clock was seen to depart from this chord, from measured_bow(); it lands in sync_error on top of
+    // the endpoint term. Pure: no device, no clock, no state.
     [[nodiscard]] static std::optional<ChordMapping> plan_chord_mapping(
         const Anchor& open,
         const Anchor& closing,
         const std::optional<BaselineRate>& baseline,
-        double previous_rate,
-        double previous_rate_noise);
+        std::chrono::nanoseconds measured_bow);
 
     // What to publish `ticks` with: the tightest pair of retained probes around it, or a single anchor extrapolated
     // from when the history does not surround it. Total except with no probe retained at all, so a caller that has just
@@ -193,15 +199,26 @@ public:
     [[nodiscard]] std::chrono::nanoseconds last_published_sync_error() const { return last_published_sync_error_; }
 
     // The endpoint term of an interpolated timestamp's error: it lands on the secant through two measured points, so
-    // it inherits how well those points are placed. A clock that moved within the interval adds to this; see the
-    // curvature term in plan_chord_mapping.
+    // it inherits how well those points are placed. A clock that moved within the interval adds to this; see
+    // measured_bow.
     [[nodiscard]] static std::chrono::nanoseconds interpolation_error(const Anchor& open, const Anchor& close) {
         return std::max(open.bracket, close.bracket) / 2;
     }
 
+    // How far `interior` lies off the chord through `open` and `close`, less its own read noise. A probe inside a chord
+    // was not fitted to it, so this is the clock's departure at that point -- measured, where the alternative is to
+    // infer it from how much two chords' slopes differ and hope the difference was the clock rather than the reads.
+    // Pure.
+    [[nodiscard]] static std::chrono::nanoseconds departure_from_chord(
+        const Anchor& open, const Anchor& close, const Anchor& interior);
+
     [[nodiscard]] Cost cost() const { return cost_; }
 
 private:
+    // What the retained probes say the clock did between two of them that the chord through them does not capture. Zero
+    // when no probe lies inside the chord, which is the absence of evidence, not a claim of linearity.
+    [[nodiscard]] std::chrono::nanoseconds measured_bow(uint64_t open_index, uint64_t close_index) const;
+
     // A mapping pinned to one probe and sloped at the best rate available, for a timestamp the probe history does not
     // surround. Nullopt only if no rate is known at all.
     [[nodiscard]] std::optional<ChordMapping> extrapolate_from(
@@ -256,18 +273,6 @@ private:
     }
     [[nodiscard]] const Anchor& probe_at(uint64_t index) const { return probe_history_[index % kProbeHistoryCapacity]; }
 
-    // The last two intervals' slopes. Only the difference between consecutive ones says the clock moved *within* one,
-    // so `previous_rate_` is what the curvature term is measured against.
-    //
-    // Which interval is which is keyed on the closing anchor rather than on call order, because an interval is closed
-    // once per drain pass until the next probe arrives -- passes run every few hundred microseconds against a 500us
-    // interval -- and rolling these forward per call would leave a chord compared against itself, reading zero
-    // curvature for every pass after the first.
-    uint64_t current_chord_close_ticks_ = 0;
-    double current_rate_ = 0.0;
-    double current_rate_noise_ = 0.0;
-    double previous_rate_ = 0.0;
-    double previous_rate_noise_ = 0.0;
     std::chrono::nanoseconds last_published_sync_error_{};
 
     double fallback_rate_ = 0.0;

@@ -287,7 +287,7 @@ TEST(RealtimeProfilerChordMapping, SecantRecoversTheRateAndPlacesTheAnchorOnTheC
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
     const auto closing = chord_close(open);
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, 0.0, 0.0);
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, {});
 
     ASSERT_TRUE(planned.has_value());
     EXPECT_NEAR(planned->frequency, kNominalRate, 1e-6);
@@ -304,7 +304,7 @@ TEST(RealtimeProfilerChordMapping, ChordTooShortToTakeASlopeFromIsRefused) {
     const auto barely_later =
         anchor_at(open.host + RealtimeProfilerClockSync::sync_interval() / 4, kNominalRate, kProbeBracket);
 
-    EXPECT_FALSE(RealtimeProfilerClockSync::plan_chord_mapping(open, barely_later, std::nullopt, 0.0, 0.0).has_value());
+    EXPECT_FALSE(RealtimeProfilerClockSync::plan_chord_mapping(open, barely_later, std::nullopt, {}).has_value());
 }
 
 // The counter is read low word first and that latches the high word, so a composed timestamp cannot tear and a pair is
@@ -314,7 +314,7 @@ TEST(RealtimeProfilerChordMapping, NonMonotonicTicksAreRefused) {
     auto closing = chord_close(open);
     closing.ticks = open.ticks;
 
-    EXPECT_FALSE(RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, 0.0, 0.0).has_value());
+    EXPECT_FALSE(RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, {}).has_value());
 }
 
 // A read serviced late puts its anchor at the midpoint of a wide bracket, which moves the span the slope is taken over
@@ -332,7 +332,7 @@ TEST(RealtimeProfilerChordMapping, LateServicedReadIsPlacedAndChargedForItsBrack
         .ticks = open.ticks + static_cast<uint64_t>(kNominalRate * chord_span_ns()),
         .bracket = late_bracket};
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, serviced_late, std::nullopt, 0.0, 0.0);
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, serviced_late, std::nullopt, {});
 
     ASSERT_TRUE(planned.has_value());
     EXPECT_GE(planned->mapping.sync_error, late_bracket / 2);
@@ -345,7 +345,7 @@ TEST(RealtimeProfilerChordMapping, AMeasuredChordIsReusableUpToItsFarAnchor) {
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
     const auto closing = chord_close(open);
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, 0.0, 0.0);
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, {});
 
     ASSERT_TRUE(planned.has_value());
     EXPECT_EQ(planned->batch_through_ticks, closing.ticks);
@@ -357,7 +357,7 @@ TEST(RealtimeProfilerChordMapping, AMeasuredChordIsReusableUpToItsFarAnchor) {
 TEST(RealtimeProfilerChordMapping, ExtrapolatingPastTheChordIsChargedForTheDistance) {
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
     const auto closing = chord_close(open);
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, 0.0, 0.0);
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, {});
     ASSERT_TRUE(planned.has_value());
 
     const uint64_t inside = open.ticks + (closing.ticks - open.ticks) / 2;
@@ -379,52 +379,53 @@ TEST(RealtimeProfilerChordMapping, ErrorCoversBothEndpointPlacements) {
     const auto closing =
         anchor_at(open.host + RealtimeProfilerClockSync::sync_interval(), kNominalRate, std::chrono::nanoseconds(900));
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, 0.0, 0.0);
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, {});
 
     ASSERT_TRUE(planned.has_value());
     EXPECT_GE(planned->mapping.sync_error, std::chrono::nanoseconds(450));
 }
 
-// A clock holding a plateau has nothing to report beyond how well its probes were placed.
-TEST(RealtimeProfilerChordMapping, SteadyClockAddsNoCurvature) {
+// A probe inside a chord was not fitted to it, so its distance from the secant is the clock's own departure. This is
+// the term that used to be inferred from how much two chords' slopes differed -- which read zero whenever a chord was
+// resolved twice, since it was then compared against itself.
+TEST(RealtimeProfilerChordMapping, ClockDepartureMeasuredAtAnInteriorProbeIsCharged) {
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
     const auto closing = chord_close(open);
+    // A probe at the chord's midpoint, sitting a clear 3us off the secant: far past what its own 700ns bracket
+    // explains.
+    constexpr auto kDeparture = std::chrono::microseconds(3);
+    auto interior = anchor_at(open.host + RealtimeProfilerClockSync::sync_interval() / 2, kNominalRate, kProbeBracket);
+    interior.host += kDeparture;
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, kNominalRate, 0.0);
+    const auto bow = RealtimeProfilerClockSync::departure_from_chord(open, closing, interior);
+    EXPECT_NEAR(
+        static_cast<double>(bow.count()),
+        static_cast<double>((kDeparture - kProbeBracket / 2).count()),
+        static_cast<double>(kProbeBracket.count()));
 
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, bow);
     ASSERT_TRUE(planned.has_value());
-    EXPECT_EQ(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
+    EXPECT_EQ(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing) + bow);
 }
 
-// A rate that moved between intervals means the clock stepped inside one of them, and the records in it are off the
-// chord by up to rate_change * span / 4. Reporting only the placements would understate exactly the records a DVFS
-// step lands on.
-TEST(RealtimeProfilerChordMapping, RateChangeBeyondMeasurementNoiseIsChargedAsCurvature) {
+// A probe landing off the secant by less than its own read could have misplaced it says nothing about the clock.
+// Charging it would put invented error on every record.
+TEST(RealtimeProfilerChordMapping, DepartureWithinAProbesOwnReadNoiseIsNotCharged) {
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
     const auto closing = chord_close(open);
-    // 3% slower over the previous interval, which is far past what two 700ns brackets over this span can fake.
-    constexpr double kRelativeRateChange = 0.03;
-    const double previous_rate = kNominalRate * (1.0 - kRelativeRateChange);
+    auto interior = anchor_at(open.host + RealtimeProfilerClockSync::sync_interval() / 2, kNominalRate, kProbeBracket);
+    interior.host += kProbeBracket / 4;  // inside its own half-bracket
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, previous_rate, 0.0);
-
-    ASSERT_TRUE(planned.has_value());
-    EXPECT_GT(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
-    // span * (change - noise) / 2 of curvature on top.
-    const auto curvature = planned->mapping.sync_error - RealtimeProfilerClockSync::interpolation_error(open, closing);
-    const double expected = chord_span_ns() * (kRelativeRateChange - chord_rate_noise()) / 2.0;
-    EXPECT_NEAR(static_cast<double>(curvature.count()), expected, expected * 0.1);
+    EXPECT_EQ(
+        RealtimeProfilerClockSync::departure_from_chord(open, closing, interior), std::chrono::nanoseconds::zero());
 }
 
-// Two short intervals disagreeing about the rate is what noise looks like, not what a step looks like. Charging it
-// would put microseconds of invented error on every record following a brief interval.
-TEST(RealtimeProfilerChordMapping, RateChangeWithinMeasurementNoiseIsNotChargedAsCurvature) {
+// A chord with nothing inside it has no evidence either way, and absence of evidence is not a bow.
+TEST(RealtimeProfilerChordMapping, AChordWithNoInteriorProbeReportsOnlyItsEndpoints) {
     const auto open = anchor_at(host_instant(1'000'000'000), kNominalRate, kProbeBracket);
     const auto closing = chord_close(open);
-    // Half the noise two 700ns brackets over this span can produce on their own.
-    const double previous_rate = kNominalRate * (1.0 - chord_rate_noise() / 2.0);
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, previous_rate, 0.0);
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, std::nullopt, {});
 
     ASSERT_TRUE(planned.has_value());
     EXPECT_EQ(planned->mapping.sync_error, RealtimeProfilerClockSync::interpolation_error(open, closing));
@@ -439,7 +440,7 @@ TEST(RealtimeProfilerChordMapping, PublishedRateComesFromTheBaselineNotTheChord)
     closing.ticks += static_cast<uint64_t>(0.3 * chord_rate_noise() * kNominalRate * chord_span_ns());
     const RealtimeProfilerClockSync::BaselineRate baseline{.rate = kNominalRate, .noise = 0.0005};
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, baseline, 0.0, 0.0);
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, baseline, {});
 
     ASSERT_TRUE(planned.has_value());
     EXPECT_NEAR(planned->frequency, kNominalRate, 1e-9);
@@ -457,7 +458,7 @@ TEST(RealtimeProfilerChordMapping, RecordLandsOnTheChordWhateverRateIsPublished)
     // published rate this would land a record ~500ns off.
     const RealtimeProfilerClockSync::BaselineRate baseline{.rate = kNominalRate * 1.01, .noise = 0.0005};
 
-    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, baseline, 0.0, 0.0);
+    const auto planned = RealtimeProfilerClockSync::plan_chord_mapping(open, closing, baseline, {});
 
     ASSERT_TRUE(planned.has_value());
     // A record three quarters of the way through the chord.

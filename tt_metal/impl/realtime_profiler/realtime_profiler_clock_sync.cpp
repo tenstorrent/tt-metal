@@ -149,6 +149,51 @@ uint64_t RealtimeProfilerClockSync::first_probe_at_or_past(uint64_t ticks) const
     return lo;
 }
 
+// How far the clock departed from the chord, measured rather than inferred. Every probe strictly inside the chord is a
+// point the secant was not fitted to, so its distance from the secant is the departure at that point; a probe's own
+// read noise accounts for bracket/2 of any distance, so that comes off first. Reads zero on a plateau, which is nearly
+// always.
+//
+// One interior probe locates the departure only where that probe happens to sit. A rate step at fraction L of the span
+// bows the trajectory as L(1-L), so a sample away from the midpoint understates the peak -- every interior probe is
+// checked and the largest kept, and with none at all this reports zero, which is the absence of evidence rather than
+// the absence of a bow. The span floor is two probe gaps at the rate probes actually arrive, so there is normally one.
+std::chrono::nanoseconds RealtimeProfilerClockSync::departure_from_chord(
+    const Anchor& open, const Anchor& close, const Anchor& interior) {
+    if (close.ticks <= open.ticks || close.host <= open.host) {
+        return {};
+    }
+    const double span_ns =
+        static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(close.host - open.host).count());
+    const double inv_rate = span_ns / static_cast<double>(close.ticks - open.ticks);
+    const double on_chord_ns = static_cast<double>(open.host.time_since_epoch().count()) +
+                               (static_cast<double>(interior.ticks) - static_cast<double>(open.ticks)) * inv_rate;
+    const double measured_ns = static_cast<double>(interior.host.time_since_epoch().count());
+    const auto departure = std::chrono::nanoseconds(static_cast<int64_t>(std::abs(measured_ns - on_chord_ns)));
+    // A probe's own read noise accounts for bracket/2 of any distance, so only what is left is the clock's.
+    return departure - std::min(departure, placement_error(interior.bracket));
+}
+
+std::chrono::nanoseconds RealtimeProfilerClockSync::measured_bow(uint64_t open_index, uint64_t close_index) const {
+    std::chrono::nanoseconds worst{};
+    for (uint64_t i = open_index + 1; i < close_index; i++) {
+        worst = std::max(worst, departure_from_chord(probe_at(open_index), probe_at(close_index), probe_at(i)));
+    }
+    if (worst != std::chrono::nanoseconds::zero() || close_index > open_index + 1) {
+        return worst;
+    }
+    // A chord of a single probe gap has no probe inside it, by definition, and that is the ordinary case whenever
+    // records are sparse enough that probes land further apart than the span floor -- which is exactly the throttling
+    // workload the bow matters for. So the chord is widened by one probe on the near side, where the record's own near
+    // anchor then sits inside it and can be measured against it. Charged unscaled: the departure was measured across
+    // roughly twice the record's own span and the bow of a rate step grows with span, so this over-states rather than
+    // invents.
+    if (open_index == oldest_probe()) {
+        return {};
+    }
+    return departure_from_chord(probe_at(open_index - 1), probe_at(close_index), probe_at(open_index));
+}
+
 std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync::place(uint64_t ticks) {
     if (probes_end_ == 0) {
         return std::nullopt;
@@ -176,14 +221,9 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
         if (closing.host - probe_at(i).host < sync_interval() / 2) {
             continue;
         }
-        if (auto chord = plan_chord_mapping(probe_at(i), closing, baseline, previous_rate_, previous_rate_noise_)) {
-            if (closing.ticks != current_chord_close_ticks_) {
-                previous_rate_ = current_rate_;
-                previous_rate_noise_ = current_rate_noise_;
-                current_chord_close_ticks_ = closing.ticks;
-            }
-            current_rate_ = chord->chord_rate;
-            current_rate_noise_ = chord->chord_rate_noise;
+        if (auto chord = plan_chord_mapping(probe_at(i), closing, baseline, measured_bow(i, close_index))) {
+            ++cost_.chords_placed;
+            cost_.chords_with_interior_probe += close_index > i + 1;
             last_published_sync_error_ = chord->mapping.sync_error;
             return chord;
         }
@@ -193,8 +233,6 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
     return extrapolate_from(closing, baseline);
 }
 
-// Deliberately does not touch previous_rate_: no slope was measured here, and feeding an unmeasured one into the next
-// interval's curvature term would invent a DVFS step.
 std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync::extrapolate_from(
     const Anchor& anchor, const std::optional<BaselineRate>& baseline) {
     const double rate = baseline.has_value() && baseline->rate > 0.0 ? baseline->rate : frequency();
@@ -225,8 +263,7 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
     const Anchor& open,
     const Anchor& closing,
     const std::optional<BaselineRate>& baseline,
-    double previous_rate,
-    double previous_rate_noise) {
+    std::chrono::nanoseconds measured_bow) {
     // A chord much shorter than the interval asked for places records inside it just fine, but its slope is uncertain
     // by (both brackets)/span and that slope is published as `frequency`. A consumer evaluating the mapping away from
     // the record would then see slope_noise * distance, which is how a few-us chord becomes microseconds of error.
@@ -242,18 +279,6 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
     const double rate = static_cast<double>(closing.ticks - open.ticks) / span_ns;
     const double rate_noise = static_cast<double>((open.bracket + closing.bracket).count()) / span_ns;
 
-    // A step of relative size D at fraction L of the interval puts the true trajectory D*T*L*(1-L) off the chord, up
-    // to D*T/4. D is not observable; how much this interval's rate differs from the last one's is, and for a step at
-    // the midpoint that difference is D/2, hence T/2. Only the part neither measurement could have invented counts, so
-    // both secants' noise comes off first -- a short interval's slope is uncertain enough to fake a whole DVFS step on
-    // its own. Reads zero on a plateau, which is nearly always.
-    std::chrono::nanoseconds curvature{};
-    if (previous_rate > 0.0) {
-        const double relative_rate_change = std::abs(rate - previous_rate) / rate;
-        const double attributable = std::max(0.0, relative_rate_change - rate_noise - previous_rate_noise);
-        curvature = std::chrono::nanoseconds(static_cast<int64_t>(span_ns * attributable / 2.0));
-    }
-
     // The rate published to consumers is the baseline's, not this chord's: a chord this narrow measures its slope to
     // only a few thousand ppm, and every duration a consumer computes divides by it. Placement is unaffected because
     // each record is anchored to where this chord puts it -- see place_on_chord.
@@ -263,7 +288,7 @@ std::optional<RealtimeProfilerClockSync::ChordMapping> RealtimeProfilerClockSync
         .mapping =
             experimental::ProgramRealtimeClockSync{
                 .device_cycle_offset = 0,  // per record
-                .sync_error = interpolation_error(open, closing) + curvature,
+                .sync_error = interpolation_error(open, closing) + measured_bow,
             },
         .frequency = published_rate,
         .chord_rate = rate,

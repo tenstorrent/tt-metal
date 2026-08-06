@@ -84,8 +84,8 @@ private:
         bool fifo_reached_capacity = false;
         // Zero until the first successful clock read. See kMappingStaleAfter.
         std::chrono::steady_clock::time_point last_probe_success_at{};
-        // When this device is due a probe with no records to bracket. See probe_device.
-        std::chrono::steady_clock::time_point next_idle_probe_at{};
+        // When this device is next due a probe even if it drained nothing. See probe_interval.
+        std::chrono::steady_clock::time_point next_probe_due_at{};
         // Held by pointer so DeviceState stays movable: the sync object carries atomics and cannot be.
         std::unique_ptr<RealtimeProfilerClockSync> clock_sync;
 
@@ -105,8 +105,8 @@ private:
     void warm_up_device_clocks();
 
     // Takes one probe and returns what the clock read blocked for. Called after every non-empty read, because that
-    // probe is what brackets the batch just read, and on kIdleProbeInterval otherwise so that the first batch after a
-    // quiet period has a recent near anchor instead of whatever the last burst left behind.
+    // probe is what brackets the batch just read, and on probe_interval() otherwise, because probe spacing is chord
+    // width and chord width is the accuracy.
     std::chrono::nanoseconds probe_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now);
     // Called from report_sync_cost, not from the drain loop: a device that has stopped answering is reported at
     // most once per warning interval, so scanning every device for it on every pass is work the drain never needs.
