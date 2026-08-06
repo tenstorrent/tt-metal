@@ -97,7 +97,9 @@ class TtVoxtralFlow:
         _mask = torch.zeros(1, 1, _vocab)
         _mask[:, :, EMPTY_AUDIO_ID] = -1e9
         _mask[:, :, N_AUDIO_SPECIAL + SEMANTIC_CODEBOOK_SIZE:] = -1e9
-        self.semantic_mask = up(_mask, SEMANTIC_DTYPE)
+        # HOST, not device: the mask add and the argmax both moved to the host -- NOTES.md
+        # [flow-08a]. It is the same fp32 arithmetic either way, and it is 1.439x faster.
+        self.semantic_mask_host = _mask.reshape(-1).float()
 
         self.proj = {k: lin(w[f"{k}.weight"]) for k in
                      ("input_projection", "time_projection", "llm_projection",
@@ -244,13 +246,19 @@ class TtVoxtralFlow:
     # Semantic code (host) and the Euler solve (device velocity)
     # ----------------------------------------------------------------------------------
     def semantic_code(self, llm_hidden):
-        """h [B,3072] -> [B,1]. Masked greedy argmax, on device in fp32 -- see semantic_dev."""
+        """h [B,3072] -> [B,1]. Greedy argmax; the fp32 matmul is on device, the mask and the
+        argmax are on the HOST -- see NOTES.md [flow-08a] and self.semantic_dev.
+
+        The argmax used to run on device and cost 490 us to reduce 33 KB, which is 0.07 GB/s, i.e.
+        entirely launch overhead. This call already ended in a device->host copy, so moving the
+        reduce out does not add a round trip -- it only makes that copy 8320 values instead of 1.
+        Exactly the same fp32 arithmetic, verified 0 changed ids on real Block 1 hidden states."""
         B = llm_hidden.shape[0]
         h = ttnn.from_torch(llm_hidden.reshape(1, B, -1).float().contiguous(),
                             dtype=SEMANTIC_DTYPE, layout=ttnn.TILE_LAYOUT, device=self.device)
-        logits = ttnn.add(ttnn.linear(h, self.semantic_dev, compute_kernel_config=COMPUTE_CONFIG),
-                          self.semantic_mask)
-        return ttnn.to_torch(ttnn.argmax(logits, dim=-1)).reshape(B, 1).long()
+        logits = ttnn.to_torch(ttnn.linear(h, self.semantic_dev,
+                                           compute_kernel_config=COMPUTE_CONFIG)).float()
+        return (logits.reshape(B, -1) + self.semantic_mask_host).argmax(-1).reshape(B, 1).long()
 
     def _solve(self, x, h, B, n_steps, cfg_alpha):
         """(x0 fp32 [B,1,36], cond++uncond [2B,3072]) -> x fp32 [B,1,36]. PURE DEVICE GRAPH.

@@ -2137,6 +2137,97 @@ waveform does not move, so WER cannot move. `--gate decode` was also run (pooled
 max 3.05%, min PCC 0.999040, 15 prompts x 22 frames) and matches §6.13's recorded level -- expected,
 since this change does not touch Block 1, and worth having as the check that it does not.
 
+### 6.31 — the two wins the map actually produced: qkv head split and semantic_code
+
+§6.30's sweep shipped one small thing. Following the map's two biggest lines properly produced the two
+real wins, and both are BYTE-IDENTICAL.
+
+**Block 2, cumulative, all three changes gated as byte-identical codes:**
+
+| change | Block 2 ms/frame | commit |
+|---|---|---|
+| start of the sweep | 22.583 | |
+| `_trunk` reshape hoist (§6.30) | 22.476 | `41194fe16f5` |
+| hand-rolled qkv head split | **21.142** | `55d4148eb4b` |
+| `semantic_code` mask+argmax to host | **20.801** | this one |
+| **total** | **-1.782 ms/frame, 7.9%** | |
+
+**1. The qkv head split, and the measurement lesson in it.** Both of my earlier readings compared the
+manual route against the shipped op WITHOUT matching output memory configs -- the shipped op gets
+`memory_config=_L1`, my slices and permutes took the default and landed in DRAM. NOTES [flow-10]
+measured that exact difference at 2.5 ms/frame downstream. Corrected:
+
+    shipped: nlp_create_qkv_heads(memory_config=L1)   122.0 us   1.001x   L1/L1/L1  bit-exact
+    manual, DEFAULT mc (what I first timed)           122.4 us   0.998x   DR/DR/DR  bit-exact
+    manual, memory_config=L1                          112.4 us   1.086x   L1/L1/L1  bit-exact
+
+And then the whole block paid **six times** the isolated figure -- interleaved A/B, 200 frames each,
+three rounds, the method swapped on the class so nothing else differs:
+
+    round      shipped     manual     ratio
+        0      22.369     21.131    1.0586x
+        1      22.419     21.180    1.0585x
+        2      22.336     21.116    1.0578x
+     mean      22.375     21.142    1.0583x     = 1.233 ms/frame
+
+**This is the FIRST time this session the whole block paid MORE than isolation**, after four cases of it
+paying less (§6.18, §6.19, §6.27, §6.30). So the lesson is NOT "isolated numbers are optimistic". It is
+that op granularity cannot see overlap or memory residency AT ALL, in either direction. Likely
+mechanism: the fused op needs a 4D [B,1,3,QW] input and that reshape repacks tile padding
+([1,32,QW] -> [2,1,32,QW], 25.9 us), while slicing the folded [1,B*3,QW] tensor never repacks.
+Measured, not established.
+
+UNRECONCILED: [flow-10] records a hand-rolled split at 158 us where this measures 112.4. Some difference
+of construction that I did not find. Logged rather than written off -- the change ships on the
+whole-block A/B and byte-identical codes, neither of which depends on settling it.
+
+**2. `semantic_code`: the argmax was 40% of it and belongs on the host.** The split, corroborated two
+ways -- the pieces sum to 1162.9 us of the whole call's 1229.5, and the composite `linear+mask+argmax`
+measured 1086.8 against the pieces' 1088.4, agreeing to 0.1%:
+
+    linear fp32 against a (3072, 8320) head   562.0 us   45.7%   102 MB at 182 GB/s -- AT the roofline
+    argmax over 8320 values                   490.1 us   39.9%   33 KB at 0.07 GB/s -- ALL overhead
+    from_torch H->D                            53.0 us    4.3%
+    add semantic_mask                          36.3 us    3.0%
+    to_torch D->H                              21.4 us    1.7%
+
+The matmul is at the roofline and is not the problem. The argmax is 490 us to reduce 33 KB. And it costs
+nothing to move, because this call ALREADY ended in a device->host copy -- doing the reduce on the host
+does not add a round trip, it only makes that copy 8320 fp32 values instead of 1, i.e. 33 KB of PCIe.
+Scored on REAL Block 1 hidden states from the fixture prompts:
+
+    A shipped: linear fp32 + device mask + argmax   1213.5 us   1.000x   0 of 8 ids changed
+    B host argmax, device mask                       893.5 us   1.386x   0 of 8
+    C host argmax AND host mask   <- SHIPPED         860.3 us   1.439x   0 of 8
+    D bf16 head, device argmax                       946.9 us   1.308x   0 of 8
+    E bf16 head + host argmax + host mask            595.7 us   2.079x   0 of 8
+
+C is exactly the same fp32 arithmetic -- same values, same order, the add and the reduce just happen on
+a different processor -- so it carries no numerical risk. Predicted 0.353 ms/frame, delivered 0.341.
+
+**E IS FASTER STILL AND IS DELIBERATELY NOT SHIPPED.** 2.079x, another 0.265 ms/frame, and 0 of 8 real
+prompts moved. But this is an ARGMAX over a vocabulary: what decides a flip is the top-2 GAP, not a norm,
+and 8 single frames is a thin sample for a discrete decision. The semantic token is the highest-stakes
+integer in the model -- it feeds Block 1's next input embedding, so ONE flip redirects the entire
+remaining generation, unlike an acoustic code which affects one frame. Needs a broad real-prompt gate.
+
+**AND MY FIRST VERSION OF THIS PROBE WAS WORTHLESS.** Round 1 scored the bf16 candidate on 64 RANDOM
+gaussian draws and reported 0 changed ids. Trap #12 already records random embeddings reading PCC 0.892
+where real prompts gave 0.9994, and an argmax is precisely where that bites. Round 2 pulls real hidden
+states out of Block 1. **ALWAYS GATE ON REAL PROMPTS** -- written in this file, and I still did it wrong
+once today.
+
+**Gate for both changes** (each run separately, against the immediately preceding commit):
+
+| | qkv split | semantic host-argmax |
+|---|---|---|
+| flow: velocity PCC | 0.99998480, unchanged | 0.99998480, unchanged |
+| flow: semantic code | exact `[262, 3346]` | exact `[262, 3346]` |
+| flow: full frame | 2 of 74, unchanged | 2 of 74, unchanged |
+| codes: semantic / acoustic | 1, 97/288, unchanged | 1, 97/288, unchanged |
+| codes: per-frame code table | **byte-identical** | **byte-identical** |
+| test_flow_pcc | 13 passed | 13 passed |
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.
