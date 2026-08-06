@@ -42,12 +42,10 @@ runs bf16 activations with HiFi4 + fp32 accumulation for a clean PCC.
 from __future__ import annotations
 
 import ttnn
-
-from models.demos.xtts_v2._stubs.pre_emphasis import build as _b_pre
-from models.demos.xtts_v2._stubs.mel_spectrogram import build as _b_mel
 from models.demos.xtts_v2._stubs.instance_norm1d import build as _b_inorm
+from models.demos.xtts_v2._stubs.mel_spectrogram import build as _b_mel
+from models.demos.xtts_v2._stubs.pre_emphasis import build as _b_pre
 from models.demos.xtts_v2._stubs.s_e_basic_block import build as _b_block
-
 
 HF_MODEL_ID = "coqui/XTTS-v2"
 
@@ -73,7 +71,13 @@ def build(device, torch_module):
     ACT = ttnn.bfloat16
 
     def f32(t):
-        return ttnn.as_tensor(t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.as_tensor(
+            t.contiguous().float(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     # ---- mel front-end: graduated leaf stubs (PreEmphasis -> MelSpectrogram -> InstanceNorm1d) ----
     pre_emph = _b_pre(device, se.torch_spec[0])
@@ -87,13 +91,23 @@ def build(device, torch_module):
         return a, b  # [C]
 
     def conv_w(W):
-        return ttnn.as_tensor(W.contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # host tensor: prepare_conv_weights (see run_conv) requires host input and
+        # returns the prepared device tensor, cached per input shape.
+        return ttnn.as_tensor(W.contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def conv_b(b):
-        return ttnn.as_tensor(b.reshape(1, 1, 1, -1).contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.as_tensor(
+            b.reshape(1, 1, 1, -1).contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
 
     def affine_t(a):
-        return ttnn.as_tensor(a.reshape(1, 1, 1, -1).contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.as_tensor(
+            a.reshape(1, 1, 1, -1).contiguous().float(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     # ---- conv1 (has bias) -> relu -> bn1 (affine, relu intervenes so NOT folded) ----
     c1_w = conv_w(se.conv1.weight.detach().float())
@@ -112,31 +126,115 @@ def build(device, torch_module):
     a0 = att[0]  # Conv1d(2048,128,1)
     a2 = att[2]  # BatchNorm1d(128)
     a3 = att[3]  # Conv1d(128,2048,1)
-    att0_w = f32(a0.weight.detach().squeeze(-1).t())      # [2048,128]
-    att0_b = ttnn.as_tensor(a0.bias.detach().reshape(1, 1, -1).contiguous().float(),
-                             dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    att0_w = f32(a0.weight.detach().squeeze(-1).t())  # [2048,128]
+    att0_b = ttnn.as_tensor(
+        a0.bias.detach().reshape(1, 1, -1).contiguous().float(),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     att_bn_a, att_bn_b = bn_scale_shift(a2)
-    att_bn_at = ttnn.as_tensor(att_bn_a.reshape(1, 1, -1).contiguous().float(),
-                                dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    att_bn_bt = ttnn.as_tensor(att_bn_b.reshape(1, 1, -1).contiguous().float(),
-                                dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    att3_w = f32(a3.weight.detach().squeeze(-1).t())      # [128,2048]
-    att3_b = ttnn.as_tensor(a3.bias.detach().reshape(1, 1, -1).contiguous().float(),
-                             dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    att_bn_at = ttnn.as_tensor(
+        att_bn_a.reshape(1, 1, -1).contiguous().float(),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    att_bn_bt = ttnn.as_tensor(
+        att_bn_b.reshape(1, 1, -1).contiguous().float(),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    att3_w = f32(a3.weight.detach().squeeze(-1).t())  # [128,2048]
+    att3_b = ttnn.as_tensor(
+        a3.bias.detach().reshape(1, 1, -1).contiguous().float(),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
-    fc_w = f32(se.fc.weight.detach().t())                 # [4096,512]
-    fc_b = ttnn.as_tensor(se.fc.bias.detach().reshape(1, 1, -1).contiguous().float(),
-                           dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    fc_w = f32(se.fc.weight.detach().t())  # [4096,512]
+    fc_b = ttnn.as_tensor(
+        se.fc.bias.detach().reshape(1, 1, -1).contiguous().float(),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
     # ---------------- conv helper ----------------
+    # conv2d re-prepares raw OIHW weights (device->host pull-back + host prep + H2D
+    # push) on EVERY call unless handed an already-prepared tensor. Prepare once per
+    # (weight, H, W) — the prepared layout depends on the input shape — with the same
+    # preparation function conv2d would call internally, so results are bit-identical.
+    _prep_cache = {}
+
+    def _prepared(spec, H, W):
+        key = (id(spec), H, W)
+        ent = _prep_cache.get(key)
+        if ent is None:
+            pw = ttnn.prepare_conv_weights(
+                weight_tensor=spec["w"],
+                input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                weights_format="OIHW",
+                in_channels=spec["ic"],
+                out_channels=spec["oc"],
+                batch_size=1,
+                input_height=H,
+                input_width=W,
+                kernel_size=(spec["k"], spec["k"]),
+                stride=(spec["s"], spec["s"]),
+                padding=(spec["p"], spec["p"]),
+                dilation=(1, 1),
+                has_bias=spec["b"] is not None,
+                groups=1,
+                device=device,
+                input_dtype=ACT,
+                output_dtype=ACT,
+                conv_config=conv_config,
+                compute_config=compute_config,
+            )
+            pb = spec["b"]
+            if pb is not None:
+                pb = ttnn.prepare_conv_bias(
+                    bias_tensor=pb,
+                    input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                    in_channels=spec["ic"],
+                    out_channels=spec["oc"],
+                    batch_size=1,
+                    input_height=H,
+                    input_width=W,
+                    kernel_size=(spec["k"], spec["k"]),
+                    stride=(spec["s"], spec["s"]),
+                    padding=(spec["p"], spec["p"]),
+                    dilation=(1, 1),
+                    groups=1,
+                    device=device,
+                    input_dtype=ACT,
+                    output_dtype=ACT,
+                    conv_config=conv_config,
+                    compute_config=compute_config,
+                )
+            ent = (pw, pb)
+            _prep_cache[key] = ent
+        return ent
+
     def run_conv(x_nhwc, spec, H, W):
+        w, b = _prepared(spec, H, W)
         out, [oh, ow] = ttnn.conv2d(
             input_tensor=x_nhwc,
-            weight_tensor=spec["w"],
+            weight_tensor=w,
             in_channels=spec["ic"],
             out_channels=spec["oc"],
             device=device,
-            bias_tensor=spec["b"],
+            bias_tensor=b,
             kernel_size=(spec["k"], spec["k"]),
             stride=(spec["s"], spec["s"]),
             padding=(spec["p"], spec["p"]),
@@ -165,23 +263,25 @@ def build(device, torch_module):
     # ---------------- forward ----------------
     def forward(x, *args, **kwargs):
         if not isinstance(x, ttnn.Tensor):
-            x = ttnn.as_tensor(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.as_tensor(
+                x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         if x.get_dtype() != ttnn.float32:
             x = ttnn.typecast(x, ttnn.float32)
         # (N,1,T) -> (1,T)
         x = ttnn.reshape(x, (1, -1))
 
         # ---- PreEmphasis (graduated leaf: pre_emphasis) ----
-        y = pre_emph(x)                                     # [1, T]
+        y = pre_emph(x)  # [1, T]
 
         # ---- MelSpectrogram STFT + mel projection (graduated leaf: mel_spectrogram) ----
-        mel = mel_fe(y)                                     # [1, 64, F]
+        mel = mel_fe(y)  # [1, 64, F]
 
         # ---- log_input ----
         mel = ttnn.log(ttnn.add(mel, 1e-6))
 
         # ---- InstanceNorm1d over time (graduated leaf: instance_norm1d) ----
-        h = inorm(mel)                                      # [1, 64, F]
+        h = inorm(mel)  # [1, 64, F]
         n_mels = int(h.shape[1])
         F = int(h.shape[-1])
 
@@ -196,38 +296,38 @@ def build(device, torch_module):
         out = affine(out, bn1_at, bn1_bt)
 
         # ---- SE-ResNet layers (graduated leaf: s_e_basic_block, NCHW) ----
-        out = ttnn.permute(out, (0, 3, 1, 2))                # NHWC -> NCHW for the block stubs
+        out = ttnn.permute(out, (0, 3, 1, 2))  # NHWC -> NCHW for the block stubs
         for layer in block_stubs:
             for block in layer:
-                out = block(out)                             # NCHW -> NCHW
+                out = block(out)  # NCHW -> NCHW
 
         # out: NCHW [1,C,H,W] float32.  C=256, H=8, W=13
         C = int(out.shape[1])
         H = int(out.shape[2])
         W = int(out.shape[3])
         # merge (C,H) -> reshape (1, C*H, W) -> time-major (1, W, C*H)
-        merged = ttnn.reshape(out, (1, C * H, W))            # [1, 2048, W]
-        xt = ttnn.permute(merged, (0, 2, 1))                 # [1, W, 2048]  (time-major)
+        merged = ttnn.reshape(out, (1, C * H, W))  # [1, 2048, W]
+        xt = ttnn.permute(merged, (0, 2, 1))  # [1, W, 2048]  (time-major)
         CH = C * H
 
         # ---- attention ----
-        w = ttnn.matmul(xt, att0_w, compute_kernel_config=compute_config)     # [1,W,128]
+        w = ttnn.matmul(xt, att0_w, compute_kernel_config=compute_config)  # [1,W,128]
         w = ttnn.add(w, att0_b)
         w = ttnn.relu(w)
-        w = ttnn.add(ttnn.multiply(w, att_bn_at), att_bn_bt)                  # BN1d affine
-        w = ttnn.matmul(w, att3_w, compute_kernel_config=compute_config)      # [1,W,2048]
+        w = ttnn.add(ttnn.multiply(w, att_bn_at), att_bn_bt)  # BN1d affine
+        w = ttnn.matmul(w, att3_w, compute_kernel_config=compute_config)  # [1,W,2048]
         w = ttnn.add(w, att3_b)
-        w = ttnn.softmax(w, dim=1)                                           # softmax over time
+        w = ttnn.softmax(w, dim=1)  # softmax over time
 
         # ---- ASP statistics pooling (over time dim=1) ----
         xw = ttnn.multiply(xt, w)
-        mu = ttnn.sum(xw, dim=1)                                             # [1,2048]
+        mu = ttnn.sum(xw, dim=1)  # [1,2048]
         x2w = ttnn.multiply(ttnn.multiply(xt, xt), w)
-        s2 = ttnn.sum(x2w, dim=1)                                            # [1,2048]
+        s2 = ttnn.sum(x2w, dim=1)  # [1,2048]
         var2 = ttnn.subtract(s2, ttnn.multiply(mu, mu))
         var2 = ttnn.clamp(var2, 1e-5, None)
         sg = ttnn.sqrt(var2)
-        emb = ttnn.concat([mu, sg], dim=1)                                   # [1,4096]
+        emb = ttnn.concat([mu, sg], dim=1)  # [1,4096]
 
         # ---- fc ----
         emb = ttnn.reshape(emb, (1, 1, 2 * CH))

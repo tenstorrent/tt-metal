@@ -31,9 +31,7 @@ gating math runs in float32. Input/output are NCHW to match the torch module.
 from __future__ import annotations
 
 import ttnn
-
 from models.demos.xtts_v2._stubs.s_e_layer import build as _b_se_layer
-
 
 HF_MODEL_ID = "coqui/XTTS-v2"
 
@@ -65,22 +63,38 @@ def build(device, torch_module):
         return W, cb * a + b
 
     def conv_w(W):
-        return ttnn.as_tensor(W.contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # host tensor: prepare_conv_weights (see run_conv) requires host input and
+        # returns the prepared device tensor, cached per input shape.
+        return ttnn.as_tensor(W.contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def conv_b(b):
-        return ttnn.as_tensor(b.reshape(1, 1, 1, -1).contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.as_tensor(
+            b.reshape(1, 1, 1, -1).contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
 
     def affine_t(a):
-        return ttnn.as_tensor(a.reshape(1, 1, 1, -1).contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.as_tensor(
+            a.reshape(1, 1, 1, -1).contiguous().float(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def f32(t):
-        return ttnn.as_tensor(t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.as_tensor(
+            t.contiguous().float(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     in_c = int(blk.conv1.in_channels)
     planes = int(blk.conv1.out_channels)
     stride = int(blk.conv1.stride[0])
 
-    w1 = conv_w(blk.conv1.weight.detach().float())         # conv1 bias=False, relu before bn1
+    w1 = conv_w(blk.conv1.weight.detach().float())  # conv1 bias=False, relu before bn1
     bn1_a, bn1_b = bn_scale_shift(blk.bn1)
     bn1_at, bn1_bt = affine_t(bn1_a), affine_t(bn1_b)
     W2, bias2 = fold_conv_bn(blk.conv2, blk.bn2)
@@ -92,16 +106,96 @@ def build(device, torch_module):
     ds = None
     if blk.downsample is not None:
         dW, db = fold_conv_bn(blk.downsample[0], blk.downsample[1])
-        ds = dict(w=conv_w(dW), b=conv_b(db), k=1, s=int(blk.downsample[0].stride[0]), p=0,
-                  ic=int(blk.downsample[0].in_channels), oc=int(blk.downsample[0].out_channels))
+        ds = dict(
+            w=conv_w(dW),
+            b=conv_b(db),
+            k=1,
+            s=int(blk.downsample[0].stride[0]),
+            p=0,
+            ic=int(blk.downsample[0].in_channels),
+            oc=int(blk.downsample[0].out_channels),
+        )
+
+    # conv2d re-prepares raw OIHW weights (device->host pull-back + host prep + H2D
+    # push) on EVERY call unless handed an already-prepared tensor. Prepare once per
+    # (weight, H, W) — the prepared layout depends on the input shape — with the same
+    # preparation function conv2d would call internally, so results are bit-identical.
+    _prep_cache = {}
+
+    def _prepared(w, b, ic, oc, k, s, p, H, W):
+        key = (id(w), H, W)
+        ent = _prep_cache.get(key)
+        if ent is None:
+            pw = ttnn.prepare_conv_weights(
+                weight_tensor=w,
+                input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                weights_format="OIHW",
+                in_channels=ic,
+                out_channels=oc,
+                batch_size=1,
+                input_height=H,
+                input_width=W,
+                kernel_size=(k, k),
+                stride=(s, s),
+                padding=(p, p),
+                dilation=(1, 1),
+                has_bias=b is not None,
+                groups=1,
+                device=device,
+                input_dtype=ACT,
+                output_dtype=ACT,
+                conv_config=conv_config,
+                compute_config=compute_config,
+            )
+            pb = b
+            if pb is not None:
+                pb = ttnn.prepare_conv_bias(
+                    bias_tensor=pb,
+                    input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                    in_channels=ic,
+                    out_channels=oc,
+                    batch_size=1,
+                    input_height=H,
+                    input_width=W,
+                    kernel_size=(k, k),
+                    stride=(s, s),
+                    padding=(p, p),
+                    dilation=(1, 1),
+                    groups=1,
+                    device=device,
+                    input_dtype=ACT,
+                    output_dtype=ACT,
+                    conv_config=conv_config,
+                    compute_config=compute_config,
+                )
+            ent = (pw, pb)
+            _prep_cache[key] = ent
+        return ent
 
     def run_conv(x_nhwc, w, b, ic, oc, k, s, p, H, W):
+        w, b = _prepared(w, b, ic, oc, k, s, p, H, W)
         out, [oh, ow] = ttnn.conv2d(
-            input_tensor=x_nhwc, weight_tensor=w, in_channels=ic, out_channels=oc, device=device,
-            bias_tensor=b, kernel_size=(k, k), stride=(s, s), padding=(p, p), dilation=(1, 1),
-            batch_size=1, input_height=H, input_width=W, conv_config=conv_config,
-            compute_config=compute_config, groups=1, return_output_dim=True,
-            return_weights_and_bias=False, dtype=ACT,
+            input_tensor=x_nhwc,
+            weight_tensor=w,
+            in_channels=ic,
+            out_channels=oc,
+            device=device,
+            bias_tensor=b,
+            kernel_size=(k, k),
+            stride=(s, s),
+            padding=(p, p),
+            dilation=(1, 1),
+            batch_size=1,
+            input_height=H,
+            input_width=W,
+            conv_config=conv_config,
+            compute_config=compute_config,
+            groups=1,
+            return_output_dim=True,
+            return_weights_and_bias=False,
+            dtype=ACT,
         )
         out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
         out = ttnn.reshape(out, (1, oh, ow, oc))
@@ -112,7 +206,9 @@ def build(device, torch_module):
 
     def forward(x, *args, **kwargs):
         if not isinstance(x, ttnn.Tensor):
-            x = ttnn.as_tensor(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.as_tensor(
+                x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         # input NCHW [1, C, H, W] -> NHWC [1, H, W, C]
         x = ttnn.typecast(x, ttnn.float32)
         H, W = int(x.shape[2]), int(x.shape[3])
@@ -129,13 +225,15 @@ def build(device, torch_module):
         out = ttnn.typecast(out, ttnn.float32)
 
         # SE gating (graduated leaf: s_e_layer) — stub is NCHW; out here is NHWC
-        out = ttnn.permute(out, (0, 3, 1, 2))                 # NHWC -> NCHW
-        out = se_gate(out)                                    # per-channel SE rescale
-        out = ttnn.permute(out, (0, 2, 3, 1))                 # NCHW -> NHWC
+        out = ttnn.permute(out, (0, 3, 1, 2))  # NHWC -> NCHW
+        out = se_gate(out)  # per-channel SE rescale
+        out = ttnn.permute(out, (0, 2, 3, 1))  # NCHW -> NHWC
 
         # residual
         if ds is not None:
-            res, _, _ = run_conv(to_conv_in(residual), ds["w"], ds["b"], ds["ic"], ds["oc"], ds["k"], ds["s"], ds["p"], H, W)
+            res, _, _ = run_conv(
+                to_conv_in(residual), ds["w"], ds["b"], ds["ic"], ds["oc"], ds["k"], ds["s"], ds["p"], H, W
+            )
             res = ttnn.typecast(res, ttnn.float32)
         else:
             res = residual
