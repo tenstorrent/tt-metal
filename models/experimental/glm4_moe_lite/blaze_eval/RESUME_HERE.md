@@ -69,7 +69,35 @@ What is not settled is declaring the CB. Findings, in order:
    `page_size`. With shard `(1, 2048)` that is 1 page, so K reads as 32.
 4. `total_size=` would set page count directly, but it reaches `_resolve_tensor_geometry` and is
    then **rejected by `BlazeProgram.cb_from_tensor`** — not plumbed through.
-5. **Attempted and UNRESOLVED:** declare the per-core shard as `(64, 32)` instead of `(1, 2048)`
+5. **`total_size` IS available** — not on `cb_from_tensor`, but `cb_from_tensor_overlapped(t,
+   address_offset, total_size, page_size, tile=...)` takes all three as first-class arguments
+   (`fused_program.py:1601`). No blaze change needed. With `total_size=K*2, page_size=64,
+   tile=Tile([1,32])` the K-mismatch error is gone.
+
+6. **THE REAL BLOCKER — the op hangs on a DEVICE-BUILT activation.** Tried twice:
+
+   | attempt | shard | CB | result |
+   |---|---|---|---|
+   | `gate5_shard_shape_attempt.py` | `(64,32)` + reshape | `cb_from_tensor` | **hang** |
+   | `gate6_overlapped_cb_attempt.py` | `(1,2048)`, no reshape | `cb_from_tensor_overlapped` | **hang** |
+
+   Both hang, so it is **not** the reshape and **not** the shard shape — those differed. What is
+   constant is that the activation was built on device and is **ROW_MAJOR**, where blaze's own
+   `_make_act_tensor` produces **TILE** layout with a 1x32 tile. The same fused op with that
+   from_torch activation gates at **PCC 0.9999**, and `build_act()` measured alone completes fine
+   at 4.8 us — so neither half is broken in isolation; the hang is the op consuming a row-major
+   backing tensor.
+
+   **Leading hypothesis:** for a 1x32 tile the bytes ought to be identical to row-major, but ttnn
+   may pad or align row-major shard rows differently than tiled pages, so the reader walks wrong
+   addresses and waits forever. Test by comparing the two tensors' `buffer_address()`,
+   page/stride metadata and shard-spec padding *before* running the op — that is a host-side
+   comparison and costs no device time.
+
+   Next after that: option (b) below (retilize inside the fused op), which sidesteps row-major
+   entirely rather than trying to make blaze accept it.
+
+7. Superseded by 5/6 — declaring the per-core shard as `(64, 32)` instead of `(1, 2048)`
    — identical bytes, but makes `n_pages = 64` and `page_size = 64` fall out naturally. This
    **hung the device**. Script preserved at
    `/tmp/.../scratchpad/gate5_script.py` (regenerate from this doc if gone).
