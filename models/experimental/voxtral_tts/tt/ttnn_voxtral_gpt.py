@@ -62,12 +62,9 @@ _V_SHARD = ttnn.MemoryConfig(
     ttnn.ShardSpec(ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
                    (TILE, HEAD_DIM), ttnn.ShardOrientation.ROW_MAJOR))
 
-# NOTES.md [gpt-20] -- wo's DECODE program config, the only linear that needed one. in0_block_w=2 ships...
-_WO_GRID = (8, 4)
-_WO_PRG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=_WO_GRID, in0_block_w=2, out_subblock_h=1, out_subblock_w=1,
-    per_core_M=1, per_core_N=(DIM // TILE) // (_WO_GRID[0] * _WO_GRID[1]),
-    fuse_batch=True, fused_activation=None, mcast_in0=True)
+# NOTES.md [gpt-20] -- wo has NO program config on Blackhole. 6.25 hand-tuned one for the N150
+# (+0.196 ms/frame); here it is worth nothing measurable and is deleted. Removing it is bit-exact,
+# so the only question was speed, and no instrument could find any. STATUS.md 6.43.
 
 # NOTES.md [gpt-21] -- k=512 on an 8x2 grid, 1.63x. THE FASTER ONES ARE NOT SAFE -- position sweep...
 _SDPA_PRG = ttnn.SDPAProgramConfig(
@@ -263,7 +260,7 @@ class TtVoxtralGPT:
         # NOTES.md [gpt-03b] -- no memory_config move: L1 here measures 0.999x, see [gpt-03]...
         a = ttnn.reshape(o, [1, 1, Q_WIDTH])
         x = ttnn.add(x, ttnn.linear(a, w["wo"], compute_kernel_config=COMPUTE_CONFIG,
-                                    memory_config=_L1, program_config=_WO_PRG), memory_config=_L1)
+                                    memory_config=_L1), memory_config=_L1)
         return self._mlp(x, self._norm(x, w["fn"]), w, _L1)
 
     @torch.no_grad()
