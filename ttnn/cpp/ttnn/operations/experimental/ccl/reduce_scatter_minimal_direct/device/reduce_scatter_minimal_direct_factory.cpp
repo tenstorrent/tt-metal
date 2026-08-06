@@ -400,7 +400,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         .kernel_source = std::string(kernel_dir) + "reduce_scatter_minimal_direct_compute.cpp",
         .core_ranges = worker_core_range,
         .compile_time_args = std::move(compute_ct_args),
-        .config = tt::tt_metal::ComputeConfigDescriptor{}});
+        // fp32_dest_acc_en MUST match the value the geometry was computed with: it halves max_dst_size
+        // (8 -> 4 tiles), so a mismatch both mis-sizes the chunk and -- worse -- would accumulate FLOAT32
+        // inputs in bf16-precision dest registers. ComputeConfigDescriptor defaults it to false.
+        .config = tt::tt_metal::ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc_en}});
     constexpr tt::tt_metal::KernelHandle reader_kernel_id = 0;
     constexpr tt::tt_metal::KernelHandle writer_kernel_id = 1;
     constexpr tt::tt_metal::KernelHandle compute_kernel_id = 2;

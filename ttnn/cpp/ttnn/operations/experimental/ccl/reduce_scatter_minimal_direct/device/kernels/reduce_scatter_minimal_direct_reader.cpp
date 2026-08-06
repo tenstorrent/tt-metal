@@ -139,6 +139,12 @@ void kernel_main() {
 
             if (k == 0) {
                 // Every remote contribution to our own slice has landed (whole tile range, all chunks).
+                //
+                // Deliberately the free noc_semaphore_wait_min rather than a typed Semaphore<>: these are
+                // GlobalSemaphore ADDRESSES handed over as runtime args, and Semaphore<>'s only constructor
+                // takes a per-program semaphore_id which it resolves through get_semaphore<>() -- a
+                // different allocation entirely, so it cannot name a global semaphore. Semaphore::wait_min
+                // forwards to exactly this free function anyway.
                 for (uint32_t s = 0; s < num_dests; ++s) {
                     auto* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(arrival_sems + s));
                     noc_semaphore_wait_min(sem, invocation + 1);

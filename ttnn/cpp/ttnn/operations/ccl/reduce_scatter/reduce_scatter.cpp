@@ -75,7 +75,9 @@ bool use_direct_reduce_scatter(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
+    bool use_l1_small_for_semaphores) {
     // The axis has to wrap: Ring on a 1D fabric, Torus on a 2D one.
     if (!tt::tt_fabric::is_ring_or_torus(topology)) {
         return false;
@@ -85,6 +87,15 @@ bool use_direct_reduce_scatter(
     // op rather than silently dropping it.
     if (chunks_per_sync.has_value() || num_workers_per_link.has_value() || num_buffers_per_channel.has_value() ||
         compute_kernel_config.has_value()) {
+        return false;
+    }
+    // Same reasoning for the two options the direct op cannot express. Its staging buffer is not the ring
+    // op's intermediate -- placement (L1-sharded / L1-interleaved / DRAM) is derived from the shape by
+    // reduce_scatter_direct_staging_spec and is not caller-selectable -- so an explicit
+    // intermediate_memory_config could not be honoured. Semaphore placement is likewise the factory's own
+    // choice. Note use_l1_small_for_semaphores is a plain bool, so "explicitly false" is indistinguishable
+    // from the default; only an explicit true can be detected and declined here.
+    if (intermediate_memory_config.has_value() || use_l1_small_for_semaphores) {
         return false;
     }
     // Structural constraints (ring, TILE, whole-page split, 1D fabric) are the op's own to state.
@@ -181,7 +192,9 @@ ttnn::Tensor reduce_scatter(
             chunks_per_sync,
             num_workers_per_link,
             num_buffers_per_channel,
-            compute_kernel_config)) {
+            compute_kernel_config,
+            intermediate_memory_config,
+            use_l1_small_for_semaphores)) {
         // Diagnostic: the direct path is otherwise completely silent (no logging, and no perf model, so
         // it reports PM_IDEAL 0.0), which makes "did this shape take the fast path?" unanswerable from a
         // CI log. Warning level so it survives default log filtering. Deduplicated by shape rather than
