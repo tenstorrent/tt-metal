@@ -249,20 +249,15 @@ std::vector<UnpackToDestMode> unpack_to_dest_fp32_modes(uint32_t cb_index) {
     return modes;
 }
 
-// ops/tilize/spec.py _tilize_use_fast — compute_tilize.cpp's third CT arg.
+// ops/tilize/spec.py _tilize_use_fast — compute_tilize.cpp's third CT arg, pinned off.
 //
-// The fast-tilize LLK datapath accepts fp32/bf16 input with a non-fp32 output, but native forces an
-// fp32 input onto the lossless standard path (fast tilize truncates fp32 to tf32), which leaves
-// bf16->bf16 as the only combination this device op can reach that may take it.
-//
-// max_chunk_tiles is the WIDEST per-core compute chunk in the program, not this core's: the selector
-// is one compile-time arg shared by every core the kernel is created over, so the LLK's cap has to
-// hold for all of them.
-uint32_t tilize_use_fast(DataType input_dtype, DataType output_dtype, uint32_t max_chunk_tiles) {
-    const bool fast = input_dtype == DataType::BFLOAT16 && output_dtype == DataType::BFLOAT16 && max_chunk_tiles > 0 &&
-                      max_chunk_tiles < kFastTilizeMaxChunkTiles;
-    return fast ? 1u : 0u;
-}
+// The fast-tilize LLK is native's bf16->bf16 datapath, but in the codegen kernels it measured as
+// never a win and sometimes a loss: no device-time change on Wt==1 shapes (the fixed per-RISC cost
+// dominates there regardless of datapath) and a 6-9% regression vs the pre-fast port on ragged
+// small-chunk bf16 shapes (Wt 3-7), where fast_tilize_init/block per-chunk setup is not amortized.
+// Kept as a compile-time arg so the kernels stay ABI-stable; re-enable only behind a measurement
+// that shows a win.
+uint32_t tilize_use_fast(DataType input_dtype, DataType output_dtype, uint32_t max_chunk_tiles) { return 0; }
 
 struct Geometry {
     uint32_t nc = 0;
