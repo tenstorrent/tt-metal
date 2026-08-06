@@ -1707,3 +1707,24 @@ vary dispatch INTENSITY (number of CQs, dispatch core placement) with the DRISC 
   Pin the grid before treating the interaction as established.
 - No early-warning signal: probes stay flat (ack 163-188 ns, worker 701-742) across every clean run in all four
   cells.
+
+### §N+11 addendum — the grid caveat was WRONG, and the interaction got stronger
+
+The §N+11 caveat "the hanging cell runs 120 while the others run 110" is **withdrawn**. Under fast dispatch
+`compute_with_storage_grid_size()` already returns 11x10, so a `--gx 0` fast-dispatch run polls **110**, not 120
+-- verified directly: `DRISC 0 resident on logical (0,1) [noc0 (0,0)], cores [0,110) of 110`. The 120 figure
+came from the separate `FULL_GRID=1` SLOW-dispatch experiments and was carried over by assumption. **All four
+cells of the 2x2 were already grid-matched at 110.** Grid never rode along with the interaction.
+
+A further DRISC+fast churn trial at a confirmed 110 cores (sanity line printed) **hung at run 16**. Updated:
+
+| | fast dispatch | slow dispatch |
+|---|---|---|
+| **DRISC** | **4 hangs / ~134 runs** (at runs 4, 16, 31, ~34) | 0 / 98 |
+| **Tensix BRISC** | 0 / 98 | 0 / 98 |
+
+4/134 against 0/294 across the other three cells: Fisher p ~ 0.004. The interaction is now the best-supported
+claim in this file, and it is grid-matched, dispatch-matched and core-type-matched by construction.
+
+The four hang points -- runs 4, 16, 31, ~34 -- remain wildly variable, so this is a rare stochastic event with a
+strongly non-uniform cell preference, not a deterministic trigger. Mean ~21 runs to hang in that cell.
