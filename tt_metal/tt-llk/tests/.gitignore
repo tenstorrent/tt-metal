@@ -1,5 +1,7 @@
 arch.dump
-sfpi/
+# SFPI toolchain install (setup_testing_env.sh) and the symlink to a local
+# compiler build used by the LLK test harness
+sfpi
 tt-smi/
 python_tests/test_tilize_max_pool.py
 sources/tilize_max_pool_test.cpp
