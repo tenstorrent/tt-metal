@@ -458,10 +458,6 @@ class TestConfig:
         StimuliConfig.WITH_COVERAGE = with_coverage
         TestConfig.SPEED_OF_LIGHT = speed_of_light
 
-        # llk_api is on the path, but its llk_sfpu subdirectory deliberately is not: llk_sfpu
-        # shares twelve basenames with tt_llk_<arch>/common/inc/sfpu, and those have to win.
-        # Headers needing a metal SFPU kernel spell the prefix instead
-        # (ckernel_sfpu_generalized_moe_gate_topk_single_face.h -> llk_sfpu/ckernel_sfpu_exp.h).
         hw_specific_includes = []
         if TestConfig.ARCH == ChipArchitecture.WORMHOLE:
             hw_specific_includes = [
