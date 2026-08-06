@@ -31,6 +31,17 @@
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
 
+// f32 intermediate buffers (cb_qk_im, cb_sum_A/B) are a ring-joint-only feature (#48753).
+// The reconfig calls it added to this shared header re-sync unpack/pack formats to those
+// fp32 CBs, but every SDPA variant compiles this header and only the ring-joint factory
+// allocates such CBs. #51963 then had to re-order some of these calls because LLK init
+// validates live formats. Scope the whole set to the variants that opt in: only the
+// ring-joint program factory defines SDPA_FP32_INTERMEDIATES=1 (when fp32_dest_acc_en);
+// all other variants get the pre-#48753 code paths (#52218).
+#ifndef SDPA_FP32_INTERMEDIATES
+#define SDPA_FP32_INTERMEDIATES 0
+#endif
+
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, true /*transpose within 16x16 face*/, cbid)));
@@ -155,13 +166,17 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
              * Note that this special invocation of copy_tile is necessary to produce
              * tiles in DST with transposed faces, as `reduce_block_max_row` expects.
              */
+#if SDPA_FP32_INTERMEDIATES
             reconfig_data_format_srca(prev_cb);
+#endif
             sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
             for (uint32_t i = 0; i < dst_tiles; i++) {
                 const uint32_t cur_max_dst_idx = i;
                 copy_tile(prev_cb, (row_start_idx + i), cur_max_dst_idx);
             }
+#if SDPA_FP32_INTERMEDIATES
             reconfig_data_format_srca(in0_cb);
+#endif
         }
 
         /**
@@ -176,7 +191,9 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
 
         tile_regs_commit();
         tile_regs_wait();
+#if SDPA_FP32_INTERMEDIATES
         pack_reconfig_data_format(out_cb);
+#endif
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t cur_max_dst_idx = i;
             pack_tile<true>(cur_max_dst_idx, out_cb, (row_start_idx + i));
@@ -218,14 +235,18 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     cb_in0.wait_front(num_tiles);
     cb_out.reserve_back(rows);
 
+#if SDPA_FP32_INTERMEDIATES
     pack_reconfig_data_format(out_cb);
+#endif
 
     binary_max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
+#if SDPA_FP32_INTERMEDIATES
         reconfig_data_format_srca(in0_cb);
+#endif
         tile_regs_acquire();
         reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
         for (uint32_t j = 0; j < cols; j++) {
@@ -233,7 +254,9 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         }
         reduce_uninit();
         if (do_eltwise_max) {
+#if SDPA_FP32_INTERMEDIATES
             reconfig_data_format_srca(prev_cb);
+#endif
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
             binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, vector_mode);
@@ -300,10 +323,12 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
+#if SDPA_FP32_INTERMEDIATES
     // llk_unpack_AB_init (inside sub_bcast_cols_init_short) validates the live
     // unpacker configuration.  Reconfigure first: qk_im can be FP32 while the
     // row maximum is BF16, notably after applying a windowed BF16 mask.
     reconfig_data_format(in0_cb, in1_cb);
+#endif
     sub_bcast_cols_init_short(in0_cb, in1_cb);
 
     // The exponential function uses InputClamping::None for better performance. This version
@@ -345,7 +370,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_wait();
 
             if constexpr (write_result_inplace) {
+#if SDPA_FP32_INTERMEDIATES
                 pack_reconfig_data_format(in0_cb);
+#endif
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_cb);
                 }
@@ -354,7 +381,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             }
 
             if constexpr (do_reduce) {
+#if SDPA_FP32_INTERMEDIATES
                 pack_reconfig_data_format(reduce_cb);
+#endif
                 // While we have results in DST, take advantage of L1 accumulation
                 // to reduce row x cols tiles to rows x 1 tiles.
                 if (u > 0) {
@@ -406,8 +435,10 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
 
     constexpr uint32_t num_tiles = rows * cols;
 
+#if SDPA_FP32_INTERMEDIATES
     reconfig_data_format(in0_cb, in1_cb);
     pack_reconfig_data_format(out_cb);
+#endif
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
@@ -491,9 +522,13 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     constexpr uint32_t granularity = cols;
 #endif
 
+#if SDPA_FP32_INTERMEDIATES
     reconfig_data_format(in0_cb, in1_cb);
+#endif
     mul_bcast_cols_init_short(in0_cb, in1_cb);
+#if SDPA_FP32_INTERMEDIATES
     pack_reconfig_data_format(in0_cb);
+#endif
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -514,7 +549,9 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
         }
     }
     cb_in1.pop_front(rows);
+#if SDPA_FP32_INTERMEDIATES
     reconfig_data_format_srcb(in0_cb);
+#endif
 }
 
 template <uint32_t in1_scalar_cb, uint32_t num_tiles>
@@ -568,8 +605,10 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
 
+#if SDPA_FP32_INTERMEDIATES
     reconfig_data_format(in0_cb, in1_cb);
     pack_reconfig_data_format(in0_cb);
+#endif
     add_tiles_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
@@ -601,9 +640,13 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
 
+#if SDPA_FP32_INTERMEDIATES
     reconfig_data_format(in0_cb, in1_cb);
+#endif
     mul_bcast_cols_init_short(in0_cb, in1_cb);
+#if SDPA_FP32_INTERMEDIATES
     pack_reconfig_data_format(in0_cb);
+#endif
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -821,8 +864,10 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
 }
 
 void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+#if SDPA_FP32_INTERMEDIATES
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
+#endif
     CircularBuffer cb_in(in_cb);
     CircularBuffer cb_out(out_cb);
     copy_tile_to_dst_init_short(in_cb);
@@ -1097,7 +1142,9 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
+#if SDPA_FP32_INTERMEDIATES
     pack_reconfig_data_format(out_cb);
+#endif
     cb_in1.wait_front(N);
     cb_out.wait_front(M);
 
@@ -1157,8 +1204,10 @@ void apply_padded_mask_lightweight_runtime(
     uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
     uint32_t start = num_cols - num_padded;
 
+#if SDPA_FP32_INTERMEDIATES
     reconfig_data_format_srca(neginf_cb);
     pack_reconfig_data_format(out_cb);
+#endif
     copy_tile_to_dst_init_short(neginf_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1189,8 +1238,10 @@ void apply_partial_mask_lightweight(
     uint32_t num_cols,
     uint32_t num_rows,
     uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
+#if SDPA_FP32_INTERMEDIATES
     reconfig_data_format_srca(mask_cb);
     pack_reconfig_data_format(out_cb);
+#endif
     copy_tile_to_dst_init_short(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1227,8 +1278,10 @@ void apply_causal_mask_lightweight(
     uint32_t num_cols,
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0) {
+#if SDPA_FP32_INTERMEDIATES
     reconfig_data_format_srca(mask_cb);
     pack_reconfig_data_format(out_cb);
+#endif
     copy_tile_to_dst_init_short(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1831,14 +1884,18 @@ void sdpa_inner_loop(
              *  cur_max = eltwise_max(prev_max, max(qk, dim=-1))
              * else:
              *  cur_max = max(qk, dim=-1)
-             *
-             * Use the reduce_c overload with cols as a runtime arg which uses standard
-             * reduce_tile + binary_max_tile. The overload with cols as a template arg
-             * is bf16-only but cb_qk_im could be fp32.
              */
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+#if SDPA_FP32_INTERMEDIATES
+            // Use the reduce_c overload with cols as a runtime arg which uses standard
+            // reduce_tile + binary_max_tile. The overload with cols as a template arg
+            // is bf16-only but cb_qk_im could be fp32.
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
                 alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+#else
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
+                alias_cur_max, alias_prev_max, processed_k_chunks > 0);
+#endif
 
             /**
              * sub_exp fuses a few operations.

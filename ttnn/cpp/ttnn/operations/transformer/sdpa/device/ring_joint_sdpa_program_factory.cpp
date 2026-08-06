@@ -1681,6 +1681,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    // This factory is the only one that allocates fp32 intermediate CBs (cb_qk_im, cb_sum_A/B
+    // when fp32_dest_acc_en); opt its compute kernel into the matching reconfig code paths in
+    // compute_common.hpp. Every other SDPA variant compiles with SDPA_FP32_INTERMEDIATES=0,
+    // which is the pre-#48753 code (#52218).
+    defines["SDPA_FP32_INTERMEDIATES"] = fp32_dest_acc_en ? "1" : "0";
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
