@@ -201,6 +201,7 @@ tools/scaleout/exabox/health_check_test_suite/
         ├── system_info.py               # tt-smi / kmd / fw version discovery
         ├── telemetry.py                 # tt-telemetry (Prometheus) collection + formatting
         ├── report.py                    # post-reset normalization + actionable-failure verdict
+        ├── slurm_reboot.py              # reboot-on-failure gating + scontrol reboot/requeue (Slurm only)
         ├── jira_client.py               # JIRA ticket create / update / close / attach
         ├── sftp_upload.py               # CSV upload to the Data-team SFTP endpoint
         ├── secrets_loader.py            # JIRA / SFTP credential-file parsing
@@ -211,3 +212,25 @@ The `test_infrastructure/` harness previously lived in the `exabox-infra` repo a
 spun up a nested Docker container to run the diag suite. Now that the harness ships
 in the same image as the diag suite, `run_health_check.py` invokes `diag_runner.py`
 directly as a subprocess (see `diag_execution.py`) instead of via docker-in-docker.
+
+### Reboot-on-failure (Slurm self-heal)
+
+`--reboot-on-failure true` (default) makes a run with an actionable failure try
+to self-heal once before it files a ticket: `run_health_check.py` arms
+`scontrol reboot ASAP nextstate=RESUME` on the node and `scontrol requeue`s the
+job, then exits immediately so the allocation frees, the node reboots, and Slurm
+reruns the same suite on the clean boot. The trigger is the post-reset
+`effective_code`, so runs whose only failures are pre-reset/excluded checks (which
+are treated as passing) do not reboot.
+
+`SLURM_RESTART_COUNT` caps this at one self-heal attempt, so a genuinely bad node
+stops looping and gets a ticket on the next failure (the JIRA body then notes it
+"persisted after N Slurm restart(s)"). Note this counter tracks *any* Slurm
+requeue/restart, not only this reboot, so an unrelated Slurm-driven requeue can
+consume the single self-heal attempt.
+
+This only fires under `--launch-mode slurm`; the orchestration (k8s) mode has no
+`scontrol`/`SLURM_JOB_ID` and reschedules pods itself. It also needs the job to
+be submitted with `sbatch --requeue`, the runner to have a passwordless
+`sudo scontrol` grant, and a `RebootProgram` set in `slurm.conf` (Slurm runs it
+via `slurmd` on the compute node once the node drains to idle).
