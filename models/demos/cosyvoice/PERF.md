@@ -24,9 +24,9 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Metric | Value | Target |
 |---|---:|---:|
-| End-to-end RTF | `0.611` | `< 0.5` ❌ |
-| LLM throughput (traced) | `121.3 tok/s` | `>= 60` ✅ |
-| LLM decode latency (traced) | `8.23 ms` | — |
+| End-to-end RTF | `0.533` | `< 0.5` ❌ |
+| LLM throughput (traced) | `148.5 tok/s` | `>= 60` ✅ |
+| LLM decode latency (traced) | `6.73 ms` | — |
 | Token agreement, teacher-forced | `98.56 %` | `> 95 %` ✅ |
 | Token agreement, through the KV cache | `95.83 %` | `> 95 %` ✅ |
 | WER (English) | `0.00 %` | `< 3.0` ✅ |
@@ -38,12 +38,12 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Stage | Cost | RTF | Share |
 |---|---:|---:|---:|
-| LLM (14-block AR decoder, traced) | `8.23 ms/token × 164` | `0.412` | 68 % |
-| Flow decoder (10 Euler steps, traced, SDPA) | `0.600 s` | `0.183` | 30 % |
+| LLM (14-block AR decoder, traced) | `6.73 ms/token × 164` | `0.337` | 63 % |
+| Flow decoder (10 Euler steps, traced, SDPA) | `0.589 s` | `0.180` | 34 % |
 | HiFT vocoder | `0.050 s` | `0.015` | 2 % |
-| **Total** | `2.001 s` | **`0.611`** | |
+| **Total** | `1.743 s` | **`0.533`** | |
 
-RTF has come down **1.096 → 0.611** (and **2.120 → 0.611** since before either stage was traced),
+RTF has come down **1.096 → 0.533** (and **2.120 → 0.533** since before either stage was traced),
 but it still misses. The rest of this section is the account of where the time went and what is
 left, because "it is 30 % away" is only useful with the reason attached.
 
@@ -168,6 +168,34 @@ They are not. `scripts/probe_kv_alignment.py` isolates it:
 **11× and 16× cheaper at tile granularity, and `bfloat8_b` — half the bytes — is identical to the
 last decimal.** In `TILE_LAYOUT` rows live in 32-row tiles, so slicing from row 1 or appending a
 single row re-tiles the entire buffer. This is a layout cost wearing a bandwidth cost's clothes.
+
+### The fix: put time on a free axis
+
+`TILE_LAYOUT` tiles the **last two** dimensions. A `[1, h, T, d_k]` cache therefore puts time on a
+*tiled* axis, and that is the whole story — appending one token re-tiles the buffer. Moving the
+buffers to time-major `[1, T, h, d_k]` puts time on a free axis:
+
+| | µs |
+|---|---:|
+| slice + concat on the tiled time axis *(was)* | `207.2` |
+| slice + concat on a free time axis | **`19.7`** |
+| permute back to `[B, h, T, d_k]` for the matmuls | `13.9` |
+
+**Paying a 13.9 µs permute to append on a free axis is 6.2× cheaper than appending on the tiled
+one.** Nothing else changes: same shapes into the matmuls, same relative-position geometry, same
+single trace.
+
+    traced decode step   8.26 → 6.73 ms   (121.4 → 148.5 tok/s)
+    trace speedup        2.54× → 3.10×
+    end-to-end RTF       0.610 → 0.533
+
+Traced vs untraced stays bit-exact (PCC `1.0000000000`, max|Δ| `0.000e+00` on all eight steps) —
+the test that would catch a cache written back one row out.
+
+This is the cheap route to what `ttnn.update_cache` offers. That op writes a slot in place at
+**3.7 µs against 207.2** — 56× — but needs 32 pre-captured traces, one per sub-step, because the
+write index and the positional slice offset both bake at capture. A change of axis order gets 6.2×
+with none of that.
 
 ### Why it stops here, and what would move it
 
