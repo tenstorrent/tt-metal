@@ -168,3 +168,19 @@ implementation has, reached without its `tp-1` hop depth.
 supports a core driving two muxes (the LINE-origin case) and gates on a single arrival semaphore, and the
 stripe-granular antipode split is what keeps that true — a byte-level split would require two credits per
 slot and per-slot epochs.
+
+**STATUS: implemented, correct, and NOT the default.** Behind `TT_AGMM_DIRECT_L1_BALANCED=1`; the default
+keeps one direction per ring position (depth `tp-1`). It passes the same 32/40 as the default, but measured
+on `medium`/ring/2 links it is neutral at tp=4 (120.16 vs 120.19) and **+5.2 us / +3.8% at tp=8** (141.6 vs
+136.4, repeated interleaved samples). It does reproducibly improve the fabric-only term
+(`TT_AGMM_ABLATE=nowait`: -1.4 us at tp=4, -2.5 us at tp=8); what it loses is on the *dependent* path.
+
+Why the depth win does not convert: **total link bytes are identical** — every stripe crosses `tp-1` hops
+under either schedule (the invariant above) — so on a shape that is NoC-occupancy-bound there is no
+throughput to gain, only latency, which is not the binding constraint. Meanwhile the arrival pattern gets
+burstier: `2K/tp` per wave from both neighbours at once instead of `K/tp`, concentrating ingress against the
+on-chip ring. That is the same mechanism that made a deferred fabric drain worse (see
+`AGMM_DIRECT_L1_DESIGN.md`).
+
+Expected to win once the dependency stall is removed by per-wave rings, at which point the burstiness stops
+gating — re-measure it then. Keep the spec's schedule as the target; the flag is the switch.

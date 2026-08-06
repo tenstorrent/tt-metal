@@ -347,7 +347,11 @@ std::vector<DirectL1Core> build_direct_l1_plan(
     uint32_t kb,
     uint32_t tp,
     uint32_t rank,
-    bool topology_is_ring) {
+    bool topology_is_ring,
+    // Balanced bidirectional delivery (spec appendix A): each stripe leaves its origin BOTH ways, so it
+    // travels tp/2 hops instead of tp-1. Implemented and correct, but OFF by default because it MEASURES
+    // WORSE on the dependent path -- see the table at the call site.
+    bool balanced) {
     std::vector<DirectL1Core> out(geo.num_cores);
     const uint32_t Wkb = geo.W * kb;  // capacity-local K tiles per ring slot
     const uint32_t k_shard_tiles = geo.Kt / tp;
@@ -375,18 +379,63 @@ std::vector<DirectL1Core> build_direct_l1_plan(
         d.has_stripe = cp.ring_pos < tp * pos_per_rank;
         if (d.has_stripe) {
             d.src_rank = cp.ring_pos / pos_per_rank;
-            if (topology_is_ring) {
-                // Direction from ring-position parity. The pos_per_rank positions owning a rank are split
-                // between the two directions, so each link carries half the stripes -- the design doc's
-                // "antipode split becomes position-level", with no byte-level split of any core's payload.
-                // At pos_per_rank == 1 (tp == 8) the parity alternates across RANKS instead, which balances
-                // the two directions just as evenly.
+            if (topology_is_ring && !balanced) {
+                // DEFAULT: one direction per ring position, by parity. A stripe travels from its origin all
+                // the way round, tp-1 hops. Deeper than appendix A's schedule, but measured FASTER on the
+                // dependent path -- see the table where `balanced` is resolved.
                 const bool bwd = (cp.ring_pos % 2u) != 0u;
                 d.dist = bwd ? ((d.src_rank + tp - rank) % tp) : ((rank + tp - d.src_rank) % tp);
-                // The last hop consumes without forwarding; everyone else (origin included) sends once.
-                const bool relays = (d.dist + 1u) < tp;
+                const bool relays = (d.dist + 1u) < tp;  // the last hop consumes without forwarding
                 d.send_fwd = !bwd && relays;
                 d.send_bwd = bwd && relays;
+            } else if (topology_is_ring) {
+                // BALANCED BIDIRECTIONAL delivery -- spec appendix A. Each stripe leaves its origin in BOTH
+                // directions, so it travels at most tp/2 hops instead of all the way round. Same bytes, but
+                // T_ready_max (the leading term of the ring bound) drops with the hop depth: tp=4 3 -> 2,
+                // tp=8 7 -> 4.
+                //
+                // The antipode (distance exactly tp/2 at even tp) is equidistant both ways, so one direction
+                // must carry it -- and if it were always the same one, that link would move tp/2 * K/tp
+                // against the other's (tp/2-1) * K/tp (2x at tp=4). Split it at STRIPE granularity by giving
+                // each stripe's extra hop to alternating directions. Never at byte granularity: a core keeps
+                // receiving exactly ONE stripe with ONE credit, so there is no partial slot to reconcile.
+                //
+                // The alternation index is the SLICE, not the Pk group: at tp=8 pos_per_rank == 1 leaves no
+                // within-rank positions to alternate over, so the slice term carries it alone (and gives
+                // preaders distinct values where kk would give only Pk).
+                const bool via_fwd = (((cp.ring_pos % pos_per_rank) + cp.slice) % 2u) == 0u;
+                const uint32_t f = via_fwd ? (tp / 2u) : (tp / 2u - 1u);
+                const uint32_t b = tp - 1u - f;  // f + b == tp-1 always
+                const uint32_t fd = (rank + tp - d.src_rank) % tp;
+                const uint32_t bd = (d.src_rank + tp - rank) % tp;
+                // fd + bd == tp and f + b == tp-1, so for fd != 0 exactly one arrival case holds.
+                if (fd == 0u) {
+                    d.dist = 0u;  // origin: reads its own shard, then seeds both directions
+                    d.send_fwd = f >= 1u;
+                    d.send_bwd = b >= 1u;
+                } else if (fd <= f) {
+                    d.dist = fd;
+                    d.send_fwd = fd < f;  // relay onward unless we are this direction's terminal
+                } else {
+                    // Not reachable unless f + b != tp-1. Checked rather than assumed because the failure is
+                    // a HANG, not a wrong answer: this core would wait on an arrival semaphore that no
+                    // upstream device ever credits.
+                    TT_FATAL(
+                        bd <= b,
+                        "TT_AGMM_DIRECT_L1: stripe (slice {}, pos {}) from rank {} reaches neither stream on "
+                        "rank {} (fd={} > f={}, bd={} > b={}); f+b must equal tp-1={}",
+                        cp.slice,
+                        cp.ring_pos,
+                        d.src_rank,
+                        rank,
+                        fd,
+                        f,
+                        bd,
+                        b,
+                        tp - 1u);
+                    d.dist = bd;
+                    d.send_bwd = bd < b;
+                }
             } else {
                 // LINE: there is no wrap, so a stripe has to fan out BOTH ways from its origin -- the origin
                 // is the one core that drives two muxes. Everyone else relays outward only.
@@ -620,8 +669,21 @@ FusedGatherContext build_fused_gather_context(
     // same program launch, so the cross-chip early-credit race that forced fwd_recv to be global does not
     // apply -- and dispatch re-zeroes them on every enqueue, which is exactly the re-arm we want.
     // Both live on ALL cores: every core waits on the go-ahead flag, not just the master ring.
-    ctx.chunk_ready_sem_id = CreateSemaphore(program, all_cores, 0);  // 0 == INVALID
-    ctx.local_done_sem_id = CreateSemaphore(program, all_cores, 0);
+    ctx.num_masters = static_cast<uint32_t>(master_ring_cores.size());
+    // ---- The staged path's progressive-publication semaphores. NOT allocated under direct-L1. ----
+    // Direct-L1 has no wave publication at all: a core gates on its own single arrival credit, so the
+    // go-ahead flag, the local-staging barrier, the per-reporter slots and the two wave counters are all
+    // dead there (the kernel (void)-casts their ids and never calls get_semaphore on them).
+    //
+    // Allocating them anyway is not free -- there is a HARD budget of 16 semaphores per core, and this is
+    // 4 + num_masters/2 of them. Balanced bidirectional delivery makes each origin core a client of BOTH
+    // muxes, and every client registration costs 2 more (the mux's flow-control pair), which tipped Sm=2
+    // over the limit: "Cannot add semaphore on core 0-9. Max number of semaphores (16) reached!". Freeing the
+    // dead ones is what pays for the second mux connection.
+    if (!dl1) {
+        ctx.chunk_ready_sem_id = CreateSemaphore(program, all_cores, 0);  // 0 == INVALID
+        ctx.local_done_sem_id = CreateSemaphore(program, all_cores, 0);
+    }
     // ONE SLOT PER REPORTER, not per arrival. Two constraints have to be met at once:
     //
     //  * A single shared counter is ambiguous -- with 4 masters, a cumulative count of 2*4 is produced
@@ -633,22 +695,20 @@ FusedGatherContext build_fused_gather_context(
     // Per-reporter slots satisfy both: master b only ever increments slot b, so slot b IS master b's
     // arrival count -- single writer, monotone, and a fixed m_groups slots regardless of tp. The
     // coordinator publishes arrival i once every slot has reached i.
-    ctx.dir_count_sem_id = CreateSemaphore(program, all_cores, 0);
-    // Assigned here, not 10 lines further down: reporter_slots below derives from it, and reading the
-    // struct default instead would silently desync the host slot count from the kernel's m_groups the
-    // moment the master count stops being 8.
-    ctx.num_masters = static_cast<uint32_t>(master_ring_cores.size());
-    const uint32_t reporter_slots = ctx.num_masters / 2u;
-    for (uint32_t b = 1; b < reporter_slots; ++b) {
-        const uint32_t nxt = CreateSemaphore(program, all_cores, 0);
-        TT_FATAL(
-            nxt == ctx.dir_count_sem_id + b,
-            "per-reporter semaphores must be consecutive for base+b indexing, got {} after base {}",
-            nxt,
-            ctx.dir_count_sem_id);
+    if (!dl1) {
+        ctx.dir_count_sem_id = CreateSemaphore(program, all_cores, 0);
+        const uint32_t reporter_slots = ctx.num_masters / 2u;
+        for (uint32_t b = 1; b < reporter_slots; ++b) {
+            const uint32_t nxt = CreateSemaphore(program, all_cores, 0);
+            TT_FATAL(
+                nxt == ctx.dir_count_sem_id + b,
+                "per-reporter semaphores must be consecutive for base+b indexing, got {} after base {}",
+                nxt,
+                ctx.dir_count_sem_id);
+        }
+        ctx.wave_fwd_sem_id = CreateSemaphore(program, all_cores, 0);
+        ctx.wave_bwd_sem_id = CreateSemaphore(program, all_cores, 0);
     }
-    ctx.wave_fwd_sem_id = CreateSemaphore(program, all_cores, 0);
-    ctx.wave_bwd_sem_id = CreateSemaphore(program, all_cores, 0);
     // Hard-tie the mux sizing to the client split. Getting these out of step does not fail loudly: the
     // mux's forwarder RISC just spins waiting for close() calls that never come.
     // Split each direction's masters across num_links muxes. Must divide evenly: an uneven split would
@@ -1236,7 +1296,35 @@ AllGatherRegimeAMatmulAsyncProgramFactory::create_at(
             operation_attributes.tp,
             ttnn::ccl::get_linearized_index_from_physical_coord(
                 in0, mesh_coordinate, operation_attributes.cluster_axis),
-            operation_attributes.topology_is_ring);
+            operation_attributes.topology_is_ring,
+            // BALANCED BIDIRECTIONAL delivery (spec appendix A), opt-in via TT_AGMM_DIRECT_L1_BALANCED=1.
+            //
+            // It halves the hop depth (tp=4: 3->2, tp=8: 7->4) and it is what the spec asks for, but it is NOT
+            // the default because it measures WORSE on the dependent path. medium/ring/2 links, device
+            // makespan, 48 timed iterations per sample:
+            //
+            //                    full                                     nowait          stall
+            //   tp=4 parity      120.19                                   101.26          18.9
+            //   tp=4 balanced    120.16  (=, within noise)                 99.89 (-1.4)   20.3
+            //   tp=8 parity      136.4   median of 136.1/140.6/136.6/134.8 104.34          31.8
+            //   tp=8 balanced    141.6   median of 141.0/138.4/141.6/142.1/141.9
+            //                                                             101.83 (-2.5)   39.2
+            //
+            // tp=8 needed REPEATED INTERLEAVED sampling to call: between-process spread reaches 5 us, and a
+            // single confirmation pair came out reversed (default 140.6 vs balanced 138.4) before four more
+            // samples separated them cleanly. Do not re-decide this from one run each.
+            //
+            // Consistent in both directions: balanced makes the FABRIC cheaper (nowait improves at both tp)
+            // and the STALL worse. Depth buys latency, but total link bytes are unchanged -- every stripe
+            // still crosses tp-1 hops either way -- so on a shape that is NoC-occupancy-bound there is no
+            // throughput to win, while the arrival pattern gets burstier: balanced delivers 2K/tp per wave
+            // from both neighbours at once instead of K/tp, concentrating ingress against the on-chip ring.
+            // That is the same mechanism that made the deferred fabric drain worse.
+            //
+            // Kept because it is correct (32/40, identical to the default) and is expected to win once the
+            // dependency stall is addressed by per-wave rings, at which point the burstiness stops gating.
+            // Re-measure it then before adopting.
+            std::getenv("TT_AGMM_DIRECT_L1_BALANCED") != nullptr);
         // ABLATE_NOGATHER: strip the fabric out of the plan rather than out of the kernel. Clearing the send
         // flags here means the client counts below come out 0, so NO mux is deployed, no client block is
         // appended to the writer args, and the kernel's existing `send_fwd || send_bwd` guard skips the
