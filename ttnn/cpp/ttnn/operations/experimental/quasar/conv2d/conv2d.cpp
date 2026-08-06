@@ -961,6 +961,35 @@ Result conv2d_L1(
             std::optional<ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig> mm_pc = std::nullopt;
             std::optional<MemoryConfig> mm_mc = std::nullopt;
             if (input_tensor_post_tm.is_sharded()) {
+                // The halo output is HEIGHT_SHARDED ROW_MAJOR with a non-tile-aligned per-core height (e.g. the
+                // 49-row downsample lands a 119-row shard). A TILE tensor's shard must be 32-aligned, so tilizing
+                // it directly FATALs. NORMALIZE it: round-trip through INTERLEAVED (drops the awkward shard),
+                // to_layout tilizes + pads the logical M to a tile multiple, then reshard HEIGHT_SHARDED with a
+                // tile-aligned per-core height over the halo output's cores. Derive the matmul config from the
+                // clean activation afterward.
+                const auto& halo_ss = input_tensor_post_tm.memory_config().shard_spec().value();
+                const auto halo_bb = halo_ss.grid.bounding_box();
+                const CoreCoord act_grid = {
+                    halo_bb.end_coord.x - halo_bb.start_coord.x + 1, halo_bb.end_coord.y - halo_bb.start_coord.y + 1};
+                const uint32_t act_cores = halo_ss.grid.num_cores();
+
+                input_tensor_post_tm = ttnn::operations::experimental::quasar::to_memory_config(
+                    input_tensor_post_tm, ttnn::DRAM_MEMORY_CONFIG, std::nullopt);
+                input_tensor_post_tm =
+                    ttnn::operations::experimental::quasar::to_layout(input_tensor_post_tm, Layout::TILE);
+
+                const auto& pshape = input_tensor_post_tm.padded_shape();
+                const uint32_t m_tiles = pshape[2] / tt::constants::TILE_HEIGHT;
+                const uint32_t cin_padded = pshape[3];
+                const uint32_t per_core_m = tt::div_up(m_tiles, act_cores);
+                const tt::tt_metal::MemoryConfig hs_cfg(
+                    TensorMemoryLayout::HEIGHT_SHARDED,
+                    tt::tt_metal::BufferType::L1,
+                    tt::tt_metal::ShardSpec(
+                        halo_ss.grid, {per_core_m * tt::constants::TILE_HEIGHT, cin_padded}, halo_ss.orientation));
+                input_tensor_post_tm = ttnn::operations::experimental::quasar::to_memory_config(
+                    input_tensor_post_tm, hs_cfg, std::nullopt);
+
                 uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
                 mm_pc = determine_matmul_op_config_from_conv_op_config_qsr(
                     opt_conv_op_parallel_config,
@@ -969,7 +998,7 @@ Result conv2d_L1(
                     conv_config.activation,
                     parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                     num_cores_c);
-                mm_mc = conv_out_memory_config;
+                mm_mc = std::nullopt;  // let matmul derive the output shard from the (clean) HS config
                 const uint32_t full_k_mm = full_inner_dim_k_ntiles;  // 1x1: = in_ch_padded/32
                 auto kspill_in0_bw = [&](uint32_t per_core_n) -> uint32_t {
                     constexpr uint32_t kSingleBlockFitTiles = 512;
@@ -983,39 +1012,23 @@ Result conv2d_L1(
                     }
                     return k_blk;
                 };
-                // The conv parallel config's grid can exceed the emulator's core count for the small
-                // stride-subsampled output (e.g. a 49-row downsample gets a 7-core conv grid), but the halo
-                // output is sharded over the ACTUAL available cores. Derive the matmul grid + per_core_M from
-                // that shard so the matmul doesn't request more cores than exist.
-                const auto& act_ss = input_tensor_post_tm.memory_config().shard_spec().value();
-                const auto act_bb = act_ss.grid.bounding_box();
-                const CoreCoord act_grid = {
-                    act_bb.end_coord.x - act_bb.start_coord.x + 1, act_bb.end_coord.y - act_bb.start_coord.y + 1};
-                const uint32_t per_core_m_act = tt::div_up(act_ss.shape[0], tt::constants::TILE_HEIGHT);
                 if (auto* c1 = std::get_if<
                         ttnn::operations::experimental::quasar::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                         &mm_pc.value())) {
                     c1->in0_block_w = kspill_in0_bw(c1->per_core_N);
                     c1->compute_with_storage_grid_size = act_grid;
-                    c1->per_core_M = per_core_m_act;
-                    c1->out_block_h = per_core_m_act;
+                    c1->per_core_M = per_core_m;
+                    c1->out_block_h = per_core_m;
                 } else if (
                     auto* c2 = std::get_if<
                         ttnn::operations::experimental::quasar::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
                         &mm_pc.value())) {
                     c2->in0_block_w = kspill_in0_bw(c2->per_core_N);
                     c2->compute_with_storage_grid_size = act_grid;
-                    c2->per_core_M = per_core_m_act;
-                    c2->out_block_h = per_core_m_act;
+                    c2->per_core_M = per_core_m;
+                    c2->out_block_h = per_core_m;
                 }
             }
-            // matmul::linear requires TILE layout; the halo output is HEIGHT_SHARDED ROW_MAJOR with a per-core
-            // height that need not be tile-aligned (e.g. the 49-row downsample lands a 119-row shard). Use quasar
-            // to_layout directly (pad + tilize, 119 -> 128) rather than tilize_with_optional_deallocation_qsr,
-            // whose padding-detection (conv_act_requires_tile_padding_qsr) builds a TILE TensorSpec from the
-            // non-32-aligned shard and FATALs. to_layout handles exactly this HS-RM non-tile-multiple case.
-            input_tensor_post_tm =
-                ttnn::operations::experimental::quasar::to_layout(input_tensor_post_tm, Layout::TILE);
             ttnn::Tensor mm_out = ttnn::operations::experimental::quasar::matmul::linear(
                 input_tensor_post_tm,
                 weight_tensor_on_device,
