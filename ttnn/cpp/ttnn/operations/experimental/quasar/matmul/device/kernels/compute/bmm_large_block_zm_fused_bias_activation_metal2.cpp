@@ -50,7 +50,15 @@
 // the TEN-4746 trap point. All other DPRINTs (pre-existing MMC* + got_in/acq/reload/mmpost) become no-ops.
 #undef DPRINT
 #define DPRINT(...) ((void)0)
-#define MMPRE(...) DEVICE_PRINT(__VA_ARGS__)
+// [#48552 DIAG] CONFIRMATION: ALL prints off (MMPRE no-op). Instead insert a REAL RISC nop-burst
+// (MMSTALL) at the two bare mm_partials_cb DFB-adjacency points (~419 push_back->reserve_back on PACK,
+// ~492 push_back->wait_front). If this PASSES with all DPRINT off, the root cause is confirmed to be
+// back-to-back DFB API calls on mm_partials_cb with no instruction between (TEN-4746 class), NOT a print.
+#define MMPRE(...) ((void)0)
+#define MMSTALL()                                                         \
+    do {                                                                  \
+        for (volatile int _mm = 0; _mm < 256; ++_mm) asm volatile("nop"); \
+    } while (0)
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
@@ -416,7 +424,7 @@ void kernel_main() {
                             }
 
 #endif  // SKIP_COMPUTE
-                            MMPRE("MMC sb{} mmdone\n", in0_subblock);  // [#48552 DIAG] unscoped, enabled for bisect
+                            MMSTALL();  // [#48552 DIAG] real RISC nop-burst at push_back->reserve_back adjacency
 
                             if (last_out) {
                                 tile_regs_commit();
@@ -489,7 +497,7 @@ void kernel_main() {
                         }
                         in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
-                    DPRINT("MMC pack blk={}\n", block);  // [#48552 DIAG] back to no-op for bisect
+                    MMSTALL();  // [#48552 DIAG] real RISC nop-burst at push_back->wait_front adjacency
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
