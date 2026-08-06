@@ -346,10 +346,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
-        _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
 
-        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
-        TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
+        if constexpr (RV_WHOLE_TILE)
+        {
+            // Whole-tile untilize uses untilize=1 + inc_mode=1: HW derives the L1 address from the
+            // buffer base + the tile/face counters + the untilize Z-strides, so it needs the untilize
+            // init and freshly-zeroed counters. Reset BOTH the tile and face selectors (the untilize
+            // MOPs drive TILE_SEL for the tile index and FACE_SEL for the face/row offset) so a stale
+            // tile index left by a prior op cannot offset the output.
+            _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
+            TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, 0);
+            TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, 0);
+            TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
+            TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, 0);
+        }
+        // Narrow mode uses RV_PACR tile mode (untilize=0, inc_mode=0) with raw GPR0 addressing, so it
+        // needs neither the untilize Z-strides nor the face/tile counters — nothing to configure here.
         PROFILER_SYNC();
     }
     {
