@@ -279,6 +279,11 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_id);
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    // [#48552 DIAG - REVERT AFTER] Early return right after init: skips ALL CB/DFB calls + the entire matmul loop.
+    // If TILE_COUNTERS 0x10000 STILL faults with this in place (and both DMs short-circuited) -> the faulting
+    // tile-counter op is in compute_kernel_hw_startup / matmul_block_init (the tile-counter descriptor setup),
+    // not any CB op or loop body. If it runs clean (no fault) -> the fault is later in the loop.
+    return;
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid

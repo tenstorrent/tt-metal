@@ -44,6 +44,7 @@
 
 void kernel_main() {
     DPRINT("IN0 start\n");  // DEBUG: matmul layer3 hang
+    return;  // [#48552 DIAG - REVERT AFTER] short-circuit the in0 reader: do nothing, to isolate the compute fault.
     uint32_t rt_args_idx = 0;
     // in0 tensor args (in0_tensor_addr is now the tensor::in0 binding)
     uint32_t in0_tensor_start_tile_id = get_arg(args::in0_tensor_start_tile_id);

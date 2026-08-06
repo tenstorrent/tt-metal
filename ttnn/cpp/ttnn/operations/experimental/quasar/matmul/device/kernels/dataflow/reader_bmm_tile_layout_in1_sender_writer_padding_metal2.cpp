@@ -33,6 +33,7 @@
 
 void kernel_main() {
     DPRINT("WSM enter\n");  // DEBUG: matmul pre-kernel_main confirmation (remove after)
+    return;  // [#48552 DIAG - REVERT AFTER] short-circuit the in1 reader/writer: do nothing, isolate compute fault.
     // READER
     uint32_t rt_args_idx = 0;
     // in1 tensor args (in1_tensor_addr is now the tensor::in1 binding)
