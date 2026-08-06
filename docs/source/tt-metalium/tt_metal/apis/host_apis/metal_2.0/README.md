@@ -27,8 +27,6 @@ forthcoming) — over a `shared/` pool of reference docs the phases draw on.
     - `cb_dfb_quasar_audit_helper.md` — **standalone device-side** CB/DFB kernel audit
       (per-op buffer portability report for Quasar; classifies CBs **or** already-ported DFBs;
       no host-audit prerequisite). The analysis `quasar_audit.md` delegates to.
-    - `temp_cb_dfb_reference_info.md` — *stub*; content absorbed into
-      `cb_dfb_quasar_audit_helper.md` (§ Sync-free and single-ended). Safe to delete.
   - **[`ai/port/`](ai/port/)** — the port procedures.
     - `metal2_port.md` — the Metal 2.0 port procedure itself.
   - **[`ai/shared/`](ai/shared/)** — cross-cutting reference, drawn on by both the audits and the recipes.
