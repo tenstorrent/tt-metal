@@ -295,7 +295,7 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                DPRINT("MMC bhbw {} {}\n", bh, bw);  // DEBUG: stem conv1 Program-B hang
+                MMPRE("MMC bhbw {} {}\n", bh, bw);  // [#48552 DIAG] unscoped, enabled for bisect
                 bool enable_reload = false;
 
 #ifdef PACK_RELU
@@ -361,7 +361,7 @@ void kernel_main() {
                             const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
-                            DPRINT("MMC sb{} preacq\n", in0_subblock);  // DEBUG #48552 subblock stall localize
+                            MMPRE("MMC sb{} preacq\n", in0_subblock);  // [#48552 DIAG] unscoped, enabled for bisect
                             tile_regs_acquire();
                             UNPACK(MMPRE(
                                 "U acq sb={},{}\n",
