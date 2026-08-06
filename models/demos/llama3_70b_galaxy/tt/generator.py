@@ -1532,8 +1532,13 @@ class Generator(WarmupForwardMixin):
                 idx for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist()) if int(pos) >= 0
             ]
 
-        if reload_sampling_params and sampling_params is not None:
+        if sampling_params is not None and (reload_sampling_params or reset_sampling_state):
+            # The params upload and the seed reset below both index by device slot, so pad
+            # to max_batch_size before either runs: a request-length seed list would leave
+            # the higher slots looking unseeded and overwrite their live seeds with None.
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+
+        if reload_sampling_params and sampling_params is not None:
             if active_seed_slots is not None:
                 seed_values = _as_list(getattr(sampling_params, "seed", None))
                 has_active_seed = any(
