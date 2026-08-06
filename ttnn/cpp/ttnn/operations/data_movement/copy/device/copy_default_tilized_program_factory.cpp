@@ -26,7 +26,10 @@ constexpr const char* KERNEL_READER_INTERLEAVED =
     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
 constexpr const char* KERNEL_WRITER_INTERLEAVED =
     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-constexpr const char* KERNEL_COMPUTE_ELTWISE_COPY =
+// Distinct from copy_same_memory_config_program_factory.cpp's same-purpose constant: that one names
+// the shared kernel, this one the sharded copy's. The two sit in anonymous namespaces, which a unity
+// build merges, so the names must differ.
+constexpr const char* KERNEL_COMPUTE_ELTWISE_COPY_SHARDED =
     "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy.cpp";
 
 }  // namespace
@@ -126,7 +129,7 @@ ProgramDescriptor CopyDeviceOperation::DefaultTilized::create_descriptor(
     KernelDescriptor compute_desc;
     const bool use_compute = convert_df;
     if (use_compute) {
-        compute_desc.kernel_source = KERNEL_COMPUTE_ELTWISE_COPY;
+        compute_desc.kernel_source = KERNEL_COMPUTE_ELTWISE_COPY_SHARDED;
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = all_cores;
         compute_desc.compile_time_args = {};
