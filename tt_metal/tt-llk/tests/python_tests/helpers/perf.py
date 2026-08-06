@@ -681,6 +681,23 @@ class PerfConfig(TestConfig):
             if not stats_df.empty:
                 results.append(stats_df)
 
+            if not variant_counter_results and TestConfig.ENABLE_PERF_COUNTERS:
+                # Counters were requested but no zone returned any. The usual cause is a kernel whose
+                # zones use ZONE_SCOPED instead of START_PERF_MEASURE: only START_PERF_MEASURE
+                # instantiates perf_counter_scoped, which is the sole path that arms and freezes the
+                # counters, so nothing ever writes SYNC_ZONE_COMPLETE and every zone reads back unused.
+                # That produced counter-free CSVs and WC-vs-NC deltas of exactly zero, which then read
+                # as "no overhead" rather than "not measured".
+                logger.warning(
+                    "{} {}: --enable-perf-counters is set but no zone returned counter data for "
+                    "run type {}. The kernel is probably not instrumented with START_PERF_MEASURE, "
+                    "so counter and metric columns will be absent and any WC-vs-NC comparison for "
+                    "this test is vacuous.",
+                    self.test_name,
+                    self.variant_id,
+                    run_type.name,
+                )
+
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)
 

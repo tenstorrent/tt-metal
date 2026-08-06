@@ -851,7 +851,7 @@ def counter_report(request, worker_id):
 
     PerfConfig.COUNTER_REPORT = None
 
-    if TestConfig.MODE == TestMode.PRODUCE:
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         return
 
     if PerfConfig.TEST_COUNTER == 0:

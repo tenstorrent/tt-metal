@@ -100,6 +100,5 @@ METRIC_BASES = frozenset(
         "pack_utilization_pct",
         "pack_dest_eff_pct",
         "fidelity_stall_pct",
-        "math_src_stall_pct",
     }
 )

@@ -100,6 +100,26 @@ def _load_counter_names(arch: ChipArchitecture) -> dict:
     return _parse_hw_counters(header.read_text())
 
 
+# The L1 group names that come out of hw_counters.h are UNVERIFIED and several are wrong. Only eight
+# physical L1 counters exist, and MUX_CTRL[6:4] routes one group of eight client interfaces into them
+# while they COUNT rather than when they are read, so a run observes group g = interfaces 8g..8g+7 and
+# the names are only labels on those indices.
+#
+# What measurement does establish, reproducibly, is the driving thread of each active interface, taken
+# from the isolated run types: an interface busy only in UNPACK_ISOLATE belongs to unpack, only in
+# PACK_ISOLATE to pack. On perf_matmul TILE_LOOP, by grant count:
+#   unpack  group0 slots 0 (163840) and 1 (32768); group1 slots 1-3 (32768 each);
+#           group2 slots 0-3 (32768 each); group4 slots 3-7 (163840 each)
+#   pack    group1 slot 0 (5120); group3 slots 4-5 (5120) and 6 (1280); group4 slot 2 (5120)
+# Grants are exactly conserved between ISOLATE and L1_CONGESTION, so contention shows up only as
+# request-asserted-minus-granted cycles, never as a change in grant count.
+#
+# So group2's "NOC_RING2_*" columns are unpack traffic and group1's "RISC_CORE" is pack traffic. Do not
+# read these names as client functions. They are deliberately not renamed yet: one RTL reading put
+# interfaces 35-39 as tied off, which would make group4 slots 3-7 dead, but those slots scale 160x with
+# tile count (1024 -> 163840 grants) while the window scales only 73x, so they carry real per-tile
+# traffic. The likeliest explanation is that USE_4_NOCS comes from the build rather than from RTL
+# source. Settle that before renaming any column.
 # Active-arch table: {bank: {id: name}} with L1 keyed by (id, mux).
 COUNTER_NAMES = _load_counter_names(get_chip_architecture())
 

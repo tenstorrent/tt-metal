@@ -27,15 +27,19 @@ All metrics are bounded 0-100% unless noted otherwise.
     % of time the pack thread was waiting on a semaphore > 0.
 
 == Unpacker Metrics (TDMA_UNPACK bank) ==
-- unpack0_write_efficiency: SRCA_WRITE / UNPACK0_BUSY_THREAD0
-    Fraction of unpacker0 busy cycles actually writing to srcA.
-- unpack1_write_efficiency: SRCB_WRITE / UNPACK1_BUSY_THREAD0
-    Fraction of unpacker1 busy cycles actually writing to srcB.
+- unpack0_write_efficiency: SRCA_WRITE_ACTUAL / UNPACK0_BUSY_THREAD0
+- unpack1_write_efficiency: SRCB_WRITE_ACTUAL / UNPACK1_BUSY_THREAD0
 - unpack_write_efficiency: average of unpack0 + unpack1.
+    CAUTION: the two numerators are not the same quantity. SRCA_WRITE_ACTUAL gates on the srcA write
+    PORT being available, SRCB_WRITE_ACTUAL gates on srcB write READY; a write needs both, so neither
+    is an "actual write" count and the two are not comparable. The average of the pair is therefore
+    the mean of two unlike quantities. Compare each against itself across variants, never to each
+    other. (The misnomer comes from tools/profiler/perf_counters.hpp.)
 - unpack_to_math_flow0: SRCA_WRITE_AVAILABLE / UNPACK0_BUSY_THREAD0
-    srcA buffer availability during unpack — high = no backpressure from math.
 - unpack_to_math_flow1: SRCB_WRITE_AVAILABLE / UNPACK1_BUSY_THREAD0
-    srcB buffer availability during unpack.
+    CAUTION: despite the name these are write DUTY CYCLES, not backpressure. The numerators are bare
+    write-enable counts, so a low value means the unpacker was not writing, which is not the same as
+    math refusing data.
 - unpack_to_math_flow: average of flow0 + flow1.
 
 == Packer Metrics (TDMA_PACK bank) ==
@@ -47,8 +51,10 @@ All metrics are bounded 0-100% unless noted otherwise.
 == Math Pipeline Stalls (TDMA_UNPACK bank — same bank, reliable) ==
 - fidelity_stall_rate: FIDELITY_PHASE_STALLS / MATH_INSTRN_AVAILABLE
     % of math-available cycles stalled by HiFi fidelity phases. 0% at LoFi.
-- math_src_stall_rate: 1 - (MATH_NOT_BLOCKED_BY_SRC / MATH_INSTRN_AVAILABLE)
-    % of math-available cycles where source data was NOT ready.
+  (math_src_stall_rate was removed: MATH_SRC_DATA_READY is gated on `dec_instr_alu` while
+   MATH_INSTRN_AVAILABLE counts the whole math pipe, so the two are not the same population and
+   1 - their ratio is not a stall fraction. It read a constant 100.0 on every INIT row, where there
+   are no ALU instructions. Blackhole exposes no ALU-gated denominator, so it cannot be repaired.)
 """
 
 import pandas as pd
@@ -89,11 +95,6 @@ def _safe_div(numerator: float, denominator: float) -> float | None:
 def _pct(value: float | None) -> float | None:
     """Convert ratio to percentage."""
     return (value * 100.0) if value is not None else None
-
-
-def _one_minus(value: float | None) -> float | None:
-    """Compute 1.0 - value, for inverting 'not stalled' into 'stalled'."""
-    return (1.0 - value) if value is not None else None
 
 
 def _avg_pair(a: float | None, b: float | None) -> float | None:
@@ -165,11 +166,8 @@ def _compute_single(df: pd.DataFrame) -> dict:
     # ── Math Pipeline Stalls (TDMA_UNPACK bank only — same bank, reliable) ──
     math_available = _avg_count(df, "TDMA_UNPACK", "MATH_INSTRN_AVAILABLE")
     fidelity_stalls = _avg_count(df, "TDMA_UNPACK", "MATH_FIDELITY_STALL")
-    math_not_blocked = _avg_count(df, "TDMA_UNPACK", "MATH_SRC_DATA_READY")
 
     fidelity_stall_rate = _safe_div(fidelity_stalls, math_available)
-    # Math src data stall: fraction of math-available cycles where src data was NOT ready
-    math_src_stall_rate = _one_minus(_safe_div(math_not_blocked, math_available))
 
     return {
         # Compute utilization
@@ -195,7 +193,6 @@ def _compute_single(df: pd.DataFrame) -> dict:
         "pack_dest_eff_pct": _pct(pack_dest_eff),
         # Math pipeline stalls
         "fidelity_stall_pct": _pct(fidelity_stall_rate),
-        "math_src_stall_pct": _pct(math_src_stall_rate),
     }
 
 
@@ -440,7 +437,6 @@ def _print_detail(metrics: dict) -> None:
         "  MATH PIPELINE STALLS",
         sep,
         f"  {'Fidelity Phase Stall:':<40} {fmt(m.get('fidelity_stall_pct')):>12}",
-        f"  {'Math Src Data Stall:':<40} {fmt(m.get('math_src_stall_pct')):>12}",
     ]
     logger.info("\n".join(lines))
 
