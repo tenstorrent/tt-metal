@@ -37,6 +37,9 @@
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp"
 #endif
+// Diagnostic TX/RX packet counters. Outside the FABRIC_2D guard: the counter call sites
+// are unconditional, so a 1D build must see this too.
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_link_debug_counters.hpp"
 
 #include <array>
 #include <cstddef>
@@ -1681,10 +1684,9 @@ FORCE_INLINE
     if (can_send) {
         did_something = true;
         progress = true;
-        {  // FABRIC LOSS COUNTER: packet pushed onto the link
-            volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
-            dbg[0]++;
-        }
+        // FABRIC LINK COUNTER: packet pushed onto the link. Past the TXQ-busy check
+        // above, so this means "on the wire", not merely "queued".
+        tt::tt_fabric::debug::fabric_link_counters()->tx++;
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
@@ -1828,10 +1830,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             // currently only support processing one packet at a time, so we only decrement by 1
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-            {  // FABRIC LOSS COUNTER: packet consumed from the ethernet link
-                volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
-                dbg[1]++;
-            }
+            // FABRIC LINK COUNTER: packet consumed from the ethernet link (first-level-ack path).
+            tt::tt_fabric::debug::fabric_link_counters()->rx++;
 
             uint8_t src_ch_id;
             if constexpr (skip_src_ch_id_update) {
@@ -1940,6 +1940,10 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             if constexpr (!enable_first_level_ack) {
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+                // FABRIC LINK COUNTER: the OTHER consume path. enable_first_level_ack picks
+                // exactly one of the two at compile time, so instrumenting both is what makes
+                // rx correct regardless of how this build is configured.
+                tt::tt_fabric::debug::fabric_link_counters()->rx++;
             }
         }
     }
@@ -2191,16 +2195,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
     size_t did_nothing_count = 0;
-    {  // FABRIC LOSS COUNTERS: zero the scratch once per boot (magic-word guarded),
-        // so counts are cumulative across the run rather than starting from L1 garbage.
-        volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(458256);
-        if (dbg[7] != 0x00C0FFEE) {
-            for (uint32_t i = 0; i < 8; ++i) {
-                dbg[i] = 0;
-            }
-            dbg[7] = 0x00C0FFEE;
-        }
-    }
+    // FABRIC LINK COUNTERS: zero once per boot so counts are cumulative across the run.
+    tt::tt_fabric::debug::fabric_link_counters_init();
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
@@ -2275,6 +2271,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif
 
     uint16_t fabric_heartbeat_counter = 0;
+    // Dumps TX/RX to the watcher ring buffer from the inner router loop. Holds the
+    // last-pushed values, so it must outlive execute_main_loop (captured by reference).
+    tt::tt_fabric::debug::FabricLinkCountersRbDumper fabric_link_counters_rb_dumper;
 #if defined(ARCH_BLACKHOLE)
     constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
 #else
@@ -2622,6 +2621,15 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
             if ((++fabric_heartbeat_counter & 0x3F) == 0) {
                 *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
+                // FABRIC LINK COUNTERS: piggyback on the heartbeat's 1-in-64 rate so the
+                // dumper's own check is off the hot path; it then rate-limits again by packet
+                // count. ERISC0 only -- both ERISCs run this loop and share one watcher
+                // mailbox, and push_to_ring_buffer's index bump is not atomic, so letting
+                // both push would corrupt the buffer. ERISC0 reads both counters out of
+                // shared L1, so nothing is lost by dumping from one side.
+                if constexpr (MY_ERISC_ID == 0) {
+                    fabric_link_counters_rb_dumper.maybe_dump();
+                }
             }
 
             if constexpr (enable_context_switch) {
