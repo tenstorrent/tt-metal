@@ -2809,11 +2809,20 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TT_FATAL(
             halo_transport_coord.has_value() && halo_destination_coord.has_value(),
             "Sliding attention requires a next-device route");
+        // send_to_next_start_Ht is linear in the chunk index, so on the scalar path the host relocates
+        // the halo page ranges every dispatch (apply_ring_joint_scalar_runtime_args). A captured trace
+        // never replays that, so on the metadata path hand the halo kernels the same kv_actual_isl the
+        // rest of the op reads and let them derive the start themselves; the value above then serves as
+        // the baked origin they shift away from.
         const RingAttentionNeighborHaloConfig neighbor_halo{
             .send_to_next_start_Ht = chunked_sliding_halo_layout.send_tail_start_tile(device_index),
             .send_to_next_count_Ht = chunked_sliding_halo_layout.halo_tile_rows,
             .send_backward = linear_wrap_halo,
             .unicast_hops = linear_wrap_halo ? ring_size - 1 : 1,
+            .kv_actual_isl = tensor_args.has_metadata() ? &tensor_args.kv_actual_isl.value() : nullptr,
+            .q_local_tile_rows = chunked_sliding_halo_layout.q_local_tile_rows,
+            .halo_tile_rows = chunked_sliding_halo_layout.halo_tile_rows,
+            .source_device = device_index,
         };
         log_debug(
             tt::LogOp,

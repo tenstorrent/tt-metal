@@ -219,6 +219,11 @@ void ring_attention_neighbor_halo_exchange_helper(
     for (const auto& input : input_tensors) {
         tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_kernel.compile_time_args);
     }
+    // Trace-safe halo relocation, appended after the per-input accessors so existing indices hold.
+    reader_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
+    if (halo.derives_start_on_device()) {
+        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->buffer()).append_to(reader_kernel.compile_time_args);
+    }
 
     KernelDescriptor writer_kernel{};
     writer_kernel.kernel_source =
@@ -242,6 +247,10 @@ void ring_attention_neighbor_halo_exchange_helper(
     }
     for (const auto& output : output_tensors) {
         tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_kernel.compile_time_args);
+    }
+    writer_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
+    if (halo.derives_start_on_device()) {
+        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->buffer()).append_to(writer_kernel.compile_time_args);
     }
 
     auto halo_signaler = fused_op_signaler;
@@ -273,6 +282,8 @@ void ring_attention_neighbor_halo_exchange_helper(
         writer_args.push_back(static_cast<uint32_t>(
             semaphores.front().address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
 
+        std::vector<uint32_t> halo_input_Wt;
+        halo_input_Wt.reserve(num_inputs);
         for (uint32_t input = 0; input < num_inputs; ++input) {
             const auto input_shape = input_tensors[input].padded_shape();
             const auto output_shape = output_tensors[input].padded_shape();
@@ -339,6 +350,29 @@ void ring_attention_neighbor_halo_exchange_helper(
             writer_args.push_back(input_tile_start);
             writer_args.push_back(input_tile_end);
             writer_args.push_back(range_start_page);
+            halo_input_Wt.push_back(input_Wt);
+        }
+
+        // Metadata block for the on-device halo relocation. Sits between the per-input descriptors and
+        // the accessor args in BOTH kernels, so the host relocation's field offsets are unaffected.
+        if (halo.derives_start_on_device()) {
+            const auto append_halo_meta = [&](KernelDescriptor::RTArgList& args, bool with_ring_size) {
+                args.push_back(static_cast<uint32_t>(
+                    halo.kv_actual_isl->buffer()->address()));  // smuggled-rta-ok: metadata tensor addr
+                args.push_back(halo.q_local_tile_rows);
+                args.push_back(halo.halo_tile_rows);
+                args.push_back(halo.source_device);
+                args.push_back(halo.send_to_next_start_Ht);
+                if (with_ring_size) {
+                    args.push_back(ring_size);
+                }
+                for (const uint32_t wt : halo_input_Wt) {
+                    args.push_back(wt);
+                }
+            };
+            // The reader has ring_size as a compile-time arg; the writer does not.
+            append_halo_meta(reader_args, /*with_ring_size=*/false);
+            append_halo_meta(writer_args, /*with_ring_size=*/true);
         }
         for (const auto& input : input_tensors) {
             reader_args.push_back(input.buffer());
