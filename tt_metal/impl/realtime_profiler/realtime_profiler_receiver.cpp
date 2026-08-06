@@ -97,19 +97,11 @@ constexpr auto kDrainGapReportThreshold = std::chrono::milliseconds(5);
 // contention; only a device that answers none of them has actually stopped serving its counter.
 constexpr uint32_t kResyncFailuresBeforeStalled = 16;
 
-// Records a device may hold staged, waiting for the probe that closes the interval they ran in. Fixed and preallocated,
-// because the drain thread must never touch the allocator.
-//
-// Sized to the FIFO, not to the interval: the FIFO is the scarce buffer -- once it fills the device backpressures onto
-// its L1 ring and records are lost on device -- while staging is ordinary host memory. As deep as the FIFO, the FIFO
-// can always be emptied in full, so running out of staging headroom can only mean the whole FIFO is already absorbed
-// and there is nothing left to drain. Anything shallower makes headroom a reason the drain stops with pages still
-// queued. One page decodes to at most one record, so the FIFO can hold no more than fifo_pages records; with room for
-// one more read on top, staging absorbs everything queued plus whatever this pass reads and push_back can never
-// reallocate. Sized this way so that draining the FIFO never waits for records to be published: the FIFO is what the
-// device backpressures onto, and making its drain depend on publication -- which waits on a probe -- is what lets a
-// delay in publication stall the device itself.
-constexpr size_t kStagedCapacityRecords = RealtimeProfilerRuntimeSizes::fifo_pages + kMaxSocketPagesPerRead;
+// How often a device with nothing to drain is probed anyway. A batch is bracketed by the probe taken after its own read
+// and the one before it, so a busy device needs no cadence at all; this exists only so that the first batch after a
+// quiet period finds a near anchor from milliseconds ago rather than from whenever the workload last stopped, which
+// would put a needlessly wide chord under it. Nothing waits on it -- it buys bound tightness, not progress.
+constexpr auto kIdleProbeInterval = std::chrono::milliseconds(5);
 
 constexpr size_t kMaxConsumerBatchPerDevice =
     1u << 15;                                      // records one callback may be handed at a time, per attached device
@@ -442,19 +434,9 @@ RealtimeProfilerReceiver::DeviceState::DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::~DeviceState() = default;
 RealtimeProfilerReceiver::DeviceState::DeviceState(DeviceState&&) noexcept = default;
 
-std::chrono::nanoseconds RealtimeProfilerReceiver::sync_device(
+std::chrono::nanoseconds RealtimeProfilerReceiver::probe_device(
     DeviceState& dev_state, std::chrono::steady_clock::time_point now) {
-    if (now < dev_state.next_poll_at) {
-        return {};
-    }
-    const auto interval = RealtimeProfilerClockSync::sync_interval();
-    // Advanced from the scheduled time, not from `now`, so a device keeps its staggered phase; scheduling off `now`
-    // would let every device converge onto whichever pass ran late and put all the blocking reads in one drain pass.
-    dev_state.next_poll_at += interval;
-    if (dev_state.next_poll_at < now) {
-        dev_state.next_poll_at = now + interval;
-    }
-
+    dev_state.next_idle_probe_at = now + kIdleProbeInterval;
     const auto before = dev_state.clock_sync->cost().busy;
     if (!dev_state.clock_sync->resync()) {
         ++dev_state.consecutive_resync_failures;
@@ -545,86 +527,70 @@ uint32_t RealtimeProfilerReceiver::read_ring_full_wait_count() {
     return peak;
 }
 
-void RealtimeProfilerReceiver::stage_pages(
-    DeviceState& dev_state, std::chrono::steady_clock::time_point now, std::span<const uint32_t> pages) {
+// Decodes what a read returned and publishes it, each record stamped from the secant between the two probes that
+// surround it. Nothing is held back: the probe taken after the read is past every record in it, so the pair a record
+// needs already exists by the time it is decoded.
+bool RealtimeProfilerReceiver::publish_pages(
+    DeviceState& dev_state,
+    std::chrono::steady_clock::time_point now,
+    std::span<const uint32_t> pages,
+    std::vector<ProgramRealtimeRecord>& batch) {
     const size_t num_pages = pages.size() / RealtimeProfilerRuntimeSizes::page_words;
     constexpr uint32_t kEndWord = sizeof(::realtime_profiler_timestamp_t) / sizeof(uint32_t);
-    const uint32_t chip_id = dev_state.chip_id;
     const DataCollector* const data_collector = data_collector_;
-    uint64_t malformed = 0;
+    uint64_t rejected = 0;
+    batch.clear();
+
+    // Records arrive in timestamp order, so one mapping covers a contiguous run of them and is only re-resolved when
+    // the next record passes its far anchor.
+    std::optional<RealtimeProfilerClockSync::ChordMapping> chord;
     for (size_t page = 0; page < num_pages; ++page) {
         const uint32_t* rp = pages.data() + page * RealtimeProfilerRuntimeSizes::page_words;
         const uint64_t start_timestamp = (static_cast<uint64_t>(rp[0]) << 32) | rp[1];
         const uint64_t end_timestamp = (static_cast<uint64_t>(rp[kEndWord]) << 32) | rp[kEndWord + 1];
         if (end_timestamp < start_timestamp) {
-            ++malformed;
+            ++rejected;
             continue;
         }
-        // frequency and clock_sync are left for close_staging: which mapping applies is not known until the anchor on
-        // the far side of this record's interval exists.
-        dev_state.staged.push_back(ProgramRealtimeRecord{
+        if (!chord.has_value() || start_timestamp > chord->batch_through_ticks) {
+            chord = dev_state.clock_sync->place(start_timestamp);
+            // Only with no probe retained at all, so there is no host time to map onto and no later pass that would
+            // help.
+            if (!chord.has_value()) {
+                ++rejected;
+                continue;
+            }
+        }
+        batch.push_back(ProgramRealtimeRecord{
             .runtime_id = rp[2],
-            .chip_id = chip_id,
+            .chip_id = dev_state.chip_id,
             .start_timestamp = start_timestamp,
             .end_timestamp = end_timestamp,
-            .frequency = 0.0,
-            .clock_sync = {},
+            .frequency = chord->frequency,
+            .clock_sync = RealtimeProfilerClockSync::place_on_chord(*chord, start_timestamp),
             .kernel_sources = data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])),
         });
     }
-    if (malformed != 0) {
-        num_malformed_records_.fetch_add(malformed, std::memory_order_relaxed);
+
+    if (rejected != 0) {
+        num_malformed_records_.fetch_add(rejected, std::memory_order_relaxed);
         TT_LOG_WARNING_THROTTLED(
             last_malformed_warn_,
             now,
             kWarnInterval,
-            "[Real-time profiler] Device {} dropped {} record(s) whose end timestamp preceded their start; these were "
-            "not delivered to consumers ({} in total)",
+            "[Real-time profiler] Device {} dropped {} record(s) that could not be mapped -- an end timestamp "
+            "preceding "
+            "its start, or no retained clock probe at all; these were not delivered to consumers ({} in total)",
             dev_state.chip_id,
-            malformed,
+            rejected,
             num_malformed_records_.load(std::memory_order_relaxed));
     }
-}
-
-// Publishes staged records, each stamped from the secant between the two probes that surround it. A record no probe
-// has yet read past stays staged until one does.
-bool RealtimeProfilerReceiver::close_staging(DeviceState& dev_state) {
-    if (dev_state.staged.empty()) {
+    if (batch.empty()) {
         return false;
     }
-
-    size_t ready = 0;
-    while (ready < dev_state.staged.size()) {
-        const ProgramRealtimeRecord& first = dev_state.staged[ready];
-        // Two separate questions: has the clock been read past this record yet, and which probes place its start. Only
-        // the first can hold a record back, and it clears within one sync interval; place() answers whenever this does.
-        const auto covered_through = dev_state.clock_sync->coverage_past(first.end_timestamp);
-        if (!covered_through.has_value()) {
-            break;
-        }
-        const auto chord = dev_state.clock_sync->place(first.start_timestamp);
-        if (!chord.has_value()) {
-            break;
-        }
-
-        // Records are produced in order, so everything this chord places and this coverage completes is contiguous. A
-        // record past the chord's far anchor goes back around for a tighter one.
-        while (ready < dev_state.staged.size() && dev_state.staged[ready].end_timestamp <= *covered_through &&
-               dev_state.staged[ready].start_timestamp <= chord->close_ticks) {
-            dev_state.staged[ready].frequency = chord->frequency;
-            dev_state.staged[ready].clock_sync =
-                RealtimeProfilerClockSync::place_on_chord(*chord, dev_state.staged[ready].start_timestamp);
-            ++ready;
-        }
-    }
-
-    if (ready == 0) {
-        return false;
-    }
-    num_published_records_.fetch_add(ready, std::memory_order_relaxed);
+    num_published_records_.fetch_add(batch.size(), std::memory_order_relaxed);
     num_published_batches_.fetch_add(1, std::memory_order_relaxed);
-    ring_.writer().publish_batch(std::span<const ProgramRealtimeRecord>(dev_state.staged).first(ready));
-    dev_state.staged.erase(dev_state.staged.begin(), dev_state.staged.begin() + static_cast<ptrdiff_t>(ready));
+    ring_.writer().publish_batch(std::span<const ProgramRealtimeRecord>(batch));
     return true;
 }
 
@@ -650,11 +616,8 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
     bring_up_device_clocks();
     // Resized before being cleared, not just reserved: the pages have to be touched here, because a first-touch fault
     // on the drain thread waits on mmap_lock the same way an allocation does.
-    for (DeviceState& dev_state : devices_) {
-        dev_state.staged.resize(kStagedCapacityRecords);
-        dev_state.staged.clear();
-    }
-    stagger_sync_phases();
+    publish_batch_.resize(kMaxSocketPagesPerRead);
+    publish_batch_.clear();
     realtime_profiler_service_->attach_producer(*this);
 
     try {
@@ -844,17 +807,7 @@ void RealtimeProfilerReceiver::bring_up_device_clocks() {
     }
 }
 
-// Spreads the devices' first poll across one sync interval. Each blocking clock read stalls the drain loop, so leaving
-// every device in phase would concentrate a mesh's worth of stalls into one pass instead of one stall per pass.
-void RealtimeProfilerReceiver::stagger_sync_phases() {
-    const auto now = std::chrono::steady_clock::now();
-    for (size_t i = 0; i < devices_.size(); i++) {
-        devices_[i].next_poll_at = now + (RealtimeProfilerClockSync::sync_interval() * static_cast<int64_t>(i)) /
-                                             static_cast<int64_t>(devices_.size());
-    }
-}
-
-uint32_t RealtimeProfilerReceiver::drain_device_pages(
+RealtimeProfilerReceiver::DrainResult RealtimeProfilerReceiver::drain_device_pages(
     DeviceState& dev_state, std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf) {
     uint32_t available = dev_state.socket->pages_available();
     if (available > peak_fifo_pages_.load(std::memory_order_relaxed)) {
@@ -870,36 +823,23 @@ uint32_t RealtimeProfilerReceiver::drain_device_pages(
             available);
     }
     if (available == 0) {
-        return 0;
+        return {};
     }
-    // One page decodes to at most one record, so bounding the read by the staging headroom is what keeps `staged` from
-    // ever growing past the capacity it was given. Pages left behind wait in the FIFO, which is sized for exactly that.
-    // Clamped rather than refused: staging is deep enough that this only binds once publication has stopped entirely,
-    // and reading whatever still fits keeps the FIFO moving even then. Reported because a drain that reads nothing
-    // looks exactly like an idle device.
-    const size_t staged_headroom = kStagedCapacityRecords - dev_state.staged.size();
-    if (staged_headroom < kMaxSocketPagesPerRead) {
-        TT_LOG_WARNING_THROTTLED(
-            last_staging_full_warn_,
-            now,
-            kWarnInterval,
-            "[Real-time profiler] Device {} has {} record(s) staged that could not be published, leaving room for only "
-            "{} more; {} of {} FIFO pages are queued",
-            dev_state.chip_id,
-            dev_state.staged.size(),
-            staged_headroom,
-            available,
-            RealtimeProfilerRuntimeSizes::fifo_pages);
-        if (staged_headroom == 0) {
-            return 0;
-        }
-    }
-    const uint32_t num_pages_to_read =
-        std::min({available, kMaxSocketPagesPerRead, static_cast<uint32_t>(staged_headroom)});
+    const uint32_t num_pages_to_read = std::min(available, kMaxSocketPagesPerRead);
     dev_state.socket->read(page_buf.data(), num_pages_to_read);
-    stage_pages(
-        dev_state, now, std::span(page_buf).first(num_pages_to_read * RealtimeProfilerRuntimeSizes::page_words));
-    return num_pages_to_read;
+
+    // The probe goes here, after the read and before anything is placed: every record this read returned was pushed to
+    // the FIFO before the read, so it completed before the read, so this probe is past all of them, and the previous
+    // one is before them. That is a bracketing pair for the whole batch obtained without waiting for anything, which is
+    // the reason this path has no staging buffer, no publication gate and no deadline in it.
+    pass_sync_busy_ += probe_device(dev_state, now);
+
+    const bool published = publish_pages(
+        dev_state,
+        now,
+        std::span(page_buf).first(num_pages_to_read * RealtimeProfilerRuntimeSizes::page_words),
+        publish_batch_);
+    return {.pages = num_pages_to_read, .published = published};
 }
 
 uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
@@ -964,27 +904,26 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
 uint32_t RealtimeProfilerReceiver::drain_all_devices(
     std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf) {
     uint32_t num_pages = 0;
-    // A close can publish on a pass that drained nothing -- the time cap firing after the workload goes quiet -- and
-    // those records are exactly the last ones of a program, so the wake cannot be gated on pages moving.
     bool published = false;
     pass_sync_busy_ = std::chrono::nanoseconds::zero();
     for (auto& dev_state : devices_) {
-        pass_sync_busy_ += sync_device(dev_state, now);
-        published |= close_staging(dev_state);
         try {
-            const uint32_t drained = drain_device_pages(dev_state, now, page_buf);
-            num_pages += drained;
-            // Only re-read the clock after a drain that actually moved pages: an idle pass is too fast for the
-            // re-read to be worth its cost.
-            if (drained != 0) {
+            const DrainResult drained = drain_device_pages(dev_state, now, page_buf);
+            num_pages += drained.pages;
+            published |= drained.published;
+            if (drained.pages != 0) {
+                // Only re-read the clock after a drain that actually moved pages: an idle pass is too fast for the
+                // re-read to be worth its cost.
                 now = std::chrono::steady_clock::now();
+            } else if (now >= dev_state.next_idle_probe_at) {
+                pass_sync_busy_ += probe_device(dev_state, now);
             }
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal, "[Real-time profiler] Exception draining device {}: {}", dev_state.chip_id, e.what());
         }
     }
-    if (num_pages > 0 || published) {
+    if (published) {
         realtime_profiler_service_->wake_consumers();
     }
     return num_pages;
@@ -1002,18 +941,11 @@ uint64_t RealtimeProfilerReceiver::drain_on_shutdown(std::vector<uint32_t>& page
     uint64_t num_pages_drained = 0;
     uint32_t quiet_rounds = 0;
     while (quiet_rounds < kShutdownDrainQuietRounds && std::chrono::steady_clock::now() < give_up_at) {
-        // Probed every round rather than once at the end: a staged record is not published until a probe has read past
-        // it, and with the drain loop stopped nothing else takes probes.
-        for (DeviceState& dev_state : devices_) {
-            dev_state.clock_sync->resync();
-        }
         const uint32_t num_pages = drain_all_devices(std::chrono::steady_clock::now(), page_buf);
         num_pages_drained += num_pages;
-        // Asked of the socket rather than inferred from num_pages: a drain also reads zero pages when staging has no
-        // headroom, and treating that as quiet would leave the FIFO unread.
         bool outstanding = false;
         for (const DeviceState& dev_state : devices_) {
-            outstanding = outstanding || dev_state.socket->pages_available() != 0 || !dev_state.staged.empty();
+            outstanding = outstanding || dev_state.socket->pages_available() != 0;
         }
         if (num_pages != 0 || outstanding) {
             quiet_rounds = 0;
@@ -1021,16 +953,6 @@ uint64_t RealtimeProfilerReceiver::drain_on_shutdown(std::vector<uint32_t>& page
             quiet_rounds++;
         }
         std::this_thread::sleep_for(kShutdownDrainQuietBackoff);
-    }
-
-    // Nothing probes after this thread stops, so the last records need their far side now.
-    bool published = false;
-    for (auto& dev_state : devices_) {
-        dev_state.clock_sync->resync();
-        published |= close_staging(dev_state);
-    }
-    if (published) {
-        realtime_profiler_service_->wake_consumers();
     }
 
     for (const DeviceState& dev_state : devices_) {

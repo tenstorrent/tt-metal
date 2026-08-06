@@ -65,7 +65,7 @@ public:
     uint32_t host_fifo_capacity_pages() const;
     uint64_t num_published_records() const override { return num_published_records_.load(std::memory_order_relaxed); }
     uint64_t num_published_batches() const { return num_published_batches_.load(std::memory_order_relaxed); }
-    // Records dropped before publication because their end timestamp preceded their start
+    // Records rejected at decode: an end timestamp before its start, or no retained clock probe to map onto
     uint64_t num_malformed_records() const { return num_malformed_records_.load(std::memory_order_relaxed); }
     // Blocking device L1 read across every chip; not for a latency-sensitive path.
     uint32_t read_ring_full_wait_count();
@@ -83,13 +83,10 @@ private:
         RealtimeProfilerCoreL1Addrs core_l1;
         bool fifo_reached_capacity = false;
         uint32_t consecutive_resync_failures = 0;
-        std::chrono::steady_clock::time_point next_poll_at{};
+        // When this device is due a probe with no records to bracket. See probe_device.
+        std::chrono::steady_clock::time_point next_idle_probe_at{};
         // Held by pointer so DeviceState stays movable: the sync object carries atomics and cannot be.
         std::unique_ptr<RealtimeProfilerClockSync> clock_sync;
-
-        // Records decoded but not yet published, waiting for the anchor that closes the interval they ran in. Their
-        // host-facing fields are unset until then.
-        std::vector<ProgramRealtimeRecord> staged;
 
         DeviceState();
         ~DeviceState();
@@ -106,19 +103,26 @@ private:
         const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id);
     void bring_up_device_clocks();
 
-    // Called on the drain loop immediately before draining dev_state, so a device's sync interval is bounded by its
-    // own drain rather than by every other device's. Returns the time the clock read blocked for, zero when none was
-    // due.
-    std::chrono::nanoseconds sync_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now);
+    // Takes one probe and returns what the clock read blocked for. Called after every non-empty read, because that
+    // probe is what brackets the batch just read, and on kIdleProbeInterval otherwise so that the first batch after a
+    // quiet period has a recent near anchor instead of whatever the last burst left behind.
+    std::chrono::nanoseconds probe_device(DeviceState& dev_state, std::chrono::steady_clock::time_point now);
     // Called from report_sync_cost, not from the drain loop: a device that has stopped answering is reported at
     // most once per warning interval, so scanning every device for it on every pass is work the drain never needs.
     void report_stalled_syncs(std::chrono::steady_clock::time_point now);
     void report_sync_cost(std::chrono::steady_clock::time_point now);
-    void stagger_sync_phases();
-    void stage_pages(
-        DeviceState& dev_state, std::chrono::steady_clock::time_point now, std::span<const uint32_t> pages);
-    // True when records were published, so the caller knows to wake consumers.
-    bool close_staging(DeviceState& dev_state);
+    // Decodes `pages` and publishes them, placed against the probe history. True when anything was published, so the
+    // caller knows to wake consumers. `batch` is the caller's scratch, reused so this never allocates.
+    bool publish_pages(
+        DeviceState& dev_state,
+        std::chrono::steady_clock::time_point now,
+        std::span<const uint32_t> pages,
+        std::vector<ProgramRealtimeRecord>& batch);
+
+    struct DrainResult {
+        uint32_t pages = 0;
+        bool published = false;
+    };
 
     // Receiver thread body.
     void run();
@@ -126,7 +130,8 @@ private:
     uint64_t drain_on_shutdown(std::vector<uint32_t>& page_buf);
     // `now` is re-read as devices are drained, so a device late in a long pass isn't gated on a stale timestamp.
     uint32_t drain_all_devices(std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf);
-    uint32_t drain_device_pages(
+    // Reads, probes, then publishes -- in that order, which is what makes the batch's bracketing pair exist.
+    DrainResult drain_device_pages(
         DeviceState& dev_state, std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf);
 
     // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default
@@ -146,10 +151,13 @@ private:
     std::chrono::steady_clock::time_point last_drain_gap_warn_{};
     std::atomic<uint64_t> num_published_records_{0};  // records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // batches published to the ring
-    std::atomic<uint64_t> num_malformed_records_{0};  // dropped at decode for having end < start
+    std::atomic<uint64_t> num_malformed_records_{0};  // rejected at decode as unmappable
+
+    // One pass's decoded records, published as a batch. Owned here rather than per device because only one device is
+    // being drained at a time, and preallocated because the drain thread must never touch the allocator.
+    std::vector<ProgramRealtimeRecord> publish_batch_;
 
     std::chrono::steady_clock::time_point last_malformed_warn_{};
-    std::chrono::steady_clock::time_point last_staging_full_warn_{};
     std::chrono::steady_clock::time_point last_probe_timeout_warn_{};
     std::chrono::steady_clock::time_point last_sync_cost_report_{};
     RealtimeProfilerClockSync::Cost sync_cost_at_last_report_;

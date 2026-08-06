@@ -51,14 +51,12 @@ public:
 
     [[nodiscard]] double frequency() const { return frequency_; }
 
-    // Adopts a rate measured elsewhere -- the secant across a closed interval, which is the local AICLK. Ignored
-    // unless it lands in the band around the commanded clock, so one bad pair of reads cannot mismap the records that
-    // follow.
+    // Adopts a rate measured elsewhere -- the secant across a closed interval, which is the local AICLK. Only a
+    // non-positive rate is refused, because consumers divide by this.
     void adopt_rate(double rate);
 
 private:
     double frequency_ = 0.0;
-    double seed_frequency_ = 0.0;
 };
 
 // Reads the profiler core's cycle counter and keeps the probes a record needs to be interpolated between. Nothing
@@ -69,20 +67,16 @@ private:
 // shared and none of it needs a publication protocol.
 class RealtimeProfilerClockSync {
 public:
-    // How far a measured rate may sit from the commanded AICLK and still be believed. Guards every place a rate is
-    // adopted or a chord is sanity-checked, so one bad pair of reads cannot mismap the records that follow.
-    static constexpr double kRateClampFraction = 0.10;
-
-    // How often a probe is taken, per device. Every probe closes the interval its records ran in, so this one number
-    // sets delivery latency (a record waits at most this long to be published), the interpolation error a DVFS step
-    // inside an interval leaves (up to rate_change * interval / 4), and cost -- one blocking PCIe read per device per
-    // interval, measured at 891ns, so 32 devices at 100us is a third of a core.
+    // The baseline a chord's own slope has to be measured across, as twice the floor: a pair closer together than half
+    // of this is refused and the near anchor is taken from further back. It no longer sets a probe cadence -- probes
+    // are taken by whoever reads records, right after reading them -- so it costs no PCIe traffic and buys only how
+    // well a local slope is resolved.
     //
     // AICLK only moves when the ARC firmware's DVFS loop runs, which is a 1ms timer (dvfs.c:DVFSChange in
-    // tt-zephyr-platforms), so probes spaced far below that re-measure a clock that provably cannot have changed --
-    // measured on Blackhole under didt, p90 sync error is flat at 385-390ns from 100us all the way out to 500us and
-    // only breaks upward at the tick. 500us is where both parts sit comfortably: it is Wormhole that pins it, failing
-    // the 15us p99 limit at 1ms (17.6us) where Blackhole is still at 1.8us. Overridable via
+    // tt-zephyr-platforms), so a chord spanning far below that resolves a clock that provably cannot have changed
+    // within it -- measured on Blackhole under didt, p90 sync error is flat at 385-390ns from 100us all the way out to
+    // 500us and only breaks upward at the tick. 500us is where both parts sit comfortably: it is Wormhole that pins it,
+    // failing the 15us p99 limit at 1ms (17.6us) where Blackhole is still at 1.8us. Overridable via
     // TT_RT_PROFILER_SYNC_INTERVAL_US.
     static std::chrono::nanoseconds sync_interval();
 
@@ -134,10 +128,6 @@ public:
         std::chrono::nanoseconds bracket{};
     };
 
-    // The device timestamp of the oldest probe that has read past `ticks`, or nullopt while none has. A record is only
-    // publishable once its end is covered: that is what says the clock is known on both sides of it. Receiver thread.
-    [[nodiscard]] std::optional<uint64_t> coverage_past(uint64_t ticks) const;
-
     // A rate measured across the whole retained history rather than across one chord.
     struct BaselineRate {
         double rate = 0.0;
@@ -168,6 +158,10 @@ public:
         // Not needed to place anything; it is what says whether a timestamp is being interpolated between the two
         // measured points or extrapolated past them. See place_on_chord.
         uint64_t close_ticks = 0;
+        // The largest start timestamp this mapping may be reused for. A measured chord stops at its far anchor, because
+        // past that a tighter pair exists or will. An extrapolated one has no such limit: place_on_chord already
+        // charges each timestamp for its own distance from the anchor, so one of them stamps a whole backlog correctly.
+        uint64_t batch_through_ticks = 0;
     };
 
     // The offset that restates a record's own interpolated placement in terms of the published `frequency`. Anchoring
@@ -208,16 +202,15 @@ public:
         const Anchor& closing,
         const std::optional<BaselineRate>& baseline,
         double previous_rate,
-        double previous_rate_noise,
-        double sanity_rate);
+        double previous_rate_noise);
 
-    // What to publish `ticks` with: the tightest pair of probes around it that can be taken as a chord, else the single
-    // probe past it sloped at the fitted rate. Nullopt only when no probe has read past `ticks` at all, so anything
-    // coverage_past admits, this places.
+    // What to publish `ticks` with: the tightest pair of retained probes around it, or a single anchor extrapolated
+    // from when the history does not surround it. Total except with no probe retained at all, so a caller that has just
+    // probed always gets an answer and nothing is ever held back for a later pass.
     //
-    // Total on purpose, and it degrades rather than refusing. This is asked about the oldest staged record repeatedly
-    // and its inputs do not change between asks, so a refusal is not retried -- it stands until the ring laps the probe
-    // it refused, seconds later, with every record behind it held up because records publish in order. Receiver thread.
+    // Asked once per record, on the pass that read it. Never conditional on the device answering -- that is what let a
+    // refusal here stall a device's whole data path, because it was asked repeatedly about the same record with inputs
+    // that did not change between asks. Receiver thread.
     [[nodiscard]] std::optional<ChordMapping> place(uint64_t ticks);
 
     // sync_error of the last interval this closed, which is the bound currently standing for this device.
@@ -233,10 +226,10 @@ public:
     [[nodiscard]] Cost cost() const { return cost_; }
 
 private:
-    // How many successively wider near anchors place() tries before it gives up on measuring a slope at all. Both of
-    // plan_chord_mapping's refusals scale as 1/span, so widening is what clears them; past a few steps it is the far
-    // anchor that does not fit, and no near anchor repairs that.
-    static constexpr uint64_t kPlacementWidenSteps = 8;
+    // A mapping pinned to one probe and sloped at the best rate available, for a timestamp the probe history does not
+    // surround. Nullopt only if no rate is known at all.
+    [[nodiscard]] std::optional<ChordMapping> extrapolate_from(
+        const Anchor& anchor, const std::optional<BaselineRate>& baseline);
 
     // Index of the oldest retained probe whose counter read reached `ticks`, or probes_end_ when none has. Probes are
     // appended in tick order, so this bisects: the retained span grows with the backlog, and scanning it per record is
