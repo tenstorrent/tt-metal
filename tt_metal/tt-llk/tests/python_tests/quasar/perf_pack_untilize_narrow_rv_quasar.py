@@ -23,7 +23,7 @@ from quasar.test_pack_untilize_narrow_rv_quasar import (
 
 # L1_TO_L1 only (end-to-end). Extend with UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE /
 # L1_CONGESTION once the per-thread dvalid mocks for the RV_PACR pack loop are wired up.
-PERF_RUN_TYPES_NARROW_RV = [[PerfRunType.L1_TO_L1]]
+PERF_RUN_TYPES_NARROW_RV = [PerfRunType.L1_TO_L1]
 
 
 @pytest.mark.perf
@@ -31,23 +31,17 @@ PERF_RUN_TYPES_NARROW_RV = [[PerfRunType.L1_TO_L1]]
 @parametrize(
     formats=NARROW_RV_FORMATS,
     case=CASES,
-    run_types=PERF_RUN_TYPES_NARROW_RV,
-    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
-    is_perf=[True],
 )
 def test_perf_pack_untilize_narrow_rv_quasar(
     perf_report,
     formats,
     case,
-    run_types,
-    loop_factor,
-    is_perf,
 ):
     run_pack_untilize_narrow_rv(
         formats,
         case,
-        run_types=run_types,
-        loop_factor=loop_factor,
-        is_perf=is_perf,
+        run_types=PERF_RUN_TYPES_NARROW_RV,
+        loop_factor=PERF_LOOP_FACTOR_QUASAR,
+        is_perf=True,
         perf_report=perf_report,
     )

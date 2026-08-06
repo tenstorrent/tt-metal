@@ -90,17 +90,15 @@ NARROW_RV_FORMATS = input_output_formats(
 @parametrize(
     formats=NARROW_RV_FORMATS,
     case=CASES,
-    run_types=[[PerfRunType.L1_TO_L1]],
-    loop_factor=[1],
 )
 def test_pack_untilize_narrow_rv_quasar(
     formats,
     case,
-    run_types,
-    loop_factor,
     *,
     is_perf=False,
     perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     whole_tile, num_tiles, last_tile_width = case
 
