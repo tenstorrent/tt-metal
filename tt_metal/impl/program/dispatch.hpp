@@ -106,6 +106,14 @@ void finalize_dfb_masks(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers);
 
+// Set cross_node_dfb_offset in each kernel group's launch msg (CROSS_NODE_DFB_OFFSET_NONE if
+// none) and reserve space in the kernel config region. Returns the new base offset; if no
+// CrossNodeDFBs are attached, sets NONE on all groups and returns base_offset unchanged.
+uint32_t finalize_cross_node_dfbs(
+    std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
+    ttsl::Span<detail::ProgramImpl*> programs,
+    uint32_t base_offset);
+
 uint32_t finalize_kernel_bins(
     IDevice* device,
     uint32_t programmable_core_type_index,

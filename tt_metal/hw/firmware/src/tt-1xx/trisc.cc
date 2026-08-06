@@ -20,6 +20,7 @@
 #if !defined(UCK_CHLKC_MATH)
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
+#include "internal/cross_node_dfb_init.h"
 #include "internal/hw_thread.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
@@ -79,6 +80,7 @@ tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BA
 #if !defined(UCK_CHLKC_MATH)
 uint32_t tt_l1_ptr* cb_l1_base __attribute__((used));
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+CrossNodeDFBInterface g_cross_node_dfb_interface[MAX_CROSS_NODE_DFBS] __attribute__((used));
 #endif
 
 #if defined(UCK_CHLKC_UNPACK)
@@ -173,6 +175,13 @@ int main(int argc, char* argv[]) {
         uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
         // NOC argument is unused
         experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
+
+        if (launch_msg->kernel_config.cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE) {
+            uint32_t tt_l1_ptr* dfb_region =
+                (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.cross_node_dfb_offset);
+            const uint32_t num_cross_node_dfbs = dfb_region[0];
+            experimental::setup_cross_node_dfb_interfaces</*reset_credits=*/false>(dfb_region + 1, num_cross_node_dfbs);
+        }
 #endif
 
         rta_l1_base =
