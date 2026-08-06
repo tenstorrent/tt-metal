@@ -294,7 +294,16 @@ CommonPlan derive_common_plan(const D2DStreamConfig& cfg, const Tensor& backing)
         tensor_page_size,
         l1_alignment);
 
-    const auto plan = derive_chunk_plan(tensor_page_size, tensor_num_pages, cfg.socket_mem_config.fifo_size);
+    // Socket page is flow control only -- payload bypasses the FIFO (see "no L1 FIFO copy" above) -- so
+    // it is sized to the write alignment, not to a tensor page. Page as both args => pages_per_chunk 1.
+    constexpr uint32_t kSocketPageSizeBytes = 64;
+    const uint32_t socket_page_size = tt::align(kSocketPageSizeBytes, l1_alignment);
+    TT_FATAL(
+        cfg.socket_mem_config.fifo_size >= socket_page_size,
+        "D2DStreamService: fifo_size ({} B) must be >= socket_page_size ({} B)",
+        cfg.socket_mem_config.fifo_size,
+        socket_page_size);
+    const auto plan = derive_chunk_plan(socket_page_size, tensor_num_pages, socket_page_size);
 
     const auto fabric_max_payload_size = static_cast<uint32_t>(
         tt::round_down(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(), static_cast<size_t>(l1_alignment)));
