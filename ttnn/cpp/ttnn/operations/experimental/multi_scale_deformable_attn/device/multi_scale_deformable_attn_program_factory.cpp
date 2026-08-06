@@ -57,6 +57,9 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     const uint32_t reduction_size = 4 * P;
 
     constexpr uint32_t TILE_MAX_ROWS = 32;
+    constexpr uint32_t TILE_WIDTH = 32;
+    // D is packed into one or more 32-wide tiles (partial last tile when D % 32 != 0).
+    const uint32_t num_d_tiles = (D + TILE_WIDTH - 1) / TILE_WIDTH;
 
     // Build the list of output tiles: each tile holds up to 32 contiguous
     // queries from a single batch index n. Q is not required to divide 32 —
@@ -172,7 +175,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         "ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn/device/kernels/compute/msda_compute.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {input_tile_cb, scalar_tile_cb, output_tile_cb, reduction_size};
+    compute_desc.compile_time_args = {input_tile_cb, scalar_tile_cb, output_tile_cb, reduction_size, num_d_tiles};
     compute_desc.config = ComputeConfigDescriptor{};
 
     // Writer kernel descriptor.
@@ -180,6 +183,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         output_tile_cb,
         output_scratch_cb,
         output_stick_aligned,
+        D,
     };
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
 

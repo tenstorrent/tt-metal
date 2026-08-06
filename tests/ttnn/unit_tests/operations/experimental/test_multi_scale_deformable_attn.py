@@ -36,7 +36,7 @@ def _reference_msda(value: torch.Tensor, grid: torch.Tensor, attn: torch.Tensor,
 
 @pytest.mark.parametrize("N", [1, 4])
 @pytest.mark.parametrize("h_in,w_in", [(10, 10), (32, 32)])
-@pytest.mark.parametrize("D", [32])
+@pytest.mark.parametrize("D", [16, 32, 64])
 @pytest.mark.parametrize("Q", [16, 64])
 @pytest.mark.parametrize("P", [4, 8])
 @pytest.mark.parametrize("align_corners", [False, True])
@@ -60,3 +60,23 @@ def test_msda_correctness(device, N, h_in, w_in, D, Q, P, align_corners):
     out = ttnn.to_torch(out_t)
 
     assert_with_pcc(ref, out.to(torch.float32), pcc=0.99)
+
+
+@pytest.mark.parametrize("D", [8, 24, 40])
+def test_msda_rejects_non_multiple_of_16_d(device, D):
+    """D must be a positive multiple of 16; other widths fail validation."""
+    N, h_in, w_in, Q, P = 1, 8, 8, 16, 4
+    value_t = ttnn.from_torch(
+        torch.randn(N, h_in, w_in, D, dtype=torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    grid_t = ttnn.from_torch(
+        torch.rand(N, Q * P, 1, 2, dtype=torch.bfloat16) * 2 - 1, device=device, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    attn_t = ttnn.from_torch(
+        torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1).to(torch.bfloat16),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    with pytest.raises(RuntimeError, match="multiple of 16"):
+        ttnn.experimental.multi_scale_deformable_attn(value_t, grid_t, attn_t)

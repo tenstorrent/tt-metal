@@ -20,7 +20,7 @@ void bind_multi_scale_deformable_attn(nb::module_& mod) {
         Fused multi-scale deformable attention (num_levels == 1 fast path).
 
         Args:
-            * :attr:`value`: (N, h_in, w_in, D) ROW_MAJOR bfloat16, N = B * num_heads
+            * :attr:`value`: (N, h_in, w_in, D) ROW_MAJOR bfloat16, N = B * num_heads, D multiple of 16
             * :attr:`grid`: (N, Q*P, 1, 2) ROW_MAJOR bfloat16, normalized to [-1, 1]
             * :attr:`attn`: (N, Q, P) ROW_MAJOR bfloat16
             * :attr:`memory_config`: output memory config

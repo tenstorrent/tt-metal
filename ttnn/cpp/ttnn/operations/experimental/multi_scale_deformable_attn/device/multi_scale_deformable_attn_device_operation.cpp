@@ -65,13 +65,13 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     TT_FATAL(as[1] > 0, "Q must be > 0");
     TT_FATAL(as[2] > 0, "P must be > 0");
 
-    // TODO: generalize the kernel to support arbitrary D (multiple of 16). The
-    // reader/writer currently assume D=32: a single tile row is split into
-    // exactly two 32-byte halves placed in TL+TR (or BL+BR) faces, and
-    // HALF_STICK_NBYTES is hardcoded to 32 in the kernels. Supporting D=64
-    // or D=16 means deriving the per-row layout from element_size + D and
-    // looping over multiple (half-)faces per row.
-    TT_FATAL(vs[-1] == 32, "value's last dim (D) must be 32, got {}", static_cast<uint32_t>(vs[-1]));
+    // D is the per-head channel width. Reader/writer pack it into one or more
+    // 32-wide tile faces (16-wide half-faces). D must be a multiple of 16 so
+    // each chunk lands on a face-half boundary (bf16 face row = 16 elements).
+    TT_FATAL(
+        vs[-1] > 0 && vs[-1] % 16 == 0,
+        "value's last dim (D) must be a positive multiple of 16, got {}",
+        static_cast<uint32_t>(vs[-1]));
 
     const uint32_t qp = static_cast<uint32_t>(gs[1]);
     const uint32_t q = static_cast<uint32_t>(as[1]);

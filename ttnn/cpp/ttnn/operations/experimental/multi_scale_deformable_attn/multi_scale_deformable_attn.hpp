@@ -18,6 +18,7 @@ namespace ttnn::experimental {
 //
 // Inputs:
 //   value:  (N, h_in, w_in, D) ROW_MAJOR bfloat16, where N = B * num_heads
+//           and D is a positive multiple of 16
 //   grid:   (N, Q*P, 1, 2)     ROW_MAJOR bfloat16, normalized to [-1, 1]
 //   attn:   (N, Q, P)          ROW_MAJOR bfloat16
 //

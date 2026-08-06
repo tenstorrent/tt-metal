@@ -4,7 +4,8 @@
 
 // Compute kernel for fused multi-scale deformable attention.
 //
-// Per output tile (up to 32 queries packed vertically, one per row):
+// Per output query-group (up to 32 queries packed vertically, one per row),
+// for each D-width tile (NUM_D_TILES; 1 for D≤32, 2 for D=64):
 //   For each of REDUCTION_SIZE (= 4 * P) (input_tile, scalar_tile) pairs:
 //     dest[h, w] = input_tile[h, w] * scalar_tile[h, 0]   (COL broadcast)
 //     pack into output_cb with L1 accumulate (after first iter)
@@ -33,9 +34,10 @@ constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
 constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(1);
 constexpr uint32_t output_cb_index = get_compile_time_arg_val(2);
 constexpr uint32_t reduction_size = get_compile_time_arg_val(3);  // = 4 * P
+constexpr uint32_t num_d_tiles = get_compile_time_arg_val(4);
 
 void kernel_main() {
-    const uint32_t num_output_tiles = get_arg_val<uint32_t>(0);
+    const uint32_t num_output_groups = get_arg_val<uint32_t>(0);
 
     CircularBuffer input_cb(input_cb_index);
     CircularBuffer scalar_cb(scalar_cb_index);
@@ -43,39 +45,41 @@ void kernel_main() {
 
     init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(input_cb_index, scalar_cb_index, output_cb_index);
 
-    for (uint32_t out = 0; out < num_output_tiles; ++out) {
-        // Reserve one output tile slot; we accumulate into it via L1 acc.
-        output_cb.reserve_back(1);
+    for (uint32_t out = 0; out < num_output_groups; ++out) {
+        for (uint32_t d_tile = 0; d_tile < num_d_tiles; ++d_tile) {
+            // Reserve one output tile slot; we accumulate into it via L1 acc.
+            output_cb.reserve_back(1);
 
-        for (uint32_t i = 0; i < reduction_size; ++i) {
-            if (i == 0) {
-                pack_reconfig_l1_acc(0);  // first iter: overwrite L1
-            } else if (i == 1) {
-                pack_reconfig_l1_acc(1);  // subsequent: accumulate into L1
+            for (uint32_t i = 0; i < reduction_size; ++i) {
+                if (i == 0) {
+                    pack_reconfig_l1_acc(0);  // first iter: overwrite L1
+                } else if (i == 1) {
+                    pack_reconfig_l1_acc(1);  // subsequent: accumulate into L1
+                }
+
+                input_cb.wait_front(1);
+                scalar_cb.wait_front(1);
+
+                tile_regs_acquire();
+                mul_tiles_bcast<BroadcastType::COL>(input_cb_index, scalar_cb_index, 0, 0, 0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                // out_of_order_output=true so every iteration packs to the same
+                // tile slot (= 0). The L1-acc mode (pack_reconfig_l1_acc) then
+                // decides between overwrite and accumulate. Default (=false)
+                // would auto-advance the write pointer and clobber out-of-range
+                // L1 after iter 1.
+                pack_tile<true>(0, output_cb_index, 0);
+                tile_regs_release();
+
+                input_cb.pop_front(1);
+                scalar_cb.pop_front(1);
             }
 
-            input_cb.wait_front(1);
-            scalar_cb.wait_front(1);
-
-            tile_regs_acquire();
-            mul_tiles_bcast<BroadcastType::COL>(input_cb_index, scalar_cb_index, 0, 0, 0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            // out_of_order_output=true so every iteration packs to the same
-            // tile slot (= 0). The L1-acc mode (pack_reconfig_l1_acc) then
-            // decides between overwrite and accumulate. Default (=false)
-            // would auto-advance the write pointer and clobber out-of-range
-            // L1 after iter 1.
-            pack_tile<true>(0, output_cb_index, 0);
-            tile_regs_release();
-
-            input_cb.pop_front(1);
-            scalar_cb.pop_front(1);
+            // Reset L1-acc mode for the next output tile.
+            pack_reconfig_l1_acc(0);
+            output_cb.push_back(1);
         }
-
-        // Reset L1-acc mode for the next output tile.
-        pack_reconfig_l1_acc(0);
-        output_cb.push_back(1);
     }
 }
