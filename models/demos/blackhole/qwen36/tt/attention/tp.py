@@ -552,10 +552,16 @@ class TPAttention:
             keys, values = self.paged_k, self.paged_v
             k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
             k_sh = ttnn.to_memory_config(k_p, self.args.kv_update_shard_cfg)
             v_sh = ttnn.to_memory_config(v_p, self.args.kv_update_shard_cfg)
+            # Free the pad SOURCES only after the padded tensors have been resharded. ttnn.pad can
+            # alias its input, so releasing k/v (or k_p/v_p) any earlier hands live L1 back to the
+            # allocator: the next L1 allocation — q's rope, a few lines below — reuses that block and
+            # silently overwrites the K/V about to be written into the cache. Invisible at small
+            # batch, but at B=32 the freed block is large enough to be reused immediately and the
+            # decode PCC collapses (~0.4) for most users.
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
             ttnn.deallocate(k_p)
             ttnn.deallocate(v_p)
             # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
@@ -583,10 +589,13 @@ class TPAttention:
                 v_h = ttnn.slice(v, (0, 0, h, 0), (1, B, h + 1, HD))
                 k_hp = ttnn.pad(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
                 v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-                ttnn.deallocate(k_h)
-                ttnn.deallocate(v_h)
                 k_sh = ttnn.to_memory_config(k_hp, self.args.kv_update_shard_cfg)
                 v_sh = ttnn.to_memory_config(v_hp, self.args.kv_update_shard_cfg)
+                # Free the pad sources only after resharding — see the paged branch above: an early
+                # deallocate here returns still-live L1 to the allocator and the next L1 op corrupts
+                # the K/V being cached (batch-size dependent; breaks at B=32).
+                ttnn.deallocate(k_h)
+                ttnn.deallocate(v_h)
                 ttnn.deallocate(k_hp)
                 ttnn.deallocate(v_hp)
                 ttnn.experimental.paged_update_cache(self.k_caches[h], k_sh, update_idxs_tensor=cur_pos_tt)
