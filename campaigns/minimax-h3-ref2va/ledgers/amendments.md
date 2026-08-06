@@ -175,3 +175,124 @@ are therefore optional conveniences rather than prerequisites.
 
 **Method note.** "Not adopted" in a handoff can mean "not adopted *in that form*". The prior-art gate
 is what distinguishes the two, and it cost one `git log --grep` plus one `grep` of the tree.
+
+---
+
+## Amendment 120 (2026-08-06) — the ref2va conditioner geometry confirmed on real media, end to end through the checkpoint's own processors
+
+**Assumed**: the reference-video vision-block arithmetic derived by hand in am. 114 — 124 frames at
+24 fps sampled to 2 fps gives 11 frames, merged in pairs into 6 vision blocks of 1008 tokens.
+
+**Measured.** Host-only, no mesh, commit `5c8adce1e85`. Real media:
+`~/h3_fl2va_artifacts/fl2va_first.mp4`, a prior calibrated run of this very pipeline. Decoded with
+our own `packing_ref2va.decode_reference_video`, prepared with `references.prepare_references`, then
+put through the checkpoint's own `Qwen3VLVideoProcessor`:
+
+```
+decoded            (124, 768, 1344, 3) @ 24.0 fps, soundtrack (2, 164864) @ 32000 Hz
+prepared           frames (124, 768, 1344, 3), waveform (2, 164864), num_frames 124
+2 fps sampling     11 frames -> 6 vision blocks
+block timestamps   [0.25, 1.25, 2.25, 3.25, 4.25, 5.0]
+video_grid_thw     [[6, 48, 84]]        pixel_values_videos (24192, 1536)
+merge_size^2 = 4   blocks(t) = 6        tokens/block = 1008
+reference assert   t == len(block_timestamps): 6 == 6  PASS
+```
+
+**What changes.** Nothing — which is the result. Three things are now measured rather than derived:
+the hand arithmetic of am. 114 was right; the reference's own consistency assert
+(`encoders.py:418-423`, "the processor merged a reference video into N vision blocks but MiniMax-H3
+labels M of them") holds on real media at the production shape; and the 24 fps clip takes the
+parity-exact untouched route through `prepare_reference_frames`, because it already *is* the canvas
+its own aspect ratio resolves to.
+
+Two incidental facts worth having: the real soundtrack is **164864** samples, not the 165333 that
+5.1667 s implies, so `prepare_reference_waveform`'s truncation is a no-op for this clip — and both
+lengths still give **207** audio latents after the zero-pad to a whole 800-sample hop, matching the
+target's own 207. And `0.25` formats as `"0.2"` under `"{:.1f}"`, confirming the round-half-to-even
+timestamp contract on a value that is exactly representable.
+
+**Method note.** The whole chain was checkable on host in one command, without the mesh and without
+the DiT. Confirming a geometry claim through the production processors before spending Galaxy time is
+close to free; deriving it and finding out at e2e is not.
+
+---
+
+## Amendment 121 (2026-08-06) — fixed baseline is green on this base; the fl2va gate skips silently when its two artifact directories disagree
+
+**Assumed**: that pointing the two artifact environment variables at separate per-purpose directories
+was tidier than sharing one.
+
+**Measured.** Mesh 4×8, cold e2e, commit `bd12ad2aeb2` (t2va) / `5c8adce1e85` (fl2va, new files only).
+Commands verbatim in `CAMPAIGN.md`. t2va **1 passed in 560 s**; fl2va **4 passed in 645 s**; exit 0
+both. Numbers in `CAMPAIGN.md`'s fixed-baseline table — CLIP 37.38, audio peak 0.095 and the fractal
+discriminator's 0.9963 / 0.2972 all reproduce STATE.md exactly, so the base has not moved.
+
+But the **first** fl2va attempt reported `4 passed`-equivalent success as **4 skipped**, with
+`MINIMAX_H3_ARTIFACT_DIR` set to `round-0/fl2va` and `MINIMAX_H3_T2VA_ARTIFACT_DIR` to `round-0/t2va`.
+t2va writes to the *first* variable, and the fl2va gate reads the calibrated `t2va.mp4` it keys its
+tier-6 thresholds to from the *second*. So the clip existed, in the other directory, and all four
+cases skipped with a one-line reason inside a 900-line log.
+
+**What changes.** Both variables point at one directory, and the campaign's baseline command sets
+them together with a comment saying why. Recorded because the failure presented as `exit 0` with a
+green summary line: `1 passed, 4 skipped` reads as success at a glance, and a skipped baseline gate
+is worse than a failing one — a red gate stops the campaign, a skipped one silently removes the
+comparison every later round is measured against.
+
+**Method note.** STATE.md already carries "a test reading its input from the directory it *writes*
+skips silently — separate env vars". This is the same trap from the other side: the env vars *were*
+separate, and pointing them at different places is what broke it. The rule that survives both is
+narrower and checkable: **assert the count, not the exit code.** A baseline run must state how many
+tests it expected to pass.
+
+---
+
+## Amendment 122 (2026-08-06) — the typed condition stream leaves every existing PCC bit-identical; the two longest ref2va shapes exceed the correctness test's budget on the CPU reference, not on the device
+
+**Assumed** (campaign plan, Phase 4): that the ref2va cases could be added to
+`test_minimax_h3_transformer` at their production lengths, alongside the existing ones.
+
+**Measured.** Mesh 4×8, TP=4/SP=8 ring 2 links, 2-layer depth with randomized norm weights, commit
+`f9c54c2b22a` (before) and working tree (after). Command:
+`scripts/run_safe_pytest.sh --run-all .../test_transformer_minimax_h3.py -k random_weights`.
+Before-capture 6 passed in 658 s; after 7 passed / 2 failed in 1370 s.
+
+**The gate's own result, digit for digit.** Existing cases, video / audio PCC:
+
+| case | before | after |
+|---|---|---|
+| small_s2048 | 99.9974 / 99.9973 | **99.9974 / 99.9973** |
+| unaligned_s2112 | 99.9973 / 99.9975 | **99.9973 / 99.9975** |
+| s21504 | 99.9973 / 99.9974 | **99.9973 / 99.9974** |
+| prod_768p_5s | 99.9973 / 99.9974 | **99.9973 / 99.9974** |
+| prod_768p_5s_fl2va | 99.9973 / 99.9974 | **99.9973 / 99.9974** |
+| prod_768p_5s_fl2va_first_last | 99.9973 / 99.9975 | **99.9973 / 99.9975** |
+
+All twelve values unchanged. That is the claim the design rested on: replacing `condition_1BKC` with
+a list of typed blocks projects fl2va's single block through the same `proj_in`, and a per-row GEMM
+against a shared weight is row-independent, so routing it through a loop changes nothing. Not merely
+"still above 0.9995" — identical. `prod_ref2va_1image` (46080 padded) also passed, at
+99.9973 / 99.9974.
+
+**The two failures were `Failed: Timeout (>300s)`**, on `prod_ref2va_1video` (81664 padded) and
+`prod_ref2va_mixed` (90112). Not a memory failure and not a numerics failure: `pytest.ini` sets a
+repo-wide 300 s per-test default, and the cost that blows it is the **torch reference**, whose full
+self-attention is O(n²) on CPU. Evidence: `prod_768p_5s` at 38222 rows spends ~110 s on the torch
+side; 81488 rows is 4.5× the attention work, so the reference alone exceeds the budget before the
+device is asked for anything. The log confirms the device side got as far as compiling its matmuls.
+
+**What changes.** The gate is split by what each half can actually establish:
+
+- **Interleaved numerics** move to production *residues* at a tractable length — audio cond 414
+  (30 mod 32), video cond 1008 (16), target audio 414 (30), target video 3024 (16), sequence 5372.
+  What an interleaved region can get wrong is which projection a block takes and which rows it lands
+  on; both are residue- and order-sensitive and neither improves with length.
+- **Production lengths** move to `test_minimax_h3_transformer_real_weights`, which has no CPU
+  reference to pay for, now carrying `@pytest.mark.timeout(5400)` and the three ref2va shapes
+  (46080 / 81664 / 111616) at full 50-layer depth. That test is the campaign's shape probe.
+
+**Method note.** "A gate's shape is part of the gate" (am. 76) is about *numerics at production
+shapes*. It does not follow that every gate must run at production length — here the binding cost was
+the reference implementation on CPU, and paying ~30 min of CPU per case would have bought no
+additional sensitivity. Say which property a shape is protecting before paying for it, and put the
+length where the property actually depends on it.

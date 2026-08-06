@@ -41,26 +41,43 @@ class Qwen3VlContext:
     fsdp_mesh_axis: int | None = None
 
 
-def vision_token_runs(input_ids: torch.Tensor, image_token_id: int) -> list[tuple[int, int]]:
-    """`(start, length)` of each contiguous run of `image_token_id` in a single sequence.
+def vision_token_runs(input_ids: torch.Tensor, image_token_id: int | Sequence[int]) -> list[tuple[int, int]]:
+    """`(start, length)` of each contiguous run of a vision pad token in a single sequence.
 
     Qwen3-VL presentations never interleave a vision block with anything: MiniMax-H3 emits a
     `"<Picture i>: "` label, then `<|vision_start|>`, then one run of `<|image_pad|>`, then
     `<|vision_end|>`. So one image is one run, and the merged vision tokens map onto the runs in order.
+
+    `image_token_id` may be **several** ids, which is what `ref2va` needs: its presentation mixes
+    `<|image_pad|>` runs (one per image reference) with `<|video_pad|>` runs (one per merged frame pair
+    of a video reference), and the runs come back in **sequence order** regardless of which pad id
+    each one is. That order matters because `_scatter_rows` consumes the tower's rows *in run order*,
+    so the caller has to assemble the tower output in presentation order to match -- which is why this
+    returns one interleaved list rather than one list per modality.
+
+    A run boundary is a change of token, so two adjacent runs of *different* pad ids are two runs, not
+    one. That cannot arise in a MiniMax-H3 presentation (a `"<{t} seconds>"` label always separates two
+    video blocks) but getting it wrong the other way -- merging them -- would silently mis-slice.
     """
+    pad_ids = {int(image_token_id)} if isinstance(image_token_id, int) else {int(i) for i in image_token_id}
     if input_ids.ndim == 2:
         if input_ids.shape[0] != 1:
             msg = f"expected a single sequence, got batch {input_ids.shape[0]}"
             raise ValueError(msg)
         input_ids = input_ids[0]
     runs: list[tuple[int, int]] = []
-    start = None
+    start, current = None, None
     for index, token in enumerate(input_ids.tolist()):
-        if token == image_token_id and start is None:
-            start = index
-        elif token != image_token_id and start is not None:
+        if token in pad_ids:
+            if start is None:
+                start, current = index, token
+            elif token != current:
+                # A different pad id: close the run and open a new one at this row.
+                runs.append((start, index - start))
+                start, current = index, token
+        elif start is not None:
             runs.append((start, index - start))
-            start = None
+            start, current = None, None
     if start is not None:
         runs.append((start, len(input_ids) - start))
     return runs

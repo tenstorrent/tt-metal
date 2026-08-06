@@ -56,7 +56,11 @@ TAG_VIDEO, TAG_TEXT, TAG_AUDIO = 0, 1, 2
 
 
 def _modality_metadata(
-    num_text: int, num_audio: int, num_video: int, grid: tuple[int, int] = (8, 8), num_cond: int = 0
+    num_text: int,
+    num_audio: int,
+    num_video: int,
+    grid: tuple[int, int] = (8, 8),
+    cond_spec: tuple[tuple[str, int], ...] = (),
 ):
     """Per-modality `(position_ids, token_tags, timestep_indices)` for one packed layout.
 
@@ -68,17 +72,32 @@ def _modality_metadata(
     gives 64 rows per frame, which is a multiple of TILE for any frame count and so can never
     exercise the unaligned assembly path. Production is 24x42 = 1008 rows/frame == 16 mod 32.
 
-    `num_cond` adds `fl2va`'s keyframe conditioning block, which sits between text and audio in the
-    packed layout. Its rows are **video**-tagged (they are video rows that happen to be pinned) and
-    carry the spatial grid of one frame at a single anchor time, mirroring
-    `packing.build_packed_sequence`'s `"first"` anchor. They get a *third* distinct timestep index
-    rather than reusing 0 or 1, because production runs them at `max(t, 0.999)` while video and audio
-    step their own schedules -- three levels, which is what the AdaLN table sees for real.
+    `cond_spec` is the conditioning region between text and audio, as
+    `((modality, rows, block_grid), ...)` in **packed order**:
+
+    - `()` for `t2va`;
+    - `(("video", 1008, (24, 42)),)` for one `fl2va` keyframe anchor, or
+      `(("video", 2016, (24, 42)),)` for two -- one contiguous block covering both, which is how the
+      pipeline passes them;
+    - an interleaved list for `ref2va`, e.g. `(("audio", 414, None), ("video", 37296, (24, 42)))` for
+      one video reference, whose soundtrack rows are packed immediately *before* its own video rows.
+
+    A `"video"` block's rows are **video**-tagged -- they are video rows that happen to be pinned --
+    and carry `block_grid`'s spatial grid, one frame per `gh * gw` rows, at successive anchor times.
+    `block_grid` is **per block** and not the target's, because that is the defining property of a
+    ref2va reference: it is prepared at its own resolution, so a 2048x2048 image reference is a
+    64x64 patch grid against the target's 24x42. An `"audio"` block ignores `block_grid`, is
+    **audio**-tagged, and advances the shared clock like any audio run.
+
+    The timestep indices give conditioning rows their own levels rather than reusing 0 or 1, because
+    production runs them at different noise than the generated rows: **2** for video conditioning
+    (`max(t, 0.999)`) and **3** for audio conditioning (a literal `t = 1.0`, campaign am. 115). So a
+    ref2va request with a soundtrack addresses four distinct timestep levels where t2va and fl2va
+    address three, and the AdaLN table is exercised wider.
     """
     grid_h, grid_w = grid
     frame = grid_h * grid_w
     assert num_video % frame == 0, "num_video must fill whole (h, w) frames"
-    assert num_cond % frame == 0, "num_cond must fill whole (h, w) frames"
     grid_t = num_video // frame
     assert grid_t >= 2, "need at least one conditioning frame and one target frame"
 
@@ -86,7 +105,6 @@ def _modality_metadata(
         return torch.stack([torch.arange(n), torch.zeros(n, dtype=torch.long), torch.zeros(n, dtype=torch.long)], -1)
 
     vt, vh, vw = torch.meshgrid(torch.arange(grid_t), torch.arange(grid_h), torch.arange(grid_w), indexing="ij")
-    ch, cw = torch.meshgrid(torch.arange(grid_h), torch.arange(grid_w), indexing="ij")
 
     meta = {
         "text": {
@@ -105,13 +123,35 @@ def _modality_metadata(
             "ts": torch.cat([torch.zeros(frame, dtype=torch.long), torch.ones(num_video - frame, dtype=torch.long)]),
         },
     }
-    num_anchors = num_cond // frame
-    anchor_t = torch.arange(num_anchors).repeat_interleave(frame)
-    meta["cond"] = {
-        "pos": torch.stack([anchor_t, ch.reshape(-1).repeat(num_anchors), cw.reshape(-1).repeat(num_anchors)], dim=-1),
-        "tags": torch.full((num_cond,), TAG_VIDEO, dtype=torch.long),
-        "ts": torch.full((num_cond,), 2, dtype=torch.long),
-    }
+
+    blocks = []
+    for modality, rows, block_grid in cond_spec:
+        if modality == "video":
+            block_h, block_w = block_grid
+            block_frame = block_h * block_w
+            assert rows % block_frame == 0, "a video conditioning block must fill whole (h, w) frames"
+            anchors = rows // block_frame
+            bh, bw = torch.meshgrid(torch.arange(block_h), torch.arange(block_w), indexing="ij")
+            anchor_t = torch.arange(anchors).repeat_interleave(block_frame)
+            pos = torch.stack(
+                [anchor_t, bh.reshape(-1).repeat(anchors), bw.reshape(-1).repeat(anchors)],
+                dim=-1,
+            )
+            tag, level = TAG_VIDEO, 2
+        elif modality == "audio":
+            pos, tag, level = clock(rows), TAG_AUDIO, 3
+        else:
+            raise ValueError(f"a conditioning block is 'video' or 'audio', got {modality!r}")
+        blocks.append(
+            {
+                "modality": modality,
+                "rows": rows,
+                "pos": pos,
+                "tags": torch.full((rows,), tag, dtype=torch.long),
+                "ts": torch.full((rows,), level, dtype=torch.long),
+            }
+        )
+    meta["cond_blocks"] = blocks
     return meta
 
 
@@ -136,14 +176,14 @@ def _modality_metadata(
     ],
 )
 @pytest.mark.parametrize(
-    ("num_text", "num_audio", "num_video", "grid", "num_cond"),
+    ("num_text", "num_audio", "num_video", "grid", "cond_spec"),
     [
         # The three tile-aligned cases: every modality is a multiple of TILE (32), so the packed
         # sequence is assembled directly in TILE_LAYOUT. This is the cheap path and stays covered.
-        pytest.param(512, 256, 1280, (8, 8), 0, id="small_s2048"),  # 2048: already aligned, no padding
+        pytest.param(512, 256, 1280, (8, 8), (), id="small_s2048"),  # 2048: already aligned, no padding
         # 2112 is a multiple of TILE but not of SP * TILE, so this one exercises the tail padding.
-        pytest.param(512, 256, 1344, (8, 8), 0, id="unaligned_s2112"),  # 2112 -> padded to 2304
-        pytest.param(512, 256, 20736, (8, 8), 0, id="s21504"),
+        pytest.param(512, 256, 1344, (8, 8), (), id="unaligned_s2112"),  # 2112 -> padded to 2304
+        pytest.param(512, 256, 20736, (8, 8), (), id="s21504"),
         # The shape that ships: 1344x768 / 124 frames, 512-token prompt. 37 latent frames over a
         # 24x42 patch grid = 37296 video rows (== 16 mod 32) and 207 audio latents x 2 channels =
         # 414 audio rows (== 30 mod 32), so this is the ROW_MAJOR assembly path -- and before that
@@ -151,17 +191,61 @@ def _modality_metadata(
         #
         # The three cases above are tile-aligned by construction and cannot reach it. They are kept
         # as the cheap regression net for the TILE path, but this is the one that gates what ships.
-        pytest.param(512, 414, 37296, (24, 42), 0, id="prod_768p_5s"),  # 38222 -> padded to 38400
+        pytest.param(512, 414, 37296, (24, 42), (), id="prod_768p_5s"),  # 38222 -> padded to 38400
         # ---- fl2va: a keyframe conditioning block between text and audio ----
         #
         # The shape that ships for fl2va: one "first" anchor adds rows_per_frame = 1008 condition rows,
         # so 39230 -> padded to 39424. Both the condition block (1008 == 16 mod 32) and the target video
         # (37296 == 16 mod 32) are unaligned, so this is the ROW_MAJOR path.
-        pytest.param(512, 414, 37296, (24, 42), 1008, id="prod_768p_5s_fl2va"),
+        pytest.param(512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), id="prod_768p_5s_fl2va"),
         # Both fl2va anchors: 40238 -> padded to 40448. The condition block is 2016 rows (== 0 mod 32)
         # here while one anchor gives 1008 (== 16), so the two production fl2va cases cover both
         # residues of the condition stream without inventing a shape to do it.
-        pytest.param(512, 414, 37296, (24, 42), 2016, id="prod_768p_5s_fl2va_first_last"),
+        pytest.param(512, 414, 37296, (24, 42), (("video", 2016, (24, 42)),), id="prod_768p_5s_fl2va_first_last"),
+        # ---- ref2va: a MODALITY-INTERLEAVED conditioning region ----
+        #
+        # The shape a single 2048x2048 image reference ships at, measured against the reference
+        # packing (campaign am. 114): 4104 presentation tokens (4096 of them one vision block) and
+        # 4096 condition rows, giving 45910 -> padded to 46080. All-video conditioning, so what this
+        # adds over fl2va is scale (1.22x t2va's packed length) and a condition block whose 64x64
+        # spatial grid is NOT the target's 24x42 -- a reference is prepared at its own resolution.
+        # This one does fit the CPU reference inside the per-test budget; the two longer ref2va shapes
+        # do not, which is why the interleaved cases below run at production residues instead.
+        pytest.param(4104, 414, 37296, (24, 42), (("video", 4096, (64, 64)),), id="prod_ref2va_1image"),
+        # A video reference WITH its soundtrack -- the case the whole typed-block design exists for.
+        # Its audio rows are packed immediately BEFORE its video rows, so the conditioning region is
+        # `[audio | video]` and the two projections must be applied per block. Also the first case with
+        # FOUR distinct timestep levels, since audio conditioning runs at a literal t = 1.0.
+        #
+        # At PRODUCTION RESIDUES but not production length, deliberately. Every stream keeps the
+        # residue mod TILE that decides the assembly path -- audio cond 414 (30), video cond 1008 (16),
+        # target audio 414 (30), target video 3024 (16) -- while the sequence is 5372 rather than
+        # 81488. The reason is the reference, not the device: this test compares against a torch model
+        # whose full self-attention is O(n^2) on CPU, and at 81488 rows that alone exceeded the 300 s
+        # per-test budget (measured, campaign am. 122). Length adds nothing here -- what the
+        # interleaved region can get wrong is which projection a block takes and which rows it lands
+        # on, and both are residue- and order-sensitive, not length-sensitive. The production LENGTHS
+        # are covered at full depth by `test_minimax_h3_transformer_real_weights`, which has no CPU
+        # reference to pay for.
+        pytest.param(
+            512,
+            414,
+            3024,
+            (24, 42),
+            (("audio", 414, None), ("video", 1008, (24, 42))),
+            id="ref2va_interleaved_audio_video",
+        ),
+        # The ordering trap: an image-shaped block on its OWN 64x64 grid, then a video block, then a
+        # standalone audio block LAST rather than paired with a video -- so a split that assumed
+        # "audio always precedes video" is caught, as is one that used the target grid for every block.
+        pytest.param(
+            512,
+            414,
+            3024,
+            (24, 42),
+            (("video", 4096, (64, 64)), ("video", 1008, (24, 42)), ("audio", 414, None)),
+            id="ref2va_interleaved_audio_last",
+        ),
     ],
 )
 def test_minimax_h3_transformer(
@@ -173,7 +257,7 @@ def test_minimax_h3_transformer(
     num_audio: int,
     num_video: int,
     grid: tuple[int, int],
-    num_cond: int,
+    cond_spec: tuple[tuple[str, int, tuple[int, int] | None], ...],
     weights: str,
     is_fsdp: bool,
     topology: ttnn.Topology,
@@ -201,29 +285,50 @@ def test_minimax_h3_transformer(
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
     B = 1
+    num_cond = sum(rows for _, rows, _ in cond_spec)
     seq_len = num_text + num_cond + num_audio + num_video
-    per_modality = _modality_metadata(num_text, num_audio, num_video, grid, num_cond)
+    per_modality = _modality_metadata(num_text, num_audio, num_video, grid, cond_spec)
+    cond_blocks = per_modality["cond_blocks"]
 
-    # ---- reference layout: packed as [text | cond | audio | video], contiguous ----
-    # This is `packing.build_packed_sequence`'s order, and the conditioning block's position between
-    # text and audio is what the model's four-way concat has to agree with.
-    order = ("text", "cond", "audio", "video")
-    ref_position_ids = torch.cat([per_modality[m]["pos"] for m in order])
-    ref_tags = torch.cat([per_modality[m]["tags"] for m in order])
-    ref_ts_idx = torch.cat([per_modality[m]["ts"] for m in order])
-    cond_start = num_text
-    audio_start = cond_start + num_cond
+    # ---- reference layout: [text | cond block 1 | ... | audio | video], contiguous ----
+    # `packing.build_packed_sequence` / `build_ref2va_packed_sequence` order, and the conditioning
+    # region's position between text and audio is what the model's concat has to agree with. For
+    # ref2va that region is modality-INTERLEAVED, so the row ranges below are collected per block
+    # rather than as one slice.
+    segments = [per_modality["text"]] + cond_blocks + [per_modality["audio"], per_modality["video"]]
+    ref_position_ids = torch.cat([segment["pos"] for segment in segments])
+    ref_tags = torch.cat([segment["tags"] for segment in segments])
+    ref_ts_idx = torch.cat([segment["ts"] for segment in segments])
+
+    # Walk the conditioning region once, in packed order, recording each block's row range. This is
+    # the single walk everything else keys off -- the reference's per-modality index lists, the
+    # per-block input tensors and the model's `condition_blocks` are all built from it, so there is no
+    # second ordering to get wrong.
+    cursor = num_text
+    for block in cond_blocks:
+        block["start"], block["stop"] = cursor, cursor + block["rows"]
+        cursor = block["stop"]
+    audio_start = cursor
     video_start = audio_start + num_audio
+
     text_indices = torch.arange(num_text)
-    audio_indices = torch.arange(audio_start, video_start)
-    # The reference's `video_indices` covers the conditioning rows FIRST and then the target rows, so
-    # its `hidden_states` is the concatenation of both -- which is how the reference's `index_copy`
-    # places a non-contiguous video stream. Ours passes them as two arguments instead.
-    video_indices = torch.cat([torch.arange(cond_start, audio_start), torch.arange(video_start, seq_len)])
+    # The reference's index lists put the CONDITIONING rows of a modality first, then its target rows,
+    # which is how its `index_copy` places a non-contiguous stream. Ours passes the conditioning rows
+    # as typed blocks instead.
+    cond_ranges = {
+        modality: [torch.arange(b["start"], b["stop"]) for b in cond_blocks if b["modality"] == modality]
+        for modality in ("video", "audio")
+    }
+    video_indices = torch.cat(cond_ranges["video"] + [torch.arange(video_start, seq_len)])
+    audio_indices = torch.cat(cond_ranges["audio"] + [torch.arange(audio_start, video_start)])
+    num_cond_video = sum(len(r) for r in cond_ranges["video"])
+    num_cond_audio = sum(len(r) for r in cond_ranges["audio"])
     num_timesteps = int(ref_ts_idx.max().item()) + 1
 
     logger.info(
         f"seq_len={seq_len} (text={num_text} cond={num_cond} audio={num_audio} video={num_video}), "
+        f"cond blocks={[(b['modality'], b['rows']) for b in cond_blocks]}, "
+        f"cond video/audio rows={num_cond_video}/{num_cond_audio}, "
         f"num_timesteps={num_timesteps}, layers={NUM_LAYERS} (reduced from 50)"
     )
 
@@ -273,20 +378,32 @@ def test_minimax_h3_transformer(
     torch_model.eval()
 
     video_input = torch.randn((B, num_video, VIDEO_PATCH_DIM), dtype=torch.float32)
-    cond_input = torch.randn((B, num_cond, VIDEO_PATCH_DIM), dtype=torch.float32) if num_cond else None
     audio_input = torch.randn((B, num_audio, AUDIO_IN_CHANNELS), dtype=torch.float32)
     prompt_input = torch.randn((B, num_text, TEXT_DIM), dtype=torch.float32)
+    # One tensor per conditioning block, at that block's own modality width: a video block is
+    # `VIDEO_PATCH_DIM` (96) wide and an audio block `AUDIO_IN_CHANNELS` (32), which is exactly why
+    # they cannot be concatenated before projection and why the model takes a list.
+    for block in cond_blocks:
+        width = VIDEO_PATCH_DIM if block["modality"] == "video" else AUDIO_IN_CHANNELS
+        block["input"] = torch.randn((B, block["rows"], width), dtype=torch.float32)
     # Timesteps are consumed unscaled in [0, 1]; one entry per distinct noise level.
     timestep = torch.rand((num_timesteps,), dtype=torch.float32)
 
     logger.info("Running torch model")
-    # The reference takes one video stream covering `video_indices`, i.e. conditioning rows then target
-    # rows. The port takes them separately so it can place them either side of audio without a slice.
-    ref_video_input = video_input if cond_input is None else torch.cat([cond_input, video_input], dim=1)
+    # The reference takes ONE stream per modality, covering that modality's index list: its
+    # conditioning rows first, then its target rows. The port instead passes the conditioning rows as
+    # typed blocks so it can place them in packed order without a scatter, so the two views of the
+    # same rows are assembled here from the same walk.
+    ref_video_input = torch.cat(
+        [block["input"] for block in cond_blocks if block["modality"] == "video"] + [video_input], dim=1
+    )
+    ref_audio_input = torch.cat(
+        [block["input"] for block in cond_blocks if block["modality"] == "audio"] + [audio_input], dim=1
+    )
     with torch.no_grad():
         torch_out = torch_model(
             hidden_states=ref_video_input,
-            audio_hidden_states=audio_input,
+            audio_hidden_states=ref_audio_input,
             encoder_hidden_states=prompt_input,
             timestep=timestep,
             timestep_indices=ref_ts_idx,
@@ -297,9 +414,11 @@ def test_minimax_h3_transformer(
             text_indices=text_indices,
             return_dict=True,
         )
-    # The port returns the TARGET video rows only -- see the note on `forward`'s return value -- so drop
-    # the reference's leading conditioning rows before comparing.
-    torch_video_out, torch_audio_out = torch_out.sample[:, num_cond:], torch_out.audio_sample
+    # The port returns the TARGET rows only, for BOTH modalities -- see the note on `forward`'s return
+    # value -- so drop the reference's leading conditioning rows of each before comparing. For ref2va
+    # the audio stream has conditioning rows too, which t2va and fl2va never did.
+    torch_video_out = torch_out.sample[:, num_cond_video:]
+    torch_audio_out = torch_out.audio_sample[:, num_cond_audio:]
     logger.info(f"torch video {tuple(torch_video_out.shape)} audio {tuple(torch_audio_out.shape)}")
 
     # ---- TT layout: the same natural global order, zero-padded to a multiple of SP * TILE ----
@@ -370,7 +489,10 @@ def test_minimax_h3_transformer(
     tt_video = bf16_tensor(video_input.unsqueeze(0), device=mesh_device)
     tt_audio = bf16_tensor(audio_input.unsqueeze(0), device=mesh_device)
     tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
-    tt_cond = None if cond_input is None else bf16_tensor(cond_input.unsqueeze(0), device=mesh_device)
+    # The typed conditioning region, in packed order. Built by the same walk as everything else.
+    tt_cond = [
+        (bf16_tensor(block["input"].unsqueeze(0), device=mesh_device), block["modality"]) for block in cond_blocks
+    ] or None
     # Raw timesteps: a handful of values, replicated, float32 so the sinusoid is computed in fp32.
     # Shaped [1, 1, T, 1] so it broadcasts against the [1, 1, 1, freq_dim/2] frequency factor.
     tt_timestep = from_torch(timestep.reshape(1, 1, num_timesteps, 1), device=mesh_device, dtype=ttnn.float32)
@@ -408,7 +530,7 @@ def test_minimax_h3_transformer(
         video_1BVC=tt_video,
         audio_1BAC=tt_audio,
         prompt_1BLP=tt_prompt,
-        condition_1BKC=tt_cond,
+        condition_blocks=tt_cond,
         timestep=tt_timestep,
         adaln_indices=tt_adaln,
         timestep_indices=tt_tsi,
@@ -493,6 +615,9 @@ def _truncated_depth_state_dict(directory: Path, num_layers: int) -> dict[str, t
     return _load_reference_state_dict(directory, keep=keep)
 
 
+# 62 GB of safetensors, a full 50-layer upload and two forwards, at up to 111616 padded rows for the
+# ref2va probe. `pytest.ini`'s 300 s default is a correctness-test budget and does not cover this.
+@pytest.mark.timeout(5400)
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
@@ -503,16 +628,46 @@ def _truncated_depth_state_dict(directory: Path, num_layers: int) -> dict[str, t
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    ("num_text", "num_audio", "num_video", "grid"),
+    ("num_text", "num_audio", "num_video", "grid", "cond_spec"),
     [
-        pytest.param(512, 256, 1280, (8, 8), id="small_s2048"),
-        pytest.param(512, 256, 20736, (8, 8), id="s21504"),
+        pytest.param(512, 256, 1280, (8, 8), (), id="small_s2048"),
+        pytest.param(512, 256, 20736, (8, 8), (), id="s21504"),
         # The shape that ships: 1344x768 / 124 frames / 512-token prompt. 37 latent frames over a
         # 24x42 patch grid = 37296 video rows, 207 audio latents x 2 channels = 414 audio rows,
         # total 38222 padded to 38400 -- 4800 rows per device at SP=8. Neither of the two cases
         # above reaches this: they are tile-aligned by construction and 1.8x smaller, so they ask
         # neither the ROW_MAJOR assembly question nor the residency one at full depth.
-        pytest.param(512, 414, 37296, (24, 42), id="prod_768p_5s"),
+        pytest.param(512, 414, 37296, (24, 42), (), id="prod_768p_5s"),
+        # ---- ref2va: does it fit? ----
+        #
+        # The campaign's shape probe. ref2va packed lengths were measured host-only against the
+        # reference packing (am. 114) and run 1.2x-3.0x t2va's, which is a residency question the
+        # 2-layer correctness test cannot answer and the t2va shape above does not reach. These three
+        # run the real 50 layers with the real checkpoint at the real padded lengths, so what they
+        # answer is exactly "does the shape the e2e gate will ask for fit on the mesh".
+        #
+        # There is no reference here and no PCC; the shape/finiteness checks are the whole gate. The
+        # verdict sets the e2e case list -- a case that does not fit becomes a documented gap with a
+        # measured reason instead of a surprise at the end.
+        pytest.param(4104, 414, 37296, (24, 42), (("video", 4096, (64, 64)),), id="ref2va_1image_s46080"),
+        pytest.param(
+            6068,
+            414,
+            37296,
+            (24, 42),
+            (("audio", 414, None), ("video", 37296, (24, 42))),
+            id="ref2va_1video_s81664",
+        ),
+        # Nine 2048x2048 image references: the documented ceiling on images, 111616 padded, 13952 rows
+        # per device. The largest shape ref2va can ask for at this target resolution.
+        pytest.param(
+            36872,
+            414,
+            37296,
+            (24, 42),
+            tuple(("video", 4096, (64, 64)) for _ in range(9)),
+            id="ref2va_9image_s111616",
+        ),
     ],
 )
 def test_minimax_h3_transformer_real_weights(
@@ -524,6 +679,7 @@ def test_minimax_h3_transformer_real_weights(
     num_audio: int,
     num_video: int,
     grid: tuple[int, int],
+    cond_spec: tuple[tuple[str, int, tuple[int, int] | None], ...],
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
@@ -563,15 +719,18 @@ def test_minimax_h3_transformer_real_weights(
     logger.info(f"loading {directory} (num_layers={model_kwargs['num_layers']})")
 
     B = 1
-    seq_len = num_text + num_audio + num_video
+    num_cond = sum(rows for _, rows, _ in cond_spec)
+    seq_len = num_text + num_cond + num_audio + num_video
     hidden_size = model_kwargs["hidden_size"]
     audio_channels = model_kwargs["audio_in_channels"]
     video_patch_dim = model_kwargs["in_channels"] * int(torch.tensor(model_kwargs["patch_size"]).prod())
 
-    per_modality = _modality_metadata(num_text, num_audio, num_video, grid)
-    position_ids = torch.cat([per_modality[m]["pos"] for m in ("text", "audio", "video")])
-    tags = torch.cat([per_modality[m]["tags"] for m in ("text", "audio", "video")])
-    ts_idx = torch.cat([per_modality[m]["ts"] for m in ("text", "audio", "video")])
+    per_modality = _modality_metadata(num_text, num_audio, num_video, grid, cond_spec)
+    cond_blocks = per_modality["cond_blocks"]
+    segments = [per_modality["text"]] + cond_blocks + [per_modality["audio"], per_modality["video"]]
+    position_ids = torch.cat([segment["pos"] for segment in segments])
+    tags = torch.cat([segment["tags"] for segment in segments])
+    ts_idx = torch.cat([segment["ts"] for segment in segments])
     num_timesteps = int(ts_idx.max().item()) + 1
 
     alignment = sp_factor * ttnn.TILE_SIZE
@@ -616,6 +775,21 @@ def test_minimax_h3_transformer_real_weights(
     tt_video = bf16_tensor(torch.randn(1, B, num_video, video_patch_dim), device=mesh_device)
     tt_audio = bf16_tensor(torch.randn(1, B, num_audio, audio_channels), device=mesh_device)
     tt_prompt = bf16_tensor(torch.randn(1, B, num_text, model_kwargs["text_dim"]), device=mesh_device)
+    tt_cond = [
+        (
+            bf16_tensor(
+                torch.randn(
+                    1,
+                    B,
+                    block["rows"],
+                    video_patch_dim if block["modality"] == "video" else audio_channels,
+                ),
+                device=mesh_device,
+            ),
+            block["modality"],
+        )
+        for block in cond_blocks
+    ] or None
     tt_timestep = from_torch(
         torch.rand(num_timesteps).reshape(1, 1, num_timesteps, 1), device=mesh_device, dtype=ttnn.float32
     )
@@ -646,13 +820,17 @@ def test_minimax_h3_transformer_real_weights(
         mesh_axes=[..., None, sp_axis],
     )
 
-    logger.info(f"running {model_kwargs['num_layers']} layers, seq_len={seq_len} (padded {padded_len})")
+    logger.info(
+        f"running {model_kwargs['num_layers']} layers, seq_len={seq_len} (padded {padded_len}, "
+        f"{padded_len // sp_factor} rows/device), cond blocks={[(b['modality'], b['rows']) for b in cond_blocks]}"
+    )
 
     def forward():
         out = tt_model(
             video_1BVC=tt_video,
             audio_1BAC=tt_audio,
             prompt_1BLP=tt_prompt,
+            condition_blocks=tt_cond,
             timestep=tt_timestep,
             adaln_indices=tt_adaln,
             timestep_indices=tt_tsi,
