@@ -98,6 +98,27 @@ void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
         "gather_codegen: operation requires index to be on Device. Input storage type: {}",
         tensor_args.input_index_tensor.storage_type());
     TT_FATAL(attributes.sparse_grad == false, "gather_codegen: sparse gradient is not supported.");
+
+    // Second belt-and-suspenders gate, this one over the output placement the free function checks
+    // with supported_execution_controls(). Unlike most ported ops the codegen prim DOES carry the
+    // requested memory config as an attribute, so its validation step can answer the same question
+    // independently of the routing decision -- and must, because none of the three factories has
+    // native's sharded path: output-spec computation below never synthesizes the shard_spec that
+    // GatherDeviceOperation::compute_output_specs derives, and every CB and per-tile transfer is
+    // sized from the output buffer's aligned TILE page (see make_tile_cb). Without this a direct
+    // ttnn::prim::gather_codegen() call with a sharded config fails inside output-tensor creation
+    // instead of here.
+    TT_FATAL(
+        !attributes.output_mem_config.is_sharded(),
+        "gather_codegen: sharded output memory config is not supported (got memory layout {}); the codegen "
+        "factories place output tiles through an interleaved TensorAccessor only.",
+        attributes.output_mem_config.memory_layout());
+    if (tensor_args.output_tensor.has_value()) {
+        TT_FATAL(
+            !tensor_args.output_tensor.value().memory_config().is_sharded(),
+            "gather_codegen: sharded preallocated output tensor is not supported (got memory layout {}).",
+            tensor_args.output_tensor.value().memory_config().memory_layout());
+    }
 }
 
 GatherCodegenDeviceOperation::spec_return_value_t GatherCodegenDeviceOperation::compute_output_specs(

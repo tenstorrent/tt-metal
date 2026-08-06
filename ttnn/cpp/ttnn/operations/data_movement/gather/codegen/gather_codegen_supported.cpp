@@ -113,6 +113,15 @@ bool is_demoted(const Tensor& /*input_tensor*/, int8_t /*dim*/, const Tensor& /*
     // The signature stays so the auto branch's `supported && !demoted` wiring is identical whether or
     // not a demotion is ever found; a future demotion belongs here as a condition over the normalized
     // attributes, not as a shape-tuple carve-out.
+    //
+    // One in-scope configuration -- input [1,1,32,64], dim=-2, index [1,1,16,64], bfloat16, TILE --
+    // beats the native prim but sits below parity with the same descriptor replayed through
+    // generic_op, and was accepted there rather than demoted. It post-transforms to Ht=2, Wt_input=1,
+    // Wt_index=1, i.e. the smallest work the row-buffered factory can be given (two tile-rows, two
+    // cores), where the measured difference is fixed per-launch cost and not anything the descriptor
+    // chooses. Accepting it is deliberate: demoting a case that beats native would route it to the
+    // slower path under `auto`, and it must keep returning false here so forced
+    // implementation="codegen" continues to measure it.
     return false;
 }
 
