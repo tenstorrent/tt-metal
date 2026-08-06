@@ -11,7 +11,13 @@ Loads the demo script + voice clones once, then for each ISL:
 
 Reports per ISL (same fields as ``demo.py`` meta):
 
-  prefill_s, prefill_tok_s, ttft_s, decode_tok_s, ms_per_tok_steady, e2e_s, ar_tokens_generated
+  prefill_s, prefill_tok_s, ttft_s, decode_tok_s, ms_per_tok_steady, e2e_s, ar_tokens_generated,
+  audio_s, rtf, rtf_x, rtf_decode
+
+RTF (real-time factor) = processing time / rendered audio duration
+(``ar_tokens / 7.5`` s). ``rtf`` is end-to-end (full ``generate()``); ``rtf_decode`` is the
+sustained decode rate only. RTF < 1 ⇒ faster than real time; ``rtf_x`` = 1/rtf is the "× RT"
+figure. The full per-ISL table is also written to ``vibevoice/output/e2e_isl_perf/<name>.json``.
 
 Env::
 
@@ -28,8 +34,10 @@ Run (from tt-metal root)::
 
 from __future__ import annotations
 
+import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -57,6 +65,29 @@ _DEMO_ID = "4p_climate_100min"
 _CFG_SCALE = 1.3
 _NUM_STEPS = 10
 _SEED = 0
+
+# Benchmark output dir: vibevoice/output/e2e_isl_perf/ (tests/perf/ -> vibevoice/).
+_PERF_DIR = Path(__file__).resolve().parents[2] / "output" / "e2e_isl_perf"
+
+
+def _dump_results(rows: list[dict], *, full_len: int, warmup_n: int, max_length_times: float) -> None:
+    """Write the ISL-sweep benchmark table to ``output/e2e_isl_perf/<demo>_rtf_sweep.json``."""
+    _PERF_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = _PERF_DIR / f"{_DEMO_ID}_rtf_sweep.json"
+    payload = {
+        "demo_id": _DEMO_ID,
+        "cfg_scale": _CFG_SCALE,
+        "num_diffusion_steps": _NUM_STEPS,
+        "seed": _SEED,
+        "trace_segment": _trace_enabled(),
+        "full_prefill_tokens": full_len,
+        "warmup_tokens": warmup_n,
+        "max_length_times": max_length_times,
+        "frame_rate_hz": 7.5,
+        "rows": rows,
+    }
+    out_path.write_text(json.dumps(payload, indent=2))
+    print(f"[isl_sweep] wrote benchmark → {out_path}", flush=True)
 
 
 def _isl_list(full_len: int) -> list[int]:
@@ -219,7 +250,8 @@ def test_e2e_isl_sweep_4p_climate_100min(mesh_device, device_params):
     print("\n[isl_sweep] ===== summary =====", flush=True)
     hdr = (
         f"{'ISL':>6} {'prefill_s':>10} {'pref_tok/s':>10} {'TTFT_s':>8} "
-        f"{'dec_tok/s':>10} {'ms/tok':>8} {'e2e_s':>10} {'ar_tok':>8} "
+        f"{'dec_tok/s':>10} {'ms/tok':>8} {'e2e_s':>10} {'audio_s':>10} "
+        f"{'RTF':>8} {'RTF_x':>7} {'RTF_dec':>8} {'ar_tok':>8} "
         f"{'mode':>13} {'steady_fr':>9}"
     )
     print(hdr, flush=True)
@@ -227,10 +259,15 @@ def test_e2e_isl_sweep_4p_climate_100min(mesh_device, device_params):
         print(
             f"{m['prefill_tokens']:6d} {m['prefill_s']:10.3f} {m['prefill_tok_s']:10.1f} "
             f"{m['ttft_s']:8.3f} {m['decode_tok_s']:10.2f} {m['ms_per_tok_steady']:8.2f} "
-            f"{m['e2e_s']:10.3f} {m['ar_tokens_generated']:8d} "
+            f"{m['e2e_s']:10.3f} {m['audio_s']:10.2f} "
+            f"{m['rtf']:8.4f} {m['rtf_x']:7.2f} {m['rtf_decode']:8.4f} "
+            f"{m['ar_tokens_generated']:8d} "
             f"{m['decode_mode']:>13} {m['steady_decode_frames']:9d}",
             flush=True,
         )
+
+    # Persist the benchmark table (JSON) under vibevoice/perf/.
+    _dump_results(rows, full_len=full_len, warmup_n=warmup_n, max_length_times=max_length_times)
 
     assert rows, "ISL sweep produced no rows"
     for m in rows:
