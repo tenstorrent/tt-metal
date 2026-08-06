@@ -28,8 +28,7 @@ void bind_neighbor_pad_halo(nb::module_& mod) {
 
         Exchanges halo rows between neighboring devices via fabric into a compact
         pre-allocated DRAM halo buffer [H-top | H-bot | W-left | W-right], and returns
-        that buffer. This is the fabric H+W exchange from neighbor_pad_conv3d with the
-        conv3d stage removed — pure transport, benchmarked toward DRAM + fabric bandwidth.
+        that buffer. Pure transport, benchmarked toward DRAM + fabric bandwidth.
         The caller must pre-allocate `halo_buffer` with the correct size (see NP design docs).
 
         Args:

@@ -12,7 +12,7 @@
 
 namespace ttnn::experimental::prim {
 
-// Standalone halo-only neighbor-pad: the fabric H+W halo exchange from the fused neighbor_pad_conv3d op
+// Standalone halo-only neighbor-pad: the fabric H+W halo exchange, paired with conv3d(halo_buffer=...)
 struct NpHaloParams {
     // NP topology: H-fabric and W-fabric halo exchange
     uint32_t np_padding_h;     // H padding per side (1 for k333)

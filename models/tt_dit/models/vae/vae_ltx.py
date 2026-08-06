@@ -29,7 +29,6 @@ from ...utils.conv3d import (
     ConvDims,
     _ntuple,
     aligned_channels,
-    apply_fused_blocking_override,
     conv3d_blocking_hash,
     conv_pad_height,
     conv_pad_in_channels,
@@ -114,7 +113,6 @@ class LTXCausalConv3d(Module):
         conv_dims: ConvDims | None = None,
         temporal_padding_mode: str = "repeat",
         depth_to_space_stride: tuple[int, int, int] | None = None,
-        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -179,33 +177,16 @@ class LTXCausalConv3d(Module):
             W=dims_W,
         )
 
-        # Hybrid dispatch: the fused neighbor_pad+conv3d op wins only on conv-heavy shapes where the interior conv
         self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
             self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
         )
-        # Fused neighbor_pad_conv3d is disabled: halo shapes route through neighbor_pad_halo + halo_scatter
-        self._use_fused = False
         # Halo-aware two-dispatch (neighbor_pad_halo -> conv3d halo mode): for the NP-light shapes that skip
         self._use_halo_conv = (
             self._needs_halo
-            and not self._use_fused
             and self.internal_padding[1] == 0
             and self.internal_padding[2] == 0
             and os.environ.get("NP_NO_HALO_CONV") is None
         )
-        if self._use_fused:
-            # Some shapes run fastest with a finer blocking on the fused op than the standalone-optimal one
-            apply_fused_blocking_override(
-                self.conv_config,
-                self.in_channels,
-                self.out_channels,
-                self.kernel_size,
-                h_factor=self.parallel_config.height_parallel.factor,
-                w_factor=self.parallel_config.width_parallel.factor,
-                T=dims_T,
-                H=dims_H,
-                W=dims_W,
-            )
 
         from models.common.utility_functions import is_blackhole
 
@@ -299,14 +280,6 @@ class LTXCausalConv3d(Module):
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
-        # H-row masking (zeroing rows at/beyond logical_h) is fused into neighbor_pad via logical_h on the standalone
-        h_mask_active = (
-            h_pad_needed
-            and logical_h > 0
-            and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
-        )
-        use_fused = self._use_fused and not h_mask_active
-
         # Pre-conv pad masking
         wf = self.parallel_config.width_parallel.factor
         hf = self.parallel_config.height_parallel.factor
@@ -335,11 +308,7 @@ class LTXCausalConv3d(Module):
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
-            sem_getter = (
-                self.ccl_manager.get_np_fused_ping_pong_semaphore
-                if use_fused
-                else self.ccl_manager.get_np_ping_pong_semaphore
-            )
+            sem_getter = self.ccl_manager.get_np_ping_pong_semaphore
             if h_pad_needed:
                 dims.append(2)
                 pad_left.append(self.external_padding[1])
@@ -354,28 +323,6 @@ class LTXCausalConv3d(Module):
                 axes.append(self.parallel_config.width_parallel.mesh_axis)
                 neighbor_sems.append(sem_getter(self.parallel_config.width_parallel.mesh_axis))
                 links.append(_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
-
-            if use_fused:
-                return self.ccl_manager.neighbor_pad_conv3d_fused(
-                    x_BTHWC,
-                    self.weight.data,
-                    self.bias.data,
-                    dims=dims,
-                    pad_left=pad_left,
-                    pad_right=pad_right,
-                    axes=axes,
-                    neighbor_sems=neighbor_sems,
-                    num_links=links,
-                    conv_config=self.conv_config,
-                    output_channels=self.out_channels,
-                    kernel_size=self.kernel_size,
-                    stride=self.stride,
-                    padding=self.internal_padding,
-                    dilation=(1, 1, 1),
-                    padding_mode="zeros",
-                    dtype=self.dtype,
-                    compute_kernel_config=self.compute_kernel_config,
-                )
 
             if self._use_halo_conv and self._persist_pad and h_pad_needed and w_pad_needed:
                 # Persistent-padded: neighbor_pad_halo -> compact -> halo_scatter into a padded buffer -> plain
@@ -517,7 +464,6 @@ class LTXResnetBlock3D(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         conv_dims: ConvDims | None = None,
-        use_fused: bool = False,
     ) -> None:
         super().__init__()
 
@@ -528,7 +474,6 @@ class LTXResnetBlock3D(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             dtype=dtype,
-            use_fused=use_fused,
         )
 
         self.norm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -629,7 +574,6 @@ class LTXUNetMidBlock3D(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         conv_dims: ConvDims | None = None,
-        use_fused: bool = False,
     ) -> None:
         super().__init__()
         self.res_blocks = ModuleList()
@@ -643,7 +587,6 @@ class LTXUNetMidBlock3D(Module):
                     ccl_manager=ccl_manager,
                     dtype=dtype,
                     conv_dims=conv_dims,
-                    use_fused=use_fused,
                 )
             )
 
@@ -674,7 +617,6 @@ class LTXDepthToSpaceUpsample(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         conv_dims: ConvDims | None = None,
-        use_fused: bool = False,
     ) -> None:
         super().__init__()
         self.stride = stride
@@ -693,7 +635,6 @@ class LTXDepthToSpaceUpsample(Module):
             dtype=dtype,
             conv_dims=conv_dims,
             depth_to_space_stride=stride,
-            use_fused=use_fused,
         )
 
     def _depth_to_space_bthwc(self, x: ttnn.Tensor, B: int, T: int, H: int, W: int) -> ttnn.Tensor:
@@ -836,7 +777,6 @@ class LTXVideoDecoder(Module):
         num_frames: int | None = None,
         height: int | None = None,
         width: int | None = None,
-        use_fused: bool = True,
     ) -> None:
         super().__init__()
 
@@ -873,7 +813,6 @@ class LTXVideoDecoder(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             dtype=dtype,
-            use_fused=use_fused,
         )
 
         # conv_in: in_channels → 1024

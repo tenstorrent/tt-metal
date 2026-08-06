@@ -58,10 +58,8 @@ class CCLManager:
         self.ag_ping_pong_idx = [0, 0]
         self.exp_ring_ping_pong_idx = [0, 0]
         self.np_ping_pong_idx = [0, 0]
-        self.np_fused_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
-        self.barrier_fused_idx = [0, 0]
 
     def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
@@ -118,27 +116,6 @@ class CCLManager:
         self.barrier_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
-        }
-
-        # Separate semaphores for fused NP+Conv3d path to avoid state conflicts when standalone NP and fused ops
-        self.np_fused_ping_pong_semaphores = {
-            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
-            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
-        }
-        self.barrier_fused_semaphores = {
-            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
-            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
-        }
-
-        # Per-(region,link) progress sems for fused NP+Conv3d overlap: 4 face regions {H-top, H-bot, W-left
-        self._np_region_n_sems = 4 * self.num_links
-        self.np_region_progress_semaphores = {
-            0: [
-                ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(self._np_region_n_sems)
-            ],
-            1: [
-                ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(self._np_region_n_sems)
-            ],
         }
 
     def get_rs_ping_pong_buffer(self, shape, dim, mesh_axis):
@@ -391,20 +368,6 @@ class CCLManager:
         self.np_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.np_ping_pong_semaphores[mesh_axis][cur_idx]
 
-    def get_np_fused_ping_pong_semaphore(self, mesh_axis):
-        """
-        Get semaphores for fused NP+Conv3d operations (separate pool from standalone NP).
-        """
-        cur_idx = self.np_fused_ping_pong_idx[mesh_axis]
-        self.np_fused_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
-        return self.np_fused_ping_pong_semaphores[mesh_axis][cur_idx]
-
-    def get_barrier_fused_semaphore(self, mesh_axis):
-        """Get barrier semaphore for fused NP+Conv3d (separate pool from standalone NP)."""
-        cur_idx = self.barrier_fused_idx[mesh_axis]
-        self.barrier_fused_idx[mesh_axis] = (cur_idx + 1) % 2
-        return self.barrier_fused_semaphores[mesh_axis][cur_idx]
-
     def get_sr_ping_pong_semaphore(self, mesh_axis):
         """
         Get semaphores for slice reshard operations.
@@ -413,10 +376,6 @@ class CCLManager:
         n_sems = 1
         self.sr_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.sr_ping_pong_semaphores[mesh_axis][cur_idx]
-
-    def get_np_region_progress_semaphores(self, mesh_axis):
-        """Get the 4*num_links per-(region,link) progress sems (static, single bank), indexed [region*num_links + link]."""
-        return self.np_region_progress_semaphores[mesh_axis]
 
     def get_np_halo_buffer(self, input_shape, dim, padding, dtype=ttnn.bfloat16, dim2=None, padding2=0):
         """
@@ -464,86 +423,6 @@ class CCLManager:
         self._ping_pong_buffer_indices[cache_key] = 1 - cur
         return self._ping_pong_buffer_cache[cache_key][cur]
 
-    def neighbor_pad_conv3d_fused(
-        self,
-        tensor: ttnn.Tensor,
-        weight: ttnn.Tensor,
-        bias,
-        *,
-        dims: list,
-        pad_left: list,
-        pad_right: list,
-        axes: list,
-        neighbor_sems: list,
-        num_links: list,
-        conv_config,
-        output_channels: int,
-        kernel_size,
-        stride,
-        padding,
-        dilation,
-        padding_mode: str,
-        dtype,
-        compute_kernel_config=None,
-    ) -> ttnn.Tensor:
-        """
-        Fused NeighborPad + Conv3d: ONE program dispatch, no sub-device manager.
-        Equivalent to neighbor_pad_halo_only() + conv3d() but as a single C++ op.
-        """
-        barrier_sem = self.get_barrier_fused_semaphore(axes[0])
-        dim2 = dims[1] if len(dims) > 1 else None
-        padding2 = pad_left[1] if dim2 is not None else 0
-        halo_buf = self.get_np_halo_buffer(
-            tensor.shape, dims[0], pad_left[0], dtype=tensor.get_dtype(), dim2=dim2, padding2=padding2
-        )
-
-        # W-axis NP padding per side, passed to the op below as np_padding_w.
-        pw = pad_left[1] if dim2 is not None and len(pad_left) > 1 else 0
-
-        # Per-call halo buffer address
-        conv_config.h_halo_buffer_addr = halo_buf.buffer_address()
-
-        # Per-(region,link) progress sems: each edge tile waits only on the (region, owning-link) it reads
-        region_sems = self.get_np_region_progress_semaphores(axes[0])
-        region_addrs = [ttnn.get_global_semaphore_address(s) for s in region_sems]
-        conv_config.region_progress_sem_addr = region_addrs + [0] * (16 - len(region_addrs))
-
-        w_sem = neighbor_sems[1] if len(neighbor_sems) > 1 else neighbor_sems[0]
-        np_pad2_left = pad_left[1] if dim2 is not None and len(pad_left) > 1 else 0
-        np_pad2_right = pad_right[1] if dim2 is not None and len(pad_right) > 1 else 0
-        np_pad_dim2_val = dim2 if dim2 is not None else 0
-        np_pad2_cluster_axis_val = axes[1] if dim2 is not None and len(axes) > 1 else 0
-        np_pad2_num_links = num_links[1] if dim2 is not None and len(num_links) > 1 else 1
-
-        return ttnn.experimental.neighbor_pad_conv3d(
-            tensor,
-            weight,
-            bias,
-            halo_buf,
-            np_padding_h=pad_left[0],
-            np_padding_w=pw,
-            np_cluster_axis=axes[0],
-            np_num_links=num_links[0],
-            np_topology=self.topology,
-            h_neighbor_semaphore=neighbor_sems[0],
-            barrier_semaphore=barrier_sem,
-            w_neighbor_semaphore=w_sem,
-            np_pad_dim2=np_pad_dim2_val,
-            np_pad2_left=np_pad2_left,
-            np_pad2_right=np_pad2_right,
-            np_pad2_cluster_axis=np_pad2_cluster_axis_val,
-            np_pad2_num_links=np_pad2_num_links,
-            conv_config=conv_config,
-            output_channels=output_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
-            padding_mode=padding_mode,
-            dtype=dtype,
-            compute_kernel_config=compute_kernel_config,
-        )
-
     def neighbor_pad_halo_only(
         self,
         tensor: ttnn.Tensor,
@@ -561,7 +440,7 @@ class CCLManager:
     ) -> ttnn.Tensor:
         """Fill and return the compact [H-top|H-bot|W-left|W-right] halo buffer via the standalone
         neighbor_pad_halo op. Pair with ttnn.experimental.conv3d(halo_buffer=...) for the two-dispatch
-        halo-aware path (no full-pad interior copy). Mirrors neighbor_pad_conv3d_fused's param derivation.
+        halo-aware path (no full-pad interior copy).
 
         input_pad_h/w > 0: `tensor` is a padded [.,H+2*ipad_h,W+2*ipad_w,C] buffer; exchange the halo of
         its INTERIOR (copy-free path). The compact buffer is sized for the interior dims.
@@ -802,17 +681,11 @@ class CCLManager:
         for axis in [0, 1]:
             for sem in self.np_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
-            for sem in self.np_fused_ping_pong_semaphores[axis]:
-                ttnn.reset_global_semaphore_value(sem, 0)
-            for sem in self.barrier_fused_semaphores[axis]:
-                ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.sr_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.rs_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.ag_ping_pong_semaphores[axis]:
-                ttnn.reset_global_semaphore_value(sem, 0)
-            for sem in self.np_region_progress_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
 
     def all_gather_persistent_buffer(

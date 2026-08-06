@@ -425,7 +425,7 @@ _BLOCKINGS = {
         12,
         4,
         8,
-    ),  # ltx_s4_res — fused halo_last 23.1ms (T_out_block 12: fewer larger matmuls; beats force_spatial -4.9%)
+    ),  # ltx_s4_res — 23.1ms (T_out_block 12: fewer, larger matmuls)
     (2, 4, 128, 48, (3, 3, 3), 147, 136, 120): (128, 64, 6, 4, 8),  # ltx_s4_out — 13833us
     # LTX-2.3 spatial latent upsampler (x2), 2x4 BH-LB, 1080p.
     (2, 4, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 256, 1, 2, 8),  # initial_conv
@@ -582,33 +582,6 @@ def register_conv3d_configs(configs: dict) -> None:
     _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
 
 
-# Fused neighbor_pad_conv3d shapes that run fastest with force_spatial_parallel
-_FORCE_SPATIAL_KEYS = {
-    (2, 4, 128, 48, (3, 3, 3), 147, 136, 120),  # ltx_s4_out (128->48): light C_out matmul
-    # s4_res (4x8): force_spatial beats halo_last at the fused-only finer block 6,4,4 (below)
-    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60),  # ltx_s4_res (4x8)
-}
-
-# Fused-only blocking: applied ONLY on the fused path (model sets it inside `if self._use_fused`)
-_FUSED_BLOCKINGS = {
-    # s4_res (4x8) force_spatial: 6,4,4 -> 8129us (-19.7%) vs standalone 10118
-    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 4, 4),  # ltx_s4_res 4x8 force_spatial
-}
-
-# Fused shapes fastest with halo_last
-_HALO_LAST_KEYS = {
-    # s4_res_2x4 (large per-dev 136x120): halo_last 23100us vs force_spatial 24282us (-4.9%, MIN FW)
-    (2, 4, 128, 128, (3, 3, 3), 147, 136, 120),  # ltx_s4_res (2x4)
-    (2, 4, 256, 256, (3, 3, 3), 147, 68, 60),  # ltx_s3_res (2x4)
-    (2, 4, 256, 512, (3, 3, 3), 147, 68, 60),  # ltx_s3_chg (2x4)
-    (4, 8, 512, 512, (3, 3, 3), 75, 34, 30),  # ltx_s2_res (4x8)
-    (4, 8, 256, 256, (3, 3, 3), 147, 34, 30),  # ltx_s3_res (4x8)
-    (4, 8, 256, 512, (3, 3, 3), 147, 34, 30),  # ltx_s3_chg (4x8)
-    # ltx_s1_up (512->4096): the fused conv pipeline runs ~250us faster than standalone conv on the small 4x8 per-dev
-    (4, 8, 512, 4096, (3, 3, 3), 39, 17, 15),  # ltx_s1_up (4x8)
-}
-
-
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
 ):
@@ -662,8 +635,7 @@ def get_conv3d_config(
                 f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
             )
 
-    # NpConv3dConfig (a Conv3dConfig subclass) so the fused-only fields below can be set
-    cfg = ttnn.NpConv3dConfig(
+    return ttnn.Conv3dConfig(
         weights_dtype=weights_dtype,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         T_out_block=T_out_block,
@@ -673,34 +645,6 @@ def get_conv3d_config(
         C_in_block=C_in_block,
         compute_with_storage_grid_size=grid_size,
     )
-    # force_spatial_parallel is a read-write field, not a constructor arg.
-    cfg.force_spatial_parallel = blocking_key in _FORCE_SPATIAL_KEYS
-    cfg.halo_last = blocking_key in _HALO_LAST_KEYS
-    return cfg
-
-
-def apply_fused_blocking_override(
-    cfg, in_channels, out_channels, kernel_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
-) -> None:
-    """Swap in the fused-only blocking for shapes whose fused-optimal block differs from standalone.
-
-    Called by a conv layer only once it has decided to take the fused path, so the standalone
-    _BLOCKINGS entry (which feeds the standalone conv3d) is never disturbed. C_in_block is kept
-    fixed — weight prep keys on it and runs after this — so the override touches only the
-    spatial/temporal/C_out blocking.
-    """
-    blocking_key = (h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
-    blk = _FUSED_BLOCKINGS.get(blocking_key)
-    if blk is None:
-        return
-    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blk
-    assert (
-        C_in_block == cfg.C_in_block
-    ), f"_FUSED_BLOCKINGS C_in_block {C_in_block} must match standalone {cfg.C_in_block} (weight prep)"
-    cfg.C_out_block = C_out_block
-    cfg.T_out_block = T_out_block
-    cfg.H_out_block = H_out_block
-    cfg.W_out_block = W_out_block
 
 
 def _walk_conv3d_modules(module: Module):
