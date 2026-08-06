@@ -446,7 +446,7 @@ class BuiltPipeline:
             # always falls back to eager: conv2d re-prepares its weights (device->
             # host pull-back) on every call, which is not trace-safe — needs
             # ttnn.prepare_conv_weights at build time first. Default path unchanged.
-            if os.environ.get("XTTS_TRACE_STAGES") == "1":
+            if _os.environ.get("XTTS_TRACE_STAGES") == "1":
                 self.se_fwd = _TracedStage(device, self.se_fwd)
                 self.hifi_fwd = _TracedStage(device, self.hifi_fwd)
 
