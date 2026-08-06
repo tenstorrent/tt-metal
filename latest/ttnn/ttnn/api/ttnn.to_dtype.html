@@ -377,11 +377,11 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
+<td><p>BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8, INT8
 - TILE</p></td>
 </tr>
 <tr class="row-odd">
-<td><p>BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
+<td><p>BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8, INT8
 - ROW_MAJOR</p></td>
 </tr>
 </tbody>
@@ -398,6 +398,8 @@
 <dd>
 <ul class="simple">
 <li><p>tensor must be on the host.</p></li>
+<li><p>INT8 (like UINT8) is host-only: device typecast/tilize are not yet supported for it,
+so INT8 conversions run on host.</p></li>
 </ul>
 </dd>
 </dl>
