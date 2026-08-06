@@ -4558,6 +4558,146 @@ class TopKGolden:
 
 
 @register_golden
+class ColumnVectorSfpuGolden:
+    """Golden for the column-vector SFPU bodies of ckernel_sfpu_sdpa.h.
+
+    Those bodies run ITERATIONS_HALF_FACE = 4 iterations at a dst_reg stride of 2.
+    Within a 16x16 face, one sfpi dst_reg unit is a 32-lane SFPU vector covering 16 rows
+    of columns {j, j+8}, for unit j in 0..7, so a stride-2 walk of 4 iterations covers
+    units 0/2/4/6: face columns {0,2,4,6} and {8,10,12,14}, all 16 rows. The VectorMode::C
+    dispatcher invokes the body on faces 0 and 2, extending that down all 32 tile rows:
+
+        rows 0-31, columns 0,2,4,6,8,10,12,14  ->  transformed
+        everything else                        ->  passed through unchanged
+
+    Measured on Blackhole. The dst_reg unit layout is not documented in the header, and
+    the two readings that suggest themselves (4 rows x 8 columns, or 16 rows x 2 adjacent
+    columns) both predict a contiguous column range, which is not what the hardware does.
+    The layout is arch-specific in principle and unconfirmed on Wormhole, so a Wormhole
+    footprint failure implicates this mask before the kernel.
+
+    Only column 0 carries meaning for the caller, since these operands are row-reduce
+    outputs broadcast down a column, but the other seven are computed and have to be
+    modelled. The 768 untouched elements are what catch a wrong stride or iteration count;
+    a golden covering only column 0 would not.
+
+    Args:
+        input_2d: float tensor [32, 32], untilized.
+        op: ColumnVectorOp selecting the body.
+        exp_scale: float scale folded into the exp bodies (already bf16-exact).
+        softplus_beta / softplus_threshold: softplus parameters, as floats.
+    Returns:
+        float32 tensor [32, 32], untilized.
+    """
+
+    # Columns the stride-2 half-face walk lands on, per the layout above.
+    TRANSFORMED_COLS = (0, 2, 4, 6, 8, 10, 12, 14)
+
+    def __call__(
+        self,
+        input_2d,
+        op,
+        exp_scale: float = 1.0,
+        softplus_beta: float = 1.0,
+        softplus_threshold: float = 20.0,
+    ):
+        from .llk_params import ColumnVectorOp
+
+        x = input_2d.to(torch.float32).clone()
+        out = x.clone()
+
+        if op in (ColumnVectorOp.RecipLegacy, ColumnVectorOp.RecipIter):
+            transformed = torch.reciprocal(x)
+        elif op in (ColumnVectorOp.ExpAccurate, ColumnVectorOp.ExpPoly):
+            # Both exp bodies fold the scale in themselves (SCALE_EN is hardcoded true),
+            # so the reference is exp(scale * x). The scale reaches the kernel as a bf16
+            # pattern, so callers must pass a bf16-exact float or the golden drifts.
+            transformed = torch.exp(exp_scale * x)
+        elif op == ColumnVectorOp.Softplus:
+            # A structural match for the kernel, threshold branch included: where
+            # beta*x > threshold the body leaves DST untouched, which is correct because
+            # the answer there is (1/beta)*(beta*x) == x, the input already in place, and
+            # torch returns x in the same regime.
+            #
+            # One divergence this does not model: on bf16 dest the body clamps its
+            # degree-6 residual polynomial to 0 beyond |beta*x| > 5, so for beta*x < -5 it
+            # returns 0 where torch returns log(1+exp(beta*x)), about 0.0067. Keep stimuli
+            # inside the fit domain to test the polynomial rather than the clamp.
+            transformed = torch.nn.functional.softplus(
+                x, beta=softplus_beta, threshold=softplus_threshold
+            )
+        else:
+            raise ValueError(f"ColumnVectorSfpuGolden: unhandled op {op}")
+
+        cols = torch.tensor(self.TRANSFORMED_COLS, dtype=torch.long)
+        out[:, cols] = transformed[:, cols]
+        return out
+
+
+@register_golden
+class ColumnVectorCorrectionGolden:
+    """Golden for calculate_fused_max_sub_exp_add_tile (ckernel_sfpu_sdpa.h).
+
+    The flash-attention softmax-combine step, merging a worker's running (max, sum) into
+    the accumulator's. Five DEST tiles in, five out, four of them modified in place.
+    Follows ttnn's correction_block (compute_common.hpp:705) and the step list in its
+    caller (sdpa_flash_decode.cpp:552):
+
+        cur_max = max(prev_max, worker_max)
+        exp_prev   = exp(scale * (prev_max   - cur_max))
+        exp_worker = exp(scale * (worker_max - cur_max))
+        out[0] = exp_prev                                 (was prev_max)
+        out[1] = exp_worker                               (was worker_max)
+        out[2] = cur_max                                  (input ignored)
+        out[3] = exp_worker*worker_sum + exp_prev*prev_sum  (was prev_sum)
+        out[4] = exp_worker*worker_sum                    (was worker_sum)
+
+    The device computes the max with a strict `v_if(prev_max < worker_max)`, so it keeps
+    prev_max on a tie. Both branches store the same number when the inputs are equal, so
+    torch.maximum matches and the tie-break stays invisible in the output.
+
+    Writes land only on the footprint columns (see ColumnVectorSfpuGolden). Every other
+    element of all five tiles passes through untouched, which this golden preserves
+    per-tile.
+
+    Args:
+        tiles: sequence of five float tensors [32, 32], untilized, in dst_reg order
+            (prev_max, worker_max, cur_max_seed, prev_sum, worker_sum).
+        scale: float folded into both exps (already bf16-exact).
+    Returns:
+        list of five float32 tensors [32, 32], untilized.
+    """
+
+    def __call__(self, tiles, scale: float):
+        prev_max, worker_max, cur_max_seed, prev_sum, worker_sum = (
+            t.to(torch.float32) for t in tiles
+        )
+
+        cur_max = torch.maximum(prev_max, worker_max)
+        exp_prev = torch.exp(scale * (prev_max - cur_max))
+        exp_worker = torch.exp(scale * (worker_max - cur_max))
+        corrected_worker_sum = exp_worker * worker_sum
+        corrected_prev_sum = exp_prev * prev_sum
+
+        computed = [
+            exp_prev,
+            exp_worker,
+            cur_max,
+            corrected_worker_sum + corrected_prev_sum,
+            corrected_worker_sum,
+        ]
+
+        cols = torch.tensor(ColumnVectorSfpuGolden.TRANSFORMED_COLS, dtype=torch.long)
+        seeds = [prev_max, worker_max, cur_max_seed, prev_sum, worker_sum]
+        out = []
+        for seed, value in zip(seeds, computed):
+            tile = seed.clone()
+            tile[:, cols] = value[:, cols]
+            out.append(tile)
+        return out
+
+
+@register_golden
 class TopKXLGolden:
     """Golden generator for the TopK-XL LLKs (K = 512/1024/2048).
 

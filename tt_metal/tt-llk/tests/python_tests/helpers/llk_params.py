@@ -750,6 +750,25 @@ class ReluConfig(Enum):
     ZeroRelu = 1
 
 
+class ColumnVectorOp(Enum):
+    """Selects which body of experimental/llk_sfpu/ckernel_sfpu_sdpa.h the
+    sfpu_column_vector test drives. Values must match the OP_* constants in
+    sources/sfpu_column_vector_test.cpp.
+    """
+
+    RecipLegacy = 0  # calculate_recip_first_column<true>, _reciprocal_compat_
+    RecipIter = 1  # calculate_recip_first_column<false>, sfpu_reciprocal_iter
+    # Named after the kernel each body runs rather than after the SDPA_EXP_APPROX_MODE
+    # argument that selects it: true picks _ckernel_sfpu_exp_accurate_, false picks
+    # calculate_exponential_polynomial at degree 2 on bf16 dest and degree 4 on fp32.
+    ExpAccurate = 2  # calculate_exponential_first_column<true,  scale>
+    ExpPoly = 3  # calculate_exponential_first_column<false, scale>
+    Softplus = 4  # calculate_softplus_first_column
+    # Five DEST tiles rather than one. Shares the driver, which takes its tile count from
+    # this op.
+    Correction = 5  # calculate_fused_max_sub_exp_add_tile
+
+
 class TopKSortDirection(Enum):
     Descending = 0
     Ascending = 1

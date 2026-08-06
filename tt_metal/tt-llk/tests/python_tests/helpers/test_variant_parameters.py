@@ -16,6 +16,7 @@ from .llk_params import (
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
+    ColumnVectorOp,
     DataCopyType,
     DestSync,
     EltwiseBinaryReuseDestType,
@@ -303,6 +304,57 @@ class APPROX_MODE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool APPROX_MODE = {self.approx_mode.cpp_enum_value};"
+
+
+@dataclass
+class COLUMN_VECTOR_OP(TemplateParameter):
+    """Selects the ckernel_sfpu_sdpa.h body driven by sfpu_column_vector_test.cpp.
+
+    Emitted as a plain int rather than an enum, so the test source can compare it against
+    its own OP_* constants without depending on an enum declared in the harness.
+    """
+
+    op: ColumnVectorOp = ColumnVectorOp.RecipLegacy
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int COLVEC_OP = {self.op.value};"
+
+
+@dataclass
+class COLUMN_VECTOR_EXP_SCALE(TemplateParameter):
+    """bf16 scale folded into the exp bodies of ckernel_sfpu_sdpa.h.
+
+    calculate_exponential_first_column takes the scale as a std::uint16_t template argument
+    holding a bf16 bit pattern, not fp32 bits and not a runtime value: the accurate path
+    multiplies through sfpi::sFloat16b and the polynomial path emits it via SFPLOADI.
+    Emitting the raw pattern keeps the C++ and the torch golden on the same constant.
+    """
+
+    scale_bf16: int = 0x3F80  # bf16(1.0)
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint16_t EXP_SCALE_BF16 = {self.scale_bf16}u;"
+
+
+@dataclass
+class COLUMN_VECTOR_SOFTPLUS_PARAMS(TemplateParameter):
+    """beta / 1-over-beta / threshold for calculate_softplus_first_column, as fp32 bits.
+
+    The body reads all three through Converter::as_float, so the raw fp32 patterns are
+    what reaches the kernel.
+    """
+
+    beta_bits: int = 0x3F800000  # 1.0f
+    beta_reciprocal_bits: int = 0x3F800000  # 1.0f
+    threshold_bits: int = 0x41A00000  # 20.0f
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t SOFTPLUS_BETA_BITS = {self.beta_bits}u;",
+            f"constexpr std::uint32_t SOFTPLUS_BETA_RECIPROCAL_BITS = {self.beta_reciprocal_bits}u;",
+            f"constexpr std::uint32_t SOFTPLUS_THRESHOLD_BITS = {self.threshold_bits}u;",
+        ]
+        return "\n".join(lines)
 
 
 @dataclass
