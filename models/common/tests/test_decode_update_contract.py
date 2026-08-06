@@ -278,6 +278,29 @@ def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():
         assert generator.model.rope_setup.rope_deltas.tolist() == [40, 20, 30, 40]
 
 
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        ({"reload_inputs": True, "reload_page_table": False}, True),
+        ({"reload_inputs": False, "reload_page_table": True}, True),
+        ({"reload_inputs": False, "reload_page_table": False}, False),
+        # A caller that omits the commands gets the conservative refresh here and the
+        # missing-argument error from decode_forward, which names them.
+        ({}, True),
+    ],
+)
+def test_hybrid_per_layer_page_tables_follow_the_input_commands(kwargs, expected):
+    pytest.importorskip("vllm")
+    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
+
+    assert (
+        HybridAttentionForCausalLM._reload_per_layer_page_tables(
+            kwargs.get("reload_inputs", True), kwargs.get("reload_page_table", False)
+        )
+        is expected
+    )
+
+
 def test_partial_reload_is_refused_without_decode_token_feedback(expect_error):
     from models.tt_transformers.tt.generator import Generator
 
