@@ -40,8 +40,9 @@ constexpr uint32_t kBlockThreshold = 32;
 // ops/tilize/spec.py _L1_RESERVE — L1 held back for kernel code and stacks, so the CB plan is
 // sized against l1_size_per_core() minus this, not the whole physical bank.
 constexpr uint32_t kL1Reserve = 128 * 1024;
-// ops/tilize/spec.py _tilize_use_fast: the fast-tilize LLK's block-width cap.
-constexpr uint32_t kFastTilizeMaxChunkTiles = 256;
+// ops/tilize/spec.py _tilize_use_fast: the fast-tilize LLK's block-width cap, kept for the day the
+// selector is re-enabled behind a winning measurement.
+[[maybe_unused]] constexpr uint32_t kFastTilizeMaxChunkTiles = 256;
 
 constexpr const char* kReaderStickUnified =
     "ttnn/cpp/ttnn/operations/data_movement/tilize/codegen/kernels/reader_stick_interleaved_unified.cpp";
@@ -257,7 +258,7 @@ std::vector<UnpackToDestMode> unpack_to_dest_fp32_modes(uint32_t cb_index) {
 // small-chunk bf16 shapes (Wt 3-7), where fast_tilize_init/block per-chunk setup is not amortized.
 // Kept as a compile-time arg so the kernels stay ABI-stable; re-enable only behind a measurement
 // that shows a win.
-uint32_t tilize_use_fast(DataType input_dtype, DataType output_dtype, uint32_t max_chunk_tiles) { return 0; }
+uint32_t tilize_use_fast(DataType, DataType, uint32_t) { return 0; }
 
 struct Geometry {
     uint32_t nc = 0;
