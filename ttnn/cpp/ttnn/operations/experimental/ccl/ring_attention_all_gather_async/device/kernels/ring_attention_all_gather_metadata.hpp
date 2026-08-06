@@ -47,8 +47,54 @@ inline uint32_t compute_gather_valid_Ht(uint32_t kv_actual_isl, uint32_t chunk_l
     return valid_slabs * chunk_local_tiles;
 }
 
-// Clamp each input to the valid slab prefix, then repartition that prefix across links. Reader and
-// writer must update both range endpoints identically or their cb_output page counts can diverge.
+// Which cache-group tail the one-hop neighbor halo reads, derived on-device.
+//
+// KEEP IN SYNC with the host reference, chunked_sliding_halo_source_start_tile
+// (ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp) and its caller
+// ChunkedSlidingHaloLayout::send_tail_start_tile. The result is linear in the chunk index
+// (current_group == chunk index for chunk-aligned prefill), so on the scalar path the host rewrites the
+// halo reader/writer page ranges every dispatch. A captured trace never runs that rewrite, which is why
+// this has to be recomputed here instead.
+inline uint32_t compute_halo_tail_start_Ht(
+    uint32_t kv_actual_isl,
+    uint32_t q_local_tile_rows,
+    uint32_t ring_size,
+    uint32_t halo_tile_rows,
+    uint32_t source_device) {
+    const uint32_t q_group_tile_rows = q_local_tile_rows * ring_size;
+    if (q_group_tile_rows == 0 || halo_tile_rows > q_local_tile_rows) {
+        return 0;
+    }
+    const uint32_t logical_k_tile_rows = (kv_actual_isl >> 5) + q_group_tile_rows;
+    if (logical_k_tile_rows < 2 * q_group_tile_rows) {
+        return 0;
+    }
+    const uint32_t current_group = logical_k_tile_rows / q_group_tile_rows - 1;
+    const uint32_t source_group = source_device + 1 == ring_size ? current_group - 1 : current_group;
+    return source_group * q_local_tile_rows + q_local_tile_rows - halo_tile_rows;
+}
+
+// Shift a halo worker's page range from the group baked at program-create time to the group this chunk
+// actually needs. Mirrors the host relocate_pages loop in apply_ring_joint_scalar_runtime_args; the
+// delta is signed because a replay can run a chunk either side of the capturing one.
+inline void relocate_halo_range(
+    uint32_t runtime_origin_page, uint32_t baked_origin_page, uint32_t& tile_start, uint32_t& tile_end) {
+    if (runtime_origin_page == baked_origin_page) {
+        return;
+    }
+    if (runtime_origin_page > baked_origin_page) {
+        const uint32_t delta = runtime_origin_page - baked_origin_page;
+        tile_start += delta;
+        tile_end += delta;
+    } else {
+        const uint32_t delta = baked_origin_page - runtime_origin_page;
+        tile_start = tile_start > delta ? tile_start - delta : 0;
+        tile_end = tile_end > delta ? tile_end - delta : 0;
+    }
+}
+
+// Clamp each input to the valid slab prefix, then repartition that prefix across links. Reader and; /has a tighter host-provided end keeps it/c// writer must update both range endpoints identically or their cb_output page counts can diverge.
+// has a tighter host-provided end keeps it.
 template <size_t NumInputs>
 inline void update_link_page_ranges_for_gather_extent(
     uint32_t gather_valid_Ht,
