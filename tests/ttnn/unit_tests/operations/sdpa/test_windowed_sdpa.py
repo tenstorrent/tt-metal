@@ -115,3 +115,91 @@ def test_windowed_sdpa_smoke(
     logger.info(f"windowed SDPA dtype={dtype} s={seq_len} heads={num_heads} windows={cu_window_seqlens} pcc={pcc}")
     assert passing, f"PCC below threshold: {pcc}"
     assert out.shape == gt.shape, f"shape mismatch: {out.shape} vs {gt.shape}"
+
+
+@pytest.mark.parametrize(
+    "seq_len, chunk, cu_window_seqlens, num_shards",
+    [
+        # Windows aligned to shard boundaries: every shard's rows sit inside one window.
+        (256, 32, [0, 64, 128, 192, 256], 4),
+        # Windows that straddle shard boundaries: shard 1 (64..127) spans windows [0,96) and [96,160).
+        # This is the case a per-block SDPA loop cannot express and the offset exists for.
+        (256, 32, [0, 96, 160, 256], 4),
+        # Uneven windows, 2 shards, and a window shorter than the chunk.
+        (128, 32, [0, 32, 96, 128], 2),
+    ],
+    ids=["aligned_4shard", "straddling_4shard", "uneven_2shard"],
+)
+@pytest.mark.parametrize("num_heads", [1, 8])
+def test_windowed_sdpa_q_token_offset(device, seq_len, chunk, cu_window_seqlens, num_shards, num_heads):
+    """Each Q shard attends over the full K/V with GLOBAL window boundaries.
+
+    This is the sequence-parallel shape: Q holds `seq_len // num_shards` contiguous rows and is indexed
+    locally, while K/V and `cu_window_seqlens` stay global. `windowed_q_token_offset` tells the on-device
+    mask generator where the shard starts, so a row's window is decided by its global position.
+
+    Concatenating the shards must reproduce the unsharded result exactly -- attention is row-independent
+    given the mask, so splitting Q changes no arithmetic. Compared against the same torch reference the
+    unsharded test uses.
+    """
+    torch.manual_seed(42)
+    b, dh = 1, 128
+    scale = dh**-0.5
+    shard_rows = seq_len // num_shards
+    assert shard_rows % 32 == 0, "offset must be tile-aligned"
+
+    q = torch.randn(b, num_heads, seq_len, dh, dtype=torch.bfloat16)
+    k = torch.randn(b, num_heads, seq_len, dh, dtype=torch.bfloat16)
+    v = torch.randn(b, num_heads, seq_len, dh, dtype=torch.bfloat16)
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        exp_approx_mode=False,
+        q_chunk_size=chunk,
+        k_chunk_size=chunk,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    # K/V are global and shared by every shard; only Q is sliced.
+    k_tt = ttnn.from_torch(k, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    v_tt = ttnn.from_torch(v, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    cu_tt = ttnn.from_torch(
+        torch.tensor(cu_window_seqlens, dtype=torch.int32),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+    )
+
+    shards = []
+    for shard in range(num_shards):
+        offset = shard * shard_rows
+        q_shard = q[:, :, offset : offset + shard_rows, :].contiguous()
+        out_tt = ttnn.transformer.scaled_dot_product_attention(
+            ttnn.from_torch(q_shard, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16),
+            k_tt,
+            v_tt,
+            is_causal=False,
+            scale=scale,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            cu_window_seqlens=cu_tt,
+            windowed_q_token_offset=offset,
+        )
+        got = ttnn.to_torch(out_tt).to(torch.float32)
+        assert got.shape[-2] == shard_rows, f"shard {shard} returned {got.shape[-2]} rows, expected {shard_rows}"
+        shards.append(got)
+
+    out = torch.cat(shards, dim=-2)
+
+    mask = windowed_mask(seq_len, cu_window_seqlens).unsqueeze(0).unsqueeze(0)
+    gt = torch.nn.functional.scaled_dot_product_attention(
+        q.to(torch.float32), k.to(torch.float32), v.to(torch.float32), attn_mask=mask, scale=scale
+    )
+
+    passing, pcc = comp_pcc(gt, out, 0.99)
+    logger.info(
+        f"windowed SDPA q-offset s={seq_len} shards={num_shards} heads={num_heads} "
+        f"windows={cu_window_seqlens} pcc={pcc}"
+    )
+    assert passing, f"PCC below threshold: {pcc}"

@@ -25,7 +25,11 @@ ttnn::Tensor scaled_dot_product_attention(
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
-    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt);
+    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt,
+    /// Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer
+    /// sequence: Q and the output are indexed locally while cu_window_seqlens and K/V stay global, so this
+    /// locates the slice among the windows. Must be a multiple of TILE_HEIGHT and satisfy offset+Sq <= Sk.
+    uint32_t windowed_q_token_offset = 0);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

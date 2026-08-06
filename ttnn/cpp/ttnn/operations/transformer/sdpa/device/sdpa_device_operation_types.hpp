@@ -25,6 +25,10 @@ struct SDPAParams {
     // Windowed (block-diagonal) attention: when true, the mask is synthesized on-device from the
     // cu_window_seqlens tensor instead of being read from attn_mask. Implies non-causal.
     bool is_windowed = false;
+    // Global row index of Q row 0, when Q is a sequence-parallel shard of a longer sequence. Q and the
+    // output are addressed locally; cu_window_seqlens and K/V stay global, so the mask generator offsets
+    // Q by this to find the right windows. 0 means Q spans the whole sequence (the unsharded case).
+    uint32_t windowed_q_token_offset = 0;
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
