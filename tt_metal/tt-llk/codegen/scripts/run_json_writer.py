@@ -6,8 +6,8 @@
 Atomic writer for the Activity-Monitor-aware run.json.
 
 Implements the live-update contract defined by:
-  - /proj_sw/user_dev/llk_code_gen/dashboard/GEN_MONITOR_FIELDS.md
-  - /proj_sw/user_dev/llk_code_gen/dashboard/RUN_JSON_SPEC.md
+  - /proj_sw/user_dev/${USER}/llk_code_gen/dashboard/GEN_MONITOR_FIELDS.md
+  - /proj_sw/user_dev/${USER}/llk_code_gen/dashboard/RUN_JSON_SPEC.md
 
 Every subcommand updates <LOG_DIR>/run.json by writing a temp file in the
 same directory and atomically renaming it into place so the dashboard never
@@ -182,6 +182,12 @@ def cmd_init(args: argparse.Namespace) -> None:
         "batch_id": args.batch_id,
         "model": args.model,
         "run_type": args.run_type,
+        # Audit-lane provenance is inherited from the dashboard runner. Reading
+        # four environment variables during init adds no work to agent steps.
+        "runner_pool": os.environ.get("CODEGEN_RUNNER_POOL") or "prod",
+        "base_commit": os.environ.get("CODEGEN_BASE_COMMIT") or None,
+        "campaign_id": os.environ.get("CODEGEN_CAMPAIGN_ID") or None,
+        "attempt_id": os.environ.get("CODEGEN_ATTEMPT_ID") or None,
         "git_commit": args.git_commit,
         "git_branch": args.git_branch,
         "description": args.description or None,

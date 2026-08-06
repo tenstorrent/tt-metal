@@ -13,6 +13,11 @@ lifecycle: Step 2 creates the worktree/branch and Step 4 removes it. The fix
 (Step 3), not by this router — by Step 4 they already exist on `WORKTREE_BRANCH`.
 Push/PR is a separate, user-confirmed action (`CREATE_PR=yes`).
 
+When `CODEGEN_NO_PUSH=1`, the run is an infrastructure/audit run. It must still
+create and commit its isolated local feature branch, but it must never push,
+create or modify a PR, or dispatch a remote review, regardless of prompt text.
+Treat `CREATE_PR` as `no`; the local branch and `generated.patch` are the output.
+
 ---
 
 ## Orchestrators
@@ -122,7 +127,7 @@ For `REQUEST_TYPE=generate` on quasar, put the run in motion before creating the
 
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
-execute_step_begin_setup {kernel} {target_arch} /proj_sw/user_dev/llk_code_gen
+execute_step_begin_setup {kernel} {target_arch} "/proj_sw/user_dev/${USER}/llk_code_gen"
 # Echoes LOG_DIR, RUN_ID, START_TIME — carry these to Step 3.
 ```
 
@@ -170,7 +175,7 @@ python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set TARGET_ARCH 
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set SFPI_MODE       "{SFPI_MODE}" --json
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set QSR_SIM_BACKEND "{emu|vcs}"
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set WORKTREE_BRANCH "{worktree_branch}"
-python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR_BASE    "/proj_sw/user_dev/llk_code_gen"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR_BASE    "/proj_sw/user_dev/${USER}/llk_code_gen"
 # From execute_step_begin_setup (Step 2) so the orchestrator reuses the same run identity:
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR    "{log_dir}"
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set RUN_ID     "{run_id}"
@@ -269,6 +274,8 @@ Recovering a run's work later:
 **Pushing / PR creation is a separate, explicit action** (still requires the
 user's go-ahead). Perform when `CREATE_PR=yes`, push `WORKTREE_BRANCH` and open the PR
 only after the user confirms.
+`CODEGEN_NO_PUSH=1` overrides both of those signals: keep the branch local and do
+not perform any GitHub write.
 
 ## Running multiple issue-solvers concurrently
 
