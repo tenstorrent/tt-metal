@@ -121,6 +121,10 @@ ttnn:
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
+  demo:
+    # 10 min for Blaze - high_bw_all_gather CCL perf and accuracy in
+    # tests/pipeline_reorg/blaze_models_prefill_tests.yaml.
+    bh_sc1_high_power: 10
   # Sweep budgets: per-SKU caps for the ttnn-run-sweeps and sweep-validation
   # workflows.
   sweep:
