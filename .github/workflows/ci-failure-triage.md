@@ -79,7 +79,8 @@ tools:
     toolsets: [actions, repos, issues, search, context]
     lockdown: false
     min-integrity: none # reads CI logs and cross-repo triage issues
-    # Reads on GITHUB_TOKEN: tt-metal CI + public tt-auto-triage dedup (breaks if that repo goes private).
+    # Pin reads to job-scoped GITHUB_TOKEN (omitting = broader cascade); dedup breaks if tt-auto-triage goes private.
+    github-token: ${{ secrets.GITHUB_TOKEN }}
   cache-memory:
     retention-days: 30
 
