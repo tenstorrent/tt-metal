@@ -117,25 +117,6 @@ def test_tts_perf(device_params, device):
     print("FORWARD_WALL_MS=%.4f" % _fwd_ms)
     assert out is not None  # perf only — NO PCC
 
-    if _PERF_TRACE:
-        try:
-            from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter
-            from models.experimental.perf_automation.agent.trace_replay import measure_adapter
-
-            def _build_for_perf(dev):
-                from models.demos.xtts_v2.tt.pipeline import build_pipeline
-
-                return build_pipeline(dev, model)
-
-            _prompt_ids = [0, 1, 2, 3, 4, 5, 6, 7]
-            # Stage adapter profiles WHATEVER emit-e2e emitted: every PIPELINE_STAGES entry gets
-            # traced (+2CQ where the stage stages its inputs). Falls back to the single decode
-            # contract for pipelines that expose only decode_step.
-            _adapter = PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=1)
-            measure_adapter(_adapter, device, mode="auto")
-        except Exception as _te:  # noqa: BLE001
-            print("TRACE_REPLAY_SKIPPED=%r" % (_te,), flush=True)
-
 
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
 def test_tts_perf_warm(device_params, device):
