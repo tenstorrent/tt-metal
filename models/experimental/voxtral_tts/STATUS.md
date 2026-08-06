@@ -2711,6 +2711,56 @@ constants) green, 122 tests green. Five module-level names in `reference/` are u
 **deliberately kept** — they document checkpoint architecture, and deleting model facts from the fp32
 ground truth to satisfy a linter is a bad trade.
 
+### 6.39 — in-place ops swept EVERYWHERE in the decode path of both blocks: a dead end, four ways
+
+§6.37 tested three sites in Block 2 and got +0.001 ms. That left two whole categories untested, which
+this closes: **Block 1 entirely**, and **`inplace=True` on the norm program config** — a different
+mechanism from op substitution, a kernel flag that lets the norm write into its own already-temporary
+sharded input rather than allocating an output. Both blocks had it hardcoded `False` and neither had ever
+tried `True`. It runs 52x per Block 1 step and 49x per Block 2 frame.
+
+**Block 1 decode step, 100 steps x 6 rounds, interleaved both directions:**
+
+| variant | ms/step | spread | vs shipped | max abs diff |
+|---|---|---|---|---|
+| A shipped | 23.152 | 0.009 | -- | -- |
+| **B norm `inplace=True`** | **23.152** | 0.006 | **1.0000x** | **0.00e+00** |
+| C ops in-place (`_mlp` multiply + add, `_layer_step` residual) | 23.215 | 0.005 | 0.9973x | 2.67e+03 |
+| D both | 23.213 | 0.009 | 0.9973x | 4.13e+03 |
+
+**Block 2 frame, 200 frames x 6 rounds:**
+
+| variant | ms/frame | spread | delta | codes |
+|---|---|---|---|---|
+| A shipped | 21.050 | 0.090 | -- | 0 of 37 |
+| B norm `inplace=True` | 21.013 | 0.067 | +0.037 | 0 of 37 |
+| C `_solve` tail in-place (CFG combine + Euler) | 21.027 | 0.044 | +0.023 | 0 of 37 |
+| D both | 20.975 | 0.038 | +0.074 | 0 of 37 |
+
+**Verdicts.**
+
+- **`inplace=True` on the norm is INERT.** Block 1 measures it to three decimal places identical with a
+  0.006-0.009 ms spread, and the output is BIT-IDENTICAL. Block 2's +0.037 is inside its 0.090 spread.
+  The flag does nothing on this path in either direction — a permanent answer, not a maybe.
+- **Block 1's in-place ops are 0.063 ms SLOWER**, which is 7x the 0.009 spread, so that one IS real.
+- **Block 2's remaining sites are within noise** — the best gap (0.074) is under the worst spread (0.090).
+
+**So across four independent measurements — §6.37's `_block` sites (+0.001), Block 1's three sites
+(-0.063), Block 2's `_solve` tail (within noise), and the norm flag (exactly inert) — in-place is a dead
+end everywhere in the decode path.** It is the kind of change that looks obviously free and is not: the
+op count is unchanged, and at these sizes the cost is the launch, not the output allocation.
+
+**AND IT CARRIES AN ALIASING HAZARD WORTH RECORDING SEPARATELY.** Block 1's C/D rows show max abs diff
+2.67e+03 on activations whose scale is ~0.02. That is **the benchmark harness, not the ops**: in-place
+makes `_layer_step` mutate its argument, and the timing loop restarts from the same `x` tensor 100 times,
+so the input drifts. It is not a correctness verdict on the ops — but it is a live demonstration that a
+function which mutates its input is a landmine even where today's call sites happen to be safe. Two
+reasons to decline, not one.
+
+**Not swept, deliberately:** `_attend`'s `add(multiply(s, SCALE), mask)` and `_layer`'s residual are
+PREFILL-only paths (~3% of wall time), and the codec's elementwise ops amortise to ~0.03 ms/frame. Both
+are below the noise floor of anything measurable here.
+
 ### Standing constraints (not fixable by us)
 - Weights are **CC BY-NC 4.0**, non-commercial, including the reference voices. Same class of
   blocker as XTTS-v2's CPML. Needs legal sign-off before any product use.

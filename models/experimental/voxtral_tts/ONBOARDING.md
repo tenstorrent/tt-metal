@@ -309,7 +309,8 @@ Full numbers in STATUS; this is the index so you don't spend a day on a closed q
 | project-then-duplicate in `_solve` | 0.785× isolated. The redundant matmul is ~1 µs; duplicating a 3072-wide result rather than a 36-wide input costs +12 µs (`§6.34`) |
 | `ttnn.repeat` instead of `ttnn.concat` to duplicate | 1.8× worse |
 | **`sdpa` for Block 2's attention interior** | 5.9× on the op, **+0.816 ms/frame** on the block — but 6.48× the error vs fp64 truth and **cost one WER word**. Reverted (`§6.37`). Needs `scale=1.0` if retried, plus a multi-seed study to settle worse-vs-different |
-| `ttnn.add_` / `ttnn.multiply_` in place | bit-exact, 1.14–1.20× isolated, **+0.001 ms** whole-block over 6 rounds (`§6.37`) |
+| **in-place ops, EVERYWHERE in the decode path** | dead end four ways (`§6.39`): Block 2 `_block` +0.001 ms, Block 1's three sites **0.063 ms SLOWER**, Block 2 `_solve` tail within noise. Op count is unchanged and at these sizes the cost is the launch, not the allocation. Also makes functions mutate their arguments |
+| **`inplace=True` on the norm program config** | **INERT** (`§6.39`) — Block 1 identical to 3 dp with a 0.006 ms spread and bit-identical output; Block 2 inside noise. Both blocks ship `inplace=False`; changing it does nothing |
 | residual-as-bias, **Block 1** | w2's add is already free |
 | residual-as-bias, **Block 2** | **not expressible** — ttnn `bias` is per-output-column, our residual differs per row |
 | `ttnn.swiglu` | `TT_THROW`s on a concatenated pair; would need w1/w3 fused, which is 4× slower |
