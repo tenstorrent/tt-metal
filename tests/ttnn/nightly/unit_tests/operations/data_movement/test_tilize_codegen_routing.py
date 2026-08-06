@@ -29,6 +29,12 @@ def _make_input(shape, dtype):
 
 _DEMOTED = [
     (
+        [1, 1, 64, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
         [1, 10, 64, 64],
         {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
         ttnn.bfloat16,
@@ -37,6 +43,12 @@ _DEMOTED = [
     (
         [1, 32, 64],
         {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.uint16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
+    (
+        [1, 32, 64],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)},
         ttnn.uint16,
         ttnn.ROW_MAJOR_LAYOUT,
     ),
@@ -162,8 +174,10 @@ _DEMOTED = [
     ),
 ]
 _DEMOTED_IDS = [
+    "[1, 1, 64, 64]|memory_config=l1|uint16|row_major",
     "[1, 10, 64, 64]|memory_config=dram|bfloat16|row_major",
     "[1, 32, 64]|memory_config=dram|uint16|row_major",
+    "[1, 32, 64]|memory_config=l1|uint16|row_major",
     "[1, 4, 96, 32]|memory_config=dram|bfloat16|row_major",
     "[1, 4, 96, 32]|memory_config=l1|bfloat16|row_major",
     "[2, 1, 96, 32]|memory_config=dram|int32|row_major",
@@ -274,59 +288,58 @@ def test_tilize_codegen_rejects_an_unknown_implementation(device, expect_error, 
         ttnn.tilize(xt, **kwargs, implementation=selector)
 
 
-# ---------------------------------------------------------------------------
-# Hand-added below the generated block: execution-control legs.
+# --- hand-added, off-grid: execution controls -------------------------------
+# The emitter is ledger-driven and every leg above varies only tensors/memory_config, so no
+# generated case can reach these: they are call parameters that control WHERE work lands and with
+# what tile geometry, not what the result contains. None of the codegen builders honours either one
+# (they all place work over the full compute_with_storage_grid_size() with the standard 32x32 tile,
+# and TilizeCodegenParams carries neither a core set nor a tile shape), so `auto` must leave them to
+# native and forced `codegen` must refuse by name rather than accept the call and ignore the
+# control — which would land work on cores the caller reserved.
 #
-# `unsupported_execution_control()` refuses `sub_core_grids` and any non-32x32 `tile`, because none
-# of the codegen builders carries either: every one places work over the full
-# compute_with_storage_grid_size() with the standard tile, and TilizeCodegenParams has no field for
-# a core set or a tile shape. Accepting such a call on codegen would land work on cores the caller
-# reserved, or silently produce the wrong tile geometry.
-#
-# The emitter cannot generate these: it is driven by the coverage ledger, which varies tensors
-# (shape / dtype / memory config) and never execution controls. The base case below is otherwise
-# in scope and non-demoted -- [1, 32, 64] bfloat16 DRAM normalizes to NC 1, Ht 1, Wt 2, which
-# `auto` routes to codegen when no control is set -- so each leg isolates the control itself.
-# ---------------------------------------------------------------------------
-
-_CONTROL_CASE = ([1, 32, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
-_CONTROL_MEMORY_CONFIG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+# The base case is the _ACCEPTED one above, i.e. a shape that provably DOES reach codegen under
+# `auto` without a control set; that is what makes an unchanged program cache here evidence of the
+# control, not of the shape.
+_CONTROL_CASE = (
+    [1, 32, 64],
+    {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+    ttnn.int32,
+    ttnn.ROW_MAJOR_LAYOUT,
+)
 
 
-# (control name, exactly as the forced-codegen TT_FATAL names it; kwargs that set it).
-_EXECUTION_CONTROLS = [
-    (
-        "sub_core_grids",
-        {"sub_core_grids": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})},
-    ),
-    # 32 rows / 64 columns both divide a 16x32 tile, so native really tilizes into it -- the leg
-    # tests the routing decision, not a shape native would have rejected anyway.
-    ("tile", {"tile": ttnn.Tile([16, 32])}),
-]
-_EXECUTION_CONTROL_IDS = [name for name, _ in _EXECUTION_CONTROLS]
+def _sub_core_grids():
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
 
 
-@pytest.mark.parametrize("control,control_kwargs", _EXECUTION_CONTROLS, ids=_EXECUTION_CONTROL_IDS)
-def test_tilize_execution_control_falls_back_to_native_under_auto(device, control, control_kwargs):
-    shape, dtype, layout = _CONTROL_CASE
-    xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
-    kwargs = {"memory_config": _CONTROL_MEMORY_CONFIG, **control_kwargs}
-    golden = ttnn.to_torch(ttnn.tilize(xt, **kwargs, implementation=_NATIVE))
+def test_tilize_codegen_sub_core_grids_falls_back_to_native(device):
+    shape, kwargs, dtype, layout = _CONTROL_CASE
+    x = _make_input(shape, dtype)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
+    control = {"sub_core_grids": _sub_core_grids()}
+    golden = ttnn.to_torch(ttnn.tilize(xt, **kwargs, **control, implementation=_NATIVE))
     entries_before = device.num_program_cache_entries()
-    out = ttnn.tilize(xt, **kwargs, implementation=_ROUTED)
+    out = ttnn.tilize(xt, **kwargs, **control, implementation=_ROUTED)
     assert_equal(golden, ttnn.to_torch(out))
-    # The golden already warmed the native program for this exact call, so an unchanged cache is
-    # what proves `auto` reused it rather than compiling a codegen program that ignores the control.
-    msg = f"auto routed a call setting '{control}' to codegen (program cache grew); expected native fallback"
+    msg = "auto routed a sub_core_grids call to codegen (program cache grew); the codegen builders ignore the restriction and would use the whole grid"
     assert device.num_program_cache_entries() == entries_before, msg
 
 
-@pytest.mark.parametrize("control,control_kwargs", _EXECUTION_CONTROLS, ids=_EXECUTION_CONTROL_IDS)
-def test_tilize_execution_control_rejected_under_forced_codegen(device, expect_error, control, control_kwargs):
-    shape, dtype, layout = _CONTROL_CASE
+@pytest.mark.parametrize(
+    "control,named",
+    [
+        (
+            {"sub_core_grids": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})},
+            "sub_core_grids",
+        ),
+        ({"tile": ttnn.Tile([16, 32])}, "tile"),
+    ],
+    ids=["sub_core_grids", "tile"],
+)
+def test_tilize_codegen_rejects_unhonourable_execution_controls(device, expect_error, control, named):
+    shape, kwargs, dtype, layout = _CONTROL_CASE
     xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
-    kwargs = {"memory_config": _CONTROL_MEMORY_CONFIG, **control_kwargs}
-    # The message must name the control, so match the phrase and not the bare word -- "tile" alone
-    # is a substring of "tilize" and would pass against any failure at all.
-    with expect_error(RuntimeError, f"cannot honour '{control}'"):
-        ttnn.tilize(xt, **kwargs, implementation=_CODEGEN)
+    # Naming the control in the message is the contract: a bare "unsupported" would let a caller
+    # believe the restriction was applied on some other path.
+    with expect_error(RuntimeError, f"cannot honour '{named}'"):
+        ttnn.tilize(xt, **kwargs, **control, implementation=_CODEGEN)
