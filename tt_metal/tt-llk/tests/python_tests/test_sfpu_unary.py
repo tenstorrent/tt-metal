@@ -63,9 +63,10 @@ SUPPORTED_FAST_MODE_OPS = [
 # the two lists is *how much of the format/mode matrix* each op is worth spending, so
 # they are coverage profiles rather than different kinds of test:
 #
-#   BROAD_SWEEP_OPS    - the full format matrix including the block floats, both
-#                        approximation modes and both tile shapes. For ops whose
-#                        kernels have format-specific or approx-mode-specific paths.
+#   BROAD_SWEEP_OPS    - the full format matrix including the block floats (and the
+#                        Bfp4_b input formats), both approximation modes and both tile
+#                        shapes. For ops whose kernels have format-specific or
+#                        approx-mode-specific paths.
 #   STANDARD_SWEEP_OPS - Float16_b + Float32, approximation mode off, one tile shape.
 #                        Enough to validate the op's own math, and ~8x cheaper.
 #
@@ -213,35 +214,6 @@ FORMATS_BFP4_B = [
     ]
 ]
 
-MATHOPS_INCLUDE_BFP4_B = [
-    MathOperation.Abs,
-    MathOperation.Atanh,
-    MathOperation.Asinh,
-    MathOperation.Acosh,
-    MathOperation.Cos,
-    MathOperation.Log,
-    MathOperation.Log1p,
-    MathOperation.Reciprocal,
-    MathOperation.Sin,
-    MathOperation.Sqrt,
-    MathOperation.Rsqrt,
-    MathOperation.Square,
-    MathOperation.Tanh,
-    MathOperation.Celu,
-    MathOperation.Silu,
-    MathOperation.Gelu,
-    MathOperation.GeluTanh,
-    MathOperation.Neg,
-    MathOperation.Fill,
-    MathOperation.Elu,
-    MathOperation.Exp,
-    MathOperation.Exp2,
-    MathOperation.Hardsigmoid,
-    MathOperation.Threshold,
-    MathOperation.ReluMax,
-    MathOperation.ReluMin,
-]
-
 # Ops whose `#pragma GCC unroll X` loops miscompile to invalid assembly under coverage
 # instrumentation, so they are skipped only when WITH_COVERAGE is set:
 #   https://github.com/tenstorrent/tt-metal/issues/33268
@@ -345,9 +317,9 @@ def _assert_sweep_profiles_disjoint():
     )
 
 
-# The broad profile sweeps the full float matrix, plus the Bfp4_b input formats for the
-# subset of ops validated against them. The standard profile is bf16/fp32 only, approx
-# mode off, one tile shape.
+# The broad profile sweeps the full float matrix and the Bfp4_b input formats over the
+# same op list — Bfp4_b is a second format axis, not a second op set. The standard
+# profile is bf16/fp32 only, approx mode off, one tile shape.
 UNARY_SWEEP_PARAMS = (
     _sweep_params(
         BROAD_FORMATS,
@@ -357,7 +329,7 @@ UNARY_SWEEP_PARAMS = (
     )
     + _sweep_params(
         FORMATS_BFP4_B,
-        MATHOPS_INCLUDE_BFP4_B,
+        BROAD_SWEEP_OPS,
         [ApproximationMode.No, ApproximationMode.Yes],
         BROAD_DIMENSIONS,
     )
