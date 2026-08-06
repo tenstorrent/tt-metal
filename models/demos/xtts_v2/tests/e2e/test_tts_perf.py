@@ -139,6 +139,10 @@ def test_tts_perf(device_params, device):
 
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
 def test_tts_perf_warm(device_params, device):
+    # This test measures the FULL model wall: undo the module-level perf-only depth cap
+    # (TT_PERF_LAYERS, set above for the tracy-profiled case) so the wall is the real 30-layer
+    # forward, not the reduced-depth profile configuration.
+    os.environ.pop("TT_PERF_LAYERS", None)
     """Cold-vs-warm end-to-end wall at the gated horizon — the served-model number.
 
     Builds once (`build_pipeline`), then times the SAME forward twice: the first
