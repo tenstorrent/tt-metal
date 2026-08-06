@@ -2770,6 +2770,46 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
             }
         }
     }
+    // EMULE_FABRIC_XFER=<file>: one compact line per payload-carrying send — the SOURCE L1
+    // offset (bridge_l1-relative, so it is directly comparable to a kernel's get_write_ptr),
+    // the sending core, each destination chip + destination L1 offset, and the payload's first
+    // word. Enough to reconstruct a whole CCL's wiring offline and diff it against the ring the
+    // op intends, which is how a misrouting bug gets localized without a device.
+    //
+    // Deliberately much cheaper than EMULE_FABRIC_DEBUG: that one is too verbose to leave on
+    // without perturbing the very race under study.
+    //
+    // Caveat: the fopen/fprintf/fclose widens the window between reading the payload word and
+    // the delivery memcpy, so under an active race the logged first word can disagree with the
+    // bytes actually delivered. Trust the addresses and targets from this trace; get delivered
+    // contents from a tensor dump.
+    if (payload != nullptr && size > 0) {
+        static const char* xfer_path = std::getenv("EMULE_FABRIC_XFER");
+        if (xfer_path != nullptr) {
+            const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
+            const uint64_t src_off = static_cast<uint64_t>(
+                reinterpret_cast<const uint8_t*>(payload) - __emule_self->bridge_l1);
+            uint32_t w0 = 0;
+            std::memcpy(&w0, payload, sizeof(uint32_t));
+            std::string ts;
+            for (auto t : targets) {
+                ts += " " + std::to_string(t);
+            }
+            static std::mutex xfer_mu;
+            std::lock_guard<std::mutex> lk(xfer_mu);
+            FILE* fp = std::fopen(xfer_path, "a");
+            if (fp != nullptr) {
+                std::fprintf(fp,
+                             "[XFER] src_chip=%u core=(%u,%u) proc=%u src_off=0x%llx size=%u "
+                             "dst_noc=0x%llx w0=0x%08x targets=[%s ]\n",
+                             src_chip, (unsigned)__emule_self->core->logical_x,
+                             (unsigned)__emule_self->core->logical_y, (unsigned)__emule_self->processor_id,
+                             (unsigned long long)src_off, size,
+                             (unsigned long long)noc_address, w0, ts.c_str());
+                std::fclose(fp);
+            }
+        }
+    }
     // One target for unicast; the line members for a multicast. Replay the terminal NOC op to each.
     for (uint32_t dst_chip : targets) {
         __emule_fabric_deliver(dst_chip, h, payload, size, noc_send_type, dbg);
