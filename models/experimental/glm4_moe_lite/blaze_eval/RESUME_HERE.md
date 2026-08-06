@@ -3,6 +3,45 @@
 Written at a context checkpoint. Everything below is measured on the 32-chip BH Galaxy unless
 marked otherwise. Full context: [`../BLAZE_EVALUATION.md`](../BLAZE_EVALUATION.md).
 
+## NEXT TASK (decided): widen DRAMStreamingMatmul past 8 cores
+
+User's call, after seeing the numbers below: **stay on blaze.** Since both fused ops are
+regressions *because* of the 8-worker limit, the only route to a blaze-based e2e win is removing
+that limit. Everything else in this document is the evidence for why this is the task.
+
+Goal: more than one worker per DRAM bank, so the matmul reaches something closer to ttnn's
+152 GB/s instead of 56 GB/s. **This is a kernel redesign, not a config change.** Change points,
+all in `blaze/ops/dram_streaming_matmul/common.py`, found by reading the source:
+
+| line | what it does now | what it needs |
+|---|---|---|
+| 34 `dram_bank_worker_cores` | returns exactly 1 core per bank | return W cores per bank, still bank-adjacent on NOC_0 |
+| 396 `num_banks = len(all_worker_cores)` | conflates core count with bank count | must become the true bank count, independent of cores |
+| 401 `bank_id = idx % num_banks` | no-op today, since num_banks == len(cores) | **already the right shape** — becomes meaningful once 396 is decoupled |
+| 274 `per_core_N = weights_shard[1] // tile_w` | per-core N derived from the DRAM weight shard | must subdivide one bank's shard across its W workers |
+
+The real work is the last row. Today each core reads its bank's **entire** shard, so there is no
+per-core column offset anywhere in the reader's page walk; W workers per bank means each reads a
+disjoint column sub-range of the same shard. That offset has to be threaded through the reader CT
+args and the page walk in `emit_dram_stream`.
+
+That line 401 modulo is the encouraging sign: the original author anticipated W > 1, so the
+bank/VC assignment logic should already tolerate it.
+
+**Validation is already built.** Re-run both A/Bs — they gate PCC against the ttnn path they would
+replace, so a wrong widening cannot pass as a fast one:
+
+```bash
+cd /home/ttuser/sdawle/tt-blaze && source env.sh && unset TT_MESH_GRAPH_DESC_PATH
+python <tt-metal>/models/experimental/glm4_moe_lite/blaze_eval/native_boundary_ab.py   # 0.52x today
+python <tt-metal>/models/experimental/glm4_moe_lite/blaze_eval/oproj_residual_ab.py    # 0.37x today
+```
+
+Targets to beat: q_kv_a 47.5 µs, o_proj+residual 69.1 µs. Either clearing ~1.1x is worth
+integrating; both clearing it is worth ~2-6 ms/token. **Coordinate first — the other agent owns
+this tree and `dram_streaming_matmul` is shared by every blaze op, so a regression here breaks all
+of them, not just GLM's.**
+
 ## VERDICT: both GLM fused ops lose at the model boundary. Do not integrate either.
 
 Two independent clusters, both correctness-gated against the ttnn path they would replace, both
