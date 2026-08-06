@@ -43,6 +43,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from loguru import logger
 
 import ttnn
 
@@ -138,6 +139,7 @@ class TtHiFTGenerator:
         emits -- so nothing here imports the CosyVoice package. See tt/weights.py
         for why that boundary is load-bearing."""
         from ..weights import build_conv1d, build_conv_transpose1d, build_resblock
+        from .conv import prepare_weights_default
 
         self.device = device
         self.dtype = dtype
@@ -209,11 +211,48 @@ class TtHiFTGenerator:
                     dtype=ttnn.float32,  # the whole excitation path stays wide
                 )
 
+        # Wormhole disagrees with itself about `prepare_conv_weights` -- see
+        # `conv.prepare_weights_default`. Applied here, after everything is built, rather
+        # than threaded through four builder signatures, and scoped to the vocoder because
+        # the flow estimator shares `TtConv1d` and *is* traced.
+        if not prepare_weights_default(device):
+            n = self._verify_weight_preparation()
+            logger.warning(
+                f"Wormhole: conv weight preparation will be verified once per geometry for {n} "
+                "vocoder convolutions (prepare_conv_weights disagrees with the op at some lengths)"
+            )
+
         # The window travels in the export rather than being recomputed, so the
         # device cannot disagree with the reference about it.
         window = bag.window
         self.stft = TtStft(device, self.n_fft, self.hop_len, window=window, dtype=dtype)
         self.istft = TtIStft(device, self.n_fft, self.hop_len, window=window, dtype=dtype)
+
+    def _verify_weight_preparation(self) -> int:
+        """Arm the prepared-weight check on every `TtConv1d` this generator owns.
+
+        A walk rather than a constructor argument: the convolutions are two and three
+        levels down (ResBlocks hold six each, the f0 predictor holds four) and threading a
+        flag through `build_conv1d`, `build_resblock`, `build_conv_transpose1d` and
+        `build_f0_predictor` would put the same decision in four places. Walking the object
+        graph once, here, keeps it in one.
+        """
+        from .conv import TtConv1d
+
+        seen, count, stack = set(), 0, [self]
+        while stack:
+            obj = stack.pop()
+            if id(obj) in seen:
+                continue
+            seen.add(id(obj))
+            if isinstance(obj, TtConv1d):
+                obj._verify = True
+                count += 1
+            elif isinstance(obj, (list, tuple)):
+                stack.extend(obj)
+            elif hasattr(obj, "__dict__"):
+                stack.extend(obj.__dict__.values())
+        return count
 
     @classmethod
     def from_export(cls, device, path: str | None = None, **kw):

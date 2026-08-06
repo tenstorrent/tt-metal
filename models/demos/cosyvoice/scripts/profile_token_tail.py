@@ -36,7 +36,15 @@ from models.demos.cosyvoice.tt.weights import WeightBag  # noqa: E402
 
 
 def main() -> int:
+    import argparse
+
     from models.demos.cosyvoice.tt.llm.model import TtTransformerLM
+
+    ap = argparse.ArgumentParser()
+    # The traced decode step this tail sits alongside. PERF.md is where the current
+    # figures live; pass the one for the part being measured.
+    ap.add_argument("--step-ms", type=float, default=4.99, help="traced decode step, ms")
+    args = ap.parse_args()
 
     device = ttnn.open_device(device_id=0, l1_small_size=131072, trace_region_size=67108864)
     try:
@@ -98,8 +106,19 @@ def main() -> int:
         print(f"    RAS sampling on host      {ras_ms:7.3f} ms  {100 * ras_ms / tail:5.1f}%")
         print(f"    embedding row -> device   {embed_ms:7.3f} ms  {100 * embed_ms / tail:5.1f}%")
         print(f"    tail total                {tail:7.3f} ms")
-        print(f"    traced decode step is ~12.52 ms, so the tail is {100 * tail / (12.52 + tail):4.1f}% of a token")
-        print(f"    on-device sampling could remove at most {d2h_ms + ras_ms:.3f} ms")
+        # The step this is a fraction *of* differs by architecture and by cache width, so
+        # it is an argument rather than a constant. It was hardcoded to 12.52 ms, which
+        # stopped being true the moment tracing and the in-place KV cache landed --
+        # PERF.md now measures 4.99 ms on Blackhole and 8.20 on Wormhole, and the same
+        # tail is twice the share of a Blackhole token that it is of a Wormhole one.
+        print(
+            f"    against a {args.step_ms:.2f} ms decode step, the tail is "
+            f"{100 * tail / (args.step_ms + tail):4.1f}% of a token"
+        )
+        print(
+            f"    on-device sampling could remove at most {d2h_ms + ras_ms:.3f} ms, i.e. "
+            f"{100 * (d2h_ms + ras_ms) / (args.step_ms + tail):4.1f}%"
+        )
     finally:
         ttnn.close_device(device)
     return 0
