@@ -13,17 +13,22 @@
 // in the output coordinate space.
 // Front-padding on W: each data stick has [front_w_pad | data | back_w_pad].
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 template <uint32_t num_bytes>
 inline __attribute__((always_inline)) void fill_with_val(uint32_t dst, uint32_t val) {
     static_assert(num_bytes % sizeof(uint16_t) == 0, "RM pad values are 2B or 4B scalars");
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
+    CoreLocalMem<volatile uint32_t> ptr(dst);
     for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); ++i) {
         ptr[i] = val;
     }
     if constexpr (num_bytes % sizeof(uint32_t) != 0) {
-        *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst + (num_bytes / sizeof(uint32_t)) * sizeof(uint32_t)) =
-            static_cast<uint16_t>(val);
+        CoreLocalMem<volatile uint16_t> tail(dst + (num_bytes / sizeof(uint32_t)) * sizeof(uint32_t));
+        *tail = static_cast<uint16_t>(val);
     }
 }
 
@@ -69,7 +74,7 @@ void kernel_main() {
 
     // NOC TRANSFER GRANULARITY.
     //
-    // Every NOC read issued below must move a *size* that is a multiple of the HW DRAM
+    // Every NOC read below must move a *size* that is a multiple of the HW DRAM
     // alignment (dram_alignment: 64B on Blackhole, 32B on Wormhole). This is the
     // empirically-measured granularity on silicon, and 16B L1 alignment is NOT enough:
     //   - Aligned W=512 + 64B back-pad (both 64B multiples): pcc = 1.0 (correct).
@@ -77,9 +82,10 @@ void kernel_main() {
     //     -> a sub-dram_alignment back-pad NOC read corrupts.
     //   - int32 W=100 -> 400B stick (16B-aligned, NOT 64B): pcc~0.01 -> a
     //     sub-dram_alignment data read corrupts.
-    // It binds the L1<->L1 pad reads as well as the DRAM data read, and it binds destination
-    // addresses as well as sizes -- hence the dram_alignment page pitch the factory hands us,
-    // which is what keeps every l1_addr below on a granule boundary.
+    // It binds the L1<->L1 pad reads as well as the DRAM data read, and it binds
+    // destination addresses as well as sizes -- hence the dram_alignment page pitch
+    // the builder hands us, which is what keeps every l1_addr below on a granule
+    // boundary.
     //
     // Only the DATA placement can force staging. A front W-pad lands data at a
     // non-A-aligned offset, and a non-A-aligned input stick makes the DRAM read size
@@ -87,12 +93,12 @@ void kernel_main() {
     // aligned read into scratch plus a RISC memmove. A ragged *pad* region does not
     // force it: pad bytes have no source to honour, so the A-multiple part rides the
     // NOC and the sub-A remainder is written by RISC, which has no granularity rule.
-    // That distinction is worth 1.25-1.57x of native on Blackhole where staging gives 0.51-0.76x.
     constexpr bool NEEDS_STAGE = (front_pad_w_bytes > 0) || (stick_size % dram_alignment != 0);
 
-    // Split points for the two pad fills: NOC the whole A-multiples, RISC the remainder. Each
-    // remainder sits at an A-multiple offset from an A-aligned page, so the stores are word-aligned
-    // and land clear of the granule any concurrent NOC read on this page can settle into.
+    // Split points for the two pad fills: NOC the whole A-multiples, RISC the
+    // remainder. Each remainder sits at an A-multiple offset from an A-aligned page,
+    // so the stores land clear of the granule any concurrent NOC read on this page
+    // can settle into.
     constexpr uint32_t back_pad_noc_bytes = (back_pad_w_bytes / dram_alignment) * dram_alignment;
     constexpr uint32_t back_pad_tail_bytes = back_pad_w_bytes - back_pad_noc_bytes;
     constexpr uint32_t pad_stick_noc_bytes = (stick_size_out / dram_alignment) * dram_alignment;
@@ -107,11 +113,19 @@ void kernel_main() {
     // stick_size logical bytes via get_noc_addr.
     const auto s = TensorAccessor(src_args, src_addr);
 
+    Noc noc;
+    CircularBuffer out_cb(cb_out);
+    CircularBuffer pad_cb(cb_pad);
+    CircularBuffer stage_cb(cb_stage);
+
     // Fill the pad constant buffer once with packed_pad_val.
     // We use this as a source for L1 self-reads to fill pad regions.
     // Size it to cover the largest possible fill: full output stick.
-    fill_with_val<stick_size_out>(get_write_ptr(cb_pad), packed_pad_val);
-    uint64_t pad_noc_addr = get_noc_addr(get_read_ptr(cb_pad));
+    fill_with_val<stick_size_out>(pad_cb.get_write_ptr(), packed_pad_val);
+    const uint32_t pad_l1_addr = pad_cb.get_read_ptr();
+    UnicastEndpoint self_ep;
+    const uint32_t my_noc_x = my_x[noc.get_noc_id()];
+    const uint32_t my_noc_y = my_y[noc.get_noc_id()];
 
     uint32_t curr_h = start_h;
     uint32_t curr_c = start_c;
@@ -121,8 +135,8 @@ void kernel_main() {
 
     while (sticks_left > 0) {
         uint32_t batch = (sticks_left < BATCH) ? sticks_left : BATCH;
-        cb_reserve_back(cb_out, batch);
-        uint32_t l1_addr = get_write_ptr(cb_out);
+        out_cb.reserve_back(batch);
+        uint32_t l1_addr = out_cb.get_write_ptr();
 
         for (uint32_t t = 0; t < batch; t++) {
             bool is_data = (curr_h >= front_h) && (curr_h < front_h + H) && (curr_c >= front_c) &&
@@ -130,32 +144,46 @@ void kernel_main() {
 
             if (is_data) {
                 if constexpr (NEEDS_STAGE) {
-                    // Data placement the NOC cannot express: pre-fill the whole output stick with
-                    // the pad value, read the A-aligned input page into scratch, then RISC-memmove
-                    // the stick_size real bytes into place. Byte-granular, so correct at any width
-                    // or offset. Scratch is cb_stage, not cb_pad, so the pad constant survives.
+                    // Data placement the NOC cannot express: pre-fill the whole output
+                    // stick with the pad value, read the A-aligned input page into
+                    // scratch, then RISC-memmove the stick_size real bytes into place.
+                    // Byte-granular, so correct at any width or offset. Scratch is
+                    // cb_stage, not cb_pad, so the pad constant survives.
                     //
-                    // The pre-fill and the DRAM read address disjoint buffers, so they share one
-                    // barrier; only the memmove depends on both.
+                    // The pre-fill and the DRAM read address disjoint buffers, so they
+                    // share one barrier; only the memmove depends on both.
                     if constexpr (front_pad_w_bytes > 0 || back_pad_w_bytes > 0) {
                         if constexpr (pad_stick_noc_bytes > 0) {
-                            noc_async_read(pad_noc_addr, l1_addr, pad_stick_noc_bytes);
+                            CoreLocalMem<uint32_t> out_mem(l1_addr);
+                            noc.async_read(
+                                self_ep,
+                                out_mem,
+                                pad_stick_noc_bytes,
+                                {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = pad_l1_addr},
+                                {.offset_bytes = 0});
                         }
                         if constexpr (pad_stick_tail_bytes > 0) {
                             fill_with_val<pad_stick_tail_bytes>(l1_addr + pad_stick_noc_bytes, packed_pad_val);
                         }
                     }
-                    uint32_t stage_addr = get_write_ptr(cb_stage);
-                    noc_async_read(s.get_noc_addr(src_stick), stage_addr, in_read_size);
-                    noc_async_read_barrier();
+                    noc.async_read(
+                        s, stage_cb, in_read_size, {.page_id = src_stick, .offset_bytes = 0}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
                     memmove(
                         reinterpret_cast<void*>(l1_addr + front_pad_w_bytes),
-                        reinterpret_cast<void*>(get_read_ptr(cb_stage)),
+                        reinterpret_cast<void*>(stage_cb.get_read_ptr()),
                         static_cast<size_t>(stick_size));
                 } else {
-                    noc_async_read(s.get_noc_addr(src_stick), l1_addr, stick_size);
+                    CoreLocalMem<uint32_t> out_mem(l1_addr);
+                    noc.async_read(
+                        s, out_mem, stick_size, {.page_id = src_stick, .offset_bytes = 0}, {.offset_bytes = 0});
                     if constexpr (back_pad_noc_bytes > 0) {
-                        noc_async_read(pad_noc_addr, l1_addr + stick_size, back_pad_noc_bytes);
+                        noc.async_read(
+                            self_ep,
+                            out_mem,
+                            back_pad_noc_bytes,
+                            {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = pad_l1_addr},
+                            {.offset_bytes = stick_size});
                     }
                     if constexpr (back_pad_tail_bytes > 0) {
                         fill_with_val<back_pad_tail_bytes>(l1_addr + stick_size + back_pad_noc_bytes, packed_pad_val);
@@ -165,7 +193,13 @@ void kernel_main() {
             } else {
                 // Full pad stick: fill from pad constant buffer
                 if constexpr (pad_stick_noc_bytes > 0) {
-                    noc_async_read(pad_noc_addr, l1_addr, pad_stick_noc_bytes);
+                    CoreLocalMem<uint32_t> out_mem(l1_addr);
+                    noc.async_read(
+                        self_ep,
+                        out_mem,
+                        pad_stick_noc_bytes,
+                        {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = pad_l1_addr},
+                        {.offset_bytes = 0});
                 }
                 if constexpr (pad_stick_tail_bytes > 0) {
                     fill_with_val<pad_stick_tail_bytes>(l1_addr + pad_stick_noc_bytes, packed_pad_val);
@@ -185,8 +219,8 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_read_barrier();  // ONE barrier for entire batch
-        cb_push_back(cb_out, batch);
+        noc.async_read_barrier();  // ONE barrier for entire batch
+        out_cb.push_back(batch);
         sticks_left -= batch;
     }
 }
