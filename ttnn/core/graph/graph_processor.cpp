@@ -462,9 +462,12 @@ void GraphProcessor::track_function_start(
 }
 
 bool GraphProcessor::track_function_end_impl() {
-    // An end with no matching start would index an empty stack. TT_ASSERT compiles out in
-    // release, so check explicitly and drop the event rather than reading out of bounds.
-    if (current_op_id.empty()) {
+    // begin_capture seeds the stack with the capture_start sentinel, and every other track_* reads
+    // current_op_id.top() unguarded. So the invariant to hold is that the sentinel is never popped,
+    // not merely that the stack is non-empty: an end with no matching start would pop it and leave
+    // the next event of any kind indexing an empty stack. TT_ASSERT compiles out in release, so
+    // check here and drop the unbalanced event instead.
+    if (current_op_id.size() <= 1) {
         log_warning(tt::LogAlways, "track_function_end without a matching track_function_start; ignoring event");
         return false;
     }

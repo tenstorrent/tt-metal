@@ -7,11 +7,15 @@
 Graph-capture state (``GraphTracker``'s processor stack) is ``thread_local``. Work that a
 mesh operation hands to the dispatch thread pool therefore used to run with an empty
 processor list and silently drop every tracking event it fired. The clearest instance is
-``MeshWorkloadImpl::compile``, which offloads per-device program compilation via
-``MeshDevice::enqueue_to_thread_pool`` and emits ``track_allocate_cb`` from those workers.
-That path is taken for *heterogeneous* workloads -- i.e. exactly the CCL/collective case --
-so an ``all_gather`` capture came back missing the circular-buffer allocations belonging to
-the collective.
+``MeshWorkloadImpl::compile``, which offloads per-device program compilation to the thread
+pool whenever a ``MeshWorkload`` holds more than one program, and emits ``track_allocate_cb``
+from those workers. When it does offload, *every* program compiles on a worker and none on
+the calling thread, so the capture came back with zero circular-buffer allocations for the
+op rather than merely fewer.
+
+A collective is used here because that is where the gap was reported (ttnn-visualizer #1684),
+but it is not collective-specific: the ``create_at`` adapter in ``ttnn/api/ttnn/device_operation.hpp``
+adds one program per mesh coordinate, so any multi-device op on that path is affected.
 
 ``ThreadPool::enqueue`` now installs the enqueuing thread's processors on the worker for the
 duration of each task, so those events land in the capture. This test asserts that the
@@ -67,22 +71,27 @@ def test_singlehost_graph_report_ccl(mesh_device, tmp_path):
     report_path = tmp_path / "graph_capture.json"
     output_dir = tmp_path / "output"
 
+    # Detailed buffer tracing is a process-global flag, so each acquire gets its own finally:
+    # nesting them keeps a failure in begin_graph_capture from leaking the flag into the rest
+    # of the pytest session, and from calling end_graph_capture without a matching begin.
     ttnn.graph.enable_detailed_buffer_tracing()
-    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
     try:
-        tt_input = ttnn.to_device(host_input, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.multiply(tt_input, 2.0)
-        x = ttnn.add(x, tt_input)  # == 3 * input
-        x = ttnn.gelu(x)
-        ttnn.synchronize_device(mesh_device)
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            tt_input = ttnn.to_device(host_input, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.multiply(tt_input, 2.0)
+            x = ttnn.add(x, tt_input)  # == 3 * input
+            x = ttnn.gelu(x)
+            ttnn.synchronize_device(mesh_device)
 
-        # Each device holds one shard along GATHER_DIM, so after the gather every device
-        # holds the full tensor. Compiling this collective produces a heterogeneous
-        # MeshWorkload, whose per-device compile runs on dispatch worker threads.
-        gathered = ttnn.all_gather(x, GATHER_DIM, topology=ttnn.Topology.Linear)
-        ttnn.synchronize_device(mesh_device)
+            # Each device holds one shard along GATHER_DIM, so after the gather every device
+            # holds the full tensor. Compiling this collective produces a heterogeneous
+            # MeshWorkload, whose per-device compile runs on dispatch worker threads.
+            gathered = ttnn.all_gather(x, GATHER_DIM, topology=ttnn.Topology.Linear)
+            ttnn.synchronize_device(mesh_device)
+        finally:
+            ttnn.graph.end_graph_capture_to_file(str(report_path))
     finally:
-        ttnn.graph.end_graph_capture_to_file(str(report_path))
         ttnn.graph.disable_detailed_buffer_tracing()
     logger.info(f"wrote capture -> {report_path}")
 

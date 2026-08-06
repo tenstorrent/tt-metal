@@ -361,17 +361,21 @@ public:
     void wait() override {}
 
 protected:
-    // Runs inline on the calling thread, which already owns the capture context, so the
-    // propagation applied by ThreadPool::enqueue is a self-assignment here.
     void enqueue_impl(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/) override { f(); }
+    bool runs_inline() const override { return true; }
 };
 
 }  // namespace thread_pool_impls
 
 void ThreadPool::enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx) {
-    // Single choke point for graph-capture context propagation: returns `f` untouched
-    // unless a capture is active, so a non-capturing dispatch pays one is_enabled() check.
-    enqueue_impl(GraphTracker::instance().wrap_with_current_context(std::move(f)), device_idx);
+    // Single choke point for graph-capture context propagation. wrap_with_current_context returns `f`
+    // untouched unless a capture is active, so a non-capturing dispatch pays one is_enabled() check.
+    // Inline pools are skipped outright: a unit mesh gets the passthrough pool, so this keeps every
+    // single-device capture (graph gtests, sweeps, op-constraint queries) off the copying path entirely.
+    if (!runs_inline()) {
+        f = GraphTracker::instance().wrap_with_current_context(std::move(f));
+    }
+    enqueue_impl(std::move(f), device_idx);
 }
 
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id, int num_threads) {

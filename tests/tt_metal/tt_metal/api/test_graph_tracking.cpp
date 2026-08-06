@@ -17,6 +17,7 @@
 #include <span>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #include <tt-metalium/graph_tracking.hpp>
 
@@ -59,9 +60,38 @@ public:
 
 }  // namespace
 
-TEST(GraphTrackerThreading, SingleThreadCapturesEachEventOnce) {
+// These tests need a clean per-thread capture stack, but calling GraphTracker::clear() outright
+// would drop processors registered process-wide by whatever else shares this binary. In particular
+// ShmTrackingProcessor is pushed behind a once-flag at device init (tt_metal/impl/device/device.cpp),
+// so clearing it after a device test has run disables SHM tracking for every later test with no way
+// to re-register. Snapshot the main thread's state and put it back instead.
+class GraphTrackerThreading : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto& tracker = GraphTracker::instance();
+        saved_processors_ = tracker.get_processors();
+        saved_hook_ = tracker.get_hook();
+        tracker.clear();
+    }
+
+    void TearDown() override {
+        auto& tracker = GraphTracker::instance();
+        tracker.clear();
+        for (const auto& processor : saved_processors_) {
+            tracker.push_processor(processor);
+        }
+        if (saved_hook_) {
+            tracker.add_hook(saved_hook_);
+        }
+    }
+
+private:
+    std::vector<std::shared_ptr<IGraphProcessor>> saved_processors_;
+    std::shared_ptr<IGraphHooks> saved_hook_;
+};
+
+TEST_F(GraphTrackerThreading, SingleThreadCapturesEachEventOnce) {
     auto& tracker = GraphTracker::instance();
-    tracker.clear();
 
     auto processor = std::make_shared<CountingProcessor>();
     tracker.push_processor(processor);
@@ -84,7 +114,7 @@ TEST(GraphTrackerThreading, SingleThreadCapturesEachEventOnce) {
 // pushes its processor before either starts dispatching (via a barrier), so
 // if storage were shared both threads would iterate both processors and each
 // would see 2 * kIterations events.
-TEST(GraphTrackerThreading, ProcessorsAreIsolatedPerThread) {
+TEST_F(GraphTrackerThreading, ProcessorsAreIsolatedPerThread) {
     constexpr int kIterations = 1000;
     constexpr int kNumThreads = 2;
 
@@ -93,7 +123,8 @@ TEST(GraphTrackerThreading, ProcessorsAreIsolatedPerThread) {
 
     auto run_one_thread = [&](const std::shared_ptr<CountingProcessor>& proc) {
         auto& tracker = GraphTracker::instance();
-        tracker.clear();
+        // A freshly spawned thread starts with an empty thread_local stack; no clear() needed.
+        ASSERT_TRUE(tracker.get_processors().empty());
         tracker.push_processor(proc);
 
         ready_count.fetch_add(1);
@@ -130,7 +161,7 @@ TEST(GraphTrackerThreading, ProcessorsAreIsolatedPerThread) {
 
 // Reproduces the race from tt-mlir#8302. One thread spins push/pop_processor
 // while another spins track_function_start.
-TEST(GraphTrackerThreading, ConcurrentPushPopAndTrackDoNotRace) {
+TEST_F(GraphTrackerThreading, ConcurrentPushPopAndTrackDoNotRace) {
     constexpr auto kDuration = std::chrono::milliseconds(200);
 
     std::atomic<bool> stop{false};
@@ -138,7 +169,6 @@ TEST(GraphTrackerThreading, ConcurrentPushPopAndTrackDoNotRace) {
 
     std::thread mutator([&] {
         auto& tracker = GraphTracker::instance();
-        tracker.clear();
         while (!stop.load()) {
             tracker.push_processor(std::make_shared<CountingProcessor>());
             tracker.pop_processor();
@@ -148,7 +178,6 @@ TEST(GraphTrackerThreading, ConcurrentPushPopAndTrackDoNotRace) {
     auto dispatcher_proc = std::make_shared<CountingProcessor>();
     std::thread dispatcher([&] {
         auto& tracker = GraphTracker::instance();
-        tracker.clear();
         tracker.push_processor(dispatcher_proc);
         while (!stop.load()) {
             tracker.track_function_start("op");
@@ -176,9 +205,8 @@ TEST(GraphTrackerThreading, ConcurrentPushPopAndTrackDoNotRace) {
 // whose matching function_end runs on a worker thread. With context
 // propagation the single processor sees both events (balanced), instead of the
 // worker's empty thread-local list silently dropping the end.
-TEST(GraphTrackerThreading, WrapPropagatesContextToWorkerThread) {
+TEST_F(GraphTrackerThreading, WrapPropagatesContextToWorkerThread) {
     auto& tracker = GraphTracker::instance();
-    tracker.clear();
 
     auto processor = std::make_shared<CountingProcessor>();
     tracker.push_processor(processor);
@@ -192,7 +220,7 @@ TEST(GraphTrackerThreading, WrapPropagatesContextToWorkerThread) {
 
     std::thread worker([task = std::move(task)]() mutable {
         auto& worker_tracker = GraphTracker::instance();
-        worker_tracker.clear();  // worker starts with an empty thread-local capture
+        // Worker starts with an empty thread-local capture.
         EXPECT_FALSE(worker_tracker.is_enabled());
         task();
         // After the wrapped task completes, the worker's own (empty) context is restored.
@@ -208,9 +236,8 @@ TEST(GraphTrackerThreading, WrapPropagatesContextToWorkerThread) {
 
 // When no capture is active on the enqueuing thread, wrap_with_current_context
 // must return a transparent wrapper (the task still runs, nothing installed).
-TEST(GraphTrackerThreading, WrapIsTransparentWhenNoCaptureActive) {
+TEST_F(GraphTrackerThreading, WrapIsTransparentWhenNoCaptureActive) {
     auto& tracker = GraphTracker::instance();
-    tracker.clear();
 
     std::atomic<int> ran{0};
     auto task = tracker.wrap_with_current_context([&ran]() { ran.fetch_add(1); });
@@ -225,9 +252,8 @@ TEST(GraphTrackerThreading, WrapIsTransparentWhenNoCaptureActive) {
 // key off is_enabled(), not emptiness, or every dispatch would copy the processor stack
 // onto the worker — adding allocations to the hot path and letting a background processor
 // observe worker-thread events it never saw before.
-TEST(GraphTrackerThreading, WrapIsTransparentWithOnlyBackgroundProcessors) {
+TEST_F(GraphTrackerThreading, WrapIsTransparentWithOnlyBackgroundProcessors) {
     auto& tracker = GraphTracker::instance();
-    tracker.clear();
 
     auto background = std::make_shared<BackgroundProcessor>();
     tracker.push_processor(background);
@@ -239,7 +265,6 @@ TEST(GraphTrackerThreading, WrapIsTransparentWithOnlyBackgroundProcessors) {
     std::atomic<bool> worker_saw_processors{true};
     std::thread worker([task = std::move(task), &worker_saw_processors]() mutable {
         auto& worker_tracker = GraphTracker::instance();
-        worker_tracker.clear();
         task();
         worker_saw_processors.store(!worker_tracker.get_processors().empty());
     });
@@ -254,9 +279,8 @@ TEST(GraphTrackerThreading, WrapIsTransparentWithOnlyBackgroundProcessors) {
 // Hooks are intentionally left behind: they change behaviour (under RunMode::NO_DISPATCH
 // they suppress writes and program dispatch) rather than just observing it, so propagating
 // them would alter what offloaded work does. Propagation stays purely additive.
-TEST(GraphTrackerThreading, WrapDoesNotPropagateHook) {
+TEST_F(GraphTrackerThreading, WrapDoesNotPropagateHook) {
     auto& tracker = GraphTracker::instance();
-    tracker.clear();
 
     auto processor = std::make_shared<CountingProcessor>();
     tracker.push_processor(processor);
@@ -267,23 +291,42 @@ TEST(GraphTrackerThreading, WrapDoesNotPropagateHook) {
     std::atomic<bool> worker_had_hook{true};
     std::thread worker([task = std::move(task), &worker_had_hook]() mutable {
         auto& worker_tracker = GraphTracker::instance();
-        worker_tracker.clear();
         task();
         worker_had_hook.store(worker_tracker.get_hook() != nullptr);
     });
     worker.join();
 
     tracker.pop_processor();
-    tracker.clear_hook();
 
     EXPECT_FALSE(worker_had_hook.load());
 }
 
+// The wrapper moves its snapshot into the tracker on entry and takes it back on exit, which
+// avoids copying the processor vector per task. std::function makes no single-invocation
+// promise, so guard that the hand-back actually happens: a second call must still propagate
+// rather than silently install an empty (moved-from) stack.
+TEST_F(GraphTrackerThreading, WrapCanRunMoreThanOnce) {
+    auto& tracker = GraphTracker::instance();
+
+    auto processor = std::make_shared<CountingProcessor>();
+    tracker.push_processor(processor);
+    auto task = tracker.wrap_with_current_context([]() { GraphTracker::instance().track_function_start("op"); });
+
+    std::thread worker([task = std::move(task)]() mutable {
+        task();
+        task();
+    });
+    worker.join();
+
+    tracker.pop_processor();
+
+    EXPECT_EQ(processor->function_starts.load(), 2);
+}
+
 // The wrapper must restore whatever capture state the worker thread already had,
 // even if that thread was itself driving an unrelated capture.
-TEST(GraphTrackerThreading, WrapRestoresPreexistingWorkerContext) {
+TEST_F(GraphTrackerThreading, WrapRestoresPreexistingWorkerContext) {
     auto& outer = GraphTracker::instance();
-    outer.clear();
 
     auto propagated = std::make_shared<CountingProcessor>();
     outer.push_processor(propagated);
@@ -292,7 +335,6 @@ TEST(GraphTrackerThreading, WrapRestoresPreexistingWorkerContext) {
 
     std::thread worker([task = std::move(task)]() mutable {
         auto& tracker = GraphTracker::instance();
-        tracker.clear();
 
         // The worker owns its own capture before running the propagated task.
         auto local_proc = std::make_shared<CountingProcessor>();

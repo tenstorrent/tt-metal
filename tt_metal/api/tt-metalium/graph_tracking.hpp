@@ -41,6 +41,9 @@ struct TrackedArgument {
 template <typename T>
 std::string serialize_tracked_arg(const std::any& a);
 
+// Implementations must be safe to call concurrently from multiple threads. A processor registered by
+// one thread is propagated onto dispatch worker threads for the duration of tasks that thread enqueues
+// (see GraphTracker's threading contract), so several workers can be inside `track_*` at once.
 class IGraphProcessor {
 public:
     enum class RunMode {
@@ -121,8 +124,10 @@ public:
 //     enqueuing thread's processors on the worker for the duration of the
 //     task and restores the worker's previous stack afterwards. Storage stays
 //     per-thread, so this does not reintroduce the concurrent push/pop race
-//     that motivated making `processors` / `hook` thread_local (#44668); the
-//     shared `IGraphProcessor` is itself internally synchronized.
+//     that motivated making `processors` / `hook` thread_local (#44668).
+//     Several workers can then be inside the same `IGraphProcessor` at once,
+//     which is why implementers are required to be thread-safe (see
+//     `IGraphProcessor`).
 //   * Only `processors` are propagated -- `hook` is deliberately *not*. Hooks
 //     change behaviour (under RunMode::NO_DISPATCH they suppress writes and
 //     program dispatch) rather than merely observing it, so propagating them
@@ -134,6 +139,16 @@ public:
 //     popping it would interleave and corrupt the recorded nesting. Tasks that
 //     only emit leaf events (buffer / circular-buffer / program tracking), as
 //     all current dispatch and compile tasks do, are safe.
+//   * Propagation recovers events, not their order. Workers run concurrently,
+//     so the order in which their events land -- e.g. the circular-buffer
+//     allocations of a multi-program workload -- follows thread scheduling and
+//     varies run to run. Consumers may rely on the set of events recorded
+//     within an op, not on their relative sequence.
+//   * `ThreadPool::enqueue` is the only propagation point. Threads that are not
+//     pool workers stay outside it: notably the dedicated completion-queue
+//     reader started by `FDMeshCommandQueue` and any thread a caller spawns
+//     directly. Nothing on those paths emits tracking events today; anything
+//     added that does will need propagating explicitly.
 //   * `hooked_buffers` is process-wide and guarded by `hooked_buffers_mutex`.
 //     This is the only piece of GraphTracker state that is shared across
 //     threads.
@@ -225,8 +240,9 @@ public:
     // allocation. Snapshotting happens now, on the calling thread, so this must
     // be invoked on the thread that owns the capture (i.e. at enqueue time,
     // before the work is handed to a worker). Callers going through
-    // `ThreadPool::enqueue` get this automatically.
-    std::function<void()> wrap_with_current_context(std::function<void()> task);
+    // `ThreadPool::enqueue` get this automatically. Discarding the result silently
+    // leaves the task unpropagated, hence [[nodiscard]].
+    [[nodiscard]] std::function<void()> wrap_with_current_context(std::function<void()> task);
 
     void clear();
 

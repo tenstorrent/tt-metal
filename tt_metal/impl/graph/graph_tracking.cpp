@@ -182,13 +182,16 @@ std::function<void()> GraphTracker::wrap_with_current_context(std::function<void
     }
     return [context = processors, task = std::move(task)]() mutable {
         auto& tracker = GraphTracker::instance();
-        auto previous = tracker.exchange_processors(context);
-        // Restore the worker thread's own stack even if `task` throws.
+        auto previous = tracker.exchange_processors(std::move(context));
+        // Put the worker thread's own stack back even if `task` throws. The exchange also hands
+        // `context` back, so moving out of it above costs no allocation yet leaves the wrapper
+        // callable again -- std::function does not promise single invocation.
         struct Restore {
             GraphTracker& tracker;
             std::vector<std::shared_ptr<IGraphProcessor>>& previous;
-            ~Restore() { tracker.exchange_processors(std::move(previous)); }
-        } restore{tracker, previous};
+            std::vector<std::shared_ptr<IGraphProcessor>>& context;
+            ~Restore() { context = tracker.exchange_processors(std::move(previous)); }
+        } restore{tracker, previous, context};
         task();
     };
 }

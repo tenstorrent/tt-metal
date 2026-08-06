@@ -34,6 +34,10 @@ public:
 
 protected:
     virtual void enqueue_impl(std::function<void()>&& f, std::optional<uint32_t> device_idx) = 0;
+    // True when enqueue runs the task synchronously on the calling thread. Such a pool never crosses a
+    // thread boundary, so the task already sees the caller's graph-capture state and enqueue skips
+    // propagation rather than paying to copy a processor vector into a task that runs where it came from.
+    virtual bool runs_inline() const { return false; }
 };
 
 // API accespting the number of threads to spawn in the pool. Will bind each thread to a CPU core, but the
