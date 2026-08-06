@@ -25,7 +25,9 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 | Metric | Value | Target |
 |---|---:|---:|
 | End-to-end RTF | `0.533` | `< 0.5` ❌ |
+| End-to-end RTF, `COSYVOICE_KV_INPLACE=1` | `0.512` | `< 0.5` ❌ |
 | LLM throughput (traced) | `148.5 tok/s` | `>= 60` ✅ |
+| LLM throughput, `COSYVOICE_KV_INPLACE=1` | `160.5 tok/s` | `>= 60` ✅ |
 | LLM decode latency (traced) | `6.73 ms` | — |
 | Token agreement, teacher-forced | `98.56 %` | `> 95 %` ✅ |
 | Token agreement, through the KV cache | `95.83 %` | `> 95 %` ✅ |
@@ -42,6 +44,14 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 | Flow decoder (10 Euler steps, traced, SDPA) | `0.589 s` | `0.180` | 34 % |
 | HiFT vocoder | `0.050 s` | `0.015` | 2 % |
 | **Total** | `1.743 s` | **`0.533`** | |
+
+**`COSYVOICE_KV_INPLACE=1`** writes the KV cache in place with `ttnn.update_cache` instead of
+rebuilding it, taking the decode step to `6.23 ms` (`160.5 tok/s`) and the total to `1.675 s`,
+**RTF `0.512`**. It is opt-in because it costs two things the default does not: a 384 MB trace
+region for the 65 traces it captures, and bit-exactness — worst PCC `0.9986` over 72 steps against
+the moving cache's exact `1.0`, non-accumulating. The width it needs has to keep the key axis on an
+**even tile count**; a one-tile scratch zone made it *slower*. Findings F45 and F46 in the notes
+carry that account.
 
 RTF has come down **1.096 → 0.533** (and **2.120 → 0.533** since before either stage was traced),
 but it still misses. The rest of this section is the account of where the time went and what is

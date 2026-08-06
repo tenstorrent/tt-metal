@@ -32,6 +32,8 @@ bounds are what stop the sampler ending an utterance after one token.
 """
 from __future__ import annotations
 
+import os
+
 import torch
 from loguru import logger
 
@@ -289,10 +291,21 @@ class TtTransformerLM:
         # costs two warm-up passes, so it is skipped for very short generations.
         traced = None
         if use_trace and cap > 8:
-            from .decoder import TracedDecodeStep
+            from .decoder import TracedDecodeStep, TracedDecodeStepInPlace
 
+            # `COSYVOICE_KV_INPLACE=1` writes the KV cache in place instead of
+            # rebuilding it -- 1.08x on the decode step, measured. Opt-in rather than
+            # default for two reasons, both about what it costs elsewhere: it captures
+            # 65 traces where this path captures one, so it needs a much larger trace
+            # region (384 MB observed to work; 64 MB fails), and it is not bit-exact
+            # against the moving cache (worst PCC 0.9986 over 72 steps,
+            # non-accumulating). The fallback below turns a too-small trace region
+            # into a warning and an untraced decode, which is 2.2x slower -- so
+            # defaulting it on would trade a certain 1.08x for a possible 2.2x loss
+            # on any caller that sizes its device the ordinary way.
+            kls = TracedDecodeStepInPlace if os.environ.get("COSYVOICE_KV_INPLACE") == "1" else TracedDecodeStep
             try:
-                traced = TracedDecodeStep(self.decoder, max_len).capture()
+                traced = kls(self.decoder, max_len).capture()
                 traced.seed(caches)
                 TtARDecoder.free_caches(caches)
                 caches = None
