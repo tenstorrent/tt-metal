@@ -244,6 +244,29 @@ def test_convert_stringifies_bool_valued_string_column(tmp_path):
     assert list(back["unpack_to_dest"]) == ["True", "False"]
 
 
+def test_convert_drops_redundant_columns_strict_safe(tmp_path):
+    # input_/output_num_blocks are provably == num_blocks (REDUNDANT_COLUMNS): the
+    # converter drops them and does NOT trip the strict unknown-column guard.
+    df = pd.DataFrame(
+        {
+            "marker": ["INIT"],
+            "num_blocks": [4],
+            "input_num_blocks": [4],
+            "output_num_blocks": [4],
+            "tile_cnt": [2],
+        }
+    )
+    p = _write_csv(tmp_path, "perf_x.csv", df)
+
+    diag = convert_csvs_to_parquet([p], tmp_path / "out.parquet", **_RUN_PROV)
+
+    assert diag["unknown_columns"] == {}  # not flagged as drift
+    names = pq.read_table(tmp_path / "out.parquet").schema.names
+    assert "num_blocks" in names
+    assert "input_num_blocks" not in names
+    assert "output_num_blocks" not in names
+
+
 # ── Parquet -> CSV (reverse conversion) ───────────────────────────────────────
 
 
