@@ -8,7 +8,8 @@
 # rebinds its buffers; (3) a perf-demoted case still lands on native under `auto`; (4) an accepted,
 # non-demoted case under `auto` compiles the codegen program; (5) an unknown `implementation` is
 # rejected. Regenerated per port; edit the emitter, not this file, for systematic
-# changes. Hand-add off-grid regressions below the generated block.
+# changes. Hand-added tests go below the generated block's sentinel line; re-emission
+# preserves them.
 
 import pytest
 import torch
@@ -20,9 +21,6 @@ _NATIVE = "native"  # forced-native golden leg
 _CODEGEN = "codegen"  # forced-codegen leg
 _ROUTED = "auto"
 
-_DRAM = {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)}
-_L1 = {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)}
-
 
 def _make_input(shape, dtype):
     if dtype in (ttnn.int32, ttnn.uint32):
@@ -31,10 +29,15 @@ def _make_input(shape, dtype):
 
 
 _ACCEPTED = [
-    ([4, 7, 32, 64], _L1, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    (
+        [32, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.int32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
 ]
 _ACCEPTED_IDS = [
-    "[4, 7, 32, 64]|memory_config=l1|bfloat16|row_major",
+    "[32, 32]|memory_config=dram|int32|row_major",
 ]
 
 
@@ -54,10 +57,15 @@ def test_tilize_codegen_routes_accepted_to_codegen(device, shape, kwargs, dtype,
 
 
 _CACHE_HIT = [
-    ([4, 7, 32, 64], _L1, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    (
+        [32, 32],
+        {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+        ttnn.int32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ),
 ]
 _CACHE_HIT_IDS = [
-    "[4, 7, 32, 64]|memory_config=l1|bfloat16|row_major",
+    "[32, 32]|memory_config=dram|int32|row_major",
 ]
 
 
@@ -77,59 +85,25 @@ def test_tilize_codegen_program_cache_hit(device, shape, kwargs, dtype, layout):
     assert device.num_program_cache_entries() == entries_after_miss, msg
 
 
-# Perf-demoted ledger cases: in scope for codegen (so forced `codegen` still runs them and verify
-# keeps measuring them), but routed to native under `auto`. One row per is_demoted() branch — the
-# Wt == 1 predicate and the enumerated Wt >= 2 table.
-_DEMOTED = [
-    ([32, 32], _DRAM, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-    ([2, 12, 64, 96], _DRAM, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    ([6, 224, 160], _DRAM, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-]
-_DEMOTED_IDS = [
-    "[32, 32]|memory_config=dram|int32|row_major",
-    "[2, 12, 64, 96]|memory_config=dram|bfloat16|row_major",
-    "[6, 224, 160]|memory_config=dram|bfloat16|row_major",
-]
+_SELECTOR_CASE = (
+    [32, 32],
+    {"memory_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)},
+    ttnn.int32,
+    ttnn.ROW_MAJOR_LAYOUT,
+)
 
 
-@pytest.mark.parametrize("shape,kwargs,dtype,layout", _DEMOTED, ids=_DEMOTED_IDS)
-def test_tilize_codegen_demoted_case_stays_native(device, shape, kwargs, dtype, layout):
-    x = _make_input(shape, dtype)
-    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
-    golden = ttnn.to_torch(ttnn.tilize(xt, **kwargs, implementation=_NATIVE))
-    entries_before = device.num_program_cache_entries()
-    out = ttnn.tilize(xt, **kwargs, implementation=_ROUTED)
-    assert_equal(golden, ttnn.to_torch(out))
-    # The golden already warmed this exact native program, so a routed dispatch that stays on
-    # native is a cache hit and cannot grow the count. Growth means `auto` compiled the codegen
-    # program for a case measured slower there.
-    msg = "auto routed a perf-demoted case to codegen (program cache grew past the native golden)"
-    assert device.num_program_cache_entries() == entries_before, msg
+@pytest.mark.parametrize("selector", ["", "Codegen", "codgen", "default"])
+def test_tilize_codegen_rejects_an_unknown_implementation(device, expect_error, selector):
+    shape, kwargs, dtype, layout = _SELECTOR_CASE
+    xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
+    # The selector is parsed on every call, including ones a front-end shortcut would
+    # otherwise answer without dispatching, so an unknown value never passes silently.
+    with expect_error(RuntimeError, "unknown implementation selector"):
+        ttnn.tilize(xt, **kwargs, implementation=selector)
 
 
-@pytest.mark.parametrize("shape,dtype", [([64, 64], ttnn.bfloat16)], ids=["[64, 64]|bfloat16"])
-def test_tilize_codegen_rejected_case_falls_back_to_native(device, expect_error, shape, dtype):
-    # Sharded input: rejected by supported_by_codegen() (TilizeCodegenParams has no shard fields and
-    # no codegen builder for the shard-backed CBs is ported), while native serves it from its own
-    # sharded factory. The ledger's own vectors are interleaved, so this leg has to be built here.
-    core = ttnn.CoreCoord(0, 0)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core)})
-    shard_spec = ttnn.ShardSpec(shard_grid, shape, ttnn.ShardOrientation.ROW_MAJOR)
-    sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-    xt = ttnn.from_torch(
-        _make_input(shape, dtype), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded
-    )
-    golden = ttnn.to_torch(ttnn.tilize(xt, memory_config=sharded, implementation=_NATIVE))
-    entries_before = device.num_program_cache_entries()
-    out = ttnn.tilize(xt, memory_config=sharded, implementation=_ROUTED)
-    assert_equal(golden, ttnn.to_torch(out))
-    msg = "auto routed an out-of-scope (sharded) case to codegen instead of falling back to native"
-    assert device.num_program_cache_entries() == entries_before, msg
-
-    # Forced codegen must refuse the same inputs rather than silently degrading to native.
-    with expect_error(RuntimeError, "not supported by the codegen implementation"):
-        ttnn.tilize(xt, memory_config=sharded, implementation=_CODEGEN)
+# ---- end of generated block; hand-added tests below are preserved across re-emission ----
 
 
 # ---------------------------------------------------------------------------

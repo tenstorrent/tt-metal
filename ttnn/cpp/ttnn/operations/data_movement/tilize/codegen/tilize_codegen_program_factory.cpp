@@ -253,8 +253,11 @@ std::vector<UnpackToDestMode> unpack_to_dest_fp32_modes(uint32_t cb_index) {
 //
 // The fast-tilize LLK datapath accepts fp32/bf16 input with a non-fp32 output, but native forces an
 // fp32 input onto the lossless standard path (fast tilize truncates fp32 to tf32), which leaves
-// bf16->bf16 as the only combination this device op can reach that may take it. The chunk width is a
-// runtime arg on every path here, so one kernel binary covers any width under the LLK's cap.
+// bf16->bf16 as the only combination this device op can reach that may take it.
+//
+// max_chunk_tiles is the WIDEST per-core compute chunk in the program, not this core's: the selector
+// is one compile-time arg shared by every core the kernel is created over, so the LLK's cap has to
+// hold for all of them.
 uint32_t tilize_use_fast(DataType input_dtype, DataType output_dtype, uint32_t max_chunk_tiles) {
     const bool fast = input_dtype == DataType::BFLOAT16 && output_dtype == DataType::BFLOAT16 && max_chunk_tiles > 0 &&
                       max_chunk_tiles < kFastTilizeMaxChunkTiles;

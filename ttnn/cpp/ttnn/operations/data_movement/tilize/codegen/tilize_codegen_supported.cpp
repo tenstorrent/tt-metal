@@ -135,8 +135,14 @@ constexpr DemotedCase kUngeneralizedDemotedCases[] = {
     // [4, 12, 96, 96] — NC 48, Ht 3, Wt 3.
     {48, 3, 3, DataType::BFLOAT16, BufferType::DRAM},
     {48, 3, 3, DataType::BFLOAT16, BufferType::L1},
-    // [5, 160, 96] — NC 5, Ht 5, Wt 3. DRAM only, as for [2, 12, 64, 96].
-    {5, 5, 3, DataType::BFLOAT16, BufferType::DRAM},
+    // The following tile geometries are deliberately absent from this table: codegen beats native
+    // on every one of them, they only trail generic_op, so demoting would route a case that wins
+    // to the slower path.
+    //   NC 2, Ht 6, Wt 7  ([2, 192, 224]) — both placements.
+    //   NC 4, Ht 7, Wt 5  ([4, 224, 160]) — L1 only; the DRAM twin is not in this class.
+    //   NC 5, Ht 5, Wt 3  ([5, 160, 96])  — both placements.
+    //   NC 7, Ht 3, Wt 5  ([7, 96, 160])  — L1 only; the DRAM twin is not in this class.
+    //
     // [5, 8, 64, 64] — NC 40, Ht 2, Wt 2.
     {40, 2, 2, DataType::BFLOAT16, BufferType::L1},
     // [6, 10, 32, 64] — NC 60, Ht 1, Wt 2.
