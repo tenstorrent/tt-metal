@@ -165,6 +165,8 @@ void kernel_main() {
     // "can PCIe egress alone hang the card?" on a drainer whose own bottleneck is read/process, not egress.
     // The host receives duplicate frames, so run it with decode OFF -- it is a stress tool, not a capture.
     constexpr uint32_t kShipRepeat = get_compile_time_arg_val(10);
+    // 1 = resync the software NoC mirrors from hardware at entry (see the wedge note below). 0 = diagnostic.
+    constexpr uint32_t kNocInit = get_compile_time_arg_val(11);
 
     constexpr uint32_t kNumRisc = 5;
     constexpr uint32_t kRingWords = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
@@ -212,8 +214,13 @@ void kernel_main() {
     // the Tensix build has always needed it for the read NoC anyway (BRISC firmware inits only its own,
     // brisc.cc:385, and a stale read counter makes noc_async_read_barrier() return EARLY -- silent corruption
     // rather than a wedge).
-    noc_local_state_init(NOC_INDEX);
-    noc_local_state_init(kReadNoc);
+    // kNocInit=0 (host: TT_METAL_PERF_DEBUG_NO_NOC_INIT=1) skips the resync so the wedge can be brought BACK
+    // on demand. Keeping the failure reproducible on one binary is what settles "did this actually fix it" --
+    // the claim that it did not was made against an already-wedged core and was wrong.
+    if constexpr (kNocInit) {
+        noc_local_state_init(NOC_INDEX);
+        noc_local_state_init(kReadNoc);
+    }
     // Does constructing Noc{kReadNoc} move the RUNTIME global `noc_index`? It matters: the library
     // noc_async_write_barrier() defaults to that global, while the writes are issued on the COMPILE-TIME
     // NOC_INDEX. If they diverge, the barrier guarding staging reuse watches the wrong NoC.

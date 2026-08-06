@@ -1411,3 +1411,75 @@ The wedged DRISC is resident and spins forever, so the NEXT run — even under f
 START while the card itself is perfectly healthy (probes 170-183 ns, tt-smi fine). `tt-smi -r` clears it. Three
 distinct states now: **WEDGED DRISC** (reset clears it), **DEGRADED** (cold power cycle), **HUNG** (cold power
 cycle). Check which one you have before debugging anything, and reset before trusting any negative result.
+
+## §N+6 — Egress saturates at ~17 GB/s, and the hang is NOT on that axis (bh-05, 2026-08-06)
+
+### The slow-dispatch wedge does not reproduce any more — cause unattributed
+
+On the current binary, from a fresh `tt-smi -r`, the slow-dispatch DRISC drainer runs **clean**: 4 runs at the
+110 grid, 6 at 120, plus ~10 more across the controls below. **The missing 2x2 cell is therefore filled: DRISC
+under slow dispatch works.** What fixed it is unknown, and three candidate explanations were each tested and
+killed:
+
+- **"120 cores gives every core firmware"** — no. A `TT_METAL_PERF_DEBUG_FULL_GRID=1` knob was added to drop the
+  reserved column, and 120 runs clean — but so does 110. The grid is not the variable.
+- **"`noc_local_state_init()` at kernel entry is the fix"** — no. A `TT_METAL_PERF_DEBUG_NO_NOC_INIT=1` knob now
+  makes the resync switchable so the wedge can be brought back on one binary. With the resync **off**, 4 runs
+  still pass. (The knob is worth keeping: a fix you cannot un-apply is a fix you cannot prove.)
+- **"a killed run leaves the resident core spinning and poisons the next"** — not sufficient. A `SIGKILL` 0.35 s
+  into a drain does not wedge the next run, and neither does the `WRITER_DIE_AFTER` hook (consumer vanishes
+  mid-stream), tested with the resync both on and off.
+
+**A methodology trap worth repeating, because it caught me twice more today.** A wedged DRISC is resident, so the
+host reads the OLD kernel's liveness words and reports FAILED TO START regardless of what was just built. A
+"wedge" observed at the 110 grid was inherited from a previous killed run, and the `HW_ACK=436036 vs
+SW_acked=436038` printed with it was **frozen at one value across four consecutive runs** — the giveaway that
+nothing was writing those words. Any counter identical across runs is stale, not reproducible. Reset first.
+
+The one genuinely reproducible footgun: **workload grid > drainer poll list hangs the workload forever.**
+`--gx 0` (120 producers) against a 110-core poll list leaves 10 cores undrained; their rings fill and they block.
+Match them, or use `FULL_GRID=1`.
+
+### Egress is capped at ~17 GB/s and the amplifier cannot exceed it
+
+Fast dispatch, delay 500, ascending `SHIP_REPEAT`, 3 runs each. Egress = `pages x 64 B / busy-sweep time`:
+
+| repeat | shipped | egress | max occ | stalls |
+|---|---|---|---|---|
+| 1 | 309 MB | 16.20-16.24 GB/s | 92 | 0 |
+| 2 | 282-318 MB | 14.76-16.64 | 232 | 0 |
+| 4 | 271-325 MB | 14.15-16.93 | 464 | 0 |
+| 6 | 291-325 MB | 14.39-16.78 | 510 | 6.6k-20k |
+| 8 | 378-379 MB | 16.78-17.03 | 510 | 20.9k |
+| 12 | 557-559 MB | 16.78-16.96 | 510 | 21.2k |
+| 16 | 738-740 MB | 16.87-16.93 | 511 | 21.2k |
+
+**21 consecutive runs, no hang.** Amplification past repeat=4 buys longer busy sweeps and more bytes, never more
+bandwidth — a 16x amplifier lands within 4% of a 1x one. **~17 GB/s is a hard wall**, and repeat=1 is already
+within 5% of it.
+
+### The hang is on the INGEST axis, not the egress axis
+
+Holding the amplifier fixed and raising producer rate (fast dispatch, 3 runs per cell):
+
+| delay | repeat | egress | outcome |
+|---|---|---|---|
+| 500 | 4/8/16 | 16.8-17.0 | clean x9 |
+| 200 | 4 | 16.64-16.95 | clean x3 |
+| 200 | 8 | 16.87-**17.47** | clean x3 |
+| 200 | 16 | 16.92-17.05 | clean x3 |
+| 100 | 4 | 16.62-16.79 | clean x3 |
+| **100** | **8** | — | **run 1 timed out mid-run, run 2 died in `is_pcie_hung`** |
+| **0** | **4** | — | **hung on run 1** |
+
+**There is no egress bandwidth at which the DRISC hangs.** 30 clean runs sit at 16.2-17.5 GB/s, and the highest
+rate ever recorded here (17.47 GB/s, delay 200 repeat 8) is *clean*. The cells that hang are at the **same**
+egress; what changes is producer delay. Occupancy (511/512) and stall counts (~21k) are also already matched
+between the clean delay-200 and the hanging delay-100 cells, so neither of those is the discriminator either.
+
+**The axis is what the DRISC READS, not what it writes** — its fused 10,496 B reads across 110 cores, at a rate
+set by producer delay. That inverts the working assumption behind every amplifier experiment: the amplifier
+loads the wrong side of the drainer, which is why 16x of it is harmless.
+
+Card left HUNG (`current_link_speed=Unknown`, `width=63`, AER all-zero, `Read 0xffffffff over PCIe`). Needs a
+**cold power cycle**; do NOT `tt-smi -r` a hung card.

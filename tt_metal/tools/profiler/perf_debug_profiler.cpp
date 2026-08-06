@@ -153,6 +153,33 @@ bool drain_on_tensix() {
     return v;
 }
 
+// TT_METAL_PERF_DEBUG_NO_NOC_INIT: do not resync the drainer's software NoC counter mirrors from hardware at
+// kernel entry. That resync is what fixes the slow-dispatch wedge (a resident core's mirrors persist across
+// launches, so a run that ends with writes unacked leaves the next run's write barrier unsatisfiable). This
+// knob exists to bring the wedge BACK on the same binary -- a fix you cannot un-apply is a fix you cannot
+// prove. Diagnostic only; it deliberately reintroduces a hang.
+bool no_noc_init() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_NO_NOC_INIT");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_FULL_GRID: under slow dispatch, do NOT hold the last worker column back -- poll the
+// whole 12x10=120 grid. The column is reserved by default so a DRISC (120 cores) and a Tensix (110, one of
+// them being the drainer itself) sweep the same poll-list length and stay comparable. Give it back when the
+// question is about FIRMWARE COVERAGE rather than sweep cost: with the workload run at the full grid every
+// core the drainer touches has a program on it, instead of the reserved column sitting in reset. Ignored on
+// the Tensix arm, where the drainer physically lives in that column.
+bool full_grid() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FULL_GRID");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+    return v;
+}
+
 // TT_METAL_PERF_DEBUG_NSTAGE: cap on staging slots. A DRISC's L1 fits 7; a Tensix's fits ~130, which would
 // make the two drainers incomparable, so the Tensix path clamps to the DRISC count by default.
 uint32_t nstage_cap(uint32_t computed) {
@@ -516,9 +543,13 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     // 110, which is exactly the grid the DRISC runs saw under fast dispatch. Run the workload with
     // `--gx 11` to match -- the poll list built below stops at column 11, so a producer placed there would
     // both go undrained and scribble on the drainer's L1.
-    // Reserved for BOTH drainer types, not just Tensix: the poll list length IS the idle sweep cost, so a
-    // DRISC polling 120 cores against a Tensix polling 110 would differ by the grid, not the core type.
-    const bool reserve_column = sd_env != nullptr && *sd_env != '\0' && *sd_env != '0';
+    // Reserved for BOTH drainer types by default, not just Tensix: the poll list length IS the idle sweep
+    // cost, so a DRISC polling 120 cores against a Tensix polling 110 would differ by the grid, not the core
+    // type. TT_METAL_PERF_DEBUG_FULL_GRID=1 drops the reservation on the DRISC arm (see full_grid()).
+    // TT_METAL_PERF_DEBUG_FULL_GRID=1 gives the column back to the producers (DRISC arm only -- the Tensix
+    // drainer's own core comes out of it, so it stays reserved there regardless).
+    const bool reserve_column =
+        sd_env != nullptr && *sd_env != '\0' && *sd_env != '0' && (tensix_drain || !full_grid());
     const uint32_t gx = static_cast<uint32_t>(grid.x) - (reserve_column ? 1u : 0u);
     const uint32_t gy = static_cast<uint32_t>(grid.y);
     const uint64_t num_cores = static_cast<uint64_t>(gx) * gy;
@@ -816,7 +847,8 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 0xFFFFFFFFu,
                 128,
                 drisc_gap_cycles(),
-                ship_repeat()};
+                ship_repeat(),
+                no_noc_init() ? 0u : 1u};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain ? CreateKernel(
