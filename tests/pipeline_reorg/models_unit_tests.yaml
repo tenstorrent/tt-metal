@@ -255,10 +255,11 @@
   team: models
 
 # Ported from the `vit nightly` entry in single_card_ttnn_models_frequent_tests.yaml.
-# That entry ran the tests/nightly/single_card/vit directory, which contains a single
-# symlink to the test file referenced directly below. HF_HUB_OFFLINE is forced back to
-# 0 because the tiered impl defaults WH SKUs to offline and the test resolves its
-# checkpoint from the hub — the legacy entry did the same with `unset HF_HUB_OFFLINE`.
+# That entry ran a tests/nightly/single_card/vit directory whose only content was a
+# symlink to the test file referenced directly below; the symlink is removed with the
+# migration. HF_HUB_OFFLINE is forced back to 0 because the tiered impl defaults WH
+# SKUs to offline and the test resolves its checkpoint from the hub — the legacy entry
+# did the same with `unset HF_HUB_OFFLINE`.
 - name: ViT unit tests
   cmd: |
     export HF_HUB_OFFLINE=0
