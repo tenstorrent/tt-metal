@@ -43,11 +43,9 @@ class CompletionCheckConsumer:
         from ttnn._experimental.layer_completion import LayerCompletionConsumer
 
         self._num_layers = num_layers
-        # This consumer only runs in (unbounded) request mode, where the external producer — NOT
-        # PREFILL_STANDALONE_NCHUNKS — determines the chunk count. So the expected total must come from
-        # PREFILL_CHECK_EXPECTED_CHUNKS; NCHUNKS is deliberately not consulted (it's commonly set via the
-        # standalone global_env and would silently pick a wrong-but-confident count). If unset, the
-        # consumer's self-terminate threshold is a guess and the PASS/FAIL signal is unreliable.
+        # The external producer decides the chunk count, so the expected total must come from
+        # PREFILL_CHECK_EXPECTED_CHUNKS. If unset, the consumer's self-terminate threshold is a guess and
+        # the PASS/FAIL signal is unreliable.
         explicit_chunks = os.environ.get("PREFILL_CHECK_EXPECTED_CHUNKS")
         if explicit_chunks is None:
             logger.warning(
