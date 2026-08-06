@@ -37,11 +37,14 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 
 | Metric | Value | Target |
 |---|---:|---:|
-| End-to-end RTF | `0.477` | `< 0.5` ✅ |
-| End-to-end RTF, `COSYVOICE_KV_INPLACE=1` | `0.449` | `< 0.5` ✅ |
-| LLM throughput (traced) | `179.2 tok/s` | `>= 60` ✅ |
-| LLM throughput, `COSYVOICE_KV_INPLACE=1` | `200.8 tok/s` | `>= 60` ✅ |
-| LLM decode latency (traced) | `5.58 ms` | — |
+| **End-to-end RTF, best measured** (`p150b`, everything on) | **`0.398`** | `< 0.5` ✅ |
+| End-to-end RTF, `p150a` default | `0.477` | `< 0.5` ✅ |
+| End-to-end RTF, `p150a` + `COSYVOICE_KV_INPLACE=1` | `0.449` | `< 0.5` ✅ |
+| End-to-end RTF, Wormhole n300, everything on | `0.628` | `< 0.5` ❌ |
+| **LLM throughput, best measured** (`p150a`, in-place KV) | **`200.8 tok/s`** | `>= 60` ✅ |
+| LLM throughput, `p150a` default | `179.2 tok/s` | `>= 60` ✅ |
+| LLM throughput, `p150b` + in-place KV | `190.8 tok/s` | `>= 60` ✅ |
+| LLM decode latency, best measured (`p150a`) | `4.98 ms` | — |
 | Token agreement, teacher-forced | `99.04 %` | `> 95 %` ✅ |
 | Token agreement, through the KV cache | `100.00 %` | `> 95 %` ✅ |
 | WER (English) | `0.00 %` | `< 3.0` ✅ |
@@ -50,6 +53,10 @@ Measured on the captured utterance: 164 generated tokens producing 3.27 s of aud
 | tokens → waveform PCC | `0.9951` | `>= 0.99` ✅ |
 
 ### RTF breakdown
+
+Blackhole `p150a`, default settings — the configuration the rest of this document's narrative is
+built on. The best measured configuration is `p150b` with everything enabled; see *Three parts side
+by side*.
 
 | Stage | Cost | RTF | Share |
 |---|---:|---:|---:|
@@ -374,13 +381,18 @@ shape assertion catches it. `test_device_fixed_shape_cache_matches_the_growing_o
 hard part is negligible; the op standing in for a missing `ttnn.conv_transpose1d` dominates the
 stage.
 
-## Wormhole side by side
+## Three parts side by side
 
-Same commit, same tests, same utterance — 164 tokens producing 3.27 s of audio. Wormhole is the
-architecture the bounty names (*"N150 or N300"*), so it gets a first-class section rather than a
-footnote. The `explicit chain` row is the pre-fused-attention path, reached with
-`COSYVOICE_SDPA_DECODE=0`; the Blackhole figure for it is the `2026-08-05` measurement of the same
-code, since that box entered its daily reboot before a same-day re-run could be taken.
+Same commit, same tests, same utterance — 164 tokens producing 3.27 s of audio, on all three parts.
+Wormhole is the architecture the bounty names (*"N150 or N300"*), so it gets a column rather than a
+footnote; the second Blackhole board is there because `p150a` became unreachable partway through and
+the substitution is worth being explicit about rather than quietly making.
+
+**Why `p150a` has gaps.** Tavern stayed unavailable through 13 retries over ~25 minutes — longer
+than its daily reboot window — so the CFM trace cache was measured on Tiptoe (`p150b`) instead.
+Before any timing was taken, `p150b` was checked to report `Arch.BLACKHOLE` and the same 13×10 grid;
+it does, and it runs ~5 % slower per token on identical work. **`p150a`'s numbers are kept as
+measured, not replaced.** A missing cell is more honest than a substituted one.
 
 ### End-to-end RTF
 
