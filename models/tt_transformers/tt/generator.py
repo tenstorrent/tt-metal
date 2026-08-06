@@ -1375,6 +1375,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             "on_device_sampling": on_device_sampling,
         }
 
+        # EXPERIMENT ONLY (#52176) — do not merge. Apply the sampling state before the forward,
+        # the pre-#45166 order, so its host-to-device writes do not land between trace replays.
+        if sampling_params is not None:
+            self.sample_decode_on_device(
+                None,
+                sampling_params=sampling_params,
+                start_pos=start_pos,
+                reset_batch=reset_batch,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
+                state_only=True,
+            )
+
         if enable_trace:
             # A real batch reset / slot remap (reset_batch) also makes the device
             # token/current_pos trace buffers stale, not just a prefill->decode
@@ -1402,6 +1416,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
+                skip_state=True,
             )
         # Host sampling
         if read_from_device:
@@ -1620,7 +1635,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         enable_trace=False,
+        state_only: bool = False,
+        skip_state: bool = False,
     ):
+        # EXPERIMENT ONLY (#52176) — do not merge. state_only/skip_state let decode_forward
+        # apply the sampling state BEFORE the decode forward, as it did pre-#45166, instead of
+        # issuing those host-to-device writes between two trace replays.
         # sampling_dp may differ from data_parallel for models that internally
         # shard users across mesh rows (users_row_sharded) — each row samples
         # 32 users independently, so sampling params must be chunked by the
@@ -1641,7 +1661,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             torch.chunk(output_tokens, sampling_dp, 0) if output_tokens is not None else [None] * sampling_dp
         )
 
-        for i in range(self.data_parallel):
+        for i in range(self.data_parallel) if not skip_state else ():
             sampling_module = getattr(self.model[i], "sampling", None)
             assert sampling_module is not None, "Sampling module not found in model for sampling on device."
             assert (
@@ -1700,6 +1720,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     seed_values, active_seed_slots, start_values
                 )
             sampling_module.seed_manager.get_new_values(active_seed_slots)
+
+        if state_only:
+            return None
 
         sampled_outputs = []
         for i in range(self.data_parallel):
