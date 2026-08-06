@@ -307,6 +307,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         "supports_prefix_caching": False,
         "supports_async_decode": False,
         "supports_sample_on_device": True,
+        "output_tokens_per_step": 256,
     }
 
     @classmethod
