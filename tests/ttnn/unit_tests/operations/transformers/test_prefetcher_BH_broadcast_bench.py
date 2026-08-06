@@ -50,7 +50,7 @@ BENCH_SHAPES = [
 ]
 
 NUM_WORKERS = 8
-TRACE_REPEATS = 32
+TRACE_REPEATS = 64
 
 
 def _flops(M, K, N):
@@ -127,8 +127,16 @@ def _build_common(device, per_core_M_tiles, k_tiles, n_tiles, in0_block_w, dtype
     )
 
 
-def _time_trace(device, run_one, trace_repeats):
-    """Capture `trace_repeats` cached dispatches, replay once, wall-clock the replay."""
+TRACE_EXECUTIONS = 4
+
+
+def _time_trace(device, run_one, trace_repeats, executions=TRACE_EXECUTIONS):
+    """Capture `trace_repeats` cached dispatches and time steady-state replay.
+
+    The FIRST execute_trace of a given trace carries a large one-off cost (several ms here), so
+    timing a single replay charges that to the matmuls and wildly inflates per-matmul time at small
+    repeat counts. Execute once to warm, then time `executions` further replays.
+    """
     trace = ttnn.begin_trace_capture(device, cq_id=0)
     out = None
     for _ in range(trace_repeats):
@@ -136,10 +144,15 @@ def _time_trace(device, run_one, trace_repeats):
     ttnn.end_trace_capture(device, trace, cq_id=0)
     assert out is not None
 
-    t0 = time.perf_counter()
+    # Warm: pay the one-off first-replay cost outside the measurement.
     ttnn.execute_trace(device, trace, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
-    elapsed = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    for _ in range(executions):
+        ttnn.execute_trace(device, trace, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    elapsed = (time.perf_counter() - t0) / executions
     ttnn.release_trace(device, trace)
     return elapsed
 
@@ -224,11 +237,11 @@ def test_broadcast_mcast_in1_vs_plain(device, op_name, per_core_M_tiles, k_tiles
         )
 
     with tensor_prefetcher_session(device):
-        # One long-lived stream: 2 warmup layers + TRACE_REPEATS traced layers, queued up front so
-        # the prefetcher runs ahead of the matmuls rather than being driven by them.
+        # One long-lived stream: 2 warmup layers + one layer per traced matmul per replay, queued
+        # up front so the prefetcher runs ahead rather than being driven by the matmuls.
         ttnn.experimental.queue_tensor_prefetcher_request(
             device,
-            [(tt_weight_bcast, block_count)] * (2 + TRACE_REPEATS),
+            [(tt_weight_bcast, block_count)] * (2 + (1 + TRACE_EXECUTIONS) * TRACE_REPEATS),
             global_cb=gcb,
         )
         gcb_out = gcb_linear()
@@ -252,4 +265,70 @@ def test_broadcast_mcast_in1_vs_plain(device, op_name, per_core_M_tiles, k_tiles
         f"{flops * TRACE_REPEATS / gcb_elapsed / 1e12:6.3f} TFLOP/s  "
         f"{weight_bytes * TRACE_REPEATS / gcb_elapsed / 1e9:6.2f} GB/s in1\n"
         f"    speedup         : {plain_us / gcb_us:6.3f}x"
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 90000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("trace_repeats", [1, 4, 16, 64, 128], ids=lambda n: f"rep{n}")
+def test_repeat_count_amortization(device, trace_repeats):
+    """Is one trace of N matmuls enough to amortize per-dispatch launch cost?
+
+    If per-matmul time keeps falling as N grows, the headline numbers are polluted by a fixed
+    per-trace/per-launch cost. If it flattens, the measured time really is per matmul.
+    """
+    op_name, per_core_M_tiles, k_tiles, n_tiles, dtype = "m2_k32_n8_bf16", 2, 32, 8, ttnn.bfloat16
+    in0_block_w = 8
+    (
+        M, K, N, worker_cores, pt_weight, pt_act, tt_act, out_mem_config, program_config, compute_kernel_config,
+    ) = _build_common(device, per_core_M_tiles, k_tiles, n_tiles, in0_block_w, dtype, seed=7)
+    expected = pt_act.float() @ pt_weight.float()
+
+    tt_weight_dram = ttnn.from_torch(
+        pt_weight, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    def plain_linear(out=None):
+        return ttnn.linear(
+            tt_act, tt_weight_dram, program_config=program_config, memory_config=out_mem_config,
+            compute_kernel_config=compute_kernel_config, dtype=dtype, optional_output_tensor=out,
+        )
+
+    plain_out = plain_linear()
+    plain_linear(plain_out)
+    plain_elapsed = _time_trace(device, lambda: plain_linear(plain_out), trace_repeats)
+    passing, out_str = comp_pcc(expected, ttnn.to_torch(plain_out), 0.99)
+    assert passing, f"baseline post-trace PCC failed: {out_str}"
+
+    tt_weight_bcast = _make_broadcast_weight(device, pt_weight, dtype=dtype)
+    page_bytes = in0_block_w * n_tiles * _bytes_per_tile(dtype)
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
+        device, [program_config], [tt_weight_bcast], bank_to_receivers=[(0, worker_cores)], size=2 * page_bytes,
+    )
+
+    def gcb_linear(out=None):
+        return ttnn.linear(
+            tt_act, tt_weight_bcast, program_config=program_config, global_cb=gcb, memory_config=out_mem_config,
+            compute_kernel_config=compute_kernel_config, dtype=dtype, optional_output_tensor=out,
+        )
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight_bcast, k_tiles // in0_block_w)] * (2 + (1 + TRACE_EXECUTIONS) * trace_repeats),
+            global_cb=gcb,
+        )
+        gcb_out = gcb_linear()
+        gcb_linear(gcb_out)
+        gcb_elapsed = _time_trace(device, lambda: gcb_linear(gcb_out), trace_repeats)
+        passing, out_str = comp_pcc(expected, ttnn.to_torch(gcb_out), 0.99)
+        assert passing, f"prefetcher post-trace PCC failed: {out_str}"
+
+    logger.info(
+        f"[amortization] repeats={trace_repeats:4d}  "
+        f"plain={plain_elapsed / trace_repeats * 1e6:8.2f} us/matmul  "
+        f"prefetcher={gcb_elapsed / trace_repeats * 1e6:7.2f} us/matmul  "
+        f"(trace totals: plain={plain_elapsed * 1e3:.2f}ms prefetcher={gcb_elapsed * 1e3:.2f}ms)"
     )
