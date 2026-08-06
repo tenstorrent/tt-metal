@@ -41,7 +41,7 @@ TEST_F(QuasarUnitMeshFixture, SingleDmL1Write) {
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     const experimental::NodeCoord node{0, 0};
-    this->WriteToL1(node, address, outputs);
+    detail::WriteToL1(this->device(), node, address, outputs);
     const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
 
     experimental::KernelSpec dm_kernel_spec{
@@ -82,7 +82,7 @@ TEST_F(QuasarUnitMeshFixture, SingleDmL1Write) {
               << std::endl;
 
     this->RunProgram(std::move(program));
-    this->ReadFromL1(node, address, 4, outputs);
+    detail::ReadFromL1(this->device(), node, address, 4, outputs);
 
     ASSERT_EQ(outputs[0], value) << "Got the value " << std::hex << outputs[0] << " instead of " << value;
 }

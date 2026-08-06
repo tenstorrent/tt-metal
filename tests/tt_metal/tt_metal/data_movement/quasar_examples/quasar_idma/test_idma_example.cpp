@@ -107,12 +107,12 @@ bool QuasarIdmaOps::run_idma_basic_test() {
     for (uint32_t i = 0; i < num_words; i++) {
         src_data[i] = 0xA0000000 + i;
     }
-    this->WriteToL1(core, src_base, src_data);
+    detail::WriteToL1(this->device(), core, src_base, src_data);
 
     run_kernel(kIdmaBasic, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
-    this->ReadFromL1(core, dst_base, total_bytes, dst_data);
+    detail::ReadFromL1(this->device(), core, dst_base, total_bytes, dst_data);
 
     bool pass = (dst_data == src_data);
     if (!pass) {
@@ -150,7 +150,7 @@ bool QuasarIdmaOps::run_idma_1d_strided_test() {
     for (uint32_t i = 0; i < src_num_words; i++) {
         src_data[i] = 0xB0000000 + i;
     }
-    this->WriteToL1(core, src_base, src_data);
+    detail::WriteToL1(this->device(), core, src_base, src_data);
 
     // Build expected: for each element i, copy elem_size bytes from src_base + i*src_stride
     constexpr uint32_t words_per_elem = elem_size / sizeof(uint32_t);     // 2
@@ -165,7 +165,7 @@ bool QuasarIdmaOps::run_idma_1d_strided_test() {
     run_kernel(kIdma1DStrided, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
-    this->ReadFromL1(core, dst_base, num_elements * elem_size, dst_data);
+    detail::ReadFromL1(this->device(), core, dst_base, num_elements * elem_size, dst_data);
 
     bool pass = (dst_data == expected);
     if (!pass) {

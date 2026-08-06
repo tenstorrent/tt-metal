@@ -43,7 +43,7 @@ bool QuasarCacheWrite::run_cache_write(std::uint32_t size_bytes, std::uint32_t w
 
     // Pre-fill destination with a sentinel so a no-op run fails the read-back.
     std::vector<std::uint32_t> init_data((size_bytes + 3) / 4, 0xA5A5A5A5);
-    this->WriteToL1(core, BASE_ADDR, init_data);
+    detail::WriteToL1(this->device(), core, BASE_ADDR, init_data);
 
     const experimental::KernelSpecName DM_KERNEL{"cache_write_perf"};
     experimental::KernelSpec dm_kernel_spec{
@@ -76,7 +76,7 @@ bool QuasarCacheWrite::run_cache_write(std::uint32_t size_bytes, std::uint32_t w
     this->RunProgram(std::move(program));
 
     std::vector<std::uint32_t> out;
-    this->ReadFromL1(core, BASE_ADDR, ((size_bytes + 3) / 4) * 4, out);
+    detail::ReadFromL1(this->device(), core, BASE_ADDR, ((size_bytes + 3) / 4) * 4, out);
     const std::uint8_t* bytes = reinterpret_cast<const std::uint8_t*>(out.data());
     for (std::uint32_t i = 0; i < size_bytes; i++) {
         if (bytes[i] != 0x5A) {

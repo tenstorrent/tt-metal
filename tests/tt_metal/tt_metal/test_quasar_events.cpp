@@ -68,7 +68,7 @@ void QuasarCrossCQEventFixture::run_cross_cq_handoff(uint8_t producer_cq, uint8_
     const uint32_t consumer_value = 0x2c110000u | consumer_cq;
 
     std::vector<uint32_t> zeros(2, 0);
-    this->WriteToL1(node, producer_address, zeros);
+    detail::WriteToL1(this->device(), node, producer_address, zeros);
 
     distributed::MeshCommandQueue& producer = this->device().mesh_command_queue(producer_cq);
     distributed::MeshCommandQueue& consumer = this->device().mesh_command_queue(consumer_cq);
@@ -88,11 +88,11 @@ void QuasarCrossCQEventFixture::run_cross_cq_handoff(uint8_t producer_cq, uint8_
     distributed::Finish(consumer);
 
     std::vector<uint32_t> producer_out(1, 0);
-    this->ReadFromL1(node, producer_address, sizeof(uint32_t), producer_out);
+    detail::ReadFromL1(this->device(), node, producer_address, sizeof(uint32_t), producer_out);
     ASSERT_EQ(producer_out[0], producer_value);
 
     std::vector<uint32_t> consumer_out(1, 0);
-    this->ReadFromL1(node, consumer_address, sizeof(uint32_t), consumer_out);
+    detail::ReadFromL1(this->device(), node, consumer_address, sizeof(uint32_t), consumer_out);
     ASSERT_EQ(consumer_out[0], consumer_value);
 }
 
@@ -109,7 +109,7 @@ TEST_F(QuasarUnitMeshFixture, EventSynchronize) {
     const uint32_t value = 0x12abcd34;
 
     std::vector<uint32_t> zeros(1, 0);
-    this->WriteToL1(node, address, zeros);
+    detail::WriteToL1(this->device(), node, address, zeros);
 
     distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
     distributed::MeshWorkload workload = make_l1_write_workload(this->device(), node, address, value, "cq_kernel");
@@ -120,7 +120,7 @@ TEST_F(QuasarUnitMeshFixture, EventSynchronize) {
     distributed::EventSynchronize(event);
 
     std::vector<uint32_t> outputs(1, 0);
-    this->ReadFromL1(node, address, sizeof(uint32_t), outputs);
+    detail::ReadFromL1(this->device(), node, address, sizeof(uint32_t), outputs);
     ASSERT_EQ(outputs[0], value);
 }
 
@@ -155,7 +155,7 @@ TEST_F(QuasarUnitMeshFixture, EventBetweenWorkloads) {
     const uint32_t value_2 = 0xccdd3344;
 
     std::vector<uint32_t> zeros(2, 0);
-    this->WriteToL1(node, address_1, zeros);
+    detail::WriteToL1(this->device(), node, address_1, zeros);
 
     distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
 
@@ -171,14 +171,14 @@ TEST_F(QuasarUnitMeshFixture, EventBetweenWorkloads) {
     distributed::EventSynchronize(event_after_wl1);
 
     std::vector<uint32_t> out_1(1, 0);
-    this->ReadFromL1(node, address_1, sizeof(uint32_t), out_1);
+    detail::ReadFromL1(this->device(), node, address_1, sizeof(uint32_t), out_1);
     ASSERT_EQ(out_1[0], value_1);
 
     // Drain the remaining wl2.
     distributed::Finish(cq);
 
     std::vector<uint32_t> out_2(1, 0);
-    this->ReadFromL1(node, address_2, sizeof(uint32_t), out_2);
+    detail::ReadFromL1(this->device(), node, address_2, sizeof(uint32_t), out_2);
     ASSERT_EQ(out_2[0], value_2);
 }
 
@@ -215,7 +215,7 @@ TEST_F(QuasarMultiCQUnitMeshFixture, RecordEventToHostFromBothCQs) {
     const uint32_t value_1 = 0x2c2c0001;
 
     std::vector<uint32_t> zeros(2, 0);
-    this->WriteToL1(node, address_0, zeros);
+    detail::WriteToL1(this->device(), node, address_0, zeros);
 
     distributed::MeshCommandQueue& cq0 = this->device().mesh_command_queue(0);
     distributed::MeshCommandQueue& cq1 = this->device().mesh_command_queue(1);
@@ -234,10 +234,10 @@ TEST_F(QuasarMultiCQUnitMeshFixture, RecordEventToHostFromBothCQs) {
     distributed::EventSynchronize(event_1);
 
     std::vector<uint32_t> out_0(1, 0);
-    this->ReadFromL1(node, address_0, sizeof(uint32_t), out_0);
+    detail::ReadFromL1(this->device(), node, address_0, sizeof(uint32_t), out_0);
     ASSERT_EQ(out_0[0], value_0);
 
     std::vector<uint32_t> out_1(1, 0);
-    this->ReadFromL1(node, address_1, sizeof(uint32_t), out_1);
+    detail::ReadFromL1(this->device(), node, address_1, sizeof(uint32_t), out_1);
     ASSERT_EQ(out_1[0], value_1);
 }

@@ -41,7 +41,7 @@ TEST_F(QuasarUnitMeshFixture, DmLoopback) {
     uint32_t dram_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
     std::vector<uint32_t> value = {0x12345678};
 
-    this->WriteToDRAMChannel(0, dram_address, value);
+    detail::WriteToDRAMChannel(this->device(), 0, dram_address, value);
     MetalContext::instance().get_cluster().dram_barrier(this->device().get_devices().at(0)->id());
 
     // Metal 2.0 reserves DM0/DM1; max 6 user DM threads per node.
@@ -149,7 +149,7 @@ TEST_F(QuasarUnitMeshFixture, DmLoopback) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> outputs{0};
-    this->ReadFromDRAMChannel(0, dram_address, sizeof(uint32_t), outputs);
+    detail::ReadFromDRAMChannel(this->device(), 0, dram_address, sizeof(uint32_t), outputs);
 
     ASSERT_EQ(outputs[0], value[0]) << "Got the value " << std::hex << outputs[0] << " instead of " << value[0];
 }

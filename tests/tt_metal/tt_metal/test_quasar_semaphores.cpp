@@ -41,7 +41,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarMultiSemaphorePipeline) {
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    this->WriteToDRAMChannel(0, dram_src_addr, initial_data);
+    detail::WriteToDRAMChannel(this->device(), 0, dram_src_addr, initial_data);
 
     const experimental::KernelSpecName DM_READER{"dm_reader"};
     const experimental::KernelSpecName DM_TRANSFORM{"dm_transform"};
@@ -148,7 +148,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarMultiSemaphorePipeline) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> actual_data(num_elements, 0);
-    this->ReadFromDRAMChannel(0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
+    detail::ReadFromDRAMChannel(this->device(), 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
 
     const std::vector<uint32_t> expected_data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
 
@@ -181,7 +181,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarMultipleClustersMultiSemaphorePipeline) {
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    this->WriteToL1(node_0, buf_a_addr, initial_data);
+    detail::WriteToL1(this->device(), node_0, buf_a_addr, initial_data);
 
     const CoreCoord core_1_virtual = this->device().worker_core_from_logical_core(node_1);
 
@@ -359,7 +359,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarMultipleClustersMultiSemaphorePipeline) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> actual_data(num_elements, 0);
-    this->ReadFromDRAMChannel(0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
+    detail::ReadFromDRAMChannel(this->device(), 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
 
     const std::vector<uint32_t> expected_data = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 

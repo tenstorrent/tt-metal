@@ -51,7 +51,7 @@ bool QuasarL2CacheOps::run_l2_flush_test(const unit_tests::dm::quasar_cache::L2F
     // that should persist after invalidation (since invalidate doesn't write back)
     uint32_t old_value = 0xDEADBEEF;
     std::vector<uint32_t> init_data(config.num_words, config.expect_new_values ? 0 : old_value);
-    this->WriteToL1(core, config.base_addr, init_data);
+    detail::WriteToL1(this->device(), core, config.base_addr, init_data);
 
     const experimental::KernelSpecName DM_KERNEL{"l2_flush"};
 
@@ -93,7 +93,7 @@ bool QuasarL2CacheOps::run_l2_flush_test(const unit_tests::dm::quasar_cache::L2F
 
     // Read back and verify
     std::vector<uint32_t> output_data;
-    this->ReadFromL1(core, config.base_addr, config.num_words * sizeof(uint32_t), output_data);
+    detail::ReadFromL1(this->device(), core, config.base_addr, config.num_words * sizeof(uint32_t), output_data);
 
     bool pass = true;
     for (uint32_t i = 0; i < config.num_words; i++) {
@@ -135,7 +135,7 @@ bool QuasarL1DCacheOps::run_l1_dcache_test(const unit_tests::dm::quasar_cache::L
     // that should persist after invalidation (since invalidate doesn't write back)
     uint32_t old_value = 0xDEADBEEF;
     std::vector<uint32_t> init_data(config.num_words, old_value);
-    this->WriteToL1(core, config.base_addr, init_data);
+    detail::WriteToL1(this->device(), core, config.base_addr, init_data);
 
     const experimental::KernelSpecName DM_KERNEL{"l1_dcache"};
 
@@ -177,7 +177,7 @@ bool QuasarL1DCacheOps::run_l1_dcache_test(const unit_tests::dm::quasar_cache::L
 
     // Read back and verify
     std::vector<uint32_t> output_data;
-    this->ReadFromL1(core, config.base_addr, config.num_words * sizeof(uint32_t), output_data);
+    detail::ReadFromL1(this->device(), core, config.base_addr, config.num_words * sizeof(uint32_t), output_data);
 
     bool pass = true;
     for (uint32_t i = 0; i < config.num_words; i++) {

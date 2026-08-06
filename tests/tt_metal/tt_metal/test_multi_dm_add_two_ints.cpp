@@ -113,10 +113,10 @@ TEST_F(QuasarUnitMeshFixture, MultiDmAddTwoInts) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> result_core_0(3, 0);
-    this->ReadFromL1(CoreCoord(0, 0), result_base, sizeof(uint32_t) * 3, result_core_0);
+    detail::ReadFromL1(this->device(), CoreCoord(0, 0), result_base, sizeof(uint32_t) * 3, result_core_0);
 
     std::vector<uint32_t> result_core_1(3, 0);
-    this->ReadFromL1(CoreCoord(1, 0), result_base, sizeof(uint32_t) * 3, result_core_1);
+    detail::ReadFromL1(this->device(), CoreCoord(1, 0), result_base, sizeof(uint32_t) * 3, result_core_1);
 
     ASSERT_EQ(result_core_0, (std::vector<uint32_t>{3, 7, 11}));
     ASSERT_EQ(result_core_1, (std::vector<uint32_t>{3, 7, 15}));

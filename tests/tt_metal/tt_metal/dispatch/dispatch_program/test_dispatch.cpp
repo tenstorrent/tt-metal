@@ -573,12 +573,12 @@ TEST_F(QuasarUnitMeshFixture, QuasarDispatchSInstantiatedAndRunning) {
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     constexpr uint32_t test_value = 0xdeadbeef;
     std::vector<uint32_t> cleared_l1(1, 0);
-    this->WriteToL1(worker_node, l1_address, cleared_l1);
+    detail::WriteToL1(this->device(), worker_node, l1_address, cleared_l1);
 
     this->RunProgram(create_quasar_l1_write_program(this->device(), worker_node, l1_address, test_value));
 
     std::vector<uint32_t> result(1, 0);
-    this->ReadFromL1(worker_node, l1_address, sizeof(uint32_t), result);
+    detail::ReadFromL1(this->device(), worker_node, l1_address, sizeof(uint32_t), result);
     // End-to-end proof dispatch_s ran: dispatch_hd notifies dispatch_s to multicast the worker go
     // signal; without a functioning dispatch_s the worker kernel never writes L1.
     ASSERT_EQ(result[0], test_value);

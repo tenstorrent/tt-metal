@@ -63,14 +63,14 @@ TEST_F(QuasarUnitMeshFixture, QuasarTraceSingleReplay) {
 
     // Warm up
     std::vector<uint32_t> zeros(1, 0);
-    this->WriteToL1(node, address, zeros);
+    detail::WriteToL1(this->device(), node, address, zeros);
     distributed::EnqueueMeshWorkload(cq, workload, true);
     std::vector<uint32_t> warm_up_result(1, 0);
-    this->ReadFromL1(node, address, sizeof(uint32_t), warm_up_result);
+    detail::ReadFromL1(this->device(), node, address, sizeof(uint32_t), warm_up_result);
     ASSERT_EQ(warm_up_result[0], value);
 
     // Capture trace
-    this->WriteToL1(node, address, zeros);
+    detail::WriteToL1(this->device(), node, address, zeros);
     distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(&this->device(), 0);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     this->device().end_mesh_trace(0, trace_id);
@@ -78,7 +78,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarTraceSingleReplay) {
     // Replay trace
     this->device().replay_mesh_trace(0, trace_id, true);
     std::vector<uint32_t> trace_result(1, 0);
-    this->ReadFromL1(node, address, sizeof(uint32_t), trace_result);
+    detail::ReadFromL1(this->device(), node, address, sizeof(uint32_t), trace_result);
     ASSERT_EQ(trace_result[0], value);
 
     this->device().release_mesh_trace(trace_id);
@@ -125,10 +125,10 @@ TEST_F(QuasarUnitMeshFixture, QuasarTraceMultipleReplays) {
 
     // Warm up
     std::vector<uint32_t> zeros(1, 0);
-    this->WriteToL1(node, address, zeros);
+    detail::WriteToL1(this->device(), node, address, zeros);
     distributed::EnqueueMeshWorkload(cq, workload, true);
     std::vector<uint32_t> warm_up_result(1, 0);
-    this->ReadFromL1(node, address, sizeof(uint32_t), warm_up_result);
+    detail::ReadFromL1(this->device(), node, address, sizeof(uint32_t), warm_up_result);
     ASSERT_EQ(warm_up_result[0], value);
 
     // Capture trace
@@ -140,12 +140,12 @@ TEST_F(QuasarUnitMeshFixture, QuasarTraceMultipleReplays) {
     constexpr uint32_t num_replays = 5;
     for (uint32_t i = 0; i < num_replays; i++) {
         std::vector<uint32_t> zeros(1, 0);
-        this->WriteToL1(node, address, zeros);
+        detail::WriteToL1(this->device(), node, address, zeros);
 
         this->device().replay_mesh_trace(0, trace_id, true);
 
         std::vector<uint32_t> result(1, 0);
-        this->ReadFromL1(node, address, sizeof(uint32_t), result);
+        detail::ReadFromL1(this->device(), node, address, sizeof(uint32_t), result);
         ASSERT_EQ(result[0], value);
     }
 
@@ -203,10 +203,10 @@ TEST_F(QuasarMultiCQUnitMeshFixture, QuasarTraceMultipleReplaysAcrossCQs) {
     std::vector<uint32_t> zeros(1, 0);
 
     // Warm up + capture the CQ0 trace.
-    this->WriteToL1(node, address_0, zeros);
+    detail::WriteToL1(this->device(), node, address_0, zeros);
     distributed::EnqueueMeshWorkload(cq0, wl0, true);
     std::vector<uint32_t> warm_up_0(1, 0);
-    this->ReadFromL1(node, address_0, sizeof(uint32_t), warm_up_0);
+    detail::ReadFromL1(this->device(), node, address_0, sizeof(uint32_t), warm_up_0);
     ASSERT_EQ(warm_up_0[0], value_0);
 
     distributed::MeshTraceId trace_id_0 = distributed::BeginTraceCapture(&this->device(), 0);
@@ -214,10 +214,10 @@ TEST_F(QuasarMultiCQUnitMeshFixture, QuasarTraceMultipleReplaysAcrossCQs) {
     this->device().end_mesh_trace(0, trace_id_0);
 
     // Warm up + capture the CQ1 trace.
-    this->WriteToL1(node, address_1, zeros);
+    detail::WriteToL1(this->device(), node, address_1, zeros);
     distributed::EnqueueMeshWorkload(cq1, wl1, true);
     std::vector<uint32_t> warm_up_1(1, 0);
-    this->ReadFromL1(node, address_1, sizeof(uint32_t), warm_up_1);
+    detail::ReadFromL1(this->device(), node, address_1, sizeof(uint32_t), warm_up_1);
     ASSERT_EQ(warm_up_1[0], value_1);
 
     distributed::MeshTraceId trace_id_1 = distributed::BeginTraceCapture(&this->device(), 1);
@@ -227,18 +227,18 @@ TEST_F(QuasarMultiCQUnitMeshFixture, QuasarTraceMultipleReplaysAcrossCQs) {
     // Interleave replays of both CQs' traces and verify each lands its own value each round.
     constexpr uint32_t num_replays = 5;
     for (uint32_t i = 0; i < num_replays; i++) {
-        this->WriteToL1(node, address_0, zeros);
-        this->WriteToL1(node, address_1, zeros);
+        detail::WriteToL1(this->device(), node, address_0, zeros);
+        detail::WriteToL1(this->device(), node, address_1, zeros);
 
         this->device().replay_mesh_trace(0, trace_id_0, true);
         this->device().replay_mesh_trace(1, trace_id_1, true);
 
         std::vector<uint32_t> result_0(1, 0);
-        this->ReadFromL1(node, address_0, sizeof(uint32_t), result_0);
+        detail::ReadFromL1(this->device(), node, address_0, sizeof(uint32_t), result_0);
         ASSERT_EQ(result_0[0], value_0);
 
         std::vector<uint32_t> result_1(1, 0);
-        this->ReadFromL1(node, address_1, sizeof(uint32_t), result_1);
+        detail::ReadFromL1(this->device(), node, address_1, sizeof(uint32_t), result_1);
         ASSERT_EQ(result_1[0], value_1);
     }
 

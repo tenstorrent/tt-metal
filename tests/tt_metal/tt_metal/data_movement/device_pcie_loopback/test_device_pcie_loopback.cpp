@@ -137,7 +137,7 @@ TEST_F(QuasarUnitMeshFixture, HostHugepagePcieLoopback) {
 
     // Step 6: Host verifies L1 staging matches src.
     std::vector<uint32_t> l1_readback;
-    this->ReadFromL1(node, l1_staging_addr, kTransferSizeBytes, l1_readback);
+    detail::ReadFromL1(this->device(), node, l1_staging_addr, kTransferSizeBytes, l1_readback);
     EXPECT_EQ(l1_readback, expected) << "L1 staging mismatch after device PCIe read";
 
     sync_debug_servers_before_teardown();

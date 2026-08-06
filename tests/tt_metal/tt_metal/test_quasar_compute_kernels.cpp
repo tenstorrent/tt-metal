@@ -39,7 +39,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarComputeKernelMultipleThreads) {
     const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(16, 0);
-    this->WriteToL1(node, l1_address, init_values);
+    detail::WriteToL1(this->device(), node, l1_address, init_values);
 
     const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
@@ -79,7 +79,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarComputeKernelMultipleThreads) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> actual_values(16, 0);
-    this->ReadFromL1(node, l1_address, 16 * sizeof(uint32_t), actual_values);
+    detail::ReadFromL1(this->device(), node, l1_address, 16 * sizeof(uint32_t), actual_values);
 
     const std::vector<uint32_t> expected_values = {4, 6, 5, 9, 8, 10, 9, 13, 12, 14, 13, 17, 16, 18, 17, 21};
 
@@ -107,7 +107,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarComputeKernelSingleThread) {
     const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(4, 0);
-    this->WriteToL1(node, l1_address, init_values);
+    detail::WriteToL1(this->device(), node, l1_address, init_values);
 
     const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
@@ -147,7 +147,7 @@ TEST_F(QuasarUnitMeshFixture, QuasarComputeKernelSingleThread) {
     this->RunProgram(std::move(program));
 
     std::vector<uint32_t> actual_values(4, 0);
-    this->ReadFromL1(node, l1_address, 4 * sizeof(uint32_t), actual_values);
+    detail::ReadFromL1(this->device(), node, l1_address, 4 * sizeof(uint32_t), actual_values);
 
     const std::vector<uint32_t> expected_values = {4, 6, 5, 9};
 
